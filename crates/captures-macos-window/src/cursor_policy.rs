@@ -337,11 +337,23 @@ pub const fn thumbnail_stale_poll_must_resign_key() -> bool {
     true
 }
 
-/// Region screenshot (⌘⇧4) claims the crosshair on key-down, not after
-/// modifiers come up or the freeze-frame paints.
+/// Region screenshot (⌘⇧4) claims the crosshair during the key-down hold, not
+/// after modifiers come up or the overlay paints.
+///
+/// When freeze-screen is on, that claim still happens on the press — but only
+/// after the freeze-frame is captured. The claim panel covers the display,
+/// becomes key, and eats mouse events, which sends `mouseExited` to the hovered
+/// app and dismisses tooltips and other hover chrome the snapshot is meant to
+/// keep.
 #[must_use]
 pub const fn region_shortcut_claims_cursor_on_press() -> bool {
     true
+}
+
+/// Delay the region cursor-claim panel until the freeze-frame exists.
+#[must_use]
+pub const fn region_cursor_claim_waits_for_freeze_frame(freeze_screen: bool) -> bool {
+    freeze_screen
 }
 
 /// After a thumbnail click, key-on-hover stays latched off so an opening
@@ -387,7 +399,8 @@ mod tests {
         capture_escape_should_dispatch, capture_surface_focus_retry_allowed,
         cursor_claim_panel_should_resign_key, cursor_claim_panel_should_show,
         macos_key_code_is_escape, overlay_prepare_keeps_native_cursor,
-        region_shortcut_claims_cursor_on_press, suppress_document_cursor_rects_for_thumbnail,
+        region_cursor_claim_waits_for_freeze_frame, region_shortcut_claims_cursor_on_press,
+        suppress_document_cursor_rects_for_thumbnail,
         thumbnail_foreign_mouse_click_must_resign_key, thumbnail_may_take_key_window,
         thumbnail_passthrough_disables_cursor_rects, thumbnail_passthrough_must_resign_key,
         thumbnail_poll_is_live, thumbnail_refresh_must_not_force_hit_testing,
@@ -504,6 +517,8 @@ mod tests {
             CaptureCursor::overlay_window().native_owned
         ));
         assert!(region_shortcut_claims_cursor_on_press());
+        assert!(region_cursor_claim_waits_for_freeze_frame(true));
+        assert!(!region_cursor_claim_waits_for_freeze_frame(false));
     }
 
     #[test]

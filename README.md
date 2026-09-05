@@ -53,7 +53,7 @@ Preview builds update after every successful merge to `main` that changes the in
 - Draw a region from an empty screen (no pre-sized outline); lock to common aspect ratios, or hold Shift for a square
 - Press Enter in the capture menu to confirm a screenshot or recording once a target is ready
 - Optional auto-start after selecting a region, window, or full display (Preferences)
-- Optional freeze while choosing a region or window, so hover states, menus, and motion stay put (on by default; turn off in Preferences to select from the live desktop)
+- Optional freeze while choosing a region or window, so hover states, tooltips, menus, and motion stay put (on by default; turn off in Preferences to select from the live desktop)
 - Optional cursor in screenshots (on by default; freeze screen does not include the pointer by itself)
 - Optional countdown before screenshots and recordings
 - Region recordings keep the selected area highlighted on screen while recording
@@ -132,7 +132,7 @@ Global capture shortcuts can be changed in Preferences. Installations still on e
 
 On macOS, overlapping Screenshot app shortcuts (`Cmd`+`Shift`+`3` / `4` / `5`) are unbound immediately so those keys reach Captures instead of the system overlay; restore them in System Settings → Keyboard → Keyboard Shortcuts → Screenshots if you want both. On GNOME, overlapping screenshot keybindings are cleared when `gsettings` is available; on KDE, Spectacle’s rectangular-region shortcut is cleared when `kwriteconfig` is available. On Windows, Print Screen is turned off for Snipping Tool when Captures uses that key, and `Win`+`Shift`+`S` is intercepted so Snipping Tool does not open. If another screenshot tool still opens on the same shortcut, `Esc` always cancels Captures — even when that other overlay has keyboard focus or the freeze-frame has not finished painting. Captures lives in the menu bar or tray after setup (on Windows, look in the taskbar overflow if the icon is hidden). Open Captures from Start, Search, or the app icon to show Preferences, including Capture History. Capture from a shortcut, the tray **New Capture** item, or a tray capture action. If a capture starts while Start or Search is still open, Captures waits for those flyouts to close so they are not frozen into the screenshot.
 
-While New Capture is open, the region, window, and display screenshot shortcuts switch that overlay in place. They do not dismiss the menu or bring Preferences and other windows forward.
+While New Capture is open, the region, window, and display screenshot shortcuts switch that overlay in place. They do not dismiss the menu or bring Preferences and other windows forward. Press the same screenshot shortcut again to freeze the capture menu into the next snapshot. An already-open region or window overlay does the same: the shortcut freezes that overlay instead of tearing it down, so you can capture Captures with Captures.
 
 While selecting a capture region, pick an aspect ratio in the capture menu or hold
 `Shift` for a square. In the screenshot editor, zoom with the header slider and

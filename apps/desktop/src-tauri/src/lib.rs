@@ -10,14 +10,16 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use tauri::CursorIcon;
 
-use captures_capture::{CaptureError, CaptureMode, LogicalRect, PhysicalRect, WindowDescriptor};
+use captures_capture::{
+    CaptureError, CaptureMode, DisplayFrame, LogicalRect, PhysicalRect, WindowDescriptor,
+};
 use chrono::{DateTime, Utc};
 use image::RgbaImage;
 use mouse_position::mouse_position::Mouse;
@@ -517,6 +519,7 @@ fn open_capture_controls_with_target(
         )
         .await
         {
+            abort_prefetched_freeze_capture(&app);
             match initial_mode {
                 CaptureSelectorMode::Screenshot => {
                     report_capture_error(&app, &error, CaptureMode::Region);
@@ -545,30 +548,45 @@ async fn start_capture_inner(
 ) -> Result<Option<ActiveSession>, AppError> {
     if let Err(error) = ensure_capture_session_available() {
         release_claimed_region_capture_cursor();
+        abort_prefetched_freeze_capture(&app);
         disarm_capture_escape_intent(&app);
         return Err(error);
     }
     if updates::install_is_active(&app) {
         release_claimed_region_capture_cursor();
+        abort_prefetched_freeze_capture(&app);
         disarm_capture_escape_intent(&app);
         return Err(AppError::UpdateInstalling);
     }
     if recording::screenshot_capture_is_blocked(&state) || screenshot_countdown_is_active(&state) {
+        abort_prefetched_freeze_capture(&app);
         disarm_capture_escape_intent(&app);
         return Err(AppError::CaptureInProgress);
     }
+    let recapture_ui = should_recapture_visible_capture_ui(&app, &state, mode);
+    let overlay_visible = capture_overlay_is_visible(&app);
     // Screenshot shortcuts must work while the capture menu is open. Stay on
     // that overlay and switch target instead of tearing it down — dismissing
     // revealed Preferences and other documents, then recaptured a ghost of the
-    // menu into the freeze-frame.
-    if recording::switch_open_capture_selector_to_screenshot(&app, &state, mode) {
+    // menu into the freeze-frame. Pressing the same screenshot shortcut again
+    // freezes the menu or region overlay into a new snapshot instead.
+    if !recapture_ui && recording::switch_open_capture_selector_to_screenshot(&app, &state, mode) {
+        abort_prefetched_freeze_capture(&app);
         disarm_capture_escape_intent(&app);
         return Ok(None);
+    }
+    if recapture_ui {
+        include_capture_ui_in_snapshot(&app);
+        if !freeze_prefetch_is_pending() {
+            tokio::time::sleep(std::time::Duration::from_millis(CAPTURE_HUD_HIDE_SETTLE_MS)).await;
+        }
     }
     arm_capture_escape(&app);
     // A failed overlay (image never loaded, webview stuck, etc.) leaves a session
     // behind. CaptureInProgress was silent on the shortcut path, so region mode
     // appeared completely dead until restart. Drop the stale session and retry.
+    // When recapturing the visible overlay, keep the window up so its chrome is
+    // in the freeze-frame.
     let stale_capture_generations = {
         let mut sessions = state.sessions.lock();
         sessions
@@ -583,15 +601,14 @@ async fn start_capture_inner(
             visibility.restore_capture(capture_generation);
         }
         drop(visibility);
-        hide_capture_overlay(&app);
+        if !(recapture_ui && overlay_visible) {
+            hide_capture_overlay(&app);
+        }
     }
-    if mode == CaptureMode::Region {
-        claim_region_capture_cursor(&app);
-    }
-
     let thumbnail_capture_generation = match begin_thumbnail_capture(&state) {
         Ok(generation) => generation,
         Err(error) => {
+            abort_prefetched_freeze_capture(&app);
             disarm_capture_escape_intent(&app);
             hide_capture_overlay(&app);
             return Err(error);
@@ -606,14 +623,19 @@ async fn start_capture_inner(
         thumbnail_capture_generation,
     )
     .await;
+    restore_capture_ui_snapshot_exclusion(&app);
+    if recapture_ui && overlay_visible && matches!(&result, Ok(None)) {
+        hide_capture_overlay(&app);
+    }
     if result.is_err() {
+        abort_prefetched_freeze_capture(&app);
         set_capture_huds_protected(&app, false);
         state.sessions.lock().clear();
-        CAPTURE_ESCAPE_INTENT.store(false, Ordering::Release);
         hide_capture_overlay(&app);
         restore_thumbnail_capture(&app, &state, thumbnail_capture_generation);
         reveal_document_windows_after_capture(&app);
         updates::restore_update_notice(&app);
+        disarm_capture_escape_intent(&app);
     }
     result
 }
@@ -632,8 +654,15 @@ async fn prepare_capture(
         return Err(error.into());
     }
     if mode == CaptureMode::Display {
+        let includes_capture_ui = capture_ui_is_visible(&app);
+        if includes_capture_ui {
+            include_capture_ui_in_snapshot(&app);
+        }
         let display = display_under_pointer(&state)?;
-        let countdown_seconds = state.settings().screenshot_countdown_seconds;
+        let countdown_seconds = screenshot_countdown_seconds_for_capture_ui(
+            state.settings().screenshot_countdown_seconds,
+            includes_capture_ui,
+        );
         if countdown_seconds > 0
             && !run_screenshot_countdown(
                 app.clone(),
@@ -650,8 +679,13 @@ async fn prepare_capture(
             return Ok(None);
         }
         ensure_capture_session_available()?;
-        let pointer = pointer_position();
-        let mut frame = state.backend.capture_display(&display.id)?;
+        let (pointer, mut frame) = if countdown_seconds > 0 {
+            discard_prefetched_freeze_frame();
+            let pointer = pointer_position();
+            (pointer, state.backend.capture_display(&display.id)?)
+        } else {
+            take_prefetched_freeze_matching_display(&state, &display.id)?
+        };
         apply_screenshot_cursor(
             &mut frame.image,
             &frame.descriptor,
@@ -659,6 +693,9 @@ async fn prepare_capture(
             state.settings().show_cursor_in_screenshots,
         );
         set_capture_huds_protected(&app, false);
+        if includes_capture_ui {
+            recording::dismiss_capture_menu_after_nested_snapshot(&app, &state);
+        }
         let _ = finish_capture(
             &app,
             &state,
@@ -672,17 +709,34 @@ async fn prepare_capture(
     }
 
     ensure_capture_session_available()?;
+    let includes_capture_ui = capture_ui_is_visible(&app);
+    if includes_capture_ui {
+        include_capture_ui_in_snapshot(&app);
+    }
     let freeze_screen = state.settings().freeze_screen;
+    let prefetched = take_prefetched_freeze_frame();
+    let freeze_screen = freeze_screen || prefetched.is_some() || includes_capture_ui;
     let id = Uuid::new_v4();
     let windows_task =
         (mode == CaptureMode::Window).then(|| take_prefetched_or_spawn_windows(&state));
     let (session, pending_windows) = if freeze_screen {
-        let pointer = pointer_position();
-        let frame = state.backend.capture_display_at_point(pointer)?;
+        let PrefetchedFreezeFrame { pointer, frame } = match prefetched {
+            Some(frame) => frame,
+            None => {
+                let pointer = pointer_position();
+                let frame = state.backend.capture_display_at_point(pointer)?;
+                PrefetchedFreezeFrame { pointer, frame }
+            }
+        };
         // The background frame is frozen now, so this capture no longer needs HUD
         // exclusion. Release it before encoding can emit a new preview and allow a
         // rapid follow-up capture to start with its own protection generation.
         set_capture_huds_protected(&app, false);
+        // Menu pixels are already in this freeze. Hide it before the overlay
+        // covers the display so the two fullscreen surfaces do not stack.
+        if includes_capture_ui {
+            recording::dismiss_capture_menu_after_nested_snapshot(&app, &state);
+        }
         let snapshot_png = storage::encode_overlay_snapshot(&frame.image)?;
         let (targets, pending_windows) =
             take_ready_or_defer_windows(windows_task, &frame.descriptor, Some(&frame.image));
@@ -699,10 +753,12 @@ async fn prepare_capture(
                 cursor: pointer,
                 shell_chrome: targets.shell_chrome,
                 windows_ready: pending_windows.is_none(),
+                includes_capture_ui,
             },
             pending_windows,
         )
     } else {
+        discard_prefetched_freeze_frame();
         // Live overlay: skip the freeze-frame so hover states can keep changing
         // until commit, then recapture the current desktop.
         let display = display_under_pointer(&state)?;
@@ -721,10 +777,16 @@ async fn prepare_capture(
                 cursor: None,
                 shell_chrome: targets.shell_chrome,
                 windows_ready: pending_windows.is_none(),
+                includes_capture_ui: false,
             },
             pending_windows,
         )
     };
+    if mode == CaptureMode::Region {
+        // Live capture already claimed on key-down. Freeze-screen waits until
+        // the snapshot exists so the claim panel cannot dismiss tooltips.
+        claim_region_capture_cursor(&app);
+    }
     let active = capture_session_to_active(&session);
     state.sessions.lock().insert(id, session);
     // Keep shortcut intent until the overlay is actually on screen. Clearing
@@ -740,6 +802,16 @@ async fn prepare_capture(
 pub(crate) type WindowListTask = std::thread::JoinHandle<Result<Vec<WindowDescriptor>, AppError>>;
 
 static PENDING_WINDOW_LIST: Mutex<Option<WindowListTask>> = Mutex::new(None);
+
+pub(crate) struct PrefetchedFreezeFrame {
+    pub pointer: Option<(i32, i32)>,
+    pub frame: DisplayFrame,
+}
+
+type FreezeFrameTask = std::thread::JoinHandle<Result<PrefetchedFreezeFrame, CaptureError>>;
+
+static PENDING_FREEZE_FRAME: Mutex<Option<FreezeFrameTask>> = Mutex::new(None);
+static FREEZE_PREFETCH_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// Start listing windows on shortcut key-down so the window overlay can show
 /// targets as soon as the freeze-frame is ready. Capture still waits for key-up
@@ -766,6 +838,324 @@ pub(crate) fn take_prefetched_or_spawn_windows(state: &Arc<AppState>) -> WindowL
 pub(crate) fn discard_prefetched_windows() {
     if let Ok(mut pending) = PENDING_WINDOW_LIST.lock() {
         drop(pending.take());
+    }
+}
+
+fn discard_prefetched_freeze_frame() {
+    FREEZE_PREFETCH_GENERATION.fetch_add(1, Ordering::AcqRel);
+    if let Ok(mut pending) = PENDING_FREEZE_FRAME.lock() {
+        drop(pending.take());
+    }
+}
+
+fn restore_prefetched_freeze_chrome(app: &AppHandle) {
+    restore_capture_ui_snapshot_exclusion(app);
+    restore_excluded_recording_chrome(app);
+    set_capture_huds_protected(app, false);
+    updates::restore_update_notice(app);
+    update_thumbnail_stack(app);
+}
+
+pub(crate) fn abort_prefetched_freeze_capture(app: &AppHandle) {
+    discard_prefetched_freeze_frame();
+    restore_prefetched_freeze_chrome(app);
+}
+
+/// Capture the freeze-frame on shortcut key-down, before the region cursor-claim
+/// panel covers the display. That panel becomes key and eats mouse events, which
+/// dismisses tooltips and other hover chrome.
+fn prefetch_freeze_frame(app: &AppHandle, state: &Arc<AppState>, claim_region_cursor: bool) {
+    discard_prefetched_freeze_frame();
+    let generation = FREEZE_PREFETCH_GENERATION.load(Ordering::Acquire);
+    let app = app.clone();
+    let state = state.clone();
+    let Ok(mut pending) = PENDING_FREEZE_FRAME.lock() else {
+        return;
+    };
+    *pending = Some(std::thread::spawn(move || {
+        let include_capture_ui = capture_ui_is_visible(&app);
+        if include_capture_ui {
+            include_capture_ui_in_snapshot(&app);
+        }
+        let had_visible_hud = conceal_capture_chrome_for_snapshot(&app);
+        settle_concealed_capture_chrome(had_visible_hud || include_capture_ui);
+        let pointer = pointer_position();
+        let frame = match state.backend.capture_display_at_point(pointer) {
+            Ok(frame) => frame,
+            Err(error) => {
+                restore_prefetched_freeze_chrome(&app);
+                return Err(error);
+            }
+        };
+        if FREEZE_PREFETCH_GENERATION.load(Ordering::Acquire) != generation {
+            restore_prefetched_freeze_chrome(&app);
+            return Err(CaptureError::Backend(
+                "discarded freeze-frame prefetch".to_owned(),
+            ));
+        }
+        if claim_region_cursor {
+            claim_region_capture_cursor(&app);
+        }
+        Ok(PrefetchedFreezeFrame { pointer, frame })
+    }));
+}
+
+fn take_prefetched_freeze_frame() -> Option<PrefetchedFreezeFrame> {
+    let task = PENDING_FREEZE_FRAME.lock().ok()?.take()?;
+    match task.join() {
+        Ok(Ok(frame)) => Some(frame),
+        Ok(Err(error)) => {
+            if !matches!(
+                &error,
+                CaptureError::Backend(message) if message == "discarded freeze-frame prefetch"
+            ) {
+                eprintln!("freeze-frame prefetch failed: {error}");
+            }
+            None
+        }
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+pub(crate) fn take_prefetched_or_capture_freeze_frame(
+    state: &Arc<AppState>,
+) -> Result<PrefetchedFreezeFrame, AppError> {
+    if let Some(frame) = take_prefetched_freeze_frame() {
+        return Ok(frame);
+    }
+    let pointer = pointer_position();
+    let frame = state.backend.capture_display_at_point(pointer)?;
+    Ok(PrefetchedFreezeFrame { pointer, frame })
+}
+
+fn take_prefetched_freeze_matching_display(
+    state: &Arc<AppState>,
+    display_id: &str,
+) -> Result<(Option<(i32, i32)>, DisplayFrame), AppError> {
+    if let Some(prefetched) = take_prefetched_freeze_frame()
+        && prefetched.frame.descriptor.id == display_id
+    {
+        return Ok((prefetched.pointer, prefetched.frame));
+    }
+    let pointer = pointer_position();
+    Ok((pointer, state.backend.capture_display(display_id)?))
+}
+
+pub(crate) fn freeze_prefetch_is_pending() -> bool {
+    PENDING_FREEZE_FRAME
+        .lock()
+        .ok()
+        .is_some_and(|pending| pending.is_some())
+}
+
+fn capture_surface_window_is_visible(app: &AppHandle, label: &str) -> bool {
+    app.get_webview_window(label)
+        .is_some_and(|window| window.is_visible().unwrap_or(false))
+}
+
+pub(crate) fn capture_overlay_is_visible(app: &AppHandle) -> bool {
+    capture_surface_window_is_visible(app, "overlay")
+}
+
+fn capture_menu_is_visible(app: &AppHandle) -> bool {
+    capture_surface_window_is_visible(app, "recording-selector")
+}
+
+fn capture_ui_is_visible(app: &AppHandle) -> bool {
+    capture_overlay_is_visible(app) || capture_menu_is_visible(app)
+}
+
+/// Overlay is already up: any new screenshot shortcut should freeze that UI.
+/// Capture menu still switches region/window/display in place unless the same
+/// screenshot target is pressed again.
+fn should_freeze_visible_capture_ui(
+    overlay_visible: bool,
+    menu_visible: bool,
+    menu_screenshot_target: Option<CaptureMode>,
+    requested: CaptureMode,
+) -> bool {
+    overlay_visible || (menu_visible && menu_screenshot_target == Some(requested))
+}
+
+fn open_menu_screenshot_target(state: &AppState) -> Option<CaptureMode> {
+    state
+        .recording_selection
+        .lock()
+        .as_ref()
+        .and_then(|selection| {
+            (selection.summary.initial_mode == CaptureSelectorMode::Screenshot)
+                .then_some(selection.summary.initial_target)
+        })
+}
+
+fn should_recapture_visible_capture_ui(
+    app: &AppHandle,
+    state: &AppState,
+    requested: CaptureMode,
+) -> bool {
+    should_freeze_visible_capture_ui(
+        capture_overlay_is_visible(app),
+        capture_menu_is_visible(app),
+        open_menu_screenshot_target(state),
+        requested,
+    )
+}
+
+pub(crate) fn should_recapture_open_capture_menu(
+    app: &AppHandle,
+    state: &AppState,
+    initial_mode: CaptureSelectorMode,
+    initial_target: CaptureMode,
+) -> bool {
+    initial_mode == CaptureSelectorMode::Screenshot
+        && capture_menu_is_visible(app)
+        && open_menu_screenshot_target(state) == Some(initial_target)
+}
+
+const CAPTURE_UI_SNAPSHOT_LABELS: [&str; 2] = ["overlay", "recording-selector"];
+
+pub(crate) fn include_capture_ui_in_snapshot(app: &AppHandle) {
+    set_capture_ui_excluded_from_snapshot(app, false);
+}
+
+pub(crate) fn restore_capture_ui_snapshot_exclusion(app: &AppHandle) {
+    set_capture_ui_excluded_from_snapshot(app, true);
+}
+
+fn set_capture_ui_excluded_from_snapshot(app: &AppHandle, excluded: bool) {
+    for label in CAPTURE_UI_SNAPSHOT_LABELS {
+        let Some(window) = app.get_webview_window(label) else {
+            continue;
+        };
+        let _ = set_window_content_protected(&window, excluded);
+        #[cfg(target_os = "macos")]
+        if let Err(error) = captures_macos_window::set_excluded_from_capture(&window, excluded) {
+            eprintln!("failed to update capture UI sharing for {label}: {error}");
+        }
+    }
+}
+
+pub(crate) fn drain_overlay_sessions_keeping_window(state: &Arc<AppState>) {
+    let stale_capture_generations = {
+        let mut sessions = state.sessions.lock();
+        sessions
+            .drain()
+            .map(|(_, session)| session.thumbnail_capture_generation)
+            .collect::<Vec<_>>()
+    };
+    if stale_capture_generations.is_empty() {
+        return;
+    }
+    let mut visibility = state.thumbnail_visibility.lock();
+    for capture_generation in stale_capture_generations {
+        visibility.restore_capture(capture_generation);
+    }
+}
+
+fn freeze_prefetch_can_start(
+    onboarding_completed: bool,
+    install_active: bool,
+    screenshot_countdown_active: bool,
+) -> bool {
+    onboarding_completed && !install_active && !screenshot_countdown_active
+}
+
+fn freeze_prefetch_is_allowed_for_selector(app: &AppHandle, state: &AppState) -> bool {
+    if !freeze_prefetch_can_start(
+        state.settings().onboarding_completed,
+        updates::install_is_active(app),
+        screenshot_countdown_is_active(state),
+    ) {
+        return false;
+    }
+    if recording::recording_session_is_active(state) {
+        return false;
+    }
+    if capture_overlay_is_visible(app) {
+        return true;
+    }
+    if capture_menu_is_visible(app) {
+        return open_menu_screenshot_target(state) == Some(CaptureMode::Region);
+    }
+    state.settings().freeze_screen
+        && state.sessions.lock().is_empty()
+        && state.recording_selection.lock().is_none()
+}
+
+fn freeze_prefetch_is_allowed(app: &AppHandle, state: &AppState, mode: CaptureMode) -> bool {
+    if !freeze_prefetch_can_start(
+        state.settings().onboarding_completed,
+        updates::install_is_active(app),
+        screenshot_countdown_is_active(state),
+    ) {
+        return false;
+    }
+    if should_recapture_visible_capture_ui(app, state, mode) {
+        return true;
+    }
+    state.settings().freeze_screen
+        && state.sessions.lock().is_empty()
+        && state.recording_selection.lock().is_none()
+}
+
+fn should_prefetch_freeze_on_shortcut_press(mode: CaptureMode, freeze_screen: bool) -> bool {
+    freeze_screen
+        && matches!(
+            mode,
+            CaptureMode::Region | CaptureMode::Window | CaptureMode::Display
+        )
+}
+
+fn should_claim_region_cursor_after_freeze(mode: CaptureMode, freeze_after_snapshot: bool) -> bool {
+    mode == CaptureMode::Region && freeze_after_snapshot
+}
+
+fn should_claim_region_cursor_on_shortcut_press(
+    mode: CaptureMode,
+    freeze_screen: bool,
+    recapture_ui: bool,
+) -> bool {
+    mode == CaptureMode::Region && !freeze_screen && !recapture_ui
+}
+
+pub(crate) const fn screenshot_countdown_seconds_for_capture_ui(
+    countdown_seconds: u8,
+    includes_capture_ui: bool,
+) -> u8 {
+    if includes_capture_ui {
+        0
+    } else {
+        countdown_seconds
+    }
+}
+
+fn prepare_capture_shortcut_press(app: &AppHandle, state: &Arc<AppState>, mode: CaptureMode) {
+    let freeze_screen = state.settings().freeze_screen;
+    let recapture_ui = should_recapture_visible_capture_ui(app, state, mode);
+    if freeze_prefetch_is_allowed(app, state, mode)
+        && (recapture_ui || should_prefetch_freeze_on_shortcut_press(mode, freeze_screen))
+    {
+        prefetch_freeze_frame(
+            app,
+            state,
+            should_claim_region_cursor_after_freeze(mode, freeze_screen || recapture_ui),
+        );
+    }
+    if should_claim_region_cursor_on_shortcut_press(mode, freeze_screen, recapture_ui) {
+        claim_region_capture_cursor(app);
+    }
+    if mode == CaptureMode::Window {
+        prefetch_capturable_windows(state);
+    }
+}
+
+fn cancel_capture_shortcut_press(app: &AppHandle, mode: CaptureMode) {
+    abort_prefetched_freeze_capture(app);
+    if mode == CaptureMode::Region {
+        release_claimed_region_capture_cursor();
+    }
+    if mode == CaptureMode::Window {
+        discard_prefetched_windows();
     }
 }
 
@@ -908,7 +1298,10 @@ async fn commit_region(
         .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
     let thumbnail_capture_generation = session.thumbnail_capture_generation;
     sync_capture_escape(&app);
-    let countdown_seconds = state.settings().screenshot_countdown_seconds;
+    let countdown_seconds = screenshot_countdown_seconds_for_capture_ui(
+        state.settings().screenshot_countdown_seconds,
+        session.includes_capture_ui,
+    );
     let image = if countdown_seconds > 0 {
         set_capture_huds_protected(&app, true);
         let completed = match run_screenshot_countdown(
@@ -1012,6 +1405,7 @@ async fn commit_window(
         .remove(&id)
         .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
     let thumbnail_capture_generation = session.thumbnail_capture_generation;
+    let includes_capture_ui = session.includes_capture_ui;
     sync_capture_escape(&app);
 
     let selected_window = match session
@@ -1026,7 +1420,10 @@ async fn commit_window(
             return Err(AppError::InvalidSelection.to_string());
         }
     };
-    let countdown_seconds = state.settings().screenshot_countdown_seconds;
+    let countdown_seconds = screenshot_countdown_seconds_for_capture_ui(
+        state.settings().screenshot_countdown_seconds,
+        includes_capture_ui,
+    );
     let display_crop_is_safe = window_display_crop_is_safe(&selected_window, &session.windows);
     let image = if countdown_seconds > 0 {
         set_capture_huds_protected(&app, true);
@@ -1140,7 +1537,10 @@ async fn commit_display(
         .ok_or_else(|| AppError::SessionUnavailable.to_string())?;
     let thumbnail_capture_generation = session.thumbnail_capture_generation;
     sync_capture_escape(&app);
-    let countdown_seconds = state.settings().screenshot_countdown_seconds;
+    let countdown_seconds = screenshot_countdown_seconds_for_capture_ui(
+        state.settings().screenshot_countdown_seconds,
+        session.includes_capture_ui,
+    );
     let image = if countdown_seconds > 0 {
         set_capture_huds_protected(&app, true);
         let completed = match run_screenshot_countdown(
@@ -1237,6 +1637,7 @@ fn cancel_capture(
     session_id: String,
 ) -> CommandResult<()> {
     hide_capture_overlay(&app);
+    restore_capture_ui_snapshot_exclusion(&app);
     let id = Uuid::parse_str(&session_id).map_err(|error| error.to_string())?;
     if let Some(session) = state.sessions.lock().remove(&id) {
         restore_thumbnail_capture(&app, state.inner(), session.thumbnail_capture_generation);
@@ -1262,6 +1663,7 @@ fn cancel_active_capture(app: AppHandle, state: tauri::State<'_, Arc<AppState>>)
 #[tauri::command]
 fn dismiss_capture_surface(app: AppHandle) {
     hide_capture_overlay(&app);
+    restore_capture_ui_snapshot_exclusion(&app);
 }
 
 /// Cancel screenshot capture UI so an update can restart. Failures are logged
@@ -1279,6 +1681,7 @@ pub(crate) fn dismiss_capture_ui_for_update(app: &AppHandle, state: &Arc<AppStat
         restore_thumbnail_capture(app, state, generation);
     }
     recording::dismiss_recording_selection_for_update(app, state);
+    restore_capture_ui_snapshot_exclusion(app);
     reveal_document_windows_after_capture(app);
     CAPTURE_ESCAPE_INTENT.store(false, Ordering::Release);
     sync_capture_escape(app);
@@ -3836,6 +4239,7 @@ fn cancel_active_capture_ui(app: &AppHandle, state: &Arc<AppState>) {
         return;
     }
     CAPTURE_ESCAPE_INTENT.store(false, Ordering::Release);
+    abort_prefetched_freeze_capture(app);
     hide_capture_overlay(app);
     let generations: Vec<u64> = state
         .sessions
@@ -3946,16 +4350,24 @@ fn register_new_capture_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), 
     let armed = AtomicBool::new(false);
     app.global_shortcut()
         .on_shortcut(parsed, move |app, _shortcut, event| {
-            if !should_trigger_shortcut(&armed, event.state()) {
-                return;
-            }
-            if app
+            let state = app.state::<Arc<AppState>>().inner().clone();
+            let preferences_or_onboarding_focused = app
                 .get_webview_window("preferences")
                 .is_some_and(|window| window.is_focused().unwrap_or(false))
                 || app
                     .get_webview_window(ONBOARDING_WINDOW_LABEL)
-                    .is_some_and(|window| window.is_focused().unwrap_or(false))
+                    .is_some_and(|window| window.is_focused().unwrap_or(false));
+            if event.state() == ShortcutState::Pressed
+                && !preferences_or_onboarding_focused
+                && freeze_prefetch_is_allowed_for_selector(app, &state)
             {
+                prefetch_freeze_frame(app, &state, false);
+            }
+            if !should_trigger_shortcut(&armed, event.state()) {
+                return;
+            }
+            if preferences_or_onboarding_focused {
+                abort_prefetched_freeze_capture(app);
                 return;
             }
             let app = app.clone();
@@ -3990,22 +4402,13 @@ fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Resu
                 && !recording::screenshot_capture_is_blocked(&state)
                 && !screenshot_countdown_is_active(&state)
             {
-                if mode == CaptureMode::Region {
-                    claim_region_capture_cursor(app);
-                } else if mode == CaptureMode::Window {
-                    prefetch_capturable_windows(&state);
-                }
+                prepare_capture_shortcut_press(app, &state, mode);
             }
             let trigger_is_suppressed =
                 track_shortcut_suppression(&suppressed_while_pressed, event.state(), suppressed);
             if !should_trigger_shortcut(&armed, event.state()) || trigger_is_suppressed {
                 if event.state() == ShortcutState::Released && trigger_is_suppressed {
-                    if mode == CaptureMode::Region {
-                        release_claimed_region_capture_cursor();
-                    }
-                    if mode == CaptureMode::Window {
-                        discard_prefetched_windows();
-                    }
+                    cancel_capture_shortcut_press(app, mode);
                 }
                 return;
             }
@@ -4046,9 +4449,19 @@ fn register_recording_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), Ap
                 return;
             }
             let suppressed = shortcut_capture_is_suppressed(app, &state);
+            if event.state() == ShortcutState::Pressed
+                && !suppressed
+                && freeze_prefetch_is_allowed_for_selector(app, &state)
+                && !recording::recording_session_is_active(&state)
+            {
+                prefetch_freeze_frame(app, &state, false);
+            }
             let trigger_is_suppressed =
                 track_shortcut_suppression(&suppressed_while_pressed, event.state(), suppressed);
             if !should_trigger_shortcut(&armed, event.state()) || trigger_is_suppressed {
+                if event.state() == ShortcutState::Released && trigger_is_suppressed {
+                    abort_prefetched_freeze_capture(app);
+                }
                 return;
             }
             let app = app.clone();
@@ -4299,16 +4712,24 @@ fn on_win_shift_s(phase: captures_session::WinShiftSPhase) {
 
 #[cfg(target_os = "windows")]
 fn dispatch_new_capture_shortcut(app: &AppHandle, event_state: ShortcutState) {
-    if !should_trigger_shortcut(&WIN_SHIFT_S_ARMED, event_state) {
-        return;
-    }
-    if app
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    let preferences_or_onboarding_focused = app
         .get_webview_window("preferences")
         .is_some_and(|window| window.is_focused().unwrap_or(false))
         || app
             .get_webview_window(ONBOARDING_WINDOW_LABEL)
-            .is_some_and(|window| window.is_focused().unwrap_or(false))
+            .is_some_and(|window| window.is_focused().unwrap_or(false));
+    if event_state == ShortcutState::Pressed
+        && !preferences_or_onboarding_focused
+        && freeze_prefetch_is_allowed_for_selector(app, &state)
     {
+        prefetch_freeze_frame(app, &state, false);
+    }
+    if !should_trigger_shortcut(&WIN_SHIFT_S_ARMED, event_state) {
+        return;
+    }
+    if preferences_or_onboarding_focused {
+        abort_prefetched_freeze_capture(app);
         return;
     }
     let app = app.clone();
@@ -4327,9 +4748,19 @@ fn dispatch_recording_shortcut(app: &AppHandle, event_state: ShortcutState) {
         return;
     }
     let suppressed = shortcut_capture_is_suppressed(app, &state);
+    if event_state == ShortcutState::Pressed
+        && !suppressed
+        && freeze_prefetch_is_allowed_for_selector(app, &state)
+        && !recording::recording_session_is_active(&state)
+    {
+        prefetch_freeze_frame(app, &state, false);
+    }
     let trigger_is_suppressed =
         track_shortcut_suppression(&WIN_SHIFT_S_SUPPRESSED, event_state, suppressed);
     if !should_trigger_shortcut(&WIN_SHIFT_S_ARMED, event_state) || trigger_is_suppressed {
+        if event_state == ShortcutState::Released && trigger_is_suppressed {
+            abort_prefetched_freeze_capture(app);
+        }
         return;
     }
     let app = app.clone();
@@ -4359,22 +4790,13 @@ fn dispatch_capture_shortcut(app: &AppHandle, mode: CaptureMode, event_state: Sh
         && !recording::screenshot_capture_is_blocked(&state)
         && !screenshot_countdown_is_active(&state)
     {
-        if mode == CaptureMode::Region {
-            claim_region_capture_cursor(app);
-        } else if mode == CaptureMode::Window {
-            prefetch_capturable_windows(&state);
-        }
+        prepare_capture_shortcut_press(app, &state, mode);
     }
     let trigger_is_suppressed =
         track_shortcut_suppression(suppressed_while_pressed, event_state, suppressed);
     if !should_trigger_shortcut(armed, event_state) || trigger_is_suppressed {
         if event_state == ShortcutState::Released && trigger_is_suppressed {
-            if mode == CaptureMode::Region {
-                release_claimed_region_capture_cursor();
-            }
-            if mode == CaptureMode::Window {
-                discard_prefetched_windows();
-            }
+            cancel_capture_shortcut_press(app, mode);
         }
         return;
     }
@@ -4525,10 +4947,15 @@ fn start_capture_from_tray(app: &AppHandle, mode: CaptureMode) {
         show_onboarding(app);
         return;
     }
-    let app = app.clone();
-    if mode == CaptureMode::Region {
-        claim_region_capture_cursor(&app);
+    let recapture_ui = should_recapture_visible_capture_ui(app, &state, mode);
+    if should_claim_region_cursor_on_shortcut_press(
+        mode,
+        state.settings().freeze_screen,
+        recapture_ui,
+    ) {
+        claim_region_capture_cursor(app);
     }
+    let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if mode == CaptureMode::Display && !recording::recording_session_is_active(&state) {
             open_capture_controls_with_target(
@@ -6728,11 +7155,35 @@ pub(crate) fn set_window_content_protected(
     window.set_content_protected(windows_display_affinity_excludes_capture(excluded, visible))
 }
 
-const CAPTURE_HUD_HIDE_SETTLE_MS: u64 = 40;
+pub(crate) const CAPTURE_HUD_HIDE_SETTLE_MS: u64 = 40;
 static RESTORE_RECORDING_HUD_AFTER_CAPTURE: AtomicBool = AtomicBool::new(false);
 static RESTORE_HIDDEN_CONTROLS_NOTICE_AFTER_CAPTURE: AtomicBool = AtomicBool::new(false);
 
+const fn recording_chrome_should_restore_after_snapshot(
+    already_marked: bool,
+    chrome_visible: bool,
+) -> bool {
+    already_marked || chrome_visible
+}
+
 pub(crate) async fn hide_capture_huds_before_snapshot(app: &AppHandle) {
+    let had_visible_hud = conceal_capture_chrome_for_snapshot(app);
+    // Native hide/content-protection calls return before every compositor has
+    // necessarily presented the new window state. Give a previously visible
+    // HUD two frames to disappear before freezing the desktop background.
+    if had_visible_hud {
+        tokio::time::sleep(std::time::Duration::from_millis(CAPTURE_HUD_HIDE_SETTLE_MS)).await;
+    }
+
+    // A capture shortcut can fire while Start / Search are still on screen.
+    // Wait until those flyouts have left so they do not freeze into the
+    // screenshot. No-op on other platforms.
+    let _ =
+        tokio::task::spawn_blocking(captures_session::dismiss_transient_shell_ui_before_capture)
+            .await;
+}
+
+fn conceal_capture_chrome_for_snapshot(app: &AppHandle) -> bool {
     let include_mini_previews = include_mini_previews_in_captures(app);
     let include_recording_controls = include_recording_controls_in_captures(app);
     let hide_update = updates::should_hide_update_notice_for_capture(app);
@@ -6763,20 +7214,14 @@ pub(crate) async fn hide_capture_huds_before_snapshot(app: &AppHandle) {
     if hide_update {
         updates::defer_visible_notice(app);
     }
+    had_visible_hud
+}
 
-    // Native hide/content-protection calls return before every compositor has
-    // necessarily presented the new window state. Give a previously visible
-    // HUD two frames to disappear before freezing the desktop background.
+fn settle_concealed_capture_chrome(had_visible_hud: bool) {
     if had_visible_hud {
-        tokio::time::sleep(std::time::Duration::from_millis(CAPTURE_HUD_HIDE_SETTLE_MS)).await;
+        std::thread::sleep(std::time::Duration::from_millis(CAPTURE_HUD_HIDE_SETTLE_MS));
     }
-
-    // A capture shortcut can fire while Start / Search are still on screen.
-    // Wait until those flyouts have left so they do not freeze into the
-    // screenshot. No-op on other platforms.
-    let _ =
-        tokio::task::spawn_blocking(captures_session::dismiss_transient_shell_ui_before_capture)
-            .await;
+    captures_session::dismiss_transient_shell_ui_before_capture();
 }
 
 fn hide_capture_huds(
@@ -6838,8 +7283,21 @@ fn hide_capture_huds_inner(
             label.starts_with(RECORDING_CONTROLS_HIDDEN_NOTICE_PREFIX)
                 && window.is_visible().unwrap_or(false)
         });
-        RESTORE_RECORDING_HUD_AFTER_CAPTURE.store(hud_visible, Ordering::SeqCst);
-        RESTORE_HIDDEN_CONTROLS_NOTICE_AFTER_CAPTURE.store(notice_visible, Ordering::SeqCst);
+        // Prefetch conceals on key-down; key-up conceals again after the HUD is
+        // already hidden. Keep the first restore mark instead of overwriting it
+        // with false, or recording controls stay gone after the snapshot.
+        if recording_chrome_should_restore_after_snapshot(
+            RESTORE_RECORDING_HUD_AFTER_CAPTURE.load(Ordering::SeqCst),
+            hud_visible,
+        ) {
+            RESTORE_RECORDING_HUD_AFTER_CAPTURE.store(true, Ordering::SeqCst);
+        }
+        if recording_chrome_should_restore_after_snapshot(
+            RESTORE_HIDDEN_CONTROLS_NOTICE_AFTER_CAPTURE.load(Ordering::SeqCst),
+            notice_visible,
+        ) {
+            RESTORE_HIDDEN_CONTROLS_NOTICE_AFTER_CAPTURE.store(true, Ordering::SeqCst);
+        }
         hide_window_inner(app, "recording-hud");
         hide_recording_controls_hidden_notices(app);
     }
@@ -7000,7 +7458,7 @@ fn run_on_appkit_main<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'stat
     captures_macos_window::run_on_main(work)
 }
 
-fn hide_capture_overlay(app: &AppHandle) {
+pub(crate) fn hide_capture_overlay(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     {
         let app = app.clone();
@@ -7896,29 +8354,33 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::macos_window_is_capture_overlay;
     use super::{
-        AppError, AppReactivation, InteractiveLaunchAction, LogicalRect, PreviewFileDropLanding,
-        STARTUP_NOTICE_AFTER_SETUP_VISIBLE, STARTUP_NOTICE_AUTOSTART_VISIBLE,
-        STARTUP_NOTICE_HEIGHT, STARTUP_NOTICE_WIDTH, StartupNoticeCaret,
-        THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP, TRAY_NOTICE_CARET_INSET,
-        TRAY_NOTICE_CARET_SIZE, TRAY_NOTICE_FRAME_PAD, TRAY_NOTICE_SCREEN_MARGIN,
-        TRAY_NOTICE_TRAY_OVERLAP, ThumbnailCursorAction, ThumbnailCursorKind,
-        ThumbnailMonitorBounds, ThumbnailPointerSpace, ThumbnailStackAnchor, ThumbnailStackOrigin,
-        ThumbnailWindowFrame, ThumbnailWindowGeometry, app_reactivation,
+        AppError, AppReactivation, CaptureMode, InteractiveLaunchAction, LogicalRect,
+        PreviewFileDropLanding, STARTUP_NOTICE_AFTER_SETUP_VISIBLE,
+        STARTUP_NOTICE_AUTOSTART_VISIBLE, STARTUP_NOTICE_HEIGHT, STARTUP_NOTICE_WIDTH,
+        StartupNoticeCaret, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP,
+        TRAY_NOTICE_CARET_INSET, TRAY_NOTICE_CARET_SIZE, TRAY_NOTICE_FRAME_PAD,
+        TRAY_NOTICE_SCREEN_MARGIN, TRAY_NOTICE_TRAY_OVERLAP, ThumbnailCursorAction,
+        ThumbnailCursorKind, ThumbnailMonitorBounds, ThumbnailPointerSpace, ThumbnailStackAnchor,
+        ThumbnailStackOrigin, ThumbnailWindowFrame, ThumbnailWindowGeometry, app_reactivation,
         capturable_windows_for_display, capture_cursor_icon, classify_preview_file_drop,
         click_through_applies, clipboard_fingerprint, display_contains_pointer,
-        drag_plugin_cursor_to_pointer_space, fallback_startup_notice, interactive_launch_action,
-        mask_macos_window_corners, parse_shortcut, place_startup_notice, preferences_url,
-        primary_app_window_priority, recording::RECORDING_REGION_INDICATOR_TITLE,
-        refine_window_chrome_from_snapshot, resolve_startup_notice_placement,
-        resolve_window_capture, should_trigger_shortcut, startup_notice_fallback_edge_from_insets,
-        startup_notice_url, take_ready_or_defer_windows, thumbnail_clamp_aligned_frame,
-        thumbnail_cursor_action, thumbnail_cursor_ignore_update, thumbnail_geometry,
-        thumbnail_pointer_in_space, thumbnail_pointer_position, thumbnail_preserve_current_height,
-        thumbnail_stack_height, thumbnail_stack_should_be_visible, thumbnail_visible_window_height,
-        thumbnail_window_top, track_shortcut_suppression, tray_accelerator,
-        tray_icon_rect_is_usable, tray_notice_window_size, viewer_window_label,
-        window_display_crop_is_safe, window_is_capturable,
-        windows_display_affinity_excludes_capture, windows_window_is_capture_overlay,
+        drag_plugin_cursor_to_pointer_space, fallback_startup_notice, freeze_prefetch_can_start,
+        interactive_launch_action, mask_macos_window_corners, parse_shortcut, place_startup_notice,
+        preferences_url, primary_app_window_priority, recording::RECORDING_REGION_INDICATOR_TITLE,
+        recording_chrome_should_restore_after_snapshot, refine_window_chrome_from_snapshot,
+        resolve_startup_notice_placement, resolve_window_capture,
+        screenshot_countdown_seconds_for_capture_ui, should_claim_region_cursor_after_freeze,
+        should_claim_region_cursor_on_shortcut_press, should_freeze_visible_capture_ui,
+        should_prefetch_freeze_on_shortcut_press, should_trigger_shortcut,
+        startup_notice_fallback_edge_from_insets, startup_notice_url, take_ready_or_defer_windows,
+        thumbnail_clamp_aligned_frame, thumbnail_cursor_action, thumbnail_cursor_ignore_update,
+        thumbnail_geometry, thumbnail_pointer_in_space, thumbnail_pointer_position,
+        thumbnail_preserve_current_height, thumbnail_stack_height,
+        thumbnail_stack_should_be_visible, thumbnail_visible_window_height, thumbnail_window_top,
+        track_shortcut_suppression, tray_accelerator, tray_icon_rect_is_usable,
+        tray_notice_window_size, viewer_window_label, window_display_crop_is_safe,
+        window_is_capturable, windows_display_affinity_excludes_capture,
+        windows_window_is_capture_overlay,
     };
 
     #[test]
@@ -8676,6 +9138,8 @@ mod tests {
     #[test]
     fn region_shortcut_claims_the_crosshair_on_press() {
         assert!(captures_macos_window::region_shortcut_claims_cursor_on_press());
+        assert!(captures_macos_window::region_cursor_claim_waits_for_freeze_frame(true));
+        assert!(!captures_macos_window::region_cursor_claim_waits_for_freeze_frame(false));
         assert!(captures_macos_window::overlay_prepare_keeps_native_cursor(
             captures_macos_window::CaptureCursor::overlay_region().native_owned
         ));
@@ -8783,6 +9247,142 @@ mod tests {
             parse_shortcut("Super+Shift+KeyS").expect("recorded super-shift-s should parse")
         );
         assert!(parse_shortcut("Escape").is_ok());
+    }
+
+    #[test]
+    fn freeze_region_shortcut_snapshots_before_claiming_the_crosshair() {
+        assert!(should_prefetch_freeze_on_shortcut_press(
+            CaptureMode::Region,
+            true,
+        ));
+        assert!(should_claim_region_cursor_after_freeze(
+            CaptureMode::Region,
+            true,
+        ));
+        assert!(!should_claim_region_cursor_on_shortcut_press(
+            CaptureMode::Region,
+            true,
+            false,
+        ));
+    }
+
+    #[test]
+    fn live_region_shortcut_still_claims_the_crosshair_immediately() {
+        assert!(!should_prefetch_freeze_on_shortcut_press(
+            CaptureMode::Region,
+            false,
+        ));
+        assert!(!should_claim_region_cursor_after_freeze(
+            CaptureMode::Region,
+            false,
+        ));
+        assert!(should_claim_region_cursor_on_shortcut_press(
+            CaptureMode::Region,
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn freeze_window_shortcut_prefetches_without_a_cursor_claim() {
+        assert!(should_prefetch_freeze_on_shortcut_press(
+            CaptureMode::Window,
+            true,
+        ));
+        assert!(!should_claim_region_cursor_after_freeze(
+            CaptureMode::Window,
+            true,
+        ));
+        assert!(!should_claim_region_cursor_on_shortcut_press(
+            CaptureMode::Window,
+            true,
+            false,
+        ));
+    }
+
+    #[test]
+    fn recapture_region_overlay_waits_to_claim_the_crosshair() {
+        assert!(!should_claim_region_cursor_on_shortcut_press(
+            CaptureMode::Region,
+            false,
+            true,
+        ));
+        assert!(should_claim_region_cursor_after_freeze(
+            CaptureMode::Region,
+            true,
+        ));
+        assert_eq!(screenshot_countdown_seconds_for_capture_ui(3, true), 0);
+        assert_eq!(screenshot_countdown_seconds_for_capture_ui(3, false), 3);
+    }
+
+    #[test]
+    fn freeze_visible_capture_ui_recaptures_overlay_for_any_screenshot() {
+        assert!(should_freeze_visible_capture_ui(
+            true,
+            false,
+            None,
+            CaptureMode::Region,
+        ));
+        assert!(should_freeze_visible_capture_ui(
+            true,
+            false,
+            None,
+            CaptureMode::Window,
+        ));
+        assert!(should_freeze_visible_capture_ui(
+            true,
+            false,
+            None,
+            CaptureMode::Display,
+        ));
+        assert!(should_freeze_visible_capture_ui(
+            false,
+            true,
+            Some(CaptureMode::Region),
+            CaptureMode::Region,
+        ));
+        assert!(!should_freeze_visible_capture_ui(
+            false,
+            true,
+            Some(CaptureMode::Region),
+            CaptureMode::Window,
+        ));
+        assert!(!should_freeze_visible_capture_ui(
+            false,
+            true,
+            Some(CaptureMode::Display),
+            CaptureMode::Region,
+        ));
+        assert!(should_freeze_visible_capture_ui(
+            false,
+            true,
+            Some(CaptureMode::Display),
+            CaptureMode::Display,
+        ));
+        assert!(!should_freeze_visible_capture_ui(
+            false,
+            false,
+            None,
+            CaptureMode::Region,
+        ));
+    }
+
+    #[test]
+    fn a_second_conceal_keeps_the_recording_hud_restore_mark() {
+        assert!(recording_chrome_should_restore_after_snapshot(false, true));
+        assert!(recording_chrome_should_restore_after_snapshot(true, false));
+        assert!(recording_chrome_should_restore_after_snapshot(true, true));
+        assert!(!recording_chrome_should_restore_after_snapshot(
+            false, false
+        ));
+    }
+
+    #[test]
+    fn freeze_prefetch_does_not_start_during_an_update_install() {
+        assert!(freeze_prefetch_can_start(true, false, false));
+        assert!(!freeze_prefetch_can_start(true, true, false));
+        assert!(!freeze_prefetch_can_start(true, false, true));
+        assert!(!freeze_prefetch_can_start(false, false, false));
     }
 
     #[test]

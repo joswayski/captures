@@ -57,6 +57,31 @@ const guidanceBounds = {
 } as DOMRect;
 
 /**
+ * jsdom completes `capture://` images with `error` on the next task. Keep
+ * snapshots pending until a test fires load, matching a real freeze-frame
+ * decode.
+ */
+function pauseHtmlImageLoading() {
+  const proto = HTMLImageElement.prototype;
+  const previous = Object.getOwnPropertyDescriptor(proto, "src");
+  Object.defineProperty(proto, "src", {
+    configurable: true,
+    enumerable: previous?.enumerable ?? true,
+    get() {
+      return this.getAttribute("src") ?? "";
+    },
+    set(value: string) {
+      this.setAttribute("src", value);
+    },
+  });
+  return () => {
+    if (previous) {
+      Object.defineProperty(proto, "src", previous);
+    }
+  };
+}
+
+/**
  * Mock guidance geometry on the prototype so React remounts / Strict Mode
  * cannot drop a per-element spy before pointer handlers read bounds.
  */
@@ -100,8 +125,10 @@ async function movePointerOverGuidance(
 describe("CaptureOverlay guidance", () => {
   let activeSession: ActiveSession | null;
   let capturePointer: { x: number; y: number; inside: boolean } | null;
+  let restoreImageLoading: (() => void) | undefined;
 
   beforeEach(() => {
+    restoreImageLoading = pauseHtmlImageLoading();
     activeSession = session;
     capturePointer = null;
     vi.mocked(listen).mockResolvedValue(() => undefined);
@@ -136,6 +163,8 @@ describe("CaptureOverlay guidance", () => {
       "capture-window-cursor",
       "capture-display-cursor",
     );
+    restoreImageLoading?.();
+    restoreImageLoading = undefined;
     vi.restoreAllMocks();
     vi.clearAllMocks();
   });

@@ -402,6 +402,9 @@ pub struct RecordingSelection {
     pub image: Option<RgbaImage>,
     pub snapshot_png: Vec<u8>,
     pub cursor: Option<(i32, i32)>,
+    /// Frozen pixels include Captures overlay or menu chrome, so commit must
+    /// not live-recapture after a screenshot countdown.
+    pub includes_capture_ui: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -859,6 +862,9 @@ pub struct CaptureSession {
     pub cursor: Option<(i32, i32)>,
     pub shell_chrome: Vec<WindowDescriptor>,
     pub windows_ready: bool,
+    /// Frozen pixels include Captures overlay or menu chrome, so commit must
+    /// not live-recapture after a screenshot countdown.
+    pub includes_capture_ui: bool,
 }
 
 pub fn default_output_directory() -> PathBuf {

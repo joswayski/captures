@@ -282,16 +282,24 @@ pub(crate) async fn prepare_capture_selector_inner(
     initial_mode: CaptureSelectorMode,
     initial_target: CaptureMode,
 ) -> Result<RecordingSelectionSession, AppError> {
-    crate::ensure_capture_session_available()?;
+    crate::ensure_capture_session_available().inspect_err(|_| {
+        crate::abort_prefetched_freeze_capture(&app);
+    })?;
     if crate::updates::install_is_active(&app) {
+        crate::abort_prefetched_freeze_capture(&app);
         return Err(AppError::UpdateInstalling);
     }
-    if !state.sessions.lock().is_empty()
-        || recording_session_is_active(&state)
-        || crate::screenshot_countdown_is_active(&state)
-    {
+    if recording_session_is_active(&state) || crate::screenshot_countdown_is_active(&state) {
+        crate::abort_prefetched_freeze_capture(&app);
         return Err(AppError::CaptureInProgress);
     }
+    let overlay_visible = crate::capture_overlay_is_visible(&app);
+    if !state.sessions.lock().is_empty() && !overlay_visible {
+        crate::abort_prefetched_freeze_capture(&app);
+        return Err(AppError::CaptureInProgress);
+    }
+    let recapture_menu =
+        crate::should_recapture_open_capture_menu(&app, &state, initial_mode, initial_target);
     crate::arm_capture_escape(&app);
     let pending_selection = {
         let mut pending = state.recording_selection.lock();
@@ -302,18 +310,22 @@ pub(crate) async fn prepare_capture_selector_inner(
         })
     };
     if let Some(summary) = pending_selection {
-        if app.get_webview_window("recording-selector").is_some() {
+        if !recapture_menu && app.get_webview_window("recording-selector").is_some() {
             if let Err(error) = app.emit("recording-selection-ready", &summary) {
                 eprintln!("failed to update the open capture menu: {error}");
             }
+            crate::abort_prefetched_freeze_capture(&app);
             return Ok(summary);
         }
-        *state.recording_selection.lock() = None;
+        if !recapture_menu {
+            *state.recording_selection.lock() = None;
+        }
     }
 
     let request_permission = match crate::mark_screen_permission_request(&state) {
         Ok(request) => request,
         Err(error) => {
+            crate::abort_prefetched_freeze_capture(&app);
             crate::disarm_capture_escape_intent(&app);
             return Err(error);
         }
@@ -325,14 +337,27 @@ pub(crate) async fn prepare_capture_selector_inner(
         ) {
             *state.screen_permission_requested_this_launch.lock() = true;
         }
+        crate::abort_prefetched_freeze_capture(&app);
         crate::disarm_capture_escape_intent(&app);
         return Err(error.into());
     }
 
     crate::suppress_thumbnail_capture_ui(&state);
+    if overlay_visible || recapture_menu {
+        crate::include_capture_ui_in_snapshot(&app);
+        if !crate::freeze_prefetch_is_pending() {
+            tokio::time::sleep(std::time::Duration::from_millis(
+                crate::CAPTURE_HUD_HIDE_SETTLE_MS,
+            ))
+            .await;
+        }
+    }
     crate::hide_capture_huds_before_snapshot(&app).await;
     warm_recording_selector_window(&app);
-    let freeze_screen = state.settings().freeze_screen;
+    let freeze_screen = state.settings().freeze_screen
+        || overlay_visible
+        || recapture_menu
+        || crate::freeze_prefetch_is_pending();
     let prepared = (|| {
         crate::ensure_capture_session_available()?;
         let id = Uuid::new_v4().to_string();
@@ -344,8 +369,9 @@ pub(crate) async fn prepare_capture_selector_inner(
         let windows_started = windows_task.is_some();
         let (display, snapshot_png, image, displays, targets, pending_windows, cursor) =
             if freeze_screen {
-                let pointer = crate::pointer_position();
-                let frame = state.backend.capture_display_at_point(pointer)?;
+                let prefetched = crate::take_prefetched_or_capture_freeze_frame(&state)?;
+                let pointer = prefetched.pointer;
+                let frame = prefetched.frame;
                 let monitors_task = {
                     let state = state.clone();
                     std::thread::spawn(move || state.monitors())
@@ -423,11 +449,17 @@ pub(crate) async fn prepare_capture_selector_inner(
             image,
             snapshot_png,
             cursor,
+            includes_capture_ui: overlay_visible || recapture_menu,
         });
         Ok::<_, AppError>((summary, pending_windows, windows_started))
     })();
+    crate::restore_capture_ui_snapshot_exclusion(&app);
     match prepared {
         Ok((summary, pending_windows, windows_started)) => {
+            if overlay_visible {
+                crate::drain_overlay_sessions_keeping_window(&state);
+                crate::hide_capture_overlay(&app);
+            }
             if let Err(error) = prepare_recording_selector(&app, &summary, true).await {
                 *state.recording_selection.lock() = None;
                 restore_recording_ui(&app, &state);
@@ -553,6 +585,7 @@ async fn select_capture_display_inner(
         image,
         snapshot_png,
         cursor,
+        includes_capture_ui: false,
     };
     let previous = {
         let mut pending = state.recording_selection.lock();
@@ -625,6 +658,18 @@ pub(crate) fn dismiss_open_recording_selection(app: &AppHandle, state: &Arc<AppS
     true
 }
 
+/// Hide the capture menu after its pixels are already in a nested freeze-frame.
+/// Skips HUD/document restore so a region overlay can take over without a flash.
+pub(crate) fn dismiss_capture_menu_after_nested_snapshot(app: &AppHandle, state: &Arc<AppState>) {
+    let mut selection = state.recording_selection.lock();
+    if selection.is_none() {
+        return;
+    }
+    *selection = None;
+    drop(selection);
+    hide_recording_selector(app);
+}
+
 /// Switch an already-open capture menu to screenshot + `target` without tearing
 /// it down. Keeps the freeze-frame and leaves document windows where they are.
 pub(crate) fn switch_open_capture_selector_to_screenshot(
@@ -638,6 +683,13 @@ pub(crate) fn switch_open_capture_selector_to_screenshot(
     };
     if app.get_webview_window("recording-selector").is_none() {
         *selection = None;
+        return false;
+    }
+    if current.summary.initial_mode == CaptureSelectorMode::Screenshot
+        && current.summary.initial_target == target
+    {
+        // Same screenshot shortcut again: let the caller freeze this menu into
+        // a new snapshot instead of no-op switching in place.
         return false;
     }
     current.summary.initial_mode = CaptureSelectorMode::Screenshot;
@@ -715,7 +767,10 @@ async fn capture_selection_screenshot_inner(
         return Err(error);
     }
     let mode = capture_mode_for_target(&request.target);
-    let countdown_seconds = state.settings().screenshot_countdown_seconds;
+    let countdown_seconds = crate::screenshot_countdown_seconds_for_capture_ui(
+        state.settings().screenshot_countdown_seconds,
+        selection.includes_capture_ui,
+    );
     let image = if countdown_seconds > 0 {
         // Delay, then recapture live so menus and hover states are current.
         match crate::run_screenshot_countdown(
