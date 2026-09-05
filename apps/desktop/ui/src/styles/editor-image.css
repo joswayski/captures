@@ -663,6 +663,11 @@
   background: var(--surface-hover);
 }
 
+.screenshot-tool-flyout button:focus-visible {
+  outline: 2px solid var(--theme-accent);
+  outline-offset: 2px;
+}
+
 .screenshot-tool-flyout button.active {
   color: var(--theme-accent-ink);
   background: var(--theme-accent);
@@ -2759,6 +2764,10 @@
   height: 100%;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.screenshot-draw-preview-brush stop {
+  stop-color: var(--solid);
 }
 
 .screenshot-format-buttons button {

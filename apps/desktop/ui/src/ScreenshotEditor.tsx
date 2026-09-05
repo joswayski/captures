@@ -3065,11 +3065,6 @@ export function ScreenshotEditor() {
         else undo();
         return;
       }
-      if (event.key === "Backspace" || event.key === "Delete") {
-        event.preventDefault();
-        deleteSelected();
-        return;
-      }
       if (event.key === "Escape") {
         if (shapesMenuOpen) {
           event.preventDefault();
@@ -3079,6 +3074,23 @@ export function ScreenshotEditor() {
         setEditingTextId(null);
         setSelectedId(null);
         setCropSelection(null);
+        return;
+      }
+      if (
+        shapesMenuOpen
+        && (
+          event.key === "Backspace"
+          || event.key === "Delete"
+          || event.key === "Home"
+          || event.key === "End"
+          || event.key.startsWith("Arrow")
+        )
+      ) {
+        return;
+      }
+      if (event.key === "Backspace" || event.key === "Delete") {
+        event.preventDefault();
+        deleteSelected();
         return;
       }
       const multiplier = event.shiftKey ? 10 : 1;
@@ -8067,6 +8079,10 @@ function toolLabel(tool: ScreenshotTool): string {
   return TOOL_ITEMS.find((item) => item.tool === tool)?.label ?? "Properties";
 }
 
+function shapeFlyoutItems(menu: HTMLElement | null): HTMLButtonElement[] {
+  return Array.from(menu?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]') ?? []);
+}
+
 function ShapesRailButton({
   activeTool,
   lastShape,
@@ -8111,6 +8127,56 @@ function ShapesRailButton({
     });
   }, []);
 
+  const closeAndRestoreFocus = useCallback(() => {
+    onClose();
+    buttonRef.current?.focus();
+  }, [onClose]);
+
+  const focusFlyoutItem = useCallback((index: number) => {
+    const items = shapeFlyoutItems(menuRef.current);
+    if (items.length === 0) return;
+    items[(index + items.length) % items.length]?.focus();
+  }, []);
+
+  const handleMenuKeyDown = useCallback((event: { key: string; preventDefault: () => void; stopPropagation: () => void }) => {
+    const items = shapeFlyoutItems(menuRef.current);
+    if (items.length === 0) return;
+    const currentIndex = items.findIndex((item) => item === document.activeElement);
+    const index = currentIndex >= 0 ? currentIndex : items.findIndex(
+      (item) => item.getAttribute("aria-checked") === "true",
+    );
+
+    if (event.key === "Escape" || event.key === "Tab") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeAndRestoreFocus();
+      return;
+    }
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      event.preventDefault();
+      event.stopPropagation();
+      focusFlyoutItem(index + 1);
+      return;
+    }
+    if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      event.preventDefault();
+      event.stopPropagation();
+      focusFlyoutItem(index - 1);
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      event.stopPropagation();
+      focusFlyoutItem(0);
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      event.stopPropagation();
+      focusFlyoutItem(items.length - 1);
+    }
+  }, [closeAndRestoreFocus, focusFlyoutItem]);
+
   useLayoutEffect(() => {
     if (!open) return undefined;
     positionMenu();
@@ -8121,6 +8187,13 @@ function ShapesRailButton({
       document.removeEventListener("scroll", positionMenu, true);
     };
   }, [open, positionMenu]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const items = shapeFlyoutItems(menuRef.current);
+    const checkedIndex = items.findIndex((item) => item.getAttribute("aria-checked") === "true");
+    items[checkedIndex >= 0 ? checkedIndex : 0]?.focus();
+  }, [open]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -8133,17 +8206,9 @@ function ShapesRailButton({
         onClose();
       }
     };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      onClose();
-    };
     document.addEventListener("pointerdown", closeOutside);
-    document.addEventListener("keydown", closeOnEscape);
     return () => {
       document.removeEventListener("pointerdown", closeOutside);
-      document.removeEventListener("keydown", closeOnEscape);
     };
   }, [open, onClose]);
 
@@ -8159,6 +8224,27 @@ function ShapesRailButton({
         aria-label="Shapes"
         title={`Shapes · ${currentItem.label} (${currentItem.shortcut})`}
         onClick={onToggle}
+        onKeyDown={(event) => {
+          if (
+            event.key !== "ArrowDown"
+            && event.key !== "ArrowUp"
+            && event.key !== "ArrowLeft"
+            && event.key !== "ArrowRight"
+          ) {
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          if (!open) onToggle();
+          else {
+            const items = shapeFlyoutItems(menuRef.current);
+            const checkedIndex = items.findIndex(
+              (item) => item.getAttribute("aria-checked") === "true",
+            );
+            const delta = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+            focusFlyoutItem((checkedIndex >= 0 ? checkedIndex : 0) + delta);
+          }
+        }}
       >
         <EditorIcon name="shapes" />
         <span>Shapes</span>
@@ -8170,6 +8256,7 @@ function ShapesRailButton({
           role="menu"
           aria-label="Shapes"
           style={menuPosition}
+          onKeyDown={handleMenuKeyDown}
         >
           {SHAPE_GROUP_ITEMS.map((item) => (
             <button
@@ -8180,7 +8267,11 @@ function ShapesRailButton({
               aria-checked={current === item.tool}
               aria-label={`${item.label} (${item.shortcut})`}
               title={`${item.label} (${item.shortcut})`}
-              onClick={() => onChoose(item.tool)}
+              tabIndex={-1}
+              onClick={() => {
+                onChoose(item.tool);
+                buttonRef.current?.focus();
+              }}
             >
               <EditorIcon name={item.tool} />
             </button>
@@ -8215,7 +8306,10 @@ function DrawToolPreview({
 
   return (
     <div
-      className="screenshot-draw-preview"
+      className={[
+        "screenshot-draw-preview",
+        tool === "remove-bg" ? "screenshot-draw-preview-brush" : "",
+      ].filter(Boolean).join(" ")}
       role="img"
       aria-label={tool === "remove-bg" ? "Brush preview" : "Stroke preview"}
     >
@@ -8224,9 +8318,9 @@ function DrawToolPreview({
           <>
             <defs>
               <radialGradient id="screenshot-brush-preview-grad" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stopColor="#f4f4f5" stopOpacity="1" />
-                <stop offset={`${hardStop}%`} stopColor="#f4f4f5" stopOpacity="1" />
-                <stop offset="100%" stopColor="#f4f4f5" stopOpacity="0" />
+                <stop offset="0%" stopOpacity="1" />
+                <stop offset={`${hardStop}%`} stopOpacity="1" />
+                <stop offset="100%" stopOpacity="0" />
               </radialGradient>
             </defs>
             <circle

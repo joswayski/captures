@@ -449,6 +449,36 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("group", { name: "Fill color" })).toBeInTheDocument();
   });
 
+  it("moves keyboard focus into the Shapes flyout and restores it on Escape", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+
+    const trigger = screen.getByRole("button", { name: "Shapes" });
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    const menu = screen.getByRole("menu", { name: "Shapes" });
+    const rectangle = within(menu).getByRole("menuitemradio", { name: "Rectangle (R)" });
+    const ellipse = within(menu).getByRole("menuitemradio", { name: "Ellipse (O)" });
+    const line = within(menu).getByRole("menuitemradio", { name: "Line (L)" });
+    expect(rectangle).toHaveFocus();
+
+    fireEvent.keyDown(rectangle, { key: "ArrowRight" });
+    expect(ellipse).toHaveFocus();
+    fireEvent.keyDown(ellipse, { key: "ArrowRight" });
+    expect(line).toHaveFocus();
+    fireEvent.keyDown(line, { key: "ArrowRight" });
+    expect(rectangle).toHaveFocus();
+    fireEvent.keyDown(rectangle, { key: "End" });
+    expect(line).toHaveFocus();
+    fireEvent.keyDown(line, { key: "Home" });
+    expect(rectangle).toHaveFocus();
+
+    fireEvent.keyDown(rectangle, { key: "Escape" });
+    expect(screen.queryByRole("menu", { name: "Shapes" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
   it("keeps locked layer transforms disabled and lets unlocked height scale proportionally", async () => {
     render(<ScreenshotEditor />);
     const canvasWidth = await screen.findByLabelText("Canvas width");
