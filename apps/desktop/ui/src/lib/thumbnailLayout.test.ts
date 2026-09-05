@@ -1270,6 +1270,22 @@ describe("thumbnail stack layout", () => {
     expect(THUMBNAIL_STACK_MOTION_DURATION_MS).toBe(580);
   });
 
+  it("does not restart exit timers from a queued layout update after disposal", async () => {
+    vi.useFakeTimers();
+    try {
+      const stack = document.createElement("main");
+      stack.innerHTML = '<article class="thumbnail-card"></article><article class="thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust"></article>';
+      const dispose = createThumbnailStackShiftController(stack);
+      dispose();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(stack.firstElementChild).not.toHaveClass("thumbnail-stack-shifting");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not rewrite a settled shift class from its own mutation observer", async () => {
     vi.useFakeTimers();
     const originalMutationObserver = globalThis.MutationObserver;

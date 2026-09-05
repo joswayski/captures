@@ -1183,6 +1183,7 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
   const exitStartedAt = new WeakMap<HTMLElement, number>();
   const scheduledTimers = new Set<ReturnType<typeof setTimeout>>();
   let microtaskQueued = false;
+  let disposed = false;
 
   const clearTimers = () => {
     for (const timer of scheduledTimers) clearTimeout(timer);
@@ -1198,6 +1199,7 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
   };
 
   const applyShifts = () => {
+    if (disposed) return;
     const cards = Array.from(
       stack.querySelectorAll<HTMLElement>(":scope > .thumbnail-card"),
     );
@@ -1329,6 +1331,7 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
   queueApply();
 
   return () => {
+    disposed = true;
     observer.disconnect();
     clearTimers();
     for (const card of stack.querySelectorAll<HTMLElement>(":scope > .thumbnail-card")) {
