@@ -1195,6 +1195,46 @@ describe("RecordingSelector", () => {
     expect(screen.getByRole("button", { name: "Full screen" })).toHaveAttribute("aria-pressed", "false");
   });
 
+  it("keeps Window highlights after a stale New Capture wake repeats the empty list", async () => {
+    preparedSession = {
+      ...session,
+      initial_mode: "screenshot",
+      windows: [],
+      shell_chrome: [],
+      windows_ready: false,
+    };
+    const { container } = render(<RecordingSelector />);
+    fireEvent.click(await screen.findByRole("button", { name: "Window" }));
+
+    await act(async () => {
+      recordingSelectionReady?.({
+        payload: {
+          ...preparedSession,
+          windows: session.windows,
+          windows_ready: true,
+        },
+      });
+    });
+    expect(await screen.findByRole("button", { name: "Select Front eligible window" }))
+      .toBeInTheDocument();
+
+    await act(async () => {
+      recordingSelectionReady?.({
+        payload: preparedSession,
+      });
+    });
+
+    const frontWindow = screen.getByRole("button", { name: "Select Front eligible window" });
+    const surface = mockSelectorSurface(container);
+    fireEvent.pointerMove(surface, { pointerId: 1, clientX: 950, clientY: 400 });
+    await waitFor(() => {
+      expect(frontWindow).toHaveClass("hovered");
+    });
+    fireEvent.pointerDown(surface, { pointerId: 1, clientX: 950, clientY: 400 });
+    expect(frontWindow).toHaveClass("selected");
+    expect(screen.getByRole("button", { name: "Take screenshot" })).toBeEnabled();
+  });
+
   it("keeps region and display capture available when the desktop cannot enumerate windows", async () => {
     preparedSession = {
       ...session,
