@@ -100,6 +100,7 @@ const RECORDING_SAVED_NOTICE_EVENT: &str = "recording-saved-artifact";
 const RECORDING_CONTROLS_HIDDEN_NOTICE_PREFIX: &str = "recording-controls-hidden-";
 const PREFERENCES_TARGET_EVENT: &str = "preferences-target";
 const AUTO_START_PREFERENCE_TARGET: &str = "auto-start-on-selection";
+const RECORDING_CONTROLS_PREFERENCE_TARGET: &str = "include-recording-controls-in-captures";
 /// Mini-preview stack listens for this to clear “In editor” when a window dies.
 const EDITOR_LAYERS_CHANGED_EVENT: &str = "editor-layers-changed";
 #[cfg(any(target_os = "macos", test))]
@@ -7056,15 +7057,22 @@ fn show_preferences(app: &AppHandle) {
 }
 
 fn preferences_url(target: Option<&str>) -> String {
-    if target == Some(AUTO_START_PREFERENCE_TARGET) {
-        format!("index.html?view=preferences&target={AUTO_START_PREFERENCE_TARGET}")
-    } else {
-        "index.html?view=preferences".to_owned()
+    match known_preference_target(target) {
+        Some(target) => format!("index.html?view=preferences&target={target}"),
+        None => "index.html?view=preferences".to_owned(),
+    }
+}
+
+fn known_preference_target(target: Option<&str>) -> Option<&str> {
+    match target {
+        Some(AUTO_START_PREFERENCE_TARGET) => Some(AUTO_START_PREFERENCE_TARGET),
+        Some(RECORDING_CONTROLS_PREFERENCE_TARGET) => Some(RECORDING_CONTROLS_PREFERENCE_TARGET),
+        _ => None,
     }
 }
 
 fn show_preferences_target(app: &AppHandle, target: Option<&str>) {
-    let target = target.filter(|candidate| *candidate == AUTO_START_PREFERENCE_TARGET);
+    let target = known_preference_target(target);
     if let Some(window) = app.get_webview_window("preferences") {
         let _ = window.show();
         let _ = window.unminimize();
@@ -8388,6 +8396,10 @@ mod tests {
         assert_eq!(
             preferences_url(Some("auto-start-on-selection")),
             "index.html?view=preferences&target=auto-start-on-selection"
+        );
+        assert_eq!(
+            preferences_url(Some("include-recording-controls-in-captures")),
+            "index.html?view=preferences&target=include-recording-controls-in-captures"
         );
         assert_eq!(
             preferences_url(Some("unknown")),

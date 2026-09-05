@@ -910,6 +910,12 @@ html.capture-selector-display {
   white-space: nowrap;
 }
 
+.capture-selector-note strong,
+.recording-hud-privacy strong {
+  color: var(--glass-text);
+  font-weight: var(--weight-bold);
+}
+
 .capture-selector-preferences-link {
   border: 0;
   border-radius: var(--r-sm);

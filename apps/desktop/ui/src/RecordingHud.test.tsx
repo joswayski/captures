@@ -120,6 +120,7 @@ describe("RecordingHud", () => {
     expect(screen.queryByText("Not in recording")).not.toBeInTheDocument();
     const privacy = screen.getByText("These controls won’t show in recordings");
     expect(privacy).toBeInTheDocument();
+    expect(privacy.querySelector("strong")).toHaveTextContent("won’t");
     expect(container.querySelector(".recording-hud")?.firstElementChild).toBe(privacy);
     expect(container.querySelector(".recording-hud-main")).toContainElement(
       screen.getByRole("button", { name: "Hide recording controls" }),
@@ -271,10 +272,11 @@ describe("RecordingHud", () => {
 
     render(<RecordingHud />);
 
-    expect(await screen.findByText(
+    const privacy = await screen.findByText(
       "These controls will show in recordings · Use Hide controls to keep them out",
-    ))
-      .toBeInTheDocument();
+    );
+    expect(privacy).toBeInTheDocument();
+    expect(privacy.querySelector("strong")).toHaveTextContent("will");
     expect(screen.queryByText("These controls won’t show in recordings"))
       .not.toBeInTheDocument();
   });
@@ -296,6 +298,8 @@ describe("RecordingHud", () => {
 
     expect(await screen.findByText("These controls won’t show in recordings"))
       .toBeInTheDocument();
+    expect(screen.getByText("These controls won’t show in recordings").querySelector("strong"))
+      .toHaveTextContent("won’t");
 
     controlsExcluded = false;
     await act(async () => {
@@ -308,6 +312,9 @@ describe("RecordingHud", () => {
       "These controls will show in recordings · Use Hide controls to keep them out",
     ))
       .toBeInTheDocument();
+    expect(screen.getByText(
+      "These controls will show in recordings · Use Hide controls to keep them out",
+    ).querySelector("strong")).toHaveTextContent("will");
   });
 
   it("uses a native Delete recording dialog before discarding", async () => {

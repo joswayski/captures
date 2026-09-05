@@ -59,6 +59,7 @@ Preview builds update after every successful merge to `main` that changes the in
 - Region recordings keep the selected area highlighted on screen while recording
 - Record as H.264 MP4, with desktop audio and microphone. Save or export as MP4, GIF, or WebM
 - Pause, resume, restart, and mute while recording
+- Recording controls stay out of screenshots and recordings by default (Preferences). Hide them during a recording to keep the bar off-screen
 - Cursor and click highlights in recordings (where supported)
 - Built-in screenshot editor — text, shapes, images, and drawings can rotate from a shared handle (hold Shift to use a configurable snap increment); text and drawings with optional drop shadows (color, opacity, blur, and offset; the whole label, including a background plate), crop (drag from outside the canvas to reach an edge; hold Shift to lock aspect), layers that hang off the canvas stay clipped until you expand, erase to transparent; unsaved edits restore when you reopen
 - Trim, crop, resize, and adjust audio in recordings, with an estimated saved size and an in-editor before/after compression comparison (Hide on the overlay, or switch back to Preserve quality)

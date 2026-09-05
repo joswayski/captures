@@ -228,6 +228,34 @@ describe("Preferences", () => {
     });
   });
 
+  it("scrolls to and highlights recording-control visibility when opened with that target", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=preferences&target=include-recording-controls-in-captures",
+    );
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    render(<Preferences />);
+
+    const includeControls = await screen.findByRole("checkbox", {
+      name: /Show recording controls in screenshots and recordings/,
+    });
+    await waitFor(() => {
+      expect(includeControls.closest("label")).toHaveClass("preference-target-highlight");
+      expect(includeControls).toHaveFocus();
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+      expect(screen.getByRole("button", { name: "Capture" })).toHaveAttribute(
+        "aria-current",
+        "true",
+      );
+    });
+  });
+
   it("can disable quick-access mini previews", async () => {
     render(<Preferences />);
 
@@ -298,6 +326,7 @@ describe("Preferences", () => {
     expect(includeControls).not.toBeChecked();
     expect(screen.getByText("Recording controls won’t show in screenshots or recordings."))
       .toBeInTheDocument();
+    expect(includeControls.closest("label")?.querySelector("strong")).toHaveTextContent("won’t");
     fireEvent.click(includeControls);
 
     await waitFor(() => {
@@ -308,6 +337,7 @@ describe("Preferences", () => {
     expect(screen.getByText(
       "Recording controls will show in screenshots and recordings. Turn this off to keep them out.",
     )).toBeInTheDocument();
+    expect(includeControls.closest("label")?.querySelector("strong")).toHaveTextContent("will");
   });
 
   it("automatically applies a newly recorded shortcut", async () => {
