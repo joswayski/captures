@@ -37,9 +37,16 @@ import {
   harnessOffsetForPlacement,
   thumbnailStackAnchorFromPlacement,
   thumbnailStackGravityFromPlacement,
+  thumbnailStackBiasFromNormalizedX,
+  thumbnailStackBiasFromFrameX,
+  thumbnailStackBiasFromHarness,
+  thumbnailStackSideFromBias,
+  thumbnailStackSideFromPlacement,
   THUMBNAIL_STACK_GRAVITY_VAR,
   THUMBNAIL_STACK_ANCHOR_TOP_GRAVITY,
   THUMBNAIL_STACK_ANCHOR_BOTTOM_GRAVITY,
+  THUMBNAIL_STACK_SIDE_LEFT_BIAS,
+  THUMBNAIL_STACK_SIDE_RIGHT_BIAS,
   captureThumbnailCardTransforms,
   thumbnailStackFanCollapseMs,
   thumbnailStackSkew,
@@ -329,6 +336,8 @@ describe("thumbnail stack layout", () => {
     )).toEqual({ x: 40, y: -552 });
 
     expect(thumbnailStackAnchorFromPlacement("top_right")).toBe("top");
+    expect(thumbnailStackSideFromPlacement("top_right")).toBe("right");
+    expect(thumbnailStackSideFromPlacement("bottom_left")).toBe("left");
     expect(thumbnailStackGravityFromPlacement("top_left")).toBe(-1);
     expect(harnessOffsetForPlacement("bottom_right", { width: 1_280, height: 720 })).toEqual({
       x: 940,
@@ -352,6 +361,19 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStackAnchorFromGravity(0.1, "top")).toBe("top");
     expect(THUMBNAIL_STACK_ANCHOR_TOP_GRAVITY).toBeLessThan(0);
     expect(THUMBNAIL_STACK_ANCHOR_BOTTOM_GRAVITY).toBeGreaterThan(0);
+
+    expect(thumbnailStackBiasFromNormalizedX(0)).toBe(-1);
+    expect(thumbnailStackBiasFromNormalizedX(0.5)).toBe(0);
+    expect(thumbnailStackBiasFromNormalizedX(1)).toBe(1);
+    expect(thumbnailStackBiasFromHarness(0, 1_280)).toBeCloseTo(-1);
+    expect(thumbnailStackBiasFromHarness(940, 1_280)).toBeCloseTo(1);
+    expect(thumbnailStackBiasFromFrameX(1_580, 0, 1_920)).toBeCloseTo(1);
+    expect(thumbnailStackSideFromBias(0.5, "left")).toBe("right");
+    expect(thumbnailStackSideFromBias(0.1, "left")).toBe("left");
+    expect(thumbnailStackSideFromBias(-0.5, "right")).toBe("left");
+    expect(thumbnailStackSideFromBias(-0.1, "right")).toBe("right");
+    expect(THUMBNAIL_STACK_SIDE_RIGHT_BIAS).toBeGreaterThan(0);
+    expect(THUMBNAIL_STACK_SIDE_LEFT_BIAS).toBeLessThan(0);
 
     expect(thumbnailStackGravityFromWorkArea({
       pileBottom: 1_040,
@@ -581,6 +603,9 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-toolbar\s*\{[\s\S]*?position:\s*fixed/,
     );
     expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar\s*\{[\s\S]*?--thumbnail-minimize-slide:\s*1/,
+    );
+    expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:hover/,
     );
     expect(thumbnailStyles).toMatch(
@@ -617,6 +642,12 @@ describe("thumbnail stack layout", () => {
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar-anchor-top\s*\{[\s\S]*?top:\s*16px/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar-anchor-right\s*\{[\s\S]*?right:\s*28px/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar-anchor-right\s*\{[\s\S]*?--thumbnail-minimize-slide:\s*-1/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-top-actions\s*\{[\s\S]*?top:\s*8px/,
