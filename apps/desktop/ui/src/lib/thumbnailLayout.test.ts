@@ -30,6 +30,7 @@ import {
   thumbnailStackGravityFromWorkArea,
   thumbnailStackAnchorFromGravity,
   thumbnailStackHarnessPileTop,
+  thumbnailStackHarnessCardTop,
   convertHarnessStackOffsetAnchor,
   convertThumbnailStackFrameAnchor,
   thumbnailStackVisualPileBottom,
@@ -296,6 +297,26 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStackAnchorFromGravity(0.1, "top")).toBe("top");
     expect(THUMBNAIL_STACK_ANCHOR_TOP_GRAVITY).toBeLessThan(0);
     expect(THUMBNAIL_STACK_ANCHOR_BOTTOM_GRAVITY).toBeGreaterThan(0);
+
+    const bottomCardTop = thumbnailStackHarnessCardTop({
+      offsetY: -280,
+      anchor: "bottom",
+      viewportHeight,
+    });
+    const flippedCardTop = thumbnailStackHarnessCardTop({
+      offsetY: convertHarnessStackOffsetAnchor(
+        { x: 0, y: -280 },
+        "bottom",
+        "top",
+        viewportHeight,
+        contentHeight,
+      ).y,
+      anchor: "top",
+      viewportHeight,
+    });
+    expect(Math.abs(flippedCardTop - bottomCardTop)).toBe(
+      THUMBNAIL_STACK_CONTROL_GUTTER_PX - THUMBNAIL_STACK_PADDING_PX,
+    );
 
     expect(thumbnailStackBiasFromNormalizedX(0)).toBe(-1);
     expect(thumbnailStackBiasFromNormalizedX(0.5)).toBe(0);

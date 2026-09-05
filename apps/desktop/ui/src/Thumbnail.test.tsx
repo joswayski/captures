@@ -7,6 +7,8 @@ import type { CaptureArtifact } from "./types";
 import {
   THUMBNAIL_CARD_SLOT_PX,
   THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS,
+  THUMBNAIL_STACK_CONTROL_GUTTER_PX,
+  THUMBNAIL_CARD_HEIGHT_PX,
   THUMBNAIL_STACK_EXPAND_COLLAPSE_MS,
   thumbnailStackFanCollapseMs,
   thumbnailStackNewestScrollTop,
@@ -1307,10 +1309,11 @@ describe("Thumbnail", () => {
       bubbles: true,
     });
     await waitFor(() => {
-      expect(stack).toHaveClass("thumbnail-stack-anchor-top");
+      expect(stack).toHaveClass("thumbnail-stack-dragging");
     });
     fireEvent.pointerUp(window, { pointerId: 1, bubbles: true });
     await waitFor(() => {
+      expect(stack).toHaveClass("thumbnail-stack-anchor-top");
       expect(stack).not.toHaveClass("thumbnail-stack-dragging");
     });
 
@@ -1331,6 +1334,95 @@ describe("Thumbnail", () => {
       .closest(".thumbnail-stack-toolbar");
     expect(toolbar).toHaveClass("thumbnail-stack-toolbar-anchor-top");
     expect(within(card).getByRole("button", { name: "Delete" })).toBeInTheDocument();
+  });
+
+  it("does not teleport the collapsed pile while dragging through mid-screen", async () => {
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1_200 });
+
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const stack = card.closest(".thumbnail-stack")!;
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32);
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
+    });
+    vi.useRealTimers();
+
+    const expand = screen.getByRole("button", { name: "Expand preview" });
+    fireEvent.pointerDown(expand, {
+      button: 0,
+      pointerId: 1,
+      screenX: 40,
+      screenY: 700,
+    });
+
+    const cardTop = () => {
+      const offsetY = Number.parseFloat(
+        document.documentElement.style.getPropertyValue("--thumbnail-stack-drag-y") || "0",
+      ) || 0;
+      if (stack.classList.contains("thumbnail-stack-anchor-top")) {
+        return offsetY + THUMBNAIL_STACK_CONTROL_GUTTER_PX;
+      }
+      return offsetY + 800 - THUMBNAIL_STACK_CONTROL_GUTTER_PX - THUMBNAIL_CARD_HEIGHT_PX;
+    };
+
+    const tops: number[] = [];
+    for (const screenY of [640, 520, 400, 280, 160]) {
+      fireEvent.pointerMove(window, {
+        pointerId: 1,
+        screenX: 40,
+        screenY,
+        bubbles: true,
+      });
+      await waitFor(() => {
+        expect(stack).toHaveClass("thumbnail-stack-dragging");
+      });
+      expect(stack).not.toHaveClass("thumbnail-stack-anchor-top");
+      tops.push(cardTop());
+    }
+
+    for (let index = 1; index < tops.length; index += 1) {
+      expect(Math.abs(tops[index]! - tops[index - 1]!)).toBeLessThan(160);
+    }
+
+    fireEvent.pointerUp(window, { pointerId: 1, bubbles: true });
+    await waitFor(() => {
+      expect(stack).toHaveClass("thumbnail-stack-anchor-top");
+      expect(stack).not.toHaveClass("thumbnail-stack-dragging");
+    });
+    expect(cardTop()).toBeLessThan(200);
+
+    fireEvent.pointerDown(expand, {
+      button: 0,
+      pointerId: 2,
+      screenX: 40,
+      screenY: 80,
+    });
+    for (const screenY of [200, 320, 440, 560, 680]) {
+      fireEvent.pointerMove(window, {
+        pointerId: 2,
+        screenX: 40,
+        screenY,
+        bubbles: true,
+      });
+      await waitFor(() => {
+        expect(stack).toHaveClass("thumbnail-stack-dragging");
+      });
+      expect(stack).toHaveClass("thumbnail-stack-anchor-top");
+      tops.push(cardTop());
+    }
+    const downTops = tops.slice(-5);
+    for (let index = 1; index < downTops.length; index += 1) {
+      expect(Math.abs(downTops[index]! - downTops[index - 1]!)).toBeLessThan(160);
+    }
+    fireEvent.pointerUp(window, { pointerId: 2, bubbles: true });
+    await waitFor(() => {
+      expect(stack).not.toHaveClass("thumbnail-stack-dragging");
+    });
+    expect(stack).not.toHaveClass("thumbnail-stack-anchor-top");
   });
 
   it("keeps Show less on the right after the pile is dragged to the right", async () => {
