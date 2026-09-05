@@ -1441,6 +1441,7 @@ describe("ScreenshotEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
     const defaults = screen.getByRole("checkbox", { name: "Drop shadow" });
     expect(defaults).not.toBeChecked();
+    expect(screen.queryByRole("slider", { name: "Shadow opacity" })).not.toBeInTheDocument();
 
     setCanvasZoomPercent(100);
     const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
@@ -1469,8 +1470,58 @@ describe("ScreenshotEditor", () => {
 
     const shadow = screen.getByRole("checkbox", { name: "Drop shadow" });
     expect(shadow).not.toBeChecked();
+    expect(screen.queryByRole("slider", { name: "Shadow opacity" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("slider", { name: "Shadow blur" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: "Shadow X offset" })).not.toBeInTheDocument();
+
     fireEvent.click(shadow);
     expect(shadow).toBeChecked();
+    expect(screen.getByRole("slider", { name: "Shadow opacity" })).toHaveAttribute(
+      "aria-valuetext",
+      "45%",
+    );
+    expect(screen.getByRole("slider", { name: "Shadow blur" })).toBeInTheDocument();
+    expect(screen.getByRole("spinbutton", { name: "Shadow X offset" })).toHaveValue(0);
+    expect(screen.getByRole("spinbutton", { name: "Shadow Y offset" })).toHaveValue(3);
+    expect(screen.getByText("Shadow color")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("slider", { name: "Shadow opacity" }), {
+      target: { value: "70" },
+    });
+    fireEvent.change(screen.getByRole("slider", { name: "Shadow blur" }), {
+      target: { value: "22" },
+    });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Shadow X offset" }), {
+      target: { value: "8" },
+    });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Shadow Y offset" }), {
+      target: { value: "-4" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Shadow color: #2d9cff" }));
+
+    expect(screen.getByRole("slider", { name: "Shadow opacity" })).toHaveAttribute(
+      "aria-valuetext",
+      "70%",
+    );
+    expect(screen.getByRole("slider", { name: "Shadow blur" })).toHaveAttribute(
+      "aria-valuetext",
+      "22 px",
+    );
+    expect(screen.getByRole("spinbutton", { name: "Shadow X offset" })).toHaveValue(8);
+    expect(screen.getByRole("spinbutton", { name: "Shadow Y offset" })).toHaveValue(-4);
+
+    fireEvent.click(shadow);
+    expect(shadow).not.toBeChecked();
+    expect(screen.queryByRole("slider", { name: "Shadow opacity" })).not.toBeInTheDocument();
+
+    fireEvent.click(shadow);
+    expect(shadow).toBeChecked();
+    expect(screen.getByRole("slider", { name: "Shadow opacity" })).toHaveAttribute(
+      "aria-valuetext",
+      "70%",
+    );
+    expect(screen.getByRole("spinbutton", { name: "Shadow X offset" })).toHaveValue(8);
+    expect(screen.getByRole("button", { name: "Shadow color: #2d9cff" })).toHaveClass("active");
   });
 
   it("adds and removes uncapped arrow curve points without creating arrows on double-click", async () => {

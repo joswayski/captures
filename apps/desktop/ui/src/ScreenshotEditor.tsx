@@ -156,6 +156,9 @@ import {
   visibleContentBounds,
   annotationDropShadowMetrics,
   annotationHasDropShadow,
+  DROP_SHADOW_BLUR_MAX,
+  DROP_SHADOW_OFFSET_MAX,
+  resolvedDropShadowStyle,
   type AlignmentSnapGuide,
   type CanvasTrimMarginPreview,
   type ArrowHandle,
@@ -168,6 +171,7 @@ import {
   type EditorPoint,
   type EditorRect,
   type EditorTextElement,
+  type DropShadowStyle,
   type ElementStyle,
   type ResizeHandle,
   type ScreenshotDocument,
@@ -865,8 +869,8 @@ function applyAnnotationDropShadow(
   context: CanvasRenderingContext2D,
   style: ElementStyle,
 ): void {
-  const metrics = annotationDropShadowMetrics(style.strokeWidth);
-  context.shadowColor = "rgba(0, 0, 0, 0.45)";
+  const metrics = annotationDropShadowMetrics(style);
+  context.shadowColor = metrics.color;
   context.shadowBlur = metrics.blur;
   context.shadowOffsetX = metrics.offsetX;
   context.shadowOffsetY = metrics.offsetY;
@@ -6935,11 +6939,11 @@ export function ScreenshotEditor() {
                 ))}
               />
             </label>
-            <DropShadowCheck
-              checked={annotationHasDropShadow(selected.style)}
-              onChange={(dropShadow) => updateSelected((element) => (
+            <DropShadowFields
+              style={selected.style}
+              onChange={(nextStyle) => updateSelected((element) => (
                 element.kind === "shape" || element.kind === "path"
-                  ? { ...element, style: { ...element.style, dropShadow } }
+                  ? { ...element, style: nextStyle }
                   : element
               ))}
             />
@@ -7062,12 +7066,9 @@ export function ScreenshotEditor() {
                     }))}
                   />
                 </label>
-                <DropShadowCheck
-                  checked={annotationHasDropShadow(defaultStyle)}
-                  onChange={(dropShadow) => setDefaultStyle((style) => ({
-                    ...style,
-                    dropShadow,
-                  }))}
+                <DropShadowFields
+                  style={defaultStyle}
+                  onChange={setDefaultStyle}
                 />
               </>
             )}
@@ -7717,22 +7718,90 @@ function CanvasBackgroundPicker({
   );
 }
 
-function DropShadowCheck({
-  checked,
+function DropShadowFields({
+  style,
   onChange,
 }: {
-  checked: boolean;
-  onChange: (checked: boolean) => void;
+  style: ElementStyle;
+  onChange: (style: ElementStyle) => void;
 }) {
+  const enabled = annotationHasDropShadow(style);
+  const shadow = resolvedDropShadowStyle(style);
+  const patchShadow = (partial: Partial<DropShadowStyle>) => {
+    onChange({
+      ...style,
+      dropShadow: true,
+      dropShadowStyle: { ...shadow, ...partial },
+    });
+  };
+
   return (
-    <label className="screenshot-check-row">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-      />
-      Drop shadow
-    </label>
+    <div className="screenshot-drop-shadow">
+      <label className="screenshot-check-row">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(event) => onChange({
+            ...style,
+            dropShadow: event.target.checked,
+          })}
+        />
+        Drop shadow
+      </label>
+      {enabled && (
+        <div className="screenshot-drop-shadow-settings">
+          <ColorField
+            label="Shadow color"
+            value={shadow.color}
+            onChange={(color) => patchShadow({ color })}
+          />
+          <label>
+            Opacity
+            <RangeSlider
+              ariaLabel="Shadow opacity"
+              min={0}
+              max={100}
+              value={Math.round(shadow.opacity)}
+              valueText={`${Math.round(shadow.opacity)}%`}
+              onChange={(opacity) => patchShadow({ opacity })}
+            />
+          </label>
+          <label>
+            Blur
+            <RangeSlider
+              ariaLabel="Shadow blur"
+              min={0}
+              max={DROP_SHADOW_BLUR_MAX}
+              value={Math.round(shadow.blur)}
+              valueText={`${Math.round(shadow.blur)} px`}
+              onChange={(blur) => patchShadow({ blur })}
+            />
+          </label>
+          <div className="screenshot-number-pair">
+            <label>
+              X offset
+              <NumberInput
+                ariaLabel="Shadow X offset"
+                min={-DROP_SHADOW_OFFSET_MAX}
+                max={DROP_SHADOW_OFFSET_MAX}
+                value={Math.round(shadow.offsetX)}
+                onChange={(offsetX) => patchShadow({ offsetX })}
+              />
+            </label>
+            <label>
+              Y offset
+              <NumberInput
+                ariaLabel="Shadow Y offset"
+                min={-DROP_SHADOW_OFFSET_MAX}
+                max={DROP_SHADOW_OFFSET_MAX}
+                value={Math.round(shadow.offsetY)}
+                onChange={(offsetY) => patchShadow({ offsetY })}
+              />
+            </label>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -105,8 +105,11 @@ import {
   arrowHeadLength,
   editorCanvasPaintScale,
   scaleArrowStrokeForLength,
+  annotationDropShadowMetrics,
   annotationDropShadowPad,
   annotationHasDropShadow,
+  dropShadowCanvasColor,
+  resolvedDropShadowStyle,
   editorTextCanvasFont,
   editorTextFontStack,
   resolveEditorTextCanvasFamily,
@@ -1316,6 +1319,60 @@ describe("screenshot editor geometry", () => {
     };
     expect(elementBounds(pathShadow).width).toBeGreaterThan(elementBounds(path).width);
     expect(elementBounds(pathShadow).height).toBeGreaterThan(elementBounds(path).height);
+  });
+
+  it("uses authored drop-shadow knobs when present and stroke-scaled defaults otherwise", () => {
+    const base = { color: "#f00", fill: null, strokeWidth: 8 };
+    const auto = resolvedDropShadowStyle(base);
+    expect(auto.color).toBe("#000000");
+    expect(auto.opacity).toBe(45);
+    expect(auto.offsetX).toBe(0);
+    expect(auto.offsetY).toBeGreaterThan(0);
+    expect(annotationDropShadowMetrics({ ...base, dropShadow: true }).color)
+      .toBe("rgba(0, 0, 0, 0.45)");
+
+    const custom = {
+      ...base,
+      dropShadow: true,
+      dropShadowStyle: {
+        color: "#ff3b5c",
+        opacity: 80,
+        blur: 18,
+        offsetX: 12,
+        offsetY: -6,
+      },
+    };
+    const resolved = resolvedDropShadowStyle(custom);
+    expect(resolved).toEqual(custom.dropShadowStyle);
+    expect(annotationDropShadowMetrics(custom)).toEqual({
+      color: "rgba(255, 59, 92, 0.8)",
+      blur: 18,
+      offsetX: 12,
+      offsetY: -6,
+    });
+    expect(dropShadowCanvasColor(resolved)).toBe("rgba(255, 59, 92, 0.8)");
+    expect(annotationDropShadowPad(custom)).toBeGreaterThan(
+      annotationDropShadowPad({ ...base, dropShadow: true }),
+    );
+
+    const autoShadow: EditorShapeElement = {
+      ...editableLayer,
+      id: "arrow-auto-shadow",
+      kind: "shape",
+      shape: "arrow",
+      x: 80,
+      y: 200,
+      endX: 320,
+      endY: 200,
+      controls: [],
+      style: { ...base, dropShadow: true },
+    };
+    const wide: EditorShapeElement = {
+      ...autoShadow,
+      id: "arrow-custom-shadow",
+      style: custom,
+    };
+    expect(elementBounds(wide).width).toBeGreaterThan(elementBounds(autoShadow).width);
   });
 
   it("hit-tests corner and edge resize handles and resizes from the opposite side", () => {

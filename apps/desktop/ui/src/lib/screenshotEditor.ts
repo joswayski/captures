@@ -31,7 +31,27 @@ export type ElementStyle = {
    * missing as off so saved drafts keep their original look.
    */
   dropShadow?: boolean;
+  /**
+   * Photoshop-style shadow knobs. Omitted until the user customizes them so
+   * older drafts keep the stroke-scaled default pool.
+   */
+  dropShadowStyle?: DropShadowStyle;
 };
+
+/** Authored drop-shadow appearance in document pixels. */
+export type DropShadowStyle = {
+  color: string;
+  /** 0–100, matching layer opacity. */
+  opacity: number;
+  blur: number;
+  offsetX: number;
+  offsetY: number;
+};
+
+export const DEFAULT_DROP_SHADOW_COLOR = "#000000";
+export const DEFAULT_DROP_SHADOW_OPACITY = 45;
+export const DROP_SHADOW_BLUR_MAX = 100;
+export const DROP_SHADOW_OFFSET_MAX = 500;
 
 /** True when a drawing style opted into a drop shadow. */
 export function annotationHasDropShadow(style: ElementStyle): boolean {
@@ -39,19 +59,90 @@ export function annotationHasDropShadow(style: ElementStyle): boolean {
 }
 
 /**
- * Canvas shadow metrics in document pixels, scaled from stroke width so a
+ * Stroke-scaled contact shadow used when a drawing enabled the effect but
+ * never stored custom knobs.
+ */
+export function defaultDropShadowStyle(strokeWidth: number): DropShadowStyle {
+  const width = Math.max(1, strokeWidth);
+  return {
+    color: DEFAULT_DROP_SHADOW_COLOR,
+    opacity: DEFAULT_DROP_SHADOW_OPACITY,
+    blur: Math.max(6, width * 0.85),
+    offsetX: 0,
+    offsetY: Math.max(2, Math.round(width * 0.32)),
+  };
+}
+
+function clampDropShadowNumber(value: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
+}
+
+function parseCssHexColor(value: string): { r: number; g: number; b: number } | null {
+  const raw = value.trim().replace(/^#/, "");
+  if (/^[0-9a-fA-F]{3}$/.test(raw)) {
+    return {
+      r: Number.parseInt(raw[0] + raw[0], 16),
+      g: Number.parseInt(raw[1] + raw[1], 16),
+      b: Number.parseInt(raw[2] + raw[2], 16),
+    };
+  }
+  if (/^[0-9a-fA-F]{6}/.test(raw)) {
+    return {
+      r: Number.parseInt(raw.slice(0, 2), 16),
+      g: Number.parseInt(raw.slice(2, 4), 16),
+      b: Number.parseInt(raw.slice(4, 6), 16),
+    };
+  }
+  return null;
+}
+
+/** Fill in omitted or out-of-range knobs from the stroke-scaled default. */
+export function resolvedDropShadowStyle(style: ElementStyle): DropShadowStyle {
+  const fallback = defaultDropShadowStyle(style.strokeWidth);
+  const custom = style.dropShadowStyle;
+  if (!custom) return fallback;
+  return {
+    color: parseCssHexColor(custom.color) ? custom.color.slice(0, 7) : fallback.color,
+    opacity: clampDropShadowNumber(custom.opacity, 0, 100, fallback.opacity),
+    blur: clampDropShadowNumber(custom.blur, 0, DROP_SHADOW_BLUR_MAX, fallback.blur),
+    offsetX: clampDropShadowNumber(
+      custom.offsetX,
+      -DROP_SHADOW_OFFSET_MAX,
+      DROP_SHADOW_OFFSET_MAX,
+      fallback.offsetX,
+    ),
+    offsetY: clampDropShadowNumber(
+      custom.offsetY,
+      -DROP_SHADOW_OFFSET_MAX,
+      DROP_SHADOW_OFFSET_MAX,
+      fallback.offsetY,
+    ),
+  };
+}
+
+export function dropShadowCanvasColor(shadow: DropShadowStyle): string {
+  const rgb = parseCssHexColor(shadow.color) ?? { r: 0, g: 0, b: 0 };
+  const alpha = Math.max(0, Math.min(1, shadow.opacity / 100));
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
+}
+
+/**
+ * Canvas shadow metrics in document pixels. Custom knobs win; otherwise a
  * thick arrow gets a slightly larger pool than a hairline.
  */
-export function annotationDropShadowMetrics(strokeWidth: number): {
+export function annotationDropShadowMetrics(style: ElementStyle): {
+  color: string;
   blur: number;
   offsetX: number;
   offsetY: number;
 } {
-  const width = Math.max(1, strokeWidth);
+  const shadow = resolvedDropShadowStyle(style);
   return {
-    blur: Math.max(6, width * 0.85),
-    offsetX: 0,
-    offsetY: Math.max(2, Math.round(width * 0.32)),
+    color: dropShadowCanvasColor(shadow),
+    blur: shadow.blur,
+    offsetX: shadow.offsetX,
+    offsetY: shadow.offsetY,
   };
 }
 
@@ -61,7 +152,7 @@ export function annotationDropShadowMetrics(strokeWidth: number): {
  */
 export function annotationDropShadowPad(style: ElementStyle): number {
   if (!annotationHasDropShadow(style)) return 0;
-  const { blur, offsetX, offsetY } = annotationDropShadowMetrics(style.strokeWidth);
+  const { blur, offsetX, offsetY } = annotationDropShadowMetrics(style);
   return Math.ceil(blur * 2 + Math.max(Math.abs(offsetX), Math.abs(offsetY)));
 }
 
