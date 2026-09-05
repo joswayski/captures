@@ -1125,10 +1125,13 @@ describe("Thumbnail", () => {
     render(<Thumbnail />);
     expect(await screen.findAllByRole("article")).toHaveLength(2);
     const clear = screen.getByRole("button", { name: "Clear all previews" });
+    const minimize = screen.getByRole("button", { name: "Minimize previews" });
     expect(clear).toHaveAttribute("data-tooltip", "Clear all");
     expect(clear.closest(".thumbnail-stack-toolbar")).toBe(
-      screen.getByRole("button", { name: "Minimize previews" }).closest(".thumbnail-stack-toolbar"),
+      minimize.closest(".thumbnail-stack-toolbar"),
     );
+    expect(clear.compareDocumentPosition(minimize) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 
     await act(async () => {
       fireEvent.click(clear);

@@ -7168,17 +7168,6 @@ export function Thumbnail() {
             ? "thumbnail-stack-toolbar-exiting"
             : "",
         ].filter(Boolean).join(" ")}>
-          <button
-            type="button"
-            className="thumbnail-stack-control thumbnail-stack-minimize"
-            aria-label="Minimize previews"
-            onClick={() => setStackCollapsed(true)}
-          >
-            <PreviewStackIcon />
-            <span className="thumbnail-stack-minimize-label" aria-hidden="true">
-              Show less
-            </span>
-          </button>
           {showClearAll && (
             <button
               type="button"
@@ -7191,6 +7180,17 @@ export function Thumbnail() {
               <CloseIcon />
             </button>
           )}
+          <button
+            type="button"
+            className="thumbnail-stack-control thumbnail-stack-minimize"
+            aria-label="Minimize previews"
+            onClick={() => setStackCollapsed(true)}
+          >
+            <PreviewStackIcon />
+            <span className="thumbnail-stack-minimize-label" aria-hidden="true">
+              Show less
+            </span>
+          </button>
         </div>
       )}
       {showOverflowCues && stackOverflow.hasOlder && (

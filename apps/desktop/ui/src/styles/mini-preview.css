@@ -1583,8 +1583,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
  * Window overlay, not a child of `.thumbnail-stack`: that scroller's
  * absolutely positioned descendants are tied to the content box, so Show less
  * would freeze beside the 2nd/3rd card once the pile overflows. `fixed` keeps
- * it on the visible stack edge while the list scrolls. Clear all sits beside
- * Show less as a second 28px control so the collapsed pile stays one hit target.
+ * it on the visible stack edge while the list scrolls. Clear all sits to the
+ * left of Show less so the Show less hover morph cannot cover it. The collapsed
+ * pile stays one hit target.
  */
 .thumbnail-stack-toolbar {
   position: fixed;
