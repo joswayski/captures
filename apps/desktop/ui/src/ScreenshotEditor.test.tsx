@@ -4150,4 +4150,67 @@ describe("ScreenshotEditor", () => {
       restoreCanvas();
     }
   });
+
+  it("runs a Save clicked during copy once copy finishes", async () => {
+    const restoreCanvas = installExportableCanvas();
+    let copyCount = 0;
+    let finishCopy!: () => void;
+    const savedArtifact = {
+      ...artifact,
+      id: "capture-edited",
+      path: "/Users/example/Captures/capture.png",
+    };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifact") return artifact;
+      if (command === "copy_screenshot_edit") {
+        copyCount += 1;
+        return new Promise<void>((resolve) => {
+          finishCopy = resolve;
+        });
+      }
+      if (command === "save_screenshot_edit") {
+        return {
+          artifact: savedArtifact,
+          path: savedArtifact.path,
+          format: "png",
+        };
+      }
+      if (command === "reveal_artifact") return undefined;
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy image" }));
+      await waitFor(() => {
+        expect(copyCount).toBe(1);
+      });
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(invoke).not.toHaveBeenCalledWith(
+        "save_screenshot_edit",
+        expect.anything(),
+      );
+
+      finishCopy();
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith(
+          "save_screenshot_edit",
+          expect.objectContaining({
+            request: expect.objectContaining({
+              artifact_id: artifact.id,
+            }),
+          }),
+        );
+      });
+    } finally {
+      restoreCanvas();
+    }
+  });
 });

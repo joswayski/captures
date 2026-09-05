@@ -1952,8 +1952,12 @@ export function ScreenshotEditor() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageCacheRef = useRef(new Map<string, CachedImage>());
   const successTimerRef = useRef<number | null>(null);
-  /** Synchronous re-entry guard so a second click cannot start another copy before busy commits. */
+  /** Synchronous re-entry guards so a second click cannot start another export before busy commits. */
   const copyInFlightRef = useRef(false);
+  const saveInFlightRef = useRef(false);
+  /** Save clicked while copy is still running; start it as soon as copy finishes. */
+  const pendingSaveAfterCopyRef = useRef(false);
+  const saveEditedImageRef = useRef<() => Promise<void>>(async () => undefined);
   /** Bumps to cancel in-flight debounced draft writes. */
   const draftSaveGenerationRef = useRef(0);
   /**
@@ -5086,7 +5090,7 @@ export function ScreenshotEditor() {
   ]);
 
   const copyEditedImage = async () => {
-    if (busy || copyInFlightRef.current) return;
+    if (copyInFlightRef.current || saveInFlightRef.current) return;
     copyInFlightRef.current = true;
     const keepCopiedState = success?.kind === "copy";
     setBusy("copying");
@@ -5111,11 +5115,19 @@ export function ScreenshotEditor() {
     } finally {
       copyInFlightRef.current = false;
       setBusy(null);
+      if (pendingSaveAfterCopyRef.current) {
+        pendingSaveAfterCopyRef.current = false;
+        void saveEditedImageRef.current();
+      }
     }
   };
 
   const saveEditedImage = async () => {
-    if (!artifact || busy) return;
+    if (!artifact || saveInFlightRef.current) return;
+    if (copyInFlightRef.current) {
+      pendingSaveAfterCopyRef.current = true;
+      return;
+    }
     const invalidFilename = screenshotFilenameError(filenameStem);
     if (invalidFilename) {
       setError(invalidFilename);
@@ -5146,6 +5158,7 @@ export function ScreenshotEditor() {
     // Keep the user-selected format. Compress/maximum only change how that format is encoded.
     // Maximum mode searches down from full quality; Compress uses the selected preset.
     const saveQuality = qualityMode === "compress" ? Number(jpegQuality) : 100;
+    saveInFlightRef.current = true;
     setBusy("saving");
     setError("");
     clearSuccess();
@@ -5208,9 +5221,11 @@ export function ScreenshotEditor() {
     } catch (reason) {
       setError(String(reason));
     } finally {
+      saveInFlightRef.current = false;
       setBusy(null);
     }
   };
+  saveEditedImageRef.current = saveEditedImage;
 
   const chooseDestinationDirectory = async () => {
     if (!artifact || busy) return;
