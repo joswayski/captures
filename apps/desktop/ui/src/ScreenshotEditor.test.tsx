@@ -97,6 +97,7 @@ function installExportableCanvas(): () => void {
     canvas: document.createElement("canvas"),
     drawImage: vi.fn(),
     fillRect: vi.fn(),
+    strokeRect: vi.fn(),
     clearRect: vi.fn(),
     save: vi.fn(),
     restore: vi.fn(),
