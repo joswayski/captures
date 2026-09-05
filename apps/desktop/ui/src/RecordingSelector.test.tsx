@@ -382,7 +382,7 @@ describe("RecordingSelector", () => {
       "These controls will show in recordings",
     );
     expect(container.querySelector(".capture-selector-note strong")).toHaveTextContent("will");
-    expect(screen.getByRole("button", { name: "Change recording control visibility" }))
+    expect(screen.getByRole("button", { name: /These controls will show in recordings/ }))
       .toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("list_recording_audio_devices");
 
@@ -436,7 +436,7 @@ describe("RecordingSelector", () => {
       "Press Enter to confirm",
     );
     expect(container.querySelector(".capture-selector-note strong")).toHaveTextContent("won’t");
-    expect(screen.getByRole("button", { name: "Change recording control visibility" }))
+    expect(screen.getByRole("button", { name: /These controls won’t show in screenshots/ }))
       .toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Take screenshot" }))
       .toHaveAttribute("aria-keyshortcuts", "Enter");
@@ -755,7 +755,7 @@ describe("RecordingSelector", () => {
     expect(invoke).not.toHaveBeenCalledWith("capture_selection_screenshot", expect.anything());
   });
 
-  it("does not capture with Enter on the recording-control Change link", async () => {
+  it("does not capture with Enter on the recording-control preference link", async () => {
     preparedSession = {
       ...session,
       initial_mode: "screenshot",
@@ -764,14 +764,14 @@ describe("RecordingSelector", () => {
     render(<RecordingSelector />);
 
     const change = await screen.findByRole("button", {
-      name: "Change recording control visibility",
+      name: /These controls won’t show in screenshots/,
     });
     fireEvent.keyDown(change, { key: "Enter" });
     expect(invoke).not.toHaveBeenCalledWith("capture_selection_screenshot", expect.anything());
     expect(invoke).not.toHaveBeenCalledWith("open_preferences", expect.anything());
   });
 
-  it("does not capture with Enter on the auto-start Change link", async () => {
+  it("does not capture with Enter on the auto-start preference link", async () => {
     preparedSession = {
       ...session,
       initial_mode: "screenshot",
@@ -786,7 +786,7 @@ describe("RecordingSelector", () => {
     });
 
     render(<RecordingSelector />);
-    const change = await screen.findByRole("button", { name: "Change auto-capture" });
+    const change = await screen.findByRole("button", { name: /Auto-capture is on/ });
     fireEvent.keyDown(change, { key: "Enter" });
     expect(invoke).not.toHaveBeenCalledWith("capture_selection_screenshot", expect.anything());
     expect(invoke).not.toHaveBeenCalledWith("open_preferences", expect.anything());
@@ -873,7 +873,7 @@ describe("RecordingSelector", () => {
     });
 
     render(<RecordingSelector />);
-    const change = await screen.findByRole("button", { name: "Change auto-capture" });
+    const change = await screen.findByRole("button", { name: /Auto-capture is on/ });
     fireEvent.click(change);
 
     await waitFor(() => {
@@ -898,7 +898,7 @@ describe("RecordingSelector", () => {
     expect(actionCalls).toEqual(["open_preferences", "cancel_recording_selection"]);
   });
 
-  it("opens recording-control visibility from its own Change link", async () => {
+  it("opens recording-control visibility from the note text", async () => {
     preparedSession = {
       ...session,
       initial_mode: "screenshot",
@@ -916,12 +916,13 @@ describe("RecordingSelector", () => {
     });
 
     render(<RecordingSelector />);
-    const change = await screen.findByRole("button", {
-      name: "Change recording control visibility",
+    const visibility = await screen.findByRole("button", {
+      name: /These controls won’t show in screenshots/,
     });
-    expect(screen.queryByRole("button", { name: "Change auto-capture" }))
+    expect(visibility.querySelector(".capture-selector-preferences-icon")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /Auto-capture is on/ }))
       .not.toBeInTheDocument();
-    fireEvent.click(change);
+    fireEvent.click(visibility);
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("open_preferences", {
@@ -941,7 +942,7 @@ describe("RecordingSelector", () => {
     });
   });
 
-  it("keeps separate Change links when auto-capture is on", async () => {
+  it("keeps separate preference links when auto-capture is on", async () => {
     preparedSession = {
       ...session,
       initial_mode: "screenshot",
@@ -956,11 +957,14 @@ describe("RecordingSelector", () => {
 
     render(<RecordingSelector />);
     const visibility = await screen.findByRole("button", {
-      name: "Change recording control visibility",
+      name: /These controls won’t show in screenshots/,
     });
-    const autoCapture = screen.getByRole("button", { name: "Change auto-capture" });
-    expect(visibility).toHaveTextContent("Change…");
-    expect(autoCapture).toHaveTextContent("Change…");
+    const autoCapture = screen.getByRole("button", { name: /Auto-capture is on/ });
+    expect(visibility).toHaveTextContent("These controls won’t show in screenshots");
+    expect(visibility.querySelector(".capture-selector-preferences-icon")).not.toBeNull();
+    expect(autoCapture).toHaveTextContent("Auto-capture is on. Selecting a target starts immediately.");
+    expect(autoCapture.querySelector(".capture-selector-preferences-icon")).not.toBeNull();
+    expect(screen.queryByText("Change…")).not.toBeInTheDocument();
     fireEvent.click(visibility);
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("open_preferences", {

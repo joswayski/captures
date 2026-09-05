@@ -2477,7 +2477,7 @@ export function RecordingSelector() {
         return;
       }
       // Mode/target segmented buttons are where Enter needs to confirm capture.
-      // Leave Close, Change…, and other dedicated actions to native activation.
+      // Leave Close, preference links, and other dedicated actions to native activation.
       if (target instanceof Element) {
         const focusedButton = target.closest("button");
         if (
@@ -3342,25 +3342,25 @@ export function RecordingSelector() {
           </div>
         )}
         <p className="capture-selector-note">
-          {recordingControlsVisibilityText(
-            controlsExcluded ?? session.recording_capabilities.controls_excluded,
-            actionMode,
-          )}
           <CapturePreferenceLink
-            ariaLabel="Change recording control visibility"
             onClick={() => openCapturePreference(RECORDING_CONTROLS_PREFERENCE_TARGET)}
-          />
+          >
+            {recordingControlsVisibilityText(
+              controlsExcluded ?? session.recording_capabilities.controls_excluded,
+              actionMode,
+            )}
+          </CapturePreferenceLink>
           {settings.auto_start_on_selection
             ? <>
-              <span aria-hidden="true">·</span>{" "}
-              <span>Auto-capture is on. Selecting a target starts immediately.</span>
+              <span aria-hidden="true">·</span>
               <CapturePreferenceLink
-                ariaLabel="Change auto-capture"
                 onClick={() => openCapturePreference(AUTO_START_PREFERENCE_TARGET)}
-              />
+              >
+                Auto-capture is on. Selecting a target starts immediately.
+              </CapturePreferenceLink>
             </>
             : <>
-              <span aria-hidden="true">·</span>{" "}
+              <span aria-hidden="true">·</span>
               Press <kbd>Enter</kbd> to confirm
             </>}
         </p>
@@ -3433,21 +3433,30 @@ function recordingControlsVisibilityText(
 }
 
 function CapturePreferenceLink({
-  ariaLabel,
   onClick,
+  children,
 }: {
-  ariaLabel: string;
   onClick: () => void;
+  children: ReactNode;
 }) {
   return (
     <button
       className="capture-selector-preferences-link"
       type="button"
-      aria-label={ariaLabel}
       onClick={onClick}
     >
-      Change…
+      {children}
+      <ExternalPreferenceIcon />
     </button>
+  );
+}
+
+function ExternalPreferenceIcon() {
+  return (
+    <svg className="capture-selector-preferences-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M6.5 3H4a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V9.5" />
+      <path d="M9 3h4v4M8.5 7.5 13 3" />
+    </svg>
   );
 }
 
