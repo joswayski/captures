@@ -388,7 +388,10 @@ describe("thumbnail stack layout", () => {
     );
 
     expect(arrival?.[1]).toContain(":not(.thumbnail-exiting)");
+    expect(arrival?.[1]).toContain(":not(.thumbnail-drop-rejected)");
     expect(arrival?.[2]).not.toMatch(/\b(?:both|forwards)\b/);
+    // Arrive itself is more specific than `.thumbnail-drop-rejected`. Skip
+    // that state so a self-drop shake is not replaced by a replayed entrance.
     // `thumbnail-arrived { animation: none }` is more specific than dismiss /
     // drop-reject. Keep those states out of the kill switch so Close can still
     // slide the card out with the motion-blur streak.

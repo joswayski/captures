@@ -169,7 +169,7 @@ html[data-preview-harness-view="thumbnail"] #root {
   filter: blur(3px);
 }
 
-.thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
+.thumbnail-card.thumbnail-ready:not(.thumbnail-exiting):not(.thumbnail-drop-rejected) {
   animation: thumbnail-arrive 0.52s cubic-bezier(0.22, 0.65, 0.28, 1);
 }
 
@@ -192,6 +192,9 @@ html[data-preview-harness-view="thumbnail"] #root {
  * `.thumbnail-exit-dismiss` / `.thumbnail-drop-rejected`, and a blanket
  * `animation: none` froze the card in place while only the image streaked,
  * then the preview popped away on the dismiss timeout.
+ * The arrive rule above also skips drop-reject: it is more specific than
+ * `.thumbnail-card.thumbnail-drop-rejected`, so a self-drop would otherwise
+ * replay `thumbnail-arrive` and never fire `thumbnail-drop-reject`.
  */
 .thumbnail-card.thumbnail-ready.thumbnail-arrived:not(.thumbnail-exiting):not(.thumbnail-drop-rejected) {
   animation: none;
