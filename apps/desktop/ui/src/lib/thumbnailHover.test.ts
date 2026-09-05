@@ -755,6 +755,25 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
     expect(thumbnailStackHasLiveHitTarget()).toBe(false);
   });
 
+  it("passes through the stack while Clear all is in flight", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack thumbnail-stack-clearing">
+        <article class="thumbnail-card"><button>Copy</button></article>
+      </main>
+      <div class="thumbnail-stack-toolbar">
+        <button class="thumbnail-stack-control">Minimize previews</button>
+        <button class="thumbnail-stack-control">Clear all previews</button>
+      </div>
+    `;
+    const card = document.querySelector(".thumbnail-card")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => card),
+    });
+    expect(thumbnailStackHasLiveHitTarget()).toBe(false);
+    expect(shouldIgnoreThumbnailCursorEvents({ x: 10, y: 10, inside: true })).toBe(true);
+  });
+
   it("keeps only the minimized stack target interactive", () => {
     document.body.innerHTML = `
       <main class="thumbnail-stack thumbnail-stack-minimized">

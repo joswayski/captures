@@ -49,6 +49,33 @@ describe("previewBackend capture display switching", () => {
     await invoke("update_settings", { settings: current });
   });
 
+  it("clears the mocked mini-preview stack without rewriting files", async () => {
+    const before = await invoke<{ id: string; path: string | null }[]>("get_artifacts");
+    expect(before.length).toBeGreaterThan(1);
+    expect(before.some((artifact) => artifact.path)).toBe(true);
+    expect(before.some((artifact) => artifact.path === null)).toBe(true);
+
+    const dismissed = await invoke<string[]>("dismiss_all_artifacts", {
+      artifactIds: before.map((artifact) => artifact.id),
+    });
+    expect(dismissed).toEqual(before.map((artifact) => artifact.id));
+    expect(await invoke<unknown[]>("get_artifacts")).toEqual([]);
+    expect(await invoke<string[]>("dismiss_all_artifacts", { artifactIds: [] })).toEqual([]);
+  });
+
+  it("leaves mocked previews that were not requested when clearing", async () => {
+    const before = await invoke<{ id: string }[]>("get_artifacts");
+    expect(before.length).toBeGreaterThan(1);
+    const keep = before[0]!.id;
+    const dismissed = await invoke<string[]>("dismiss_all_artifacts", {
+      artifactIds: before.slice(1).map((artifact) => artifact.id),
+    });
+    expect(dismissed).not.toContain(keep);
+    expect(await invoke<{ id: string }[]>("get_artifacts")).toEqual([
+      expect.objectContaining({ id: keep }),
+    ]);
+  });
+
   it("rejects an unknown display without returning undefined", async () => {
     const current = await invoke<RecordingSelectionSession>("get_recording_selection");
     await expect(invoke("select_capture_display", {

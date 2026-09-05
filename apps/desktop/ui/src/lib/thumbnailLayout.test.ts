@@ -625,6 +625,18 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar-exiting \.thumbnail-stack-minimize,[\s\S]*?\{[^}]*transition:\s*none/,
     );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-clearing,\s*\n\.thumbnail-stack-clearing ~ \.thumbnail-stack-toolbar,\s*\n\.thumbnail-stack-clearing ~ \.thumbnail-overflow-cue\s*\{[\s\S]*?pointer-events:\s*none/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-clearing > \.thumbnail-card\.thumbnail-exit-dismiss\s*\{[\s\S]*?animation-delay:\s*var\(--thumbnail-clear-delay/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-control\[data-tooltip\]::after\s*\{[\s\S]*?bottom:\s*calc\(100% \+ 6px\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar-anchor-top \.thumbnail-stack-control\[data-tooltip\]::after\s*\{[\s\S]*?top:\s*calc\(100% \+ 6px\)/,
+    );
   });
 
   it("reserves the Show less gutter above expanded cards at the top of the screen", () => {
@@ -1590,6 +1602,9 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStackSuppressesSlotShift(stack)).toBe(true);
     stack.classList.add("thumbnail-stack-anchor-top");
     expect(thumbnailStackShiftsFromTop(stack)).toBe(true);
+    stack.classList.remove("thumbnail-stack-compact");
+    stack.classList.add("thumbnail-stack-clearing");
+    expect(thumbnailStackSuppressesSlotShift(stack)).toBe(true);
     expect(thumbnailStackShiftSlots(THUMBNAIL_CARD_SLOT_PX)).toBe(1);
     expect(thumbnailStackShiftSlots(-THUMBNAIL_CARD_SLOT_PX)).toBe(1);
     expect(thumbnailStackShiftSlots(0)).toBe(0);

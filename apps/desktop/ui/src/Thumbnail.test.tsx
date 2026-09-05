@@ -1008,6 +1008,7 @@ describe("Thumbnail", () => {
     expect(minimize).toHaveTextContent("Show less");
     expect(minimize).not.toHaveAttribute("data-tooltip");
     expect(screen.queryByRole("button", { name: "Clear previews" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Clear all previews" })).toBeNull();
 
     vi.useFakeTimers();
     fireEvent.click(minimize);
@@ -1087,6 +1088,7 @@ describe("Thumbnail", () => {
     render(<Thumbnail />);
     const cards = await screen.findAllByRole("article");
     expect(cards).toHaveLength(8);
+    expect(screen.getByRole("button", { name: "Clear all previews" })).toBeEnabled();
     const stack = cards[0]!.closest(".thumbnail-stack")!;
     const viewportHeight = 400;
     Object.defineProperties(stack, {
@@ -1120,6 +1122,8 @@ describe("Thumbnail", () => {
       expect(card.style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe("");
     });
 
+    expect(screen.getByRole("button", { name: "Expand 8 previews" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Clear all previews" })).toBeNull();
     const expand = screen.getByRole("button", { name: "Expand 8 previews" });
     expect(expand.style.getPropertyValue("--thumbnail-collapsed-skew-pad")).toBe("");
     stack.scrollTop = 0;
@@ -1139,9 +1143,150 @@ describe("Thumbnail", () => {
     expect(stack).toHaveClass("thumbnail-stack-scrollport");
     expect(screen.queryByRole("button", { name: "Show newer captures" })).toBeNull();
     expect(screen.getByRole("button", { name: "Show older captures" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clear all previews" })).toBeEnabled();
     const restack = screen.getByRole("button", { name: "Minimize previews" })
       .closest(".thumbnail-stack-toolbar");
     expect(stack.contains(restack)).toBe(false);
+  });
+
+  it("clears every expanded preview without saving or trashing files", async () => {
+    const stacked = [
+      {
+        ...artifact,
+        id: "capture-1",
+        path: "/Users/example/Captures/one.png",
+      },
+      {
+        ...artifact,
+        id: "capture-2",
+        path: null,
+      },
+    ];
+    vi.mocked(invoke).mockImplementation(async (command, payload) => {
+      if (command === "get_artifacts") return stacked;
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: stacked.at(-1)?.id };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        return new Promise(() => undefined);
+      }
+      if (command === "dismiss_all_artifacts") {
+        const requested = (payload as { artifactIds?: string[] } | undefined)?.artifactIds;
+        return Array.isArray(requested) ? requested : [];
+      }
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    expect(await screen.findAllByRole("article")).toHaveLength(2);
+    const clear = screen.getByRole("button", { name: "Clear all previews" });
+    const minimize = screen.getByRole("button", { name: "Minimize previews" });
+    expect(clear).toHaveAttribute("data-tooltip", "Clear all");
+    expect(clear.closest(".thumbnail-stack-toolbar")).toBe(
+      minimize.closest(".thumbnail-stack-toolbar"),
+    );
+    expect(clear.compareDocumentPosition(minimize) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        fireEvent.click(clear);
+        await Promise.resolve();
+      });
+
+      const cards = screen.getAllByRole("article");
+      expect(cards).toHaveLength(2);
+      expect(cards[0]!.closest(".thumbnail-stack")).toHaveClass("thumbnail-stack-clearing");
+      expect(cards[0]).toHaveClass("thumbnail-exit-dismiss");
+      expect(cards[1]).toHaveClass("thumbnail-exit-dismiss");
+      expect(invoke).toHaveBeenCalledWith("dismiss_all_artifacts", {
+        artifactIds: ["capture-1", "capture-2"],
+      });
+      expect(invoke).not.toHaveBeenCalledWith("trash_artifact", expect.anything());
+      expect(invoke).not.toHaveBeenCalledWith("save_artifact", expect.anything());
+      expect(invoke).not.toHaveBeenCalledWith("dismiss_artifact", expect.anything());
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_450);
+      });
+      expect(screen.queryByRole("article")).not.toBeInTheDocument();
+      expect(invoke).not.toHaveBeenCalledWith("dismiss_artifact", expect.anything());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves an in-flight saved delete on the stack so trash can still run", async () => {
+    const stacked = [
+      { ...artifact, id: "capture-1" },
+      { ...artifact, id: "capture-2" },
+      {
+        ...artifact,
+        id: "capture-3",
+        path: "/Users/example/Captures/three.png",
+      },
+    ];
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return stacked;
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: stacked.at(-1)?.id };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        return new Promise(() => undefined);
+      }
+      if (command === "dismiss_all_artifacts") {
+        // Over-return every stack id the way a whole-stack drain would, so
+        // the frontend must ignore ids that were not requested.
+        return stacked.map((item) => item.id);
+      }
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    const cards = await screen.findAllByRole("article");
+    expect(cards).toHaveLength(3);
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(within(cards[2]).getByRole("button", { name: "Delete" }));
+      expect(cards[2]).toHaveClass("thumbnail-exit-delete");
+      expect(invoke).not.toHaveBeenCalledWith("trash_artifact", expect.anything());
+      expect(screen.getByRole("button", { name: "Clear all previews" })).toBeEnabled();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Clear all previews" }));
+        await Promise.resolve();
+      });
+
+      expect(invoke).toHaveBeenCalledWith("dismiss_all_artifacts", {
+        artifactIds: ["capture-1", "capture-2"],
+      });
+      expect(invoke).not.toHaveBeenCalledWith("trash_artifact", expect.anything());
+      expect(invoke).not.toHaveBeenCalledWith("dismiss_artifact", expect.anything());
+      expect(screen.getAllByRole("article")).toHaveLength(3);
+      expect(cards[0]).toHaveClass("thumbnail-exit-dismiss");
+      expect(cards[1]).toHaveClass("thumbnail-exit-dismiss");
+      expect(cards[2]).toHaveClass("thumbnail-exit-delete");
+      expect(cards[0]!.closest(".thumbnail-stack")).toHaveClass("thumbnail-stack-clearing");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_450);
+      });
+      expect(screen.getAllByRole("article")).toHaveLength(1);
+      expect(cards[2]).toBeInTheDocument();
+      expect(cards[2]).toHaveClass("thumbnail-exit-delete");
+      expect(screen.queryByRole("button", { name: "Clear all previews" })).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_751);
+      });
+      expect(invoke).toHaveBeenCalledWith("trash_artifact", {
+        artifactId: "capture-3",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("latches the live compact pose so expand can start from a partial fan", async () => {
