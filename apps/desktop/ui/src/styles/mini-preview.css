@@ -186,7 +186,14 @@ html[data-preview-harness-view="thumbnail"] #root {
   }
 }
 
-.thumbnail-card.thumbnail-ready.thumbnail-arrived:not(.thumbnail-drop-rejected) {
+/*
+ * Cancel arrival after it finishes so later class toggles cannot replay it.
+ * Exclude exit: this selector is more specific than `.thumbnail-exit-dismiss`,
+ * so a blanket `animation: none` froze the card in place while only the image
+ * streaked, then the preview popped away on the dismiss timeout.
+ * Exclude drop-reject so a self-drop is not held still here either.
+ */
+.thumbnail-card.thumbnail-ready.thumbnail-arrived:not(.thumbnail-exiting):not(.thumbnail-drop-rejected) {
   animation: none;
 }
 
