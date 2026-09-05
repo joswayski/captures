@@ -544,14 +544,15 @@ export const THUMBNAIL_MINIMIZE_MORPH_MS = 240;
 export const THUMBNAIL_MINIMIZE_SWAP_MS = 180;
 
 /**
- * Delay before live cards above a dust-delete begin sliding into the empty
- * slot. Matches the pre-motion ash phase in styles.css.
+ * Delay before live cards toward the stack anchor begin sliding into a
+ * dust-delete hole. Matches the pre-motion ash phase in styles.css.
  */
 export const THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS = 1_800;
 
 /**
- * Delay before live cards above a dismiss begin sliding. Matches the point
- * where the outgoing preview has fully faded/streaked off-screen.
+ * Delay before live cards toward the stack anchor begin sliding after a
+ * dismiss. Matches the point where the outgoing preview has fully
+ * faded/streaked off-screen.
  */
 export const THUMBNAIL_DISMISS_STACK_MOTION_DELAY_MS = 450;
 
