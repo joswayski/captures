@@ -8712,7 +8712,7 @@ function PreferencesSections({
           <span>
             Freeze screen when capturing
             <small>
-              Holds hover states, menus, and motion still while you choose a region or window.
+              Holds hover states, tooltips, menus, and motion still while you choose a region or window.
               Turn this off to select from the live desktop.
             </small>
           </span>

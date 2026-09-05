@@ -308,8 +308,9 @@ pub(crate) async fn prepare_capture_selector_inner(
         let windows_started = windows_task.is_some();
         let (display, snapshot_png, image, displays, targets, pending_windows, cursor) =
             if freeze_screen {
-                let pointer = crate::pointer_position();
-                let frame = state.backend.capture_display_at_point(pointer)?;
+                let prefetched = crate::take_prefetched_or_capture_freeze_frame(&state)?;
+                let pointer = prefetched.pointer;
+                let frame = prefetched.frame;
                 let monitors_task = {
                     let state = state.clone();
                     std::thread::spawn(move || state.monitors())

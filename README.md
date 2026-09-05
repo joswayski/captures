@@ -53,7 +53,7 @@ Preview builds update after every successful merge to `main` that changes the in
 - Draw a region from an empty screen (no pre-sized outline); lock to common aspect ratios, or hold Shift for a square
 - Press Enter in the capture menu to confirm a screenshot or recording once a target is ready
 - Optional auto-start after selecting a region, window, or full display (Preferences)
-- Optional freeze while choosing a region or window, so hover states, menus, and motion stay put (on by default; turn off in Preferences to select from the live desktop)
+- Optional freeze while choosing a region or window, so hover states, tooltips, menus, and motion stay put (on by default; turn off in Preferences to select from the live desktop)
 - Optional cursor in screenshots (on by default; freeze screen does not include the pointer by itself)
 - Optional countdown before screenshots and recordings
 - Region recordings keep the selected area highlighted on screen while recording
