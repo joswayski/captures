@@ -5814,6 +5814,7 @@ export function Thumbnail() {
   const [exitingArtifactIds, setExitingArtifactIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [stackClearing, setStackClearing] = useState(false);
   const [clipboardState, setClipboardState] = useState<ClipboardState>({
     revision: -1,
     artifact_id: null,
@@ -6630,10 +6631,40 @@ export function Thumbnail() {
   const compact = stackMotion !== "expanded";
   const stackAnimating = stackMotion === "collapsing" || stackMotion === "expanding";
   const exitingOnly = artifacts.every(({ id }) => exitingArtifactIds.has(id));
-  const controlsDisabled = stackAnimating || exitingOnly;
+  const livePreviewCount = artifacts.reduce(
+    (count, artifact) => (exitingArtifactIds.has(artifact.id) ? count : count + 1),
+    0,
+  );
+  // Clear all is the stack equivalent of Close: leave files and history, hide
+  // the dock. One preview already has Close/Delete, so this stays off a
+  // single card and off the collapsed pile.
+  const showClearAll = !collapsed && livePreviewCount >= 2;
+  const controlsDisabled = stackAnimating || exitingOnly || stackClearing;
   const stackScrollport = (stackMotion === "expanding" || stackMotion === "expanded")
     && thumbnailStackNeedsScrollport(artifacts.length, stackViewportHeight);
   const showOverflowCues = stackMotion === "expanded";
+
+  const clearAllPreviews = () => {
+    if (controlsDisabled || livePreviewCount < 2) return;
+    const requested = artifacts
+      .filter((artifact) => !exitingArtifactIds.has(artifact.id))
+      .map((artifact) => artifact.id);
+    setStackClearing(true);
+    void invoke<string[]>("dismiss_all_artifacts")
+      .then((dismissed) => {
+        const removed = new Set(
+          Array.isArray(dismissed) && dismissed.length > 0 ? dismissed : requested,
+        );
+        setExitingArtifactIds((current) => {
+          const next = new Set(current);
+          removed.forEach((id) => next.delete(id));
+          return next;
+        });
+        setArtifacts((current) => current.filter((artifact) => !removed.has(artifact.id)));
+      })
+      .catch(() => undefined)
+      .finally(() => setStackClearing(false));
+  };
 
   const setStackCollapsed = (nextCollapsed: boolean) => {
     if (controlsDisabled || collapsed === nextCollapsed) return;
@@ -7055,6 +7086,7 @@ export function Thumbnail() {
           stackHoverReady ? "thumbnail-stack-hover-ready" : "",
           stackHoverLatched ? "thumbnail-stack-hover-latched" : "",
           stackAnchor === "top" ? "thumbnail-stack-anchor-top" : "",
+          stackClearing ? "thumbnail-stack-clearing" : "",
         ].filter(Boolean).join(" ")}
         onScroll={refreshStackOverflow}
         onDragStartCapture={(event) => {
@@ -7147,6 +7179,18 @@ export function Thumbnail() {
               Show less
             </span>
           </button>
+          {showClearAll && (
+            <button
+              type="button"
+              className="thumbnail-stack-control thumbnail-stack-clear"
+              aria-label="Clear all previews"
+              data-tooltip="Clear all"
+              disabled={controlsDisabled}
+              onClick={clearAllPreviews}
+            >
+              <CloseIcon />
+            </button>
+          )}
         </div>
       )}
       {showOverflowCues && stackOverflow.hasOlder && (

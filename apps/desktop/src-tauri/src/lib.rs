@@ -278,6 +278,7 @@ pub fn run() {
             reveal_artifact,
             trash_artifact,
             dismiss_artifact,
+            dismiss_all_artifacts,
             open_artifact_viewer,
             screenshot_editor::open_screenshot_editor,
             screenshot_editor::default_screenshot_edit_path,
@@ -2906,18 +2907,40 @@ fn open_screenshot_editor_owner_ids(app: &AppHandle) -> Vec<String> {
 }
 
 fn remove_artifact(app: &AppHandle, state: &Arc<AppState>, artifact_id: &str) -> CommandResult<()> {
-    {
+    let removed = {
         let mut artifacts = state.artifacts.lock();
         let original_len = artifacts.len();
         artifacts.retain(|artifact| artifact.id != artifact_id);
-        if artifacts.len() == original_len {
-            return Err("artifact is no longer available".to_owned());
-        }
+        artifacts.len() != original_len
+    };
+    if !removed {
+        // Dismiss is idempotent so an in-flight card exit can finish after
+        // Clear all has already drained the stack.
+        return Ok(());
     }
     app.emit("artifact-removed", artifact_id)
         .map_err(|error| error.to_string())?;
     updates::restore_update_notice(app);
     Ok(())
+}
+
+#[tauri::command]
+fn dismiss_all_artifacts(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> CommandResult<Vec<String>> {
+    let ids: Vec<String> = state
+        .take_preview_stack()
+        .into_iter()
+        .map(|artifact| artifact.id)
+        .collect();
+    for id in &ids {
+        app.emit("artifact-removed", id)
+            .map_err(|error| error.to_string())?;
+    }
+    updates::restore_update_notice(&app);
+    refresh_thumbnail_stack(&app);
+    Ok(ids)
 }
 
 #[tauri::command]

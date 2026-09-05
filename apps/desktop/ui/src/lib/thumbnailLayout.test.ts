@@ -541,6 +541,15 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar-exiting \.thumbnail-stack-minimize,[\s\S]*?\{[^}]*transition:\s*none/,
     );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-clearing,\s*\n\.thumbnail-stack-clearing ~ \.thumbnail-stack-toolbar,\s*\n\.thumbnail-stack-clearing ~ \.thumbnail-overflow-cue\s*\{[\s\S]*?pointer-events:\s*none/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-control\[data-tooltip\]::after\s*\{[\s\S]*?bottom:\s*calc\(100% \+ var\(--s-1\)\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar-anchor-top \.thumbnail-stack-control\[data-tooltip\]::after\s*\{[\s\S]*?top:\s*calc\(100% \+ var\(--s-1\)\)/,
+    );
   });
 
   it("reserves the Show less gutter above expanded cards at the top of the screen", () => {

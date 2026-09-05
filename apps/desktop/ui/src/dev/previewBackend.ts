@@ -338,6 +338,8 @@ function mockArtifacts(): CaptureArtifact[] {
   }));
 }
 
+let previewArtifacts: CaptureArtifact[] = mockArtifacts();
+
 /**
  * Optional local clip for reviewing the recording editor. Generate one with
  * `ffmpeg -f lavfi -i color=c=black:s=800x500:d=6 apps/desktop/ui/public/dev-sample.mp4`.
@@ -654,7 +656,6 @@ const RESPONSES: Record<string, unknown> = {
   get_update_status: updateStatus(),
   get_capture_history: HISTORY,
   get_recording_drafts: DRAFTS,
-  get_artifacts: mockArtifacts(),
   get_artifact: ARTIFACT,
   get_recording_artifact: RECORDING,
   get_clipboard_state: CLIPBOARD,
@@ -779,8 +780,20 @@ export function installPreviewBackend(): void {
   applyPreviewStage();
   trackThumbnailPointerForHarness();
   selection = createSelection();
+  previewArtifacts = mockArtifacts();
   mockIPC(async (command, payload) => {
     if (command === "get_recording_selection") return selection;
+    if (command === "get_artifacts") return previewArtifacts;
+    if (command === "dismiss_all_artifacts") {
+      const ids = previewArtifacts.map((artifact) => artifact.id);
+      previewArtifacts = [];
+      return ids;
+    }
+    if (command === "dismiss_artifact" || command === "trash_artifact") {
+      const artifactId = (payload as { artifactId?: string } | undefined)?.artifactId;
+      previewArtifacts = previewArtifacts.filter((artifact) => artifact.id !== artifactId);
+      return undefined;
+    }
     if (command === "update_settings") {
       const next = (payload as { settings?: AppSettings } | undefined)?.settings;
       if (!next) return SETTINGS;

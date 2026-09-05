@@ -1583,7 +1583,8 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
  * Window overlay, not a child of `.thumbnail-stack`: that scroller's
  * absolutely positioned descendants are tied to the content box, so Show less
  * would freeze beside the 2nd/3rd card once the pile overflows. `fixed` keeps
- * it on the visible stack edge while the list scrolls.
+ * it on the visible stack edge while the list scrolls. Clear all sits beside
+ * Show less as a second 28px control so the collapsed pile stays one hit target.
  */
 .thumbnail-stack-toolbar {
   position: fixed;
@@ -1593,6 +1594,12 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   display: flex;
   gap: var(--s-1);
   pointer-events: auto;
+}
+
+.thumbnail-stack-clearing,
+.thumbnail-stack-clearing ~ .thumbnail-stack-toolbar,
+.thumbnail-stack-clearing ~ .thumbnail-overflow-cue {
+  pointer-events: none;
 }
 
 .thumbnail-stack-toolbar-leaving,
@@ -1718,6 +1725,10 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   pointer-events: none;
 }
 
+.thumbnail-stack-clear {
+  flex: 0 0 28px;
+}
+
 .thumbnail-stack-minimize {
   --thumbnail-minimize-morph: 240ms;
   --thumbnail-minimize-swap: 180ms;
@@ -1834,8 +1845,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-stack-control[data-tooltip]::after {
   position: absolute;
-  top: calc(100% + var(--s-1));
+  top: auto;
   right: 0;
+  bottom: calc(100% + var(--s-1));
   z-index: 60;
   padding: var(--s-1) var(--s-2);
   border-radius: var(--r-xs);
@@ -1844,7 +1856,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   background: var(--glass-strong);
   box-shadow: var(--shadow-sm);
   opacity: 0;
-  transform: translateY(-2px);
+  transform: translateY(2px);
   transition:
     opacity var(--dur-1) var(--ease-out),
     transform var(--dur-1) var(--ease-out);
@@ -1854,11 +1866,24 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   white-space: nowrap;
 }
 
+.thumbnail-stack-toolbar-anchor-top .thumbnail-stack-control[data-tooltip]::after {
+  top: calc(100% + var(--s-1));
+  bottom: auto;
+  transform: translateY(-2px);
+}
+
 .thumbnail-stack-control[data-tooltip]:hover::after,
 .thumbnail-stack-control[data-tooltip][data-native-pointer-hover="true"]::after,
 .thumbnail-stack-control[data-tooltip]:focus-visible::after {
   opacity: 1;
   transform: translateY(0);
+}
+
+.thumbnail-stack-toolbar-leaving .thumbnail-stack-control[data-tooltip]::after,
+.thumbnail-stack-toolbar-exiting .thumbnail-stack-control[data-tooltip]::after,
+.thumbnail-stack-toolbar-entering .thumbnail-stack-control[data-tooltip]::after {
+  opacity: 0;
+  transition: none;
 }
 
 .thumbnail-stack-compact {

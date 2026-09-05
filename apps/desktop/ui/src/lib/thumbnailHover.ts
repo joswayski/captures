@@ -246,7 +246,7 @@ export function shouldLockThumbnailCardHoverOnStackMotion(
 export function thumbnailStackHasLiveHitTarget(root: Document = document): boolean {
   if (root.querySelector(".thumbnail-stack-dragging")) return true;
   if (root.querySelector(
-    ".thumbnail-stack-minimizing, .thumbnail-stack-expanding",
+    ".thumbnail-stack-minimizing, .thumbnail-stack-expanding, .thumbnail-stack-clearing",
   )) {
     return false;
   }

@@ -379,6 +379,14 @@ impl AppState {
         });
     }
 
+    /// Take every capture off the mini-preview stack.
+    ///
+    /// Saved folder files, Capture History, and editor-retained exports stay.
+    /// A later capture starts a fresh stack.
+    pub fn take_preview_stack(&self) -> Vec<CaptureArtifact> {
+        std::mem::take(&mut *self.artifacts.lock())
+    }
+
     /// Replace a capture already on the mini-preview stack or retained from an
     /// editor export. Returns false when neither store has this id.
     pub fn replace_artifact(&self, artifact: CaptureArtifact) -> bool {
@@ -728,5 +736,68 @@ mod tests {
                 .and_then(|artifact| artifact.path),
             Some("/tmp/keep-again.png".to_owned())
         );
+    }
+
+    #[test]
+    fn clearing_the_preview_stack_keeps_saved_files_and_editor_exports() {
+        use captures_capture::CaptureMode;
+
+        use crate::models::{CaptureArtifact, ClipboardCopyStatus};
+
+        use super::AppState;
+
+        let state = AppState::new();
+        let unsaved = CaptureArtifact {
+            id: "capture-1".to_owned(),
+            path: None,
+            preview_url: String::new(),
+            full_url: String::new(),
+            width: 8,
+            height: 8,
+            size_bytes: 12,
+            created_at: "2026-08-29T00:00:00Z".to_owned(),
+            mode: CaptureMode::Region,
+            history_saved: true,
+            clipboard_copy_status: ClipboardCopyStatus::Skipped,
+            image_png: vec![1],
+            preview_png: vec![2],
+        };
+        let saved = CaptureArtifact {
+            id: "capture-2".to_owned(),
+            path: Some("/tmp/saved.png".to_owned()),
+            ..unsaved.clone()
+        };
+        let editor_export = CaptureArtifact {
+            id: "editor-1".to_owned(),
+            path: Some("/tmp/editor.png".to_owned()),
+            ..unsaved.clone()
+        };
+        state.artifacts.lock().push(unsaved);
+        state.artifacts.lock().push(saved);
+        state.store_editor_artifact("capture-1", editor_export);
+
+        let dismissed = state.take_preview_stack();
+        assert_eq!(
+            dismissed
+                .iter()
+                .map(|artifact| artifact.id.as_str())
+                .collect::<Vec<_>>(),
+            ["capture-1", "capture-2"]
+        );
+        assert!(state.artifacts.lock().is_empty());
+        assert_eq!(
+            dismissed
+                .iter()
+                .find(|artifact| artifact.id == "capture-2")
+                .and_then(|artifact| artifact.path.as_deref()),
+            Some("/tmp/saved.png")
+        );
+        assert_eq!(
+            state
+                .find_artifact("editor-1")
+                .and_then(|artifact| artifact.path),
+            Some("/tmp/editor.png".to_owned())
+        );
+        assert!(state.take_preview_stack().is_empty());
     }
 }
