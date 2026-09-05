@@ -32,6 +32,7 @@ mocked backend with representative sample data so any window can be reviewed in 
 npm run dev --workspace @captures/desktop
 open "http://127.0.0.1:1420/?view=preferences&mock=1"
 open "http://127.0.0.1:1420/?view=recording-hud&mock=1&stage=1"
+open "http://127.0.0.1:1420/?view=recording-hud&mock=1&stage=1&controls=1"
 open "http://127.0.0.1:1420/?view=recording-region-indicator&mock=1&stage=1&target=region&x=260&y=180&width=1000&height=640"
 open "http://127.0.0.1:1420/?view=thumbnail&mock=1&stage=1"
 open "http://127.0.0.1:1420/?view=thumbnail&mock=1&stage=1&placement=top-right"
@@ -54,6 +55,7 @@ open "http://127.0.0.1:1420/?view=startup&mock=1&stage=1&caret=top&caret_x=148"
 - `placement` sets the mini-preview home corner in the thumbnail and Preferences harness (`top-left`, `top-right`, `bottom-left`, `bottom-right`).
 - `reject=1` loops the mini-preview self-drop “no” shake on the newest expanded card.
 - `auto=1` enables automatic capture in the selector harness so its compact controls and Preferences link can be reviewed.
+- `controls=1` includes recording controls in captures so the will-show copy and Change link can be reviewed.
 - `live=1` or `frozen=0` shows the capture overlay and recording selector over the live desktop instead of a freeze-frame.
 - `screenshot_format` and `video_format` set the Preferences defaults used by the editor harness (`png`/`jpeg`/`webp` and `mp4`/`gif`/`webm`).
 - `platform` selects macOS, Windows, or Linux shortcut defaults and copy in the Preferences harness (`?view=preferences&mock=1&platform=windows`).
