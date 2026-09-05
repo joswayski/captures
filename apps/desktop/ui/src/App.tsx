@@ -6248,6 +6248,7 @@ export function Thumbnail() {
     let ignoreCursorUpdate: Promise<void> = Promise.resolve();
     let lastCursorSyncAt = 0;
     let consecutiveNullPolls = 0;
+    let pointerPollSupported = true;
     let cursorHandoffTimers: ReturnType<typeof setTimeout>[] = [];
     let cardHoverLocked = false;
     let cardHoverLockOrigin: { x: number; y: number } | null = null;
@@ -6343,7 +6344,7 @@ export function Thumbnail() {
       // the pointer is on a card. An in-progress pile drag is the exception.
       const dragging = Boolean(document.querySelector(".thumbnail-stack-dragging"));
       setIgnoreCursorEvents(
-        thumbnailUnknownPointerShouldIgnoreCursorEvents(dragging)
+        thumbnailUnknownPointerShouldIgnoreCursorEvents(dragging, pointerPollSupported)
           || !thumbnailStackHasLiveHitTarget(),
         true,
       );
@@ -6469,7 +6470,10 @@ export function Thumbnail() {
       }
       // Prefer pass-through until a poll proves the pointer is on a live card.
       // Forcing the whole tall window hit-testable covers apps underneath.
-      setIgnoreCursorEvents(thumbnailUnknownPointerShouldIgnoreCursorEvents(dragging), true);
+      setIgnoreCursorEvents(
+        thumbnailUnknownPointerShouldIgnoreCursorEvents(dragging, pointerPollSupported),
+        true,
+      );
       if (refreshNative) {
         void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
       }
@@ -6501,6 +6505,7 @@ export function Thumbnail() {
             const needsRecovery = thumbnailNullPollNeedsDesktopInputRecovery(
               ignoringCursorEvents,
               document.documentElement.classList.contains("thumbnail-native-tracking"),
+              pointerPollSupported,
             );
             if (
               needsRecovery
@@ -6530,6 +6535,7 @@ export function Thumbnail() {
           const needsRecovery = thumbnailNullPollNeedsDesktopInputRecovery(
             ignoringCursorEvents,
             document.documentElement.classList.contains("thumbnail-native-tracking"),
+            pointerPollSupported,
           );
           if (
             needsRecovery
@@ -6668,6 +6674,13 @@ export function Thumbnail() {
       THUMBNAIL_HIT_TEST_CHANGED_EVENT,
       updateThumbnailHitTest,
     );
+    void invoke<boolean>("thumbnail_pointer_poll_available")
+      .then((available) => {
+        if (cancelled) return;
+        pointerPollSupported = available !== false;
+        applyStackClickThrough();
+      })
+      .catch(() => undefined);
     schedulePoll(0);
     return () => {
       cancelled = true;

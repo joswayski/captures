@@ -121,13 +121,17 @@ export function shouldRecoverThumbnailAfterNullPolls(
 
 /**
  * Recover from hung pointer polls only when the stack is still eating desktop
- * input. Click-through with an unknown pointer is the safe state: looping
- * recover there would keep re-arming a tall window over other apps.
+ * input. Click-through with an unknown pointer is the safe state on platforms
+ * that can poll: looping recover there would keep re-arming a tall window over
+ * other apps. Wayland never returns a pointer sample; skip recovery so the
+ * stack can stay interactive for DOM hover.
  */
 export function thumbnailNullPollNeedsDesktopInputRecovery(
   ignoringCursorEvents: boolean,
   nativeTracking: boolean,
+  pointerPollSupported = true,
 ): boolean {
+  if (!pointerPollSupported) return false;
   return !ignoringCursorEvents || nativeTracking;
 }
 
@@ -306,13 +310,18 @@ export function shouldIgnoreThumbnailCursorEvents(
 
 /**
  * Unknown pointer samples must not make the tall always-on-top stack eat
- * desktop input. Only an in-progress pile drag may keep the window interactive
- * without a live hit test.
+ * desktop input once this platform has proven it can poll. Only an in-progress
+ * pile drag may keep the window interactive without a live hit test.
+ *
+ * Wayland-only sessions never report a global pointer. Those stacks stay
+ * interactive so DOM hover can expand, drag, copy, and save.
  */
 export function thumbnailUnknownPointerShouldIgnoreCursorEvents(
   isDragging: boolean,
+  pointerPollSupported = true,
 ): boolean {
-  return !isDragging;
+  if (isDragging || !pointerPollSupported) return false;
+  return true;
 }
 
 export function clearThumbnailNativeHover(root: ParentNode = document) {

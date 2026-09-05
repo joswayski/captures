@@ -972,6 +972,10 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
   it("passes desktop input through when the pointer sample is unknown", () => {
     expect(thumbnailUnknownPointerShouldIgnoreCursorEvents(false)).toBe(true);
     expect(thumbnailUnknownPointerShouldIgnoreCursorEvents(true)).toBe(false);
+    expect(thumbnailUnknownPointerShouldIgnoreCursorEvents(false, true)).toBe(true);
+    expect(
+      thumbnailUnknownPointerShouldIgnoreCursorEvents(false, false),
+    ).toBe(false);
   });
 
   it("keeps a minimized stack toolbar control interactive", () => {
@@ -1126,6 +1130,9 @@ describe("thumbnail interactivity recovery helpers", () => {
     expect(thumbnailNullPollNeedsDesktopInputRecovery(false, false)).toBe(true);
     expect(thumbnailNullPollNeedsDesktopInputRecovery(true, true)).toBe(true);
     expect(thumbnailNullPollNeedsDesktopInputRecovery(false, true)).toBe(true);
+    expect(thumbnailNullPollNeedsDesktopInputRecovery(true, false, false)).toBe(false);
+    expect(thumbnailNullPollNeedsDesktopInputRecovery(false, false, false)).toBe(false);
+    expect(thumbnailNullPollNeedsDesktopInputRecovery(false, true, false)).toBe(false);
   });
 
   it("times out hung pointer polls so sleep cannot stall the loop", async () => {

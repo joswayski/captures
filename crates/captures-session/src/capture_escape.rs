@@ -61,6 +61,14 @@ pub const fn windows_escape_hook_should_swallow(enabled: bool) -> bool {
     enabled
 }
 
+/// Shortcut intent may drop only after a capture surface is on screen.
+/// Clearing it earlier unregisters the Windows hook and the global Escape
+/// hotkey while `show()` is still queued, so Escape cannot cancel.
+#[must_use]
+pub const fn capture_escape_may_drop_intent(surface_visible: bool) -> bool {
+    surface_visible
+}
+
 /// Escape cancels even if freeze-frame has not painted and another overlay is
 /// the key window.
 #[must_use]
@@ -203,7 +211,7 @@ pub fn ensure_capture_escape_hook() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CaptureEscapeUi, MACOS_ESCAPE_KEY_CODE, WINDOWS_VK_ESCAPE,
+        CaptureEscapeUi, MACOS_ESCAPE_KEY_CODE, WINDOWS_VK_ESCAPE, capture_escape_may_drop_intent,
         capture_escape_overrides_focus_and_freeze, macos_key_code_is_escape,
         windows_escape_hook_should_swallow, windows_vk_is_escape,
     };
@@ -271,6 +279,11 @@ mod tests {
         assert!(CaptureEscapeUi::from_live_surfaces(false, false, true, false, false).is_armed());
         assert!(CaptureEscapeUi::from_live_surfaces(false, false, false, true, false).is_armed());
         assert!(CaptureEscapeUi::from_live_surfaces(false, false, false, false, true).is_armed());
+        assert!(
+            !capture_escape_may_drop_intent(false),
+            "intent must stay armed until the overlay or selector is visible"
+        );
+        assert!(capture_escape_may_drop_intent(true));
     }
 
     #[test]

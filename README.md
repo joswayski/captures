@@ -89,7 +89,7 @@ Preview builds update after every successful merge to `main` that changes the in
 | macOS 13+ | Supported; primary development target |
 | Windows 11 | Supported; experimental |
 | Linux X11 | Supported; hide recording controls manually when needed |
-| Linux Wayland | Experimental; no window targeting, cursor capture, or click highlights |
+| Linux Wayland | Experimental; no window targeting, cursor capture, or click highlights. Mini previews cannot poll the pointer, so the stack stays interactive and may cover apps underneath |
 
 ## Shortcuts
 

@@ -297,6 +297,7 @@ pub fn run() {
             set_mini_preview_stack_position,
             get_thumbnail_pointer_position,
             get_capture_pointer_position,
+            thumbnail_pointer_poll_available,
             set_thumbnail_cursor,
             reassert_thumbnail_cursor,
             set_thumbnail_ignore_cursor_events,
@@ -726,7 +727,8 @@ async fn prepare_capture(
     };
     let active = capture_session_to_active(&session);
     state.sessions.lock().insert(id, session);
-    CAPTURE_ESCAPE_INTENT.store(false, Ordering::Release);
+    // Keep shortcut intent until the overlay is actually on screen. Clearing
+    // it here unregisters Escape on Windows/Linux while show() is still queued.
     show_capture_window(&app, &active);
     sync_capture_escape(&app);
     if let Some(task) = pending_windows {
@@ -1605,6 +1607,7 @@ fn show_capture_overlay(
             window.set_focus().map_err(|error| error.to_string())?;
             let _ = mode;
         }
+        handoff_capture_escape_from_intent(&app, window.is_visible().unwrap_or(false));
         Ok(())
     } else {
         Err("capture overlay is unavailable".to_owned())
@@ -1646,6 +1649,7 @@ fn reveal_capture_overlay(
         window.set_focus().map_err(|error| error.to_string())?;
         apply_overlay_capture_cursor(&window, mode)?;
     }
+    handoff_capture_escape_from_intent(&app, window.is_visible().unwrap_or(false));
     Ok(())
 }
 
@@ -1836,6 +1840,23 @@ fn get_thumbnail_pointer_position(
 #[tauri::command]
 fn get_capture_pointer_position(window: tauri::WebviewWindow) -> Option<ThumbnailPointerPosition> {
     webview_pointer_position(&window)
+}
+
+/// False on Wayland-only Linux, where `mouse_position` cannot sample the cursor.
+#[tauri::command]
+fn thumbnail_pointer_poll_available() -> bool {
+    thumbnail_global_pointer_poll_available(cfg!(target_os = "linux"), x11_display_is_present())
+}
+
+const fn thumbnail_global_pointer_poll_available(is_linux: bool, x11_display: bool) -> bool {
+    !is_linux || x11_display
+}
+
+fn x11_display_is_present() -> bool {
+    #[cfg(target_os = "linux")]
+    return x11_display_available();
+    #[cfg(not(target_os = "linux"))]
+    false
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
@@ -3768,6 +3789,15 @@ pub(crate) fn arm_capture_escape(app: &AppHandle) {
 
 pub(crate) fn disarm_capture_escape_intent(app: &AppHandle) {
     CAPTURE_ESCAPE_INTENT.store(false, Ordering::Release);
+    sync_capture_escape(app);
+}
+
+/// Drop shortcut intent only after a capture surface is visible so Windows and
+/// Linux keep the Escape hook registered through the async overlay show.
+fn handoff_capture_escape_from_intent(app: &AppHandle, surface_visible: bool) {
+    if captures_session::capture_escape_may_drop_intent(surface_visible) {
+        CAPTURE_ESCAPE_INTENT.store(false, Ordering::Release);
+    }
     sync_capture_escape(app);
 }
 
@@ -9271,6 +9301,15 @@ mod tests {
                 .is_armed()
         );
         assert!(!captures_session::windows_escape_hook_should_swallow(false));
+        assert!(!captures_session::capture_escape_may_drop_intent(false));
+        assert!(captures_session::capture_escape_may_drop_intent(true));
+    }
+
+    #[test]
+    fn wayland_only_sessions_cannot_poll_the_thumbnail_pointer() {
+        assert!(super::thumbnail_global_pointer_poll_available(false, false));
+        assert!(super::thumbnail_global_pointer_poll_available(true, true));
+        assert!(!super::thumbnail_global_pointer_poll_available(true, false));
     }
 
     #[cfg(target_os = "macos")]
