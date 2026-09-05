@@ -34,13 +34,15 @@ static ENABLED: AtomicBool = AtomicBool::new(false);
 static SWALLOWED_S: AtomicBool = AtomicBool::new(false);
 static HOOK: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 static INSTALL: Mutex<()> = Mutex::new(());
-static HANDLER: OnceLock<Mutex<Option<fn(WinShiftSPhase)>>> = OnceLock::new();
+type WinShiftSCallback = fn(WinShiftSPhase);
+type WinShiftSHandlerSlot = Mutex<Option<WinShiftSCallback>>;
+static HANDLER: OnceLock<WinShiftSHandlerSlot> = OnceLock::new();
 
-fn handler_slot() -> &'static Mutex<Option<fn(WinShiftSPhase)>> {
+fn handler_slot() -> &'static WinShiftSHandlerSlot {
     HANDLER.get_or_init(|| Mutex::new(None))
 }
 
-pub fn set_handler(handler: Option<fn(WinShiftSPhase)>) {
+pub fn set_handler(handler: Option<WinShiftSCallback>) {
     if let Ok(mut slot) = handler_slot().lock() {
         *slot = handler;
     }
