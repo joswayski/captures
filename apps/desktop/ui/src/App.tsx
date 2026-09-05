@@ -132,6 +132,7 @@ import {
   setThumbnailStackDragSwayReady,
   setThumbnailStackDragging,
   setThumbnailStackPressing,
+  thumbnailStackMeasuredFrameHeight,
   writeHarnessStackOffset,
 } from "./lib/thumbnailStackDrag";
 import {
@@ -6786,8 +6787,12 @@ export function Thumbnail() {
           let convertedAnchor = false;
           try {
             const scale = currentWindow ? await currentWindow.scaleFactor() : 1;
-            const size = currentWindow ? await currentWindow.outerSize() : null;
-            const frameHeight = size ? size.height / scale : contentHeight;
+            const size = currentWindow ? await currentWindow.innerSize() : null;
+            const frameHeight = thumbnailStackMeasuredFrameHeight(
+              size ? size.height / scale : null,
+              contentHeight,
+              window.innerHeight,
+            );
             const monitor = await currentMonitor();
             const workTop = monitor
               ? monitor.workArea.position.y / scale

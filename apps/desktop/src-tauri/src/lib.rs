@@ -8687,6 +8687,38 @@ mod tests {
     }
 
     #[test]
+    fn keeps_a_dragged_collapsed_pile_on_its_origin_after_another_capture() {
+        let work = bounds((0, 0, 1_920, 1_040), (0, 0, 1_920, 1_080), 1.0);
+        let origin = ThumbnailStackOrigin {
+            x: 420.0,
+            edge: 640.0,
+            anchor: ThumbnailStackAnchor::Bottom,
+        };
+        let three = stack_geometry(work, 3, true, Some(origin));
+        let four = stack_geometry(work, 4, true, Some(origin));
+        assert_eq!(three.x, 420.0);
+        assert_eq!(four.x, 420.0);
+        assert_eq!(three.y + three.height, 640.0);
+        assert_eq!(four.y + four.height, 640.0);
+
+        // Auto-expanding that parked pile would size the window as the
+        // expanded bar and clamp it to the work-area top — the stuck-drag
+        // position users hit when the webview stayed collapsed.
+        let expanded = stack_geometry(work, 4, false, Some(origin));
+        assert_eq!(expanded.y, 0.0);
+        assert!(expanded.height > four.height);
+        assert_eq!(
+            thumbnail_window_top(
+                four.y,
+                expanded.height,
+                four.height,
+                ThumbnailStackAnchor::Bottom,
+            ),
+            640.0 - expanded.height,
+        );
+    }
+
+    #[test]
     fn restores_a_top_aligned_pile_without_consuming_preserved_slack() {
         let work = bounds((0, 0, 1_920, 1_040), (0, 0, 1_920, 1_080), 1.0);
         let geometry = thumbnail_geometry(
