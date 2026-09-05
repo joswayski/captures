@@ -482,10 +482,16 @@ describe("thumbnail stack layout", () => {
       /html:has\(\.thumbnail-card:hover\):not\(:has\([\s\S]*?cursor:\s*grab/,
     );
     expect(thumbnailStyles).toMatch(
-      /html:has\(\s*:is\(\s*\.thumbnail-stack-toolbar/,
+      /html:not\(:has\(\.thumbnail-stack-dragging\)\):not\(:has\(\.thumbnail-card\.thumbnail-file-dragging\)\):has\(\s*:is\(\s*\.thumbnail-stack-toolbar/,
     );
     expect(thumbnailStyles).toMatch(
-      /html:has\(\s*:is\(\s*\.thumbnail-stack-toolbar[\s\S]*?\) \*\s*\{[\s\S]*?cursor:\s*pointer !important/,
+      /html:not\(:has\(\.thumbnail-stack-dragging\)\):not\(:has\(\.thumbnail-card\.thumbnail-file-dragging\)\):has\([\s\S]*?\) \*\s*\{[\s\S]*?cursor:\s*pointer !important/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /html\.thumbnail-native-tracking:not\(:has\(\.thumbnail-stack-dragging\)\) :is\(\.thumbnail-stack-toolbar/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /html:has\(\.thumbnail-stack-dragging\),\s*\nhtml:has\(\.thumbnail-stack-dragging\) \*,\s*\nhtml:has\(\.thumbnail-card\.thumbnail-file-dragging\),\s*\nhtml:has\(\.thumbnail-card\.thumbnail-file-dragging\) \*\s*\{[\s\S]*?cursor:\s*-webkit-grabbing !important/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-card:hover :is\(button, \.icon-button, \.thumbnail-editor-control\):not\(:disabled\)/,

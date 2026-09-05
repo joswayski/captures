@@ -1005,10 +1005,10 @@ html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
  * The collapsed pile expands on click and can still be dragged. Force pointer
  * on peeking cards and their images so file-drag grab cannot leak through.
  */
-html.thumbnail-native-tracking :is(.thumbnail-stack-toolbar, .thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target):not(:disabled),
-html.thumbnail-native-tracking :is(.thumbnail-stack-toolbar, .thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target):not(:disabled) *,
-:is(.thumbnail-stack-toolbar, .thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target)[data-native-pointer-hover="true"]:not(:disabled),
-:is(.thumbnail-stack-toolbar, .thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target)[data-native-pointer-hover="true"]:not(:disabled) * {
+html.thumbnail-native-tracking:not(:has(.thumbnail-stack-dragging)) :is(.thumbnail-stack-toolbar, .thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target):not(:disabled),
+html.thumbnail-native-tracking:not(:has(.thumbnail-stack-dragging)) :is(.thumbnail-stack-toolbar, .thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target):not(:disabled) *,
+html:not(:has(.thumbnail-stack-dragging)) :is(.thumbnail-stack-toolbar, .thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target)[data-native-pointer-hover="true"]:not(:disabled),
+html:not(:has(.thumbnail-stack-dragging)) :is(.thumbnail-stack-toolbar, .thumbnail-stack-control, .thumbnail-overflow-cue, .thumbnail-collapsed-hit-target)[data-native-pointer-hover="true"]:not(:disabled) * {
   cursor: pointer !important;
 }
 
@@ -1029,6 +1029,9 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
  * on `html` *and* every descendant with `!important`. Native tracking otherwise
  * stamps grab/default on the whole tree, and moving across the rounded control,
  * morphing pill, or peeking cards lets WebKit flash the arrow.
+ * Skip that while a pile or file drag is in flight: pointer capture keeps
+ * :hover / data-native-pointer-hover, and this selector would otherwise beat
+ * the grabbing rules despite also using `!important`.
  */
 html:has(.thumbnail-card:hover):not(:has(
   :is(
@@ -1049,7 +1052,7 @@ html:has(.thumbnail-card:hover):not(:has(
   cursor: grab;
 }
 
-html:has(
+html:not(:has(.thumbnail-stack-dragging)):not(:has(.thumbnail-card.thumbnail-file-dragging)):has(
   :is(
     .thumbnail-stack-toolbar,
     .thumbnail-stack-control,
@@ -1060,7 +1063,7 @@ html:has(
     .thumbnail-editor-control
   ):hover:not(:disabled):not([data-thumbnail-hover-stale])
 ),
-html:has(
+html:not(:has(.thumbnail-stack-dragging)):not(:has(.thumbnail-card.thumbnail-file-dragging)):has(
   :is(
     .thumbnail-stack-toolbar,
     .thumbnail-stack-control,
@@ -1071,7 +1074,7 @@ html:has(
     .thumbnail-editor-control
   ):hover:not(:disabled):not([data-thumbnail-hover-stale])
 ) *,
-html:has(
+html:not(:has(.thumbnail-stack-dragging)):not(:has(.thumbnail-card.thumbnail-file-dragging)):has(
   :is(
     .thumbnail-stack-toolbar,
     .thumbnail-stack-control,
@@ -1082,7 +1085,7 @@ html:has(
     .thumbnail-editor-control
   )[data-native-pointer-hover="true"]:not(:disabled)
 ),
-html:has(
+html:not(:has(.thumbnail-stack-dragging)):not(:has(.thumbnail-card.thumbnail-file-dragging)):has(
   :is(
     .thumbnail-stack-toolbar,
     .thumbnail-stack-control,
