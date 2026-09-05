@@ -188,6 +188,15 @@ function setCanvasBounds(canvas: HTMLCanvasElement, width = 1_440, height = 900)
   });
 }
 
+function chooseShapeTool(name: "Rectangle (R)" | "Ellipse (O)" | "Line (L)") {
+  if (!screen.queryByRole("menu", { name: "Shapes" })) {
+    fireEvent.click(screen.getByRole("button", { name: "Shapes" }));
+  }
+  fireEvent.click(
+    within(screen.getByRole("menu", { name: "Shapes" })).getByRole("menuitemradio", { name }),
+  );
+}
+
 describe("ScreenshotEditor", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", "/?view=screenshot-editor&artifact_id=capture-1");
@@ -381,14 +390,18 @@ describe("ScreenshotEditor", () => {
       "Select & move (V)",
       "Crop (C)",
       "Text (T)",
-      "Rectangle (R)",
-      "Ellipse (O)",
-      "Line (L)",
+      "Shapes",
       "Arrow (A)",
       "Freehand (P)",
       "Eraser (B)",
     ]) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    }
+    expect(screen.queryByRole("button", { name: "Rectangle (R)" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Shapes" }));
+    const shapesMenu = screen.getByRole("menu", { name: "Shapes" });
+    for (const name of ["Rectangle (R)", "Ellipse (O)", "Line (L)"]) {
+      expect(within(shapesMenu).getByRole("menuitemradio", { name })).toBeInTheDocument();
     }
     expect(screen.queryByRole("button", { name: /Curved arrow/ })).not.toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("get_artifact", {
@@ -403,6 +416,37 @@ describe("ScreenshotEditor", () => {
         artifact_ids: ["capture-1"],
       });
     });
+  });
+
+  it("groups rectangle, ellipse, and line under Shapes and keeps Arrow on the rail", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+
+    expect(screen.getByRole("button", { name: "Arrow (A)" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Shapes" }));
+    expect(screen.getByRole("button", { name: "Shapes" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("img", { name: "Stroke preview" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Filled shape" })).not.toBeChecked();
+    expect(screen.getByRole("slider", { name: "Opacity" })).toHaveValue("100");
+
+    fireEvent.click(
+      within(screen.getByRole("menu", { name: "Shapes" })).getByRole("menuitemradio", {
+        name: "Ellipse (O)",
+      }),
+    );
+    expect(screen.queryByRole("menu", { name: "Shapes" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ellipse" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Ellipse", { selector: ".screenshot-properties-heading strong" }))
+      .toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "l" });
+    expect(screen.getByRole("button", { name: "Line" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("checkbox", { name: "Filled shape" })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "r" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Filled shape" }));
+    expect(screen.getByRole("checkbox", { name: "Filled shape" })).toBeChecked();
+    expect(screen.getByRole("group", { name: "Fill color" })).toBeInTheDocument();
   });
 
   it("keeps locked layer transforms disabled and lets unlocked height scale proportionally", async () => {
@@ -1566,7 +1610,7 @@ describe("ScreenshotEditor", () => {
     await screen.findAllByText("1440 × 900");
 
     setCanvasZoomPercent(100);
-    fireEvent.click(screen.getByRole("button", { name: "Line (L)" }));
+    chooseShapeTool("Line (L)");
     const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
     canvas.setPointerCapture = vi.fn();
     canvas.hasPointerCapture = vi.fn(() => true);
@@ -1795,6 +1839,8 @@ describe("ScreenshotEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Erase" }));
     expect(screen.getByRole("button", { name: "Erase" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Brush size")).toBeInTheDocument();
+    expect(screen.getByLabelText("Brush softness")).toHaveAttribute("aria-valuetext", "18%");
+    expect(screen.getByRole("img", { name: "Brush preview" })).toBeInTheDocument();
     expect(screen.getByText("Paint to erase.")).toBeInTheDocument();
     expect(screen.queryByLabelText("Color tolerance")).not.toBeInTheDocument();
 
@@ -2394,7 +2440,7 @@ describe("ScreenshotEditor", () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Canvas width");
 
-    fireEvent.click(screen.getByRole("button", { name: "Rectangle (R)" }));
+    chooseShapeTool("Rectangle (R)");
     const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
     canvas.setPointerCapture = vi.fn();
     canvas.hasPointerCapture = vi.fn(() => true);
@@ -2428,7 +2474,7 @@ describe("ScreenshotEditor", () => {
     });
 
     // Shape tool stays active, but the new rectangle is selected for post-place edits.
-    expect(screen.getByRole("button", { name: "Rectangle (R)" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Shapes" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -2444,7 +2490,7 @@ describe("ScreenshotEditor", () => {
     await screen.findByLabelText("Canvas width");
 
     setCanvasZoomPercent(100);
-    fireEvent.click(screen.getByRole("button", { name: "Rectangle (R)" }));
+    chooseShapeTool("Rectangle (R)");
     const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
     canvas.setPointerCapture = vi.fn();
     canvas.hasPointerCapture = vi.fn(() => true);

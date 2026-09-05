@@ -35,8 +35,24 @@ export const DEFAULT_WAND_TOLERANCE = 36;
 /** Default brush radius in document (layer) pixels before natural scaling. */
 export const DEFAULT_REMOVE_BG_BRUSH_SIZE = 28;
 
+/**
+ * Eraser UI softness (0 = hard edge, 100 = fully feathered).
+ * Kept in sync with `DEFAULT_BRUSH_HARDNESS` via `brushHardnessFromSoftness`.
+ */
+export const DEFAULT_BRUSH_SOFTNESS = 18;
+
+/** Map the 0–100 softness slider to the 0–1 hardness the stamp uses. */
+export function brushHardnessFromSoftness(softnessPercent: number): number {
+  return 1 - Math.max(0, Math.min(100, softnessPercent)) / 100;
+}
+
+/** Inverse of `brushHardnessFromSoftness` for displaying stored hardness. */
+export function brushSoftnessFromHardness(hardness: number): number {
+  return Math.round((1 - Math.max(0, Math.min(1, hardness))) * 100);
+}
+
 /** How hard the erase/restore brush edge is (1 = hard circle). */
-export const DEFAULT_BRUSH_HARDNESS = 0.82;
+export const DEFAULT_BRUSH_HARDNESS = brushHardnessFromSoftness(DEFAULT_BRUSH_SOFTNESS);
 
 /**
  * Topmost visible image layer under a document-space point.
