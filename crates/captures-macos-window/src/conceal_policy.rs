@@ -16,6 +16,17 @@ pub fn should_conceal_documents_for_capture_activation(
     other_app_is_frontmost && !captures_holds_user_focus
 }
 
+/// Whether Later/Close should yield back to the app that the notice covered.
+///
+/// A remembered frontmost app that has since quit is not a handoff target:
+/// yield is a no-op, and Preferences should stay in Captures' foreground order.
+pub fn should_hand_off_update_notice_activation(
+    remembered_external_app: bool,
+    remembered_app_is_terminated: bool,
+) -> bool {
+    remembered_external_app && !remembered_app_is_terminated
+}
+
 /// Whether Later/Close should push a donated key window behind the user's app.
 ///
 /// Hiding the update notice donates key status to Preferences, history, or an
@@ -29,10 +40,28 @@ pub fn should_order_donated_document_behind_after_notice_dismiss(
     handing_off_to_external_app && donated_key_is_titled_document
 }
 
+/// How many donated titled windows Later should push behind, in donation order.
+///
+/// Resigning one titled document can immediately donate key to another. Drain
+/// until the next key window is not a titled document, or handoff is off.
+pub fn donated_titled_windows_to_push_behind(
+    handing_off_to_external_app: bool,
+    successive_key_windows_are_titled: &[bool],
+) -> usize {
+    if !handing_off_to_external_app {
+        return 0;
+    }
+    successive_key_windows_are_titled
+        .iter()
+        .take_while(|is_titled| **is_titled)
+        .count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        should_conceal_documents_for_capture_activation,
+        donated_titled_windows_to_push_behind, should_conceal_documents_for_capture_activation,
+        should_hand_off_update_notice_activation,
         should_order_donated_document_behind_after_notice_dismiss,
     };
 
@@ -67,5 +96,28 @@ mod tests {
         assert!(!should_order_donated_document_behind_after_notice_dismiss(
             false, true
         ));
+    }
+
+    #[test]
+    fn later_does_not_hand_off_to_a_terminated_app() {
+        assert!(should_hand_off_update_notice_activation(true, false));
+        assert!(!should_hand_off_update_notice_activation(true, true));
+        assert!(!should_hand_off_update_notice_activation(false, false));
+    }
+
+    #[test]
+    fn later_drains_every_donated_titled_document() {
+        assert_eq!(
+            donated_titled_windows_to_push_behind(true, &[true, true, true]),
+            3
+        );
+        assert_eq!(
+            donated_titled_windows_to_push_behind(true, &[true, false]),
+            1
+        );
+        assert_eq!(
+            donated_titled_windows_to_push_behind(false, &[true, true]),
+            0
+        );
     }
 }

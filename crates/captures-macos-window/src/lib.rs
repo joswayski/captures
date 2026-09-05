@@ -2,7 +2,8 @@ mod conceal_policy;
 mod cursor_policy;
 
 pub use conceal_policy::{
-    should_conceal_documents_for_capture_activation,
+    donated_titled_windows_to_push_behind, should_conceal_documents_for_capture_activation,
+    should_hand_off_update_notice_activation,
     should_order_donated_document_behind_after_notice_dismiss,
 };
 pub use cursor_policy::{

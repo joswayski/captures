@@ -1,5 +1,5 @@
 use crate::conceal_policy::{
-    should_conceal_documents_for_capture_activation,
+    should_conceal_documents_for_capture_activation, should_hand_off_update_notice_activation,
     should_order_donated_document_behind_after_notice_dismiss,
 };
 use crate::cursor_policy::{
@@ -2451,7 +2451,10 @@ pub fn dismiss_update_notice(window: &WebviewWindow) -> Result<(), &'static str>
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         slot.take()
     };
-    let handing_off = previous.is_some();
+    let handing_off = should_hand_off_update_notice_activation(
+        previous.is_some(),
+        previous.as_ref().is_some_and(|app| app.isTerminated()),
+    );
     if native.isKeyWindow() {
         native.resignKeyWindow();
     }
@@ -2745,25 +2748,35 @@ fn resign_ns_window_key_without_raising_documents(window: &NSWindow) {
     }
     let previous = thumbnail_activation_handoff_target();
     window.resignKeyWindow();
-    push_donated_titled_document_behind(previous.is_some());
+    push_donated_titled_document_behind(should_hand_off_update_notice_activation(
+        previous.is_some(),
+        previous.as_ref().is_some_and(|app| app.isTerminated()),
+    ));
     clear_frontmost_app_before_thumbnail_key();
     yield_activation_to(previous);
 }
 
-/// Resigns a titled document that received donated key status and orders it
-/// behind the user's frontmost app. Resigning alone leaves the window visually
-/// promoted until activation yield finishes.
+/// Resigns every titled document that received donated key status and orders
+/// each behind the user's frontmost app. Resigning one window can immediately
+/// donate key to another open Preferences, history, or editor window.
 fn push_donated_titled_document_behind(handing_off_to_external_app: bool) {
     let Some(main_thread) = MainThreadMarker::new() else {
         return;
     };
     let app = NSApplication::sharedApplication(main_thread);
-    if let Some(key) = app.keyWindow()
-        && should_order_donated_document_behind_after_notice_dismiss(
+    let mut seen = Vec::new();
+    while let Some(key) = app.keyWindow() {
+        if !should_order_donated_document_behind_after_notice_dismiss(
             handing_off_to_external_app,
             is_titled_document_window(&key),
-        )
-    {
+        ) {
+            break;
+        }
+        let window_number = key.windowNumber();
+        if seen.contains(&window_number) {
+            break;
+        }
+        seen.push(window_number);
         key.resignKeyWindow();
         key.orderBack(None);
     }
