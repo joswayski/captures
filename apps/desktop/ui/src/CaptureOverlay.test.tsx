@@ -57,39 +57,19 @@ const guidanceBounds = {
 } as DOMRect;
 
 /**
- * jsdom completes `capture://` images with `error` on the next task. Keep
- * snapshots pending until a test fires load, matching a real freeze-frame
- * decode.
+ * jsdom completes `capture://` images with `error` on the next task. Swallow
+ * that event so React's snapshot `onError` cannot trip the overlay reveal
+ * path until a test fires `load`.
  */
 function pauseHtmlImageLoading() {
-  const proto = HTMLImageElement.prototype;
-  const previous = Object.getOwnPropertyDescriptor(proto, "src");
-  const previousSetAttribute = proto.setAttribute;
-  const assignSrc = (element: HTMLImageElement, value: string) => {
-    Element.prototype.setAttribute.call(element, "src", value);
-  };
-  proto.setAttribute = function setAttribute(name: string, value: string) {
-    if (String(name).toLowerCase() === "src") {
-      assignSrc(this as unknown as HTMLImageElement, value);
-      return;
+  const suppressError = (event: Event) => {
+    if (event.target instanceof HTMLImageElement) {
+      event.stopImmediatePropagation();
     }
-    previousSetAttribute.call(this, name, value);
   };
-  Object.defineProperty(proto, "src", {
-    configurable: true,
-    enumerable: previous?.enumerable ?? true,
-    get() {
-      return this.getAttribute("src") ?? "";
-    },
-    set(value: string) {
-      assignSrc(this, value);
-    },
-  });
+  window.addEventListener("error", suppressError, true);
   return () => {
-    proto.setAttribute = previousSetAttribute;
-    if (previous) {
-      Object.defineProperty(proto, "src", previous);
-    }
+    window.removeEventListener("error", suppressError, true);
   };
 }
 
