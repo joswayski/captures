@@ -5837,6 +5837,11 @@ export function Thumbnail() {
   ));
   const stackRef = useRef<HTMLElement>(null);
   const stackDrag = useRef<CollapsedThumbnailStackDrag | null>(null);
+  // Keep the press-time top/bottom layout for the whole drag. Flipping it
+  // mid-screen teleports compact cards across the tall window until the
+  // converted frame catches up.
+  const collapsedLayoutAnchorRef = useRef<ThumbnailStackAnchor>("bottom");
+  const collapsedFrameRef = useRef<{ x: number; y: number } | null>(null);
   const collapsedStackPointerCleanup = useRef<(() => void) | null>(null);
   const skipCollapsedStackClick = useRef(false);
   const stackFanCollapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -6769,6 +6774,163 @@ export function Thumbnail() {
     ),
   );
 
+  const collapsedNativeGeometry = async () => {
+    const contentHeight = collapsedContentHeight();
+    const scale = currentWindow ? await currentWindow.scaleFactor() : 1;
+    const size = currentWindow ? await currentWindow.outerSize() : null;
+    const monitor = await currentMonitor();
+    const workTop = monitor ? monitor.workArea.position.y / scale : 0;
+    const workHeight = monitor
+      ? monitor.workArea.size.height / scale
+      : window.screen.availHeight;
+    return {
+      contentHeight,
+      frameHeight: size ? size.height / scale : contentHeight,
+      work: {
+        x: monitor ? monitor.workArea.position.x / scale : 0,
+        y: workTop,
+        width: monitor
+          ? monitor.workArea.size.width / scale
+          : window.screen.availWidth,
+        height: workHeight,
+        bottomGap: 12,
+      },
+      workTop,
+      workHeight,
+    };
+  };
+
+  const placeCollapsedStackFrame = async (
+    x: number,
+    y: number,
+    anchor: ThumbnailStackAnchor,
+  ) => {
+    const contentHeight = collapsedContentHeight();
+    if (isTauri()) {
+      try {
+        const { frameHeight, work, workTop, workHeight } = await collapsedNativeGeometry();
+        const clamped = clampThumbnailStackFrame(
+          x,
+          y,
+          340,
+          frameHeight,
+          work,
+          contentHeight,
+          anchor,
+        );
+        const next = await invoke<{ x: number; y: number }>(
+          "set_mini_preview_stack_position",
+          { x: clamped.x, y: clamped.y, anchor },
+        );
+        applyThumbnailStackGravity(
+          stackRef.current,
+          thumbnailStackGravityFromWorkArea({
+            pileBottom: thumbnailStackVisualPileBottom({
+              y: next.y,
+              frameHeight,
+              contentHeight,
+              anchor,
+            }),
+            workTop,
+            workHeight,
+            contentHeight,
+            bottomGap: 12,
+          }),
+        );
+        collapsedFrameRef.current = next;
+        return next;
+      } catch {
+        applyThumbnailStackGravity(
+          stackRef.current,
+          thumbnailStackGravityFromPlacement(placementRef.current),
+        );
+        const next = await invoke<{ x: number; y: number }>(
+          "set_mini_preview_stack_position",
+          { x, y, anchor },
+        );
+        collapsedFrameRef.current = next;
+        return next;
+      }
+    }
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    const written = writeHarnessStackOffset(
+      x,
+      y,
+      document.documentElement,
+      viewport,
+      { anchor, contentHeight },
+    );
+    applyThumbnailStackGravity(
+      stackRef.current,
+      thumbnailStackGravityFromHarness({
+        offsetY: written.y,
+        anchor,
+        viewportHeight: viewport.height,
+        contentHeight,
+      }),
+    );
+    collapsedFrameRef.current = written;
+    return written;
+  };
+
+  const settleCollapsedStackAnchor = async () => {
+    const frame = collapsedFrameRef.current;
+    if (!frame) return;
+    const from = collapsedLayoutAnchorRef.current;
+    const contentHeight = collapsedContentHeight();
+    if (isTauri()) {
+      try {
+        const { frameHeight, workTop, workHeight } = await collapsedNativeGeometry();
+        const gravity = thumbnailStackGravityFromWorkArea({
+          pileBottom: thumbnailStackVisualPileBottom({
+            y: frame.y,
+            frameHeight,
+            contentHeight,
+            anchor: from,
+          }),
+          workTop,
+          workHeight,
+          contentHeight,
+          bottomGap: 12,
+        });
+        const nextAnchor = thumbnailStackAnchorFromGravity(gravity, from);
+        if (nextAnchor === from) return;
+        const converted = convertThumbnailStackFrameAnchor(
+          frame,
+          from,
+          nextAnchor,
+          frameHeight,
+          contentHeight,
+        );
+        collapsedLayoutAnchorRef.current = nextAnchor;
+        await placeCollapsedStackFrame(converted.x, converted.y, nextAnchor);
+        commitStackAnchor(nextAnchor);
+        return;
+      } catch {
+        return;
+      }
+    }
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    const gravity = thumbnailStackGravityFromHarness({
+      offsetY: frame.y,
+      anchor: from,
+      viewportHeight: viewport.height,
+      contentHeight,
+    });
+    const nextAnchor = thumbnailStackAnchorFromGravity(gravity, from);
+    if (nextAnchor === from) return;
+    const converted = convertHarnessStackOffsetAnchor(
+      frame,
+      from,
+      nextAnchor,
+      viewport.height,
+      contentHeight,
+    );
+    collapsedLayoutAnchorRef.current = nextAnchor;
+    await placeCollapsedStackFrame(converted.x, converted.y, nextAnchor);
+    commitStackAnchor(nextAnchor);
+  };
+
   const collapsedStackDrag = () => {
     stackDrag.current ??= new CollapsedThumbnailStackDrag({
       getFrame: async () => {
@@ -6779,157 +6941,11 @@ export function Thumbnail() {
         }
         return readHarnessStackOffset();
       },
-      moveFrame: async (x, y) => {
-        const contentHeight = collapsedContentHeight();
-        if (isTauri()) {
-          let frameX = x;
-          let frameY = y;
-          let anchor = stackAnchorRef.current;
-          let convertedAnchor = false;
-          try {
-            const scale = currentWindow ? await currentWindow.scaleFactor() : 1;
-            const size = currentWindow ? await currentWindow.outerSize() : null;
-            const frameHeight = size ? size.height / scale : contentHeight;
-            const monitor = await currentMonitor();
-            const workTop = monitor
-              ? monitor.workArea.position.y / scale
-              : 0;
-            const workHeight = monitor
-              ? monitor.workArea.size.height / scale
-              : window.screen.availHeight;
-            const work = {
-              x: monitor ? monitor.workArea.position.x / scale : 0,
-              y: workTop,
-              width: monitor
-                ? monitor.workArea.size.width / scale
-                : window.screen.availWidth,
-              height: workHeight,
-              bottomGap: 12,
-            };
-            const clamped = clampThumbnailStackFrame(
-              frameX,
-              frameY,
-              340,
-              frameHeight,
-              work,
-              contentHeight,
-              anchor,
-            );
-            frameX = clamped.x;
-            frameY = clamped.y;
-            const gravity = thumbnailStackGravityFromWorkArea({
-              pileBottom: thumbnailStackVisualPileBottom({
-                y: frameY,
-                frameHeight,
-                contentHeight,
-                anchor,
-              }),
-              workTop,
-              workHeight,
-              contentHeight,
-              bottomGap: 12,
-            });
-            const nextAnchor = thumbnailStackAnchorFromGravity(gravity, anchor);
-            if (nextAnchor !== anchor) {
-              const converted = convertThumbnailStackFrameAnchor(
-                { x: frameX, y: frameY },
-                anchor,
-                nextAnchor,
-                frameHeight,
-                contentHeight,
-              );
-              const reclamped = clampThumbnailStackFrame(
-                converted.x,
-                converted.y,
-                340,
-                frameHeight,
-                work,
-                contentHeight,
-                nextAnchor,
-              );
-              frameX = reclamped.x;
-              frameY = reclamped.y;
-              commitStackAnchor(nextAnchor);
-              anchor = nextAnchor;
-              convertedAnchor = true;
-            }
-            const next = await invoke<{ x: number; y: number }>(
-              "set_mini_preview_stack_position",
-              { x: frameX, y: frameY, anchor },
-            );
-            applyThumbnailStackGravity(
-              stackRef.current,
-              thumbnailStackGravityFromWorkArea({
-                pileBottom: thumbnailStackVisualPileBottom({
-                  y: next.y,
-                  frameHeight,
-                  contentHeight,
-                  anchor,
-                }),
-                workTop,
-                workHeight,
-                contentHeight,
-                bottomGap: 12,
-              }),
-            );
-            if (convertedAnchor) stackDrag.current?.rebaseFrame(next);
-            return next;
-          } catch {
-            applyThumbnailStackGravity(
-              stackRef.current,
-              thumbnailStackGravityFromPlacement(placementRef.current),
-            );
-            return invoke<{ x: number; y: number }>(
-              "set_mini_preview_stack_position",
-              { x, y, anchor: stackAnchorRef.current },
-            );
-          }
-        }
-        const viewport = { width: window.innerWidth, height: window.innerHeight };
-        const anchor = stackAnchorRef.current;
-        const written = writeHarnessStackOffset(
-          x,
-          y,
-          document.documentElement,
-          viewport,
-          { anchor, contentHeight },
-        );
-        const gravity = thumbnailStackGravityFromHarness({
-          offsetY: written.y,
-          anchor,
-          viewportHeight: viewport.height,
-          contentHeight,
-        });
-        applyThumbnailStackGravity(stackRef.current, gravity);
-        const nextAnchor = thumbnailStackAnchorFromGravity(gravity, anchor);
-        if (nextAnchor === anchor) return written;
-        const converted = convertHarnessStackOffsetAnchor(
-          written,
-          anchor,
-          nextAnchor,
-          viewport.height,
-          contentHeight,
-        );
-        const nextWritten = writeHarnessStackOffset(
-          converted.x,
-          converted.y,
-          document.documentElement,
-          viewport,
-          { anchor: nextAnchor, contentHeight },
-        );
-        commitStackAnchor(nextAnchor);
-        applyThumbnailStackGravity(
-          stackRef.current,
-          thumbnailStackGravityFromHarness({
-            offsetY: nextWritten.y,
-            anchor: nextAnchor,
-            viewportHeight: viewport.height,
-            contentHeight,
-          }),
-        );
-        stackDrag.current?.rebaseFrame(nextWritten);
-        return nextWritten;
-      },
+      moveFrame: async (x, y) => placeCollapsedStackFrame(
+        x,
+        y,
+        collapsedLayoutAnchorRef.current,
+      ),
       reducedMotion: prefersReducedMotion,
       onSway: (sway) => applyThumbnailStackDragSway(stackRef.current, sway),
       onDraggingChange: (dragging) => {
@@ -6950,6 +6966,7 @@ export function Thumbnail() {
     collapsedStackPointerCleanup.current?.();
     const drag = collapsedStackDrag();
     if (!drag.pointerDown(event.nativeEvent)) return;
+    collapsedLayoutAnchorRef.current = stackAnchorRef.current;
     skipCollapsedStackClick.current = true;
     setThumbnailStackPressing(stackRef.current, true);
     if (stackFanCollapseTimer.current) {
@@ -7006,8 +7023,9 @@ export function Thumbnail() {
         x: upEvent.clientX,
         y: upEvent.clientY,
       });
-      void drag.pointerUp({ pointerId: upEvent.pointerId }).then((outcome) => {
+      void drag.pointerUp({ pointerId: upEvent.pointerId }).then(async (outcome) => {
         if (outcome === "ignored") return;
+        if (outcome === "drop") await settleCollapsedStackAnchor();
         setThumbnailStackDragging(stackRef.current, false);
         window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
         if (options.expand !== false && outcome === "expand") setStackCollapsed(false);

@@ -233,6 +233,35 @@ describe("CollapsedThumbnailStackDrag", () => {
     expect(await drag.pointerUp({ pointerId: 1 })).toBe("drop");
   });
 
+  it("drops a superseded in-flight move so a later sample is not overwritten", async () => {
+    let continueFirst: (() => void) | undefined;
+    const frames: { x: number; y: number }[] = [];
+    const drag = new CollapsedThumbnailStackDrag({
+      getFrame: () => ({ x: 0, y: 0 }),
+      moveFrame: (x, y) => new Promise<{ x: number; y: number }>((resolve) => {
+        const finish = () => {
+          frames.push({ x, y });
+          resolve({ x, y });
+        };
+        if (continueFirst === undefined) continueFirst = finish;
+        else finish();
+      }),
+      reducedMotion: () => false,
+    });
+
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 0 });
+    const first = drag.pointerMove({ pointerId: 1, screenX: 40, screenY: 0 });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(continueFirst).toEqual(expect.any(Function));
+    const second = drag.pointerMove({ pointerId: 1, screenX: 80, screenY: 0 });
+    continueFirst?.();
+    expect(await first).toBeNull();
+    expect(await second).toMatchObject({ dragging: true, x: 80, y: 0 });
+    expect(frames.at(-1)).toEqual({ x: 80, y: 0 });
+  });
+
   it("ignores an in-flight move after the press has already ended", async () => {
     let continueMove: (() => void) | undefined;
     const drag = new CollapsedThumbnailStackDrag({

@@ -252,6 +252,9 @@ export class CollapsedThumbnailStackDrag {
   private lastTickMs = 0;
   private swayRaf = 0;
   private pointerSampled = false;
+  /** Bumps so a newer pointer sample can retire an in-flight frame move. */
+  private moveGeneration = 0;
+  private moveTail: Promise<void> = Promise.resolve();
 
   constructor(private readonly host: ThumbnailStackDragHost) {}
 
@@ -318,16 +321,33 @@ export class CollapsedThumbnailStackDrag {
     this.pointerSampled = true;
     this.startSwayLoop();
     this.host.onSway?.(this.sway);
-    await this.ready;
-    if (!this.sessionIs(session, event.pointerId)) return null;
-    const next = await this.host.moveFrame(this.startFrame.x + dx, this.startFrame.y + dy);
-    if (!this.sessionIs(session, event.pointerId)) return null;
-    return {
-      dragging: true,
-      x: next.x,
-      y: next.y,
-      sway: this.sway,
-    };
+    const generation = ++this.moveGeneration;
+    const result = this.moveTail.then(async () => {
+      if (!this.sessionIs(session, event.pointerId) || generation !== this.moveGeneration) {
+        return null;
+      }
+      await this.ready;
+      if (!this.sessionIs(session, event.pointerId) || generation !== this.moveGeneration) {
+        return null;
+      }
+      const moveDx = this.lastPointer.x - this.startPointer.x;
+      const moveDy = this.lastPointer.y - this.startPointer.y;
+      const next = await this.host.moveFrame(
+        this.startFrame.x + moveDx,
+        this.startFrame.y + moveDy,
+      );
+      if (!this.sessionIs(session, event.pointerId) || generation !== this.moveGeneration) {
+        return null;
+      }
+      return {
+        dragging: true as const,
+        x: next.x,
+        y: next.y,
+        sway: this.sway,
+      };
+    });
+    this.moveTail = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   async pointerUp(
@@ -344,6 +364,7 @@ export class CollapsedThumbnailStackDrag {
 
   private beginSession(pointerId: number, screenX: number, screenY: number) {
     this.session += 1;
+    this.moveGeneration += 1;
     const session = this.session;
     this.pointerId = pointerId;
     this.startPointer = { x: screenX, y: screenY };
@@ -361,6 +382,7 @@ export class CollapsedThumbnailStackDrag {
 
   private endSession() {
     this.session += 1;
+    this.moveGeneration += 1;
     this.pointerId = null;
     this.dragging = false;
     this.ready = null;

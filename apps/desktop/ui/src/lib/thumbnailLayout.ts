@@ -438,6 +438,30 @@ export function thumbnailStackAnchorFromGravity(
   return current;
 }
 
+/**
+ * Compact cards sit on one end of a full-height stack (`bottom: 52px` or
+ * `top: 52px`). Flipping that layout mid-drag teleports the pile across the
+ * window until the frame conversion catches up, so collapsed dragging keeps
+ * the press-time anchor and only settles after drop.
+ */
+export function thumbnailStackHarnessCardTop({
+  offsetY,
+  anchor,
+  viewportHeight,
+}: {
+  offsetY: number;
+  anchor: ThumbnailStackAnchor;
+  viewportHeight: number;
+}): number {
+  if (anchor === "top") return offsetY + THUMBNAIL_STACK_CONTROL_GUTTER_PX;
+  return (
+    offsetY
+    + viewportHeight
+    - THUMBNAIL_STACK_CONTROL_GUTTER_PX
+    - THUMBNAIL_CARD_HEIGHT_PX
+  );
+}
+
 /** Convert a harness `#root` translation between top and bottom anchoring. */
 export function convertHarnessStackOffsetAnchor(
   offset: { x: number; y: number },
