@@ -1122,8 +1122,22 @@ function writeShiftSlots(card: HTMLElement, slots: number): void {
   card.style.setProperty(STACK_SHIFT_SLOTS_VAR, String(slots));
 }
 
+function readShiftSlots(card: HTMLElement): number {
+  const raw = card.style.getPropertyValue(STACK_SHIFT_SLOTS_VAR).trim();
+  if (!raw) return 0;
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function clearShiftSlots(card: HTMLElement): void {
   card.style.removeProperty(STACK_SHIFT_SLOTS_VAR);
+}
+
+function hasExpandedSlotShift(card: HTMLElement): boolean {
+  return card.classList.contains(STACK_SHIFTING_CLASS)
+    || card.classList.contains(STACK_SHIFT_INSTANT_CLASS)
+    || hasThumbnailStackShiftPx(readStackShiftPx(card))
+    || Boolean(card.style.translate);
 }
 
 function writeStackShiftPx(card: HTMLElement, shiftPx: number, animate: boolean): void {
@@ -1274,21 +1288,37 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
     }
 
     if (thumbnailStackSuppressesSlotShift(stack)) {
-      // Compact pose is a 3D `transform` from a shared bottom anchor. Expanded
-      // slot `translate` would compose with that and drop survivors below the
-      // front card until the held exit is removed. Snapshot any in-flight
-      // settle as compact depth so Show less does not jump cards back up to
-      // their original expanded slots.
-      for (const card of cards) {
-        const shiftPx = readStackShiftPx(card);
-        if (hasThumbnailStackShiftPx(shiftPx)) {
-          writeShiftSlots(card, thumbnailStackShiftSlots(shiftPx));
+      // Compact pose is a 3D `transform`. Expanded slot `translate` would
+      // compose with that and drop survivors off the pile until the held exit
+      // is removed. Snapshot any in-flight settle as compact depth so Show
+      // less does not jump cards back to their original expanded slots, then
+      // rebase or clear that snapshot when held exits unmount so React's new
+      // `--thumbnail-stack-base-depth` does not stack with a stale offset.
+      const motionStates: ThumbnailStackCardMotionState[] = cards.map((card) => {
+        const holdsLayoutSlot = isHeldLayoutExitCard(card);
+        const startedAt = exitStartedAt.get(card);
+        const delayMs = motionDelayMsFor(card);
+        const motionReady = holdsLayoutSlot
+          && startedAt !== undefined
+          && now - startedAt >= delayMs;
+        return {
+          exiting: isExitingCard(card),
+          holdsLayoutSlot,
+          motionReady,
+          currentShiftPx: readStackShiftPx(card),
+        };
+      });
+      const shifts = computeThumbnailStackShifts(motionStates, {
+        fromTop: thumbnailStackShiftsFromTop(stack),
+      });
+      for (let index = 0; index < cards.length; index += 1) {
+        const card = cards[index]!;
+        const nextSlots = thumbnailStackShiftSlots(shifts[index] ?? 0);
+        const expandedShift = hasExpandedSlotShift(card);
+        if (expandedShift || readShiftSlots(card) > 0) {
+          writeShiftSlots(card, nextSlots);
         }
-        const hasSlotShift = card.classList.contains(STACK_SHIFTING_CLASS)
-          || card.classList.contains(STACK_SHIFT_INSTANT_CLASS)
-          || hasThumbnailStackShiftPx(shiftPx)
-          || Boolean(card.style.translate);
-        if (hasSlotShift) writeStackShiftPx(card, 0, false);
+        if (expandedShift) writeStackShiftPx(card, 0, false);
       }
       return;
     }

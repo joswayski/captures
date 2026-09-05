@@ -1437,6 +1437,86 @@ describe("thumbnail stack layout", () => {
       expect(survivor).not.toHaveClass("thumbnail-stack-shifting");
       expect(survivor.style.translate).toBe("");
       expect(survivor.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("1");
+
+      exiting.remove();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(survivor.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("");
+    } finally {
+      dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("rebases compact shift-slots when one of two held exits unmounts", async () => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    stack.className = "thumbnail-stack thumbnail-stack-anchor-top";
+    const first = document.createElement("article");
+    first.className = "thumbnail-card";
+    const second = document.createElement("article");
+    second.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    const third = document.createElement("article");
+    third.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    const fourth = document.createElement("article");
+    fourth.className = "thumbnail-card";
+    stack.append(first, second, third, fourth);
+    const dispose = createThumbnailStackShiftController(stack);
+
+    try {
+      await Promise.resolve();
+      vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(fourth.style.translate).toBe(`0 ${-THUMBNAIL_CARD_SLOT_PX * 2}px`);
+
+      stack.classList.add("thumbnail-stack-compact");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(fourth.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("2");
+
+      second.remove();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(fourth.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("1");
+
+      third.remove();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(fourth.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("");
+    } finally {
+      dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears compact shift-slots on a lower survivor after a top-anchored middle delete unmounts", async () => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    stack.className = "thumbnail-stack thumbnail-stack-anchor-top";
+    const first = document.createElement("article");
+    first.className = "thumbnail-card";
+    const exiting = document.createElement("article");
+    exiting.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    const third = document.createElement("article");
+    third.className = "thumbnail-card";
+    stack.append(first, exiting, third);
+    const dispose = createThumbnailStackShiftController(stack);
+
+    try {
+      await Promise.resolve();
+      vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(first.style.translate).toBe("");
+      expect(third.style.translate).toBe(`0 ${-THUMBNAIL_CARD_SLOT_PX}px`);
+
+      stack.classList.add("thumbnail-stack-compact");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(first.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("");
+      expect(third.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("1");
+
+      exiting.remove();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(third.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("");
     } finally {
       dispose();
       vi.useRealTimers();
