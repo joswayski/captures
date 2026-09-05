@@ -6151,9 +6151,10 @@ export function Thumbnail() {
   const hasThumbnailCards = artifacts.length > 0;
 
   useEffect(() => {
-    // Dust-delete and dismiss both hold layout; survivors above slide by N
-    // slots with the same ease. Pure CSS only moved one fixed step (or reflowed
-    // flex on dismiss), which jittered multi-exit batches.
+    // Dust-delete and dismiss both hold layout; survivors slide toward the
+    // stack anchor by N slots with the same ease. Pure CSS only moved one
+    // fixed step (or reflowed flex on dismiss), which jittered multi-exit
+    // batches.
     if (!hasThumbnailCards) return;
     const stack = stackRef.current;
     if (!stack) return;

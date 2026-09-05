@@ -1255,8 +1255,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
 
 /*
  * Multi-slot stack settle is driven in JS (createThumbnailStackShiftController).
- * Delete and dismiss both hold layout; survivors ease by N × slot with the same
- * transition. Finished holes snap the translate down with layout reflow.
+ * Delete and dismiss both hold layout; survivors ease by N × slot toward the
+ * stack anchor (down when bottom-anchored, up when top-anchored). Finished
+ * holes snap the translate with layout reflow.
  *
  * Use the `translate` property (not `transform`) so dismiss `translateX` and
  * delete dust transforms still compose when a shifted card itself starts exiting.
@@ -1287,9 +1288,11 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
 /*
  * Once a live card starts moving into an exiting slot, cover its controls until
  * the holes are removed, so a different control cannot slide under a still
- * pointer during the settle.
+ * pointer during the settle. Bottom-anchored stacks slide preceding siblings
+ * down; top-anchored stacks slide following siblings up.
  */
-.thumbnail-card:not(.thumbnail-exiting):has(~ .thumbnail-exit-delete.thumbnail-exit-dust)::before {
+.thumbnail-stack:not(.thumbnail-stack-anchor-top) .thumbnail-card:not(.thumbnail-exiting):has(~ .thumbnail-exit-delete.thumbnail-exit-dust)::before,
+.thumbnail-stack-anchor-top .thumbnail-exit-delete.thumbnail-exit-dust ~ .thumbnail-card:not(.thumbnail-exiting)::before {
   position: absolute;
   z-index: 30;
   inset: 0;
@@ -1300,7 +1303,8 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
   animation: thumbnail-stack-interaction-guard 1ms 1.8s step-end forwards;
 }
 
-.thumbnail-card:not(.thumbnail-exiting):has(~ .thumbnail-exit-dismiss)::before {
+.thumbnail-stack:not(.thumbnail-stack-anchor-top) .thumbnail-card:not(.thumbnail-exiting):has(~ .thumbnail-exit-dismiss)::before,
+.thumbnail-stack-anchor-top .thumbnail-exit-dismiss ~ .thumbnail-card:not(.thumbnail-exiting)::before {
   position: absolute;
   z-index: 30;
   inset: 0;
@@ -1311,7 +1315,8 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
   animation: thumbnail-stack-interaction-guard 1ms 0.45s step-end forwards;
 }
 
-.thumbnail-card:not(.thumbnail-exiting):has(~ .thumbnail-exit-delete:not(.thumbnail-exit-dust))::before {
+.thumbnail-stack:not(.thumbnail-stack-anchor-top) .thumbnail-card:not(.thumbnail-exiting):has(~ .thumbnail-exit-delete:not(.thumbnail-exit-dust))::before,
+.thumbnail-stack-anchor-top .thumbnail-exit-delete:not(.thumbnail-exit-dust) ~ .thumbnail-card:not(.thumbnail-exiting)::before {
   position: absolute;
   z-index: 30;
   inset: 0;
