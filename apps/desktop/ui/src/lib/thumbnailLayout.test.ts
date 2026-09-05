@@ -657,6 +657,41 @@ describe("thumbnail stack layout", () => {
     );
   });
 
+  it("centers mini-preview tooltips on their icons and flips them away from the stack edge", () => {
+    const iconTip = thumbnailStyles.match(/\.icon-button::after\s*\{([^}]*)\}/);
+    const editorTip = thumbnailStyles.match(/\.thumbnail-editor-control-tip\s*\{([^}]*)\}/);
+    const stackTip = thumbnailStyles.match(
+      /\.thumbnail-stack-control\[data-tooltip\]::after\s*\{([^}]*)\}/,
+    );
+    const deleteFreeze = thumbnailStyles.match(
+      /\.thumbnail-exit-delete \.icon-button\.delete::after\s*\{([^}]*)\}/,
+    );
+
+    expect(iconTip?.[1]).toMatch(/left:\s*50%/);
+    expect(iconTip?.[1]).toMatch(/translate:\s*-50% 0/);
+    expect(iconTip?.[1]).toMatch(/justify-self:\s*start/);
+    expect(editorTip?.[1]).toMatch(/left:\s*50%/);
+    expect(editorTip?.[1]).toMatch(/translate:\s*-50% 0/);
+    expect(stackTip?.[1]).toMatch(/left:\s*50%/);
+    expect(stackTip?.[1]).toMatch(/translate:\s*-50% 0/);
+    expect(stackTip?.[1]).toMatch(/bottom:\s*calc\(100% \+ 6px\)/);
+    expect(deleteFreeze?.[1]).toMatch(/transform:\s*translateY\(0\)/);
+
+    expect(thumbnailStyles).not.toMatch(/\.thumbnail-top-left \.icon-button::after/);
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-top-actions \.icon-button::after\s*\{[\s\S]*?bottom:\s*calc\(100% \+ 6px\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-anchor-top \.thumbnail-top-actions \.icon-button::after\s*\{[\s\S]*?top:\s*calc\(100% \+ 6px\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-anchor-top \.thumbnail-editor-control-tip\s*\{[\s\S]*?top:\s*calc\(100% \+ 6px\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar-anchor-top \.thumbnail-stack-control\[data-tooltip\]::after\s*\{[\s\S]*?top:\s*calc\(100% \+ 6px\)/,
+    );
+  });
+
   it("sizes the collapsed expand target from receding extra cards", () => {
     expect(thumbnailCollapsedPeekPx(1)).toBe(0);
     expect(thumbnailCollapsedPeekPx(2)).toBeCloseTo(

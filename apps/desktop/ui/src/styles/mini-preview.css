@@ -541,12 +541,14 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
 }
 
 .icon-button {
+  --thumbnail-tooltip-nudge: -2px;
   position: relative;
   display: grid;
   width: 28px;
   height: 28px;
   padding: 5px;
   place-items: center;
+  overflow: visible;
   border: 1px solid var(--glass-border);
   border-radius: var(--r-md);
   color: var(--glass-text);
@@ -586,10 +588,21 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
   background: var(--theme-signal);
 }
 
+/*
+ * Center tips on the icon. `translate` holds the X centering so hover
+ * `transform` (and grid `place-items: center`) cannot shove them sideways.
+ * `justify-self`/`align-self: start` keeps the abspos ::after on the
+ * padding box instead of the centered grid area.
+ */
 .icon-button::after {
   position: absolute;
+  justify-self: start;
+  align-self: start;
+  inset: auto;
   top: calc(100% + 6px);
   left: 50%;
+  z-index: 20;
+  width: max-content;
   padding: 4px 7px;
   border-radius: var(--r-xs);
   content: attr(data-tooltip);
@@ -597,7 +610,8 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
   background: var(--glass-strong);
   box-shadow: var(--shadow-sm);
   opacity: 0;
-  transform: translate(-50%, -2px);
+  translate: -50% 0;
+  transform: translateY(var(--thumbnail-tooltip-nudge));
   transition:
     opacity 0.12s ease,
     transform 0.12s ease;
@@ -605,37 +619,37 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
   font-size: var(--text-2xs);
   font-weight: var(--weight-medium);
   white-space: nowrap;
-  z-index: 20;
 }
 
 .icon-button:hover::after,
 .icon-button[data-native-pointer-hover="true"]::after,
 .icon-button:focus-visible::after {
   opacity: 1;
-  transform: translate(-50%, 0);
+  transform: translateY(0);
+}
+
+/* Bottom-anchored stack: room above the card, keep tips out of the preview. */
+.thumbnail-top-actions .icon-button {
+  --thumbnail-tooltip-nudge: 2px;
 }
 
 .thumbnail-top-actions .icon-button::after {
   top: auto;
   bottom: calc(100% + 6px);
-  transform: translate(-50%, 2px);
 }
 
-.thumbnail-top-actions .icon-button:hover::after,
-.thumbnail-top-actions .icon-button[data-native-pointer-hover="true"]::after,
-.thumbnail-top-actions .icon-button:focus-visible::after {
-  transform: translate(-50%, 0);
+/*
+ * Top-anchored stack: Show less (and later close-all / delete-all) sit in the
+ * gutter above the first card, on whichever side the toolbar uses. Flip tips
+ * below the icons so they cannot tuck under those controls.
+ */
+.thumbnail-stack-anchor-top .thumbnail-top-actions .icon-button {
+  --thumbnail-tooltip-nudge: -2px;
 }
 
-.thumbnail-top-left .icon-button::after {
-  left: 0;
-  transform: translate(0, 2px);
-}
-
-.thumbnail-top-left .icon-button:hover::after,
-.thumbnail-top-left .icon-button[data-native-pointer-hover="true"]::after,
-.thumbnail-top-left .icon-button:focus-visible::after {
-  transform: translate(0, 0);
+.thumbnail-stack-anchor-top .thumbnail-top-actions .icon-button::after {
+  top: calc(100% + 6px);
+  bottom: auto;
 }
 
 /*
@@ -646,6 +660,7 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
  */
 .thumbnail-editor-control {
   --editor-control-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --thumbnail-tooltip-nudge: 2px;
   position: absolute;
   z-index: 9;
   top: 8px;
@@ -744,15 +759,18 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
 .thumbnail-editor-control-tip {
   position: absolute;
   z-index: 20;
+  inset: auto;
   bottom: calc(100% + 6px);
-  right: 0;
+  left: 50%;
+  width: max-content;
   padding: 4px 7px;
   border-radius: var(--r-xs);
   color: var(--glass-text);
   background: var(--glass-strong);
   box-shadow: var(--shadow-sm);
   opacity: 0;
-  transform: translateY(2px);
+  translate: -50% 0;
+  transform: translateY(var(--thumbnail-tooltip-nudge));
   transition:
     opacity 0.12s ease,
     transform 0.12s ease;
@@ -767,6 +785,15 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
 .thumbnail-editor-control:focus-visible .thumbnail-editor-control-tip {
   opacity: 1;
   transform: translateY(0);
+}
+
+.thumbnail-stack-anchor-top .thumbnail-editor-control {
+  --thumbnail-tooltip-nudge: -2px;
+}
+
+.thumbnail-stack-anchor-top .thumbnail-editor-control-tip {
+  top: calc(100% + 6px);
+  bottom: auto;
 }
 
 .thumbnail-editor-control svg {
@@ -1380,7 +1407,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
 
 .thumbnail-exit-delete .icon-button.delete::after {
   opacity: 1;
-  transform: translate(0, 0);
+  transform: translateY(0);
   transition: none;
 }
 
@@ -1745,12 +1772,14 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
 }
 
 .thumbnail-stack-control {
+  --thumbnail-tooltip-nudge: 2px;
   position: relative;
   display: grid;
   width: 28px;
   height: 28px;
   padding: 0;
   place-items: center;
+  overflow: visible;
   border: 1px solid var(--glass-border);
   border-radius: var(--r-md);
   color: var(--glass-text);
@@ -1917,19 +1946,30 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
   transition: none;
 }
 
+/*
+ * Per-control tips, not one shared corner anchor. Extra toolbar actions
+ * (close all, delete all) each get a tip centered on that icon. Default
+ * toolbar is at the bottom of the window, so the tip opens above.
+ */
 .thumbnail-stack-control[data-tooltip]::after {
   position: absolute;
-  top: calc(100% + var(--s-1));
-  right: 0;
+  justify-self: start;
+  align-self: start;
+  inset: auto;
+  top: auto;
+  bottom: calc(100% + 6px);
+  left: 50%;
   z-index: 60;
-  padding: var(--s-1) var(--s-2);
+  width: max-content;
+  padding: 4px 7px;
   border-radius: var(--r-xs);
   content: attr(data-tooltip);
   color: var(--glass-text);
   background: var(--glass-strong);
   box-shadow: var(--shadow-sm);
   opacity: 0;
-  transform: translateY(-2px);
+  translate: -50% 0;
+  transform: translateY(var(--thumbnail-tooltip-nudge));
   transition:
     opacity var(--dur-1) var(--ease-out),
     transform var(--dur-1) var(--ease-out);
@@ -1944,6 +1984,15 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
 .thumbnail-stack-control[data-tooltip]:focus-visible::after {
   opacity: 1;
   transform: translateY(0);
+}
+
+.thumbnail-stack-toolbar-anchor-top .thumbnail-stack-control {
+  --thumbnail-tooltip-nudge: -2px;
+}
+
+.thumbnail-stack-toolbar-anchor-top .thumbnail-stack-control[data-tooltip]::after {
+  top: calc(100% + 6px);
+  bottom: auto;
 }
 
 .thumbnail-stack-compact {
