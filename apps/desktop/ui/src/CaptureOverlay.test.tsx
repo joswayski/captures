@@ -893,7 +893,9 @@ describe("CaptureOverlay guidance", () => {
     await act(async () => {
       sessionReady?.({
         payload: {
-          ...activeSession,
+          ...session,
+          mode: "window",
+          windows_ready: false,
           windows: [{
             id: "notes",
             title: "Notes",
