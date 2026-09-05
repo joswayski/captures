@@ -164,6 +164,22 @@ export function clampThumbnailStackFrame(
   };
 }
 
+/**
+ * Native inner size, or the webview height when that API is unavailable.
+ * Never fall back to the collapsed content box alone: a preserved expanded
+ * frame would then clamp as if it were 240px and pin the pile to the bar top.
+ */
+export function thumbnailStackMeasuredFrameHeight(
+  measuredHeight: number | null | undefined,
+  contentHeight: number,
+  viewportHeight: number,
+): number {
+  if (typeof measuredHeight === "number" && measuredHeight > 0) {
+    return measuredHeight;
+  }
+  return Math.max(contentHeight, Math.max(0, viewportHeight));
+}
+
 export function readHarnessStackOffset(
   root: HTMLElement = document.documentElement,
 ): ThumbnailStackPoint {
