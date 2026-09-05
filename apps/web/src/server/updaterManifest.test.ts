@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   PREVIEW_LATEST_JSON_URL,
+  UPDATER_MANIFEST_FAILURE_RETRY_MS,
   isUpdaterManifest,
   resetUpdaterManifestCache,
   resolveUpdaterManifest,
@@ -103,6 +104,62 @@ test("resolveUpdaterManifest fails closed without a cached copy", async () => {
     ok: false,
     error: "updater manifest is unavailable",
   });
+});
+
+test("resolveUpdaterManifest backs off cold-cache failures and retries at the deadline", async (context) => {
+  context.mock.timers.enable({ apis: ["Date"], now: 100_000 });
+  resetUpdaterManifestCache();
+  let fetches = 0;
+  const fetcher = async () => {
+    fetches += 1;
+    return fetches === 1
+      ? new Response("unavailable", { status: 503 })
+      : new Response(manifestText(), { status: 200 });
+  };
+
+  const first = await resolveUpdaterManifest(fetcher);
+  assert.equal(first.ok, false);
+  context.mock.timers.tick(UPDATER_MANIFEST_FAILURE_RETRY_MS - 1);
+  assert.deepEqual(await resolveUpdaterManifest(fetcher), first);
+  assert.equal(fetches, 1);
+
+  context.mock.timers.tick(1);
+  const recovered = await resolveUpdaterManifest(fetcher);
+  assert.equal(recovered.ok, true);
+  assert.equal(fetches, 2);
+  assert.deepEqual(await resolveUpdaterManifest(fetcher), recovered);
+  assert.equal(fetches, 2);
+});
+
+test("resolveUpdaterManifest keeps stale responses marked stale throughout failure backoff", async (context) => {
+  context.mock.timers.enable({ apis: ["Date"], now: 100_000 });
+  resetUpdaterManifestCache();
+  setUpdaterManifestCacheForTests(manifestText(), { expiresAt: 60_000, fetchedAt: 1_000 });
+  let fetches = 0;
+  const fetcher = async () => {
+    fetches += 1;
+    return fetches === 1
+      ? new Response("rate limited", { status: 429 })
+      : new Response(manifestText({ version: "2026.9.202" }), { status: 200 });
+  };
+
+  const [first, concurrent] = await Promise.all([
+    resolveUpdaterManifest(fetcher),
+    resolveUpdaterManifest(fetcher),
+  ]);
+  assert.deepEqual(first, { ok: true, text: manifestText(), ageSeconds: 99, stale: true });
+  assert.deepEqual(concurrent, first);
+  context.mock.timers.tick(10_000);
+  assert.deepEqual(await resolveUpdaterManifest(fetcher), {
+    ok: true, text: manifestText(), ageSeconds: 109, stale: true,
+  });
+  assert.equal(fetches, 1);
+
+  context.mock.timers.tick(UPDATER_MANIFEST_FAILURE_RETRY_MS - 10_000);
+  assert.deepEqual(await resolveUpdaterManifest(fetcher), {
+    ok: true, text: manifestText({ version: "2026.9.202" }), ageSeconds: 0, stale: false,
+  });
+  assert.equal(fetches, 2);
 });
 
 test("resolveUpdaterManifest rejects a payload that is not an updater manifest", async () => {
