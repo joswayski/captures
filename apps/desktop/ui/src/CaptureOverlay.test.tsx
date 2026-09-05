@@ -64,6 +64,17 @@ const guidanceBounds = {
 function pauseHtmlImageLoading() {
   const proto = HTMLImageElement.prototype;
   const previous = Object.getOwnPropertyDescriptor(proto, "src");
+  const previousSetAttribute = proto.setAttribute;
+  const assignSrc = (element: HTMLImageElement, value: string) => {
+    Element.prototype.setAttribute.call(element, "src", value);
+  };
+  proto.setAttribute = function setAttribute(name: string, value: string) {
+    if (String(name).toLowerCase() === "src") {
+      assignSrc(this as unknown as HTMLImageElement, value);
+      return;
+    }
+    previousSetAttribute.call(this, name, value);
+  };
   Object.defineProperty(proto, "src", {
     configurable: true,
     enumerable: previous?.enumerable ?? true,
@@ -71,10 +82,11 @@ function pauseHtmlImageLoading() {
       return this.getAttribute("src") ?? "";
     },
     set(value: string) {
-      this.setAttribute("src", value);
+      assignSrc(this, value);
     },
   });
   return () => {
+    proto.setAttribute = previousSetAttribute;
     if (previous) {
       Object.defineProperty(proto, "src", previous);
     }

@@ -324,6 +324,8 @@ pub struct RecordingCapabilities {
     pub cursor_control: bool,
     pub click_highlights: bool,
     pub controls_excluded: bool,
+    /// False on Linux: the recording bar cannot be omitted from the capture stream.
+    pub can_exclude_controls: bool,
 }
 
 /// Platforms that can keep the recording control bar out of the output.
@@ -339,6 +341,7 @@ pub const fn recording_controls_are_excluded(include_in_captures: bool) -> bool 
 
 impl RecordingCapabilities {
     pub fn current(include_recording_controls_in_captures: bool) -> Self {
+        let can_exclude_controls = platform_can_exclude_recording_controls();
         let controls_excluded =
             recording_controls_are_excluded(include_recording_controls_in_captures);
         #[cfg(target_os = "macos")]
@@ -349,6 +352,7 @@ impl RecordingCapabilities {
                 cursor_control: true,
                 click_highlights: true,
                 controls_excluded,
+                can_exclude_controls,
             }
         }
         #[cfg(any(target_os = "windows", target_os = "linux"))]
@@ -363,6 +367,7 @@ impl RecordingCapabilities {
                 cursor_control: pointer_features,
                 click_highlights: pointer_features,
                 controls_excluded,
+                can_exclude_controls,
             }
         }
     }
@@ -1350,9 +1355,9 @@ mod tests {
 
     use super::{
         AppSettings, Appearance, ColorTheme, CustomThemeSettings, HistoryEntry,
-        MiniPreviewPlacement, RecordingArtifact, ScreenshotFormat, VideoFormat,
-        macos_screenshot_hotkeys_conflicting_with, migrate_output_directory, migrate_settings,
-        platform_can_exclude_recording_controls, recording_controls_are_excluded,
+        MiniPreviewPlacement, RecordingArtifact, RecordingCapabilities, ScreenshotFormat,
+        VideoFormat, macos_screenshot_hotkeys_conflicting_with, migrate_output_directory,
+        migrate_settings, platform_can_exclude_recording_controls, recording_controls_are_excluded,
         recording_media_url, recording_poster_url, recording_selection_url, snapshot_url,
     };
 
@@ -1676,6 +1681,26 @@ mod tests {
             platform_can_exclude_recording_controls()
         );
         assert!(!recording_controls_are_excluded(true));
+    }
+
+    #[test]
+    fn recording_capabilities_report_whether_controls_can_be_excluded() {
+        let excluded = RecordingCapabilities::current(false);
+        assert_eq!(
+            excluded.can_exclude_controls,
+            platform_can_exclude_recording_controls()
+        );
+        assert_eq!(
+            excluded.controls_excluded,
+            platform_can_exclude_recording_controls()
+        );
+
+        let included = RecordingCapabilities::current(true);
+        assert_eq!(
+            included.can_exclude_controls,
+            platform_can_exclude_recording_controls()
+        );
+        assert!(!included.controls_excluded);
     }
 
     #[test]

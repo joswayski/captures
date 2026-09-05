@@ -68,13 +68,14 @@ const session: RecordingSelectionSession = {
   initial_mode: "recording",
   initial_target: "region",
   recording_available: true,
-  recording_capabilities: {
-    system_audio: true,
-    microphone: true,
-    cursor_control: true,
-    click_highlights: true,
-    controls_excluded: true,
-  },
+    recording_capabilities: {
+      system_audio: true,
+      microphone: true,
+      cursor_control: true,
+      click_highlights: true,
+      controls_excluded: true,
+      can_exclude_controls: true,
+    },
   display: {
     id: "display-1",
     name: "Built-in Retina Display",
@@ -366,6 +367,7 @@ describe("RecordingSelector", () => {
         cursor_control: false,
         click_highlights: false,
         controls_excluded: false,
+        can_exclude_controls: false,
       },
     };
     const { container } = render(<RecordingSelector />);
@@ -381,9 +383,12 @@ describe("RecordingSelector", () => {
     expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
       "These controls will show in recordings",
     );
+    expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
+      "Use Hide controls to keep them out",
+    );
     expect(container.querySelector(".capture-selector-note strong")).toHaveTextContent("will");
-    expect(screen.getByRole("button", { name: /These controls will show in recordings/ }))
-      .toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /These controls will show in recordings/ }))
+      .not.toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("list_recording_audio_devices");
 
     fireEvent.click(screen.getByRole("button", { name: "Full screen" }));

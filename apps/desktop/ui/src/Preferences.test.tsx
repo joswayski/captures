@@ -341,6 +341,33 @@ describe("Preferences", () => {
     expect(includeControls.closest("label")?.querySelector("strong")).toHaveTextContent("will");
   });
 
+  it("disables recording-control inclusion when the platform cannot exclude them", async () => {
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_settings") return settings;
+      if (command === "platform_can_exclude_recording_controls") return false;
+      if (command === "get_update_status") {
+        return { state: "idle", current_version: "0.1.0", current_display_version: "0.1.0" };
+      }
+      if (command === "set_shortcut_capture_suppressed") return undefined;
+      if (command === "update_settings") return (args as { settings: AppSettings }).settings;
+      if (command === "open_capture_history") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<Preferences />);
+
+    const includeControls = await screen.findByRole("checkbox", {
+      name: /Show recording controls in screenshots and recordings/,
+    });
+    await waitFor(() => expect(includeControls).toBeDisabled());
+    expect(includeControls).not.toBeChecked();
+    expect(includeControls.closest("label")).toHaveTextContent(
+      "This desktop session cannot keep recording controls out of screenshots and recordings. Use Hide controls on the recording bar to keep them off-screen.",
+    );
+    fireEvent.click(includeControls);
+    expect(invoke).not.toHaveBeenCalledWith("update_settings", expect.anything());
+  });
+
   it("automatically applies a newly recorded shortcut", async () => {
     render(<Preferences />);
 

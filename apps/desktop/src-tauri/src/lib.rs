@@ -328,6 +328,7 @@ pub fn run() {
             recording::capture_selection_screenshot,
             recording::list_recording_audio_devices,
             recording::recording_controls_are_excluded,
+            recording::platform_can_exclude_recording_controls,
             recording::get_recording_snapshot,
             recording::start_recording,
             recording::pause_recording,

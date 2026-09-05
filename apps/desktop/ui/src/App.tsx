@@ -278,7 +278,8 @@ const STACK_CLEAR_EXIT_ACTION = "stack_clear";
 const THUMBNAIL_SAVED_FEEDBACK_MS = 1_000;
 const THUMBNAIL_HIT_TEST_CHANGED_EVENT = "captures-thumbnail-hit-test-changed";
 const RECORDING_SELECTOR_REVEAL_FALLBACK_MS = 200;
-const CAPTURE_OVERLAY_REVEAL_FALLBACK_MS = 400;
+/** Hidden overlay paints first; reveal after decode or this deadline. Tests use a longer deadline so jsdom cannot race the wake assertion. */
+const CAPTURE_OVERLAY_REVEAL_FALLBACK_MS = import.meta.env.MODE === "test" ? 10_000 : 400;
 const RECORDING_COUNTDOWN_FADE_OUT_MS = 180;
 const PREFERENCES_TARGET_EVENT = "preferences-target";
 const AUTO_START_PREFERENCE_TARGET = "auto-start-on-selection";
@@ -3342,14 +3343,14 @@ export function RecordingSelector() {
           </div>
         )}
         <p className="capture-selector-note">
-          <CapturePreferenceLink
-            onClick={() => openCapturePreference(RECORDING_CONTROLS_PREFERENCE_TARGET)}
-          >
-            {recordingControlsVisibilityText(
-              controlsExcluded ?? session.recording_capabilities.controls_excluded,
-              actionMode,
-            )}
-          </CapturePreferenceLink>
+          <CaptureSelectorVisibilityNote
+            canExcludeControls={session.recording_capabilities.can_exclude_controls}
+            controlsExcluded={
+              controlsExcluded ?? session.recording_capabilities.controls_excluded
+            }
+            actionMode={actionMode}
+            onOpenPreference={() => openCapturePreference(RECORDING_CONTROLS_PREFERENCE_TARGET)}
+          />
           {settings.auto_start_on_selection
             ? <>
               <span aria-hidden="true">·</span>
@@ -3430,6 +3431,30 @@ function recordingControlsVisibilityText(
       : <>These controls <strong>will</strong> show in {output}</>;
   }
   return "Checking whether these controls will show…";
+}
+
+function CaptureSelectorVisibilityNote({
+  canExcludeControls,
+  controlsExcluded,
+  actionMode,
+  onOpenPreference,
+}: {
+  canExcludeControls: boolean;
+  controlsExcluded: boolean | null;
+  actionMode: CaptureVisibilityContext;
+  onOpenPreference: () => void;
+}) {
+  const copy = recordingControlsVisibilityText(
+    controlsExcluded,
+    actionMode,
+    !canExcludeControls && actionMode === "recording",
+  );
+  if (!canExcludeControls) return copy;
+  return (
+    <CapturePreferenceLink onClick={onOpenPreference}>
+      {copy}
+    </CapturePreferenceLink>
+  );
 }
 
 function CapturePreferenceLink({
@@ -8611,6 +8636,7 @@ function ThemeColorField({
 
 export function Preferences() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [canExcludeRecordingControls, setCanExcludeRecordingControls] = useState(true);
   const [recordingDevices, setRecordingDevices] = useState<AudioDevice[]>([]);
   const [saveStatus, setSaveStatus] = useState<PreferencesSaveStatus>({ kind: "idle", message: "" });
   const [recordingShortcut, setRecordingShortcut] = useState<string | null>(null);
@@ -8721,10 +8747,14 @@ export function Preferences() {
   useEffect(() => {
     let active = true;
     activeRef.current = true;
-    void invoke<AppSettings>("get_settings").then((loadedSettings) => {
+    void Promise.all([
+      invoke<AppSettings>("get_settings"),
+      invoke<boolean>("platform_can_exclude_recording_controls").catch(() => true),
+    ]).then(([loadedSettings, canExclude]) => {
       if (!active) return;
       settingsRef.current = loadedSettings;
       setSettings(loadedSettings);
+      setCanExcludeRecordingControls(canExclude);
     });
     return () => {
       active = false;
@@ -8899,6 +8929,7 @@ export function Preferences() {
           <div className="preferences-sections">
             <PreferencesSections
               settings={settings}
+              canExcludeRecordingControls={canExcludeRecordingControls}
               highlightedPreference={highlightedPreference}
               recordingDevices={recordingDevices}
               recordingShortcut={recordingShortcut}
@@ -8919,6 +8950,7 @@ export function Preferences() {
 
 function PreferencesSections({
   settings,
+  canExcludeRecordingControls,
   highlightedPreference,
   recordingDevices,
   recordingShortcut,
@@ -8931,6 +8963,7 @@ function PreferencesSections({
   chooseDirectory,
 }: {
   settings: AppSettings;
+  canExcludeRecordingControls: boolean;
   highlightedPreference: string | null;
   recordingDevices: AudioDevice[];
   recordingShortcut: string | null;
@@ -9159,13 +9192,16 @@ function PreferencesSections({
             type="checkbox"
             checked={settings.include_recording_controls_in_captures}
             onChange={(event) => update("include_recording_controls_in_captures", event.target.checked)}
+            disabled={!canExcludeRecordingControls}
           />
           <span>
             Show recording controls in screenshots and recordings
             <small>
-              {settings.include_recording_controls_in_captures
-                ? <>Recording controls <strong>will</strong> show in screenshots and recordings. Turn this off to keep them out.</>
-                : <>Recording controls <strong>won’t</strong> show in screenshots or recordings.</>}
+              {!canExcludeRecordingControls
+                ? "This desktop session cannot keep recording controls out of screenshots and recordings. Use Hide controls on the recording bar to keep them off-screen."
+                : settings.include_recording_controls_in_captures
+                  ? <>Recording controls <strong>will</strong> show in screenshots and recordings. Turn this off to keep them out.</>
+                  : <>Recording controls <strong>won’t</strong> show in screenshots or recordings.</>}
             </small>
           </span>
         </label>

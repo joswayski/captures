@@ -55,10 +55,10 @@ open "http://127.0.0.1:1420/?view=startup&mock=1&stage=1&caret=top&caret_x=148"
 - `placement` sets the mini-preview home corner in the thumbnail and Preferences harness (`top-left`, `top-right`, `bottom-left`, `bottom-right`).
 - `reject=1` loops the mini-preview self-drop “no” shake on the newest expanded card.
 - `auto=1` enables automatic capture in the selector harness so its compact controls and Preferences link can be reviewed.
-- `controls=1` includes recording controls in captures so the will-show copy and Preferences link can be reviewed.
+- `controls=1` includes recording controls in captures so the will-show copy and Preferences link can be reviewed. Combine with `platform=linux` to review the capture-menu copy that cannot open that setting.
 - `live=1` or `frozen=0` shows the capture overlay and recording selector over the live desktop instead of a freeze-frame.
 - `screenshot_format` and `video_format` set the Preferences defaults used by the editor harness (`png`/`jpeg`/`webp` and `mp4`/`gif`/`webm`).
-- `platform` selects macOS, Windows, or Linux shortcut defaults and copy in the Preferences harness (`?view=preferences&mock=1&platform=windows`).
+- `platform` selects macOS, Windows, or Linux shortcut defaults and copy in the Preferences harness (`?view=preferences&mock=1&platform=windows`). On Linux it also disables recording-control exclusion.
 - Appearance follows the `captures-appearance` value in `localStorage`.
 
 The harness is dev-only and is dropped from production builds. Drop an optional

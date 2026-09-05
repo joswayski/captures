@@ -171,6 +171,7 @@ export interface RecordingSelectionSession {
     cursor_control: boolean;
     click_highlights: boolean;
     controls_excluded: boolean;
+    can_exclude_controls: boolean;
   };
   display: DisplayDescriptor;
   displays: DisplayDescriptor[];

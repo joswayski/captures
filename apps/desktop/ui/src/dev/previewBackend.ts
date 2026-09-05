@@ -126,6 +126,10 @@ function previewPlatform(): "macos" | "windows" | "linux" {
   return "macos";
 }
 
+function previewCanExcludeRecordingControls(): boolean {
+  return previewPlatform() !== "linux";
+}
+
 function previewFreezeScreen(): boolean {
   return !flag("live") && query().get("frozen") !== "0";
 }
@@ -596,7 +600,8 @@ function createSelection(): RecordingSelectionSession {
       microphone: true,
       cursor_control: true,
       click_highlights: true,
-      controls_excluded: !flag("controls"),
+      can_exclude_controls: previewCanExcludeRecordingControls(),
+      controls_excluded: previewCanExcludeRecordingControls() && !flag("controls"),
     },
     display: DISPLAY,
     displays: DISPLAYS.map((item) => ({ ...item })),
@@ -679,7 +684,8 @@ const RESPONSES: Record<string, unknown> = {
   get_recording_snapshot: recordingSnapshot(),
   get_onboarding_state: ONBOARDING,
   list_recording_audio_devices: AUDIO_DEVICES,
-  recording_controls_are_excluded: !flag("controls"),
+  recording_controls_are_excluded: previewCanExcludeRecordingControls() && !flag("controls"),
+  platform_can_exclude_recording_controls: previewCanExcludeRecordingControls(),
   get_feedback_context: {
     app_version: "0.4.1",
     os: "macOS",
