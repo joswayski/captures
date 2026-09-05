@@ -184,7 +184,7 @@ export type EditorTextElement = EditorElementBase & {
   background: string | null;
   /** Hollow text whose glyph edges use `color` instead of a solid fill. */
   outlined: boolean;
-  /** Capsule-like background used by the Rounded Box preset. */
+  /** Soft rounded-rect background used by the Rounded Box preset. */
   roundedBackground: boolean;
 };
 
@@ -434,13 +434,28 @@ export const TEXT_CHAR_WIDTH_RATIO = 0.56;
  * Kept in lockstep with canvas paint + inline editor chrome so trim/selection
  * include the full bubble, not just the glyph box.
  */
-export const TEXT_BACKGROUND_PAD_X_RATIO = 0.22;
+export const TEXT_BACKGROUND_PAD_X_RATIO = 0.36;
 
 /**
  * Vertical padding of a solid/rounded text background beyond the layout box.
  * Symmetric so the label sits centered in the bubble.
  */
-export const TEXT_BACKGROUND_PAD_Y_RATIO = 0.2;
+export const TEXT_BACKGROUND_PAD_Y_RATIO = 0.22;
+
+/**
+ * Corner radius of a Rounded Box plate, relative to the shorter side.
+ * Kept well below 0.5 so short labels stay rounded rectangles, not capsules.
+ */
+export const TEXT_BACKGROUND_RADIUS_RATIO = 0.28;
+
+/** Extra cap so radius scales with type size instead of becoming a pill. */
+export const TEXT_BACKGROUND_RADIUS_FONT_RATIO = 0.34;
+
+/**
+ * Empty in-progress text fields stay this many ems wide so typing can start
+ * immediately, then shrink to the glyphs once there is content.
+ */
+export const TEXT_COMPOSING_WIDTH_EM = 8;
 
 /**
  * Extra downward shift when glyph bounding boxes are unavailable.
@@ -495,11 +510,42 @@ export function estimateTextWidth(text: string, fontSize: number): number {
   return Math.max(1, text.length) * fontSize * TEXT_CHAR_WIDTH_RATIO;
 }
 
-/** Default box width for newly placed text (fits a short sample with room to grow). */
-export function defaultTextBoxWidth(fontSize: number, sample = "Text"): number {
+/** Wide empty field used while placing text, before any glyphs exist. */
+export function composingTextBoxWidth(fontSize: number): number {
   return Math.max(
-    Math.round(fontSize * 2.2),
-    Math.ceil(estimateTextWidth(sample, fontSize) + fontSize * 0.4),
+    minTextBoxWidth(fontSize),
+    Math.round(fontSize * TEXT_COMPOSING_WIDTH_EM),
+  );
+}
+
+/** Default box width for newly placed text (a wide empty composing field). */
+export function defaultTextBoxWidth(fontSize: number): number {
+  return composingTextBoxWidth(fontSize);
+}
+
+/** True when a text layer has nothing to keep after the inline editor blurs. */
+export function isBlankTextElement(
+  element: Pick<EditorTextElement, "text">,
+): boolean {
+  return element.text.trim().length === 0;
+}
+
+/**
+ * Corner radius of a Rounded Box plate. Never a full capsule: short words stay
+ * rounded rectangles so the label does not collapse into a circle.
+ */
+export function textBackgroundRadius(
+  element: Pick<EditorTextElement, "roundedBackground" | "fontSize">,
+  backgroundWidth: number,
+  backgroundHeight: number,
+): number {
+  if (!element.roundedBackground) return 0;
+  const shortest = Math.min(backgroundWidth, backgroundHeight);
+  if (shortest <= 0) return 0;
+  return Math.min(
+    shortest * TEXT_BACKGROUND_RADIUS_RATIO,
+    element.fontSize * TEXT_BACKGROUND_RADIUS_FONT_RATIO,
+    shortest / 2,
   );
 }
 
@@ -531,16 +577,10 @@ export function fittedAutoWidthTextBox(
   );
 }
 
-/**
- * Grow (or shrink) an auto-width text layer to fit its current content.
- * Left-aligned boxes grow to the right; center and right keep their anchor.
- */
-export function fitAutoWidthTextElement(
+function withAutoWidthBox(
   element: EditorTextElement,
-  measure?: (line: string) => number,
+  nextWidth: number,
 ): EditorTextElement {
-  if (!isAutoWidthText(element)) return element;
-  const nextWidth = fittedAutoWidthTextBox(element.text, element.fontSize, measure);
   if (Math.abs(nextWidth - element.width) < 0.5) {
     return nextWidth === element.width ? element : { ...element, width: nextWidth };
   }
@@ -551,6 +591,72 @@ export function fitAutoWidthTextElement(
       ? element.x - delta
       : element.x;
   return { ...element, width: nextWidth, x };
+}
+
+/**
+ * Grow (or shrink) an auto-width text layer to fit its current content.
+ * Left-aligned boxes grow to the right; center and right keep their anchor.
+ */
+export function fitAutoWidthTextElement(
+  element: EditorTextElement,
+  measure?: (line: string) => number,
+): EditorTextElement {
+  if (!isAutoWidthText(element)) return element;
+  return withAutoWidthBox(
+    element,
+    fittedAutoWidthTextBox(element.text, element.fontSize, measure),
+  );
+}
+
+/**
+ * While the inline editor is open, an empty field stays wide so typing can
+ * start immediately. Content hugs the longest line as soon as glyphs exist.
+ */
+export function fitEditingAutoWidthTextElement(
+  element: EditorTextElement,
+  measure?: (line: string) => number,
+): EditorTextElement {
+  if (!isAutoWidthText(element)) return element;
+  if (isBlankTextElement(element)) {
+    return withAutoWidthBox(element, composingTextBoxWidth(element.fontSize));
+  }
+  return fitAutoWidthTextElement(element, measure);
+}
+
+/** Place a new empty text layer at `point`, ready to type. */
+export function createPlacedTextElement(options: {
+  id: string;
+  point: EditorPoint;
+  fontSize: number;
+  color: string;
+  preset: TextStylePreset;
+}): EditorTextElement {
+  const width = composingTextBoxWidth(options.fontSize);
+  const align: EditorTextElement["align"] = textPresetPrefersCenter(options.preset)
+    ? "center"
+    : "left";
+  return applyTextStylePreset({
+    id: options.id,
+    kind: "text",
+    x: align === "center" ? options.point.x - width / 2 : options.point.x,
+    y: options.point.y,
+    text: "",
+    fontSize: options.fontSize,
+    width,
+    autoWidth: true,
+    fontFamily: "sans",
+    bold: false,
+    italic: false,
+    align,
+    color: options.color,
+    background: null,
+    outlined: false,
+    roundedBackground: false,
+    locked: false,
+    visible: true,
+    opacity: 100,
+    blendMode: "source-over",
+  }, options.preset);
 }
 
 /** Background inset around the text layout box (document pixels). */

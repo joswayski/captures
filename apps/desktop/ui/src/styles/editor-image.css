@@ -901,7 +901,7 @@
   outline: 0;
 }
 
-/* Keep select-all useful for replacing “Text” without hiding the style itself. */
+/* Keep select-all useful for replacing a label without hiding the style itself. */
 .screenshot-inline-text-editor::selection {
   color: var(--inline-text-selection-color);
   background: rgba(var(--theme-accent-rgb), 0.2);
@@ -2844,7 +2844,7 @@
 }
 
 .screenshot-text-style-preview.style-rounded-box {
-  border-radius: var(--r-pill);
+  border-radius: var(--r-lg);
 }
 
 @media (prefers-contrast: more) {

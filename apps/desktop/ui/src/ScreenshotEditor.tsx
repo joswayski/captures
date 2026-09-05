@@ -132,20 +132,20 @@ import {
   snapTranslatedBounds,
   stackDropLightFocusAtPoint,
   createDocumentPaintCanvas,
-  defaultTextBoxWidth,
+  createPlacedTextElement,
   editorTextCanvasFont,
   editorTextFontStack,
   estimateTextWidth,
-  fitAutoWidthTextElement,
-  fittedAutoWidthTextBox,
+  fitEditingAutoWidthTextElement,
   isAutoWidthText,
+  isBlankTextElement,
   loadEditorTextFonts,
   TEXT_LINE_HEIGHT_RATIO,
   TEXT_OPTICAL_CENTER_NUDGE_RATIO,
   textBackgroundPad,
+  textBackgroundRadius,
   textGlyphDrawY,
   textHasBackgroundPlate,
-  textPresetPrefersCenter,
   textStylePreset,
   wrapTextLines,
   translateElement,
@@ -669,7 +669,7 @@ function measureTextElementLine(element: EditorTextElement, line: string): numbe
 }
 
 function fitLiveText(element: EditorTextElement): EditorTextElement {
-  return fitAutoWidthTextElement(
+  return fitEditingAutoWidthTextElement(
     element,
     (line) => measureTextElementLine(element, line),
   );
@@ -677,16 +677,6 @@ function fitLiveText(element: EditorTextElement): EditorTextElement {
 
 function textOutlineWidth(fontSize: number): number {
   return Math.max(1.5, fontSize * 0.08);
-}
-
-function textBackgroundRadius(
-  element: Extract<ScreenshotElement, { kind: "text" }>,
-  backgroundWidth: number,
-  backgroundHeight: number,
-): number {
-  if (!element.roundedBackground) return 0;
-  // Full capsule when the plate is wider than tall (the usual bubble label).
-  return Math.min(backgroundWidth / 2, backgroundHeight / 2);
 }
 
 function drawSmoothPath(
@@ -3590,38 +3580,13 @@ export function ScreenshotEditor() {
       }
       // Keep the coming textarea focused; otherwise the canvas click steals it.
       event.preventDefault();
-      const styled = applyTextStylePreset({
+      const element = createPlacedTextElement({
         id: editorId(),
-        kind: "text",
-        x: point.x,
-        y: point.y,
-        text: "Text",
+        point,
         fontSize: defaultFontSize,
-        width: defaultTextBoxWidth(defaultFontSize),
-        autoWidth: true,
-        fontFamily: "sans",
-        bold: false,
-        italic: false,
-        // Bubble / plate styles look off when left-aligned in a wider box.
-        align: textPresetPrefersCenter(defaultTextStyle) ? "center" : "left",
         color: defaultStyle.color,
-        background: null,
-        outlined: false,
-        roundedBackground: false,
-        locked: false,
-        visible: true,
-        opacity: 100,
-        blendMode: "source-over",
-      }, defaultTextStyle);
-      const element = {
-        ...styled,
-        autoWidth: true as const,
-        width: fittedAutoWidthTextBox(
-          styled.text,
-          styled.fontSize,
-          (line) => measureTextElementLine(styled, line),
-        ),
-      };
+        preset: defaultTextStyle,
+      });
       // Fully off-canvas text still grows the document so the label is not lost.
       const withText = { ...current, elements: [...current.elements, element] };
       const next = isFullyOutsideCanvas(elementBounds(element), current)
@@ -3632,7 +3597,7 @@ export function ScreenshotEditor() {
         next.elements.find(({ id }) => id === element.id),
         next,
       );
-      beginTextEditingFromPointerDown(element.id, true);
+      beginTextEditingFromPointerDown(element.id);
       return;
     }
 
@@ -5742,9 +5707,21 @@ export function ScreenshotEditor() {
                     return;
                   }
                   setSubduedInlineSelectionId(null);
+                  const textId = editingText.id;
+                  const shouldDiscard = isBlankTextElement(editingText);
                   setEditingTextId((current) => (
-                    current === editingText.id ? null : current
+                    current === textId ? null : current
                   ));
+                  if (!shouldDiscard) return;
+                  const currentDocument = documentRef.current;
+                  if (!currentDocument) return;
+                  commitDocument({
+                    ...currentDocument,
+                    elements: currentDocument.elements.filter((element) => (
+                      element.id !== textId
+                    )),
+                  });
+                  setSelectedId((current) => (current === textId ? null : current));
                 }}
                 onKeyDown={(event) => {
                   if (event.key !== "Escape") return;

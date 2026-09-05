@@ -825,13 +825,18 @@ describe("ScreenshotEditor", () => {
       name: "Edit text on canvas",
     });
     const inlineFrame = inlineEditor.closest(".screenshot-inline-text-frame") as HTMLElement;
-    expect(inlineEditor).toHaveValue("Text");
+    expect(inlineEditor).toHaveValue("");
     expect(inlineEditor).toHaveFocus();
-    expect(inlineEditor).toHaveClass("is-placeholder-selected");
+    expect(inlineEditor).not.toHaveClass("is-placeholder-selected");
     expect(inlineFrame).toBeInTheDocument();
     expect(inlineEditor.style.getPropertyValue("--inline-text-selection-color"))
       .toBe("#ff3b5c");
     const initialWidth = Number.parseFloat(inlineFrame.style.width);
+    expect(initialWidth).toBeGreaterThan(300);
+    fireEvent.change(inlineEditor, {
+      target: { value: "Hi" },
+    });
+    expect(Number.parseFloat(inlineFrame.style.width)).toBeLessThan(initialWidth);
     fireEvent.change(inlineEditor, {
       target: { value: "Hello from the screenshot editor" },
     });
@@ -867,6 +872,39 @@ describe("ScreenshotEditor", () => {
     });
     expect(await screen.findByRole("textbox", { name: "Edit text on canvas" }))
       .toHaveValue("Hello from the screenshot editor");
+  });
+
+  it("discards a new text layer if you click away without typing", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+
+    setCanvasZoomPercent(100);
+    fireEvent.click(screen.getByRole("button", { name: "Text (T)" }));
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    setCanvasBounds(canvas);
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 3,
+      clientX: 200,
+      clientY: 140,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 3,
+      clientX: 200,
+      clientY: 140,
+    });
+
+    const inlineEditor = await screen.findByRole("textbox", {
+      name: "Edit text on canvas",
+    });
+    expect(inlineEditor).toHaveValue("");
+    fireEvent.blur(inlineEditor);
+    expect(screen.queryByRole("textbox", { name: "Edit text on canvas" }))
+      .not.toBeInTheDocument();
+    const layerList = screen.getByRole("region", { name: "Layers" })
+      .querySelector(".screenshot-layer-list")!;
+    expect(layerList.children).toHaveLength(1);
   });
 
   it("sizes the inline editor from a rotated text layer's local bounds", async () => {
@@ -944,7 +982,7 @@ describe("ScreenshotEditor", () => {
 
     setCanvasZoomPercent(100);
     fireEvent.click(screen.getByRole("button", { name: "Text (T)" }));
-    // Rounded Box is the default for new text (bubbly label style).
+    // Rounded Box is the default for new text (rounded-rect label style).
     fireEvent.click(screen.getByRole("button", { name: "New text style: Rounded Box" }));
 
     for (const style of [
@@ -978,7 +1016,12 @@ describe("ScreenshotEditor", () => {
     });
     expect(inlineEditor.style.fontFamily).toContain("ui-rounded");
     expect(inlineEditor).toHaveStyle({ backgroundColor: "#111318" });
-    expect(Number.parseFloat(inlineEditor.style.borderRadius)).toBeGreaterThan(20);
+    const radius = Number.parseFloat(inlineEditor.style.borderRadius);
+    const frameHeight = Number.parseFloat(
+      (inlineEditor.closest(".screenshot-inline-text-frame") as HTMLElement).style.height,
+    );
+    expect(radius).toBeGreaterThan(6);
+    expect(radius).toBeLessThan(frameHeight * 0.45);
     expect(inlineEditor).toHaveStyle({ textAlign: "center" });
     expect(screen.getByRole("button", { name: "Text style: Rounded Box" }))
       .toHaveAttribute("aria-expanded", "false");
@@ -1019,6 +1062,9 @@ describe("ScreenshotEditor", () => {
     expect(screenshotEditorStyles).toMatch(
       /\.screenshot-text-style-preview\.style-box,[\s\S]*?background:\s*var\(--solid\)/,
     );
+    expect(screenshotEditorStyles).toMatch(
+      /\.screenshot-text-style-preview\.style-rounded-box\s*\{[^}]*border-radius:\s*var\(--r-lg\)/s,
+    );
     expect(screenshotEditorStyles).toContain("@media (prefers-contrast: more)");
     expect(screenshotEditorStyles).toContain("@media (forced-colors: active)");
   });
@@ -1042,7 +1088,9 @@ describe("ScreenshotEditor", () => {
       clientX: 120,
       clientY: 80,
     });
-    fireEvent.blur(await screen.findByRole("textbox", { name: "Edit text on canvas" }));
+    const inlineEditor = await screen.findByRole("textbox", { name: "Edit text on canvas" });
+    fireEvent.change(inlineEditor, { target: { value: "Copied label" } });
+    fireEvent.blur(inlineEditor);
 
     const layerList = screen.getByRole("region", { name: "Layers" })
       .querySelector(".screenshot-layer-list")!;
@@ -2487,7 +2535,9 @@ describe("ScreenshotEditor", () => {
       clientX: 120,
       clientY: 80,
     });
-    fireEvent.blur(await screen.findByRole("textbox", { name: "Edit text on canvas" }));
+    const inlineEditor = await screen.findByRole("textbox", { name: "Edit text on canvas" });
+    fireEvent.change(inlineEditor, { target: { value: "Pinned" } });
+    fireEvent.blur(inlineEditor);
 
     // Select the text layer (Select tool becomes active via layer list click).
     fireEvent.click(screen.getByRole("button", { name: "Select & move (V)" }));
@@ -2504,7 +2554,7 @@ describe("ScreenshotEditor", () => {
       clientY: 95,
     });
     const textLayer = within(screen.getByRole("region", { name: "Layers" }))
-      .getByRole("button", { name: /TextText/ });
+      .getByRole("button", { name: /PinnedText/ });
     expect(textLayer).toHaveAttribute("aria-pressed", "true");
 
     // Click the checkerboard / empty padding around the canvas surface.
