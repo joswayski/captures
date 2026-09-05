@@ -6,7 +6,9 @@ import {
   createThumbnailStackShiftController,
   computeThumbnailStackShifts,
   countMotionReadySlotsBelow,
+  hasThumbnailStackShiftPx,
   thumbnailStackSuppressesSlotShift,
+  thumbnailStackShiftsFromTop,
   thumbnailStackShiftSlots,
   easeOutCubic,
   resolveThumbnailStackShiftPx,
@@ -984,16 +986,22 @@ describe("thumbnail stack layout", () => {
     ]);
   });
 
-  it("animates only when the required shift increases", () => {
+  it("animates only when the required shift magnitude increases", () => {
     expect(shouldAnimateThumbnailStackShift(0, THUMBNAIL_CARD_SLOT_PX)).toBe(true);
     expect(shouldAnimateThumbnailStackShift(THUMBNAIL_CARD_SLOT_PX, THUMBNAIL_CARD_SLOT_PX * 2))
       .toBe(true);
-    // Slot removal reflows layout; transform must snap down to cancel the jump.
+    // Slot removal reflows layout; transform must snap to cancel the jump.
     expect(shouldAnimateThumbnailStackShift(THUMBNAIL_CARD_SLOT_PX * 2, THUMBNAIL_CARD_SLOT_PX))
       .toBe(false);
     expect(shouldAnimateThumbnailStackShift(THUMBNAIL_CARD_SLOT_PX, 0)).toBe(false);
     expect(shouldAnimateThumbnailStackShift(THUMBNAIL_CARD_SLOT_PX, THUMBNAIL_CARD_SLOT_PX))
       .toBe(false);
+    expect(shouldAnimateThumbnailStackShift(0, -THUMBNAIL_CARD_SLOT_PX)).toBe(true);
+    expect(shouldAnimateThumbnailStackShift(-THUMBNAIL_CARD_SLOT_PX, -THUMBNAIL_CARD_SLOT_PX * 2))
+      .toBe(true);
+    expect(shouldAnimateThumbnailStackShift(-THUMBNAIL_CARD_SLOT_PX * 2, -THUMBNAIL_CARD_SLOT_PX))
+      .toBe(false);
+    expect(shouldAnimateThumbnailStackShift(-THUMBNAIL_CARD_SLOT_PX, 0)).toBe(false);
   });
 
   it("clamps exiting cards to their current shift so they cannot jump up or chase new holes", () => {
@@ -1101,6 +1109,67 @@ describe("thumbnail stack layout", () => {
     ]);
   });
 
+  it("slides later cards up into a top-anchored hole instead of earlier cards down", () => {
+    // Top-anchored DOM is newest-first. Delete the middle preview: Show less
+    // and preview 1 stay put, preview 3 slides up into the hole.
+    const cards = [
+      card({}),
+      card({ exiting: true, holdsLayoutSlot: true, motionReady: true }),
+      card({}),
+    ];
+    expect(computeThumbnailStackShifts(cards, { fromTop: true })).toEqual([
+      0,
+      0,
+      -thumbnailStackShiftPx(1),
+    ]);
+  });
+
+  it("slides every live card below a top pair of exits up by two slots", () => {
+    const cards = [
+      card({ exiting: true, holdsLayoutSlot: true, motionReady: true }),
+      card({ exiting: true, holdsLayoutSlot: true, motionReady: true }),
+      card({}),
+      card({}),
+    ];
+    expect(computeThumbnailStackShifts(cards, { fromTop: true })).toEqual([
+      0,
+      0,
+      -thumbnailStackShiftPx(2),
+      -thumbnailStackShiftPx(2),
+    ]);
+  });
+
+  it("keeps live cards ahead of a neighbor that froze mid-settle when top-anchored", () => {
+    // Delete 2, then delete 3 before 3 finishes sliding up into 2. 4 must stay
+    // behind 3 instead of completing the slide into a still-solid preview.
+    const cards = [
+      card({}),
+      card({ exiting: true, holdsLayoutSlot: true, motionReady: true }),
+      card({
+        exiting: true,
+        holdsLayoutSlot: true,
+        motionReady: false,
+        currentShiftPx: -thumbnailStackShiftPx(1) * 0.85,
+      }),
+      card({}),
+    ];
+    expect(computeThumbnailStackShifts(cards, { fromTop: true })).toEqual([
+      0,
+      0,
+      -thumbnailStackShiftPx(1) * 0.85,
+      -thumbnailStackShiftPx(1) * 0.85,
+    ]);
+  });
+
+  it("does not slide earlier cards down when a top-anchored hole is ready", () => {
+    const cards = [
+      card({}),
+      card({ exiting: true, holdsLayoutSlot: true, motionReady: true }),
+      card({}),
+    ];
+    expect(computeThumbnailStackShifts(cards, { fromTop: true })[0]).toBe(0);
+  });
+
   it("snaps an exiting card's shift down when a hole below is removed", () => {
     const cards = [
       card({ exiting: true, currentShiftPx: thumbnailStackShiftPx(1) }),
@@ -1115,6 +1184,12 @@ describe("thumbnail stack layout", () => {
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-card\.thumbnail-stack-shifting\.thumbnail-exiting\s*\{[^}]*filter:\s*none/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack:not\(\.thumbnail-stack-anchor-top\) \.thumbnail-card:not\(\.thumbnail-exiting\):has\(~ \.thumbnail-exit-delete\.thumbnail-exit-dust\)::before/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-anchor-top \.thumbnail-exit-delete\.thumbnail-exit-dust ~ \.thumbnail-card:not\(\.thumbnail-exiting\)::before/,
     );
   });
 
@@ -1279,14 +1354,110 @@ describe("thumbnail stack layout", () => {
     }
   });
 
+  it("slides later cards up on a top-anchored stack and leaves earlier cards put", async () => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    stack.className = "thumbnail-stack thumbnail-stack-anchor-top";
+    const first = document.createElement("article");
+    first.className = "thumbnail-card";
+    const second = document.createElement("article");
+    second.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    const third = document.createElement("article");
+    third.className = "thumbnail-card";
+    stack.append(first, second, third);
+    const dispose = createThumbnailStackShiftController(stack);
+
+    try {
+      await Promise.resolve();
+      vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(first).not.toHaveClass("thumbnail-stack-shifting");
+      expect(first.style.getPropertyValue("--thumbnail-stack-shift")).toBe("");
+      expect(first.style.translate).toBe("");
+      expect(third).toHaveClass("thumbnail-stack-shifting");
+      expect(third.style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${-THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+      expect(third.style.translate).toBe(`0 ${-THUMBNAIL_CARD_SLOT_PX}px`);
+    } finally {
+      dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("snaps a top-anchored upward shift off when the hole above is removed", async () => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    stack.className = "thumbnail-stack thumbnail-stack-anchor-top";
+    const exiting = document.createElement("article");
+    exiting.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    const survivor = document.createElement("article");
+    survivor.className = "thumbnail-card";
+    stack.append(exiting, survivor);
+    const dispose = createThumbnailStackShiftController(stack);
+
+    try {
+      await Promise.resolve();
+      vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(survivor).toHaveClass("thumbnail-stack-shifting");
+      expect(survivor.style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${-THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+
+      exiting.remove();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(survivor).not.toHaveClass("thumbnail-stack-shifting");
+      expect(survivor.style.getPropertyValue("--thumbnail-stack-shift")).toBe("");
+      expect(survivor.style.translate).toBe("");
+    } finally {
+      dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("snapshots a top-anchored upward settle as compact depth when collapsing", async () => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    stack.className = "thumbnail-stack thumbnail-stack-anchor-top";
+    const exiting = document.createElement("article");
+    exiting.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    const survivor = document.createElement("article");
+    survivor.className = "thumbnail-card";
+    stack.append(exiting, survivor);
+    const dispose = createThumbnailStackShiftController(stack);
+
+    try {
+      await Promise.resolve();
+      vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(survivor.style.translate).toBe(`0 ${-THUMBNAIL_CARD_SLOT_PX}px`);
+
+      stack.classList.add("thumbnail-stack-compact");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(survivor).not.toHaveClass("thumbnail-stack-shifting");
+      expect(survivor.style.translate).toBe("");
+      expect(survivor.style.getPropertyValue("--thumbnail-stack-shift-slots")).toBe("1");
+    } finally {
+      dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("treats a compact pile as suppressing expanded slot shifts", () => {
     const stack = document.createElement("main");
     stack.className = "thumbnail-stack";
     expect(thumbnailStackSuppressesSlotShift(stack)).toBe(false);
+    expect(thumbnailStackShiftsFromTop(stack)).toBe(false);
     stack.classList.add("thumbnail-stack-compact");
     expect(thumbnailStackSuppressesSlotShift(stack)).toBe(true);
+    stack.classList.add("thumbnail-stack-anchor-top");
+    expect(thumbnailStackShiftsFromTop(stack)).toBe(true);
     expect(thumbnailStackShiftSlots(THUMBNAIL_CARD_SLOT_PX)).toBe(1);
+    expect(thumbnailStackShiftSlots(-THUMBNAIL_CARD_SLOT_PX)).toBe(1);
     expect(thumbnailStackShiftSlots(0)).toBe(0);
+    expect(hasThumbnailStackShiftPx(THUMBNAIL_CARD_SLOT_PX)).toBe(true);
+    expect(hasThumbnailStackShiftPx(-THUMBNAIL_CARD_SLOT_PX)).toBe(true);
+    expect(hasThumbnailStackShiftPx(0)).toBe(false);
   });
 
   it("clears slot shifts while the stack is compact and restores them after expand", async () => {
@@ -1403,6 +1574,10 @@ describe("thumbnail stack layout", () => {
   it("restores the shifting class from a leftover stack offset", () => {
     const card = document.createElement("article");
     card.style.setProperty("--thumbnail-stack-shift", `${THUMBNAIL_CARD_SLOT_PX}px`);
+    restoreThumbnailStackShiftClass(card);
+    expect(card).toHaveClass("thumbnail-stack-shifting");
+    card.style.setProperty("--thumbnail-stack-shift", `${-THUMBNAIL_CARD_SLOT_PX}px`);
+    card.classList.remove("thumbnail-stack-shifting");
     restoreThumbnailStackShiftClass(card);
     expect(card).toHaveClass("thumbnail-stack-shifting");
     card.style.removeProperty("--thumbnail-stack-shift");

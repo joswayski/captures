@@ -664,6 +664,58 @@ describe("Thumbnail", () => {
     }
   });
 
+  it("slides later previews up into a deleted slot when the stack is top-anchored", async () => {
+    const captures = [1, 2, 3].map((n) => ({
+      ...artifact,
+      id: `capture-${n}`,
+      preview_url: `captures-capture://artifact/capture-${n}`,
+      full_url: `captures-capture://artifact-full/capture-${n}`,
+    }));
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return captures;
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: captures[2].id };
+      }
+      if (command === "get_settings") {
+        return { mini_preview_placement: "top_left" };
+      }
+      if (command === "get_thumbnail_pointer_position") return null;
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    const cards = await screen.findAllByRole("article");
+    expect(cards).toHaveLength(3);
+    const stack = cards[0].closest(".thumbnail-stack")!;
+    await waitFor(() => {
+      expect(stack).toHaveClass("thumbnail-stack-anchor-top");
+    });
+    // Top-anchored lists render newest-first: capture-3, capture-2, capture-1.
+    expect(cards[0]).toHaveAttribute("data-thumbnail-id", "capture-3");
+    expect(cards[1]).toHaveAttribute("data-thumbnail-id", "capture-2");
+    expect(cards[2]).toHaveAttribute("data-thumbnail-id", "capture-1");
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(within(cards[1]).getByRole("button", { name: "Delete" }));
+      expect(cards[1]).toHaveClass("thumbnail-exiting");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      });
+
+      expect(cards[0]).not.toHaveClass("thumbnail-stack-shifting");
+      expect(cards[0].style.getPropertyValue("--thumbnail-stack-shift")).toBe("");
+      expect(cards[2]).toHaveClass("thumbnail-stack-shifting");
+      expect(cards[2].style.getPropertyValue("--thumbnail-stack-shift")).toBe(
+        `${-THUMBNAIL_CARD_SLOT_PX}px`,
+      );
+      expect(cards[2].style.translate).toBe(`0 ${-THUMBNAIL_CARD_SLOT_PX}px`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("re-arms native preview hit testing as soon as deletion completes", async () => {
     let pointerPolls = 0;
     vi.mocked(invoke).mockImplementation(async (command) => {
