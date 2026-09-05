@@ -432,39 +432,11 @@ function TrayNoticeShell({
 }
 
 export function StartupNotice() {
-  const [shortcut, setShortcut] = useState("CommandOrControl+Shift+Space");
-
-  useEffect(() => {
-    void invoke<AppSettings>("get_settings")
-      .then((settings) => {
-        if (settings.new_capture_shortcut.trim()) {
-          setShortcut(settings.new_capture_shortcut);
-        }
-      })
-      .catch(() => undefined);
-  }, []);
-
-  const keys = shortcutDisplayTokens(shortcut);
-  const trayLabel = captureChromeLabel();
-
   return (
     <TrayNoticeShell className="startup-notice">
-      <div className="tray-notice-card">
-        <div className="startup-notice-body">
-          <div className="startup-icon" aria-hidden="true">
-            <CaptureIcon />
-          </div>
-          <div>
-            <p>
-              Use the {trayLabel} icon, or press{" "}
-              {keys.map((key, index) => (
-                <kbd key={`${key}-${index}`}>{key}</kbd>
-              ))}
-              {" "}to start.
-            </p>
-          </div>
-        </div>
-      </div>
+      <p className="tray-notice-card startup-notice-card" role="status">
+        Captures is ready to use
+      </p>
     </TrayNoticeShell>
   );
 }
@@ -663,9 +635,38 @@ function UpdateDownloadFallback() {
 
 export function UpdateNotice() {
   const status = useUpdateStatus();
+  const [showChangelog, setShowChangelog] = useState(true);
   const [actionError, setActionError] = useState("");
   const [installing, setInstalling] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    const cleanup = createCleanupRegistry();
+    void invoke<AppSettings>("get_settings")
+      .then((settings) => {
+        if (active) setShowChangelog(settings.show_update_changelog !== false);
+      })
+      .catch(() => undefined);
+    void listen<AppSettings>("settings-changed", ({ payload }) => {
+      if (active) setShowChangelog(payload.show_update_changelog !== false);
+    }).then((unlisten) => {
+      cleanup.add(unlisten);
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      cleanup.dispose();
+    };
+  }, []);
+
+  const persistShowChangelog = (next: boolean) => {
+    setShowChangelog(next);
+    void invoke<AppSettings>("get_settings")
+      .then((current) => invoke("update_settings", {
+        settings: { ...current, show_update_changelog: next },
+      }))
+      .catch(() => undefined);
+  };
 
   const close = () => {
     setActionError("");
@@ -692,6 +693,7 @@ export function UpdateNotice() {
     ? stackedReleaseNotes(available.changelog, available.notes, available.display_version)
     : [];
   const stacked = groups.length > 1;
+  const notesVisible = Boolean(available && !error && showChangelog);
   const progress = downloading?.total
     ? Math.min(100, Math.round((downloading.downloaded / downloading.total) * 100))
     : null;
@@ -703,13 +705,13 @@ export function UpdateNotice() {
   const state = status?.state ?? "loading";
   const visualState = error ? "error" : state;
   const title = restarting
-    ? "Update complete"
+    ? "Updated"
     : downloading
       ? "Updating Captures"
       : error
         ? "Update failed"
         : available
-          ? "An update is available"
+          ? "Update available"
           : status?.state === "up_to_date"
             ? "You’re up to date"
             : status?.state === "checking"
@@ -734,7 +736,7 @@ export function UpdateNotice() {
     const primary = root.querySelector<HTMLButtonElement>("button.primary");
     const dismiss = root.querySelector<HTMLButtonElement>("button.update-dismiss");
     (primary ?? dismiss ?? root).focus({ preventScroll: true });
-  }, [visualState, available, error, downloading, restarting]);
+  }, [visualState, available, error, downloading, restarting, notesVisible]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -751,7 +753,12 @@ export function UpdateNotice() {
     <TrayNoticeShell>
       <div
         ref={dialogRef}
-        className={`update-notice update-notice-${visualState} tray-notice-card`}
+        className={[
+          "update-notice",
+          `update-notice-${visualState}`,
+          "tray-notice-card",
+          notesVisible ? "" : "update-notice-compact",
+        ].filter(Boolean).join(" ")}
         role="dialog"
         tabIndex={-1}
         aria-labelledby="update-notice-title"
@@ -759,18 +766,44 @@ export function UpdateNotice() {
       >
       <header className="update-notice-header">
         <div className="update-app-icon" aria-hidden="true">
-          <CaptureIcon />
+          {visualState === "restarting" ? (
+            <CheckIcon />
+          ) : visualState === "error" ? (
+            <WarningIcon />
+          ) : visualState === "downloading" || visualState === "checking" || visualState === "loading" ? (
+            <span className="update-spinner" />
+          ) : (
+            <CaptureIcon />
+          )}
         </div>
         <div className="update-notice-copy">
           <h1 id="update-notice-title">{title}</h1>
           <p id="update-notice-description">{description}</p>
         </div>
+        {available && !error && !notesVisible && (
+          <button
+            type="button"
+            className="update-notes-reveal"
+            onClick={() => persistShowChangelog(true)}
+          >
+            What’s new
+          </button>
+        )}
       </header>
 
-      <div className={`update-notice-body${available && !error ? "" : " update-notice-body-status"}`}>
-        {available && !error && (
+      <div className={`update-notice-body${notesVisible ? "" : " update-notice-body-status"}`}>
+        {notesVisible && (
           <section className={`update-notes${stacked ? " update-notes-stacked" : ""}`} aria-label="What's new">
-            <h2>What’s new</h2>
+            <div className="update-notes-heading">
+              <h2>What’s new</h2>
+              <button
+                type="button"
+                className="update-notes-toggle"
+                onClick={() => persistShowChangelog(false)}
+              >
+                Hide
+              </button>
+            </div>
             {stacked && (
               <p className="update-notes-intro">
                 This update includes all of the following changes:
@@ -788,7 +821,7 @@ export function UpdateNotice() {
                     >
                       {stacked && <h3 id={headingId}>{group.displayVersion}</h3>}
                       {group.items.length > 0 ? (
-                        <ul>
+                        <ul className="update-notes-list">
                           {group.items.map((note, index) => (
                             <li key={`${group.version}-${index}-${note}`}>{note}</li>
                           ))}
@@ -829,9 +862,17 @@ export function UpdateNotice() {
         )}
 
         {restarting && (
-          <p className="update-status-message update-restarting" role="status">
-            Reopening in {restarting.seconds_remaining} seconds…
-          </p>
+          <section className="update-restart" role="status">
+            <p className="update-status-message update-restarting">
+              Reopening in {restarting.seconds_remaining} seconds…
+            </p>
+            <div
+              className="update-restart-progress"
+              aria-hidden="true"
+            >
+              <span />
+            </div>
+          </section>
         )}
 
         {error && (
@@ -847,7 +888,7 @@ export function UpdateNotice() {
 
         {!available && !downloading && !restarting && !error && status?.state !== "up_to_date" && (
           <p className="update-status-message update-checking" role="status">
-            <span className="update-spinner" aria-hidden="true" />Checking…
+            Checking…
           </p>
         )}
       </div>
@@ -907,7 +948,13 @@ export function UpdateNotice() {
   );
 }
 
-function UpdatePreferences() {
+function UpdatePreferences({
+  showChangelog,
+  updateShowChangelog,
+}: {
+  showChangelog: boolean;
+  updateShowChangelog: (value: boolean) => void;
+}) {
   const status = useUpdateStatus();
   const [actionError, setActionError] = useState("");
   const currentVersion = status?.current_display_version ?? "…";
@@ -1006,6 +1053,20 @@ function UpdatePreferences() {
       )}
       {actionError && <p className="update-settings-error" role="alert">{actionError}</p>}
       {(actionError || status?.state === "error") && <UpdateDownloadFallback />}
+      <label className="check-row switch-row">
+        <input
+          type="checkbox"
+          checked={showChangelog}
+          onChange={(event) => updateShowChangelog(event.target.checked)}
+        />
+        <span>
+          Show what’s new on update notices
+          <small>
+            Lists every Preview since the version you have. Turn this off for a
+            compact Update now prompt.
+          </small>
+        </span>
+      </label>
     </section>
   );
 }
@@ -8966,7 +9027,10 @@ function PreferencesSections({
         </div>
       </section>
 
-      <UpdatePreferences />
+      <UpdatePreferences
+        showChangelog={settings.show_update_changelog !== false}
+        updateShowChangelog={(value) => update("show_update_changelog", value)}
+      />
 
       <section className="settings-card" id="about" aria-labelledby="about-heading">
         <header className="settings-card-header">

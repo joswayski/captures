@@ -69,7 +69,7 @@ describe("UpdateNotice", () => {
     render(<UpdateNotice />);
 
     expect(await screen.findByRole("dialog", {
-      name: "An update is available",
+      name: "Update available",
     })).toBeInTheDocument();
     expect(screen.getByText("Version 2026.07.19.2 · 12.6 MB")).toBeInTheDocument();
     expect(screen.queryByText("Open captures will close. Unsaved edits are kept as drafts."))
@@ -177,7 +177,7 @@ describe("UpdateNotice", () => {
 
     render(<UpdateNotice />);
 
-    expect(await screen.findByText("Update complete")).toBeInTheDocument();
+    expect(await screen.findByText("Updated")).toBeInTheDocument();
     expect(screen.getByText("Reopening in 3 seconds…")).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
@@ -223,7 +223,7 @@ describe("UpdateNotice", () => {
     expect(warning.compareDocumentPosition(notes) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
     expect(warning.compareDocumentPosition(updateNow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(warning.querySelector("svg")).toBeInTheDocument();
-    expect(screen.getByRole("dialog", { name: "An update is available" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Update available" })).toBeInTheDocument();
     expect(updateNow).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Update now" }));
 
@@ -321,7 +321,7 @@ describe("UpdateNotice", () => {
     });
 
     const { container } = render(<UpdateNotice />);
-    expect(await screen.findByRole("dialog", { name: "An update is available" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Update available" })).toBeInTheDocument();
     const notice = container.querySelector(".tray-notice");
     expect(notice).toHaveAttribute("data-caret", "top");
     expect((notice as HTMLElement | null)?.style.getPropertyValue("--tray-caret-x")).toBe("220px");
@@ -375,10 +375,50 @@ describe("UpdateNotice", () => {
     expect(await screen.findByRole("button", { name: "Later" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Update now" })).toBeDisabled();
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.getByRole("dialog", { name: "An update is available" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Update available" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Later" })).toBeDisabled();
 
     finishInstall();
     await waitFor(() => expect(screen.getByRole("button", { name: "Later" })).toBeEnabled());
+  });
+
+  it("can hide release notes from the update notice", async () => {
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_update_status") return available;
+      if (command === "get_settings") return { show_update_changelog: true };
+      if (command === "update_settings") return (args as { settings: { show_update_changelog: boolean } }).settings;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<UpdateNotice />);
+
+    expect(await screen.findByRole("region", { name: "What's new" })).toBeInTheDocument();
+    expect(screen.getByText("Adds automatic releases")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Hide" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("region", { name: "What's new" })).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText("Adds automatic releases")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "What’s new" })).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("update_settings", {
+      settings: expect.objectContaining({ show_update_changelog: false }),
+    });
+  });
+
+  it("stays compact when release notes are turned off", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_update_status") return stacked;
+      if (command === "get_settings") return { show_update_changelog: false };
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<UpdateNotice />);
+
+    expect(await screen.findByRole("dialog", { name: "Update available" })).toBeInTheDocument();
+    expect(screen.queryByText("This update includes all of the following changes:")).not.toBeInTheDocument();
+    expect(screen.queryByText("Fix post-update launch notice position on macOS")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "What’s new" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Update now" })).toBeInTheDocument();
   });
 });

@@ -42,6 +42,7 @@ const settings: AppSettings = {
   freeze_screen: true,
   show_cursor_in_screenshots: true,
   screenshot_format: "png",
+  show_update_changelog: true,
   recording: {
     video_shortcut: "Ctrl+Shift+5",
     gif_shortcut: "Ctrl+Shift+6",
@@ -486,6 +487,23 @@ describe("Preferences", () => {
     fireEvent.click(screen.getByRole("button", { name: "Check Now" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("check_for_updates"));
+  });
+
+  it("can hide release notes on update notices", async () => {
+    render(<Preferences />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Updates" }));
+    const changelog = await screen.findByRole("checkbox", {
+      name: /Show what’s new on update notices/,
+    });
+    expect(changelog).toBeChecked();
+    fireEvent.click(changelog);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({ show_update_changelog: false }),
+      });
+    });
   });
 
   it("does not label a manual Linux update with the AppImage size", async () => {

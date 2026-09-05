@@ -2229,7 +2229,9 @@ fn update_settings(
         }
         update_thumbnail_stack(&app);
     }
-    if show_mini_previews_changed {
+    if show_mini_previews_changed
+        || settings.show_update_changelog != previous_settings.show_update_changelog
+    {
         updates::refresh_update_notice(&app);
     }
     if recording_controls_setting_changed
@@ -4572,15 +4574,15 @@ fn create_overlay_window(app: &AppHandle) -> Result<(), tauri::Error> {
     Ok(())
 }
 
-const STARTUP_NOTICE_WIDTH: f64 = 400.0;
-const STARTUP_NOTICE_HEIGHT: f64 = 118.0;
+const STARTUP_NOTICE_WIDTH: f64 = 252.0;
+const STARTUP_NOTICE_HEIGHT: f64 = 44.0;
 /// Transparent padding around the rounded card so `--shadow-md` is not clipped.
 /// Dark `--shadow-md` is `0 8px 20px`, so the blur plus Y offset needs 28px.
 const TRAY_NOTICE_FRAME_PAD: f64 = 28.0;
 /// Extra window height reserved for the tray-pointing caret.
-const TRAY_NOTICE_CARET_SIZE: f64 = 12.0;
-/// Keep the caret off the rounded corners of the notice.
-const TRAY_NOTICE_CARET_INSET: f64 = 28.0;
+const TRAY_NOTICE_CARET_SIZE: f64 = 8.0;
+/// Keep the caret off the rounded ends of the notice.
+const TRAY_NOTICE_CARET_INSET: f64 = 22.0;
 /// Pull the transparent window over the tray so the caret tip sits on the icon.
 const TRAY_NOTICE_TRAY_OVERLAP: f64 = 2.0;
 const TRAY_NOTICE_SCREEN_MARGIN: f64 = 10.0;

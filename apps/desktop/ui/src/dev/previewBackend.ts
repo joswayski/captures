@@ -158,6 +158,11 @@ function previewVideoFormat(): AppSettings["recording"]["video_format"] {
   return value === "gif" || value === "webm" ? value : "mp4";
 }
 
+function previewShowUpdateChangelog(): boolean {
+  const value = query().get("changelog");
+  return value !== "0" && value !== "false";
+}
+
 function previewShortcutSettings(
   platform: "macos" | "windows" | "linux" = previewPlatform(),
 ): Pick<
@@ -233,6 +238,7 @@ const SETTINGS: AppSettings = {
   freeze_screen: previewFreezeScreen(),
   show_cursor_in_screenshots: true,
   screenshot_format: previewScreenshotFormat(),
+  show_update_changelog: previewShowUpdateChangelog(),
 };
 
 const DISPLAY: DisplayDescriptor = {
@@ -473,6 +479,15 @@ function updateStatus(): UpdateStatus {
       display_version: "2026.08.27.5",
       downloaded: 7_340_032,
       total: 12_582_912,
+    };
+  }
+  if (state === "restarting") {
+    return {
+      ...base,
+      state: "restarting",
+      version: "2026.8.2705",
+      display_version: "2026.08.27.5",
+      seconds_remaining: 3,
     };
   }
   if (state === "up_to_date") return { ...base, state: "up_to_date" };

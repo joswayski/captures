@@ -182,43 +182,25 @@ describe("RecordingHud", () => {
     expect(screen.queryByText(/your shortcut/)).not.toBeInTheDocument();
   });
 
-  it("points first-run setup at the tray and New Capture shortcut", async () => {
+  it("points first-run setup at the tray with a ready-to-use tooltip", () => {
     window.history.replaceState({}, "", "/?view=startup");
-    vi.mocked(invoke).mockImplementation(async (command) => {
-      if (command === "get_settings") {
-        return {
-          new_capture_shortcut: "Ctrl+Shift+Space",
-        };
-      }
-      throw new Error(`unexpected command: ${command}`);
-    });
 
     render(<StartupNotice />);
 
+    expect(screen.getByText("Captures is ready to use")).toBeInTheDocument();
     expect(screen.queryByText("Captures is here whenever you need it")).not.toBeInTheDocument();
-    expect(screen.getByText(/Use the (menu bar|tray) icon, or press/)).toBeInTheDocument();
-    expect(await screen.findByText("Ctrl")).toBeInTheDocument();
-    expect(screen.getByText("Shift")).toBeInTheDocument();
-    expect(screen.getByText("Space")).toBeInTheDocument();
-    expect(screen.getByText(/to start/)).toBeInTheDocument();
     expect(screen.queryByText("Captures is running")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Use the (menu bar|tray) icon/)).not.toBeInTheDocument();
     expect(document.querySelector(".tray-notice-caret")).not.toBeInTheDocument();
   });
 
   it("renders a caret pointing at the tray when placement is provided", () => {
     window.history.replaceState({}, "", "/?view=startup&caret=top&caret_x=180");
-    vi.mocked(invoke).mockImplementation(async (command) => {
-      if (command === "get_settings") {
-        return {
-          new_capture_shortcut: "Ctrl+Shift+Space",
-        };
-      }
-      throw new Error(`unexpected command: ${command}`);
-    });
 
     const { container } = render(<StartupNotice />);
     const notice = container.querySelector(".startup-notice");
 
+    expect(screen.getByText("Captures is ready to use")).toBeInTheDocument();
     expect(notice).toHaveAttribute("data-caret", "top");
     expect((notice as HTMLElement | null)?.style.getPropertyValue("--tray-caret-x")).toBe(
       "180px",
