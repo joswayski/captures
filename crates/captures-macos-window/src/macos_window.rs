@@ -1,4 +1,7 @@
-use crate::conceal_policy::should_conceal_documents_for_capture_activation;
+use crate::conceal_policy::{
+    should_conceal_documents_for_capture_activation,
+    should_order_donated_document_behind_after_notice_dismiss,
+};
 use crate::cursor_policy::{
     CaptureCursor, CaptureCursorEvent, CaptureCursorKind, CaptureCursorMonitorAction,
     ThumbnailHoverCursor, capture_cursor_monitor_action, capture_escape_should_dispatch,
@@ -1064,8 +1067,8 @@ static FRONTMOST_APP_BEFORE_CAPTURE: Mutex<Option<Retained<NSRunningApplication>
     Mutex::new(None);
 // The interactive update notice activates Captures so its buttons and keyboard
 // focus work. Keep its activation handoff separate from capture overlays: when
-// the notice hides, AppKit otherwise donates key status to an open editor and
-// raises that editor over the app the user was working in.
+// the notice hides, AppKit otherwise donates key status to Preferences, history,
+// or an editor and raises that window over the app the user was working in.
 static FRONTMOST_APP_BEFORE_UPDATE_NOTICE: Mutex<Option<Retained<NSRunningApplication>>> =
     Mutex::new(None);
 // `Some(None)` means the update notice most recently yielded to another
@@ -2431,8 +2434,9 @@ fn refresh_notice_activation_source_while_unfocused<T>(
 }
 
 /// Hides the interactive update notice and hands activation back to the app it
-/// covered. AppKit may make an open editor key as the notice disappears, so
-/// resign that donated key window before yielding to the external app.
+/// covered. AppKit may make Preferences, history, or an editor key as the
+/// notice disappears; resign and order that donated window back before yielding
+/// so it cannot flash over the user's work.
 pub fn dismiss_update_notice(window: &WebviewWindow) -> Result<(), &'static str> {
     if !is_main_thread() {
         let window = window.clone();
@@ -2447,19 +2451,12 @@ pub fn dismiss_update_notice(window: &WebviewWindow) -> Result<(), &'static str>
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         slot.take()
     };
+    let handing_off = previous.is_some();
     if native.isKeyWindow() {
         native.resignKeyWindow();
     }
-    if previous.is_some()
-        && let Some(main_thread) = MainThreadMarker::new()
-    {
-        let app = NSApplication::sharedApplication(main_thread);
-        if let Some(key) = app.keyWindow()
-            && is_titled_document_window(&key)
-        {
-            key.resignKeyWindow();
-        }
-    }
+    // Resigning the notice donates key status and can raise Preferences.
+    push_donated_titled_document_behind(handing_off);
     if window.hide().is_err() {
         let mut slot = FRONTMOST_APP_BEFORE_UPDATE_NOTICE
             .lock()
@@ -2468,6 +2465,10 @@ pub fn dismiss_update_notice(window: &WebviewWindow) -> Result<(), &'static str>
         native.makeKeyWindow();
         return Err("failed to hide update notice");
     }
+    // Hide can donate key again after the first resign. Push any titled
+    // document back before the async activation yield, or it stays on top for a
+    // frame.
+    push_donated_titled_document_behind(handing_off);
     yield_activation_to(previous);
     Ok(())
 }
@@ -2744,22 +2745,28 @@ fn resign_ns_window_key_without_raising_documents(window: &NSWindow) {
     }
     let previous = thumbnail_activation_handoff_target();
     window.resignKeyWindow();
-    if previous.is_some()
-        && let Some(main_thread) = MainThreadMarker::new()
-    {
-        let app = NSApplication::sharedApplication(main_thread);
-        if let Some(key) = app.keyWindow()
-            && is_titled_document_window(&key)
-        {
-            key.resignKeyWindow();
-            // Key donation can also raise the editor inside Captures' inactive
-            // window stack. Put it behind the user's frontmost app before
-            // returning activation so it cannot remain visually promoted.
-            key.orderBack(None);
-        }
-    }
+    push_donated_titled_document_behind(previous.is_some());
     clear_frontmost_app_before_thumbnail_key();
     yield_activation_to(previous);
+}
+
+/// Resigns a titled document that received donated key status and orders it
+/// behind the user's frontmost app. Resigning alone leaves the window visually
+/// promoted until activation yield finishes.
+fn push_donated_titled_document_behind(handing_off_to_external_app: bool) {
+    let Some(main_thread) = MainThreadMarker::new() else {
+        return;
+    };
+    let app = NSApplication::sharedApplication(main_thread);
+    if let Some(key) = app.keyWindow()
+        && should_order_donated_document_behind_after_notice_dismiss(
+            handing_off_to_external_app,
+            is_titled_document_window(&key),
+        )
+    {
+        key.resignKeyWindow();
+        key.orderBack(None);
+    }
 }
 
 /// Orders out titled document windows so capture activation cannot flash them.
@@ -3421,6 +3428,8 @@ mod tests {
 
     #[test]
     fn titled_document_mask_matches_editors_not_capture_surfaces() {
+        // Preferences, history, and editors share this mask, so Later can
+        // identify the window AppKit just donated key status to.
         assert!(style_mask_is_titled_document(
             NSWindowStyleMask::Titled | NSWindowStyleMask::Closable | NSWindowStyleMask::Resizable
         ));
