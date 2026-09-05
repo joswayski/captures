@@ -188,13 +188,10 @@ html[data-preview-harness-view="thumbnail"] #root {
 
 /*
  * Cancel arrival after it finishes so later class toggles cannot replay it.
- * Exclude exit and drop-reject: this selector is more specific than
- * `.thumbnail-exit-dismiss` / `.thumbnail-drop-rejected`, and a blanket
- * `animation: none` froze the card in place while only the image streaked,
- * then the preview popped away on the dismiss timeout.
- * The arrive rule above also skips drop-reject: it is more specific than
- * `.thumbnail-card.thumbnail-drop-rejected`, so a self-drop would otherwise
- * replay `thumbnail-arrive` and never fire `thumbnail-drop-reject`.
+ * Exclude exit: this selector is more specific than `.thumbnail-exit-dismiss`,
+ * so a blanket `animation: none` froze the card in place while only the image
+ * streaked, then the preview popped away on the dismiss timeout.
+ * Exclude drop-reject so a self-drop is not held still here either.
  */
 .thumbnail-card.thumbnail-ready.thumbnail-arrived:not(.thumbnail-exiting):not(.thumbnail-drop-rejected) {
   animation: none;
@@ -225,9 +222,26 @@ html[data-preview-harness-view="thumbnail"] #root {
  * macOS-style “no” shake when the file is dropped back on this stack.
  * Use `translate` so compact-pile `transform` still composes if a reject
  * somehow runs there; expanded cards are the file-drag source.
+ *
+ * Arrive / arrived set `animation` at (0,3,0). Keep reject at least that
+ * specific so a settled card actually shakes instead of replaying arrive
+ * (fade + rise) or staying still under `animation: none`.
  */
-.thumbnail-card.thumbnail-drop-rejected {
-  animation: thumbnail-drop-reject var(--thumbnail-drop-reject-duration) var(--ease-out);
+.thumbnail-card.thumbnail-drop-rejected,
+.thumbnail-card.thumbnail-ready.thumbnail-drop-rejected,
+.thumbnail-card.thumbnail-ready.thumbnail-arrived.thumbnail-drop-rejected {
+  animation: thumbnail-drop-reject var(--thumbnail-drop-reject-duration)
+    var(--thumbnail-drop-reject-ease);
+}
+
+.thumbnail-card.thumbnail-drop-rejected img,
+html:not(.thumbnail-native-tracking) .thumbnail-card.thumbnail-drop-rejected:hover img,
+.thumbnail-card.thumbnail-drop-rejected:focus-within img,
+.thumbnail-card.thumbnail-drop-rejected[data-thumbnail-native-active="true"] img {
+  opacity: 1;
+  filter: blur(0) brightness(1);
+  transform: scale(1);
+  transition: none;
 }
 
 @keyframes thumbnail-drop-reject {
@@ -235,20 +249,23 @@ html[data-preview-harness-view="thumbnail"] #root {
   100% {
     translate: 0 0;
   }
-  16% {
+  10% {
     translate: calc(-1 * var(--thumbnail-drop-reject-x-1)) 0;
   }
-  32% {
-    translate: var(--thumbnail-drop-reject-x-2) 0;
+  30% {
+    translate: var(--thumbnail-drop-reject-x-1) 0;
   }
-  48% {
-    translate: calc(-1 * var(--thumbnail-drop-reject-x-3)) 0;
+  50% {
+    translate: calc(-1 * var(--thumbnail-drop-reject-x-2)) 0;
   }
-  64% {
-    translate: var(--thumbnail-drop-reject-x-4) 0;
+  65% {
+    translate: var(--thumbnail-drop-reject-x-3) 0;
   }
   80% {
-    translate: calc(-1 * var(--thumbnail-drop-reject-x-5)) 0;
+    translate: calc(-1 * var(--thumbnail-drop-reject-x-4)) 0;
+  }
+  90% {
+    translate: var(--thumbnail-drop-reject-x-4) 0;
   }
 }
 
@@ -1593,9 +1610,12 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
  * Window overlay, not a child of `.thumbnail-stack`: that scroller's
  * absolutely positioned descendants are tied to the content box, so Show less
  * would freeze beside the 2nd/3rd card once the pile overflows. `fixed` keeps
- * it on the visible stack edge while the list scrolls.
+ * it on the visible stack edge while the list scrolls. Left/right follows the
+ * screen edge the pile is hugging; `--thumbnail-minimize-slide` flips the
+ * Show less morph so the pill grows inward from that edge.
  */
 .thumbnail-stack-toolbar {
+  --thumbnail-minimize-slide: 1;
   position: fixed;
   z-index: 50;
   bottom: 16px;
@@ -1751,7 +1771,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-stack-minimize-label {
   opacity: 0;
-  transform: translateX(4px);
+  transform: translateX(calc(var(--thumbnail-minimize-slide) * 4px));
   transition:
     opacity var(--thumbnail-minimize-swap) var(--ease-out),
     transform var(--thumbnail-minimize-swap) var(--ease-out);
@@ -1786,7 +1806,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 .thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize[data-native-pointer-hover="true"] svg,
 .thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:focus-visible svg {
   opacity: 0;
-  transform: translateX(-8px) scale(0.8);
+  transform: translateX(calc(var(--thumbnail-minimize-slide) * -8px)) scale(0.8);
 }
 
 .thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:hover .thumbnail-stack-minimize-label,
@@ -1811,7 +1831,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-stack-toolbar-leaving .thumbnail-stack-minimize svg {
   opacity: 0;
-  transform: translateX(-8px) scale(0.8);
+  transform: translateX(calc(var(--thumbnail-minimize-slide) * -8px)) scale(0.8);
   transition: none;
 }
 
@@ -1838,7 +1858,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 .thumbnail-stack-toolbar-exiting .thumbnail-stack-minimize-label,
 .thumbnail-stack-toolbar-entering .thumbnail-stack-minimize-label {
   opacity: 0;
-  transform: translateX(4px);
+  transform: translateX(calc(var(--thumbnail-minimize-slide) * 4px));
   transition: none;
 }
 
@@ -1922,6 +1942,12 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 .thumbnail-stack-toolbar-anchor-top {
   top: 16px;
   bottom: auto;
+}
+
+.thumbnail-stack-toolbar-anchor-right {
+  --thumbnail-minimize-slide: -1;
+  left: auto;
+  right: 28px;
 }
 
 .thumbnail-stack-compact > .thumbnail-card {
@@ -2479,7 +2505,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
     transform: scale(1.015);
   }
 
-  .thumbnail-card.thumbnail-drop-rejected {
+  .thumbnail-card.thumbnail-drop-rejected,
+  .thumbnail-card.thumbnail-ready.thumbnail-drop-rejected,
+  .thumbnail-card.thumbnail-ready.thumbnail-arrived.thumbnail-drop-rejected {
     animation: none;
   }
 

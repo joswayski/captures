@@ -20,6 +20,7 @@ import {
   setThumbnailStackDragging,
   setThumbnailStackPressing,
   thumbnailStackDragExceededThreshold,
+  thumbnailStackMeasuredFrameHeight,
   tickThumbnailStackDragSway,
   writeHarnessStackOffset,
 } from "./thumbnailStackDrag";
@@ -103,6 +104,21 @@ describe("clampThumbnailStackFrame", () => {
     expect(clampThumbnailStackFrame(2_000, 2_000, 340, 240, work)).toEqual({
       x: 1_580,
       y: 788,
+    });
+  });
+
+  it("uses the webview height when the native size is missing so slack still applies", () => {
+    expect(thumbnailStackMeasuredFrameHeight(792, 240, 1_040)).toBe(792);
+    expect(thumbnailStackMeasuredFrameHeight(null, 240, 792)).toBe(792);
+    expect(thumbnailStackMeasuredFrameHeight(0, 240, 792)).toBe(792);
+    expect(thumbnailStackMeasuredFrameHeight(undefined, 240, 240)).toBe(240);
+    const work = { x: 0, y: 0, width: 1_920, height: 1_040, bottomGap: 12 };
+    const pinned = clampThumbnailStackFrame(0, -800, 340, 240, work, 240);
+    expect(pinned).toEqual({ x: 0, y: 0 });
+    const frame = thumbnailStackMeasuredFrameHeight(null, 240, 792);
+    expect(clampThumbnailStackFrame(0, -800, 340, frame, work, 240)).toEqual({
+      x: 0,
+      y: -552,
     });
   });
 

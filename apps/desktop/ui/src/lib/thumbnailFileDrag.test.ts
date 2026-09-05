@@ -41,15 +41,29 @@ describe("mini-preview file-drop landing", () => {
 
   it("shakes with shared duration and spacing tokens", () => {
     expect(designTokens).toMatch(/--thumbnail-drop-reject-duration:\s*var\(--dur-5\)/);
+    expect(designTokens).toMatch(/--thumbnail-drop-reject-ease:\s*linear/);
     expect(designTokens).toMatch(/--thumbnail-drop-reject-x-1:\s*var\(--s-5\)/);
+    expect(designTokens).not.toMatch(/--thumbnail-drop-reject-x-5:/);
     expect(THUMBNAIL_DROP_REJECT_MS).toBe(420);
     expect(thumbnailStyles).toMatch(
-      /animation:\s*thumbnail-drop-reject var\(--thumbnail-drop-reject-duration\) var\(--ease-out\)/,
+      /animation:\s*thumbnail-drop-reject var\(--thumbnail-drop-reject-duration\)\s+var\(--thumbnail-drop-reject-ease\)/,
     );
     expect(thumbnailStyles).toMatch(
       /translate:\s*calc\(-1 \* var\(--thumbnail-drop-reject-x-1\)\) 0/,
     );
+    expect(thumbnailStyles).toMatch(
+      /translate:\s*var\(--thumbnail-drop-reject-x-1\) 0/,
+    );
     expect(thumbnailStyles).not.toMatch(/translate:\s*-9px 0/);
+  });
+
+  it("lets the reject shake override the settled arrive animation", () => {
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-card\.thumbnail-ready\.thumbnail-arrived:not\(\.thumbnail-exiting\):not\(\.thumbnail-drop-rejected\)/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-card\.thumbnail-ready\.thumbnail-arrived\.thumbnail-drop-rejected/,
+    );
   });
 });
 
