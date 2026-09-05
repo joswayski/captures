@@ -3126,6 +3126,93 @@ describe("ScreenshotEditor", () => {
     }
   });
 
+  it("drags the compression handle instead of placing a shape while a draw tool is selected", async () => {
+    const restoreCanvas = installExportableCanvas();
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+      openExportSettings();
+
+      fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
+      fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
+      const frame = await screen.findByRole("group", { name: "Compression comparison" });
+      await waitFor(() => {
+        expect(screen.getByAltText("After compression")).toBeInTheDocument();
+      });
+
+      setCanvasZoomPercent(100);
+      fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
+
+      const handle = screen.getByRole("button", { name: "Drag to compare before and after" });
+      expect(handle).toBeEnabled();
+      expect(frame).toHaveClass("is-draw-locked");
+
+      vi.spyOn(frame, "getBoundingClientRect").mockReturnValue({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 1_440,
+        bottom: 900,
+        width: 1_440,
+        height: 900,
+        toJSON: () => ({}),
+      });
+      handle.setPointerCapture = vi.fn();
+      handle.hasPointerCapture = vi.fn(() => true);
+      handle.releasePointerCapture = vi.fn();
+
+      fireEvent.pointerDown(handle, {
+        button: 0,
+        pointerId: 91,
+        clientX: 360,
+        clientY: 450,
+      });
+      fireEvent.pointerMove(handle, {
+        pointerId: 91,
+        clientX: 360,
+        clientY: 450,
+      });
+      fireEvent.pointerUp(handle, {
+        pointerId: 91,
+        clientX: 360,
+        clientY: 450,
+      });
+
+      expect(screen.queryByRole("button", { name: /ArrowShape/ })).not.toBeInTheDocument();
+      expect(screen.getByRole("slider", { name: "Before and after comparison" }))
+        .toHaveValue("25");
+
+      const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+      canvas.setPointerCapture = vi.fn();
+      canvas.hasPointerCapture = vi.fn(() => true);
+      canvas.releasePointerCapture = vi.fn();
+      setCanvasBounds(canvas);
+
+      fireEvent.pointerDown(canvas, {
+        button: 0,
+        pointerId: 92,
+        clientX: 80,
+        clientY: 160,
+      });
+      fireEvent.pointerMove(canvas, {
+        pointerId: 92,
+        clientX: 280,
+        clientY: 160,
+      });
+      fireEvent.pointerUp(canvas, {
+        button: 0,
+        pointerId: 92,
+        clientX: 280,
+        clientY: 160,
+      });
+
+      expect(screen.getByRole("button", { name: /ArrowShape/ })).toBeInTheDocument();
+    } finally {
+      restoreCanvas();
+    }
+  });
+
   it("uses the original file size when export is original + preserve quality and unedited", async () => {
     const toBlob = vi.fn((callback: BlobCallback) => {
       callback(new Blob([new Uint8Array(999_999)], { type: "image/png" }));

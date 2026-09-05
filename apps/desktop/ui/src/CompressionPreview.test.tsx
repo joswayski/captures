@@ -311,7 +311,7 @@ describe("CompressionPreview", () => {
       .toHaveClass("is-suppressed");
   });
 
-  it("restores a saved split and locks the handle while drawing", () => {
+  it("restores a saved split and keeps the circular handle draggable while drawing", () => {
     const onSplitChange = vi.fn();
     const { rerender } = render(
       <CompressionPreview
@@ -328,8 +328,13 @@ describe("CompressionPreview", () => {
 
     const frame = screen.getByRole("group", { name: "Compression comparison" });
     expect(frame).toHaveClass("is-draw-locked");
-    expect(screen.getByRole("slider", { name: "Before and after comparison" }))
-      .toHaveValue("72");
+    const handle = screen.getByRole("button", { name: "Drag to compare before and after" });
+    const split = screen.getByRole("slider", { name: "Before and after comparison" });
+    expect(handle).toBeEnabled();
+    expect(split).toBeDisabled();
+    expect(split).toHaveValue("72");
+    fireEvent.change(split, { target: { value: "20" } });
+    expect(split).toHaveValue("72");
 
     rerender(
       <CompressionPreview
@@ -345,5 +350,60 @@ describe("CompressionPreview", () => {
     );
     expect(screen.getByRole("slider", { name: "Before and after comparison" }))
       .toHaveValue("72");
+    expect(screen.getByRole("button", { name: "Drag to compare before and after" }))
+      .toBeEnabled();
+  });
+
+  it("drags the circular handle even when drawing is allowed through the overlay", () => {
+    const onSplitChange = vi.fn();
+    render(
+      <CompressionPreview
+        beforeUrl="blob:before"
+        afterUrl="blob:after"
+        beforeBytes={1_000_000}
+        afterBytes={250_000}
+        pending={false}
+        splitDragEnabled={false}
+        onSplitChange={onSplitChange}
+      />,
+    );
+
+    const frame = screen.getByRole("group", { name: "Compression comparison" });
+    vi.spyOn(frame, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 200,
+      bottom: 100,
+      width: 200,
+      height: 100,
+      toJSON: () => ({}),
+    });
+
+    const handle = screen.getByRole("button", { name: "Drag to compare before and after" });
+    handle.setPointerCapture = vi.fn();
+    handle.releasePointerCapture = vi.fn();
+    handle.hasPointerCapture = vi.fn(() => true);
+
+    fireEvent.pointerDown(handle, {
+      button: 0,
+      pointerId: 11,
+      clientX: 80,
+      clientY: 50,
+    });
+    expect(handle.setPointerCapture).toHaveBeenCalledWith(11);
+    expect(onSplitChange).toHaveBeenCalledWith(40);
+    expect(screen.getByRole("slider", { name: "Before and after comparison" }))
+      .toHaveValue("40");
+
+    fireEvent.pointerMove(handle, {
+      pointerId: 11,
+      clientX: 140,
+      clientY: 50,
+    });
+    expect(onSplitChange).toHaveBeenCalledWith(70);
+    expect(screen.getByRole("slider", { name: "Before and after comparison" }))
+      .toHaveValue("70");
   });
 });

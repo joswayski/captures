@@ -2651,7 +2651,6 @@
   pointer-events: auto;
 }
 
-.compression-preview-frame.is-draw-locked .compression-preview-handle,
 .compression-preview-frame.is-draw-locked .compression-preview-range {
   pointer-events: none;
 }
@@ -2668,6 +2667,11 @@
 
 .compression-preview-frame.is-suppressed {
   opacity: 0;
+  pointer-events: none;
+}
+
+.compression-preview-frame.is-suppressed .compression-preview-handle,
+.compression-preview-frame.is-suppressed .compression-preview-range {
   pointer-events: none;
 }
 
