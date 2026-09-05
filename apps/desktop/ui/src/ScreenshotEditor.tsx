@@ -3,6 +3,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -30,9 +31,10 @@ import {
 } from "./lib/screenshotEditorDraft";
 import {
   applyImageBackgroundEdit,
+  brushHardnessFromSoftness,
   brushRadiusInNaturalPixels,
   brushStrokeDirtyRect,
-  DEFAULT_BRUSH_HARDNESS,
+  DEFAULT_BRUSH_SOFTNESS,
   DEFAULT_REMOVE_BG_BRUSH_SIZE,
   DEFAULT_WAND_TOLERANCE,
   documentPointToImagePixel,
@@ -79,6 +81,8 @@ import {
   createScreenshotDocument,
   cropDocument,
   duplicateScreenshotElement,
+  closedShapePolygon,
+  editorPointsToSvgPath,
   elementBounds,
   elementLocalBounds,
   elementLocalPoint,
@@ -105,7 +109,9 @@ import {
   imageSourceDisplaySize,
   imageSizeAtHeight,
   imageSizeAtWidth,
+  isClosedShapeKind,
   isCurveableStrokeShape,
+  isPolygonShapeKind,
   isFullyOutsideCanvas,
   isSupportedImageFile,
   loadImageFile,
@@ -261,6 +267,7 @@ type EditorGesture =
     workingCanvas: HTMLCanvasElement;
     originalData: ImageData | null;
     radius: number;
+    hardness: number;
     lastPixel: { x: number; y: number } | null;
     pendingPixel: { x: number; y: number } | null;
     changed: boolean;
@@ -346,16 +353,36 @@ type MagnifyGestureEvent = Event & {
   scale?: number;
 };
 
-const TOOL_ITEMS: Array<{ tool: ScreenshotTool; label: string; shortcut: string }> = [
-  { tool: "select", label: "Select & move", shortcut: "V" },
-  { tool: "crop", label: "Crop", shortcut: "C" },
-  { tool: "text", label: "Text", shortcut: "T" },
+type EditorToolItem = { tool: ScreenshotTool; label: string; shortcut?: string };
+type GroupedShapeTool = Extract<
+  ScreenshotTool,
+  "rectangle" | "ellipse" | "line" | "triangle" | "diamond" | "star"
+>;
+
+/** Geometry tools share one rail button; arrows stay one click away. */
+const SHAPE_FLYOUT_COLUMNS = 3;
+const SHAPE_GROUP_ITEMS: Array<{ tool: GroupedShapeTool; label: string; shortcut?: string }> = [
   { tool: "rectangle", label: "Rectangle", shortcut: "R" },
   { tool: "ellipse", label: "Ellipse", shortcut: "O" },
   { tool: "line", label: "Line", shortcut: "L" },
+  { tool: "triangle", label: "Triangle" },
+  { tool: "diamond", label: "Diamond", shortcut: "D" },
+  { tool: "star", label: "Star", shortcut: "S" },
+];
+
+const RAIL_TOOL_ITEMS: EditorToolItem[] = [
+  { tool: "select", label: "Select & move", shortcut: "V" },
+  { tool: "crop", label: "Crop", shortcut: "C" },
+  { tool: "text", label: "Text", shortcut: "T" },
   { tool: "arrow", label: "Arrow", shortcut: "A" },
   { tool: "pen", label: "Freehand", shortcut: "P" },
   { tool: "remove-bg", label: "Eraser", shortcut: "B" },
+];
+
+const TOOL_ITEMS: EditorToolItem[] = [
+  ...RAIL_TOOL_ITEMS.slice(0, 3),
+  ...SHAPE_GROUP_ITEMS,
+  ...RAIL_TOOL_ITEMS.slice(3),
 ];
 
 const TEXT_STYLE_ITEMS: Array<{ preset: TextStylePreset; label: string }> = [
@@ -368,12 +395,26 @@ const TEXT_STYLE_ITEMS: Array<{ preset: TextStylePreset; label: string }> = [
   { preset: "rounded-box", label: "Rounded Box" },
 ];
 
-/** Tools that draw closed or open vector shapes (not freehand). */
-function isShapeDrawTool(tool: ScreenshotTool): boolean {
+function isGroupedShapeTool(tool: ScreenshotTool): tool is GroupedShapeTool {
   return tool === "rectangle"
     || tool === "ellipse"
     || tool === "line"
-    || tool === "arrow";
+    || tool === "triangle"
+    || tool === "diamond"
+    || tool === "star";
+}
+
+function isClosedShapeTool(tool: ScreenshotTool): boolean {
+  return isClosedShapeKind(tool);
+}
+
+function shapeItemName(item: { label: string; shortcut?: string }): string {
+  return item.shortcut ? `${item.label} (${item.shortcut})` : item.label;
+}
+
+/** Tools that draw closed or open vector shapes (not freehand). */
+function isShapeDrawTool(tool: ScreenshotTool): boolean {
+  return isGroupedShapeTool(tool) || tool === "arrow";
 }
 
 /**
@@ -920,7 +961,7 @@ function paintShapeGeometry(
 ): void {
   const { x, y, endX, endY, shape, style } = element;
 
-  if (shape === "rectangle" || shape === "ellipse") {
+  if (isClosedShapeKind(shape)) {
     const left = Math.min(x, endX);
     const top = Math.min(y, endY);
     const width = Math.abs(endX - x);
@@ -928,7 +969,7 @@ function paintShapeGeometry(
     context.beginPath();
     if (shape === "rectangle") {
       context.roundRect(left, top, width, height, Math.min(12, width / 6, height / 6));
-    } else {
+    } else if (shape === "ellipse") {
       context.ellipse(
         left + width / 2,
         top + height / 2,
@@ -938,6 +979,14 @@ function paintShapeGeometry(
         0,
         Math.PI * 2,
       );
+    } else if (isPolygonShapeKind(shape)) {
+      const points = closedShapePolygon(shape, { x: left, y: top, width, height });
+      if (points.length < 3) return;
+      context.moveTo(points[0].x, points[0].y);
+      for (let index = 1; index < points.length; index += 1) {
+        context.lineTo(points[index].x, points[index].y);
+      }
+      context.closePath();
     }
     if (style.fill) context.fill();
     context.stroke();
@@ -1730,6 +1779,8 @@ export function ScreenshotEditor() {
   const [undoStack, setUndoStack] = useState<ScreenshotDocument[]>([]);
   const [redoStack, setRedoStack] = useState<ScreenshotDocument[]>([]);
   const [tool, setTool] = useState<ScreenshotTool>("select");
+  const [lastGroupedShape, setLastGroupedShape] = useState<GroupedShapeTool>("rectangle");
+  const [shapesMenuOpen, setShapesMenuOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [subduedInlineSelectionId, setSubduedInlineSelectionId] = useState<string | null>(null);
@@ -1739,6 +1790,7 @@ export function ScreenshotEditor() {
   const [wandTolerance, setWandTolerance] = useState(DEFAULT_WAND_TOLERANCE);
   const [wandContiguous, setWandContiguous] = useState(true);
   const [removeBgBrushSize, setRemoveBgBrushSize] = useState(DEFAULT_REMOVE_BG_BRUSH_SIZE);
+  const [removeBgBrushSoftness, setRemoveBgBrushSoftness] = useState(DEFAULT_BRUSH_SOFTNESS);
   const [removeBgBusy, setRemoveBgBusy] = useState(false);
   /**
    * Live erase/restore punches holes before commit. Preview the checkerboard
@@ -1751,6 +1803,7 @@ export function ScreenshotEditor() {
     strokeWidth: 8,
     dropShadow: false,
   });
+  const [defaultOpacity, setDefaultOpacity] = useState(100);
   const [defaultFontSize, setDefaultFontSize] = useState(48);
   const [defaultTextStyle, setDefaultTextStyle] = useState<TextStylePreset>("rounded-box");
   const [rotationSnapDegrees, setRotationSnapDegrees] = useState(
@@ -1870,6 +1923,25 @@ export function ScreenshotEditor() {
     text: string;
   } | null>(null);
   const [saved, setSaved] = useState<SavedScreenshotEdit | null>(null);
+
+  const closeShapesMenu = useCallback(() => setShapesMenuOpen(false), []);
+
+  const activateTool = useCallback((
+    next: ScreenshotTool,
+    options?: { openShapesMenu?: boolean },
+  ) => {
+    setEditingTextId(null);
+    setTool(next);
+    if (isGroupedShapeTool(next)) {
+      setLastGroupedShape(next);
+      setShapesMenuOpen(Boolean(options?.openShapesMenu));
+    } else {
+      setShapesMenuOpen(false);
+    }
+    if (next !== "select") setSelectedId(null);
+    if (next !== "crop") setCropSelection(null);
+  }, []);
+
   const viewportRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -3037,15 +3109,32 @@ export function ScreenshotEditor() {
         else undo();
         return;
       }
-      if (event.key === "Backspace" || event.key === "Delete") {
-        event.preventDefault();
-        deleteSelected();
-        return;
-      }
       if (event.key === "Escape") {
+        if (shapesMenuOpen) {
+          event.preventDefault();
+          setShapesMenuOpen(false);
+          return;
+        }
         setEditingTextId(null);
         setSelectedId(null);
         setCropSelection(null);
+        return;
+      }
+      if (
+        shapesMenuOpen
+        && (
+          event.key === "Backspace"
+          || event.key === "Delete"
+          || event.key === "Home"
+          || event.key === "End"
+          || event.key.startsWith("Arrow")
+        )
+      ) {
+        return;
+      }
+      if (event.key === "Backspace" || event.key === "Delete") {
+        event.preventDefault();
+        deleteSelected();
         return;
       }
       const multiplier = event.shiftKey ? 10 : 1;
@@ -3054,12 +3143,12 @@ export function ScreenshotEditor() {
       else if (event.key === "ArrowUp") nudgeSelected(0, -multiplier);
       else if (event.key === "ArrowDown") nudgeSelected(0, multiplier);
       else if (!command && !event.altKey) {
-        const match = TOOL_ITEMS.find(({ shortcut }) => shortcut.toLowerCase() === event.key.toLowerCase());
+        const match = TOOL_ITEMS.find(({ shortcut }) => (
+          shortcut
+          && shortcut.toLowerCase() === event.key.toLowerCase()
+        ));
         if (match) {
-          setEditingTextId(null);
-          setTool(match.tool);
-          if (match.tool !== "select") setSelectedId(null);
-          setCropSelection(null);
+          activateTool(match.tool);
         }
       }
     };
@@ -3090,6 +3179,8 @@ export function ScreenshotEditor() {
     setManualZoom,
     undo,
     zoomBy,
+    activateTool,
+    shapesMenuOpen,
   ]);
 
   useEffect(() => {
@@ -3424,7 +3515,7 @@ export function ScreenshotEditor() {
       gesture.radius,
       gesture.mode,
       gesture.originalData,
-      DEFAULT_BRUSH_HARDNESS,
+      gesture.hardness,
     );
     const next: RemoveBackgroundGesture = {
       ...gesture,
@@ -3776,7 +3867,7 @@ export function ScreenshotEditor() {
         style: { ...defaultStyle, fill: null },
         locked: false,
         visible: true,
-        opacity: 100,
+        opacity: defaultOpacity,
         blendMode: "source-over",
       }
       : {
@@ -3790,11 +3881,11 @@ export function ScreenshotEditor() {
         controls: [],
         style: {
           ...defaultStyle,
-          fill: tool === "rectangle" || tool === "ellipse" ? defaultStyle.fill : null,
+          fill: isClosedShapeKind(tool) ? defaultStyle.fill : null,
         },
         locked: false,
         visible: true,
-        opacity: 100,
+        opacity: defaultOpacity,
         blendMode: "source-over",
       };
     startCanvasGesture({
@@ -4581,6 +4672,7 @@ export function ScreenshotEditor() {
         originalData = readLayerImageData(element.originalSrc);
       }
       const radius = brushRadiusInNaturalPixels(element, removeBgBrushSize);
+      const hardness = brushHardnessFromSoftness(removeBgBrushSoftness);
       const stamped = strokeRemoveBackgroundBrush(
         workingData,
         pixel.x,
@@ -4590,7 +4682,7 @@ export function ScreenshotEditor() {
         radius,
         mode,
         originalData,
-        DEFAULT_BRUSH_HARDNESS,
+        hardness,
       );
       // Seed the live canvas once after the initial stamp. Pointer moves only
       // upload the small dirty rectangle touched by the next brush segment.
@@ -4607,6 +4699,7 @@ export function ScreenshotEditor() {
         workingCanvas,
         originalData,
         radius,
+        hardness,
         lastPixel: pixel,
         pendingPixel: null,
         changed: stamped > 0,
@@ -5591,24 +5684,36 @@ export function ScreenshotEditor() {
       </header>
 
       <nav className="screenshot-tool-rail" aria-label="Screenshot tools">
-        {TOOL_ITEMS.map((item) => (
-          <button
-            key={item.tool}
-            type="button"
-            className={tool === item.tool ? "active" : ""}
-            aria-pressed={tool === item.tool}
-            aria-label={`${item.label} (${item.shortcut})`}
-            title={`${item.label} (${item.shortcut})`}
-            onClick={() => {
-              setEditingTextId(null);
-              setTool(item.tool);
-              if (item.tool !== "select") setSelectedId(null);
-              if (item.tool !== "crop") setCropSelection(null);
-            }}
-          >
-            <EditorIcon name={item.tool} />
-            <span>{item.label}</span>
-          </button>
+        {RAIL_TOOL_ITEMS.map((item) => (
+          <Fragment key={item.tool}>
+            {item.tool === "arrow" && (
+              <ShapesRailButton
+                activeTool={tool}
+                lastShape={lastGroupedShape}
+                open={shapesMenuOpen}
+                onToggle={() => {
+                  if (isGroupedShapeTool(tool)) {
+                    setShapesMenuOpen((current) => !current);
+                    return;
+                  }
+                  activateTool(lastGroupedShape, { openShapesMenu: true });
+                }}
+                onChoose={(shape) => activateTool(shape)}
+                onClose={closeShapesMenu}
+              />
+            )}
+            <button
+              type="button"
+              className={tool === item.tool ? "active" : ""}
+              aria-pressed={tool === item.tool}
+              aria-label={`${item.label} (${item.shortcut})`}
+              title={`${item.label} (${item.shortcut})`}
+              onClick={() => activateTool(item.tool)}
+            >
+              <EditorIcon name={item.tool} />
+              <span>{item.label}</span>
+            </button>
+          </Fragment>
         ))}
       </nav>
 
@@ -6637,7 +6742,7 @@ export function ScreenshotEditor() {
             <p>
               Remove a color, paint it out, or paint it back.
             </p>
-            <div className="screenshot-format-buttons" role="group" aria-label="Eraser mode">
+            <div className="screenshot-format-buttons screenshot-format-buttons-3" role="group" aria-label="Eraser mode">
               {REMOVE_BG_MODE_ITEMS.map((item) => (
                 <button
                   key={item.mode}
@@ -6685,8 +6790,17 @@ export function ScreenshotEditor() {
               </>
             ) : (
               <>
+                <DrawToolPreview
+                  tool="remove-bg"
+                  color="#ffffff"
+                  fill={null}
+                  strokeWidth={removeBgBrushSize}
+                  brushSize={removeBgBrushSize}
+                  brushSoftness={removeBgBrushSoftness}
+                  opacity={100}
+                />
                 <label>
-                  Brush size
+                  Size
                   <RangeSlider
                     ariaLabel="Brush size"
                     min={4}
@@ -6700,6 +6814,22 @@ export function ScreenshotEditor() {
                       { value: 120, label: "120" },
                     ]}
                     onChange={setRemoveBgBrushSize}
+                  />
+                </label>
+                <label>
+                  Softness
+                  <RangeSlider
+                    ariaLabel="Brush softness"
+                    min={0}
+                    max={100}
+                    value={removeBgBrushSoftness}
+                    valueText={`${removeBgBrushSoftness}%`}
+                    marks={[
+                      { value: 0, label: "Hard" },
+                      { value: 50, label: "50%" },
+                      { value: 100, label: "Soft" },
+                    ]}
+                    onChange={setRemoveBgBrushSoftness}
                   />
                 </label>
                 <p>
@@ -6965,6 +7095,21 @@ export function ScreenshotEditor() {
                 ))}
               />
             </label>
+            <label>
+              Opacity
+              <RangeSlider
+                ariaLabel="Opacity"
+                min={0}
+                max={100}
+                value={selected.opacity}
+                valueText={`${selected.opacity}%`}
+                onChange={(opacity) => updateSelected((element) => (
+                  element.kind === "shape" || element.kind === "path"
+                    ? { ...element, opacity }
+                    : element
+                ))}
+              />
+            </label>
             <DropShadowFields
               style={selected.style}
               onChange={(nextStyle) => updateSelected((element) => (
@@ -6973,7 +7118,7 @@ export function ScreenshotEditor() {
                   : element
               ))}
             />
-            {selected.kind === "shape" && (selected.shape === "rectangle" || selected.shape === "ellipse") && (
+            {selected.kind === "shape" && isClosedShapeKind(selected.shape) && (
               <>
                 <label className="screenshot-check-row">
                   <input
@@ -7086,13 +7231,39 @@ export function ScreenshotEditor() {
               </>
             ) : (
               <>
+                {isGroupedShapeTool(tool) && (
+                  <div className="screenshot-shape-picker" role="group" aria-label="Shape">
+                    {SHAPE_GROUP_ITEMS.map((item) => (
+                      <button
+                        key={item.tool}
+                        type="button"
+                        className={tool === item.tool ? "active" : ""}
+                        aria-pressed={tool === item.tool}
+                        aria-label={item.label}
+                        title={shapeItemName(item)}
+                        onClick={() => activateTool(item.tool)}
+                      >
+                        <EditorIcon name={item.tool} />
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <DrawToolPreview
+                  tool={tool}
+                  color={defaultStyle.color}
+                  fill={isClosedShapeTool(tool) ? defaultStyle.fill : null}
+                  strokeWidth={defaultStyle.strokeWidth}
+                  brushSize={defaultStyle.strokeWidth}
+                  brushSoftness={0}
+                  opacity={defaultOpacity}
+                />
                 <ColorField
-                  label="New annotation color"
+                  label="Color"
                   value={defaultStyle.color}
                   onChange={(color) => setDefaultStyle((style) => ({ ...style, color }))}
                 />
                 <label>
-                  Stroke width
+                  Size
                   <RangeSlider
                     ariaLabel="Stroke width"
                     min={2}
@@ -7105,6 +7276,42 @@ export function ScreenshotEditor() {
                     }))}
                   />
                 </label>
+                <label>
+                  Opacity
+                  <RangeSlider
+                    ariaLabel="Opacity"
+                    min={0}
+                    max={100}
+                    value={defaultOpacity}
+                    valueText={`${defaultOpacity}%`}
+                    onChange={setDefaultOpacity}
+                  />
+                </label>
+                {isClosedShapeTool(tool) && (
+                  <>
+                    <label className="screenshot-check-row">
+                      <input
+                        type="checkbox"
+                        checked={defaultStyle.fill !== null}
+                        onChange={(event) => setDefaultStyle((style) => ({
+                          ...style,
+                          fill: event.target.checked ? `${style.color}55` : null,
+                        }))}
+                      />
+                      Filled shape
+                    </label>
+                    {defaultStyle.fill && (
+                      <ColorField
+                        label="Fill color"
+                        value={defaultStyle.fill.slice(0, 7)}
+                        onChange={(fill) => setDefaultStyle((style) => ({
+                          ...style,
+                          fill: `${fill}88`,
+                        }))}
+                      />
+                    )}
+                  </>
+                )}
                 <DropShadowFields
                   style={defaultStyle}
                   onChange={setDefaultStyle}
@@ -8031,6 +8238,328 @@ function toolLabel(tool: ScreenshotTool): string {
   return TOOL_ITEMS.find((item) => item.tool === tool)?.label ?? "Properties";
 }
 
+function shapeFlyoutItems(menu: HTMLElement | null): HTMLButtonElement[] {
+  return Array.from(menu?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]') ?? []);
+}
+
+function ShapesRailButton({
+  activeTool,
+  lastShape,
+  open,
+  onToggle,
+  onChoose,
+  onClose,
+}: {
+  activeTool: ScreenshotTool;
+  lastShape: GroupedShapeTool;
+  open: boolean;
+  onToggle: () => void;
+  onChoose: (tool: GroupedShapeTool) => void;
+  onClose: () => void;
+}) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
+  const active = isGroupedShapeTool(activeTool);
+  const current = active ? activeTool : lastShape;
+  const currentItem = SHAPE_GROUP_ITEMS.find((item) => item.tool === current)
+    ?? SHAPE_GROUP_ITEMS[0];
+
+  const positionMenu = useCallback(() => {
+    const trigger = buttonRef.current;
+    if (!trigger) return;
+    const triggerBounds = trigger.getBoundingClientRect();
+    const menuBounds = menuRef.current?.getBoundingClientRect();
+    const menuHeight = menuBounds?.height ?? 112;
+    const menuWidth = menuBounds?.width ?? 172;
+    const gap = 10;
+    const viewportPadding = 8;
+    setMenuPosition({
+      top: Math.min(
+        Math.max(viewportPadding, triggerBounds.top + triggerBounds.height / 2 - menuHeight / 2),
+        Math.max(viewportPadding, window.innerHeight - menuHeight - viewportPadding),
+      ),
+      left: Math.min(
+        Math.max(viewportPadding, triggerBounds.right + gap),
+        Math.max(viewportPadding, window.innerWidth - menuWidth - viewportPadding),
+      ),
+    });
+  }, []);
+
+  const closeAndRestoreFocus = useCallback(() => {
+    onClose();
+    buttonRef.current?.focus();
+  }, [onClose]);
+
+  const focusFlyoutItem = useCallback((index: number) => {
+    const items = shapeFlyoutItems(menuRef.current);
+    if (items.length === 0) return;
+    items[(index + items.length) % items.length]?.focus();
+  }, []);
+
+  const handleMenuKeyDown = useCallback((event: { key: string; preventDefault: () => void; stopPropagation: () => void }) => {
+    const items = shapeFlyoutItems(menuRef.current);
+    if (items.length === 0) return;
+    const currentIndex = items.findIndex((item) => item === document.activeElement);
+    const index = currentIndex >= 0 ? currentIndex : items.findIndex(
+      (item) => item.getAttribute("aria-checked") === "true",
+    );
+
+    if (event.key === "Escape" || event.key === "Tab") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeAndRestoreFocus();
+      return;
+    }
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      event.stopPropagation();
+      focusFlyoutItem(index + 1);
+      return;
+    }
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      event.stopPropagation();
+      focusFlyoutItem(index - 1);
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      event.stopPropagation();
+      focusFlyoutItem(index + SHAPE_FLYOUT_COLUMNS);
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      event.stopPropagation();
+      focusFlyoutItem(index - SHAPE_FLYOUT_COLUMNS);
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      event.stopPropagation();
+      focusFlyoutItem(0);
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      event.stopPropagation();
+      focusFlyoutItem(items.length - 1);
+    }
+  }, [closeAndRestoreFocus, focusFlyoutItem]);
+
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    positionMenu();
+    window.addEventListener("resize", positionMenu);
+    document.addEventListener("scroll", positionMenu, true);
+    return () => {
+      window.removeEventListener("resize", positionMenu);
+      document.removeEventListener("scroll", positionMenu, true);
+    };
+  }, [open, positionMenu]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const items = shapeFlyoutItems(menuRef.current);
+    const checkedIndex = items.findIndex((item) => item.getAttribute("aria-checked") === "true");
+    items[checkedIndex >= 0 ? checkedIndex : 0]?.focus();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (
+        !buttonRef.current?.contains(target)
+        && !menuRef.current?.contains(target)
+      ) {
+        onClose();
+      }
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+    };
+  }, [open, onClose]);
+
+  return (
+    <div className="screenshot-tool-shapes">
+      <button
+        ref={buttonRef}
+        type="button"
+        className={active ? "active" : ""}
+        aria-pressed={active}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Shapes"
+        title={`Shapes · ${shapeItemName(currentItem)}`}
+        onClick={onToggle}
+        onKeyDown={(event) => {
+          if (
+            event.key !== "ArrowDown"
+            && event.key !== "ArrowUp"
+            && event.key !== "ArrowLeft"
+            && event.key !== "ArrowRight"
+          ) {
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          if (!open) onToggle();
+          else handleMenuKeyDown(event);
+        }}
+      >
+        <EditorIcon name="shapes" />
+        <span>Shapes</span>
+      </button>
+      {open && createPortal(
+        <div
+          ref={menuRef}
+          className="screenshot-tool-flyout"
+          role="menu"
+          aria-label="Shapes"
+          style={menuPosition}
+          onKeyDown={handleMenuKeyDown}
+        >
+          {SHAPE_GROUP_ITEMS.map((item) => (
+            <button
+              key={item.tool}
+              type="button"
+              className={current === item.tool ? "active" : ""}
+              role="menuitemradio"
+              aria-checked={current === item.tool}
+              aria-label={shapeItemName(item)}
+              title={shapeItemName(item)}
+              tabIndex={-1}
+              onClick={() => {
+                onChoose(item.tool);
+                buttonRef.current?.focus();
+              }}
+            >
+              <EditorIcon name={item.tool} />
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+function DrawToolPreview({
+  tool,
+  color,
+  fill,
+  strokeWidth,
+  brushSize,
+  brushSoftness,
+  opacity,
+}: {
+  tool: ScreenshotTool;
+  color: string;
+  fill: string | null;
+  strokeWidth: number;
+  brushSize: number;
+  brushSoftness: number;
+  opacity: number;
+}) {
+  const previewStroke = Math.max(1.75, Math.min(12, strokeWidth * 0.42));
+  const brushRadius = 8 + ((brushSize - 4) / 116) * 22;
+  const hardStop = Math.max(4, (1 - brushSoftness / 100) * 72);
+
+  return (
+    <div
+      className={[
+        "screenshot-draw-preview",
+        tool === "remove-bg" ? "screenshot-draw-preview-brush" : "",
+      ].filter(Boolean).join(" ")}
+      role="img"
+      aria-label={tool === "remove-bg" ? "Brush preview" : "Stroke preview"}
+    >
+      <svg viewBox="0 0 160 72" aria-hidden="true" style={{ opacity: opacity / 100 }}>
+        {tool === "remove-bg" ? (
+          <>
+            <defs>
+              <radialGradient id="screenshot-brush-preview-grad" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stopOpacity="1" />
+                <stop offset={`${hardStop}%`} stopOpacity="1" />
+                <stop offset="100%" stopOpacity="0" />
+              </radialGradient>
+            </defs>
+            <circle
+              cx="80"
+              cy="36"
+              r={brushRadius}
+              fill="url(#screenshot-brush-preview-grad)"
+            />
+          </>
+        ) : tool === "rectangle" ? (
+          <rect
+            x="38"
+            y="16"
+            width="84"
+            height="40"
+            rx="6"
+            fill={fill ?? "none"}
+            stroke={color}
+            strokeWidth={previewStroke}
+          />
+        ) : tool === "ellipse" ? (
+          <ellipse
+            cx="80"
+            cy="36"
+            rx="42"
+            ry="20"
+            fill={fill ?? "none"}
+            stroke={color}
+            strokeWidth={previewStroke}
+          />
+        ) : tool === "line" ? (
+          <path
+            d="M28 50 132 22"
+            fill="none"
+            stroke={color}
+            strokeWidth={previewStroke}
+            strokeLinecap="round"
+          />
+        ) : isPolygonShapeKind(tool) ? (
+          <path
+            d={editorPointsToSvgPath(closedShapePolygon(tool, {
+              x: 38,
+              y: 12,
+              width: 84,
+              height: 48,
+            }))}
+            fill={fill ?? "none"}
+            stroke={color}
+            strokeWidth={previewStroke}
+            strokeLinejoin="round"
+          />
+        ) : tool === "arrow" ? (
+          <path
+            d="M30 50 118 24M104 20h18v18"
+            fill="none"
+            stroke={color}
+            strokeWidth={previewStroke}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        ) : (
+          <path
+            d="M22 48c18-28 28-32 38-12s18 16 36-16 22-8 42 8"
+            fill="none"
+            stroke={color}
+            strokeWidth={previewStroke}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        )}
+      </svg>
+    </div>
+  );
+}
+
 function EditorIcon({ name }: { name: string }) {
   if (name === "select") return <svg viewBox="0 0 24 24"><path d="m5 3 13 9-7 2-3 7Z" /></svg>;
   if (name === "crop") return <svg viewBox="0 0 24 24"><path d="M7 3v14a2 2 0 0 0 2 2h12M3 7h14a2 2 0 0 1 2 2v12" /></svg>;
@@ -8043,17 +8572,39 @@ function EditorIcon({ name }: { name: string }) {
     );
   }
   if (name === "text") return <svg viewBox="0 0 24 24"><path d="M5 5h14M12 5v14M8 19h8" /></svg>;
+  if (name === "shapes") {
+    return (
+      <svg viewBox="0 0 24 24">
+        <rect x="3.5" y="8.5" width="11" height="11" rx="1.5" />
+        <circle cx="15.25" cy="9.75" r="5.25" />
+      </svg>
+    );
+  }
   if (name === "rectangle") return <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2" /></svg>;
   if (name === "ellipse") return <svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8" ry="6.5" /></svg>;
   if (name === "line") return <svg viewBox="0 0 24 24"><path d="M5 19 19 5" /></svg>;
+  if (name === "triangle") return <svg viewBox="0 0 24 24"><path d="M12 4 20.5 19.5H3.5Z" /></svg>;
+  if (name === "diamond") return <svg viewBox="0 0 24 24"><path d="M12 3.5 20.5 12 12 20.5 3.5 12Z" /></svg>;
+  if (name === "star") {
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d={editorPointsToSvgPath(closedShapePolygon("star", {
+          x: 3,
+          y: 3,
+          width: 18,
+          height: 18,
+        }))} />
+      </svg>
+    );
+  }
   if (name === "arrow") return <svg viewBox="0 0 24 24"><path d="M4 20 20 4M12 4h8v8" /></svg>;
   if (name === "pen") return <svg viewBox="0 0 24 24"><path d="M4 16c4-7 6-8 8-3s4 4 8-4M4 20h16" /></svg>;
   if (name === "remove-bg") {
     return (
       <svg viewBox="0 0 24 24">
-        <path d="M4 20c2-6 5-9 8-9s4 2 8 9" />
-        <path d="M9 7.5a2.5 2.5 0 1 0 5 0 2.5 2.5 0 0 0-5 0Z" />
-        <path d="M12 10v3" />
+        <path d="m14.8 20.5-7.4-7.4a2.4 2.4 0 0 1 0-3.4L13.2 4a2.4 2.4 0 0 1 3.4 0l3.4 3.4a2.4 2.4 0 0 1 0 3.4l-7.4 7.4a2.4 2.4 0 0 1-3.4 0Z" />
+        <path d="m8.6 11.8 3.6 3.6" />
+        <path d="M4 21h8" />
       </svg>
     );
   }

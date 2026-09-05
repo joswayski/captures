@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyImageBackgroundEdit,
+  brushHardnessFromSoftness,
   brushRadiusInNaturalPixels,
+  brushSoftnessFromHardness,
   brushStrokeDirtyRect,
   colorDistanceRgb,
+  DEFAULT_BRUSH_HARDNESS,
+  DEFAULT_BRUSH_SOFTNESS,
   documentPointToImagePixel,
   hitTestImageElement,
   imageDataToCanvas,
@@ -257,6 +261,27 @@ describe("stampRemoveBackgroundBrush", () => {
     expect(samplePixel(image, 2, 2)?.a).toBe(0);
     // Far corner stays opaque.
     expect(samplePixel(image, 0, 0)?.a).toBe(255);
+  });
+
+  it("leaves a soft fringe when hardness is below 1", () => {
+    const image = solidImageData(9, 9, [20, 40, 60, 255]);
+    stampRemoveBackgroundBrush(image, 4, 4, 3.5, "erase", null, 0);
+    const center = samplePixel(image, 4, 4)?.a ?? 255;
+    const fringe = samplePixel(image, 4, 6)?.a ?? 255;
+    const corner = samplePixel(image, 0, 0)?.a ?? 0;
+    expect(center).toBeLessThan(fringe);
+    expect(fringe).toBeGreaterThan(0);
+    expect(fringe).toBeLessThan(255);
+    expect(corner).toBe(255);
+  });
+
+  it("converts softness percent to hardness", () => {
+    expect(brushHardnessFromSoftness(0)).toBe(1);
+    expect(brushHardnessFromSoftness(100)).toBe(0);
+    expect(brushHardnessFromSoftness(DEFAULT_BRUSH_SOFTNESS))
+      .toBeCloseTo(DEFAULT_BRUSH_HARDNESS);
+    expect(brushSoftnessFromHardness(DEFAULT_BRUSH_HARDNESS))
+      .toBe(DEFAULT_BRUSH_SOFTNESS);
   });
 
   it("restores pixels from the original bitmap", () => {

@@ -613,6 +613,78 @@
   transform: translate(0, -50%);
 }
 
+.screenshot-tool-rail button[aria-expanded="true"] > span {
+  opacity: 0;
+}
+
+.screenshot-tool-shapes {
+  display: contents;
+}
+
+.screenshot-tool-rail .screenshot-tool-shapes > button::after {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 0;
+  height: 0;
+  border: 3.5px solid transparent;
+  border-right-color: currentColor;
+  border-bottom-color: currentColor;
+  content: "";
+  opacity: 0.72;
+}
+
+.screenshot-tool-flyout {
+  position: fixed;
+  z-index: 80;
+  display: grid;
+  grid-template-columns: repeat(3, 44px);
+  padding: var(--s-3);
+  align-items: center;
+  gap: var(--s-2);
+  border: 1px solid var(--editor-border);
+  border-radius: var(--r-lg);
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-lg);
+}
+
+.screenshot-tool-flyout button {
+  display: grid;
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  color: var(--editor-text-muted);
+  background: transparent;
+}
+
+.screenshot-tool-flyout button:hover {
+  color: var(--editor-text);
+  background: var(--surface-hover);
+}
+
+.screenshot-tool-flyout button:focus-visible {
+  outline: 2px solid var(--theme-accent);
+  outline-offset: 2px;
+}
+
+.screenshot-tool-flyout button.active {
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+}
+
+.screenshot-tool-flyout svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 /* --------------------------------------------------------------- canvas --- */
 
 .screenshot-canvas-viewport {
@@ -2641,6 +2713,75 @@
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   gap: var(--s-2);
+}
+
+.screenshot-format-buttons-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.screenshot-shape-picker {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--s-2);
+}
+
+.screenshot-shape-picker button {
+  display: grid;
+  min-height: 40px;
+  place-items: center;
+  border: 1px solid var(--editor-border);
+  border-radius: var(--r-sm);
+  color: var(--editor-text-muted);
+  background: var(--editor-control);
+}
+
+.screenshot-shape-picker button:hover {
+  color: var(--editor-text);
+  background: var(--editor-control-hover);
+}
+
+.screenshot-shape-picker button.active {
+  border-color: var(--theme-accent);
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+}
+
+.screenshot-shape-picker svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.screenshot-draw-preview {
+  display: grid;
+  height: 88px;
+  overflow: hidden;
+  place-items: center;
+  border: 1px solid var(--editor-border);
+  border-radius: var(--r-md);
+  background-color: var(--canvas-checker-b);
+  background-image:
+    linear-gradient(45deg, var(--canvas-checker-a) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--canvas-checker-a) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--canvas-checker-a) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--canvas-checker-a) 75%);
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-size: 16px 16px;
+}
+
+.screenshot-draw-preview svg {
+  width: 100%;
+  height: 100%;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.screenshot-draw-preview-brush stop {
+  stop-color: var(--solid);
 }
 
 .screenshot-format-buttons button {
