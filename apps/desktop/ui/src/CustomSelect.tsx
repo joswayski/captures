@@ -7,82 +7,19 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import {
+  CUSTOM_SELECT_MAX_MENU_HEIGHT,
+  CUSTOM_SELECT_MAX_MENU_WIDTH,
+  placeCustomSelectMenu,
+  type CustomSelectMenuLayout,
+} from "./lib/customSelectMenu";
+
 export type SelectOption = {
   value: string;
   label: string;
   description?: string;
   disabled?: boolean;
 };
-
-const VIEWPORT_PADDING = 8;
-const MENU_GAP = 6;
-const MAX_MENU_HEIGHT = 240;
-const MAX_MENU_WIDTH = 360;
-
-export type CustomSelectMenuLayout = {
-  placement: "above" | "below";
-  maxHeight: number;
-  top: number;
-  left: number;
-  minWidth: number;
-};
-
-/** Viewport box used by `placeCustomSelectMenu`. */
-export type CustomSelectMenuBox = {
-  top: number;
-  left: number;
-  right: number;
-  bottom: number;
-  width: number;
-  height: number;
-};
-
-/**
- * Place a select menu next to its trigger without crossing the window edge.
- * Prefer the trigger’s right edge (the in-flow look), then shift so the card
- * stays fully on-screen — including when the trigger sits in a clipped editor.
- */
-export function placeCustomSelectMenu(
-  trigger: CustomSelectMenuBox,
-  menu: { width: number; height: number },
-  viewport: { width: number; height: number },
-  optionCount: number,
-): CustomSelectMenuLayout {
-  const measuredHeight = menu.height || Math.min(MAX_MENU_HEIGHT, optionCount * 31 + 8);
-  const desiredHeight = Math.min(MAX_MENU_HEIGHT, measuredHeight);
-  const spaceAbove = Math.max(0, trigger.top - VIEWPORT_PADDING);
-  const spaceBelow = Math.max(0, viewport.height - trigger.bottom - VIEWPORT_PADDING);
-  const placement = spaceBelow < desiredHeight && spaceAbove > spaceBelow ? "above" : "below";
-  const availableHeight = placement === "above" ? spaceAbove : spaceBelow;
-  const viewportMaxHeight = Math.max(0, viewport.height - VIEWPORT_PADDING * 2);
-  const maxHeight = Math.max(
-    1,
-    Math.min(MAX_MENU_HEIGHT, availableHeight || viewportMaxHeight, viewportMaxHeight),
-  );
-  const menuHeight = Math.min(maxHeight, measuredHeight);
-
-  const maxWidth = Math.min(MAX_MENU_WIDTH, Math.max(0, viewport.width - VIEWPORT_PADDING * 2));
-  const menuWidth = Math.min(Math.max(menu.width, trigger.width), maxWidth || trigger.width);
-  let left = trigger.right - menuWidth;
-  const minLeft = VIEWPORT_PADDING;
-  const maxLeft = viewport.width - VIEWPORT_PADDING - menuWidth;
-  left = Math.min(Math.max(minLeft, left), Math.max(minLeft, maxLeft));
-
-  let top = placement === "above"
-    ? trigger.top - MENU_GAP - menuHeight
-    : trigger.bottom + MENU_GAP;
-  const minTop = VIEWPORT_PADDING;
-  const maxTop = Math.max(minTop, viewport.height - menuHeight - VIEWPORT_PADDING);
-  top = Math.min(Math.max(minTop, top), maxTop);
-
-  return {
-    placement,
-    maxHeight,
-    top,
-    left,
-    minWidth: Math.min(trigger.width, maxWidth || trigger.width),
-  };
-}
 
 function menuContainsTarget(
   root: HTMLElement | null,
@@ -119,7 +56,7 @@ export function CustomSelect({
   const [activeIndex, setActiveIndex] = useState(0);
   const [menuLayout, setMenuLayout] = useState<CustomSelectMenuLayout>({
     placement: "below",
-    maxHeight: MAX_MENU_HEIGHT,
+    maxHeight: CUSTOM_SELECT_MAX_MENU_HEIGHT,
     top: 0,
     left: 0,
     minWidth: 0,
@@ -221,7 +158,7 @@ export function CustomSelect({
         left: menuLayout.left,
         minWidth: menuLayout.minWidth,
         maxHeight: menuLayout.maxHeight,
-        maxWidth: MAX_MENU_WIDTH,
+        maxWidth: CUSTOM_SELECT_MAX_MENU_WIDTH,
       }}
     >
       {options.map((option, index) => (

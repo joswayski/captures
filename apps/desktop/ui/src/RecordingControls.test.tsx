@@ -4,7 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import { useState } from "react";
 
 import { RecordingCountdown, RecordingRegionIndicator, ScreenshotCountdown } from "./App";
-import { CustomSelect, placeCustomSelectMenu } from "./CustomSelect";
+import { CustomSelect } from "./CustomSelect";
+import { placeCustomSelectMenu } from "./lib/customSelectMenu";
 import type { RecordingSessionSnapshot } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({
