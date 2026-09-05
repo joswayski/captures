@@ -161,11 +161,11 @@
 }
 
 .preferences-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   min-height: 64px;
   padding: var(--s-6) var(--s-8);
   align-items: center;
-  justify-content: space-between;
   gap: var(--s-6);
   border-bottom: 1px solid var(--border-subtle);
   background: var(--surface-canvas);
@@ -187,6 +187,107 @@
   min-width: 0;
   align-items: center;
   gap: var(--s-4);
+}
+
+.preferences-find {
+  display: flex;
+  min-width: 0;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.preferences-find-input {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--h-md);
+  padding: 0 var(--s-4);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--text);
+  background: var(--surface-field);
+  outline: none;
+  font-size: var(--text-md);
+  line-height: var(--leading-snug);
+  transition:
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard);
+}
+
+.preferences-find-input::placeholder {
+  color: var(--text-faint);
+}
+
+.preferences-find-input:hover {
+  border-color: var(--border-strong);
+}
+
+.preferences-find-input:focus {
+  border-color: var(--theme-accent);
+  box-shadow: var(--focus-ring-tight);
+}
+
+.preferences-find-input::-webkit-search-decoration,
+.preferences-find-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+
+.preferences-find-count {
+  flex: 0 0 auto;
+  min-width: 5.5rem;
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.preferences-find-step,
+.preferences-find-close {
+  display: grid;
+  width: var(--h-md);
+  height: var(--h-md);
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--text-subtle);
+  background: var(--control);
+  box-shadow: var(--shadow-xs);
+}
+
+.preferences-find-step:hover:not(:disabled),
+.preferences-find-close:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--control-hover);
+}
+
+.preferences-find-step:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.preferences-find-step:focus-visible,
+.preferences-find-close:focus-visible,
+.preferences-find-input:focus {
+  outline: none;
+}
+
+.preferences-find-step:focus-visible,
+.preferences-find-close:focus-visible {
+  border-color: var(--theme-accent);
+  box-shadow: var(--focus-ring-tight);
+}
+
+.preferences-find-step svg,
+.preferences-find-close svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .preferences-history-button {
@@ -540,6 +641,34 @@
     background: transparent;
     box-shadow: 0 0 0 0 rgba(var(--theme-accent-rgb), 0);
   }
+}
+
+.preference-find-match {
+  position: relative;
+  z-index: 0;
+}
+
+.preference-find-match::after {
+  position: absolute;
+  inset: calc(-1 * var(--s-3));
+  border-radius: var(--r-lg);
+  background: var(--surface-selected);
+  content: "";
+  pointer-events: none;
+  z-index: -1;
+}
+
+.preference-find-current::after {
+  box-shadow:
+    0 0 0 2px rgba(var(--theme-accent-rgb), 0.62),
+    0 0 20px rgba(var(--theme-accent-rgb), 0.18);
+}
+
+.check-row.switch-row.preference-find-match::after {
+  top: calc(var(--s-5) - var(--s-4));
+  right: calc(-1 * var(--s-4));
+  bottom: calc(-1 * var(--s-4));
+  left: calc(-1 * var(--s-4));
 }
 
 .directory-input {
