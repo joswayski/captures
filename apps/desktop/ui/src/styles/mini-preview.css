@@ -29,9 +29,8 @@ html[data-preview-harness-view="thumbnail"] #root {
     0 6px 14px rgba(0, 0, 0, 0.38),
     0 2px 5px rgba(0, 0, 0, 0.26);
   /*
-   * Signed gravity from JS: +1 bottom (peek up), 0 middle (skew only),
-   * -1 top (peek down). Per-capture `--thumbnail-stack-skew-*` is not
-   * scaled so the pile never goes perfectly flush.
+   * Signed gravity from JS: +1 bottom (peek up), 0 middle (structured
+   * peek tucked), -1 top (peek down).
    */
   --thumbnail-stack-gravity: 1;
   --thumbnail-stack-expand-sign: 1;
@@ -214,8 +213,8 @@ html[data-preview-harness-view="thumbnail"] #root {
 
 /*
  * macOS-style “no” shake when the file is dropped back on this stack.
- * Use `translate` so stack-skew `transform` on collapsed cards still composes
- * if a reject somehow runs there; expanded cards are the file-drag source.
+ * Use `translate` so compact-pile `transform` still composes if a reject
+ * somehow runs there; expanded cards are the file-drag source.
  */
 .thumbnail-card.thumbnail-drop-rejected {
   animation: thumbnail-drop-reject var(--thumbnail-drop-reject-duration) var(--ease-out);
@@ -1917,15 +1916,15 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
 
 .thumbnail-stack-compact > .thumbnail-card {
   /*
-   * React sets `--thumbnail-stack-base-depth` from DOM order, a per-capture
-   * `--thumbnail-stack-skew-*` lean from the artifact id, and a tiny depth
-   * `--thumbnail-stack-peek-jitter` so stacked peeks are not a perfectly
-   * even ruler. Subtract any expanded slot-settle that was in flight when
-   * Show less started so the minimizing pose matches the on-screen position
-   * instead of jumping back up a held hole. `--thumbnail-stack-pose` eases
-   * consecutive peeks toward `--thumbnail-stack-recede` (aliased as
-   * `--thumbnail-stack-pile-depth` for rest and hover). Expand uses the real
-   * slot depth so cards fly to list slots.
+   * React sets `--thumbnail-stack-base-depth` from DOM order and a tiny
+   * depth `--thumbnail-stack-peek-jitter` so stacked peeks are not a
+   * perfectly even ruler. Subtract any expanded slot-settle that was in
+   * flight when Show less started so the minimizing pose matches the
+   * on-screen position instead of jumping back up a held hole.
+   * `--thumbnail-stack-pose` eases consecutive peeks toward
+   * `--thumbnail-stack-recede` (aliased as `--thumbnail-stack-pile-depth`
+   * for rest and hover). Expand uses the real slot depth so cards fly to
+   * list slots.
    */
   --thumbnail-stack-depth: max(
     0,
@@ -1949,19 +1948,15 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   --thumbnail-stack-pile-depth: var(--thumbnail-stack-pose, 0);
   --thumbnail-stack-rest-transform:
     translate3d(
-      calc(
-        var(--thumbnail-stack-pile-depth, 0) * -0.8px
-        + var(--thumbnail-stack-skew-x, 0px)
-      ),
+      calc(var(--thumbnail-stack-pile-depth, 0) * -0.8px),
       calc(
         var(--thumbnail-stack-pile-depth, 0) * -9px
           * var(--thumbnail-stack-gravity, 1)
         + var(--thumbnail-stack-peek-jitter, 0px)
-        + var(--thumbnail-stack-skew-y, 0px)
       ),
       calc(var(--thumbnail-stack-pile-depth, 0) * -24px)
     )
-    rotateZ(var(--thumbnail-stack-skew-rot, 0deg))
+    rotateZ(0deg)
     rotateX(
       calc(
         var(--thumbnail-stack-pile-depth, 0) * -0.8deg
@@ -1971,19 +1966,15 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
     scale(calc(1 - var(--thumbnail-stack-pile-depth, 0) * 0.025));
   --thumbnail-stack-hover-transform:
     translate3d(
-      calc(
-        var(--thumbnail-stack-pile-depth, 0) * -0.6px
-        + var(--thumbnail-stack-fan-shift, 0px)
-      ),
+      calc(var(--thumbnail-stack-pile-depth, 0) * -0.6px),
       calc(
         var(--thumbnail-stack-pile-depth, 0) * -11px
           * var(--thumbnail-stack-gravity, 1)
         + var(--thumbnail-stack-peek-jitter, 0px)
-        + var(--thumbnail-stack-skew-y, 0px)
       ),
       calc(var(--thumbnail-stack-pile-depth, 0) * -18px)
     )
-    rotateZ(var(--thumbnail-stack-fan-tilt, 0deg))
+    rotateZ(0deg)
     rotateX(
       calc(
         var(--thumbnail-stack-pile-depth, 0) * -0.7deg
@@ -2213,16 +2204,14 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   );
   position: absolute;
   z-index: 40;
-  right: calc(28px - var(--thumbnail-collapsed-skew-pad, 0px));
+  right: 28px;
   bottom: calc(52px - var(--thumbnail-peek-down));
-  left: calc(28px - var(--thumbnail-collapsed-skew-pad, 0px));
+  left: 28px;
   /*
    * Front card is 160px. Extra peek height comes from `--thumbnail-collapsed-peek`
-   * (idle 9px × receding pose plus rest-skew overflow) so a single preview
-   * does not steal clicks in the empty space above it. Hover uses
-   * `--thumbnail-collapsed-hover-peek`. Side inset pulls back by
-   * `--thumbnail-collapsed-skew-pad` so scattered rear-card edges stay on
-   * this control. Gravity splits the extra above or below the front card.
+   * (idle 9px × receding pose) so a single preview does not steal clicks in
+   * the empty space above it. Hover uses `--thumbnail-collapsed-hover-peek`.
+   * Gravity splits the extra above or below the front card.
    */
   height: calc(160px + var(--thumbnail-peek-up) + var(--thumbnail-peek-down));
   padding: 0;
@@ -2363,7 +2352,6 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
     translate3d(
       calc(
         var(--thumbnail-stack-pile-depth, 0) * -0.8px
-        + var(--thumbnail-stack-skew-x, 0px)
         + var(--thumbnail-drag-sway-x, 0) * 1px
           * var(--thumbnail-stack-pile-depth, 0)
           * 0.7
@@ -2372,15 +2360,13 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
         var(--thumbnail-stack-pile-depth, 0) * -9px
           * var(--thumbnail-stack-gravity, 1)
         + var(--thumbnail-stack-peek-jitter, 0px)
-        + var(--thumbnail-stack-skew-y, 0px)
         + var(--thumbnail-drag-sway-y, 0) * 1px * var(--thumbnail-stack-pile-depth, 0) * 0.2
       ),
       calc(var(--thumbnail-stack-pile-depth, 0) * -24px)
     )
     rotateZ(
       calc(
-        var(--thumbnail-stack-skew-rot, 0deg)
-        + var(--thumbnail-drag-sway-x, 0)
+        var(--thumbnail-drag-sway-x, 0)
         * var(--thumbnail-stack-pile-depth, 0)
         * 0.12deg
       )

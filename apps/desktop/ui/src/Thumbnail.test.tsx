@@ -10,7 +10,6 @@ import {
   THUMBNAIL_STACK_EXPAND_COLLAPSE_MS,
   thumbnailStackFanCollapseMs,
   thumbnailStackNewestScrollTop,
-  thumbnailStackSkewCssVars,
   thumbnailStackPeekJitterPx,
 } from "./lib/thumbnailLayout";
 import {
@@ -1062,15 +1061,13 @@ describe("Thumbnail", () => {
       expect(card.style.getPropertyValue("--thumbnail-stack-hidden")).toBe("");
     });
     expect(collapsedCards[0].style.getPropertyValue("--thumbnail-stack-base-depth")).toBe("7");
-    const restRots = [...collapsedCards].map((card) => (
-      card.style.getPropertyValue("--thumbnail-stack-skew-rot")
-    ));
-    expect(restRots.at(-1)).toBe("0deg");
-    expect(new Set(restRots.slice(0, -1)).size).toBe(7);
+    collapsedCards.forEach((card) => {
+      expect(card.style.getPropertyValue("--thumbnail-stack-skew-rot")).toBe("");
+      expect(card.style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe("");
+    });
 
     const expand = screen.getByRole("button", { name: "Expand 8 previews" });
-    expect(expand.style.getPropertyValue("--thumbnail-collapsed-skew-pad")).not.toBe("0px");
-    expect(expand.style.getPropertyValue("--thumbnail-collapsed-skew-pad")).not.toBe("");
+    expect(expand.style.getPropertyValue("--thumbnail-collapsed-skew-pad")).toBe("");
     stack.scrollTop = 0;
     await act(async () => {
       fireEvent.click(expand);
@@ -1093,7 +1090,7 @@ describe("Thumbnail", () => {
     expect(stack.contains(restack)).toBe(false);
   });
 
-  it("fans collapsed previews with staggered tilt and settles that pose on expand", async () => {
+  it("latches the live compact pose so expand can start from a partial fan", async () => {
     const secondArtifact = {
       ...artifact,
       id: "capture-2",
@@ -1130,25 +1127,11 @@ describe("Thumbnail", () => {
       await vi.advanceTimersByTimeAsync(32);
     });
 
-    const oldest = thumbnailStackSkewCssVars("capture-1", 2);
-    const middle = thumbnailStackSkewCssVars("capture-2", 1);
-    const newest = thumbnailStackSkewCssVars("capture-3", 0);
-    expect(cards[0].style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe(
-      String(oldest["--thumbnail-stack-fan-tilt"]),
-    );
-    expect(cards[1].style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe(
-      String(middle["--thumbnail-stack-fan-tilt"]),
-    );
-    expect(cards[2].style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe("0deg");
-    expect(cards[0].style.getPropertyValue("--thumbnail-stack-skew-rot")).toBe(
-      String(oldest["--thumbnail-stack-skew-rot"]),
-    );
-    expect(cards[1].style.getPropertyValue("--thumbnail-stack-skew-rot")).toBe(
-      String(middle["--thumbnail-stack-skew-rot"]),
-    );
-    expect(cards[2].style.getPropertyValue("--thumbnail-stack-skew-rot")).toBe("0deg");
-    expect(newest["--thumbnail-stack-skew-rot"]).toBe("0deg");
-    expect(oldest["--thumbnail-stack-skew-rot"]).not.toBe(middle["--thumbnail-stack-skew-rot"]);
+    expect(cards[0].style.getPropertyValue("--thumbnail-stack-base-depth")).toBe("2");
+    expect(cards[1].style.getPropertyValue("--thumbnail-stack-base-depth")).toBe("1");
+    expect(cards[2].style.getPropertyValue("--thumbnail-stack-base-depth")).toBe("0");
+    expect(cards[0].style.getPropertyValue("--thumbnail-stack-fan-tilt")).toBe("");
+    expect(cards[0].style.getPropertyValue("--thumbnail-stack-skew-rot")).toBe("");
 
     const livePose = "matrix(0.97, 0.12, -0.12, 0.97, 10, -24)";
     const originalComputed = window.getComputedStyle.bind(window);
