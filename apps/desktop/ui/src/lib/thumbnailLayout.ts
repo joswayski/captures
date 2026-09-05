@@ -908,7 +908,8 @@ function clearTranslatePx(card: HTMLElement): void {
 
 /** Compact / collapsed / expanding piles pose with `transform`, not slot `translate`. */
 export function thumbnailStackSuppressesSlotShift(stack: HTMLElement): boolean {
-  return stack.classList.contains("thumbnail-stack-compact");
+  return stack.classList.contains("thumbnail-stack-compact")
+    || stack.classList.contains("thumbnail-stack-clearing");
 }
 
 /** How many expanded slots `shiftPx` represents, for compact visual depth. */

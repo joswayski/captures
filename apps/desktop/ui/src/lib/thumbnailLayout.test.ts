@@ -545,6 +545,9 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-clearing,\s*\n\.thumbnail-stack-clearing ~ \.thumbnail-stack-toolbar,\s*\n\.thumbnail-stack-clearing ~ \.thumbnail-overflow-cue\s*\{[\s\S]*?pointer-events:\s*none/,
     );
     expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-clearing > \.thumbnail-card\.thumbnail-exit-dismiss\s*\{[\s\S]*?animation-delay:\s*var\(--thumbnail-clear-delay/,
+    );
+    expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-control\[data-tooltip\]::after\s*\{[\s\S]*?bottom:\s*calc\(100% \+ var\(--s-1\)\)/,
     );
     expect(thumbnailStyles).toMatch(
@@ -1228,6 +1231,9 @@ describe("thumbnail stack layout", () => {
     stack.className = "thumbnail-stack";
     expect(thumbnailStackSuppressesSlotShift(stack)).toBe(false);
     stack.classList.add("thumbnail-stack-compact");
+    expect(thumbnailStackSuppressesSlotShift(stack)).toBe(true);
+    stack.classList.remove("thumbnail-stack-compact");
+    stack.classList.add("thumbnail-stack-clearing");
     expect(thumbnailStackSuppressesSlotShift(stack)).toBe(true);
     expect(thumbnailStackShiftSlots(THUMBNAIL_CARD_SLOT_PX)).toBe(1);
     expect(thumbnailStackShiftSlots(0)).toBe(0);

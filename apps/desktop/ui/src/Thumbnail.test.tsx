@@ -1134,18 +1134,33 @@ describe("Thumbnail", () => {
     expect(clear.compareDocumentPosition(minimize) & Node.DOCUMENT_POSITION_FOLLOWING)
       .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 
-    await act(async () => {
-      fireEvent.click(clear);
-      await Promise.resolve();
-    });
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        fireEvent.click(clear);
+        await Promise.resolve();
+      });
 
-    expect(screen.queryByRole("article")).not.toBeInTheDocument();
-    expect(invoke).toHaveBeenCalledWith("dismiss_all_artifacts", {
-      artifactIds: ["capture-1", "capture-2"],
-    });
-    expect(invoke).not.toHaveBeenCalledWith("trash_artifact", expect.anything());
-    expect(invoke).not.toHaveBeenCalledWith("save_artifact", expect.anything());
-    expect(invoke).not.toHaveBeenCalledWith("dismiss_artifact", expect.anything());
+      const cards = screen.getAllByRole("article");
+      expect(cards).toHaveLength(2);
+      expect(cards[0]!.closest(".thumbnail-stack")).toHaveClass("thumbnail-stack-clearing");
+      expect(cards[0]).toHaveClass("thumbnail-exit-dismiss");
+      expect(cards[1]).toHaveClass("thumbnail-exit-dismiss");
+      expect(invoke).toHaveBeenCalledWith("dismiss_all_artifacts", {
+        artifactIds: ["capture-1", "capture-2"],
+      });
+      expect(invoke).not.toHaveBeenCalledWith("trash_artifact", expect.anything());
+      expect(invoke).not.toHaveBeenCalledWith("save_artifact", expect.anything());
+      expect(invoke).not.toHaveBeenCalledWith("dismiss_artifact", expect.anything());
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_450);
+      });
+      expect(screen.queryByRole("article")).not.toBeInTheDocument();
+      expect(invoke).not.toHaveBeenCalledWith("dismiss_artifact", expect.anything());
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("leaves an in-flight saved delete on the stack so trash can still run", async () => {
@@ -1194,13 +1209,23 @@ describe("Thumbnail", () => {
         artifactIds: ["capture-1", "capture-2"],
       });
       expect(invoke).not.toHaveBeenCalledWith("trash_artifact", expect.anything());
+      expect(invoke).not.toHaveBeenCalledWith("dismiss_artifact", expect.anything());
+      expect(screen.getAllByRole("article")).toHaveLength(3);
+      expect(cards[0]).toHaveClass("thumbnail-exit-dismiss");
+      expect(cards[1]).toHaveClass("thumbnail-exit-dismiss");
+      expect(cards[2]).toHaveClass("thumbnail-exit-delete");
+      expect(cards[0]!.closest(".thumbnail-stack")).toHaveClass("thumbnail-stack-clearing");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_450);
+      });
       expect(screen.getAllByRole("article")).toHaveLength(1);
       expect(cards[2]).toBeInTheDocument();
       expect(cards[2]).toHaveClass("thumbnail-exit-delete");
       expect(screen.queryByRole("button", { name: "Clear all previews" })).toBeNull();
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(3_201);
+        await vi.advanceTimersByTimeAsync(1_751);
       });
       expect(invoke).toHaveBeenCalledWith("trash_artifact", {
         artifactId: "capture-3",

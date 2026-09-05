@@ -1603,6 +1603,20 @@ html:has(.thumbnail-card.thumbnail-file-dragging) {
   pointer-events: none;
 }
 
+/* Same Close streak as a single card: slide left with horizontal motion blur.
+ * Slot settle is suppressed while the whole live pile is leaving. */
+.thumbnail-stack-clearing > .thumbnail-card.thumbnail-exit-dismiss {
+  animation-delay: var(--thumbnail-clear-delay, 0ms);
+}
+
+.thumbnail-stack-clearing > .thumbnail-card.thumbnail-exit-dismiss img {
+  animation-delay: var(--thumbnail-clear-delay, 0ms);
+}
+
+.thumbnail-stack-clearing ~ .thumbnail-overflow-cue {
+  opacity: 0;
+}
+
 .thumbnail-stack-toolbar-leaving,
 .thumbnail-stack-toolbar-exiting {
   pointer-events: none;
