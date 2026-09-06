@@ -38,17 +38,17 @@ const stacked: UpdateStatus = {
     {
       version: "2026.8.2705",
       display_version: "2026.08.27.5",
-      notes: "> [!WARNING]\n> Experimental.\n\n## What's Changed\n* Fix post-update launch notice position on macOS by @joswayski in https://github.com/example/pull/265",
+      notes: "> [!WARNING]\n> Experimental.\n\n## What's Changed\n* Fix post-update launch notice position on macOS by @joswayski in https://github.com/example/captures/pull/265",
     },
     {
       version: "2026.8.2704",
       display_version: "2026.08.27.4",
-      notes: "* Fix capture menu display switching and the Record CTA by @joswayski in https://github.com/example/pull/263",
+      notes: "* Fix capture menu display switching and the Record CTA by @joswayski in https://github.com/example/captures/pull/263",
     },
     {
       version: "2026.8.2703",
       display_version: "2026.08.27.3",
-      notes: "* Redesign the desktop UI around one design system by @joswayski in https://github.com/example/pull/262",
+      notes: "* Redesign the desktop UI around one design system by @joswayski in https://github.com/example/captures/pull/262",
     },
   ],
 };
@@ -75,6 +75,7 @@ describe("UpdateNotice", () => {
     expect(screen.queryByText("Open captures will close. Unsaved edits are kept as drafts."))
       .not.toBeInTheDocument();
     expect(screen.getByText("Adds automatic releases")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open pull request 1" })).toHaveTextContent("#1");
     expect(screen.queryByText(/first contribution/iu)).not.toBeInTheDocument();
     expect(screen.queryByText(/experimental/u)).not.toBeInTheDocument();
     expect(screen.queryByText(/Full Changelog/u)).not.toBeInTheDocument();
@@ -125,12 +126,30 @@ describe("UpdateNotice", () => {
     expect(screen.getByRole("heading", { name: "2026.08.27.4" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "2026.08.27.3" })).toBeInTheDocument();
     expect(screen.getByText("Fix post-update launch notice position on macOS")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open pull request 265" })).toHaveTextContent("#265");
     expect(screen.getByText("Fix capture menu display switching and the Record CTA")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open pull request 263" })).toHaveTextContent("#263");
     expect(screen.getByText("Redesign the desktop UI around one design system")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open pull request 262" })).toHaveTextContent("#262");
     expect(screen.queryByText("Fix the latest Preview only")).not.toBeInTheDocument();
     expect(screen.getByText("Version 2026.08.27.5 · 12.6 MB")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Later" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("dismiss_update_notice"));
+  });
+
+  it("opens changelog pull requests from the listed number", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_update_status") return available;
+      if (command === "open_update_changelog_url") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<UpdateNotice />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open pull request 1" }));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_update_changelog_url", {
+      url: "https://github.com/joswayski/captures/pull/1",
+    }));
   });
 
   it("shows download progress while installation is running", async () => {

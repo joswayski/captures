@@ -318,6 +318,7 @@ pub fn run() {
             updates::install_update,
             updates::dismiss_update_notice,
             updates::open_update_download_page,
+            updates::open_update_changelog_url,
             recording::prepare_recording,
             recording::get_recording_selection,
             recording::select_capture_display,
@@ -7376,9 +7377,10 @@ fn set_capture_huds_protected_inner(app: &AppHandle, protected: bool) {
             continue;
         }
         // Keep opted-in chrome capturable when the matching preference is on.
-        // Failed update notices stay capturable so the error can be screenshotted.
-        // Recording controls stay excluded unless the user opted them in — releasing
-        // HUD protection after a freeze-frame used to make Cmd+Shift+4 capture them.
+        // Update notices stay capturable so the changelog or an error can be
+        // screenshotted. Recording controls stay excluded unless the user opted
+        // them in — releasing HUD protection after a freeze-frame used to make
+        // Cmd+Shift+4 capture them.
         let next_protected = if label == recording::RECORDING_REGION_INDICATOR_LABEL {
             true
         } else if label == "thumbnail" && include_mini_previews {
