@@ -544,6 +544,30 @@ describe("CaptureOverlay guidance", () => {
     expect(invoke).toHaveBeenCalledWith("cancel_capture", { sessionId: "capture-1" });
   });
 
+  it("does not reveal a freeze-frame after Escape cancels the overlay", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=overlay&mode=region&session_id=capture-1",
+    );
+    const { container } = render(<App />);
+    await screen.findByText("Drag to select a region");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    const snapshot = container.querySelector(".capture-snapshot");
+    expect(snapshot).not.toBeNull();
+    fireEvent.load(snapshot!);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
+      command === "reveal_capture_overlay"
+    ))).toHaveLength(0);
+    expect(invoke).toHaveBeenCalledWith("cancel_capture", { sessionId: "capture-1" });
+  });
+
   it("keeps a top-left region square and moves its dimensions on-screen", async () => {
     activeSession = { ...session, display_corner_radius: 40 };
     window.history.replaceState(

@@ -5391,6 +5391,7 @@ function CaptureOverlay() {
     sessionId: string;
     promise: Promise<unknown>;
   } | null>(null);
+  const captureCancelledRef = useRef(false);
   const regionOverlayWarmedRef = useRef(false);
   const selectionFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRegionCursorSyncAtRef = useRef(0);
@@ -5415,8 +5416,9 @@ function CaptureOverlay() {
           return;
         }
         activeSessionIdRef.current = payload.id;
-        revealingSessionIdRef.current = null;
-        setVisibleSessionId(null);
+          revealingSessionIdRef.current = null;
+          captureCancelledRef.current = false;
+          setVisibleSessionId(null);
         setPrimingSessionId(null);
         setSession(payload);
         setStart(null);
@@ -5441,6 +5443,7 @@ function CaptureOverlay() {
       if (active && initialSession) {
         activeSessionIdRef.current = initialSession.id;
         revealingSessionIdRef.current = null;
+        captureCancelledRef.current = false;
         setVisibleSessionId(null);
         setPrimingSessionId(null);
         setSession(initialSession);
@@ -5462,6 +5465,10 @@ function CaptureOverlay() {
     // Match the region commit fast path: hide the native surface before the
     // async command crosses into Rust. The backend repeats the hide while it
     // restores the previous app and capture UI, so this remains best-effort.
+    captureCancelledRef.current = true;
+    activeSessionIdRef.current = null;
+    revealingSessionIdRef.current = null;
+    overlayWakeRef.current = null;
     dismissCaptureOverlayWindow();
     if (sessionId) {
       void invoke("cancel_capture", { sessionId });
@@ -5546,7 +5553,10 @@ function CaptureOverlay() {
   const overlayFrozen = sessionShowsFreezeFrame(session);
 
   const wakeOverlay = useCallback(() => {
-    if (!sessionId) return Promise.resolve();
+    if (!sessionId || captureCancelledRef.current) return Promise.resolve();
+    if (activeSessionIdRef.current && activeSessionIdRef.current !== sessionId) {
+      return Promise.resolve();
+    }
     const existing = overlayWakeRef.current;
     if (existing?.sessionId === sessionId) return existing.promise;
     const promise = invoke("show_capture_overlay", { sessionId }).catch((error) => {
@@ -5558,11 +5568,13 @@ function CaptureOverlay() {
   }, [sessionId]);
 
   const revealOverlay = useCallback(() => {
-    if (!sessionId) return;
+    if (!sessionId || captureCancelledRef.current) return;
+    if (activeSessionIdRef.current !== sessionId) return;
     if (revealingSessionIdRef.current === sessionId) return;
     revealingSessionIdRef.current = sessionId;
     const shouldPrimeRegionOverlay = overlayFrozen && mode === "region" && !regionOverlayWarmedRef.current;
     void wakeOverlay().then(() => {
+      if (captureCancelledRef.current || activeSessionIdRef.current !== sessionId) return;
       if (shouldPrimeRegionOverlay) {
         // Keep the shade at rest while the snapshot paints under native alpha.
         // The snapshot itself is always CSS-opaque; only the dim fades in after
@@ -5571,17 +5583,18 @@ function CaptureOverlay() {
       }
       let revealed = false;
       const finishReveal = () => {
-        if (revealed || activeSessionIdRef.current !== sessionId) return;
+        if (revealed || captureCancelledRef.current || activeSessionIdRef.current !== sessionId) return;
         revealed = true;
         window.clearTimeout(fallbackTimer);
         // Native reveal makes the already-painted snapshot fully opaque, then
         // focuses the overlay under cover of that frame (macOS). Fade only the
         // shade / chrome after that so open editors cannot shimmer.
         void invoke("reveal_capture_overlay", { sessionId }).then(() => {
+          if (captureCancelledRef.current || activeSessionIdRef.current !== sessionId) return;
           void invoke("sync_capture_cursor", { sessionId });
           if (shouldPrimeRegionOverlay) regionOverlayWarmedRef.current = true;
           requestAnimationFrame(() => {
-            if (activeSessionIdRef.current !== sessionId) return;
+            if (captureCancelledRef.current || activeSessionIdRef.current !== sessionId) return;
             setPrimingSessionId(null);
             setVisibleSessionId(sessionId);
           });
@@ -5607,14 +5620,14 @@ function CaptureOverlay() {
   // load the snapshot. Do not reveal here — that used to race the image decode
   // and flash a black unpainted surface.
   useEffect(() => {
-    if (!session?.id) return;
+    if (!session?.id || captureCancelledRef.current) return;
     void wakeOverlay().catch(() => undefined);
   }, [session?.id, wakeOverlay]);
 
   // Safety: if snapshot onLoad never fires, still reveal so capture is not stuck.
   // Live overlays have no freeze-frame, so reveal as soon as the session exists.
   useEffect(() => {
-    if (!session?.id) return;
+    if (!session?.id || captureCancelledRef.current) return;
     if (!overlayFrozen) {
       void revealOverlay();
       return;
