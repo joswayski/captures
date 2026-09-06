@@ -76,6 +76,28 @@ pub const fn capture_escape_overrides_focus_and_freeze() -> bool {
     true
 }
 
+/// Shortcut key-down must arm Escape before the freeze-frame exists. Waiting
+/// for cursor-claim or overlay show leaves Esc ignored during prefetch, then
+/// the frozen overlay still appears.
+#[must_use]
+pub const fn capture_escape_arms_on_shortcut_press() -> bool {
+    true
+}
+
+/// In-flight freeze-frame capture, encode, and overlay/selector present must
+/// abort when Escape invalidates the capture-flow generation.
+#[must_use]
+pub const fn capture_flow_is_current(started: u64, current: u64) -> bool {
+    started != 0 && started == current
+}
+
+/// Overlay and selector show/reveal must hide again if the session vanished
+/// while the native present call ran. Otherwise Esc leaves a stuck freeze-frame.
+#[must_use]
+pub const fn capture_surface_must_revalidate_after_present() -> bool {
+    true
+}
+
 #[cfg(target_os = "windows")]
 mod windows_hook {
     use std::{
@@ -211,8 +233,10 @@ pub fn ensure_capture_escape_hook() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CaptureEscapeUi, MACOS_ESCAPE_KEY_CODE, WINDOWS_VK_ESCAPE, capture_escape_may_drop_intent,
-        capture_escape_overrides_focus_and_freeze, macos_key_code_is_escape,
+        CaptureEscapeUi, MACOS_ESCAPE_KEY_CODE, WINDOWS_VK_ESCAPE,
+        capture_escape_arms_on_shortcut_press, capture_escape_may_drop_intent,
+        capture_escape_overrides_focus_and_freeze, capture_flow_is_current,
+        capture_surface_must_revalidate_after_present, macos_key_code_is_escape,
         windows_escape_hook_should_swallow, windows_vk_is_escape,
     };
 
@@ -290,5 +314,20 @@ mod tests {
     fn windows_escape_hook_never_swallows_while_disarmed() {
         assert!(windows_escape_hook_should_swallow(true));
         assert!(!windows_escape_hook_should_swallow(false));
+    }
+
+    #[test]
+    fn escape_arms_on_shortcut_press_and_aborts_stale_freeze_frames() {
+        assert!(capture_escape_arms_on_shortcut_press());
+        assert!(capture_flow_is_current(4, 4));
+        assert!(
+            !capture_flow_is_current(4, 5),
+            "Escape must invalidate in-flight overlay present"
+        );
+        assert!(
+            !capture_flow_is_current(0, 0),
+            "an unused flow token must not present capture UI"
+        );
+        assert!(capture_surface_must_revalidate_after_present());
     }
 }

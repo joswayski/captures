@@ -173,6 +173,7 @@ pub(crate) fn discard_recording_countdown_from_escape(app: &AppHandle, state: &A
         }
         snapshot.id.clone()
     };
+    destroy_recording_countdown(app);
     let app = app.clone();
     let state = state.clone();
     tauri::async_runtime::spawn(async move {
@@ -300,7 +301,7 @@ pub(crate) async fn prepare_capture_selector_inner(
     }
     let recapture_menu =
         crate::should_recapture_open_capture_menu(&app, &state, initial_mode, initial_target);
-    crate::arm_capture_escape(&app);
+    let flow = crate::adopt_or_begin_capture_flow(&app);
     let pending_selection = {
         let mut pending = state.recording_selection.lock();
         pending.as_mut().map(|selection| {
@@ -353,6 +354,13 @@ pub(crate) async fn prepare_capture_selector_inner(
         }
     }
     crate::hide_capture_huds_before_snapshot(&app).await;
+    if crate::capture_flow_was_cancelled(flow) {
+        crate::abort_prefetched_freeze_capture(&app);
+        *state.recording_selection.lock() = None;
+        restore_recording_ui(&app, &state);
+        crate::disarm_capture_escape_intent(&app);
+        return Err(AppError::ScreenshotCancelled);
+    }
     warm_recording_selector_window(&app);
     let freeze_screen = state.settings().freeze_screen
         || overlay_visible
@@ -454,17 +462,35 @@ pub(crate) async fn prepare_capture_selector_inner(
         Ok::<_, AppError>((summary, pending_windows, windows_started))
     })();
     crate::restore_capture_ui_snapshot_exclusion(&app);
+    if crate::capture_flow_was_cancelled(flow) {
+        *state.recording_selection.lock() = None;
+        restore_recording_ui(&app, &state);
+        crate::disarm_capture_escape_intent(&app);
+        return Err(AppError::ScreenshotCancelled);
+    }
     match prepared {
         Ok((summary, pending_windows, windows_started)) => {
             if overlay_visible {
                 crate::drain_overlay_sessions_keeping_window(&state);
                 crate::hide_capture_overlay(&app);
             }
+            if crate::capture_flow_was_cancelled(flow) {
+                *state.recording_selection.lock() = None;
+                restore_recording_ui(&app, &state);
+                crate::disarm_capture_escape_intent(&app);
+                return Err(AppError::ScreenshotCancelled);
+            }
             if let Err(error) = prepare_recording_selector(&app, &summary, true).await {
                 *state.recording_selection.lock() = None;
                 restore_recording_ui(&app, &state);
                 crate::disarm_capture_escape_intent(&app);
                 return Err(error);
+            }
+            if crate::capture_flow_was_cancelled(flow) {
+                *state.recording_selection.lock() = None;
+                restore_after_recording_selection(&app, &state);
+                crate::disarm_capture_escape_intent(&app);
+                return Err(AppError::ScreenshotCancelled);
             }
             // Selector visibility / selection state now own Escape. Drop the
             // pre-paint gap flag so a later recording does not steal Esc.
@@ -632,6 +658,8 @@ fn cancel_recording_selection_inner(
     }
     *selection = None;
     drop(selection);
+    crate::invalidate_capture_flow();
+    crate::abort_prefetched_freeze_capture(app);
     restore_after_recording_selection(app, state);
     Ok(())
 }
@@ -1087,6 +1115,7 @@ async fn start_recording_inner(
     request: StartRecordingRequest,
 ) -> Result<RecordingSessionSnapshot, AppError> {
     crate::ensure_capture_session_available()?;
+    let flow = crate::adopt_or_begin_capture_flow(&app);
     request
         .options
         .validate()
@@ -1123,12 +1152,27 @@ async fn start_recording_inner(
         }
     };
     emit_snapshot(&app, &snapshot);
+    if crate::capture_flow_was_cancelled(flow) {
+        fail_session(&app, &state, &snapshot.id, "cancelled".to_owned());
+        restore_recording_ui(&app, &state);
+        crate::disarm_capture_escape_intent(&app);
+        return Err(AppError::ScreenshotCancelled);
+    }
     let recording_ui = async {
         prepare_recording_hud(&app, &selected_display).await?;
         prepare_recording_region_indicator(&app, &selected_display, &snapshot.options.target)
             .await?;
         if snapshot.options.countdown_seconds > 0 {
             show_recording_countdown(&app, &selected_display)?;
+            if crate::capture_flow_was_cancelled(flow)
+                || !countdown_is_current(&state, &snapshot.id, generation)
+            {
+                destroy_recording_countdown(&app);
+                fail_session(&app, &state, &snapshot.id, "cancelled".to_owned());
+                restore_recording_ui(&app, &state);
+                crate::disarm_capture_escape_intent(&app);
+                return Err(AppError::ScreenshotCancelled);
+            }
         }
         Ok::<_, AppError>(())
     }
@@ -3581,6 +3625,14 @@ pub(crate) fn focus_recording_window(app: &AppHandle, label: &'static str) {
     }
 }
 
+fn recording_selection_is_live(app: &AppHandle, selection_id: &str) -> bool {
+    app.state::<Arc<AppState>>()
+        .recording_selection
+        .lock()
+        .as_ref()
+        .is_some_and(|selection| selection.summary.id == selection_id)
+}
+
 fn hide_recording_selector(app: &AppHandle) {
     let Some(window) = app.get_webview_window("recording-selector") else {
         return;
@@ -3947,6 +3999,10 @@ async fn prepare_recording_selector(
             crate::set_click_through(&window, true).map_err(|error| error.to_string())?;
             #[cfg(target_os = "macos")]
             captures_macos_window::prime_window_reveal(&window).map_err(str::to_owned)?;
+            if !recording_selection_is_live(&handle, &selection.id) {
+                hide_recording_selector(&handle);
+                return Ok(());
+            }
             window.show().map_err(|error| error.to_string())?;
             crate::set_window_content_protected(&window, true)
                 .map_err(|error| error.to_string())?;
@@ -3954,6 +4010,9 @@ async fn prepare_recording_selector(
             handle
                 .emit("recording-selection-ready", &selection)
                 .map_err(|error| error.to_string())?;
+            if !recording_selection_is_live(&handle, &selection.id) {
+                hide_recording_selector(&handle);
+            }
             Ok(())
         })();
         let _ = sender.send(result);
@@ -3991,6 +4050,10 @@ fn schedule_recording_selector_webview_wake(app: &AppHandle, selection: Recordin
         }
         let handle = app.clone();
         if let Err(error) = app.run_on_main_thread(move || {
+            if !recording_selection_is_live(&handle, &selection_id) {
+                hide_recording_selector(&handle);
+                return;
+            }
             let Some(window) = handle.get_webview_window("recording-selector") else {
                 return;
             };
@@ -4000,6 +4063,10 @@ fn schedule_recording_selector_webview_wake(app: &AppHandle, selection: Recordin
             }
             if let Err(error) = window.show() {
                 eprintln!("failed to show recording selector while waking: {error}");
+            }
+            if !recording_selection_is_live(&handle, &selection_id) {
+                hide_recording_selector(&handle);
+                return;
             }
             let _ = crate::set_window_content_protected(&window, true);
         }) {
@@ -4051,6 +4118,10 @@ pub fn show_recording_selector(
     crate::set_click_through(&window, true).map_err(|error| error.to_string())?;
     window.show().map_err(|error| error.to_string())?;
     crate::set_click_through(&window, true).map_err(|error| error.to_string())?;
+    if !recording_selection_is_live(&app, &selection_id) {
+        hide_recording_selector(&app);
+        return Err(AppError::SessionUnavailable.to_string());
+    }
     Ok(())
 }
 
@@ -4123,6 +4194,10 @@ pub fn reveal_recording_selector(
         eprintln!("failed to focus recording selector: {error}");
     }
     apply_selector_capture_cursor(&window, mode)?;
+    if !recording_selection_is_live(&app, &selection_id) {
+        hide_recording_selector(&app);
+        return Err(AppError::SessionUnavailable.to_string());
+    }
     Ok(())
 }
 
