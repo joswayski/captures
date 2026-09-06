@@ -7149,11 +7149,13 @@ export function Thumbnail() {
     x: number,
     y: number,
     anchor: ThumbnailStackAnchor,
+    nativeGeometry?: Awaited<ReturnType<typeof collapsedNativeGeometry>>,
   ) => {
     const contentHeight = collapsedContentHeight();
     if (isTauri()) {
       try {
-        const { frameHeight, work, workTop, workHeight } = await collapsedNativeGeometry();
+        const { frameHeight, work, workTop, workHeight } = nativeGeometry
+          ?? await collapsedNativeGeometry();
         const clamped = clampThumbnailStackFrame(
           x,
           y,
@@ -7233,7 +7235,8 @@ export function Thumbnail() {
     const contentHeight = collapsedContentHeight();
     if (isTauri()) {
       try {
-        const { frameHeight, workTop, workHeight } = await collapsedNativeGeometry();
+        const nativeGeometry = await collapsedNativeGeometry();
+        const { frameHeight, workTop, workHeight } = nativeGeometry;
         const gravity = thumbnailStackGravityFromWorkArea({
           pileBottom: thumbnailStackVisualPileBottom({
             y: frame.y,
@@ -7256,10 +7259,18 @@ export function Thumbnail() {
           contentHeight,
         );
         collapsedLayoutAnchorRef.current = nextAnchor;
-        await placeCollapsedStackFrame(converted.x, converted.y, nextAnchor);
+        // Flip the DOM alignment before yielding to native position IPC. The
+        // collapsed window can retain hundreds of pixels of expanded-height
+        // slack; moving that frame first exposes the bottom-aligned cards at
+        // the opposite edge for a compositor frame before this promise
+        // returns. The direct class toggle and IPC dispatch now share one JS
+        // turn, so the next paint sees the converted frame and alignment.
         commitStackAnchor(nextAnchor);
+        await placeCollapsedStackFrame(converted.x, converted.y, nextAnchor, nativeGeometry);
         return;
       } catch {
+        collapsedLayoutAnchorRef.current = from;
+        commitStackAnchor(from);
         return;
       }
     }
@@ -7280,8 +7291,8 @@ export function Thumbnail() {
       contentHeight,
     );
     collapsedLayoutAnchorRef.current = nextAnchor;
-    await placeCollapsedStackFrame(converted.x, converted.y, nextAnchor);
     commitStackAnchor(nextAnchor);
+    await placeCollapsedStackFrame(converted.x, converted.y, nextAnchor);
   };
 
   const collapsedStackDrag = () => {
