@@ -38,17 +38,17 @@ const stacked: UpdateStatus = {
     {
       version: "2026.8.2705",
       display_version: "2026.08.27.5",
-      notes: "> [!WARNING]\n> Experimental.\n\n## What's Changed\n* Fix post-update launch notice position on macOS by @joswayski in https://github.com/example/pull/265",
+      notes: "> [!WARNING]\n> Experimental.\n\n## What's Changed\n* Fix post-update launch notice position on macOS by @joswayski in https://github.com/example/captures/pull/265",
     },
     {
       version: "2026.8.2704",
       display_version: "2026.08.27.4",
-      notes: "* Fix capture menu display switching and the Record CTA by @joswayski in https://github.com/example/pull/263",
+      notes: "* Fix capture menu display switching and the Record CTA by @joswayski in https://github.com/example/captures/pull/263",
     },
     {
       version: "2026.8.2703",
       display_version: "2026.08.27.3",
-      notes: "* Redesign the desktop UI around one design system by @joswayski in https://github.com/example/pull/262",
+      notes: "* Redesign the desktop UI around one design system by @joswayski in https://github.com/example/captures/pull/262",
     },
   ],
 };
