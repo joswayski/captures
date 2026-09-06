@@ -1130,8 +1130,6 @@ async fn start_recording_inner(
         }
         selected.take().ok_or(AppError::SessionUnavailable)?
     };
-    hide_recording_selector(&app);
-    crate::set_capture_huds_protected(&app, false);
 
     let selected_display = selection.summary.display.clone();
     let initialized = (|| {
@@ -1147,10 +1145,22 @@ async fn start_recording_inner(
     let (snapshot, generation) = match initialized {
         Ok(initialized) => initialized,
         Err(error) => {
-            restore_recording_ui(&app, &state);
+            *state.recording_selection.lock() = Some(selection);
             return Err(error);
         }
     };
+    let recording_ui = async {
+        prepare_recording_hud(&app, &selected_display).await?;
+        prepare_recording_region_indicator(&app, &selected_display, &snapshot.options.target).await
+    }
+    .await;
+    if let Err(error) = recording_ui {
+        fail_session(&app, &state, &snapshot.id, error.to_string());
+        *state.recording_selection.lock() = Some(selection);
+        return Err(error);
+    }
+    hide_recording_selector(&app);
+    crate::set_capture_huds_protected(&app, false);
     emit_snapshot(&app, &snapshot);
     if crate::capture_flow_was_cancelled(flow) {
         fail_session(&app, &state, &snapshot.id, "cancelled".to_owned());
@@ -1158,29 +1168,21 @@ async fn start_recording_inner(
         crate::disarm_capture_escape_intent(&app);
         return Err(AppError::ScreenshotCancelled);
     }
-    let recording_ui = async {
-        prepare_recording_hud(&app, &selected_display).await?;
-        prepare_recording_region_indicator(&app, &selected_display, &snapshot.options.target)
-            .await?;
-        if snapshot.options.countdown_seconds > 0 {
-            show_recording_countdown(&app, &selected_display)?;
-            if crate::capture_flow_was_cancelled(flow)
-                || !countdown_is_current(&state, &snapshot.id, generation)
-            {
-                destroy_recording_countdown(&app);
-                fail_session(&app, &state, &snapshot.id, "cancelled".to_owned());
-                restore_recording_ui(&app, &state);
-                crate::disarm_capture_escape_intent(&app);
-                return Err(AppError::ScreenshotCancelled);
-            }
+    if snapshot.options.countdown_seconds > 0 {
+        if let Err(error) = show_recording_countdown(&app, &selected_display) {
+            fail_session(&app, &state, &snapshot.id, error.to_string());
+            restore_recording_ui(&app, &state);
+            return Err(error);
         }
-        Ok::<_, AppError>(())
-    }
-    .await;
-    if let Err(error) = recording_ui {
-        fail_session(&app, &state, &snapshot.id, error.to_string());
-        restore_recording_ui(&app, &state);
-        return Err(error);
+        if crate::capture_flow_was_cancelled(flow)
+            || !countdown_is_current(&state, &snapshot.id, generation)
+        {
+            destroy_recording_countdown(&app);
+            fail_session(&app, &state, &snapshot.id, "cancelled".to_owned());
+            restore_recording_ui(&app, &state);
+            crate::disarm_capture_escape_intent(&app);
+            return Err(AppError::ScreenshotCancelled);
+        }
     }
     // Countdown windows keep Escape armed via live surface state. Drop the
     // shortcut-press intent now so a zero-countdown recording — which has no
@@ -1284,6 +1286,10 @@ fn schedule_countdown(
         if let Err(error) = start_segment(app.clone(), state.clone(), &session_id, generation).await
         {
             fail_session(&app, &state, &session_id, error.to_string());
+            restore_recording_ui(&app, &state);
+            if let Err(reveal_error) = show_recording_hud(&app).await {
+                eprintln!("failed to show recording startup error: {reveal_error}");
+            }
         }
     });
 }

@@ -2906,7 +2906,7 @@ export function RecordingSelector() {
   };
   const onPointerUp = (event: React.PointerEvent) => {
     const drag = regionDragRef.current;
-    const current = pendingRegionPointRef.current;
+    const current = drag ? point(event) : null;
     const forceSquare = event.shiftKey || pendingRegionForceSquareRef.current;
     let finishedCreate: ReturnType<typeof dragSelectionRect> | null = null;
     if (drag && current) {
@@ -2939,6 +2939,19 @@ export function RecordingSelector() {
     ) {
       autoStartAfterSelectionRef.current = true;
     }
+  };
+  const onPointerCancel = (event: React.PointerEvent) => {
+    const drag = regionDragRef.current;
+    if (
+      typeof event.currentTarget.hasPointerCapture === "function"
+      && event.currentTarget.hasPointerCapture(event.pointerId)
+    ) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (drag) {
+      setRegion(drag.initial.width > 0 && drag.initial.height > 0 ? drag.initial : null);
+    }
+    clearRegionDrag();
   };
 
   const selectableWindows = frontToBackWindows(session.windows);
@@ -3083,7 +3096,7 @@ export function RecordingSelector() {
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
+      onPointerCancel={onPointerCancel}
       onPointerEnter={(event) => {
         if (targetMode !== "window") return;
         if ((event.target as Element).closest(".recording-selector-panel")) return;
@@ -3686,6 +3699,7 @@ export function RecordingHud() {
     void currentWindow.startDragging().catch((error) => setError(String(error)));
   };
   const canControl = snapshot.state === "recording" || snapshot.state === "paused";
+  const canRestart = canControl || snapshot.state === "failed";
   const hasMicrophone = Boolean(snapshot.options.audio.microphone_device_id);
   const deleteRecording = async () => {
     if (busy) return;
@@ -3707,6 +3721,10 @@ export function RecordingHud() {
   };
   const restartRecording = async () => {
     if (busy) return;
+    if (snapshot.state === "failed") {
+      await invokeAction("restart_recording");
+      return;
+    }
     try {
       const choice = await message(
         "The current recording will be deleted and a new countdown will begin.",
@@ -3751,8 +3769,8 @@ export function RecordingHud() {
               onClick={() => void invokeAction(snapshot.state === "paused" ? "resume_recording" : "pause_recording")}
             ><PauseResumeIcon paused={snapshot.state === "paused"} /></button>
           </HudTooltip>
-          <HudTooltip label="Restart recording">
-            <button type="button" className="recording-icon-button" disabled={!canControl || busy} aria-label="Restart recording" onClick={() => void restartRecording()}><RestartRecordingIcon /></button>
+          <HudTooltip label={snapshot.state === "failed" ? "Retry recording" : "Restart recording"}>
+            <button type="button" className="recording-icon-button" disabled={!canRestart || busy} aria-label={snapshot.state === "failed" ? "Retry recording" : "Restart recording"} onClick={() => void restartRecording()}><RestartRecordingIcon /></button>
           </HudTooltip>
           <HudTooltip label="Take a region screenshot">
             <button type="button" className="recording-icon-button" disabled={!canControl || busy} aria-label="Take a region screenshot" onClick={() => void takeScreenshot()}><CaptureIcon /></button>

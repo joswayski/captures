@@ -395,5 +395,14 @@ describe("RecordingHud", () => {
 
     expect(await screen.findByText("Failed")).toBeInTheDocument();
     expect(container.querySelector(".recording-hud-failed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop recording" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry recording" }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("restart_recording", {
+        sessionId: snapshot.id,
+      });
+    });
+    expect(nativeMessage).not.toHaveBeenCalled();
   });
 });
