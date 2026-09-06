@@ -15,6 +15,7 @@ test("website product shots cover the README stills with unique files", () => {
     [
       "capture-selection",
       "screenshot-editor",
+      "collapsed-mini-previews",
       "video-editor",
       "preferences",
     ],
@@ -24,7 +25,7 @@ test("website product shots cover the README stills with unique files", () => {
     (match) => match[1],
   );
   assert.deepEqual(readmeFiles, PRODUCT_SHOTS.map((shot) => shot.file));
-  assert.equal(PRODUCT_SHOTS.length, 4);
+  assert.equal(PRODUCT_SHOTS.length, 5);
   const files = new Set(PRODUCT_SHOTS.map((shot) => shot.file));
   const ids = new Set(PRODUCT_SHOTS.map((shot) => shot.id));
   assert.equal(files.size, PRODUCT_SHOTS.length);

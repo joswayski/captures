@@ -23,6 +23,15 @@ export const PRODUCT_SHOTS = [
     alt: "Captures screenshot editor with the Suez Canal, a Choke point label, a tiger on the left bank, and an Evergreen ship hanging off the right edge with an Expand canvas button",
   },
   {
+    id: "collapsed-mini-previews",
+    file: "collapsed-mini-previews.jpg",
+    width: 719,
+    height: 825,
+    title: "Keep captures handy",
+    description: "Collapse recent captures into a compact corner pile until you need them.",
+    alt: "Captures mini preview cards naturally layered into a compact stack over a photo",
+  },
+  {
     id: "video-editor",
     file: "video-editor.jpg",
     width: 1440,

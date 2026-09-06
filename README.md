@@ -22,15 +22,23 @@ Captures is a cross-platform screen capture utility built for quick captures and
   </tr>
   <tr>
     <td width="50%">
+      <img src="docs/images/collapsed-mini-previews.jpg" alt="Captures mini preview cards naturally layered into a compact stack over a photo" width="100%">
+      <br>
+      <sub><strong>Keep captures handy</strong>. Collapse recent captures into a compact corner pile until you need them.</sub>
+    </td>
+    <td width="50%">
       <img src="docs/images/video-editor.jpg" alt="Captures video editor trimming a total solar eclipse to a few seconds of totality, with crop handles and save controls" width="100%">
       <br>
       <sub><strong>Polish recordings</strong>. Preview, trim, crop, and export video with quality and audio controls.</sub>
     </td>
+  </tr>
+  <tr>
     <td width="50%">
       <img src="docs/images/preferences.jpg" alt="Captures Preferences showing the appearance, accent color, and capture settings" width="100%">
       <br>
       <sub><strong>Fully customizable</strong>. Light or dark appearance, accent colors, shortcuts, and capture defaults.</sub>
     </td>
+    <td width="50%"></td>
   </tr>
 </table>
 
