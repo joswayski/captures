@@ -2241,6 +2241,8 @@ describe("screenshot editor geometry", () => {
     expect(short.style.strokeWidth).toBeCloseTo(2, 5);
     expect(arrowHeadLength(short.style.strokeWidth, arrowChordLength(short)))
       .toBeLessThan(12);
+    const intermediate = scaleArrowStrokeForLength(long, { ...long, endX: 95 });
+    expect(intermediate.style.strokeWidth).toBe(4);
     const longer = scaleArrowStrokeForLength(long, { ...long, endX: 400 });
     expect(longer.style.strokeWidth).toBe(8);
   });

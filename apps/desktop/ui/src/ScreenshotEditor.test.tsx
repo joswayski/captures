@@ -1390,6 +1390,7 @@ describe("ScreenshotEditor", () => {
     const shortened = screen.getByRole("slider", { name: "Stroke width" });
     const label = shortened.getAttribute("aria-valuetext") ?? "";
     const px = Number(label.replace(" px", ""));
+    expect(Number.isInteger(px)).toBe(true);
     expect(px).toBeGreaterThan(0);
     expect(px).toBeLessThan(4);
   });
@@ -1464,6 +1465,7 @@ describe("ScreenshotEditor", () => {
 
     const scaled = screen.getByRole("slider", { name: "Stroke width" });
     const scaledPx = Number((scaled.getAttribute("aria-valuetext") ?? "").replace(" px", ""));
+    expect(Number.isInteger(scaledPx)).toBe(true);
     expect(scaledPx).toBeGreaterThan(0);
     expect(scaledPx).toBeLessThan(4);
   });
