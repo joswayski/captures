@@ -5169,8 +5169,9 @@ export function ScreenshotEditor() {
         exportFormat,
         artifact.path,
       );
-      const overwriteSource = !savingCopy
+      const overwriteSource = !makeCopy
         && !sourceMissing
+        && screenshotPathMatchesFormat(artifact.path, exportFormat)
         && artifact.path === destinationPath;
       await loadEditorTextFonts();
       const imagePng = await canvasPngBytes(renderFlattened());
@@ -5225,7 +5226,9 @@ export function ScreenshotEditor() {
       setBusy(null);
     }
   };
-  saveEditedImageRef.current = saveEditedImage;
+  useLayoutEffect(() => {
+    saveEditedImageRef.current = saveEditedImage;
+  });
 
   const chooseDestinationDirectory = async () => {
     if (!artifact || busy) return;
