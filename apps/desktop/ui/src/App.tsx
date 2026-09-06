@@ -7551,7 +7551,9 @@ export function Thumbnail() {
           stackMotion === "collapsing" ? "thumbnail-stack-toolbar-leaving" : "",
           stackMotion === "expanding" ? "thumbnail-stack-toolbar-entering" : "",
           (stackClearing || exitingOnly) && stackMotion !== "collapsing"
-            ? "thumbnail-stack-toolbar-exiting"
+            ? stackClearing
+              ? "thumbnail-stack-toolbar-clearing"
+              : "thumbnail-stack-toolbar-exiting"
             : "",
         ].filter(Boolean).join(" ")}>
           {showClearAll && (
