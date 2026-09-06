@@ -5555,8 +5555,8 @@ fn create_overlay_window(app: &AppHandle) -> Result<(), tauri::Error> {
     Ok(())
 }
 
-const STARTUP_NOTICE_WIDTH: f64 = 240.0;
-const STARTUP_NOTICE_HEIGHT: f64 = 36.0;
+const STARTUP_NOTICE_WIDTH: f64 = 296.0;
+const STARTUP_NOTICE_HEIGHT: f64 = 54.0;
 /// Transparent padding around the rounded card so `--shadow-md` is not clipped.
 /// Dark `--shadow-md` is `0 8px 20px`, so the blur plus Y offset needs 28px.
 const TRAY_NOTICE_FRAME_PAD: f64 = 28.0;

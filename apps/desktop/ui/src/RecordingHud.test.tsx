@@ -183,12 +183,22 @@ describe("RecordingHud", () => {
     expect(screen.queryByText(/your shortcut/)).not.toBeInTheDocument();
   });
 
-  it("points first-run setup at the tray with a ready-to-use tooltip", () => {
+  it("points first-run setup at the tray with a ready-to-use shortcut", async () => {
     window.history.replaceState({}, "", "/?view=startup");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_settings") {
+        return { new_capture_shortcut: "Ctrl+Shift+Space" };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
 
     render(<StartupNotice />);
 
     expect(screen.getByText("Captures is ready to use")).toBeInTheDocument();
+    expect(screen.getByText("Open New Capture with")).toBeInTheDocument();
+    expect(await screen.findByText("Ctrl")).toBeInTheDocument();
+    expect(screen.getByText("Shift")).toBeInTheDocument();
+    expect(screen.getByText("Space")).toBeInTheDocument();
     expect(screen.queryByText("Captures is here whenever you need it")).not.toBeInTheDocument();
     expect(screen.queryByText("Captures is running")).not.toBeInTheDocument();
     expect(screen.queryByText(/Use the (menu bar|tray) icon/)).not.toBeInTheDocument();
