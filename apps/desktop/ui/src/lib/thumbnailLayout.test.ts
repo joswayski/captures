@@ -150,6 +150,7 @@ describe("thumbnail stack layout", () => {
     expect(pressing?.[1]).toMatch(
       /transform\s+var\(--stack-fan-dur\) calc\(var\(--thumbnail-stack-pile-depth, 0\) \* var\(--stack-fan-stagger\)\)/,
     );
+    expect(pressing?.[1]).toMatch(/theme-accent-rgb/);
     expect(minimizingCard?.[1]).toMatch(/var\(--thumbnail-stack-expanded-transform\)/);
     expect(minimizeRun?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
     expect(minimizeRun?.[1]).toMatch(/transform 0\.52s/);
@@ -425,6 +426,10 @@ describe("thumbnail stack layout", () => {
     expect(dragging?.[1]).not.toMatch(/-0\.28deg/);
     expect(dragging?.[1]).not.toMatch(/0\.18deg/);
     expect(dragging?.[1]).toMatch(/0\.12deg/);
+    expect(dragging?.[1]).toMatch(/theme-accent-rgb/);
+    expect(thumbnailStyles).not.toMatch(
+      /\.thumbnail-stack-dragging \.thumbnail-collapsed-hit-target::before/,
+    );
   });
 
   it("releases the arrival animation before cards exit or shift", () => {

@@ -2280,6 +2280,8 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
  * Pressing eases the hover fan back to the rest pile. Drag sway waits for
  * this gather (`thumbnail-stack-drag-sway`) so a mid-ease pose cannot snap
  * onto the velocity lean.
+ * Keep the accent glow while the pointer is down so it does not drop out from
+ * under the sparkles the moment a click becomes a drag.
  */
 .thumbnail-stack-minimized.thumbnail-stack-pressing > .thumbnail-card,
 .thumbnail-stack-minimized.thumbnail-stack-dragging:not(.thumbnail-stack-drag-sway) > .thumbnail-card {
@@ -2287,6 +2289,10 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
     opacity var(--dur-4) var(--ease-out),
     transform var(--stack-fan-dur) calc(var(--thumbnail-stack-pile-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease),
     box-shadow var(--stack-fan-dur) calc(var(--thumbnail-stack-pile-depth, 0) * var(--stack-fan-stagger)) var(--stack-fan-ease);
+  box-shadow:
+    var(--thumbnail-card-shadow),
+    0 0 0 1px rgba(var(--theme-accent-rgb), 0.55),
+    0 0 22px rgba(var(--theme-accent-rgb), 0.28);
 }
 
 .thumbnail-stack-compact > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
@@ -2540,15 +2546,10 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
     )
     scale(calc(1 - var(--thumbnail-stack-pile-depth, 0) * 0.025));
   filter: brightness(calc(1 - var(--thumbnail-stack-pile-depth, 0) * 0.12));
-  box-shadow: var(--thumbnail-card-shadow);
-}
-
-.thumbnail-stack-dragging .thumbnail-collapsed-hit-target::before,
-.thumbnail-stack-dragging .thumbnail-collapsed-hit-target::after,
-.thumbnail-stack-pressing .thumbnail-collapsed-hit-target::before,
-.thumbnail-stack-pressing .thumbnail-collapsed-hit-target::after {
-  animation: none;
-  opacity: 0;
+  box-shadow:
+    var(--thumbnail-card-shadow),
+    0 0 0 1px rgba(var(--theme-accent-rgb), 0.55),
+    0 0 22px rgba(var(--theme-accent-rgb), 0.28);
 }
 
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover:not([data-thumbnail-hover-stale])) > .thumbnail-card::before,
