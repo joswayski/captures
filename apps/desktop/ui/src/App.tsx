@@ -7259,14 +7259,18 @@ export function Thumbnail() {
           contentHeight,
         );
         collapsedLayoutAnchorRef.current = nextAnchor;
-        // Flip the DOM alignment before yielding to native position IPC. The
-        // collapsed window can retain hundreds of pixels of expanded-height
-        // slack; moving that frame first exposes the bottom-aligned cards at
-        // the opposite edge for a compositor frame before this promise
-        // returns. The direct class toggle and IPC dispatch now share one JS
-        // turn, so the next paint sees the converted frame and alignment.
+        // The retained window can have hundreds of pixels of empty expanded
+        // height. Hold the stack at its converted screen position while the
+        // DOM anchor changes and native position IPC catches up; otherwise
+        // the new alignment can paint at the opposite edge for one frame.
+        const stack = stackRef.current;
+        if (stack) stack.style.translate = `0 ${converted.y - frame.y}px`;
         commitStackAnchor(nextAnchor);
-        await placeCollapsedStackFrame(converted.x, converted.y, nextAnchor, nativeGeometry);
+        try {
+          await placeCollapsedStackFrame(converted.x, converted.y, nextAnchor, nativeGeometry);
+        } finally {
+          stack?.style.removeProperty("translate");
+        }
         return;
       } catch {
         collapsedLayoutAnchorRef.current = from;
@@ -7291,8 +7295,14 @@ export function Thumbnail() {
       contentHeight,
     );
     collapsedLayoutAnchorRef.current = nextAnchor;
+    const stack = stackRef.current;
+    if (stack) stack.style.translate = `0 ${converted.y - frame.y}px`;
     commitStackAnchor(nextAnchor);
-    await placeCollapsedStackFrame(converted.x, converted.y, nextAnchor);
+    try {
+      await placeCollapsedStackFrame(converted.x, converted.y, nextAnchor);
+    } finally {
+      stack?.style.removeProperty("translate");
+    }
   };
 
   const collapsedStackDrag = () => {

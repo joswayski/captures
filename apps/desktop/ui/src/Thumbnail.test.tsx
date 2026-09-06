@@ -1717,6 +1717,22 @@ describe("Thumbnail", () => {
       }
       return offsetY + 800 - THUMBNAIL_STACK_CONTROL_GUTTER_PX - THUMBNAIL_CARD_HEIGHT_PX;
     };
+    const anchorHandoffs: string[] = [];
+    const setRootStyle = document.documentElement.style.setProperty.bind(
+      document.documentElement.style,
+    );
+    vi.spyOn(document.documentElement.style, "setProperty").mockImplementation(
+      (property, value, priority) => {
+        if (
+          property === "--thumbnail-stack-drag-y"
+          && stack instanceof HTMLElement
+          && stack.style.translate
+        ) {
+          anchorHandoffs.push(stack.style.translate);
+        }
+        setRootStyle(property, value, priority);
+      },
+    );
 
     const tops: number[] = [];
     for (const screenY of [640, 520, 400, 280, 160]) {
@@ -1743,6 +1759,8 @@ describe("Thumbnail", () => {
       expect(stack).not.toHaveClass("thumbnail-stack-dragging");
     });
     expect(cardTop()).toBeLessThan(200);
+    expect(anchorHandoffs).toEqual(["0 560px"]);
+    expect((stack as HTMLElement).style.translate).toBe("");
 
     fireEvent.pointerDown(expand, {
       button: 0,
@@ -1772,6 +1790,8 @@ describe("Thumbnail", () => {
       expect(stack).not.toHaveClass("thumbnail-stack-dragging");
     });
     expect(stack).not.toHaveClass("thumbnail-stack-anchor-top");
+    expect(anchorHandoffs).toEqual(["0 560px", "0 -560px"]);
+    expect((stack as HTMLElement).style.translate).toBe("");
   });
 
   it("keeps Show less on the right after the pile is dragged to the right", async () => {
