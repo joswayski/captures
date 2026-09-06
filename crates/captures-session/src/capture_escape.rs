@@ -98,6 +98,22 @@ pub const fn capture_surface_must_revalidate_after_present() -> bool {
     true
 }
 
+/// Shortcut key-up must not start a new capture after Escape cancelled the
+/// matching key-down flow. `press_generation == 0` means that press never
+/// armed a flow (no freeze prefetch), so release may still open capture UI.
+#[must_use]
+pub const fn shortcut_release_should_start_capture(press_generation: u64, current: u64) -> bool {
+    press_generation == 0 || capture_flow_is_current(press_generation, current)
+}
+
+/// After recording prep, shortcut intent must not keep Escape armed. A
+/// countdown window owns Escape while it is visible; a live recording must
+/// not swallow the key in other apps.
+#[must_use]
+pub const fn recording_prep_must_disarm_escape_intent() -> bool {
+    true
+}
+
 #[cfg(target_os = "windows")]
 mod windows_hook {
     use std::{
@@ -237,6 +253,7 @@ mod tests {
         capture_escape_arms_on_shortcut_press, capture_escape_may_drop_intent,
         capture_escape_overrides_focus_and_freeze, capture_flow_is_current,
         capture_surface_must_revalidate_after_present, macos_key_code_is_escape,
+        recording_prep_must_disarm_escape_intent, shortcut_release_should_start_capture,
         windows_escape_hook_should_swallow, windows_vk_is_escape,
     };
 
@@ -329,5 +346,19 @@ mod tests {
             "an unused flow token must not present capture UI"
         );
         assert!(capture_surface_must_revalidate_after_present());
+    }
+
+    #[test]
+    fn cancelled_shortcut_press_must_not_start_on_release() {
+        assert!(
+            shortcut_release_should_start_capture(0, 9),
+            "a press that never armed a flow may still open capture UI"
+        );
+        assert!(shortcut_release_should_start_capture(4, 4));
+        assert!(
+            !shortcut_release_should_start_capture(4, 5),
+            "Escape during a held shortcut must suppress that key-up"
+        );
+        assert!(recording_prep_must_disarm_escape_intent());
     }
 }

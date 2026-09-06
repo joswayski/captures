@@ -79,7 +79,8 @@ pub use capture_escape::{
     CaptureEscapeUi, capture_escape_arms_on_shortcut_press, capture_escape_may_drop_intent,
     capture_escape_overrides_focus_and_freeze, capture_flow_is_current,
     capture_surface_must_revalidate_after_present, ensure_capture_escape_hook,
-    macos_key_code_is_escape, set_capture_escape_enabled, set_capture_escape_handler,
+    macos_key_code_is_escape, recording_prep_must_disarm_escape_intent, set_capture_escape_enabled,
+    set_capture_escape_handler, shortcut_release_should_start_capture,
     windows_escape_hook_should_swallow, windows_vk_is_escape,
 };
 

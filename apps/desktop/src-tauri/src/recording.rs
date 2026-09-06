@@ -1182,6 +1182,10 @@ async fn start_recording_inner(
         restore_recording_ui(&app, &state);
         return Err(error);
     }
+    // Countdown windows keep Escape armed via live surface state. Drop the
+    // shortcut-press intent now so a zero-countdown recording — which has no
+    // countdown window — cannot leave the Windows hook swallowing Escape.
+    crate::disarm_capture_escape_intent(&app);
     schedule_countdown(
         app,
         state,

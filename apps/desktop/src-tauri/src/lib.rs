@@ -1197,7 +1197,7 @@ pub(crate) const fn screenshot_countdown_seconds_for_capture_ui(
 fn prepare_capture_shortcut_press(app: &AppHandle, state: &Arc<AppState>, mode: CaptureMode) {
     let freeze_screen = state.settings().freeze_screen;
     let recapture_ui = should_recapture_visible_capture_ui(app, state, mode);
-    let _ = begin_capture_flow(app);
+    let _ = begin_shortcut_capture_flow(app);
     if freeze_prefetch_is_allowed(app, state, mode)
         && (recapture_ui || should_prefetch_freeze_on_shortcut_press(mode, freeze_screen))
     {
@@ -4256,6 +4256,9 @@ static CAPTURE_ESCAPE_CANCELING: AtomicBool = AtomicBool::new(false);
 /// Bumped on shortcut press and on Escape so an in-flight freeze-frame cannot
 /// present after the user already cancelled.
 static CAPTURE_FLOW_GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Generation armed on shortcut key-down. Key-up must not start a new capture
+/// after Escape invalidated this token while the chord was still held.
+static SHORTCUT_CAPTURE_FLOW: AtomicU64 = AtomicU64::new(0);
 
 fn install_capture_escape_cancel(app: &AppHandle) {
     let _ = CAPTURE_ESCAPE_APP.set(app.clone());
@@ -4312,6 +4315,31 @@ pub(crate) fn begin_capture_flow(app: &AppHandle) -> u64 {
     let generation = next_capture_flow_generation();
     arm_capture_escape(app);
     generation
+}
+
+fn begin_shortcut_capture_flow(app: &AppHandle) -> u64 {
+    let generation = begin_capture_flow(app);
+    SHORTCUT_CAPTURE_FLOW.store(generation, Ordering::Release);
+    generation
+}
+
+fn clear_shortcut_capture_flow() {
+    SHORTCUT_CAPTURE_FLOW.store(0, Ordering::Release);
+}
+
+/// True when Escape already cancelled the matching shortcut key-down. The
+/// key-up must not call `adopt_or_begin_capture_flow`, which would start a
+/// fresh generation and show the freeze overlay again.
+fn shortcut_release_was_cancelled(app: &AppHandle) -> bool {
+    let generation = SHORTCUT_CAPTURE_FLOW.swap(0, Ordering::AcqRel);
+    if captures_session::shortcut_release_should_start_capture(
+        generation,
+        CAPTURE_FLOW_GENERATION.load(Ordering::Acquire),
+    ) {
+        return false;
+    }
+    abort_prefetched_freeze_capture(app);
+    true
 }
 
 /// Reuses the shortcut-press flow when Escape is already armed; otherwise
@@ -4499,14 +4527,19 @@ fn register_new_capture_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), 
                 || app
                     .get_webview_window(ONBOARDING_WINDOW_LABEL)
                     .is_some_and(|window| window.is_focused().unwrap_or(false));
-            if event.state() == ShortcutState::Pressed
-                && !preferences_or_onboarding_focused
-                && freeze_prefetch_is_allowed_for_selector(app, &state)
-            {
-                let _ = begin_capture_flow(app);
-                prefetch_freeze_frame(app, &state, false);
+            if event.state() == ShortcutState::Pressed {
+                clear_shortcut_capture_flow();
+                if !preferences_or_onboarding_focused
+                    && freeze_prefetch_is_allowed_for_selector(app, &state)
+                {
+                    let _ = begin_shortcut_capture_flow(app);
+                    prefetch_freeze_frame(app, &state, false);
+                }
             }
             if !should_trigger_shortcut(&armed, event.state()) {
+                return;
+            }
+            if shortcut_release_was_cancelled(app) {
                 return;
             }
             if preferences_or_onboarding_focused {
@@ -4540,19 +4573,25 @@ fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Resu
                 return;
             }
             let suppressed = shortcut_capture_is_suppressed(app, &state);
-            if event.state() == ShortcutState::Pressed
-                && !suppressed
-                && !recording::screenshot_capture_is_blocked(&state)
-                && !screenshot_countdown_is_active(&state)
-            {
-                prepare_capture_shortcut_press(app, &state, mode);
+            if event.state() == ShortcutState::Pressed {
+                clear_shortcut_capture_flow();
+                if !suppressed
+                    && !recording::screenshot_capture_is_blocked(&state)
+                    && !screenshot_countdown_is_active(&state)
+                {
+                    prepare_capture_shortcut_press(app, &state, mode);
+                }
             }
             let trigger_is_suppressed =
                 track_shortcut_suppression(&suppressed_while_pressed, event.state(), suppressed);
             if !should_trigger_shortcut(&armed, event.state()) || trigger_is_suppressed {
                 if event.state() == ShortcutState::Released && trigger_is_suppressed {
+                    clear_shortcut_capture_flow();
                     cancel_capture_shortcut_press(app, mode);
                 }
+                return;
+            }
+            if shortcut_release_was_cancelled(app) {
                 return;
             }
             let app = app.clone();
@@ -4595,20 +4634,26 @@ fn register_recording_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), Ap
                 return;
             }
             let suppressed = shortcut_capture_is_suppressed(app, &state);
-            if event.state() == ShortcutState::Pressed
-                && !suppressed
-                && freeze_prefetch_is_allowed_for_selector(app, &state)
-                && !recording::recording_session_is_active(&state)
-            {
-                let _ = begin_capture_flow(app);
-                prefetch_freeze_frame(app, &state, false);
+            if event.state() == ShortcutState::Pressed {
+                clear_shortcut_capture_flow();
+                if !suppressed
+                    && freeze_prefetch_is_allowed_for_selector(app, &state)
+                    && !recording::recording_session_is_active(&state)
+                {
+                    let _ = begin_shortcut_capture_flow(app);
+                    prefetch_freeze_frame(app, &state, false);
+                }
             }
             let trigger_is_suppressed =
                 track_shortcut_suppression(&suppressed_while_pressed, event.state(), suppressed);
             if !should_trigger_shortcut(&armed, event.state()) || trigger_is_suppressed {
                 if event.state() == ShortcutState::Released && trigger_is_suppressed {
+                    clear_shortcut_capture_flow();
                     abort_prefetched_freeze_capture(app);
                 }
+                return;
+            }
+            if shortcut_release_was_cancelled(app) {
                 return;
             }
             let app = app.clone();
@@ -4869,14 +4914,19 @@ fn dispatch_new_capture_shortcut(app: &AppHandle, event_state: ShortcutState) {
         || app
             .get_webview_window(ONBOARDING_WINDOW_LABEL)
             .is_some_and(|window| window.is_focused().unwrap_or(false));
-    if event_state == ShortcutState::Pressed
-        && !preferences_or_onboarding_focused
-        && freeze_prefetch_is_allowed_for_selector(app, &state)
-    {
-        let _ = begin_capture_flow(app);
-        prefetch_freeze_frame(app, &state, false);
+    if event_state == ShortcutState::Pressed {
+        clear_shortcut_capture_flow();
+        if !preferences_or_onboarding_focused
+            && freeze_prefetch_is_allowed_for_selector(app, &state)
+        {
+            let _ = begin_shortcut_capture_flow(app);
+            prefetch_freeze_frame(app, &state, false);
+        }
     }
     if !should_trigger_shortcut(&WIN_SHIFT_S_ARMED, event_state) {
+        return;
+    }
+    if shortcut_release_was_cancelled(app) {
         return;
     }
     if preferences_or_onboarding_focused {
@@ -4899,20 +4949,26 @@ fn dispatch_recording_shortcut(app: &AppHandle, event_state: ShortcutState) {
         return;
     }
     let suppressed = shortcut_capture_is_suppressed(app, &state);
-    if event_state == ShortcutState::Pressed
-        && !suppressed
-        && freeze_prefetch_is_allowed_for_selector(app, &state)
-        && !recording::recording_session_is_active(&state)
-    {
-        let _ = begin_capture_flow(app);
-        prefetch_freeze_frame(app, &state, false);
+    if event_state == ShortcutState::Pressed {
+        clear_shortcut_capture_flow();
+        if !suppressed
+            && freeze_prefetch_is_allowed_for_selector(app, &state)
+            && !recording::recording_session_is_active(&state)
+        {
+            let _ = begin_shortcut_capture_flow(app);
+            prefetch_freeze_frame(app, &state, false);
+        }
     }
     let trigger_is_suppressed =
         track_shortcut_suppression(&WIN_SHIFT_S_SUPPRESSED, event_state, suppressed);
     if !should_trigger_shortcut(&WIN_SHIFT_S_ARMED, event_state) || trigger_is_suppressed {
         if event_state == ShortcutState::Released && trigger_is_suppressed {
+            clear_shortcut_capture_flow();
             abort_prefetched_freeze_capture(app);
         }
+        return;
+    }
+    if shortcut_release_was_cancelled(app) {
         return;
     }
     let app = app.clone();
@@ -4940,19 +4996,25 @@ fn dispatch_capture_shortcut(app: &AppHandle, mode: CaptureMode, event_state: Sh
         return;
     }
     let suppressed = shortcut_capture_is_suppressed(app, &state);
-    if event_state == ShortcutState::Pressed
-        && !suppressed
-        && !recording::screenshot_capture_is_blocked(&state)
-        && !screenshot_countdown_is_active(&state)
-    {
-        prepare_capture_shortcut_press(app, &state, mode);
+    if event_state == ShortcutState::Pressed {
+        clear_shortcut_capture_flow();
+        if !suppressed
+            && !recording::screenshot_capture_is_blocked(&state)
+            && !screenshot_countdown_is_active(&state)
+        {
+            prepare_capture_shortcut_press(app, &state, mode);
+        }
     }
     let trigger_is_suppressed =
         track_shortcut_suppression(suppressed_while_pressed, event_state, suppressed);
     if !should_trigger_shortcut(armed, event_state) || trigger_is_suppressed {
         if event_state == ShortcutState::Released && trigger_is_suppressed {
+            clear_shortcut_capture_flow();
             cancel_capture_shortcut_press(app, mode);
         }
+        return;
+    }
+    if shortcut_release_was_cancelled(app) {
         return;
     }
     let app = app.clone();
@@ -10096,6 +10158,16 @@ mod tests {
         assert!(!captures_session::capture_flow_is_current(3, 4));
         assert!(!captures_session::capture_flow_is_current(0, 0));
         assert!(captures_session::capture_surface_must_revalidate_after_present());
+        assert!(captures_session::shortcut_release_should_start_capture(
+            0, 9
+        ));
+        assert!(captures_session::shortcut_release_should_start_capture(
+            3, 3
+        ));
+        assert!(!captures_session::shortcut_release_should_start_capture(
+            3, 4
+        ));
+        assert!(captures_session::recording_prep_must_disarm_escape_intent());
     }
 
     #[test]
