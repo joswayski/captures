@@ -1732,7 +1732,8 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
 }
 
 .thumbnail-stack-toolbar-leaving,
-.thumbnail-stack-toolbar-exiting {
+.thumbnail-stack-toolbar-exiting,
+.thumbnail-stack-toolbar-clearing {
   pointer-events: none;
 }
 
@@ -1746,6 +1747,15 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
  */
 .thumbnail-stack-toolbar-exiting {
   animation: thumbnail-stack-toolbar-exit 1.05s linear both;
+}
+
+/*
+ * Clear all: leave with the first Close streak instead of holding for the
+ * last-preview dissolve. 450ms matches thumbnail-dismiss-streak / visual
+ * card exit; the 1.03s dismiss animation is only a layout hold.
+ */
+.thumbnail-stack-toolbar-clearing {
+  animation: thumbnail-stack-toolbar-clear 0.45s cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
 .thumbnail-stack-toolbar-entering {
@@ -1768,6 +1778,17 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
     animation-timing-function: cubic-bezier(0.33, 0, 0.2, 1);
   }
   100% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.9);
+  }
+}
+
+@keyframes thumbnail-stack-toolbar-clear {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
     opacity: 0;
     transform: translateY(6px) scale(0.9);
   }
@@ -1895,33 +1916,34 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
 }
 
 /*
- * Idle hover only. While the last preview deletes, the toolbar stays visible
- * (and native pointer tracking still hits its bounds) — expanding to “Show
- * less” on a control that is about to vanish is noise.
+ * Idle hover only. While the last preview deletes or Clear all is in flight,
+ * the toolbar stays visible (and native pointer tracking still hits its
+ * bounds) — expanding to “Show less” on a control that is about to vanish
+ * is noise.
  */
-.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:hover,
-.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize[data-native-pointer-hover="true"],
-.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:focus-visible {
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-clearing):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:hover,
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-clearing):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize[data-native-pointer-hover="true"],
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-clearing):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:focus-visible {
   width: 92px;
   background: var(--glass-strong-solid);
   border-color: var(--glass-border);
   cursor: pointer;
 }
 
-.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:active {
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-clearing):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:active {
   transform: scale(0.94);
 }
 
-.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:hover svg,
-.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize[data-native-pointer-hover="true"] svg,
-.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:focus-visible svg {
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-clearing):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:hover svg,
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-clearing):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize[data-native-pointer-hover="true"] svg,
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-clearing):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:focus-visible svg {
   opacity: 0;
   transform: translateX(calc(var(--thumbnail-minimize-slide) * -8px)) scale(0.8);
 }
 
-.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:hover .thumbnail-stack-minimize-label,
-.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize[data-native-pointer-hover="true"] .thumbnail-stack-minimize-label,
-.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:focus-visible .thumbnail-stack-minimize-label {
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-clearing):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:hover .thumbnail-stack-minimize-label,
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-clearing):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize[data-native-pointer-hover="true"] .thumbnail-stack-minimize-label,
+.thumbnail-stack-toolbar:not(.thumbnail-stack-toolbar-leaving):not(.thumbnail-stack-toolbar-exiting):not(.thumbnail-stack-toolbar-clearing):not(.thumbnail-stack-toolbar-entering) .thumbnail-stack-minimize:focus-visible .thumbnail-stack-minimize-label {
   opacity: 1;
   transform: translateX(0);
 }
@@ -1952,6 +1974,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
 }
 
 .thumbnail-stack-toolbar-exiting .thumbnail-stack-minimize,
+.thumbnail-stack-toolbar-clearing .thumbnail-stack-minimize,
 .thumbnail-stack-toolbar-entering .thumbnail-stack-minimize {
   width: 28px;
   transform: none;
@@ -1959,6 +1982,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
 }
 
 .thumbnail-stack-toolbar-exiting .thumbnail-stack-minimize svg,
+.thumbnail-stack-toolbar-clearing .thumbnail-stack-minimize svg,
 .thumbnail-stack-toolbar-entering .thumbnail-stack-minimize svg {
   opacity: 1;
   transform: none;
@@ -1966,6 +1990,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
 }
 
 .thumbnail-stack-toolbar-exiting .thumbnail-stack-minimize-label,
+.thumbnail-stack-toolbar-clearing .thumbnail-stack-minimize-label,
 .thumbnail-stack-toolbar-entering .thumbnail-stack-minimize-label {
   opacity: 0;
   transform: translateX(calc(var(--thumbnail-minimize-slide) * 4px));
@@ -2014,6 +2039,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
 
 .thumbnail-stack-toolbar-leaving .thumbnail-stack-control[data-tooltip]::after,
 .thumbnail-stack-toolbar-exiting .thumbnail-stack-control[data-tooltip]::after,
+.thumbnail-stack-toolbar-clearing .thumbnail-stack-control[data-tooltip]::after,
 .thumbnail-stack-toolbar-entering .thumbnail-stack-control[data-tooltip]::after {
   opacity: 0;
   transition: none;
@@ -2592,7 +2618,8 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
 
   .thumbnail-stack-toolbar-leaving,
   .thumbnail-stack-toolbar-entering,
-  .thumbnail-stack-toolbar-exiting {
+  .thumbnail-stack-toolbar-exiting,
+  .thumbnail-stack-toolbar-clearing {
     animation: none;
   }
 

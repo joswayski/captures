@@ -570,7 +570,7 @@ describe("thumbnail stack layout", () => {
     );
   });
 
-  it("fades the Show less control in linearly and delays hiding it on last delete", () => {
+  it("fades the Show less control in linearly, delays hiding it on last delete, and clears it with the Close streak", () => {
     const enter = thumbnailStyles.split("@keyframes thumbnail-stack-toolbar-in")[1]
       ?.split("@keyframes")[0];
     expect(thumbnailStyles).toMatch(
@@ -580,6 +580,9 @@ describe("thumbnail stack layout", () => {
     expect(enter).not.toMatch(/60%/);
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar-exiting\s*\{[^}]*animation:\s*thumbnail-stack-toolbar-exit 1\.05s/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-toolbar-clearing\s*\{[^}]*animation:\s*thumbnail-stack-toolbar-clear 0\.45s/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-control\s*\{[\s\S]*?cursor:\s*pointer/,
@@ -602,16 +605,16 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-toolbar\s*\{[\s\S]*?--thumbnail-minimize-slide:\s*1/,
     );
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:hover/,
+      /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-clearing\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:hover/,
     );
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:focus-visible \{[\s\S]*?cursor:\s*pointer/,
+      /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-clearing\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:focus-visible \{[\s\S]*?cursor:\s*pointer/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar\s*\{[\s\S]*?cursor:\s*pointer/,
     );
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:active/,
+      /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-clearing\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:active/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar-leaving \.thumbnail-stack-minimize\s*\{[^}]*width:\s*92px/,
@@ -625,10 +628,10 @@ describe("thumbnail stack layout", () => {
     expect(leave).toMatch(/filter:\s*blur\(var\(--blur-dissolve\)\)/);
     expect(leave).not.toMatch(/translateY/);
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-toolbar-exiting \.thumbnail-stack-minimize,[\s\S]*?\{[^}]*width:\s*28px/,
+      /\.thumbnail-stack-toolbar-exiting \.thumbnail-stack-minimize,[\s\S]*?\.thumbnail-stack-toolbar-clearing \.thumbnail-stack-minimize,[\s\S]*?\{[^}]*width:\s*28px/,
     );
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-toolbar-exiting \.thumbnail-stack-minimize,[\s\S]*?\{[^}]*transition:\s*none/,
+      /\.thumbnail-stack-toolbar-exiting \.thumbnail-stack-minimize,[\s\S]*?\.thumbnail-stack-toolbar-clearing \.thumbnail-stack-minimize,[\s\S]*?\{[^}]*transition:\s*none/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-clearing,\s*\n\.thumbnail-stack-clearing ~ \.thumbnail-stack-toolbar,\s*\n\.thumbnail-stack-clearing ~ \.thumbnail-overflow-cue\s*\{[\s\S]*?pointer-events:\s*none/,

@@ -585,14 +585,15 @@ function thumbnailStackControlAtPoint(
 }
 
 /**
- * Collapse/expand and last-preview delete keep the Show less control in the
- * DOM (and fully opaque for part of the delete). Native pointer tracking uses
- * bounds, so skip hover while the toolbar is a decorative fade.
+ * Collapse/expand, last-preview delete, and Clear all keep the Show less
+ * control in the DOM (and fully opaque for part of the delete). Native
+ * pointer tracking uses bounds, so skip hover while the toolbar is a
+ * decorative fade.
  */
 function thumbnailStackControlIsInteractive(control: HTMLElement): boolean {
   if (control.matches(":disabled")) return false;
   return !control.closest(
-    ".thumbnail-stack-toolbar-leaving, .thumbnail-stack-toolbar-exiting, .thumbnail-stack-toolbar-entering",
+    ".thumbnail-stack-toolbar-leaving, .thumbnail-stack-toolbar-exiting, .thumbnail-stack-toolbar-clearing, .thumbnail-stack-toolbar-entering",
   );
 }
 

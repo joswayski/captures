@@ -1200,6 +1200,12 @@ describe("Thumbnail", () => {
       expect(cards[0]!.closest(".thumbnail-stack")).toHaveClass("thumbnail-stack-clearing");
       expect(cards[0]).toHaveClass("thumbnail-exit-dismiss");
       expect(cards[1]).toHaveClass("thumbnail-exit-dismiss");
+      expect(minimize.closest(".thumbnail-stack-toolbar")).toHaveClass(
+        "thumbnail-stack-toolbar-clearing",
+      );
+      expect(minimize.closest(".thumbnail-stack-toolbar")).not.toHaveClass(
+        "thumbnail-stack-toolbar-exiting",
+      );
       expect(invoke).toHaveBeenCalledWith("dismiss_all_artifacts", {
         artifactIds: ["capture-1", "capture-2"],
       });
