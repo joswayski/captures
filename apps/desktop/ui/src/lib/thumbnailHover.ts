@@ -540,9 +540,22 @@ function thumbnailStackMinimizeControlAtPoint(
     }
   }
   if (!toolbar || !thumbnailStackControlIsInteractive(toolbar)) return null;
+  const controls = Array.from(
+    toolbar.querySelectorAll<HTMLElement>(".thumbnail-stack-control:not(:disabled)"),
+  ).filter((control) => thumbnailStackControlIsInteractive(control));
+  const directControl = directTarget?.closest<HTMLElement>(".thumbnail-stack-control");
+  if (directControl && controls.includes(directControl)) return directControl;
+  for (const control of controls) {
+    if (containsPoint(control, x, y)) return control;
+  }
+  // WebKit often reports the toolbar or the card under Show less. Idle Clear
+  // all must not steal that hit — only the morphing Show less pill owns the
+  // leftover toolbar chrome around it.
   if (!containsPoint(toolbar, x, y)) return null;
-  const minimize = toolbar.querySelector<HTMLElement>(".thumbnail-stack-control:not(:disabled)");
-  if (minimize && thumbnailStackControlIsInteractive(minimize)) return minimize;
+  const minimize = toolbar.querySelector<HTMLElement>(
+    ".thumbnail-stack-minimize:not(:disabled)",
+  );
+  if (minimize && controls.includes(minimize)) return minimize;
   return null;
 }
 

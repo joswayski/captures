@@ -3503,7 +3503,9 @@ fn dismiss_all_artifacts(
             .map_err(|error| error.to_string())?;
     }
     updates::restore_update_notice(&app);
-    refresh_thumbnail_stack(&app);
+    // Leave the native window up so the frontend Close streak can finish.
+    // Hiding here blanks WKWebView and the cards vanish with no motion.
+    // The stack syncs after the last card unmounts.
     Ok(ids)
 }
 

@@ -386,6 +386,118 @@ describe("applyThumbnailNativeHover", () => {
     expect(shouldIgnoreThumbnailCursorEvents({ x: 30, y: 10, inside: true })).toBe(false);
   });
 
+  it("does not hover Clear all when the pointer is on Show less", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack">
+        <article class="thumbnail-card"><img alt=""></article>
+      </main>
+      <div class="thumbnail-stack-toolbar">
+        <button class="thumbnail-stack-control thumbnail-stack-clear" data-tooltip="Clear all">Clear all</button>
+        <button class="thumbnail-stack-control thumbnail-stack-minimize">Show less</button>
+      </div>
+    `;
+    const toolbar = document.querySelector<HTMLElement>(".thumbnail-stack-toolbar")!;
+    const clear = document.querySelector<HTMLButtonElement>(".thumbnail-stack-clear")!;
+    const minimize = document.querySelector<HTMLButtonElement>(".thumbnail-stack-minimize")!;
+    vi.spyOn(toolbar, "getBoundingClientRect").mockReturnValue({
+      x: 28,
+      y: 8,
+      top: 8,
+      right: 160,
+      bottom: 36,
+      left: 28,
+      width: 132,
+      height: 28,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(clear, "getBoundingClientRect").mockReturnValue({
+      x: 28,
+      y: 8,
+      top: 8,
+      right: 56,
+      bottom: 36,
+      left: 28,
+      width: 28,
+      height: 28,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(minimize, "getBoundingClientRect").mockReturnValue({
+      x: 64,
+      y: 8,
+      top: 8,
+      right: 156,
+      bottom: 36,
+      left: 64,
+      width: 92,
+      height: 28,
+      toJSON: () => ({}),
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => minimize),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 80, y: 20, inside: true })).toBe("pointer");
+    expectNativePointerHover(minimize, true);
+    expectNativePointerHover(clear, false);
+  });
+
+  it("hovers only Clear all when the pointer is on the close control", () => {
+    document.body.innerHTML = `
+      <main class="thumbnail-stack">
+        <article class="thumbnail-card"><img alt=""></article>
+      </main>
+      <div class="thumbnail-stack-toolbar">
+        <button class="thumbnail-stack-control thumbnail-stack-clear" data-tooltip="Clear all">Clear all</button>
+        <button class="thumbnail-stack-control thumbnail-stack-minimize">Show less</button>
+      </div>
+    `;
+    const toolbar = document.querySelector<HTMLElement>(".thumbnail-stack-toolbar")!;
+    const clear = document.querySelector<HTMLButtonElement>(".thumbnail-stack-clear")!;
+    const minimize = document.querySelector<HTMLButtonElement>(".thumbnail-stack-minimize")!;
+    vi.spyOn(toolbar, "getBoundingClientRect").mockReturnValue({
+      x: 28,
+      y: 8,
+      top: 8,
+      right: 160,
+      bottom: 36,
+      left: 28,
+      width: 132,
+      height: 28,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(clear, "getBoundingClientRect").mockReturnValue({
+      x: 28,
+      y: 8,
+      top: 8,
+      right: 56,
+      bottom: 36,
+      left: 28,
+      width: 28,
+      height: 28,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(minimize, "getBoundingClientRect").mockReturnValue({
+      x: 64,
+      y: 8,
+      top: 8,
+      right: 92,
+      bottom: 36,
+      left: 64,
+      width: 28,
+      height: 28,
+      toJSON: () => ({}),
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => toolbar),
+    });
+
+    expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
+    expectNativePointerHover(clear, true);
+    expectNativePointerHover(minimize, false);
+  });
+
   it("moves hover directly to a remaining card after the stack changes", () => {
     document.body.innerHTML = `
       <article id="removed" class="thumbnail-card"><button>Delete</button></article>
