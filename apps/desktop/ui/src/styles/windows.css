@@ -2782,9 +2782,9 @@ html[data-preview-harness-view="startup"]:has([data-caret="bottom"]) #root {
 
 .recording-controls-hidden-notice {
   display: flex;
-  width: calc(100% - 12px);
-  height: calc(100% - 12px);
-  margin: 6px;
+  width: calc(100% - 56px);
+  height: calc(100% - 56px);
+  margin: 28px;
   padding: var(--s-5);
   align-items: center;
   gap: var(--s-5);
