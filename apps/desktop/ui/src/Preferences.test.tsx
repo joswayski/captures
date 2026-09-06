@@ -489,6 +489,7 @@ describe("Preferences", () => {
   });
 
   it("always offers an installer download that can replace a broken copy", async () => {
+    window.history.replaceState({}, "", "/?view=preferences&platform=linux");
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_settings") return settings;
       if (command === "get_update_status") {
@@ -504,8 +505,26 @@ describe("Preferences", () => {
     expect(
       await screen.findByText(/If this copy cannot update itself/u),
     ).toBeInTheDocument();
+    expect(screen.getByText(/~\/\.local\/bin\/Captures\.AppImage/u)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "download from captur.es" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_update_download_page"));
+  });
+
+  it("tells macOS and Windows users to install over the current copy", async () => {
+    window.history.replaceState({}, "", "/?view=preferences&platform=macos");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_settings") return settings;
+      if (command === "get_update_status") {
+        return { state: "idle", current_version: "0.1.0", current_display_version: "0.1.0" };
+      }
+      if (command === "set_shortcut_capture_suppressed") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<Preferences />);
+
+    expect(await screen.findByText(/install over it/u)).toBeInTheDocument();
+    expect(screen.queryByText(/Captures\.AppImage/u)).not.toBeInTheDocument();
   });
 
   it("can hide release notes on update notices", async () => {

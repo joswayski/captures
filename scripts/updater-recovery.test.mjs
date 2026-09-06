@@ -59,5 +59,8 @@ test("README, website, and Preview channel share stable installer names", () => 
     readme,
     /If Captures will not open or cannot install an update/u,
   );
+  assert.match(readme, /~\/\.local\/bin\/Captures\.AppImage/u);
   assert.match(home, /replaces the current app/u);
+  assert.match(home, /~\/\.local\/bin\/Captures\.AppImage/u);
+  assert.match(releases, /~\/\.local\/bin\/Captures\.AppImage/u);
 });

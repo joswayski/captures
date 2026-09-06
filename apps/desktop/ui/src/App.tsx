@@ -655,13 +655,22 @@ function UpdateDownloadFallback({ source }: { source: "notice" | "preferences" }
       download from captur.es
     </button>
   );
+  const linuxRecovery = detectShortcutPlatform() === "linux";
   return (
     <p className="update-download-fallback">
       {source === "preferences" ? (
-        <>
-          If this copy cannot update itself, {download} and install over it. Settings and
-          captures stay.
-        </>
+        linuxRecovery ? (
+          <>
+            If this copy cannot update itself, {download}. Debian packages replace this
+            app; AppImage users should replace ~/.local/bin/Captures.AppImage. Settings
+            and captures stay.
+          </>
+        ) : (
+          <>
+            If this copy cannot update itself, {download} and install over it. Settings and
+            captures stay.
+          </>
+        )
       ) : (
         <>You can also {download}.</>
       )}
