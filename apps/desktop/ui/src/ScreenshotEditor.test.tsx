@@ -4066,20 +4066,17 @@ describe("ScreenshotEditor", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("keeps repeat-copy feedback compact without replacing the export hint", async () => {
+  it("keeps copy feedback from dimming or reflowing the export footer", async () => {
     const restoreCanvas = installExportableCanvas();
     let copyCount = 0;
-    let finishSecondCopy!: () => void;
+    let finishCopy!: () => void;
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_artifact") return artifact;
       if (command === "copy_screenshot_edit") {
         copyCount += 1;
-        if (copyCount === 2) {
-          return new Promise<void>((resolve) => {
-            finishSecondCopy = resolve;
-          });
-        }
-        return undefined;
+        return new Promise<void>((resolve) => {
+          finishCopy = resolve;
+        });
       }
       const draft = draftCommandResult(String(command));
       if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
@@ -4094,9 +4091,28 @@ describe("ScreenshotEditor", () => {
 
       const hint = "Save keeps original quality as PNG and overwrites the original.";
       expect(screen.getByText(hint)).toBeInTheDocument();
+      expect(screenshotEditorStyles).toMatch(
+        /\.screenshot-export-copy-idle,\s*\n\.screenshot-export-copy-done\s*\{[^}]*grid-area:\s*1 \/ 1/s,
+      );
 
       fireEvent.click(screen.getByRole("button", { name: "Copy image" }));
+      await waitFor(() => {
+        expect(copyCount).toBe(1);
+      });
 
+      const copying = screen.getByRole("button", { name: "Copy image" });
+      expect(copying).toBeEnabled();
+      expect(copying).toHaveAttribute("aria-busy", "true");
+      expect(copying).toHaveClass("screenshot-export-copy");
+      expect(copying.querySelector(".screenshot-export-copy-idle")).not.toBeNull();
+      expect(copying.querySelector(".screenshot-export-copy-done")).not.toBeNull();
+      expect(screen.queryByRole("button", { name: "Copying…" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+      expect(screen.getByRole("textbox", { name: "Saved filename" })).toBeEnabled();
+      expect(screen.getByRole("checkbox", { name: "Save as new file" })).toBeEnabled();
+      expect(screen.getByText(hint)).toBeInTheDocument();
+
+      finishCopy();
       await waitFor(() => {
         expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
       });
@@ -4104,24 +4120,94 @@ describe("ScreenshotEditor", () => {
       expect(screen.getByText("Copied to clipboard")).toHaveAttribute("role", "status");
       // Hint stays put so the footer does not reflow around a status swap.
       expect(screen.getByText(hint)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Copied" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Copied" })).not.toHaveAttribute("aria-busy");
 
       fireEvent.click(screen.getByRole("button", { name: "Copied" }));
-
-      expect(screen.getByRole("button", { name: "Copied" })).toBeDisabled();
-      expect(screen.queryByRole("button", { name: "Copying…" })).not.toBeInTheDocument();
-      expect(screen.queryByText("Copied to clipboard")).not.toBeInTheDocument();
-      expect(screen.getByText(hint)).toBeInTheDocument();
-
       await waitFor(() => {
         expect(copyCount).toBe(2);
       });
-      finishSecondCopy();
+
+      const recopying = screen.getByRole("button", { name: "Copied" });
+      expect(recopying).toBeEnabled();
+      expect(recopying).toHaveAttribute("aria-busy", "true");
+      expect(screen.queryByRole("button", { name: "Copying…" })).not.toBeInTheDocument();
+      expect(screen.queryByText("Copied to clipboard")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+      expect(screen.getByRole("textbox", { name: "Saved filename" })).toBeEnabled();
+      expect(screen.getByText(hint)).toBeInTheDocument();
+
+      finishCopy();
       await waitFor(() => {
-        expect(screen.getByRole("button", { name: "Copied" })).toBeEnabled();
+        expect(screen.getByRole("button", { name: "Copied" })).not.toHaveAttribute("aria-busy");
       });
+      expect(screen.getByRole("button", { name: "Copied" })).toBeEnabled();
       expect(screen.getByText("Copied to clipboard")).toHaveClass("visually-hidden");
       expect(invoke).toHaveBeenCalledWith("copy_screenshot_edit", {
         imagePng: expect.any(Array),
+      });
+    } finally {
+      restoreCanvas();
+    }
+  });
+
+  it("runs a Save clicked during copy once copy finishes", async () => {
+    const restoreCanvas = installExportableCanvas();
+    let copyCount = 0;
+    let finishCopy!: () => void;
+    const savedArtifact = {
+      ...artifact,
+      id: "capture-edited",
+      path: "/Users/example/Captures/capture.png",
+    };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifact") return artifact;
+      if (command === "copy_screenshot_edit") {
+        copyCount += 1;
+        return new Promise<void>((resolve) => {
+          finishCopy = resolve;
+        });
+      }
+      if (command === "save_screenshot_edit") {
+        return {
+          artifact: savedArtifact,
+          path: savedArtifact.path,
+          format: "png",
+        };
+      }
+      if (command === "reveal_artifact") return undefined;
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy image" }));
+      await waitFor(() => {
+        expect(copyCount).toBe(1);
+      });
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(invoke).not.toHaveBeenCalledWith(
+        "save_screenshot_edit",
+        expect.anything(),
+      );
+
+      finishCopy();
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith(
+          "save_screenshot_edit",
+          expect.objectContaining({
+            request: expect.objectContaining({
+              artifact_id: artifact.id,
+            }),
+          }),
+        );
       });
     } finally {
       restoreCanvas();

@@ -3542,6 +3542,26 @@
   background: var(--positive-surface);
 }
 
+/* Keep Copy image / Copied in one slot so the save row does not reflow. */
+.screenshot-export-copy-label {
+  display: grid;
+  justify-items: center;
+}
+
+.screenshot-export-copy-idle,
+.screenshot-export-copy-done {
+  grid-area: 1 / 1;
+}
+
+.screenshot-export-copy:not(.success) .screenshot-export-copy-done,
+.screenshot-export-copy.success .screenshot-export-copy-idle {
+  visibility: hidden;
+}
+
+.screenshot-export-copy[aria-busy="true"] {
+  cursor: progress;
+}
+
 .screenshot-make-copy {
   display: inline-flex;
   height: var(--h-lg);
