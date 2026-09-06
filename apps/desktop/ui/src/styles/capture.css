@@ -910,29 +910,59 @@ html.capture-selector-display {
   white-space: nowrap;
 }
 
+.capture-selector-note strong,
+.recording-hud-privacy strong {
+  color: var(--glass-text);
+  font-weight: var(--weight-bold);
+}
+
 .capture-selector-preferences-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   border: 0;
   border-radius: var(--r-sm);
-  padding: 2px var(--s-2);
-  color: var(--theme-accent-text-strong);
+  padding: 2px 5px;
+  color: inherit;
   background: transparent;
   font: inherit;
-  text-decoration: underline;
-  text-decoration-color: rgba(var(--theme-accent-rgb), 0.55);
-  text-underline-offset: 3px;
   transition:
     color var(--dur-2) var(--ease-standard),
     background var(--dur-2) var(--ease-standard);
 }
 
-.capture-selector-preferences-link:hover {
-  color: var(--glass-text);
+.capture-selector-preferences-link:hover,
+.capture-selector-preferences-link:focus-visible {
+  color: var(--theme-accent-text-strong);
   background: var(--glass-hover);
+}
+
+.capture-selector-preferences-link:hover strong,
+.capture-selector-preferences-link:focus-visible strong {
+  color: inherit;
 }
 
 .capture-selector-preferences-link:focus-visible {
   outline: 2px solid var(--theme-accent);
   outline-offset: 2px;
+}
+
+.capture-selector-preferences-icon {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  opacity: 0.72;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: opacity var(--dur-2) var(--ease-standard);
+}
+
+.capture-selector-preferences-link:hover .capture-selector-preferences-icon,
+.capture-selector-preferences-link:focus-visible .capture-selector-preferences-icon {
+  opacity: 1;
 }
 
 .recording-selector-error {

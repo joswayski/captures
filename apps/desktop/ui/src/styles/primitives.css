@@ -321,6 +321,11 @@
   line-height: var(--leading-snug);
 }
 
+.check-row small strong {
+  color: var(--text);
+  font-weight: var(--weight-bold);
+}
+
 .check-row.capture-option {
   align-items: start;
 }

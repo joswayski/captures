@@ -126,6 +126,10 @@ function previewPlatform(): "macos" | "windows" | "linux" {
   return "macos";
 }
 
+function previewCanExcludeRecordingControls(): boolean {
+  return previewPlatform() !== "linux";
+}
+
 function previewFreezeScreen(): boolean {
   return !flag("live") && query().get("frozen") !== "0";
 }
@@ -229,7 +233,7 @@ const SETTINGS: AppSettings = {
   show_mini_previews: true,
   mini_preview_placement: previewMiniPreviewPlacement(),
   include_mini_previews_in_captures: false,
-  include_recording_controls_in_captures: false,
+  include_recording_controls_in_captures: flag("controls"),
   launch_at_login: true,
   last_screen_permission_request_id: null,
   pending_capture_after_restart: null,
@@ -596,7 +600,8 @@ function createSelection(): RecordingSelectionSession {
       microphone: true,
       cursor_control: true,
       click_highlights: true,
-      controls_excluded: true,
+      can_exclude_controls: previewCanExcludeRecordingControls(),
+      controls_excluded: previewCanExcludeRecordingControls() && !flag("controls"),
     },
     display: DISPLAY,
     displays: DISPLAYS.map((item) => ({ ...item })),
@@ -679,7 +684,8 @@ const RESPONSES: Record<string, unknown> = {
   get_recording_snapshot: recordingSnapshot(),
   get_onboarding_state: ONBOARDING,
   list_recording_audio_devices: AUDIO_DEVICES,
-  recording_controls_are_excluded: true,
+  recording_controls_are_excluded: previewCanExcludeRecordingControls() && !flag("controls"),
+  platform_can_exclude_recording_controls: previewCanExcludeRecordingControls(),
   get_feedback_context: {
     app_version: "0.4.1",
     os: "macOS",

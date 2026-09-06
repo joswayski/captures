@@ -228,6 +228,34 @@ describe("Preferences", () => {
     });
   });
 
+  it("scrolls to and highlights recording-control visibility when opened with that target", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=preferences&target=include-recording-controls-in-captures",
+    );
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    render(<Preferences />);
+
+    const includeControls = await screen.findByRole("checkbox", {
+      name: /Show recording controls in screenshots and recordings/,
+    });
+    await waitFor(() => {
+      expect(includeControls.closest("label")).toHaveClass("preference-target-highlight");
+      expect(includeControls).toHaveFocus();
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+      expect(screen.getByRole("button", { name: "Capture" })).toHaveAttribute(
+        "aria-current",
+        "true",
+      );
+    });
+  });
+
   it("can disable quick-access mini previews", async () => {
     render(<Preferences />);
 
@@ -296,8 +324,10 @@ describe("Preferences", () => {
       name: /Show recording controls in screenshots and recordings/,
     });
     expect(includeControls).not.toBeChecked();
-    expect(screen.getByText("Recording controls won’t show in screenshots or recordings."))
-      .toBeInTheDocument();
+    expect(includeControls.closest("label")).toHaveTextContent(
+      "Recording controls won’t show in screenshots or recordings.",
+    );
+    expect(includeControls.closest("label")?.querySelector("strong")).toHaveTextContent("won’t");
     fireEvent.click(includeControls);
 
     await waitFor(() => {
@@ -305,9 +335,37 @@ describe("Preferences", () => {
         settings: expect.objectContaining({ include_recording_controls_in_captures: true }),
       });
     });
-    expect(screen.getByText(
+    expect(includeControls.closest("label")).toHaveTextContent(
       "Recording controls will show in screenshots and recordings. Turn this off to keep them out.",
-    )).toBeInTheDocument();
+    );
+    expect(includeControls.closest("label")?.querySelector("strong")).toHaveTextContent("will");
+  });
+
+  it("disables recording-control inclusion when the platform cannot exclude them", async () => {
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_settings") return settings;
+      if (command === "platform_can_exclude_recording_controls") return false;
+      if (command === "get_update_status") {
+        return { state: "idle", current_version: "0.1.0", current_display_version: "0.1.0" };
+      }
+      if (command === "set_shortcut_capture_suppressed") return undefined;
+      if (command === "update_settings") return (args as { settings: AppSettings }).settings;
+      if (command === "open_capture_history") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<Preferences />);
+
+    const includeControls = await screen.findByRole("checkbox", {
+      name: /Show recording controls in screenshots and recordings/,
+    });
+    await waitFor(() => expect(includeControls).toBeDisabled());
+    expect(includeControls).not.toBeChecked();
+    expect(includeControls.closest("label")).toHaveTextContent(
+      "This desktop session cannot keep recording controls out of screenshots and recordings. Use Hide controls on the recording bar to keep them off-screen.",
+    );
+    fireEvent.click(includeControls);
+    expect(invoke).not.toHaveBeenCalledWith("update_settings", expect.anything());
   });
 
   it("automatically applies a newly recorded shortcut", async () => {

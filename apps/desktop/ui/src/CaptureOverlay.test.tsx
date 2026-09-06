@@ -57,27 +57,35 @@ const guidanceBounds = {
 } as DOMRect;
 
 /**
- * jsdom completes `capture://` images with `error` on the next task. Keep
- * snapshots pending until a test fires load, matching a real freeze-frame
- * decode.
+ * jsdom completes `capture://` images with `load`/`error` on the next task.
+ * Record the URL without setting the src attribute so the overlay cannot reveal
+ * until a test fires `load`.
  */
 function pauseHtmlImageLoading() {
   const proto = HTMLImageElement.prototype;
-  const previous = Object.getOwnPropertyDescriptor(proto, "src");
+  const previousSrc = Object.getOwnPropertyDescriptor(proto, "src");
+  const previousSetAttribute = proto.setAttribute;
+  const paused = new WeakMap<HTMLImageElement, string>();
   Object.defineProperty(proto, "src", {
     configurable: true,
-    enumerable: previous?.enumerable ?? true,
+    enumerable: previousSrc?.enumerable ?? true,
     get() {
-      return this.getAttribute("src") ?? "";
+      return paused.get(this) ?? this.getAttribute("src") ?? "";
     },
     set(value: string) {
-      this.setAttribute("src", value);
+      paused.set(this, String(value));
     },
   });
-  return () => {
-    if (previous) {
-      Object.defineProperty(proto, "src", previous);
+  proto.setAttribute = function setAttribute(name: string, value: string) {
+    if (String(name).toLowerCase() === "src") {
+      paused.set(this as unknown as HTMLImageElement, String(value));
+      return;
     }
+    previousSetAttribute.call(this, name, value);
+  };
+  return () => {
+    proto.setAttribute = previousSetAttribute;
+    if (previousSrc) Object.defineProperty(proto, "src", previousSrc);
   };
 }
 

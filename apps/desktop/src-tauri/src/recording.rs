@@ -1052,6 +1052,11 @@ pub fn recording_controls_are_excluded(state: tauri::State<'_, Arc<AppState>>) -
     controls_excluded_for_preference(state.settings().include_recording_controls_in_captures)
 }
 
+#[tauri::command]
+pub fn platform_can_exclude_recording_controls() -> bool {
+    crate::models::platform_can_exclude_recording_controls()
+}
+
 /// Whether this session should keep Captures recording chrome out of the
 /// native recorder (macOS ScreenCaptureKit application exclusion).
 pub(crate) fn should_exclude_captures_app_from_recording(state: &AppState) -> bool {

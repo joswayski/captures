@@ -279,11 +279,18 @@ const STACK_CLEAR_EXIT_ACTION = "stack_clear";
 const THUMBNAIL_SAVED_FEEDBACK_MS = 1_000;
 const THUMBNAIL_HIT_TEST_CHANGED_EVENT = "captures-thumbnail-hit-test-changed";
 const RECORDING_SELECTOR_REVEAL_FALLBACK_MS = 200;
-const CAPTURE_OVERLAY_REVEAL_FALLBACK_MS = 400;
+/** Hidden overlay paints first; reveal after decode or this deadline. Tests use a longer deadline so jsdom cannot race the wake assertion. */
+const CAPTURE_OVERLAY_REVEAL_FALLBACK_MS = import.meta.env.MODE === "test" ? 10_000 : 400;
 const RECORDING_COUNTDOWN_FADE_OUT_MS = 180;
 const PREFERENCES_TARGET_EVENT = "preferences-target";
 const AUTO_START_PREFERENCE_TARGET = "auto-start-on-selection";
 const AUTO_START_PREFERENCE_ID = "auto-start-on-selection-setting";
+const RECORDING_CONTROLS_PREFERENCE_TARGET = "include-recording-controls-in-captures";
+const RECORDING_CONTROLS_PREFERENCE_ID = "include-recording-controls-in-captures-setting";
+const PREFERENCE_TARGET_IDS: Record<string, string> = {
+  [AUTO_START_PREFERENCE_TARGET]: AUTO_START_PREFERENCE_ID,
+  [RECORDING_CONTROLS_PREFERENCE_TARGET]: RECORDING_CONTROLS_PREFERENCE_ID,
+};
 const PREFERENCE_HIGHLIGHT_MS = 2_400;
 const COUNTDOWN_SECONDS = Array.from({ length: 11 }, (_, seconds) => seconds);
 
@@ -2475,7 +2482,7 @@ export function RecordingSelector() {
         return;
       }
       // Mode/target segmented buttons are where Enter needs to confirm capture.
-      // Leave Close, Change…, and other dedicated actions to native activation.
+      // Leave Close, preference links, and other dedicated actions to native activation.
       if (target instanceof Element) {
         const focusedButton = target.closest("button");
         if (
@@ -3012,10 +3019,10 @@ export function RecordingSelector() {
     }
     setActionMode(mode);
   };
-  const openAutoStartPreference = () => {
+  const openCapturePreference = (target: string) => {
     // Cancelling destroys this selector WebView before its IPC promise settles,
     // so finish opening Preferences while the caller is still alive.
-    void invoke("open_preferences", { target: AUTO_START_PREFERENCE_TARGET })
+    void invoke("open_preferences", { target })
       .then(() => cancelSelection(session))
       .catch((error) => setError(String(error)));
   };
@@ -3372,22 +3379,25 @@ export function RecordingSelector() {
           </div>
         )}
         <p className="capture-selector-note">
-          {recordingControlsVisibilityText(
-            controlsExcluded ?? session.recording_capabilities.controls_excluded,
-            actionMode,
-          )}{" "}
+          <CaptureSelectorVisibilityNote
+            canExcludeControls={session.recording_capabilities.can_exclude_controls}
+            controlsExcluded={
+              controlsExcluded ?? session.recording_capabilities.controls_excluded
+            }
+            actionMode={actionMode}
+            onOpenPreference={() => openCapturePreference(RECORDING_CONTROLS_PREFERENCE_TARGET)}
+          />
           {settings.auto_start_on_selection
             ? <>
-              <span aria-hidden="true">·</span>{" "}
-              <span>Auto-capture is on. Selecting a target starts immediately.</span>
-              <button
-                className="capture-selector-preferences-link"
-                type="button"
-                onClick={openAutoStartPreference}
-              >Change…</button>
+              <span aria-hidden="true">·</span>
+              <CapturePreferenceLink
+                onClick={() => openCapturePreference(AUTO_START_PREFERENCE_TARGET)}
+              >
+                Auto-capture is on. Selecting a target starts immediately.
+              </CapturePreferenceLink>
             </>
             : <>
-              <span aria-hidden="true">·</span>{" "}
+              <span aria-hidden="true">·</span>
               Press <kbd>Enter</kbd> to confirm
             </>}
         </p>
@@ -3446,15 +3456,69 @@ function recordingControlsVisibilityText(
   controlsExcluded: boolean | null,
   context: CaptureVisibilityContext,
   showHideHint = false,
-): string {
+): ReactNode {
   const output = captureOutputLabel(context);
-  if (controlsExcluded === true) return `These controls won’t show in ${output}`;
+  if (controlsExcluded === true) {
+    return <>These controls <strong>won’t</strong> show in {output}</>;
+  }
   if (controlsExcluded === false) {
     return showHideHint
-      ? `These controls will show in ${output} · Use Hide controls to keep them out`
-      : `These controls will show in ${output}`;
+      ? <>These controls <strong>will</strong> show in {output} · Use Hide controls to keep them out</>
+      : <>These controls <strong>will</strong> show in {output}</>;
   }
   return "Checking whether these controls will show…";
+}
+
+function CaptureSelectorVisibilityNote({
+  canExcludeControls,
+  controlsExcluded,
+  actionMode,
+  onOpenPreference,
+}: {
+  canExcludeControls: boolean;
+  controlsExcluded: boolean | null;
+  actionMode: CaptureVisibilityContext;
+  onOpenPreference: () => void;
+}) {
+  const copy = recordingControlsVisibilityText(
+    controlsExcluded,
+    actionMode,
+    !canExcludeControls && actionMode === "recording",
+  );
+  if (!canExcludeControls) return copy;
+  return (
+    <CapturePreferenceLink onClick={onOpenPreference}>
+      {copy}
+    </CapturePreferenceLink>
+  );
+}
+
+function CapturePreferenceLink({
+  onClick,
+  children,
+}: {
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      className="capture-selector-preferences-link"
+      type="button"
+      onClick={onClick}
+    >
+      {children}
+      <ExternalPreferenceIcon />
+    </button>
+  );
+}
+
+function ExternalPreferenceIcon() {
+  return (
+    <svg className="capture-selector-preferences-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M6.5 3H4a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V9.5" />
+      <path d="M9 3h4v4M8.5 7.5 13 3" />
+    </svg>
+  );
 }
 
 export function RecordingHud() {
@@ -5345,6 +5409,8 @@ function CaptureOverlay() {
     return () => {
       active = false;
       cleanup.dispose();
+      activeSessionIdRef.current = null;
+      revealingSessionIdRef.current = null;
     };
   }, []);
 
@@ -8617,6 +8683,7 @@ function ThemeColorField({
 
 export function Preferences() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [canExcludeRecordingControls, setCanExcludeRecordingControls] = useState(true);
   const [recordingDevices, setRecordingDevices] = useState<AudioDevice[]>([]);
   const [saveStatus, setSaveStatus] = useState<PreferencesSaveStatus>({ kind: "idle", message: "" });
   const [recordingShortcut, setRecordingShortcut] = useState<string | null>(null);
@@ -8727,10 +8794,14 @@ export function Preferences() {
   useEffect(() => {
     let active = true;
     activeRef.current = true;
-    void invoke<AppSettings>("get_settings").then((loadedSettings) => {
+    void Promise.all([
+      invoke<AppSettings>("get_settings"),
+      invoke<boolean>("platform_can_exclude_recording_controls").catch(() => true),
+    ]).then(([loadedSettings, canExclude]) => {
       if (!active) return;
       settingsRef.current = loadedSettings;
       setSettings(loadedSettings);
+      setCanExcludeRecordingControls(canExclude);
     });
     return () => {
       active = false;
@@ -8757,16 +8828,19 @@ export function Preferences() {
   }, []);
 
   useEffect(() => {
-    if (!settings || requestedPreferenceTarget !== AUTO_START_PREFERENCE_TARGET) return;
+    if (!settings || !requestedPreferenceTarget) return;
+    const elementId = PREFERENCE_TARGET_IDS[requestedPreferenceTarget];
+    if (!elementId) return;
+    const targetName = requestedPreferenceTarget;
     const frame = window.requestAnimationFrame(() => {
       setVisibleSection("capture");
-      const target = scrollerRef.current?.querySelector<HTMLElement>(`#${AUTO_START_PREFERENCE_ID}`);
+      const target = scrollerRef.current?.querySelector<HTMLElement>(`#${elementId}`);
       if (!target) return;
       if (typeof target.scrollIntoView === "function") {
         target.scrollIntoView({ behavior: "smooth", block: "center" });
       }
       target.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
-      setHighlightedPreference(AUTO_START_PREFERENCE_TARGET);
+      setHighlightedPreference(targetName);
       if (preferenceHighlightTimerRef.current) {
         window.clearTimeout(preferenceHighlightTimerRef.current);
       }
@@ -8902,6 +8976,7 @@ export function Preferences() {
           <div className="preferences-sections">
             <PreferencesSections
               settings={settings}
+              canExcludeRecordingControls={canExcludeRecordingControls}
               highlightedPreference={highlightedPreference}
               recordingDevices={recordingDevices}
               recordingShortcut={recordingShortcut}
@@ -8922,6 +8997,7 @@ export function Preferences() {
 
 function PreferencesSections({
   settings,
+  canExcludeRecordingControls,
   highlightedPreference,
   recordingDevices,
   recordingShortcut,
@@ -8934,6 +9010,7 @@ function PreferencesSections({
   chooseDirectory,
 }: {
   settings: AppSettings;
+  canExcludeRecordingControls: boolean;
   highlightedPreference: string | null;
   recordingDevices: AudioDevice[];
   recordingShortcut: string | null;
@@ -9152,18 +9229,26 @@ function PreferencesSections({
           </span>
         </label>
 
-        <label className="check-row switch-row">
+        <label
+          id={RECORDING_CONTROLS_PREFERENCE_ID}
+          className={`check-row switch-row${highlightedPreference === RECORDING_CONTROLS_PREFERENCE_TARGET
+            ? " preference-target-highlight"
+            : ""}`}
+        >
           <input
             type="checkbox"
             checked={settings.include_recording_controls_in_captures}
             onChange={(event) => update("include_recording_controls_in_captures", event.target.checked)}
+            disabled={!canExcludeRecordingControls}
           />
           <span>
             Show recording controls in screenshots and recordings
             <small>
-              {settings.include_recording_controls_in_captures
-                ? "Recording controls will show in screenshots and recordings. Turn this off to keep them out."
-                : "Recording controls won’t show in screenshots or recordings."}
+              {!canExcludeRecordingControls
+                ? "This desktop session cannot keep recording controls out of screenshots and recordings. Use Hide controls on the recording bar to keep them off-screen."
+                : settings.include_recording_controls_in_captures
+                  ? <>Recording controls <strong>will</strong> show in screenshots and recordings. Turn this off to keep them out.</>
+                  : <>Recording controls <strong>won’t</strong> show in screenshots or recordings.</>}
             </small>
           </span>
         </label>
