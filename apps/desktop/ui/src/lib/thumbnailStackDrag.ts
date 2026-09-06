@@ -287,9 +287,18 @@ export class CollapsedThumbnailStackDrag {
 
   /**
    * Keep the pointer delta after a coordinate-system change (bottom↔top
-   * harness anchor) so later moves do not jump back to the old origin.
+   * harness anchor) so later moves do not jump back to the old origin. When
+   * `fromFrame` is supplied, preserve pointer samples that arrived while an
+   * asynchronous native move was converting the frame.
    */
-  rebaseFrame(frame: ThumbnailStackPoint) {
+  rebaseFrame(frame: ThumbnailStackPoint, fromFrame?: ThumbnailStackPoint) {
+    if (fromFrame) {
+      this.startFrame = {
+        x: this.startFrame.x + frame.x - fromFrame.x,
+        y: this.startFrame.y + frame.y - fromFrame.y,
+      };
+      return;
+    }
     this.startFrame = {
       x: frame.x - (this.lastPointer.x - this.startPointer.x),
       y: frame.y - (this.lastPointer.y - this.startPointer.y),

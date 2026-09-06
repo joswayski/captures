@@ -510,6 +510,42 @@ describe("CollapsedThumbnailStackDrag", () => {
     expect(moved?.x).toBe(110);
     expect(moved?.y).toBe(-190);
   });
+
+  it("preserves newer pointer travel while an earlier frame is rebased", async () => {
+    let releaseFirstMove!: () => void;
+    const firstMove = new Promise<void>((resolve) => {
+      releaseFirstMove = resolve;
+    });
+    let markFirstMoveStarted!: () => void;
+    const firstMoveStarted = new Promise<void>((resolve) => {
+      markFirstMoveStarted = resolve;
+    });
+    let moveCount = 0;
+    const drag = new CollapsedThumbnailStackDrag({
+      getFrame: () => ({ x: 0, y: 0 }),
+      moveFrame: async (x: number, y: number) => {
+        moveCount += 1;
+        if (moveCount === 1) {
+          markFirstMoveStarted();
+          await firstMove;
+          const converted = { x, y: y - 200 };
+          drag.rebaseFrame(converted, { x, y });
+          return converted;
+        }
+        return { x, y };
+      },
+      reducedMotion: () => false,
+    });
+
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 0 });
+    const crossing = drag.pointerMove({ pointerId: 1, screenX: 20, screenY: 30 });
+    await firstMoveStarted;
+    const newer = drag.pointerMove({ pointerId: 1, screenX: 30, screenY: 50 });
+    releaseFirstMove();
+
+    await crossing;
+    expect(await newer).toMatchObject({ x: 30, y: -150 });
+  });
 });
 
 describe("stack dragging class helpers", () => {
