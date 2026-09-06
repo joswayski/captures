@@ -1923,6 +1923,10 @@ describe("RecordingSelector", () => {
         clipPath: "polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, "
           + "100px 120px, 100px 340px, 400px 340px, 400px 120px, 100px 120px)",
       });
+      expect(container.querySelector(".recording-selector-snapshot")).toHaveStyle({
+        clipPath: "polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, "
+          + "100px 120px, 100px 340px, 400px 340px, 400px 120px, 100px 120px)",
+      });
     });
   });
 
