@@ -2023,7 +2023,19 @@ function recordingRegionIndicatorRect(): RecordingRect | null {
  * remain clean even on platforms that cannot exclude overlay windows.
  */
 export function RecordingRegionIndicator() {
-  const rect = recordingRegionIndicatorRect();
+  const rect = useMemo(() => recordingRegionIndicatorRect(), []);
+  useEffect(() => {
+    if (!rect) return;
+    let active = true;
+    afterNextPaint(() => {
+      if (active) {
+        void invoke("reveal_recording_region_indicator");
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [rect]);
   if (!rect) {
     return <main className="recording-region-indicator" aria-hidden="true" />;
   }

@@ -332,6 +332,7 @@ pub fn run() {
             recording::platform_can_exclude_recording_controls,
             recording::get_recording_snapshot,
             recording::start_recording,
+            recording::reveal_recording_region_indicator,
             recording::pause_recording,
             recording::resume_recording,
             recording::restart_recording,
@@ -5198,7 +5199,9 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         "capture-region" => start_capture_from_tray(app, CaptureMode::Region),
         "capture-window" => start_capture_from_tray(app, CaptureMode::Window),
         "capture-display" => start_capture_from_tray(app, CaptureMode::Display),
-        "record-screen" => start_recording_from_tray(app),
+        "record-region" => start_recording_from_tray(app, CaptureMode::Region),
+        "record-window" => start_recording_from_tray(app, CaptureMode::Window),
+        "record-display" => start_recording_from_tray(app, CaptureMode::Display),
         "capture-history" => {
             show_capture_history(app);
         }
@@ -5264,7 +5267,7 @@ fn start_capture_from_tray(app: &AppHandle, mode: CaptureMode) {
     });
 }
 
-fn start_recording_from_tray(app: &AppHandle) {
+fn start_recording_from_tray(app: &AppHandle, target: CaptureMode) {
     let state = app.state::<Arc<AppState>>().inner().clone();
     if !state.settings().onboarding_completed {
         show_onboarding(app);
@@ -5272,7 +5275,13 @@ fn start_recording_from_tray(app: &AppHandle) {
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = recording::prepare_recording_inner(app.clone(), state).await
+        if let Err(error) = recording::prepare_capture_selector_inner(
+            app.clone(),
+            state,
+            CaptureSelectorMode::Recording,
+            target,
+        )
+        .await
             && !matches!(
                 &error,
                 AppError::CaptureInProgress | AppError::ScreenshotCancelled
@@ -5322,26 +5331,38 @@ fn build_tray_menu(
     let capture_region = tray_menu_item(
         app,
         "capture-region",
-        "Capture Region",
+        "Screenshot Region",
         Some(&settings.region_shortcut),
     )?;
     let capture_window = tray_menu_item(
         app,
         "capture-window",
-        "Capture Window",
+        "Screenshot Window",
         Some(&settings.window_shortcut),
     )?;
     let capture_display = tray_menu_item(
         app,
         "capture-display",
-        "Capture Display",
+        "Screenshot Display",
         Some(&settings.display_shortcut),
     )?;
-    let record_screen = tray_menu_item(
+    let record_region = tray_menu_item(
         app,
-        "record-screen",
-        "Record Screen",
+        "record-region",
+        "Record Region",
         Some(&settings.recording.video_shortcut),
+    )?;
+    let record_window = tray_menu_item(
+        app,
+        "record-window",
+        "Record Window",
+        Some(&settings.recording.window_shortcut),
+    )?;
+    let record_display = tray_menu_item(
+        app,
+        "record-display",
+        "Record Display",
+        Some(&settings.recording.display_shortcut),
     )?;
     let capture_history = tray_menu_item(app, "capture-history", "Capture History…", None)?;
     let open_folder = tray_menu_item(app, "open-folder", "Open Save Location", None)?;
@@ -5368,7 +5389,9 @@ fn build_tray_menu(
     menu.append(&capture_region)?;
     menu.append(&capture_window)?;
     menu.append(&capture_display)?;
-    menu.append(&record_screen)?;
+    menu.append(&record_region)?;
+    menu.append(&record_window)?;
+    menu.append(&record_display)?;
     menu.append(if update.pin_first { &sep_mid } else { &sep_top })?;
     menu.append(&capture_history)?;
     menu.append(&open_folder)?;

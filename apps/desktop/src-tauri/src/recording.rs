@@ -66,6 +66,7 @@ pub struct RecordingRuntime {
     coordinator: RecordingCoordinator,
     session: Option<RuntimeSession>,
     generation: u64,
+    region_indicator_ready: Option<tokio::sync::oneshot::Sender<()>>,
     exports: HashMap<String, CancelToken>,
     /// In-flight export size estimates, keyed by artifact ID. A newer request
     /// cancels and replaces the previous one for the same artifact.
@@ -1151,7 +1152,13 @@ async fn start_recording_inner(
     };
     let recording_ui = async {
         prepare_recording_hud(&app, &selected_display).await?;
-        prepare_recording_region_indicator(&app, &selected_display, &snapshot.options.target).await
+        prepare_recording_region_indicator(
+            &app,
+            &state,
+            &selected_display,
+            &snapshot.options.target,
+        )
+        .await
     }
     .await;
     if let Err(error) = recording_ui {
@@ -3569,6 +3576,7 @@ fn append_segment(
 fn fail_session(app: &AppHandle, state: &AppState, session_id: &str, message: String) {
     let (snapshot, segment) = {
         let mut runtime = state.recording.lock();
+        runtime.region_indicator_ready = None;
         let now = now_ms();
         let snapshot = runtime
             .coordinator
@@ -3607,6 +3615,7 @@ fn fail_session(app: &AppHandle, state: &AppState, session_id: &str, message: St
 }
 
 fn restore_recording_ui(app: &AppHandle, state: &Arc<AppState>) {
+    state.recording.lock().region_indicator_ready = None;
     hide_recording_selector(app);
     destroy_recording_region_indicator(app);
     destroy_recording_countdown(app);
@@ -4251,6 +4260,7 @@ fn recording_region_indicator_url(target: &RecordingTarget) -> Option<String> {
 
 async fn prepare_recording_region_indicator(
     app: &AppHandle,
+    state: &AppState,
     display: &DisplayDescriptor,
     target: &RecordingTarget,
 ) -> Result<(), AppError> {
@@ -4260,8 +4270,10 @@ async fn prepare_recording_region_indicator(
     };
     let handle = app.clone();
     let display = display.clone();
+    let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
+    state.recording.lock().region_indicator_ready = Some(ready_sender);
     let (sender, receiver) = tokio::sync::oneshot::channel();
-    app.run_on_main_thread(move || {
+    if let Err(error) = app.run_on_main_thread(move || {
         let result = (|| -> Result<(), String> {
             destroy_recording_region_indicator(&handle);
             let (x, y, width, height) = display.overlay_geometry();
@@ -4292,23 +4304,65 @@ async fn prepare_recording_region_indicator(
                     .map_err(str::to_owned)?;
                 captures_macos_window::cover_display(&window, &display.id)
                     .map_err(str::to_owned)?;
-                // Status level keeps this above apps but below the later
-                // countdown and the recording HUD.
-                captures_macos_window::show_without_activating(&window).map_err(str::to_owned)?;
+                // Wake the hidden WKWebView at imperceptible alpha so React can
+                // paint the guide before it replaces the selector.
+                captures_macos_window::prime_window_reveal(&window).map_err(str::to_owned)?;
             }
+            // Other webviews continue painting while hidden on Windows and
+            // Linux, but showing this transparent, click-through surface also
+            // guarantees that the readiness effect gets a frame. The selector
+            // remains visible underneath until the guide reports ready.
             #[cfg(not(target_os = "macos"))]
             window.show().map_err(|error| error.to_string())?;
-            crate::set_window_content_protected(&window, true)
-                .map_err(|error| error.to_string())?;
-            crate::set_click_through(&window, true).map_err(|error| error.to_string())?;
             Ok(())
         })();
         let _ = sender.send(result);
-    })?;
-    receiver
+    }) {
+        state.recording.lock().region_indicator_ready = None;
+        return Err(error.into());
+    }
+    let setup = receiver
         .await
         .map_err(|_| AppError::Task("recording region setup was interrupted".to_owned()))?
-        .map_err(AppError::Task)
+        .map_err(AppError::Task);
+    if let Err(error) = setup {
+        state.recording.lock().region_indicator_ready = None;
+        return Err(error);
+    }
+    match tokio::time::timeout(Duration::from_secs(5), ready_receiver).await {
+        Ok(Ok(())) => Ok(()),
+        _ => {
+            state.recording.lock().region_indicator_ready = None;
+            Err(AppError::Task(
+                "recording region indicator did not become ready".to_owned(),
+            ))
+        }
+    }
+}
+
+#[tauri::command]
+pub fn reveal_recording_region_indicator(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window(RECORDING_REGION_INDICATOR_LABEL)
+        .ok_or_else(|| "recording region indicator is unavailable".to_owned())?;
+    #[cfg(target_os = "macos")]
+    {
+        // Status level keeps this above apps but below the later countdown and
+        // the recording HUD.
+        captures_macos_window::show_without_activating(&window).map_err(str::to_owned)?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    window.show().map_err(|error| error.to_string())?;
+    crate::set_window_content_protected(&window, true).map_err(|error| error.to_string())?;
+    crate::set_click_through(&window, true).map_err(|error| error.to_string())?;
+    hide_recording_selector(&app);
+    if let Some(sender) = state.recording.lock().region_indicator_ready.take() {
+        let _ = sender.send(());
+    }
+    Ok(())
 }
 
 fn destroy_recording_region_indicator(app: &AppHandle) {
