@@ -2325,7 +2325,8 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
   animation: none;
 }
 
-.thumbnail-stack-expanding > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
+/* Match the arrived-card guard's specificity: settled cards must still fly. */
+.thumbnail-stack-expanding > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting):not(.thumbnail-drop-rejected) {
   opacity: 1;
   animation: thumbnail-card-expand 0.52s var(--ease-standard) both;
 }
@@ -2355,8 +2356,20 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
 }
 
 @keyframes thumbnail-card-expand-dim {
+  from {
+    opacity: var(--thumbnail-stack-expand-dim-from, 0);
+  }
   to {
     opacity: 0;
+  }
+}
+
+@keyframes thumbnail-card-expand-blur {
+  from {
+    filter: var(--thumbnail-stack-expand-blur-from, blur(0px));
+  }
+  to {
+    filter: blur(0px);
   }
 }
 
@@ -2395,6 +2408,10 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
 .thumbnail-stack-minimizing.thumbnail-stack-minimize-run > .thumbnail-card .thumbnail-media {
   filter: blur(calc(var(--thumbnail-stack-pose, 0) * 1.15px));
   transition: filter 0.52s var(--ease-standard);
+}
+
+.thumbnail-stack-expanding > .thumbnail-card .thumbnail-media {
+  animation: thumbnail-card-expand-blur 0.52s var(--ease-standard) both;
 }
 
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover:not([data-thumbnail-hover-stale])) > .thumbnail-card .thumbnail-media,
@@ -2615,7 +2632,8 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
   }
 
   .thumbnail-stack-minimizing > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting),
-  .thumbnail-stack-expanding > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting) {
+  .thumbnail-stack-expanding > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting):not(.thumbnail-drop-rejected),
+  .thumbnail-stack-expanding > .thumbnail-card .thumbnail-media {
     animation: none;
   }
 

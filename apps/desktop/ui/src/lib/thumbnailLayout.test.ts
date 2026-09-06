@@ -50,7 +50,7 @@ import {
   THUMBNAIL_STACK_ANCHOR_BOTTOM_GRAVITY,
   THUMBNAIL_STACK_SIDE_LEFT_BIAS,
   THUMBNAIL_STACK_SIDE_RIGHT_BIAS,
-  captureThumbnailCardTransforms,
+  captureThumbnailCardPoses,
   thumbnailStackFanCollapseMs,
   thumbnailStackPeekJitterPx,
   thumbnailStackPileDepth,
@@ -193,22 +193,40 @@ describe("thumbnail stack layout", () => {
     );
   });
 
-  it("captures live card transforms so expand can start from a partial pose", () => {
+  it("captures live transforms, blur, and dimming so expand starts from the visible pose", () => {
     const stack = document.createElement("main");
     const card = document.createElement("article");
     card.className = "thumbnail-card";
     card.setAttribute("data-thumbnail-id", "capture-1");
+    const media = document.createElement("div");
+    media.className = "thumbnail-media";
+    card.append(media);
     stack.append(card);
     const computed = { transform: "matrix(0.97, 0.12, -0.12, 0.97, 10, -24)" };
-    const spy = vi.spyOn(window, "getComputedStyle").mockReturnValue(
-      computed as CSSStyleDeclaration,
+    const spy = vi.spyOn(window, "getComputedStyle").mockImplementation(
+      (element, pseudo) => (pseudo ? { opacity: "0.23" }
+        : element === media ? { filter: "blur(1.4px)" } : computed) as CSSStyleDeclaration,
     );
 
-    expect(captureThumbnailCardTransforms(stack).get("capture-1")).toBe(computed.transform);
-    expect(captureThumbnailCardTransforms(stack).has("missing")).toBe(false);
+    expect(captureThumbnailCardPoses(stack).get("capture-1")).toEqual({
+      transform: computed.transform,
+      blur: "blur(1.4px)",
+      dim: "0.23",
+    });
+    expect(captureThumbnailCardPoses(stack).has("missing")).toBe(false);
+    expect(thumbnailStyles).toContain("opacity: var(--thumbnail-stack-expand-dim-from, 0)");
+    expect(thumbnailStyles).toContain("filter: var(--thumbnail-stack-expand-blur-from, blur(0px))");
+    expect(thumbnailStyles).toContain("thumbnail-card-expand-blur 0.52s var(--ease-standard) both");
+    // Must tie the arrived-card animation guard, then win by source order.
+    const expansion = ".thumbnail-stack-expanding > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting):not(.thumbnail-drop-rejected)";
+    expect(thumbnailStyles.split(`${expansion} {`)[1]?.split("}")[0])
+      .toContain("animation: thumbnail-card-expand 0.52s var(--ease-standard) both");
+    expect(thumbnailStyles.indexOf(expansion)).toBeGreaterThan(thumbnailStyles.indexOf(
+      ".thumbnail-card.thumbnail-ready.thumbnail-arrived:not(.thumbnail-exiting):not(.thumbnail-drop-rejected)",
+    ));
 
     spy.mockImplementation(() => ({ transform: "none" }) as CSSStyleDeclaration);
-    expect(captureThumbnailCardTransforms(stack).size).toBe(0);
+    expect(captureThumbnailCardPoses(stack).size).toBe(0);
     spy.mockRestore();
   });
 

@@ -121,21 +121,32 @@ export function thumbnailStackPileDepth(depth: number): number {
 
 const THUMBNAIL_CARD_ID_ATTRIBUTE = "data-thumbnail-id";
 
+export type ThumbnailCardPose = {
+  transform: string;
+  blur: string;
+  dim: string;
+};
+
 /**
- * Snapshot each collapsed card's live transform so expand can ease from a
+ * Snapshot each collapsed card's live pose so expand can ease from a
  * latched rest pose, a mid-fan tween, or the full hover fan without snapping.
  */
-export function captureThumbnailCardTransforms(
+export function captureThumbnailCardPoses(
   stack: Element | null,
-): Map<string, string> {
-  const captured = new Map<string, string>();
+): Map<string, ThumbnailCardPose> {
+  const captured = new Map<string, ThumbnailCardPose>();
   if (!stack) return captured;
   stack.querySelectorAll<HTMLElement>(":scope > .thumbnail-card").forEach((card) => {
     const id = card.getAttribute(THUMBNAIL_CARD_ID_ATTRIBUTE);
     if (!id) return;
     const transform = getComputedStyle(card).transform;
     if (!transform || transform === "none") return;
-    captured.set(id, transform);
+    const media = card.querySelector(".thumbnail-media");
+    captured.set(id, {
+      transform,
+      blur: media ? getComputedStyle(media).filter : "none",
+      dim: getComputedStyle(card, "::before").opacity,
+    });
   });
   return captured;
 }

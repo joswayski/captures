@@ -175,7 +175,8 @@ import {
   thumbnailStackOverflow,
   restoreThumbnailStackShiftClass,
   thumbnailCollapsedPeekPx,
-  captureThumbnailCardTransforms,
+  captureThumbnailCardPoses,
+  type ThumbnailCardPose,
   thumbnailStackFanCollapseMs,
   thumbnailStackPeekJitterPx,
   THUMBNAIL_CARD_SLOT_PX,
@@ -6123,7 +6124,7 @@ export function Thumbnail() {
   const [stackHoverReady, setStackHoverReady] = useState(false);
   const [stackMinimizeRun, setStackMinimizeRun] = useState(false);
   const [stackHoverLatched, setStackHoverLatched] = useState(false);
-  const [expandFromTransforms, setExpandFromTransforms] = useState<Map<string, string>>(
+  const [expandFromPoses, setExpandFromPoses] = useState<Map<string, ThumbnailCardPose>>(
     () => new Map(),
   );
   const [exitingArtifactIds, setExitingArtifactIds] = useState<Set<string>>(
@@ -6161,7 +6162,6 @@ export function Thumbnail() {
   const collapsedStackPointerCleanup = useRef<(() => void) | null>(null);
   const skipCollapsedStackClick = useRef(false);
   const stackFanCollapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const stackFanCollapsed = useRef(false);
   const stackMotionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stackHoverReadyFrames = useRef<{ first: number; second: number } | null>(null);
   const previousStackMotion = useRef<"expanded" | "collapsing" | "collapsed" | "expanding">(
@@ -7085,7 +7085,7 @@ export function Thumbnail() {
       stackHoverReadyFrames.current = frames;
     };
     if (prefersReducedMotion()) {
-      setExpandFromTransforms(new Map());
+      setExpandFromPoses(new Map());
       if (!nextCollapsed) pendingNewestReveal.current = true;
       setStackMotion(nextCollapsed ? "collapsed" : "expanded");
       if (nextCollapsed) armHoverReady();
@@ -7101,7 +7101,7 @@ export function Thumbnail() {
     }
     if (nextCollapsed) {
       cancelHoverReady();
-      setExpandFromTransforms(new Map());
+      setExpandFromPoses(new Map());
       setStackHoverLatched(false);
       setStackMinimizeRun(false);
       setStackMotion("collapsing");
@@ -7148,19 +7148,19 @@ export function Thumbnail() {
     pendingNewestReveal.current = true;
     void invoke("set_mini_previews_collapsed", { collapsed: false })
       .then(() => {
-        setExpandFromTransforms(captureThumbnailCardTransforms(stackRef.current));
+        setExpandFromPoses(captureThumbnailCardPoses(stackRef.current));
         cancelHoverReady();
         setStackMinimizeRun(false);
         setStackHoverLatched(false);
         setStackMotion("expanding");
         stackMotionTimer.current = setTimeout(() => {
           stackMotionTimer.current = null;
-          setExpandFromTransforms(new Map());
+          setExpandFromPoses(new Map());
           setStackMotion("expanded");
         }, STACK_MOTION_MS);
       })
       .catch(() => {
-        setExpandFromTransforms(new Map());
+        setExpandFromPoses(new Map());
         pendingNewestReveal.current = false;
         setStackMotion("collapsed");
         armHoverReady();
@@ -7414,8 +7414,21 @@ export function Thumbnail() {
         const stack = stackRef.current;
         if (!stack) return;
         setThumbnailStackDragging(stack, dragging);
-        if (dragging && stackFanCollapsed.current) {
-          setThumbnailStackDragSwayReady(stack, true);
+        setThumbnailStackPressing(stack, dragging);
+        // A click keeps the hover pose. Gather only once movement commits a
+        // drag, then allow velocity-driven lean after the gather finishes.
+        if (dragging) {
+          if (prefersReducedMotion()) {
+            setThumbnailStackDragSwayReady(stack, true);
+          } else {
+            const cardCount = stack.querySelectorAll(":scope > .thumbnail-card").length;
+            stackFanCollapseTimer.current = setTimeout(() => {
+              stackFanCollapseTimer.current = null;
+              if (!stackDrag.current?.isDragging) return;
+              stackDrag.current.resetSway();
+              setThumbnailStackDragSwayReady(stackRef.current, true);
+            }, thumbnailStackFanCollapseMs(cardCount));
+          }
         }
         window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
       },
@@ -7437,24 +7450,9 @@ export function Thumbnail() {
     if (!drag.pointerDown(event.nativeEvent)) return;
     collapsedLayoutAnchorRef.current = stackAnchorRef.current;
     skipCollapsedStackClick.current = true;
-    setThumbnailStackPressing(stackRef.current, true);
     if (stackFanCollapseTimer.current) {
       clearTimeout(stackFanCollapseTimer.current);
       stackFanCollapseTimer.current = null;
-    }
-    if (prefersReducedMotion()) {
-      stackFanCollapsed.current = true;
-    } else {
-      stackFanCollapsed.current = false;
-      const cardCount = stackRef.current?.querySelectorAll(":scope > .thumbnail-card").length
-        ?? 0;
-      stackFanCollapseTimer.current = setTimeout(() => {
-        stackFanCollapseTimer.current = null;
-        stackFanCollapsed.current = true;
-        if (!drag.isDragging) return;
-        drag.resetSway();
-        setThumbnailStackDragSwayReady(stackRef.current, true);
-      }, thumbnailStackFanCollapseMs(cardCount));
     }
     event.preventDefault();
     event.nativeEvent.preventDefault();
@@ -7485,7 +7483,6 @@ export function Thumbnail() {
         clearTimeout(stackFanCollapseTimer.current);
         stackFanCollapseTimer.current = null;
       }
-      stackFanCollapsed.current = false;
       setThumbnailStackPressing(stackRef.current, false);
       releaseThumbnailPointerCapture(hitTarget, pointerId);
       releaseThumbnailCapturedHover(hitTarget, {
@@ -7588,7 +7585,7 @@ export function Thumbnail() {
             editorActive={editorActiveArtifactIds.has(artifact.id)}
             stackCollapsed={compact}
             stackDepth={artifacts.length - artifacts.indexOf(artifact) - 1}
-            expandFromTransform={expandFromTransforms.get(artifact.id)}
+            expandFromPose={expandFromPoses.get(artifact.id)}
             stackDismissing={isStackClearTarget}
             clearDelayMs={clearDelayMs}
             previewDropReject={
@@ -7727,7 +7724,7 @@ export function ThumbnailCard({
   editorActive = false,
   stackCollapsed = false,
   stackDepth = 0,
-  expandFromTransform,
+  expandFromPose,
   stackDismissing = false,
   clearDelayMs = 0,
   previewDropReject = false,
@@ -7741,7 +7738,7 @@ export function ThumbnailCard({
   editorActive?: boolean;
   stackCollapsed?: boolean;
   stackDepth?: number;
-  expandFromTransform?: string;
+  expandFromPose?: ThumbnailCardPose;
   /** Parent Clear all: play Close without a per-card dismiss command. */
   stackDismissing?: boolean;
   clearDelayMs?: number;
@@ -8201,8 +8198,12 @@ export function ThumbnailCard({
         ...(stackCollapsed ? {
           "--thumbnail-stack-base-depth": stackDepth,
           "--thumbnail-stack-peek-jitter": `${thumbnailStackPeekJitterPx(stackDepth)}px`,
-          ...(expandFromTransform
-            ? { "--thumbnail-stack-expand-from": expandFromTransform }
+          ...(expandFromPose
+            ? {
+              "--thumbnail-stack-expand-from": expandFromPose.transform,
+              "--thumbnail-stack-expand-blur-from": expandFromPose.blur,
+              "--thumbnail-stack-expand-dim-from": expandFromPose.dim,
+            }
             : {}),
         } : {}),
         ...(clearDelayMs > 0
