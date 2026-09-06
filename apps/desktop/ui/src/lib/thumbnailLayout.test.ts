@@ -137,7 +137,7 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-anchor-top\.thumbnail-stack-compact > \.thumbnail-card\s*\{[^}]*top:\s*52px/,
     );
     expect(thumbnailStyles).toMatch(
-      /var\(--thumbnail-stack-pile-depth, 0\) \* -9px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)/,
+      /var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)/,
     );
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-hover-transform/);
     expect(compactCard?.[1]).toMatch(/rotateZ\(0deg\)/);
@@ -150,6 +150,7 @@ describe("thumbnail stack layout", () => {
     expect(pressing?.[1]).toMatch(
       /transform\s+var\(--stack-fan-dur\) calc\(var\(--thumbnail-stack-pile-depth, 0\) \* var\(--stack-fan-stagger\)\)/,
     );
+    expect(pressing?.[1]).toMatch(/theme-accent-rgb/);
     expect(minimizingCard?.[1]).toMatch(/var\(--thumbnail-stack-expanded-transform\)/);
     expect(minimizeRun?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
     expect(minimizeRun?.[1]).toMatch(/transform 0\.52s/);
@@ -390,7 +391,7 @@ describe("thumbnail stack layout", () => {
     applyThumbnailStackGravity(stack, -0.42);
     expect(stack.style.getPropertyValue(THUMBNAIL_STACK_GRAVITY_VAR)).toBe("-0.42");
     expect(thumbnailStyles).toMatch(
-      /var\(--thumbnail-stack-pile-depth, 0\) \* -9px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)/,
+      /var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)/,
     );
     expect(thumbnailStyles).not.toMatch(/--thumbnail-stack-skew-y/);
   });
@@ -425,6 +426,10 @@ describe("thumbnail stack layout", () => {
     expect(dragging?.[1]).not.toMatch(/-0\.28deg/);
     expect(dragging?.[1]).not.toMatch(/0\.18deg/);
     expect(dragging?.[1]).toMatch(/0\.12deg/);
+    expect(dragging?.[1]).toMatch(/theme-accent-rgb/);
+    expect(thumbnailStyles).not.toMatch(
+      /\.thumbnail-stack-dragging \.thumbnail-collapsed-hit-target::before/,
+    );
   });
 
   it("releases the arrival animation before cards exit or shift", () => {
@@ -753,7 +758,7 @@ describe("thumbnail stack layout", () => {
     expect(envelope(6)).toBeLessThan(envelope(2));
     expect(Math.abs(thumbnailStackPeekJitterPx(6))).toBeLessThanOrEqual(envelope(6) + 1e-12);
     expect(thumbnailStyles).toMatch(
-      /var\(--thumbnail-stack-pile-depth, 0\) \* -9px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)\s*\+\s*var\(--thumbnail-stack-peek-jitter, 0px\)/,
+      /var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)\s*\+\s*var\(--thumbnail-stack-peek-jitter, 0px\)/,
     );
   });
 

@@ -6712,7 +6712,7 @@ fn thumbnail_collapsed_peek(count: usize, hovered: bool) -> f64 {
     let extra = count.saturating_sub(1) as f64;
     let pose = thumbnail_stack_pose_depth(extra);
     // Keep in sync with THUMBNAIL_STACK_IDLE_PEEK_PX / HOVER_PEEK_PX.
-    pose * if hovered { 11.0 } else { 9.0 }
+    pose * if hovered { 16.0 } else { 13.0 }
 }
 
 fn thumbnail_stack_height(count: usize, collapsed: bool) -> f64 {
@@ -10064,7 +10064,7 @@ mod tests {
         assert!(thumbnail_stack_height(8, true) > thumbnail_stack_height(4, true));
         assert!(thumbnail_stack_height(8, true) < thumbnail_stack_height(8, false));
         let pose_3 = 3.0 * (24.0 + 0.55 * 3.0) / (3.0 + 24.0);
-        let peek = pose_3 * 11.0;
+        let peek = pose_3 * 16.0;
         let extra_above_padding = f64::max(peek - 28.0, 0.0);
         assert!((thumbnail_stack_height(4, true) - (240.0 + extra_above_padding)).abs() < 1e-9);
     }
