@@ -385,7 +385,13 @@ pub(crate) async fn prepare_capture_selector_inner(
                     let state = state.clone();
                     std::thread::spawn(move || state.monitors())
                 };
-                let snapshot_png = storage::encode_overlay_snapshot(&frame.image)?;
+                let snapshot_png = crate::encode_overlay_snapshot_with_cursor(
+                    &frame.image,
+                    &frame.descriptor,
+                    pointer,
+                    state.settings().show_cursor_in_screenshots
+                        || state.settings().recording.show_cursor,
+                )?;
                 let displays = selection_displays_from_list(
                     monitors_task
                         .join()
@@ -564,7 +570,12 @@ async fn select_capture_display_inner(
     let (display, snapshot_png, image, targets, cursor) = if freeze_screen {
         let pointer = crate::pointer_position();
         let frame = state.backend.capture_display(&requested_display.id)?;
-        let snapshot_png = storage::encode_overlay_snapshot(&frame.image)?;
+        let snapshot_png = crate::encode_overlay_snapshot_with_cursor(
+            &frame.image,
+            &frame.descriptor,
+            pointer,
+            state.settings().show_cursor_in_screenshots || state.settings().recording.show_cursor,
+        )?;
         let targets = crate::capturable_windows_for_display(
             state.windows(),
             &frame.descriptor,

@@ -785,7 +785,12 @@ async fn prepare_capture(
         if includes_capture_ui {
             recording::dismiss_capture_menu_after_nested_snapshot(&app, &state);
         }
-        let snapshot_png = storage::encode_overlay_snapshot(&frame.image)?;
+        let snapshot_png = encode_overlay_snapshot_with_cursor(
+            &frame.image,
+            &frame.descriptor,
+            pointer,
+            state.settings().show_cursor_in_screenshots,
+        )?;
         let (targets, pending_windows) =
             take_ready_or_defer_windows(windows_task, &frame.descriptor, Some(&frame.image));
         (
@@ -3946,6 +3951,19 @@ fn apply_screenshot_cursor(
         pointer,
         enabled,
     );
+}
+
+/// Encode an overlay-only copy so the frozen selector reflects the cursor
+/// setting without baking that glyph into the source used for the final crop.
+pub(crate) fn encode_overlay_snapshot_with_cursor(
+    image: &RgbaImage,
+    display: &captures_capture::DisplayDescriptor,
+    pointer: Option<(i32, i32)>,
+    enabled: bool,
+) -> Result<Vec<u8>, AppError> {
+    let mut snapshot = image.clone();
+    apply_screenshot_cursor(&mut snapshot, display, pointer, enabled);
+    storage::encode_overlay_snapshot(&snapshot)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8711,9 +8729,10 @@ mod tests {
         ThumbnailStackOrigin, ThumbnailWindowFrame, ThumbnailWindowGeometry, app_reactivation,
         capturable_windows_for_display, capture_cursor_icon, classify_preview_file_drop,
         click_through_applies, clipboard_fingerprint, display_contains_pointer,
-        drag_plugin_cursor_to_pointer_space, fallback_startup_notice, freeze_prefetch_can_start,
-        interactive_launch_action, mask_macos_window_corners, parse_shortcut, place_startup_notice,
-        preferences_url, primary_app_window_priority, recording::RECORDING_REGION_INDICATOR_TITLE,
+        drag_plugin_cursor_to_pointer_space, encode_overlay_snapshot_with_cursor,
+        fallback_startup_notice, freeze_prefetch_can_start, interactive_launch_action,
+        mask_macos_window_corners, parse_shortcut, place_startup_notice, preferences_url,
+        primary_app_window_priority, recording::RECORDING_REGION_INDICATOR_TITLE,
         recording_chrome_should_restore_after_snapshot, refine_window_chrome_from_snapshot,
         resolve_startup_notice_placement, resolve_window_capture,
         screenshot_countdown_seconds_for_capture_ui, should_claim_region_cursor_after_freeze,
@@ -10776,6 +10795,20 @@ mod tests {
             scale_factor: 2.0,
             is_primary: true,
         }
+    }
+
+    #[test]
+    fn overlay_snapshot_shows_the_cursor_without_mutating_the_capture_source() {
+        let source = RgbaImage::from_pixel(100, 100, Rgba([0, 0, 0, 255]));
+        let snapshot =
+            encode_overlay_snapshot_with_cursor(&source, &test_display(), Some((10, 12)), true)
+                .expect("snapshot encoded");
+        let decoded = image::load_from_memory(&snapshot)
+            .expect("snapshot decoded")
+            .to_rgba8();
+
+        assert!(decoded.pixels().any(|pixel| pixel.0 == [24, 24, 24, 255]));
+        assert!(source.pixels().all(|pixel| pixel.0 == [0, 0, 0, 255]));
     }
 
     #[test]

@@ -879,7 +879,7 @@ pub struct CaptureSession {
     pub snapshot_png: Vec<u8>,
     pub windows: Vec<WindowDescriptor>,
     /// Pointer sample taken with a freeze-frame so stills can composite the
-    /// cursor after cropping without baking it into the shared freeze image.
+    /// cursor after cropping without baking it into the source image.
     pub cursor: Option<(i32, i32)>,
     pub shell_chrome: Vec<WindowDescriptor>,
     pub windows_ready: bool,
