@@ -62,6 +62,7 @@ impl RecordingSession {
                 | (RecordingState::Paused, RecordingState::Recording)
                 | (RecordingState::Paused, RecordingState::Finalizing)
                 | (RecordingState::Paused, RecordingState::Countdown)
+                | (RecordingState::Failed, RecordingState::Countdown)
                 | (RecordingState::Finalizing, RecordingState::Ready)
                 | (RecordingState::Ready, RecordingState::Editor)
                 | (RecordingState::Editor, RecordingState::Ready)
@@ -87,7 +88,7 @@ impl RecordingSession {
         if matches!(next, RecordingState::Countdown)
             && matches!(
                 self.state,
-                RecordingState::Recording | RecordingState::Paused
+                RecordingState::Recording | RecordingState::Paused | RecordingState::Failed
             )
         {
             self.accumulated_ms = 0;
@@ -332,6 +333,26 @@ mod tests {
             .expect("recording restarts");
         assert_eq!(restarted.elapsed_ms, 0);
         assert_eq!(restarted.state, RecordingState::Countdown);
+    }
+
+    #[test]
+    fn failed_recording_can_retry_the_same_session() {
+        let mut coordinator = RecordingCoordinator::default();
+        let id = coordinator.begin(options(), 0).expect("session begins").id;
+        coordinator
+            .transition(&id, RecordingState::Countdown, 100)
+            .expect("countdown starts");
+        coordinator
+            .fail(&id, "native recorder unavailable".to_owned(), 500)
+            .expect("recording fails");
+
+        let retried = coordinator
+            .transition(&id, RecordingState::Countdown, 1_000)
+            .expect("recording retries");
+
+        assert_eq!(retried.state, RecordingState::Countdown);
+        assert_eq!(retried.elapsed_ms, 0);
+        assert_eq!(retried.error, None);
     }
 
     #[test]

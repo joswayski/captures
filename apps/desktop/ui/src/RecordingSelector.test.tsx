@@ -1543,6 +1543,37 @@ describe("RecordingSelector", () => {
     expect(screen.getByRole("button", { name: "Start recording" })).toBeEnabled();
   });
 
+  it("uses the pointer-up position when the drag has no move event", async () => {
+    const { container } = render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Start recording" });
+    const surface = mockSelectorSurfaceForDrag(container);
+
+    fireEvent.pointerDown(surface, { pointerId: 30, clientX: 100, clientY: 120 });
+    fireEvent.pointerUp(surface, { pointerId: 30, clientX: 360, clientY: 300 });
+
+    expect(container.querySelector(".recording-selection-frame")).toHaveStyle({
+      left: "100px",
+      top: "120px",
+      width: "260px",
+      height: "180px",
+    });
+    expect(screen.getByRole("button", { name: "Start recording" })).toBeEnabled();
+  });
+
+  it("discards a cancelled region drag without auto-starting", async () => {
+    await enableAutoStartPreference();
+    const { container } = render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Record", pressed: true });
+    const surface = mockSelectorSurfaceForDrag(container);
+
+    fireEvent.pointerDown(surface, { pointerId: 31, clientX: 100, clientY: 120 });
+    fireEvent.pointerMove(surface, { pointerId: 31, clientX: 360, clientY: 300 });
+    fireEvent.pointerCancel(surface, { pointerId: 31, clientX: 360, clientY: 300 });
+
+    expect(container.querySelector(".recording-selection-frame")).not.toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith("start_recording", expect.anything());
+  });
+
   it("hides region guidance while creating a new region selection", async () => {
     preparedSession = {
       ...session,
@@ -1877,7 +1908,7 @@ describe("RecordingSelector", () => {
       });
     }
     fireEvent.pointerMove(surface!, { pointerId: 1, clientX: 400, clientY: 340 });
-    fireEvent.pointerUp(surface!, { pointerId: 1 });
+    fireEvent.pointerUp(surface!, { pointerId: 1, clientX: 400, clientY: 340 });
 
     await waitFor(() => {
       expect(container.querySelector(".recording-selection-frame")).toHaveStyle({
