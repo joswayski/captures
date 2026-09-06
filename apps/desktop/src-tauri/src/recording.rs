@@ -4192,7 +4192,9 @@ pub fn reveal_recording_selector(
     #[cfg(target_os = "macos")]
     {
         captures_macos_window::reveal_window(&window).map_err(str::to_owned)?;
-        captures_macos_window::conceal_documents_under_opaque_capture_surface();
+        if mode != CaptureMode::Region {
+            captures_macos_window::conceal_documents_under_opaque_capture_surface();
+        }
         captures_macos_window::elevate_capture_surface(&window).map_err(str::to_owned)?;
     }
     crate::set_click_through(&window, false).map_err(|error| error.to_string())?;
@@ -4238,6 +4240,10 @@ pub fn sync_selector_cursor(
     let window = app
         .get_webview_window("recording-selector")
         .ok_or_else(|| "recording selector is unavailable".to_owned())?;
+    #[cfg(target_os = "macos")]
+    if mode == CaptureMode::Region {
+        captures_macos_window::reveal_concealed_document_windows_under_capture_surface();
+    }
     apply_selector_capture_cursor(&window, mode)
 }
 

@@ -2131,9 +2131,11 @@ fn reveal_capture_overlay(
     set_click_through(&window, false).map_err(|error| error.to_string())?;
     #[cfg(target_os = "macos")]
     {
-        // Opaque frozen frame first, then take key focus so sibling document
-        // windows (editors) can deactivate under cover of the snapshot.
-        captures_macos_window::reveal_capture_overlay(&window).map_err(str::to_owned)?;
+        // Window capture keeps the frozen frame opaque while sibling documents
+        // deactivate. Region capture cuts through that frame, so its live
+        // desktop pixels must keep those documents visible underneath.
+        captures_macos_window::reveal_capture_overlay(&window, mode == CaptureMode::Region)
+            .map_err(str::to_owned)?;
         if let Err(error) = captures_macos_window::elevate_capture_surface(&window) {
             eprintln!("failed to keep the capture overlay above the menu bar: {error}");
         }

@@ -2207,11 +2207,15 @@ pub fn release_capture_cursor() {
 /// Reveals the overlay after WebKit has painted its reset state.
 ///
 /// Makes the frozen frame fully opaque first, then orders out titled documents
-/// so an open editor cannot vanish for a frame while this surface is still
-/// transparent.
-pub fn reveal_capture_overlay(window: &WebviewWindow) -> Result<(), &'static str> {
+/// unless a transparent region must continue showing those live windows.
+pub fn reveal_capture_overlay(
+    window: &WebviewWindow,
+    preserve_visible_documents: bool,
+) -> Result<(), &'static str> {
     reveal_window(window)?;
-    conceal_documents_under_opaque_capture_surface();
+    if !preserve_visible_documents {
+        conceal_documents_under_opaque_capture_surface();
+    }
     Ok(())
 }
 
@@ -2857,6 +2861,28 @@ pub fn reveal_concealed_document_windows() {
         }
     }
     yield_activation_to(yield_to);
+}
+
+/// Restores documents beneath an already-visible capture surface without
+/// changing app activation. Region cutouts expose live desktop pixels, so a
+/// selector that began in another mode must put these windows back first.
+pub fn reveal_concealed_document_windows_under_capture_surface() {
+    if !is_main_thread() {
+        let _ = run_on_main(reveal_concealed_document_windows_under_capture_surface);
+        return;
+    }
+    if MainThreadMarker::new().is_none() {
+        return;
+    }
+    let windows =
+        CONCEALED_DOCUMENT_WINDOWS.with(|concealed| std::mem::take(&mut *concealed.borrow_mut()));
+    for window in windows {
+        if window.isVisible() {
+            continue;
+        }
+        window.orderFront(None);
+        window.orderBack(None);
+    }
 }
 
 fn is_titled_document_window(window: &NSWindow) -> bool {
