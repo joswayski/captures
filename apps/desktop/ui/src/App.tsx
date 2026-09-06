@@ -467,11 +467,30 @@ function TrayNoticeShell({
 }
 
 export function StartupNotice() {
+  const [shortcut, setShortcut] = useState("CommandOrControl+Shift+Space");
+
+  useEffect(() => {
+    void invoke<AppSettings>("get_settings")
+      .then((settings) => {
+        if (settings.new_capture_shortcut.trim()) {
+          setShortcut(settings.new_capture_shortcut);
+        }
+      })
+      .catch(() => undefined);
+  }, []);
+
+  const keys = shortcutDisplayTokens(shortcut);
+
   return (
     <TrayNoticeShell className="startup-notice">
-      <p className="startup-notice-card" role="status">
-        Captures is ready to use
-      </p>
+      <div className="startup-notice-card" role="status">
+        <strong>Captures is ready to use</strong>
+        <p>
+          Open New Capture with {keys.map((key, index) => (
+            <kbd key={`${key}-${index}`}>{key}</kbd>
+          ))}
+        </p>
+      </div>
     </TrayNoticeShell>
   );
 }

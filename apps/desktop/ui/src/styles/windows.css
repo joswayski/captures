@@ -2593,8 +2593,8 @@ html[data-preview-harness-view="startup"] #root {
   position: fixed;
   top: 28px;
   left: 50%;
-  width: 296px;
-  height: 72px;
+  width: 352px;
+  height: 90px;
   transform: translateX(-50%);
 }
 
@@ -2617,19 +2617,38 @@ html[data-preview-harness-view="startup"]:has([data-caret="bottom"]) #root {
 .startup-notice-card {
   display: grid;
   margin: 0;
-  padding: var(--s-3) var(--s-6);
+  padding: var(--s-2) var(--s-6) var(--s-3);
   flex: 1;
   place-items: center;
   border: 0;
   border-radius: var(--r-pill);
   color: var(--glass-text);
   background: var(--glass-strong-solid);
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
   letter-spacing: var(--tracking-tight);
   line-height: var(--leading-tight);
   text-align: center;
-  white-space: nowrap;
+}
+
+.startup-notice-card strong {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+
+.startup-notice-card p {
+  margin: 0;
+  color: var(--glass-text-subtle);
+  font-size: var(--text-sm);
+}
+
+.startup-notice-card kbd {
+  margin-left: var(--s-1);
+  padding: 1px var(--s-1);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-sm);
+  color: var(--glass-text);
+  background: var(--glass-hover);
+  font: inherit;
+  font-weight: var(--weight-semibold);
 }
 
 @keyframes startup-arrive {
