@@ -74,7 +74,7 @@ jobs:
         with:
           toolchain: 1.94.0
       - run: npm ci
-      - run: npm run prepare:media
+      - uses: ./.github/actions/prepare-media
       - run: npm run tauri:build --workspace @captures/desktop -- --config src-tauri/tauri.recording.local.conf.json
       - name: Validate bundled media sidecars and notices
         shell: bash
@@ -168,10 +168,7 @@ jobs:
             mingw-w64-ucrt-x86_64-yasm
             mingw-w64-ucrt-x86_64-zlib
       - run: npm ci
-      - name: Build Windows media sidecars
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
-        run: bash scripts/build-ffmpeg-sidecars.sh
+      - uses: ./.github/actions/prepare-media
       - name: Build desktop app through the root build command
         run: npm run build -- --bundles ${{ matrix.bundle }}
       - uses: actions/upload-artifact@v4

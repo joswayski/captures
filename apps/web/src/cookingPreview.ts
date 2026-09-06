@@ -40,11 +40,11 @@ export function releaseRunBuckets(runs: readonly GitHubWorkflowRun[]) {
       succeeded.add(sha);
     } else if (
       run.conclusion === "failure" ||
-      run.conclusion === "cancelled" ||
       run.conclusion === "timed_out" ||
       run.conclusion === "startup_failure"
     ) {
-      // Only mark failed if this SHA never also succeeded (retries).
+      // Cancelled pending runs are superseded by the next release batch, not
+      // failed changes. Only mark failures if this SHA never also succeeded.
       if (!succeeded.has(sha)) failed.add(sha);
     }
   }
@@ -70,26 +70,25 @@ export function cookingPreviewShas(
   const { building, failed, succeeded } = releaseRunBuckets(input.runs);
   const cooking = new Set<string>();
   let seenPublished = publishedCommit === null;
+  const batchHeadIndex = changes.findIndex((change) => building.has(change.sha.toLowerCase()));
 
-  for (const change of changes) {
+  for (const [index, change] of changes.entries()) {
     const sha = change.sha.toLowerCase();
     const recentEnough = isWithinCookingWindow(change.committedAt, input.now);
 
-    // Never show cooking for finished failures/cancels.
-    if (failed.has(sha) && !building.has(sha) && !succeeded.has(sha)) {
-      if (publishedCommit && sha === publishedCommit) seenPublished = true;
-      continue;
+    // Publication wins over old workflow metadata, including superseded runs
+    // whose event SHA differs from the main snapshot that actually shipped.
+    if (publishedCommit && sha === publishedCommit) {
+      seenPublished = true;
     }
+    const includedInBatch = !seenPublished && batchHeadIndex !== -1 && index >= batchHeadIndex;
 
-    // Actively building — only badge merges still inside the cooking window.
-    if (recentEnough && building.has(sha)) {
+    if (recentEnough && (includedInBatch || (!publishedCommit && building.has(sha)))) {
       cooking.add(change.sha);
     }
 
     if (!seenPublished) {
-      if (publishedCommit && sha === publishedCommit) {
-        seenPublished = true;
-      } else if (recentEnough && !failed.has(sha) && !succeeded.has(sha)) {
+      if (recentEnough && !failed.has(sha) && !succeeded.has(sha)) {
         // Newer than the latest published Preview and still unresolved. A
         // successful scope-only run intentionally has no release to wait for.
         cooking.add(change.sha);

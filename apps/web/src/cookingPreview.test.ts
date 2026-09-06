@@ -52,7 +52,7 @@ test("releaseRunBuckets treats queued runs as building and retries as success", 
   ]);
 
   assert.deepEqual([...buckets.building].sort(), ["aaa", "bbb", "ccc"]);
-  assert.deepEqual([...buckets.failed].sort(), ["eee", "fff", "ggg"]);
+  assert.deepEqual([...buckets.failed].sort(), ["fff", "ggg"]);
   assert.deepEqual([...buckets.succeeded].sort(), ["ddd", "hhh"]);
 });
 
@@ -141,4 +141,12 @@ test("returns no cooking SHAs for an empty change list", () => {
     cookingPreviewShas([], { publishedCommit: "published", runs: [], now: NOW }),
     [],
   );
+});
+
+test("superseded runs and failed earlier attempts cook as part of the next batch", () => {
+  const changes = [change("five", HOUR), change("four", HOUR), change("three", HOUR), change("published", 2 * HOUR)];
+  const runs = [run("five", "pending"), run("four", "completed", "cancelled"), run("three", "completed", "failure")];
+  assert.deepEqual(cookingPreviewShas(changes, { publishedCommit: "published", runs, now: NOW }), ["five", "four", "three"]);
+  // The published snapshot, not any stale workflow event SHA, ends cooking.
+  assert.deepEqual(cookingPreviewShas(changes, { publishedCommit: "five", runs, now: NOW }), []);
 });

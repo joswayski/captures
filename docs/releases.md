@@ -1,22 +1,40 @@
 # Captures releases
 
-Every push to `main` runs the inexpensive scope check in
-`.github/workflows/release.yml`. Website, hosted API, documentation, standalone
-desktop UI test-file, and release-tooling-only changes stop there: they do not
+Pushes to `main` request a Preview in `.github/workflows/release.yml`. One release
+runs at a time; GitHub's default single pending slot replaces older requests while
+`cancel-in-progress: false` lets the active release finish. When the next run
+starts, it snapshots the latest `main` commit once. If changes 2–5 arrive while
+change 1 is building, they ship together in the next Preview. Change 6 arriving
+after that snapshot waits for the following batch. Individual intermediate
+installers are skipped, not their changes.
+
+The scope check compares that snapshot with the nearest **published** dated
+Preview in its main-branch history, ignoring drafts and orphan tags. Website,
+hosted API, documentation, standalone desktop UI test-file, and release-tooling-only
+changes since that Preview stop there: they do not
 choose a new version, build installers, publish a Preview, or notify installed
 desktop apps. Changes to desktop source, shared UI source, Rust crates and
 manifests, or the desktop's reachable `package-lock.json` dependency graph
 continue through the release. Manual builds always run, including when a
 release-tooling change intentionally needs a new installer set.
 
-Qualifying Preview workflows wait in commit order without cancelling older
-pushes, run the frontend and Rust quality gates, and then build macOS Apple
-Silicon, Windows x64, and Linux x64 packages. A Preview is published only when
-every job succeeds. Later runs share a GitHub concurrency group with `queue: max`
-so they stay queued instead of cancelling an older or intermediate build
-(`cancel-in-progress: false` alone still drops pending runs when a third push
-arrives). The wait job retries transient GitHub API errors instead of failing the
-Preview.
+Qualifying batches run the frontend and Rust quality gates, then build macOS
+Apple Silicon, Windows x64, and Linux x64 packages in parallel. A Preview is
+published only when every job succeeds. Failed batches remain included in the
+next request's comparison with the last published Preview; a docs-only push
+cannot hide unreleased desktop changes. Notes use that same published baseline
+and include all qualifying commits in the batch.
+
+PR and release packaging reuse an exact-key cache of unsigned FFmpeg/ffprobe
+binaries, source archives, and compliance files. The key includes the platform,
+architecture, runner image, compiler, Rust host/toolchain, SDK or zlib version,
+and hashes of the pinned source/build script, validator, configuration, and
+notice. There are no fallback restore keys. Cache hits still verify the source
+checksum, recreate compliance files, and validate both binaries. Cache saves
+happen immediately after validation, before packaging can sign binaries; app
+signing, notarization, updater signatures, and complete-release validation still
+run for every release. Delete the relevant GitHub Actions `ffmpeg-v1-*` cache to
+force a cold rebuild; the first build after a key change is also cold.
 
 Previews are GitHub pre-releases with CalVer versions in `YYYY.MM.DD.N` form,
 using the
@@ -24,8 +42,8 @@ using the
 through 99. A Preview named `Captures Preview 2026.07.19.1` uses tag
 `v2026.07.19.1`. Tauri receives the SemVer-compatible internal version
 `2026.7.1901`; source manifests remain at the development version. The updater
-channel and fixed Git tag are both named `preview` and update after every
-installed-app change.
+channel and fixed Git tag are both named `preview` and update after each
+successful batch of installed-app changes.
 
 The workflow stages a draft Preview at the exact tested commit. Each platform
 builds and validates its pinned LGPL FFmpeg sidecars, then uploads its installer,
@@ -98,7 +116,19 @@ For a historical backfill, dispatch the workflow from `main` with `target_sha`
 set to a commit that is already on `main`. The workflow checks out and rebuilds
 that commit, derives its New York date from the commit timestamp, and publishes
 the next revision for that date. Dispatch historical commits from oldest to
-newest so their revisions preserve merge order.
+newest so their revisions preserve merge order. Manual requests share the same
+single pending slot and can be superseded by a subsequent push or dispatch
+before starting; retry a superseded backfill when the queue is quiet. A dispatch
+without `target_sha` snapshots the latest `main` when it starts.
+
+When switching from the old preserve-every-push workflow, pending runs created
+with the old workflow may still exist. Inspect Actions after merging; if needed,
+cancel only obsolete pending Preview runs, keep the active run, and dispatch
+the new workflow from `main`. Do not rerun old workflow runs to enable batching:
+they retain their old workflow definition. For an urgent fix, a maintainer can
+explicitly cancel an obsolete active build and request the latest `main`; check
+that any staged draft was cleaned up before retrying. Normal pushes never
+cancel the active release.
 
 ## Install the latest Preview
 

@@ -11,6 +11,7 @@ import {
   desktopLockSnapshot,
   desktopReleaseImpact,
   isDesktopReleasePath,
+  previousPreviewTag,
   releaseImpactBetween,
   releaseNotesBetween,
 } from "./desktop-release.mjs";
@@ -150,4 +151,66 @@ test("the Preview workflow gates builds and generates scoped notes", () => {
     /name: Load the current desktop release helper[\s\S]*?ref: \$\{\{ github\.sha \}\}[\s\S]*?sparse-checkout: scripts\/desktop-release\.mjs/u,
   );
   assert.doesNotMatch(workflow, /generate_release_notes=true/u);
+  assert.match(workflow, /concurrency:\n  group: captures-preview-main\n  cancel-in-progress: false\n\n/u);
+  assert.doesNotMatch(workflow, /wait-preview-queue|github\.event\.before/u);
+  assert.match(workflow, /release_sha="\$\{REQUESTED_SHA:-origin\/main\}"/u);
+  assert.match(workflow, /BEFORE_SHA: \$\{\{ steps\.baseline\.outputs\.previous_tag \}\}/u);
+  assert.match(workflow, /"\$generated_notes" \\\n\s+"\$PREVIOUS_TAG"/u);
+});
+
+test("batches unpublished desktop changes, fixes, and notes across docs-only pushes", () => {
+  const directory = mkdtempSync(join(tmpdir(), "captures-preview-batch-"));
+  const originalDirectory = process.cwd();
+  const runGit = (...args) => execFileSync("git", args, { cwd: directory, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const commit = (path, text) => {
+    writeFileSync(join(directory, path), text);
+    runGit("add", path);
+    runGit("commit", "-m", text);
+    return runGit("rev-parse", "HEAD");
+  };
+  const published = (tag_name) => ({ tag_name, draft: false, prerelease: true });
+  try {
+    runGit("init");
+    runGit("config", "user.name", "Captures Test");
+    runGit("config", "user.email", "captures@example.com");
+    mkdirSync(join(directory, "apps/desktop"), { recursive: true });
+    const first = commit("apps/desktop/app.txt", "Change 1 (#1)");
+    runGit("tag", "v2026.09.05.1");
+    const releases = [published("v2026.09.05.1")];
+    commit("apps/desktop/app.txt", "Change 2 (#2)");
+    runGit("tag", "v2026.09.05.2");
+    releases.push({ ...published("v2026.09.05.2"), draft: true });
+    commit("apps/desktop/app.txt", "Fix 3 (#3)");
+    runGit("tag", "v2026.09.05.3"); // Orphan tag from an interrupted stage.
+    const batch = commit("README.md", "Docs 4 (#4)");
+    process.chdir(directory);
+    assert.equal(previousPreviewTag(batch, releases), "v2026.09.05.1");
+    assert.equal(releaseImpactBetween(first, batch).shouldRelease, true);
+    assert.equal(releaseImpactBetween("", batch).shouldRelease, true, "bootstrap includes older desktop files");
+    const notes = releaseNotesBetween(previousPreviewTag(batch, releases), batch, "joswayski/captures");
+    assert.match(notes, /Change 2/u);
+    assert.match(notes, /Fix 3/u);
+    assert.doesNotMatch(notes, /Change 1|Docs 4/u);
+
+    // A new push cannot alter the pinned batch. After publication it belongs
+    // exclusively to the next batch, and repeated/docs-only runs are skipped.
+    const next = commit("apps/desktop/app.txt", "Change 5 (#5)");
+    runGit("tag", "v2026.09.05.4", batch);
+    releases.push(published("v2026.09.05.4"));
+    assert.equal(previousPreviewTag(batch, releases), "v2026.09.05.4");
+    assert.equal(releaseImpactBetween("v2026.09.05.4", batch).shouldRelease, false);
+    const nextNotes = releaseNotesBetween(previousPreviewTag(next, releases), next, "joswayski/captures");
+    assert.match(nextNotes, /Change 5/u);
+    assert.doesNotMatch(nextNotes, /Change 2|Fix 3/u);
+    // Historical builds must not use a later published version as their base.
+    assert.equal(previousPreviewTag(first, releases), "v2026.09.05.1");
+    assert.equal(previousPreviewTag(next, []), "");
+    runGit("tag", "v2026.09.05.5", next);
+    releases.push(published("v2026.09.05.5"));
+    const docs = commit("README.md", "Docs only (#6)");
+    assert.equal(releaseImpactBetween(previousPreviewTag(docs, releases), docs).shouldRelease, false);
+  } finally {
+    process.chdir(originalDirectory);
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
