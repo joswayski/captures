@@ -272,11 +272,16 @@ describe("RecordingCountdown", () => {
 });
 
 describe("RecordingRegionIndicator", () => {
-  afterEach(() => {
-    window.history.replaceState({}, "", "/");
+  beforeEach(() => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
   });
 
-  it("keeps the selected region clear while shading and framing its exterior", () => {
+  afterEach(() => {
+    window.history.replaceState({}, "", "/");
+    vi.clearAllMocks();
+  });
+
+  it("reveals only after the selected region has painted", async () => {
     window.history.replaceState(
       {},
       "",
@@ -294,6 +299,9 @@ describe("RecordingRegionIndicator", () => {
       width: "640px",
       height: "360px",
     });
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("reveal_recording_region_indicator");
+    });
   });
 
   it("stays transparent when its native window has no valid region", () => {
@@ -303,6 +311,7 @@ describe("RecordingRegionIndicator", () => {
 
     expect(container.querySelector(".capture-shade-full")).not.toBeInTheDocument();
     expect(container.querySelector(".recording-region-indicator-frame")).not.toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith("reveal_recording_region_indicator");
   });
 });
 
