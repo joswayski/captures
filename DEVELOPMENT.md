@@ -20,7 +20,7 @@ npm run prepare:media
 npm run dev
 ```
 
-`npm run prepare:media` is required on the first run for each operating system and whenever the pinned media build changes.
+`npm run prepare:media` is required on the first run for each operating system and whenever the pinned media build changes. It downloads the pinned FFmpeg source from ffmpeg.org, or from a previously published Preview if that host is unreachable.
 
 ## Design harness
 

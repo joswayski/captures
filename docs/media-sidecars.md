@@ -10,12 +10,14 @@ live session; FFmpeg synchronizes and muxes those tracks when it finalizes the
 recording.
 
 The macOS, Windows, and Linux sidecars are built from the source version and
-SHA-256 pinned in `scripts/build-ffmpeg-sidecars.sh`. Every platform
-configuration intentionally disables GPL, nonfree, version-3-only, network, and
-autodetected external components. The system zlib is enabled explicitly for PNG
-posters. The build does not include libx264; H.264 visual exports use Apple's
-VideoToolbox encoder on macOS and the in-process OpenH264 encoder on Windows and
-Linux.
+SHA-256 pinned in `scripts/build-ffmpeg-sidecars.sh`. Cold builds download that
+tarball from ffmpeg.org, or from a previously published Captures Preview when
+ffmpeg.org is unreachable. The SHA-256 pin is the authenticity check in either
+case. Every platform configuration intentionally disables GPL, nonfree,
+version-3-only, network, and autodetected external components. The system zlib is
+enabled explicitly for PNG posters. The build does not include libx264; H.264
+visual exports use Apple's VideoToolbox encoder on macOS and the in-process
+OpenH264 encoder on Windows and Linux.
 
 Build and validate the sidecars with:
 

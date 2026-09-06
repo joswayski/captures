@@ -36,10 +36,25 @@ runs:
           target/ffmpeg-build/*.tar.xz
           target/ffmpeg-build/*.tar.xz.asc
           target/ffmpeg-dist
+    # Always runs: download verifies the pinned checksum even on a cache hit.
+    # Historical package jobs overlay this helper from the workflow commit.
+    - name: Download pinned FFmpeg source
+      shell: ${{ runner.os == 'Windows' && 'msys2 {0}' || 'bash' }}
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        if [[ -f release-tools/scripts/download-ffmpeg-source.mjs ]]; then
+          node release-tools/scripts/download-ffmpeg-source.mjs
+        else
+          node scripts/download-ffmpeg-source.mjs
+        fi
     # Always runs: the script verifies the source checksum, recreates notices,
     # and exercises both binaries even when compilation can be skipped.
     - name: Build or validate media sidecars
       shell: ${{ runner.os == 'Windows' && 'msys2 {0}' || 'bash' }}
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
       run: bash scripts/build-ffmpeg-sidecars.sh
     # Save now, not as a post-job hook: packaging may sign the binaries later.
     - name: Save validated unsigned media cache
