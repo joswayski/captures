@@ -4254,6 +4254,11 @@ static CAPTURE_ESCAPE_APP: OnceLock<AppHandle> = OnceLock::new();
 static CAPTURE_ESCAPE_INTENT: AtomicBool = AtomicBool::new(false);
 static CAPTURE_ESCAPE_HOTKEY_REGISTERED: AtomicBool = AtomicBool::new(false);
 static CAPTURE_ESCAPE_CANCELING: AtomicBool = AtomicBool::new(false);
+/// Serializes deferred global-shortcut mutations. The plugin invokes handlers
+/// while holding its shortcut registry mutex, so registering or unregistering
+/// Escape synchronously from one of those handlers deadlocks the event loop.
+static CAPTURE_ESCAPE_HOTKEY_SYNC: Mutex<()> = Mutex::new(());
+static CAPTURE_ESCAPE_HOTKEY_SYNC_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// Bumped on shortcut press and on Escape so an in-flight freeze-frame cannot
 /// present after the user already cancelled.
 static CAPTURE_FLOW_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -4380,11 +4385,7 @@ pub(crate) fn sync_capture_escape(app: &AppHandle) {
     captures_session::set_capture_escape_enabled(active);
     #[cfg(target_os = "macos")]
     captures_macos_window::set_capture_escape_armed(active);
-    if active {
-        register_capture_escape_hotkey(app);
-    } else {
-        unregister_capture_escape_hotkey(app);
-    }
+    schedule_capture_escape_hotkey_sync(app, active);
 }
 
 fn capture_escape_ui_is_active(app: &AppHandle, state: &AppState) -> bool {
@@ -4429,6 +4430,26 @@ fn cancel_active_capture_ui(app: &AppHandle, state: &Arc<AppState>) {
     updates::restore_update_notice(app);
     sync_capture_escape(app);
     CAPTURE_ESCAPE_CANCELING.store(false, Ordering::Release);
+}
+
+fn schedule_capture_escape_hotkey_sync(app: &AppHandle, active: bool) {
+    let generation = CAPTURE_ESCAPE_HOTKEY_SYNC_GENERATION
+        .fetch_add(1, Ordering::AcqRel)
+        .wrapping_add(1);
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Ok(_guard) = CAPTURE_ESCAPE_HOTKEY_SYNC.lock() else {
+            return;
+        };
+        if CAPTURE_ESCAPE_HOTKEY_SYNC_GENERATION.load(Ordering::Acquire) != generation {
+            return;
+        }
+        if active {
+            register_capture_escape_hotkey(&app);
+        } else {
+            unregister_capture_escape_hotkey(&app);
+        }
+    });
 }
 
 fn register_capture_escape_hotkey(app: &AppHandle) {
