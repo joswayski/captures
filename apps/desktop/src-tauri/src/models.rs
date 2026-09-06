@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub const HISTORY_RETENTION_DAYS: i64 = 30;
-const CURRENT_SETTINGS_SCHEMA_VERSION: u8 = 4;
+const CURRENT_SETTINGS_SCHEMA_VERSION: u8 = 5;
 const SHORTCUT_MODIFIER: &str = "CommandOrControl";
 /// kCGSHotKeyScreenshot — Save picture of screen as a file (⌘⇧3).
 const MACOS_SCREENSHOT_SAVE_SCREEN: u32 = 28;
@@ -207,8 +207,14 @@ pub enum VideoFormat {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RecordingSettings {
+    /// Legacy field name retained so existing Record Screen bindings become
+    /// Record Region bindings without resetting a user's shortcut.
     #[serde(default = "default_video_shortcut")]
     pub video_shortcut: String,
+    #[serde(default = "default_record_window_shortcut")]
+    pub window_shortcut: String,
+    #[serde(default = "default_record_display_shortcut")]
+    pub display_shortcut: String,
     #[serde(default = "default_gif_shortcut")]
     pub gif_shortcut: String,
     #[serde(default)]
@@ -245,6 +251,8 @@ impl Default for RecordingSettings {
     fn default() -> Self {
         Self {
             video_shortcut: default_video_shortcut(),
+            window_shortcut: default_record_window_shortcut(),
+            display_shortcut: default_record_display_shortcut(),
             gif_shortcut: default_gif_shortcut(),
             video_format: VideoFormat::default(),
             video_fps: default_video_fps(),
@@ -797,6 +805,14 @@ fn default_video_shortcut() -> String {
     }
 }
 
+fn default_record_window_shortcut() -> String {
+    format!("{SHORTCUT_MODIFIER}+Shift+Alt+W")
+}
+
+fn default_record_display_shortcut() -> String {
+    format!("{SHORTCUT_MODIFIER}+Shift+Alt+3")
+}
+
 fn default_gif_shortcut() -> String {
     captures_extra_shortcut("6")
 }
@@ -1062,13 +1078,15 @@ fn shortcut_matches(shortcut: &str, modifiers: &[&str], key: &str) -> bool {
     parsed_key == canonical_shortcut_token(key) && mods == expected
 }
 
-fn capture_shortcut_values(settings: &AppSettings) -> [&str; 6] {
+fn capture_shortcut_values(settings: &AppSettings) -> [&str; 8] {
     [
         settings.new_capture_shortcut.as_str(),
         settings.region_shortcut.as_str(),
         settings.window_shortcut.as_str(),
         settings.display_shortcut.as_str(),
         settings.recording.video_shortcut.as_str(),
+        settings.recording.window_shortcut.as_str(),
+        settings.recording.display_shortcut.as_str(),
         settings.recording.gif_shortcut.as_str(),
     ]
 }
@@ -1235,7 +1253,9 @@ pub enum SuperShiftSAction {
     Region,
     Window,
     Display,
-    Recording,
+    RecordRegion,
+    RecordWindow,
+    RecordDisplay,
 }
 
 pub fn settings_super_shift_s_action(settings: &AppSettings) -> Option<SuperShiftSAction> {
@@ -1254,7 +1274,13 @@ pub fn settings_super_shift_s_action(settings: &AppSettings) -> Option<SuperShif
     if shortcut_is_super_shift_s(&settings.recording.video_shortcut)
         || shortcut_is_super_shift_s(&settings.recording.gif_shortcut)
     {
-        return Some(SuperShiftSAction::Recording);
+        return Some(SuperShiftSAction::RecordRegion);
+    }
+    if shortcut_is_super_shift_s(&settings.recording.window_shortcut) {
+        return Some(SuperShiftSAction::RecordWindow);
+    }
+    if shortcut_is_super_shift_s(&settings.recording.display_shortcut) {
+        return Some(SuperShiftSAction::RecordDisplay);
     }
     None
 }
@@ -1480,7 +1506,7 @@ mod tests {
     fn fresh_settings_require_first_run_onboarding() {
         let mut settings = AppSettings::default();
 
-        assert_eq!(settings.settings_schema_version, 4);
+        assert_eq!(settings.settings_schema_version, 5);
         assert!(!settings.onboarding_completed);
         assert!(!migrate_settings(&mut settings));
     }
@@ -1496,7 +1522,7 @@ mod tests {
         settings.recording.video_max_resolution = captures_recording::MaxResolution::P1080;
 
         assert!(migrate_settings(&mut settings));
-        assert_eq!(settings.settings_schema_version, 4);
+        assert_eq!(settings.settings_schema_version, 5);
         assert!(settings.onboarding_completed);
         assert_eq!(settings.recording.video_fps, 30);
         assert_eq!(
@@ -1516,6 +1542,14 @@ mod tests {
 
         assert!(migrate_settings(&mut settings));
         assert_eq!(settings.recording.video_fps, 60);
+        assert_eq!(
+            settings.recording.window_shortcut,
+            super::default_record_window_shortcut()
+        );
+        assert_eq!(
+            settings.recording.display_shortcut,
+            super::default_record_display_shortcut()
+        );
         assert_eq!(
             settings.recording.video_max_resolution,
             captures_recording::MaxResolution::Original
@@ -1573,6 +1607,14 @@ mod tests {
         assert_eq!(
             settings.recording.video_shortcut,
             super::default_video_shortcut()
+        );
+        assert_eq!(
+            settings.recording.window_shortcut,
+            super::default_record_window_shortcut()
+        );
+        assert_eq!(
+            settings.recording.display_shortcut,
+            super::default_record_display_shortcut()
         );
         assert!(settings.recording.open_editor_after_recording);
         assert_eq!(settings.recording.video_format, VideoFormat::Mp4);
@@ -1847,7 +1889,7 @@ mod tests {
         settings.recording.gif_shortcut = "Command+Shift+6".to_owned();
 
         assert!(migrate_settings(&mut settings));
-        assert_eq!(settings.settings_schema_version, 4);
+        assert_eq!(settings.settings_schema_version, 5);
         assert_eq!(
             settings.new_capture_shortcut,
             super::default_new_capture_shortcut()
@@ -1880,7 +1922,7 @@ mod tests {
         settings.recording.gif_shortcut = "CommandOrControl+Shift+6".to_owned();
 
         assert!(migrate_settings(&mut settings));
-        assert_eq!(settings.settings_schema_version, 4);
+        assert_eq!(settings.settings_schema_version, 5);
         assert_eq!(
             settings.new_capture_shortcut,
             super::default_new_capture_shortcut()
@@ -1891,6 +1933,14 @@ mod tests {
         assert_eq!(
             settings.recording.video_shortcut,
             super::default_video_shortcut()
+        );
+        assert_eq!(
+            settings.recording.window_shortcut,
+            super::default_record_window_shortcut()
+        );
+        assert_eq!(
+            settings.recording.display_shortcut,
+            super::default_record_display_shortcut()
         );
         assert_eq!(
             settings.recording.gif_shortcut,
@@ -2145,6 +2195,21 @@ mod tests {
                 ..AppSettings::default()
             }),
             Some(super::SuperShiftSAction::NewCapture)
+        );
+        assert_eq!(
+            super::settings_super_shift_s_action(&AppSettings {
+                new_capture_shortcut: "Control+Shift+Space".to_owned(),
+                region_shortcut: "Control+Shift+4".to_owned(),
+                window_shortcut: "Alt+PrintScreen".to_owned(),
+                display_shortcut: "PrintScreen".to_owned(),
+                recording: {
+                    let mut recording = AppSettings::default().recording;
+                    recording.window_shortcut = "Win+Shift+S".to_owned();
+                    recording
+                },
+                ..AppSettings::default()
+            }),
+            Some(super::SuperShiftSAction::RecordWindow)
         );
         assert!(super::shortcut_is_super_shift_s("Win+Shift+S"));
         assert!(super::shortcut_is_super_shift_s("Super+Shift+KeyS"));

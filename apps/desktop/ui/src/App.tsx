@@ -2502,6 +2502,27 @@ export function RecordingSelector() {
         if (eventMatchesShortcut(shortcutEvent, settings.recording.video_shortcut)) {
           event.preventDefault();
           setActionMode("recording");
+          setTargetMode("region");
+          setHoveredWindow(null);
+          setHoveredDisplay(false);
+          setSelectedWindow(null);
+          return;
+        }
+        if (eventMatchesShortcut(shortcutEvent, settings.recording.window_shortcut)) {
+          event.preventDefault();
+          setActionMode("recording");
+          setTargetMode("window");
+          setHoveredWindow(null);
+          setHoveredDisplay(false);
+          return;
+        }
+        if (eventMatchesShortcut(shortcutEvent, settings.recording.display_shortcut)) {
+          event.preventDefault();
+          setActionMode("recording");
+          setTargetMode("display");
+          setHoveredWindow(null);
+          setHoveredDisplay(false);
+          setSelectedWindow(null);
           return;
         }
       }
@@ -9496,12 +9517,28 @@ function PreferencesSections({
             onChange={(value) => update("display_shortcut", value)}
           />
           <ShortcutInput
-            id="video-shortcut"
-            label="Record Screen"
+            id="record-region-shortcut"
+            label="Record Region"
             value={settings.recording.video_shortcut}
-            recording={recordingShortcut === "video-shortcut"}
-            onRecordingChange={(recording) => setShortcutRecording("video-shortcut", recording)}
+            recording={recordingShortcut === "record-region-shortcut"}
+            onRecordingChange={(recording) => setShortcutRecording("record-region-shortcut", recording)}
             onChange={(value) => updateRecording("video_shortcut", value)}
+          />
+          <ShortcutInput
+            id="record-window-shortcut"
+            label="Record Window"
+            value={settings.recording.window_shortcut}
+            recording={recordingShortcut === "record-window-shortcut"}
+            onRecordingChange={(recording) => setShortcutRecording("record-window-shortcut", recording)}
+            onChange={(value) => updateRecording("window_shortcut", value)}
+          />
+          <ShortcutInput
+            id="record-display-shortcut"
+            label="Record Full Screen"
+            value={settings.recording.display_shortcut}
+            recording={recordingShortcut === "record-display-shortcut"}
+            onRecordingChange={(recording) => setShortcutRecording("record-display-shortcut", recording)}
+            onChange={(value) => updateRecording("display_shortcut", value)}
           />
         </div>
       </section>

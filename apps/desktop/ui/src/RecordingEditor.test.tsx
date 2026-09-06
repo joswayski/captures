@@ -92,6 +92,8 @@ const settings: AppSettings = {
   show_update_changelog: true,
   recording: {
     video_shortcut: "Ctrl+Shift+5",
+    window_shortcut: "Ctrl+Shift+Alt+W",
+    display_shortcut: "Ctrl+Shift+Alt+3",
     gif_shortcut: "Ctrl+Shift+6",
     video_format: "mp4",
     video_fps: 60,

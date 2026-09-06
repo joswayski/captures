@@ -193,6 +193,8 @@ function previewShortcutSettings(
     open_editor_after_recording: true,
     gif_shortcut: "CommandOrControl+Shift+6",
     video_shortcut: "CommandOrControl+Shift+5",
+    window_shortcut: "CommandOrControl+Shift+Alt+W",
+    display_shortcut: "CommandOrControl+Shift+Alt+3",
   };
   if (platform === "windows") {
     return {
@@ -222,7 +224,7 @@ function previewShortcutSettings(
 }
 
 const SETTINGS: AppSettings = {
-  settings_schema_version: 4,
+  settings_schema_version: 5,
   appearance: readStoredAppearance(),
   theme: "mustard",
   custom_theme: { accent: "#32d3ff", signal: "#ff4fc3" },

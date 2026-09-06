@@ -104,7 +104,9 @@ Defaults follow each platform’s built-in screenshot keys. Captures-only action
 | `Cmd`+`Shift`+`4` | Capture a region |
 | `Cmd`+`Shift`+`W` | Capture a window |
 | `Cmd`+`Shift`+`3` | Choose a display for a full-screen screenshot |
-| `Cmd`+`Shift`+`5` | Record the screen, then save video or GIF |
+| `Cmd`+`Shift`+`5` | Record a region |
+| `Cmd`+`Shift`+`Option`+`W` | Record a window |
+| `Cmd`+`Shift`+`Option`+`3` | Choose a display to record full screen |
 | `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
 
 ### Windows
@@ -115,7 +117,9 @@ Defaults follow each platform’s built-in screenshot keys. Captures-only action
 | `Win`+`Shift`+`S` | Capture a region |
 | `Alt`+`PrtScn` | Capture a window |
 | `PrtScn` | Choose a display for a full-screen screenshot |
-| `Win`+`Alt`+`R` | Record the screen, then save video or GIF |
+| `Win`+`Alt`+`R` | Record a region |
+| `Ctrl`+`Shift`+`Alt`+`W` | Record a window |
+| `Ctrl`+`Shift`+`Alt`+`3` | Choose a display to record full screen |
 | `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
 
 ### Linux (GNOME / Ubuntu)
@@ -126,14 +130,16 @@ Defaults follow each platform’s built-in screenshot keys. Captures-only action
 | `Super`+`Shift`+`S` | Capture a region |
 | `Alt`+`PrtScn` | Capture a window |
 | `Shift`+`PrtScn` | Choose a display for a full-screen screenshot |
-| `Ctrl`+`Shift`+`Alt`+`R` | Record the screen, then save video or GIF |
+| `Ctrl`+`Shift`+`Alt`+`R` | Record a region |
+| `Ctrl`+`Shift`+`Alt`+`W` | Record a window |
+| `Ctrl`+`Shift`+`Alt`+`3` | Choose a display to record full screen |
 | `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
 
 Global capture shortcuts can be changed in Preferences. In Preferences, `Cmd`+`F` on macOS or `Ctrl`+`F` on Windows and Linux finds a setting; `Enter`, `F3`, or `Cmd`/`Ctrl`+`G` moves to the next match. Installations still on earlier factory defaults (`Ctrl`+`Shift` or the shared macOS-style number keys) are updated automatically; custom shortcuts stay as they are.
 
 On macOS, overlapping Screenshot app shortcuts (`Cmd`+`Shift`+`3` / `4` / `5`) are unbound immediately so those keys reach Captures instead of the system overlay; restore them in System Settings → Keyboard → Keyboard Shortcuts → Screenshots if you want both. On GNOME, overlapping screenshot keybindings are cleared when `gsettings` is available; on KDE, Spectacle’s rectangular-region shortcut is cleared when `kwriteconfig` is available. On Windows, Print Screen is turned off for Snipping Tool when Captures uses that key, and `Win`+`Shift`+`S` is intercepted so Snipping Tool does not open. If another screenshot tool still opens on the same shortcut, `Esc` always cancels Captures — even when that other overlay has keyboard focus or the freeze-frame has not finished painting. Captures lives in the menu bar or tray after setup (on Windows, look in the taskbar overflow if the icon is hidden). Open Captures from Start, Search, or the app icon to show Preferences, including Capture History. Capture from a shortcut, the tray **New Capture** item, or a tray capture action. If a capture starts while Start or Search is still open, Captures waits for those flyouts to close so they are not frozen into the screenshot.
 
-While New Capture is open, the region, window, and display screenshot shortcuts switch that overlay in place. They do not dismiss the menu or bring Preferences and other windows forward. Press the same screenshot shortcut again to freeze the capture menu into the next snapshot. An already-open region or window overlay does the same: the shortcut freezes that overlay instead of tearing it down, so you can capture Captures with Captures.
+While New Capture is open, the region, window, and display screenshot or recording shortcuts switch that overlay in place. They do not dismiss the menu or bring Preferences and other windows forward. Press the same screenshot shortcut again to freeze the capture menu into the next snapshot. An already-open region or window overlay does the same: the shortcut freezes that overlay instead of tearing it down, so you can capture Captures with Captures.
 
 While selecting a capture region, pick an aspect ratio in the capture menu or hold
 `Shift` for a square. In the screenshot editor, zoom with the header slider and

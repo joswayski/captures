@@ -44,6 +44,8 @@ const settings: AppSettings = {
   show_update_changelog: true,
   recording: {
     video_shortcut: "Ctrl+Shift+5",
+    window_shortcut: "Ctrl+Shift+Alt+W",
+    display_shortcut: "Ctrl+Shift+Alt+3",
     gif_shortcut: "Ctrl+Shift+6",
     video_format: "mp4",
     video_fps: 60,
@@ -1929,7 +1931,7 @@ describe("RecordingSelector", () => {
     expect(invoke).not.toHaveBeenCalledWith("start_capture", expect.anything());
   });
 
-  it("switches to Record mode from the recording shortcut while the capture menu is open", async () => {
+  it("switches to Region recording from its shortcut while the capture menu is open", async () => {
     render(<RecordingSelector />);
     fireEvent.click(await screen.findByRole("button", { name: "Screenshot" }));
     expect(screen.getByRole("button", { name: "Screenshot", pressed: true })).toBeInTheDocument();
@@ -1942,8 +1944,41 @@ describe("RecordingSelector", () => {
     });
 
     expect(await screen.findByRole("button", { name: "Record", pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Region", pressed: true })).toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("start_recording", expect.anything());
     expect(invoke).not.toHaveBeenCalledWith("start_capture", expect.anything());
+  });
+
+  it("switches to Window recording from its shortcut while the capture menu is open", async () => {
+    render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Close capture controls" });
+
+    fireEvent.keyDown(window, {
+      key: "w",
+      code: "KeyW",
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: true,
+    });
+
+    expect(await screen.findByRole("button", { name: "Record", pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Window", pressed: true })).toBeInTheDocument();
+  });
+
+  it("switches to Full Screen recording from its shortcut while the capture menu is open", async () => {
+    render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Close capture controls" });
+
+    fireEvent.keyDown(window, {
+      key: "3",
+      code: "Digit3",
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: true,
+    });
+
+    expect(await screen.findByRole("button", { name: "Record", pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Full screen", pressed: true })).toBeInTheDocument();
   });
 
   it("does not discard a prepared selection after a transient reveal failure", async () => {
