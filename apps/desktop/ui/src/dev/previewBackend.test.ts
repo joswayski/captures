@@ -49,6 +49,25 @@ describe("previewBackend capture display switching", () => {
     await invoke("update_settings", { settings: current });
   });
 
+  it("opens changelog pull requests in a new tab from the harness", async () => {
+    const opened: Array<[string, string]> = [];
+    const originalOpen = window.open;
+    window.open = ((url?: string | URL, target?: string) => {
+      opened.push([String(url), target ?? ""]);
+      return null;
+    }) as typeof window.open;
+    try {
+      await invoke("open_update_changelog_url", {
+        url: "https://github.com/joswayski/captures/pull/249",
+      });
+      expect(opened).toEqual([
+        ["https://github.com/joswayski/captures/pull/249", "_blank"],
+      ]);
+    } finally {
+      window.open = originalOpen;
+    }
+  });
+
   it("clears the mocked mini-preview stack without rewriting files", async () => {
     const before = await invoke<{ id: string; path: string | null }[]>("get_artifacts");
     expect(before.length).toBeGreaterThan(1);

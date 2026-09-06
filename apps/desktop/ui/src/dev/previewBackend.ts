@@ -830,6 +830,11 @@ export function installPreviewBackend(): void {
       Object.assign(SETTINGS, next);
       return SETTINGS;
     }
+    if (command === "open_update_changelog_url") {
+      const url = payloadString(payload, "url");
+      if (url) window.open(url, "_blank", "noopener,noreferrer");
+      return undefined;
+    }
     if (command === "select_capture_display") return selectCaptureDisplay(payload);
     if (command === "get_thumbnail_pointer_position" || command === "get_capture_pointer_position") {
       return thumbnailPointer.inside
