@@ -2027,13 +2027,20 @@ export function RecordingRegionIndicator() {
   useEffect(() => {
     if (!rect) return;
     let active = true;
-    afterNextPaint(() => {
-      if (active) {
-        void invoke("reveal_recording_region_indicator");
-      }
-    });
+    let revealed = false;
+    const reveal = () => {
+      if (!active || revealed) return;
+      revealed = true;
+      window.clearTimeout(timer);
+      void invoke("reveal_recording_region_indicator").catch(console.error);
+    };
+    // WKWebView can defer animation frames even on a primed native window.
+    // Match the selector's bounded reveal rather than blocking recording.
+    const timer = window.setTimeout(reveal, RECORDING_SELECTOR_REVEAL_FALLBACK_MS);
+    afterNextPaint(reveal);
     return () => {
       active = false;
+      window.clearTimeout(timer);
     };
   }, [rect]);
   if (!rect) {
@@ -2762,14 +2769,18 @@ export function RecordingSelector() {
         await invoke("capture_selection_screenshot", {
           request: { selection_id: currentSession.id, target },
         });
+        if (activeSessionIdRef.current !== currentSession.id) return;
         activeSessionIdRef.current = null;
+        sessionRef.current = null;
         revealingSessionIdRef.current = null;
         setSession(null);
         clearRegionDrag();
       } catch (error) {
+        if (activeSessionIdRef.current !== currentSession.id) return;
         const message = String(error);
         if (message.includes("screenshot cancelled")) {
           activeSessionIdRef.current = null;
+          sessionRef.current = null;
           revealingSessionIdRef.current = null;
           setSession(null);
           clearRegionDrag();
@@ -2808,11 +2819,14 @@ export function RecordingSelector() {
       await invoke("start_recording", {
         request: { selection_id: currentSession.id, options },
       });
+      if (activeSessionIdRef.current !== currentSession.id) return;
       activeSessionIdRef.current = null;
+      sessionRef.current = null;
       revealingSessionIdRef.current = null;
       setSession(null);
       clearRegionDrag();
     } catch (error) {
+      if (activeSessionIdRef.current !== currentSession.id) return;
       setError(String(error));
       setStarting(false);
     }
@@ -2874,10 +2888,19 @@ export function RecordingSelector() {
     Math.max(session.window_coordinate_scale || 1, 1),
   );
   const onPointerDown = (event: React.PointerEvent) => {
+    if (starting || switchingDisplay || event.button !== 0) return;
     if ((event.target as Element).closest(".recording-selector-panel")) return;
+    if (targetMode === "display") {
+      if (settingsRef.current?.auto_start_on_selection) void start();
+      return;
+    }
     if (targetMode === "window") {
       const hit = windowAtPointer(event);
       if (hit?.kind === "window") {
+        if (selectedWindow === hit.target.id && settingsRef.current?.auto_start_on_selection) {
+          void start();
+          return;
+        }
         setSelectedWindow(hit.target.id);
         setHoveredWindow(hit.target.id);
         setHoveredDisplay(false);
@@ -2899,7 +2922,7 @@ export function RecordingSelector() {
     }
     if (targetMode !== "region") return;
     event.preventDefault();
-    const start = point(event);
+    const origin = point(event);
     const target = event.target as Element;
     const handle = target.closest<HTMLElement>("[data-selection-handle]")?.dataset.selectionHandle as SelectionDragMode | undefined;
     const mode: SelectionDragMode = handle
@@ -2908,15 +2931,15 @@ export function RecordingSelector() {
     event.currentTarget.setPointerCapture(event.pointerId);
     clearRegionDrag();
     pendingRegionForceSquareRef.current = event.shiftKey;
-    pendingRegionPointRef.current = start;
+    pendingRegionPointRef.current = origin;
     regionDragRef.current = {
       mode,
-      origin: start,
-      initial: region ?? { x: start.x, y: start.y, width: 0, height: 0 },
+      origin,
+      initial: region ?? { x: origin.x, y: origin.y, width: 0, height: 0 },
     };
     if (mode === "create") {
       setRegionSelecting(true);
-      setRegion({ x: start.x, y: start.y, width: 0, height: 0 });
+      setRegion({ x: origin.x, y: origin.y, width: 0, height: 0 });
     }
   };
   const onPointerMove = (event: React.PointerEvent) => {

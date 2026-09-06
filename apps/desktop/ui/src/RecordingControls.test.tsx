@@ -313,6 +313,37 @@ describe("RecordingRegionIndicator", () => {
     expect(container.querySelector(".recording-region-indicator-frame")).not.toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("reveal_recording_region_indicator");
   });
+
+  it("reveals once even when WebKit suspends animation frames", async () => {
+    vi.useFakeTimers();
+    const frame = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
+    try {
+      window.history.replaceState({}, "", "/?view=recording-region-indicator&x=1&y=2&width=300&height=200");
+      const { unmount } = render(<RecordingRegionIndicator />);
+      expect(invoke).not.toHaveBeenCalled();
+      await act(async () => { vi.advanceTimersByTime(1000); });
+      expect(invoke).toHaveBeenCalledExactlyOnceWith("reveal_recording_region_indicator");
+      unmount();
+    } finally {
+      frame.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels the reveal deadline when the guide unmounts", async () => {
+    vi.useFakeTimers();
+    const frame = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
+    try {
+      window.history.replaceState({}, "", "/?view=recording-region-indicator&x=1&y=2&width=300&height=200");
+      const { unmount } = render(<RecordingRegionIndicator />);
+      unmount();
+      await act(async () => { vi.advanceTimersByTime(1000); });
+      expect(invoke).not.toHaveBeenCalled();
+    } finally {
+      frame.mockRestore();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("ScreenshotCountdown", () => {

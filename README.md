@@ -60,7 +60,7 @@ Preview builds automatically publish installed-app changes from `main`, and may 
 - Capture regions, windows, or full displays. Window mode treats the menu bar, taskbar, and desktop backdrop as a full-display capture instead of a window.
 - Draw a region from an empty screen (no pre-sized outline); lock to common aspect ratios, or hold Shift for a square
 - Press Enter in the capture menu to confirm a screenshot or recording once a target is ready
-- Optional auto-start after selecting a region, window, or full display (Preferences)
+- Optional auto-start after selecting a region, window, or full display (Preferences). Draw a region, click a window, or click the desktop in Full screen mode to start; with auto-start off, confirm with Enter or the capture button
 - Optional freeze while choosing a region or window, so hover states, tooltips, menus, and motion stay put (on by default; turn off in Preferences to select from the live desktop)
 - Optional cursor in screenshots (on by default; freeze screen does not include the pointer by itself)
 - Optional countdown before screenshots and recordings

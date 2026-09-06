@@ -1217,6 +1217,75 @@ describe("RecordingSelector", () => {
     hiddenClick.mockRestore();
   });
 
+  it.each([true, false])("confirms a full-screen recording by click or Enter (auto-start %s)", async (autoStart) => {
+    preparedSession = { ...session, initial_target: "display" };
+    if (autoStart) await enableAutoStartPreference();
+    const { container } = render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Full screen", pressed: true });
+    const surface = mockSelectorSurface(container);
+    fireEvent.pointerDown(surface, { pointerId: 1, button: 0, clientX: 80, clientY: 90 });
+    if (!autoStart) {
+      expect(invoke).not.toHaveBeenCalledWith("start_recording", expect.anything());
+      fireEvent.keyDown(window, { key: "Enter" });
+    }
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("start_recording", {
+      request: {
+        selection_id: session.id,
+        options: expect.objectContaining({ target: { type: "display", display_id: "display-1" } }),
+      },
+    }));
+  });
+
+  it("retries an auto-start recording by clicking the same window after failure", async () => {
+    preparedSession = { ...session, initial_target: "window" };
+    await enableAutoStartPreference();
+    const defaultInvoke = vi.mocked(invoke).getMockImplementation();
+    let attempts = 0;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "start_recording") {
+        attempts += 1;
+        throw new Error("recording startup failed");
+      }
+      return defaultInvoke?.(command, args);
+    });
+    const { container } = render(<RecordingSelector />);
+    await screen.findByRole("button", { name: "Window", pressed: true });
+    const surface = mockSelectorSurface(container);
+    fireEvent.pointerDown(surface, { pointerId: 1, button: 0, clientX: 950, clientY: 400 });
+    await screen.findByRole("alert");
+    expect(attempts).toBe(1);
+    fireEvent.pointerDown(surface, { pointerId: 1, button: 0, clientX: 950, clientY: 400 });
+    await waitFor(() => expect(attempts).toBe(2));
+  });
+
+  it.each(["resolve", "reject"])("ignores a stale recording start %s after opening a new selector", async (outcome) => {
+    preparedSession = { ...session, initial_target: "display" };
+    const defaultInvoke = vi.mocked(invoke).getMockImplementation();
+    let resolveStart!: () => void;
+    let rejectStart!: (error: Error) => void;
+    const pending = new Promise<void>((resolve, reject) => {
+      resolveStart = resolve;
+      rejectStart = reject;
+    });
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "start_recording") return pending;
+      return defaultInvoke?.(command, args);
+    });
+    render(<RecordingSelector />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start recording" }));
+    fireEvent.keyDown(window, { key: "Escape" });
+    await act(async () => {
+      recordingSelectionReady?.({ payload: { ...session, id: "selection-2" } });
+    });
+    await screen.findByRole("button", { name: "Region", pressed: true });
+    await act(async () => {
+      if (outcome === "resolve") resolveStart();
+      else rejectStart(new Error("old recording failed"));
+    });
+    expect(screen.getByRole("button", { name: "Region", pressed: true })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("keeps the recording menu open when choosing Region or Window with auto-start on", async () => {
     await enableAutoStartPreference();
     render(<RecordingSelector />);
