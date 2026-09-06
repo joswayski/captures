@@ -70,9 +70,8 @@
 }
 
 /*
- * During region selection, the same cutout clips both the shade and frozen
- * snapshot. Transparent WebView pixels expose the color-managed desktop in the
- * selected area while the frozen, treated frame remains outside it.
+ * Region cutouts apply only to the shade. Keep the snapshot intact underneath
+ * so the selected area shows undimmed frozen pixels, never the live desktop.
  */
 
 .capture-region.capture-visible:not(.capture-priming) {
