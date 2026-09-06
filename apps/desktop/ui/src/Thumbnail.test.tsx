@@ -1217,6 +1217,126 @@ describe("Thumbnail", () => {
     }
   });
 
+  it("keeps the Close streak mounted when Clear all emits artifact-removed", async () => {
+    const stacked = [
+      { ...artifact, id: "capture-1" },
+      { ...artifact, id: "capture-2" },
+    ];
+    type ArtifactRemovedHandler = (event: { payload: string }) => void;
+    let onArtifactRemoved: ArtifactRemovedHandler | null = null;
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      if (event === "artifact-removed") {
+        onArtifactRemoved = handler as ArtifactRemovedHandler;
+      }
+      return () => undefined;
+    });
+    vi.mocked(invoke).mockImplementation(async (command, payload) => {
+      if (command === "get_artifacts") return stacked;
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: stacked.at(-1)?.id };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        return new Promise(() => undefined);
+      }
+      if (command === "dismiss_all_artifacts") {
+        const requested = (payload as { artifactIds?: string[] } | undefined)?.artifactIds ?? [];
+        for (const id of requested) {
+          onArtifactRemoved?.({ payload: id });
+        }
+        return requested;
+      }
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    expect(await screen.findAllByRole("article")).toHaveLength(2);
+    await waitFor(() => expect(onArtifactRemoved).not.toBeNull());
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Clear all previews" }));
+        await Promise.resolve();
+      });
+
+      const cards = screen.getAllByRole("article");
+      expect(cards).toHaveLength(2);
+      expect(cards[0]!.closest(".thumbnail-stack")).toHaveClass("thumbnail-stack-clearing");
+      expect(cards[0]).toHaveClass("thumbnail-exit-dismiss");
+      expect(cards[1]).toHaveClass("thumbnail-exit-dismiss");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_450);
+      });
+      expect(screen.queryByRole("article")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a later capture stay interactive if Clear all is still in flight", async () => {
+    const stacked = [
+      { ...artifact, id: "capture-1" },
+      { ...artifact, id: "capture-2" },
+    ];
+    type CaptureCompletedHandler = (event: { payload: CaptureArtifact }) => void;
+    let onCaptureCompleted: CaptureCompletedHandler | null = null;
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      if (event === "capture-completed") {
+        onCaptureCompleted = handler as CaptureCompletedHandler;
+      }
+      return () => undefined;
+    });
+    vi.mocked(invoke).mockImplementation(async (command, payload) => {
+      if (command === "get_artifacts") return stacked;
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: stacked.at(-1)?.id };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        return new Promise(() => undefined);
+      }
+      if (command === "dismiss_all_artifacts") {
+        const requested = (payload as { artifactIds?: string[] } | undefined)?.artifactIds;
+        return Array.isArray(requested) ? requested : [];
+      }
+      return undefined;
+    });
+
+    render(<Thumbnail />);
+    expect(await screen.findAllByRole("article")).toHaveLength(2);
+    await waitFor(() => expect(onCaptureCompleted).not.toBeNull());
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Clear all previews" }));
+        await Promise.resolve();
+      });
+      expect(screen.getAllByRole("article")[0]!.closest(".thumbnail-stack"))
+        .toHaveClass("thumbnail-stack-clearing");
+
+      const nextArtifact = {
+        ...artifact,
+        id: "capture-3",
+        preview_url: "captures-capture://artifact/capture-3",
+        full_url: "captures-capture://artifact-full/capture-3",
+      };
+      await act(async () => {
+        onCaptureCompleted?.({ payload: nextArtifact });
+      });
+
+      const remaining = screen.getByRole("article");
+      expect(remaining).toHaveAttribute("data-thumbnail-id", "capture-3");
+      expect(remaining.closest(".thumbnail-stack")).not.toHaveClass("thumbnail-stack-clearing");
+      expect(remaining).not.toHaveClass("thumbnail-exiting");
+      expect(screen.getByRole("button", { name: "Copy" })).toBeEnabled();
+      expect(screen.queryByRole("button", { name: "Clear all previews" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Minimize previews" })).toBeEnabled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("leaves an in-flight saved delete on the stack so trash can still run", async () => {
     const stacked = [
       { ...artifact, id: "capture-1" },

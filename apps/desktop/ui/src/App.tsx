@@ -6054,6 +6054,7 @@ export function Thumbnail() {
   const [clearingArtifactIds, setClearingArtifactIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const clearingArtifactIdsRef = useRef(clearingArtifactIds);
   const [clipboardState, setClipboardState] = useState<ClipboardState>({
     revision: -1,
     artifact_id: null,
@@ -6103,6 +6104,10 @@ export function Thumbnail() {
       else next.delete(artifactId);
       return next;
     });
+  }, []);
+  const replaceClearingArtifactIds = useCallback((next: Set<string>) => {
+    clearingArtifactIdsRef.current = next;
+    setClearingArtifactIds(next);
   }, []);
   const refreshStackOverflow = useCallback(() => {
     const stack = stackRef.current;
@@ -6190,9 +6195,27 @@ export function Thumbnail() {
           if (!active) return;
           removedArtifactIds.delete(payload.id);
           setArtifactExiting(payload.id, false);
-          setArtifacts((current) => current.some(({ id }) => id === payload.id)
-            ? current
-            : [...current, payload]);
+          const clearing = clearingArtifactIdsRef.current;
+          if (clearing.size > 0) {
+            // A new capture must not inherit a stuck Clear all lock. Drop any
+            // still-leaving cards so the dock comes back interactive.
+            replaceClearingArtifactIds(new Set());
+            setExitingArtifactIds((current) => {
+              if (current.size === 0) return current;
+              const next = new Set(current);
+              for (const id of clearing) next.delete(id);
+              next.delete(payload.id);
+              return next.size === current.size ? current : next;
+            });
+          }
+          setArtifacts((current) => {
+            const withoutCleared = clearing.size === 0
+              ? current
+              : current.filter(({ id }) => !clearing.has(id));
+            return withoutCleared.some(({ id }) => id === payload.id)
+              ? withoutCleared
+              : [...withoutCleared, payload];
+          });
         }),
         listen<CaptureArtifact>("artifact-updated", ({ payload }) => {
           if (!active) return;
@@ -6200,6 +6223,13 @@ export function Thumbnail() {
         }),
         listen<string>("artifact-removed", ({ payload }) => {
           if (!active) return;
+          if (clearingArtifactIdsRef.current.has(payload)) {
+            // Clear all already took these off the backend stack. Keep the
+            // cards mounted so the shared Close streak can finish; onRemoved
+            // drops them after animationend.
+            setActiveViewerArtifactId((current) => current === payload ? null : current);
+            return;
+          }
           removedArtifactIds.add(payload);
           setArtifactExiting(payload, false);
           setArtifacts((current) => current.filter(({ id }) => id !== payload));
@@ -6236,7 +6266,7 @@ export function Thumbnail() {
       active = false;
       cleanup.dispose();
     };
-  }, [applyClipboardState, setArtifactExiting]);
+  }, [applyClipboardState, replaceClearingArtifactIds, setArtifactExiting]);
 
   useEffect(() => {
     // The thumbnail window is a drag source, never a file-drop destination.
@@ -6315,6 +6345,13 @@ export function Thumbnail() {
     let cancelled = false;
     // Sync may grow the native window for new cards. It intentionally does not
     // shrink after dismissals — that recomposes WKWebView and flickers survivors.
+    if (clearingArtifactIds.size > 0) {
+      // Clear all already drained the backend stack. Keep this frame until the
+      // last Close streak finishes so the window is not hidden mid-animation.
+      return () => {
+        cancelled = true;
+      };
+    }
     void invoke("sync_thumbnail_stack")
       .catch(() => undefined)
       .finally(() => {
@@ -6332,7 +6369,7 @@ export function Thumbnail() {
     return () => {
       cancelled = true;
     };
-  }, [artifacts.length, refreshStackOverflow, stackViewportHeight]);
+  }, [artifacts.length, clearingArtifactIds.size, refreshStackOverflow, stackViewportHeight]);
 
   useLayoutEffect(() => {
     if (stackMotion !== "expanded" || !pendingNewestReveal.current) return;
@@ -6941,7 +6978,7 @@ export function Thumbnail() {
       .filter((artifact) => !exitingArtifactIds.has(artifact.id))
       .map((artifact) => artifact.id);
     if (requested.length === 0) return;
-    setClearingArtifactIds(new Set(requested));
+    replaceClearingArtifactIds(new Set(requested));
     void invoke<string[]>("dismiss_all_artifacts", { artifactIds: requested })
       .catch(() => undefined);
   };
@@ -7452,12 +7489,12 @@ export function Thumbnail() {
             }
             onRemoved={(artifactId) => {
               setArtifactExiting(artifactId, false);
-              setClearingArtifactIds((current) => {
-                if (!current.has(artifactId)) return current;
+              const current = clearingArtifactIdsRef.current;
+              if (current.has(artifactId)) {
                 const next = new Set(current);
                 next.delete(artifactId);
-                return next;
-              });
+                replaceClearingArtifactIds(next);
+              }
               setArtifacts((current) => current.filter(({ id }) => id !== artifactId));
             }}
             onExitChange={setArtifactExiting}
@@ -7919,7 +7956,9 @@ export function ThumbnailCard({
         // click-through while an editor owns focus. Re-arm immediately after
         // removal instead of waiting for a throttled background pointer poll.
         window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
-        void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
+        if (action !== STACK_CLEAR_EXIT_ACTION) {
+          void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
+        }
       })
       .catch((error) => {
         // Only unlock if remove failed — otherwise the card is gone.
