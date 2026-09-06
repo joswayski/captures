@@ -2310,6 +2310,28 @@
   margin-top: var(--s-3);
 }
 
+.update-notes-pr {
+  padding: 0;
+  border: 0;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
+  cursor: pointer;
+}
+
+.update-notes-pr:hover {
+  color: var(--text-subtle);
+}
+
+.update-notes-pr:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--r-sm);
+}
+
 .update-notes-list li::before {
   content: "";
   position: absolute;

@@ -455,17 +455,17 @@ const ONBOARDING: OnboardingState = {
   microphone_can_request: true,
 };
 
-function previewNotes(summary: string): string {
+function previewNotes(summary: string, pull: number): string {
   return [
     "> [!WARNING]",
     "> This Preview is functional, but experimental.",
     "",
     "## What's Changed",
-    `* ${summary} by @joswayski in https://github.com/joswayski/captures/pull/1`,
-    "* @devin-ai-integration[bot] made their first contribution in https://github.com/joswayski/captures/pull/1",
+    `* ${summary} by @joswayski in https://github.com/joswayski/captures/pull/${pull}`,
+    `* @devin-ai-integration[bot] made their first contribution in https://github.com/joswayski/captures/pull/${pull}`,
     "",
     "## New Contributors",
-    "* @someone made their first contribution in https://github.com/joswayski/captures/pull/1",
+    `* @someone made their first contribution in https://github.com/joswayski/captures/pull/${pull}`,
     "",
     "**Full Changelog**: https://github.com/joswayski/captures/compare/old...new",
   ].join("\n");
@@ -506,7 +506,7 @@ function updateStatus(): UpdateStatus {
       retry_install: true,
     };
   }
-  const latestNotes = previewNotes("Fix post-update launch notice position on macOS");
+  const latestNotes = previewNotes("Fix post-update launch notice position on macOS", 265);
   return {
     ...base,
     state: "available",
@@ -522,12 +522,12 @@ function updateStatus(): UpdateStatus {
       {
         version: "2026.8.2704",
         display_version: "2026.08.27.4",
-        notes: previewNotes("Fix capture menu display switching and the Record CTA"),
+        notes: previewNotes("Fix capture menu display switching and the Record CTA", 263),
       },
       {
         version: "2026.8.2703",
         display_version: "2026.08.27.3",
-        notes: previewNotes("Redesign the desktop UI around one design system"),
+        notes: previewNotes("Redesign the desktop UI around one design system", 262),
       },
     ],
     installable: true,

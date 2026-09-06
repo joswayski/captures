@@ -185,6 +185,10 @@ pub fn defer_visible_notice(app: &AppHandle) {
     begin_deferred_restore(app);
 }
 
+/// Whether capture should hide the update notice so it is not in the snapshot.
+///
+/// Always false: an already-open notice stays capturable so the changelog or an
+/// error can be screenshotted. New notices still wait until capture finishes.
 pub fn should_hide_update_notice_for_capture(app: &AppHandle) -> bool {
     should_hide_update_notice_status(&app.state::<UpdateCoordinator>().status.lock())
 }
@@ -386,6 +390,17 @@ pub fn dismiss_update_notice(app: AppHandle) {
 pub fn open_update_download_page(app: AppHandle) -> Result<(), String> {
     app.opener()
         .open_url(DOWNLOAD_PAGE_URL, None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
+/// Opens a GitHub pull request from changelog copy. The update window has no
+/// opener permission, so numbers stay native buttons instead of `<a>` tags.
+#[tauri::command]
+pub fn open_update_changelog_url(app: AppHandle, url: String) -> Result<(), String> {
+    let url = changelog_pull_request_url(&url)
+        .ok_or_else(|| "that changelog link is not a GitHub pull request".to_owned())?;
+    app.opener()
+        .open_url(&url, None::<&str>)
         .map_err(|error| error.to_string())
 }
 
@@ -1011,8 +1026,42 @@ fn check_error_status(
     })
 }
 
-fn should_hide_update_notice_status(status: &UpdateStatus) -> bool {
-    !matches!(status, UpdateStatus::Error { .. })
+/// Available, downloading, and failed notices stay on screen during capture so
+/// the changelog or an error can be screenshotted. New notices still wait until
+/// capture finishes before appearing for the first time.
+fn should_hide_update_notice_status(_status: &UpdateStatus) -> bool {
+    false
+}
+
+fn changelog_pull_request_url(url: &str) -> Option<String> {
+    let rest = url
+        .trim()
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.trim().strip_prefix("https://www.github.com/"))?;
+    let rest = rest
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(rest)
+        .trim_end_matches('/');
+    let mut parts = rest.split('/');
+    let owner = parts.next()?;
+    let repo = parts.next()?;
+    if parts.next()? != "pull" {
+        return None;
+    }
+    let number = parts.next()?;
+    if parts.next().is_some()
+        || owner.is_empty()
+        || repo.is_empty()
+        || owner.starts_with('.')
+        || repo.starts_with('.')
+        || number.is_empty()
+        || !number.chars().all(|character| character.is_ascii_digit())
+        || (number.len() > 1 && number.starts_with('0'))
+    {
+        return None;
+    }
+    Some(format!("https://github.com/{owner}/{repo}/pull/{number}"))
 }
 
 fn download_error_is_retryable(error: &str) -> bool {
@@ -1295,8 +1344,8 @@ mod tests {
     use super::{
         AtomicFlagGuard, CHECK_INTERVAL, DOWNLOAD_ATTEMPTS, DOWNLOAD_PAGE_URL, NoticeDisposition,
         NoticeRestorePlan, RELEASES_URL, UpdateChangelogEntry, UpdateStatus,
-        capture_window_should_close_for_update, check_error_status, display_version,
-        download_error_is_retryable, download_retry_delay, install_error_message,
+        capture_window_should_close_for_update, changelog_pull_request_url, check_error_status,
+        display_version, download_error_is_retryable, download_retry_delay, install_error_message,
         manifest_download_size, notice_disposition, notice_restore_plan,
         open_captures_will_close_from, release_channel_enabled, restart_blocker,
         should_begin_deferred_restore, should_hide_update_notice_status,
@@ -1509,20 +1558,50 @@ mod tests {
     }
 
     #[test]
-    fn keeps_failed_update_notices_visible_during_capture() {
+    fn keeps_update_notices_visible_during_capture() {
         let error = UpdateStatus::Error {
             current_version: "2026.7.1901".into(),
             current_display_version: "2026.07.19.1".into(),
             message: "Download request failed with status: 403 Forbidden".into(),
             retry_install: true,
         };
+        let available = available_status(Vec::new());
         assert!(!should_hide_update_notice_status(&error));
-        assert_eq!(notice_disposition(&error, true), NoticeDisposition::Show);
-        assert_eq!(notice_disposition(&error, false), NoticeDisposition::Show);
-        assert!(should_hide_update_notice_status(&UpdateStatus::UpToDate {
+        assert!(!should_hide_update_notice_status(&available));
+        assert!(!should_hide_update_notice_status(&UpdateStatus::UpToDate {
             current_version: "2026.7.1901".into(),
             current_display_version: "2026.07.19.1".into(),
         }));
+        assert_eq!(notice_disposition(&error, true), NoticeDisposition::Show);
+        assert_eq!(notice_disposition(&error, false), NoticeDisposition::Show);
+        assert_eq!(
+            notice_disposition(&available, true),
+            NoticeDisposition::Defer
+        );
+    }
+
+    #[test]
+    fn opens_only_github_pull_request_changelog_urls() {
+        assert_eq!(
+            changelog_pull_request_url("https://github.com/joswayski/captures/pull/249"),
+            Some("https://github.com/joswayski/captures/pull/249".into()),
+        );
+        assert_eq!(
+            changelog_pull_request_url("https://www.github.com/joswayski/captures/pull/249/"),
+            Some("https://github.com/joswayski/captures/pull/249".into()),
+        );
+        assert!(
+            changelog_pull_request_url("https://github.com/joswayski/captures/pull/249/files")
+                .is_none()
+        );
+        assert!(
+            changelog_pull_request_url("https://github.com/joswayski/captures/issues/249")
+                .is_none()
+        );
+        assert!(
+            changelog_pull_request_url("https://example.com/joswayski/captures/pull/249").is_none()
+        );
+        assert!(changelog_pull_request_url("javascript:alert(1)").is_none());
     }
 
     #[test]

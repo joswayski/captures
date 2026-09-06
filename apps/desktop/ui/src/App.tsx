@@ -874,9 +874,29 @@ export function UpdateNotice() {
                       {stacked && <h3 id={headingId}>{group.displayVersion}</h3>}
                       {group.items.length > 0 ? (
                         <ul className="update-notes-list">
-                          {group.items.map((note, index) => (
-                            <li key={`${group.version}-${index}-${note}`}>{note}</li>
-                          ))}
+                          {group.items.map((note, index) => {
+                            const pullRequest = note.pullRequest;
+                            return (
+                              <li key={`${group.version}-${index}-${note.text}`}>
+                                {note.text}
+                                {pullRequest ? (
+                                  <>
+                                    {" "}
+                                    <button
+                                      type="button"
+                                      className="update-notes-pr"
+                                      aria-label={`Open pull request ${pullRequest.number}`}
+                                      onClick={() => void invoke("open_update_changelog_url", {
+                                        url: pullRequest.url,
+                                      })}
+                                    >
+                                      #{pullRequest.number}
+                                    </button>
+                                  </>
+                                ) : null}
+                              </li>
+                            );
+                          })}
                         </ul>
                       ) : (
                         <p className="update-notes-empty">
