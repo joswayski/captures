@@ -1,6 +1,7 @@
 import { useCallback, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 
 import captureSelection from "../../../docs/images/capture-selection.jpg";
+import collapsedMiniPreviews from "../../../docs/images/collapsed-mini-previews.jpg";
 import preferences from "../../../docs/images/preferences.jpg";
 import screenshotEditor from "../../../docs/images/screenshot-editor.jpg";
 import videoEditor from "../../../docs/images/video-editor.jpg";
@@ -18,6 +19,7 @@ import { useImageZoom } from "./useImageZoom";
 
 const SHOT_SRC = {
   "capture-selection.jpg": captureSelection,
+  "collapsed-mini-previews.jpg": collapsedMiniPreviews,
   "preferences.jpg": preferences,
   "screenshot-editor.jpg": screenshotEditor,
   "video-editor.jpg": videoEditor,
