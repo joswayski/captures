@@ -7104,8 +7104,8 @@ export function ScreenshotEditor() {
                 ariaLabel="Stroke width"
                 min={2}
                 max={40}
-                value={selected.style.strokeWidth}
-                valueText={`${selected.style.strokeWidth} px`}
+                value={Math.round(selected.style.strokeWidth)}
+                valueText={`${Math.round(selected.style.strokeWidth)} px`}
                 onChange={(strokeWidth) => updateSelected((element) => (
                   element.kind === "shape" || element.kind === "path"
                     ? {
@@ -7289,8 +7289,8 @@ export function ScreenshotEditor() {
                     ariaLabel="Stroke width"
                     min={2}
                     max={40}
-                    value={defaultStyle.strokeWidth}
-                    valueText={`${defaultStyle.strokeWidth} px`}
+                    value={Math.round(defaultStyle.strokeWidth)}
+                    valueText={`${Math.round(defaultStyle.strokeWidth)} px`}
                     onChange={(strokeWidth) => setDefaultStyle((style) => ({
                       ...style,
                       strokeWidth,

@@ -2857,11 +2857,11 @@ export function scaleArrowStrokeForLength(
     ...next,
     style: {
       ...next.style,
-      strokeWidth: clamp(
+      strokeWidth: Math.round(clamp(
         initial.style.strokeWidth * (nextLength / initialLength),
         1,
         80,
-      ),
+      )),
     },
   };
 }
@@ -3803,7 +3803,7 @@ export function resizeElement(
         ? element.style
         : {
           ...element.style,
-          strokeWidth: clamp(element.style.strokeWidth * strokeScale, 1, 80),
+          strokeWidth: Math.round(clamp(element.style.strokeWidth * strokeScale, 1, 80)),
         },
     };
   }
