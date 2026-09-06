@@ -200,6 +200,8 @@ impl NativeRecordingSegment {
             if let Some(audio_output_id) = audio_output_id {
                 let _ = stream.remove_output_handler(audio_output_id, SCStreamOutputType::Audio);
             }
+            let _ = writer.finish();
+            let _ = fs::remove_file(output_path);
             return Err(MacRecordingError::ScreenCaptureKit(error.to_string()));
         }
 

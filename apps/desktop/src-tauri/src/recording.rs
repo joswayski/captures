@@ -66,6 +66,7 @@ pub struct RecordingRuntime {
     coordinator: RecordingCoordinator,
     session: Option<RuntimeSession>,
     generation: u64,
+    starting_selection_id: Option<String>,
     region_indicator_ready: Option<tokio::sync::oneshot::Sender<()>>,
     exports: HashMap<String, CancelToken>,
     /// In-flight export size estimates, keyed by artifact ID. A newer request
@@ -663,6 +664,11 @@ fn cancel_recording_selection_inner(
 ) -> Result<(), AppError> {
     let mut selection = state.recording_selection.lock();
     let Some(current) = selection.as_ref() else {
+        drop(selection);
+        if state.recording.lock().starting_selection_id.as_deref() == Some(selection_id) {
+            crate::invalidate_capture_flow();
+            restore_recording_ui(app, state);
+        }
         return Ok(());
     };
     if current.summary.id != selection_id {
@@ -1161,8 +1167,12 @@ async fn start_recording_inner(
             return Err(error);
         }
     };
+    state.recording.lock().starting_selection_id = Some(selection.summary.id.clone());
     let recording_ui = async {
         prepare_recording_hud(&app, &selected_display).await?;
+        if crate::capture_flow_was_cancelled(flow) {
+            return Err(AppError::ScreenshotCancelled);
+        }
         prepare_recording_region_indicator(
             &app,
             &state,
@@ -1172,6 +1182,12 @@ async fn start_recording_inner(
         .await
     }
     .await;
+    state.recording.lock().starting_selection_id = None;
+    if crate::capture_flow_was_cancelled(flow) {
+        fail_session(&app, &state, &snapshot.id, "cancelled".to_owned());
+        restore_recording_ui(&app, &state);
+        return Err(AppError::ScreenshotCancelled);
+    }
     if let Err(error) = recording_ui {
         fail_session(&app, &state, &snapshot.id, error.to_string());
         *state.recording_selection.lock() = Some(selection);
@@ -1750,8 +1766,12 @@ async fn restart_recording_inner(
     }
     emit_snapshot(&app, &snapshot);
     crate::hide_window(&app, "recording-hud");
-    if countdown > 0 {
-        show_recording_countdown(&app, &display)?;
+    if countdown > 0
+        && let Err(error) = show_recording_countdown(&app, &display)
+    {
+        fail_session(&app, &state, session_id, error.to_string());
+        restore_recording_ui(&app, &state);
+        return Err(error);
     }
     schedule_countdown(app, state, session_id.to_owned(), generation, countdown);
     Ok(snapshot)
@@ -4324,6 +4344,7 @@ async fn prepare_recording_region_indicator(
                 // Wake the hidden WKWebView at imperceptible alpha so React can
                 // paint the guide before it replaces the selector.
                 captures_macos_window::prime_window_reveal(&window).map_err(str::to_owned)?;
+                captures_macos_window::show_without_activating(&window).map_err(str::to_owned)?;
             }
             // Other webviews continue painting while hidden on Windows and
             // Linux, but showing this transparent, click-through surface also
@@ -4331,6 +4352,7 @@ async fn prepare_recording_region_indicator(
             // remains visible underneath until the guide reports ready.
             #[cfg(not(target_os = "macos"))]
             window.show().map_err(|error| error.to_string())?;
+            crate::set_click_through(&window, true).map_err(|error| error.to_string())?;
             Ok(())
         })();
         let _ = sender.send(result);
@@ -4362,6 +4384,10 @@ pub fn reveal_recording_region_indicator(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
+    // A delayed webview callback after cancellation must not hide a new selector.
+    if state.recording.lock().region_indicator_ready.is_none() {
+        return Err(AppError::SessionUnavailable.to_string());
+    }
     let window = app
         .get_webview_window(RECORDING_REGION_INDICATOR_LABEL)
         .ok_or_else(|| "recording region indicator is unavailable".to_owned())?;
@@ -4369,6 +4395,7 @@ pub fn reveal_recording_region_indicator(
     {
         // Status level keeps this above apps but below the later countdown and
         // the recording HUD.
+        captures_macos_window::reveal_window(&window).map_err(str::to_owned)?;
         captures_macos_window::show_without_activating(&window).map_err(str::to_owned)?;
     }
     #[cfg(not(target_os = "macos"))]
