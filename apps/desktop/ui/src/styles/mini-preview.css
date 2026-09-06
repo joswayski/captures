@@ -2331,7 +2331,14 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
 }
 
 .thumbnail-stack-minimizing > .thumbnail-card::before {
-  animation: thumbnail-card-minimize-dim 0.52s var(--ease-standard) both;
+  opacity: 0;
+  transition: none;
+}
+
+/* Start depth shading on the same frame and curve as the 3D movement. */
+.thumbnail-stack-minimizing.thumbnail-stack-minimize-run > .thumbnail-card::before {
+  opacity: calc(min(0.72, var(--thumbnail-stack-pile-depth, 0) * 0.14));
+  transition: opacity 0.52s var(--ease-standard);
 }
 
 .thumbnail-stack-expanding > .thumbnail-card::before {
@@ -2344,15 +2351,6 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
   }
   to {
     transform: var(--thumbnail-stack-expanded-transform);
-  }
-}
-
-@keyframes thumbnail-card-minimize-dim {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: calc(min(0.72, var(--thumbnail-stack-pile-depth, 0) * 0.14));
   }
 }
 
@@ -2381,12 +2379,22 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
 
 /*
  * Blur lives on the media shell, not the card: a parent filter flattens the
- * screenshot and blanks it in WebKit when expand removes the filter. Only the
- * collapsed rest pose blurs so expand/collapse fly-outs stay sharp.
+ * screenshot and blanks it in WebKit when expand removes the filter. Collapse
+ * reaches the rest blur during the flight, not in a delayed pass after landing.
  */
 .thumbnail-stack-minimized > .thumbnail-card .thumbnail-media {
   filter: blur(calc(var(--thumbnail-stack-pose, 0) * 1.15px));
   transition: filter var(--stack-fan-dur, var(--dur-3)) calc(var(--thumbnail-stack-depth, 0) * var(--stack-fan-stagger, 0ms)) var(--stack-fan-ease, var(--ease-out));
+}
+
+.thumbnail-stack-minimizing > .thumbnail-card .thumbnail-media {
+  filter: blur(0px);
+  transition: none;
+}
+
+.thumbnail-stack-minimizing.thumbnail-stack-minimize-run > .thumbnail-card .thumbnail-media {
+  filter: blur(calc(var(--thumbnail-stack-pose, 0) * 1.15px));
+  transition: filter 0.52s var(--ease-standard);
 }
 
 .thumbnail-stack-minimized.thumbnail-stack-hover-ready:not(.thumbnail-stack-hover-latched):not(.thumbnail-stack-dragging):not(.thumbnail-stack-pressing):has(.thumbnail-collapsed-hit-target:hover:not([data-thumbnail-hover-stale])) > .thumbnail-card .thumbnail-media,

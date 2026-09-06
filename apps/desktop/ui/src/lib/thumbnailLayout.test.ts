@@ -100,6 +100,24 @@ function card(
 }
 
 describe("thumbnail stack layout", () => {
+  it("applies collapse depth effects with the flight, without a delayed landing pass", () => {
+    const rule = (selector: string) => thumbnailStyles.split(`\n${selector} {`)[1]?.split("}")[0];
+    const collapsing = ".thumbnail-stack-minimizing > .thumbnail-card";
+    const running = ".thumbnail-stack-minimizing.thumbnail-stack-minimize-run > .thumbnail-card";
+    const resting = ".thumbnail-stack-minimized > .thumbnail-card";
+    const compact = ".thumbnail-stack-compact > .thumbnail-card";
+
+    expect(rule(`${collapsing}::before`)).toContain("opacity: 0;");
+    expect(rule(`${collapsing} .thumbnail-media`)).toContain("filter: blur(0px);");
+    expect(rule(running)).toContain("transform 0.52s var(--ease-standard)");
+    expect(rule(`${running}::before`)).toContain("transition: opacity 0.52s var(--ease-standard);");
+    expect(rule(`${running} .thumbnail-media`)).toContain("transition: filter 0.52s var(--ease-standard);");
+    expect(rule(`${running}::before`)?.match(/opacity: ([^;]+);/)?.[1])
+      .toBe(rule(`${compact}::before`)?.match(/opacity: ([^;]+);/)?.[1]);
+    expect(rule(`${running} .thumbnail-media`)?.match(/filter: ([^;]+);/)?.[1])
+      .toBe(rule(`${resting} .thumbnail-media`)?.match(/filter: ([^;]+);/)?.[1]);
+  });
+
   it("does not ease compact-card transforms until collapse hover is armed", () => {
     const compactCard = thumbnailStyles.match(
       /\.thumbnail-stack-compact > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
@@ -156,7 +174,6 @@ describe("thumbnail stack layout", () => {
     expect(minimizeRun?.[1]).toMatch(/transform 0\.52s/);
     expect(minimizeRun?.[1]).toMatch(/top 0\.52s/);
     expect(thumbnailStyles).toMatch(/thumbnail-card-expand 0\.52s/);
-    expect(thumbnailStyles).toMatch(/thumbnail-card-minimize-dim 0\.52s/);
     expect(thumbnailStyles).toMatch(/thumbnail-card-expand-dim 0\.52s/);
     expect(hoverFan).not.toBeNull();
     expect(thumbnailStyles).toMatch(/--stack-fan-stagger:\s*16ms/);
