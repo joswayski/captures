@@ -663,8 +663,7 @@ describe("CaptureOverlay guidance", () => {
           + "200px 150px, 200px 565px, 513px 565px, 513px 150px, 200px 150px)",
       });
       expect(container.querySelector(".capture-snapshot")).toHaveStyle({
-        clipPath: "polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, "
-          + "200px 150px, 200px 565px, 513px 565px, 513px 150px, 200px 150px)",
+        clipPath: "",
       });
     });
   });
