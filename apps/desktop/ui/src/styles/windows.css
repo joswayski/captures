@@ -2603,6 +2603,15 @@ html[data-preview-harness-view="startup"]:has([data-caret="bottom"]) #root {
   bottom: 28px;
 }
 
+/* Match the transparent native window: 440×116 card plus its 28px shadow frame. */
+html[data-preview-harness-view="recording-saved"] #root {
+  position: fixed;
+  top: 30px;
+  right: 18px;
+  width: 496px;
+  height: 172px;
+}
+
 .startup-notice {
   --tray-caret-fill: var(--glass-strong-solid);
   --tray-caret-span: 12px;
@@ -2676,9 +2685,11 @@ html[data-preview-harness-view="startup"]:has([data-caret="bottom"]) #root {
 .recording-saved-notice {
   position: relative;
   display: grid;
-  width: calc(100% - 16px);
-  height: calc(100% - 16px);
-  margin: var(--s-4);
+  /* Match RECORDING_SAVED_NOTICE_FRAME_PAD so the glass shadow fits inside
+   * the transparent native window instead of being clipped at its edges. */
+  width: calc(100% - 56px);
+  height: calc(100% - 56px);
+  margin: 28px;
   padding: var(--s-5) 38px var(--s-5) var(--s-5);
   grid-template-columns: 38px minmax(0, 1fr) auto;
   align-items: center;
@@ -2689,7 +2700,7 @@ html[data-preview-harness-view="startup"]:has([data-caret="bottom"]) #root {
   background: var(--glass-strong);
   box-shadow: var(--glass-shadow);
   backdrop-filter: var(--glass-blur);
-  animation: recording-saved-lifecycle 11s var(--ease-standard) forwards;
+  animation: recording-saved-lifecycle 15s var(--ease-standard) forwards;
 }
 
 .recording-saved-icon {

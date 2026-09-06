@@ -6170,8 +6170,17 @@ fn place_tray_notice(
     }
 }
 
-const RECORDING_SAVED_NOTICE_WIDTH: f64 = 440.0;
-const RECORDING_SAVED_NOTICE_HEIGHT: f64 = 116.0;
+const RECORDING_SAVED_NOTICE_CARD_WIDTH: f64 = 440.0;
+const RECORDING_SAVED_NOTICE_CARD_HEIGHT: f64 = 116.0;
+/// Transparent padding around the notice card so its glass shadow is not clipped
+/// by the transparent native window.
+const RECORDING_SAVED_NOTICE_FRAME_PAD: f64 = 28.0;
+const RECORDING_SAVED_NOTICE_WIDTH: f64 =
+    RECORDING_SAVED_NOTICE_CARD_WIDTH + RECORDING_SAVED_NOTICE_FRAME_PAD * 2.0;
+const RECORDING_SAVED_NOTICE_HEIGHT: f64 =
+    RECORDING_SAVED_NOTICE_CARD_HEIGHT + RECORDING_SAVED_NOTICE_FRAME_PAD * 2.0;
+const RECORDING_SAVED_NOTICE_VISIBLE_FOR: std::time::Duration =
+    std::time::Duration::from_millis(15_200);
 const RECORDING_CONTROLS_HIDDEN_NOTICE_CARD_WIDTH: f64 = 418.0;
 const RECORDING_CONTROLS_HIDDEN_NOTICE_CARD_HEIGHT: f64 = 74.0;
 /// Transparent padding around the notice card so its glass shadow is not clipped
@@ -6252,7 +6261,7 @@ fn show_recording_saved_notice(app: &AppHandle, artifact_id: &str) -> Result<(),
     let timer_app = app.clone();
     let timer_state = state;
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(11_200));
+        std::thread::sleep(RECORDING_SAVED_NOTICE_VISIBLE_FOR);
         let handle = timer_app.clone();
         let _ = timer_app.run_on_main_thread(move || {
             if timer_state
@@ -8720,7 +8729,10 @@ mod tests {
     use super::macos_window_is_capture_overlay;
     use super::{
         AppError, AppReactivation, CaptureMode, InteractiveLaunchAction, LogicalRect,
-        PreviewFileDropLanding, STARTUP_NOTICE_AFTER_SETUP_VISIBLE,
+        PreviewFileDropLanding, RECORDING_SAVED_NOTICE_CARD_HEIGHT,
+        RECORDING_SAVED_NOTICE_CARD_WIDTH, RECORDING_SAVED_NOTICE_FRAME_PAD,
+        RECORDING_SAVED_NOTICE_HEIGHT, RECORDING_SAVED_NOTICE_VISIBLE_FOR,
+        RECORDING_SAVED_NOTICE_WIDTH, STARTUP_NOTICE_AFTER_SETUP_VISIBLE,
         STARTUP_NOTICE_AUTOSTART_VISIBLE, STARTUP_NOTICE_HEIGHT, STARTUP_NOTICE_WIDTH,
         StartupNoticeCaret, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP,
         TRAY_NOTICE_CARET_INSET, TRAY_NOTICE_CARET_SIZE, TRAY_NOTICE_FRAME_PAD,
@@ -10734,6 +10746,21 @@ mod tests {
                 440.0 + TRAY_NOTICE_FRAME_PAD * 2.0,
                 290.0 + TRAY_NOTICE_FRAME_PAD + TRAY_NOTICE_CARET_SIZE
             )
+        );
+    }
+
+    #[test]
+    fn recording_saved_notice_reserves_a_full_shadow_frame() {
+        assert_eq!(
+            (RECORDING_SAVED_NOTICE_WIDTH, RECORDING_SAVED_NOTICE_HEIGHT),
+            (
+                RECORDING_SAVED_NOTICE_CARD_WIDTH + RECORDING_SAVED_NOTICE_FRAME_PAD * 2.0,
+                RECORDING_SAVED_NOTICE_CARD_HEIGHT + RECORDING_SAVED_NOTICE_FRAME_PAD * 2.0,
+            )
+        );
+        assert_eq!(
+            RECORDING_SAVED_NOTICE_VISIBLE_FOR,
+            std::time::Duration::from_millis(15_200)
         );
     }
 
