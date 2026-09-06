@@ -2693,6 +2693,8 @@ fn update_settings(
         || settings.window_shortcut.trim().is_empty()
         || settings.display_shortcut.trim().is_empty()
         || settings.recording.video_shortcut.trim().is_empty()
+        || settings.recording.window_shortcut.trim().is_empty()
+        || settings.recording.display_shortcut.trim().is_empty()
     {
         return Err("all shortcuts must be set".to_owned());
     }
@@ -2704,14 +2706,20 @@ fn update_settings(
         parse_shortcut(&settings.window_shortcut).map_err(|error| error.to_string())?;
     let display_shortcut =
         parse_shortcut(&settings.display_shortcut).map_err(|error| error.to_string())?;
-    let video_shortcut =
+    let record_region_shortcut =
         parse_shortcut(&settings.recording.video_shortcut).map_err(|error| error.to_string())?;
+    let record_window_shortcut =
+        parse_shortcut(&settings.recording.window_shortcut).map_err(|error| error.to_string())?;
+    let record_display_shortcut =
+        parse_shortcut(&settings.recording.display_shortcut).map_err(|error| error.to_string())?;
     let shortcuts = [
         new_capture_shortcut,
         region_shortcut,
         window_shortcut,
         display_shortcut,
-        video_shortcut,
+        record_region_shortcut,
+        record_window_shortcut,
+        record_display_shortcut,
     ];
     if shortcuts
         .iter()
@@ -2746,7 +2754,9 @@ fn update_settings(
         || settings.region_shortcut != previous_settings.region_shortcut
         || settings.window_shortcut != previous_settings.window_shortcut
         || settings.display_shortcut != previous_settings.display_shortcut
-        || settings.recording.video_shortcut != previous_settings.recording.video_shortcut;
+        || settings.recording.video_shortcut != previous_settings.recording.video_shortcut
+        || settings.recording.window_shortcut != previous_settings.recording.window_shortcut
+        || settings.recording.display_shortcut != previous_settings.recording.display_shortcut;
     if shortcuts_changed && let Err(error) = register_shortcuts_with(&app, &settings) {
         let _ = register_shortcuts_with(&app, &previous_settings);
         return Err(error.to_string());
@@ -4531,7 +4541,17 @@ fn register_shortcuts_with(app: &AppHandle, settings: &AppSettings) -> Result<()
     register_shortcut(app, &settings.region_shortcut, CaptureMode::Region)?;
     register_shortcut(app, &settings.window_shortcut, CaptureMode::Window)?;
     register_shortcut(app, &settings.display_shortcut, CaptureMode::Display)?;
-    register_recording_shortcut(app, &settings.recording.video_shortcut)?;
+    register_recording_shortcut(app, &settings.recording.video_shortcut, CaptureMode::Region)?;
+    register_recording_shortcut(
+        app,
+        &settings.recording.window_shortcut,
+        CaptureMode::Window,
+    )?;
+    register_recording_shortcut(
+        app,
+        &settings.recording.display_shortcut,
+        CaptureMode::Display,
+    )?;
     sync_capture_escape(app);
     Ok(())
 }
@@ -4641,7 +4661,11 @@ fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Resu
         .map_err(|error| AppError::Shortcut(error.to_string()))
 }
 
-fn register_recording_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), AppError> {
+fn register_recording_shortcut(
+    app: &AppHandle,
+    shortcut: &str,
+    target: CaptureMode,
+) -> Result<(), AppError> {
     if skip_windows_os_owned_super_shift_s(shortcut) {
         return Ok(());
     }
@@ -4682,7 +4706,13 @@ fn register_recording_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), Ap
             }
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(error) = recording::prepare_recording_inner(app.clone(), state).await
+                if let Err(error) = recording::prepare_capture_selector_inner(
+                    app.clone(),
+                    state,
+                    CaptureSelectorMode::Recording,
+                    target,
+                )
+                .await
                     && !matches!(
                         &error,
                         AppError::CaptureInProgress | AppError::ScreenshotCancelled
@@ -4925,7 +4955,15 @@ fn on_win_shift_s(phase: captures_session::WinShiftSPhase) {
         models::SuperShiftSAction::Display => {
             dispatch_capture_shortcut(app, CaptureMode::Display, event_state)
         }
-        models::SuperShiftSAction::Recording => dispatch_recording_shortcut(app, event_state),
+        models::SuperShiftSAction::RecordRegion => {
+            dispatch_recording_shortcut(app, CaptureMode::Region, event_state)
+        }
+        models::SuperShiftSAction::RecordWindow => {
+            dispatch_recording_shortcut(app, CaptureMode::Window, event_state)
+        }
+        models::SuperShiftSAction::RecordDisplay => {
+            dispatch_recording_shortcut(app, CaptureMode::Display, event_state)
+        }
     }
 }
 
@@ -4964,7 +5002,7 @@ fn dispatch_new_capture_shortcut(app: &AppHandle, event_state: ShortcutState) {
 }
 
 #[cfg(target_os = "windows")]
-fn dispatch_recording_shortcut(app: &AppHandle, event_state: ShortcutState) {
+fn dispatch_recording_shortcut(app: &AppHandle, target: CaptureMode, event_state: ShortcutState) {
     let state = app.state::<Arc<AppState>>().inner().clone();
     if !state.settings().onboarding_completed {
         if event_state == ShortcutState::Released {
@@ -4997,7 +5035,13 @@ fn dispatch_recording_shortcut(app: &AppHandle, event_state: ShortcutState) {
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = recording::prepare_recording_inner(app.clone(), state).await
+        if let Err(error) = recording::prepare_capture_selector_inner(
+            app.clone(),
+            state,
+            CaptureSelectorMode::Recording,
+            target,
+        )
+        .await
             && !matches!(
                 &error,
                 AppError::CaptureInProgress | AppError::ScreenshotCancelled

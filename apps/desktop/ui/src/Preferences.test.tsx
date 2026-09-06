@@ -45,6 +45,8 @@ const settings: AppSettings = {
   show_update_changelog: true,
   recording: {
     video_shortcut: "Ctrl+Shift+5",
+    window_shortcut: "Ctrl+Shift+Alt+W",
+    display_shortcut: "Ctrl+Shift+Alt+3",
     gif_shortcut: "Ctrl+Shift+6",
     video_format: "mp4",
     video_fps: 30,
@@ -394,6 +396,33 @@ describe("Preferences", () => {
       suppressed: false,
     });
     expect(await screen.findByText("Changes saved")).toBeInTheDocument();
+  });
+
+  it("offers and persists shortcuts for every recording target", async () => {
+    render(<Preferences />);
+
+    expect(await screen.findByRole("button", { name: "Record Region" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Record Window" })).toBeInTheDocument();
+    const recorder = screen.getByRole("button", { name: "Record Full Screen" });
+
+    fireEvent.click(recorder);
+    fireEvent.keyDown(recorder, {
+      code: "KeyF",
+      key: "F",
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: true,
+    });
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({
+          recording: expect.objectContaining({
+            display_shortcut: "Control+Shift+Alt+KeyF",
+          }),
+        }),
+      });
+    });
   });
 
   it("previews and persists a color theme", async () => {

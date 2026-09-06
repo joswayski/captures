@@ -186,7 +186,7 @@ export function platformShortcutHelp(platform: ShortcutPlatform): {
   if (platform === "macos") {
     return {
       intro:
-        "Defaults match macOS Screenshot for full screen, region, and recording. Captures-only actions keep their own shortcuts.",
+        "Defaults match macOS Screenshot for full screen, region, and region recording. Captures-only actions keep their own shortcuts.",
       takeoverTitle: "macOS Screenshot shortcuts",
       takeoverBody:
         "Captures unbinds overlapping Screenshot app keys (⌘⇧3, ⌘⇧4, ⌘⇧5) so they reach this app instead of the system overlay. Restore them in System Settings if you want both.",
@@ -195,7 +195,7 @@ export function platformShortcutHelp(platform: ShortcutPlatform): {
   if (platform === "windows") {
     return {
       intro:
-        "Defaults match Windows screenshot keys: Win+Shift+S region, PrtScn full screen, Alt+PrtScn window, and Win+Alt+R recording.",
+        "Defaults match Windows screenshot keys: Win+Shift+S region, PrtScn full screen, Alt+PrtScn window, and Win+Alt+R region recording.",
       takeoverTitle: "Windows screenshot shortcuts",
       takeoverBody:
         "Captures unbinds overlapping Snipping Tool keys so Win+Shift+S and Print Screen reach this app instead of the system overlay. Restore them in Windows keyboard settings if you want both.",
@@ -203,7 +203,7 @@ export function platformShortcutHelp(platform: ShortcutPlatform): {
   }
   return {
     intro:
-      "Defaults match GNOME/Ubuntu screenshot keys: PrtScn opens New Capture, Super+Shift+S region, Shift+PrtScn full screen, Alt+PrtScn window, and Ctrl+Shift+Alt+R recording.",
+      "Defaults match GNOME/Ubuntu screenshot keys: PrtScn opens New Capture, Super+Shift+S region, Shift+PrtScn full screen, Alt+PrtScn window, and Ctrl+Shift+Alt+R region recording.",
     takeoverTitle: "GNOME screenshot shortcuts",
     takeoverBody:
       "Captures turns off overlapping GNOME screenshot keys (and KDE Spectacle region capture when those tools are installed) so they reach this app. Restore them in Keyboard settings if you want both.",

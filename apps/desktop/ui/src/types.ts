@@ -112,7 +112,10 @@ export interface OnboardingState {
 }
 
 export interface RecordingSettings {
+  /** Legacy field name retained for the Record Region shortcut. */
   video_shortcut: string;
+  window_shortcut: string;
+  display_shortcut: string;
   gif_shortcut: string;
   video_format: VideoFormat;
   video_fps: number;
