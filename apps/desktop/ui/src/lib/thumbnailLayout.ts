@@ -22,7 +22,7 @@ export const THUMBNAIL_CARD_SLOT_PX = THUMBNAIL_CARD_HEIGHT_PX + THUMBNAIL_STACK
 export const THUMBNAIL_STACK_FULL_PEEK_DEPTH = 3;
 
 /**
- * Far-field peek step as a fraction of a full 9px idle step.
+ * Far-field peek step as a fraction of a full idle step.
  * Deep cards pack toward this so a long history recedes instead of hiding.
  * Mirrored in mini-preview.css as `--thumbnail-stack-recede`.
  */
@@ -42,10 +42,10 @@ export const THUMBNAIL_STACK_PEEK_JITTER_PX = 0.4;
 export const THUMBNAIL_STACK_PEEK_JITTER_DECAY = 0.58;
 
 /** Idle collapsed peek per pose unit (matches compact rest `translateY`). */
-export const THUMBNAIL_STACK_IDLE_PEEK_PX = 9;
+export const THUMBNAIL_STACK_IDLE_PEEK_PX = 13;
 
 /** Hover-fan collapsed peek per pose unit (matches compact hover `translateY`). */
-export const THUMBNAIL_STACK_HOVER_PEEK_PX = 11;
+export const THUMBNAIL_STACK_HOVER_PEEK_PX = 16;
 
 /** Extra delay per stacked card so collapsed hover lift does not fire in lockstep. */
 export const THUMBNAIL_STACK_FAN_STAGGER_MS = 16;

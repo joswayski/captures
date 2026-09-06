@@ -2123,7 +2123,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
     translate3d(
       calc(var(--thumbnail-stack-pile-depth, 0) * -0.8px),
       calc(
-        var(--thumbnail-stack-pile-depth, 0) * -9px
+        var(--thumbnail-stack-pile-depth, 0) * -13px
           * var(--thumbnail-stack-gravity, 1)
         + var(--thumbnail-stack-peek-jitter, 0px)
       ),
@@ -2141,7 +2141,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
     translate3d(
       calc(var(--thumbnail-stack-pile-depth, 0) * -0.6px),
       calc(
-        var(--thumbnail-stack-pile-depth, 0) * -11px
+        var(--thumbnail-stack-pile-depth, 0) * -16px
           * var(--thumbnail-stack-gravity, 1)
         + var(--thumbnail-stack-peek-jitter, 0px)
       ),
@@ -2524,7 +2524,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
           * 0.7
       ),
       calc(
-        var(--thumbnail-stack-pile-depth, 0) * -9px
+        var(--thumbnail-stack-pile-depth, 0) * -13px
           * var(--thumbnail-stack-gravity, 1)
         + var(--thumbnail-stack-peek-jitter, 0px)
         + var(--thumbnail-drag-sway-y, 0) * 1px * var(--thumbnail-stack-pile-depth, 0) * 0.2

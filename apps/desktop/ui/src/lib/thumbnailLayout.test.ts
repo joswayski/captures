@@ -137,7 +137,7 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-anchor-top\.thumbnail-stack-compact > \.thumbnail-card\s*\{[^}]*top:\s*52px/,
     );
     expect(thumbnailStyles).toMatch(
-      /var\(--thumbnail-stack-pile-depth, 0\) \* -9px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)/,
+      /var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)/,
     );
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-hover-transform/);
     expect(compactCard?.[1]).toMatch(/rotateZ\(0deg\)/);
@@ -391,7 +391,7 @@ describe("thumbnail stack layout", () => {
     applyThumbnailStackGravity(stack, -0.42);
     expect(stack.style.getPropertyValue(THUMBNAIL_STACK_GRAVITY_VAR)).toBe("-0.42");
     expect(thumbnailStyles).toMatch(
-      /var\(--thumbnail-stack-pile-depth, 0\) \* -9px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)/,
+      /var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)/,
     );
     expect(thumbnailStyles).not.toMatch(/--thumbnail-stack-skew-y/);
   });
@@ -758,7 +758,7 @@ describe("thumbnail stack layout", () => {
     expect(envelope(6)).toBeLessThan(envelope(2));
     expect(Math.abs(thumbnailStackPeekJitterPx(6))).toBeLessThanOrEqual(envelope(6) + 1e-12);
     expect(thumbnailStyles).toMatch(
-      /var\(--thumbnail-stack-pile-depth, 0\) \* -9px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)\s*\+\s*var\(--thumbnail-stack-peek-jitter, 0px\)/,
+      /var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\n\s*\* var\(--thumbnail-stack-gravity, 1\)\s*\+\s*var\(--thumbnail-stack-peek-jitter, 0px\)/,
     );
   });
 
