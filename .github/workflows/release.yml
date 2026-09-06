@@ -347,8 +347,9 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.release_sha }}
       # Historical package jobs check out the tested SHA, then overlay the
-      # current upload helper and cache action, even for targets predating them.
-      # Include every local import of github-release-assets.mjs.
+      # current upload helper, FFmpeg source downloader, and cache action, even
+      # for targets predating them. Include every local import of
+      # github-release-assets.mjs.
       - name: Load the current release asset helper
         uses: actions/checkout@v4
         with:
@@ -356,6 +357,7 @@ jobs:
           sparse-checkout: |
             scripts/github-release-assets.mjs
             scripts/release-assets.mjs
+            scripts/download-ffmpeg-source.mjs
             .github/actions/prepare-media/action.yml
           sparse-checkout-cone-mode: false
           path: release-tools

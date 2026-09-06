@@ -34,7 +34,11 @@ checksum, recreate compliance files, and validate both binaries. Cache saves
 happen immediately after validation, before packaging can sign binaries; app
 signing, notarization, updater signatures, and complete-release validation still
 run for every release. Delete the relevant GitHub Actions `ffmpeg-v1-*` cache to
-force a cold rebuild; the first build after a key change is also cold.
+force a cold rebuild; the first build after a key change is also cold. Cold
+cache misses download the pinned FFmpeg source. GitHub-hosted runners try a
+previously published copy of that tarball from this repository first, then
+ffmpeg.org, so a timeout talking to ffmpeg.org cannot stall a Preview.
+Checksum verification is unchanged.
 
 Previews are GitHub pre-releases with CalVer versions in `YYYY.MM.DD.N` form,
 using the
