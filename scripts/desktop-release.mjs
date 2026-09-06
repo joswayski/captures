@@ -1,4 +1,4 @@
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
@@ -107,7 +107,7 @@ function fileAt(ref, path) {
 function changedPaths(before, after) {
   const args = refExists(before)
     ? ["diff", "--name-only", "--diff-filter=ACDMRTUXB", before, after]
-    : ["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", after];
+    : ["ls-tree", "--name-only", "-r", after];
   const output = git(args);
   return output ? output.split(/\r?\n/u) : [];
 }
@@ -172,17 +172,21 @@ export function releaseNotes(commits, repository, fallbackCommit = "") {
   return `## What's Changed\n${notes.join("\n")}\n`;
 }
 
-export function previousPreviewTag(head) {
-  const parent = firstParent(head);
-  if (!parent) return "";
+/** Nearest published Preview on main's history, never an unfinished draft tag. */
+export function previousPreviewTag(head, releases) {
+  const tags = releases
+    .filter((release) => !release.draft && release.prerelease
+      && /^v\d{4}\.\d{2}\.\d{2}\.[1-9]\d?$/u.test(release.tag_name))
+    .map((release) => release.tag_name);
+  if (tags.length === 0) return "";
   try {
     return git([
       "describe",
       "--tags",
       "--abbrev=0",
-      "--match",
-      "v[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9].[1-9]*",
-      parent,
+      "--first-parent",
+      ...tags.flatMap((tag) => ["--match", tag]),
+      head,
     ]);
   } catch {
     return "";
@@ -205,6 +209,14 @@ function appendOutput(entries) {
 
 function main() {
   const [command, ...args] = process.argv.slice(2);
+  if (command === "baseline") {
+    const [head, releasesPath] = args;
+    if (!head || !releasesPath) throw new Error("usage: desktop-release.mjs baseline <head> <releases.json>");
+    const tag = previousPreviewTag(head, JSON.parse(readFileSync(releasesPath, "utf8")));
+    appendOutput({ previous_tag: tag });
+    process.stdout.write(`Previous published Preview: ${tag || "none"}.\n`);
+    return;
+  }
   if (command === "changed") {
     const [before, after] = args;
     if (!after) throw new Error("usage: desktop-release.mjs changed <before> <after>");
@@ -215,17 +227,16 @@ function main() {
   }
 
   if (command === "notes") {
-    const [after, repository, outputPath] = args;
-    if (!after || !repository || !outputPath) {
-      throw new Error("usage: desktop-release.mjs notes <after> <repository> <output-path>");
+    const [after, repository, outputPath, before] = args;
+    if (!after || !repository || !outputPath || before === undefined) {
+      throw new Error("usage: desktop-release.mjs notes <after> <repository> <output-path> <previous-tag>");
     }
-    const before = previousPreviewTag(after);
     writeFileSync(outputPath, releaseNotesBetween(before, after, repository));
     process.stdout.write(`Generated desktop release notes since ${before || "repository start"}.\n`);
     return;
   }
 
-  throw new Error("usage: desktop-release.mjs <changed|notes> ...");
+  throw new Error("usage: desktop-release.mjs <baseline|changed|notes> ...");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

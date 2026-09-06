@@ -10,27 +10,27 @@ on:
         required: false
         type: string
 
-# cancel-in-progress: false only protects the running run. queue: max keeps
-# later main pushes pending (up to 100) instead of cancelling the middle SHA.
+# Finish the active release; replace pending runs with the newest request.
+# The next run snapshots main once, so skipped runs' changes ship together.
+# Omitting queue uses GitHub's default single pending slot.
 concurrency:
   group: captures-preview-main
   cancel-in-progress: false
-  queue: max
 
 permissions:
   contents: read
 
 jobs:
   queue:
-    name: Wait for earlier Preview builds
+    name: Select the next Preview batch
     runs-on: ubuntu-24.04
     permissions:
-      actions: read
       contents: read
     outputs:
       release_sha: ${{ steps.target.outputs.release_sha }}
       release_timestamp: ${{ steps.target.outputs.release_timestamp }}
       should_release: ${{ steps.scope.outputs.should_release }}
+      previous_tag: ${{ steps.baseline.outputs.previous_tag }}
     steps:
       - name: Restrict releases to main
         shell: bash
@@ -54,7 +54,7 @@ jobs:
           set -euo pipefail
 
           git fetch origin main
-          release_sha="${REQUESTED_SHA:-$GITHUB_SHA}"
+          release_sha="${REQUESTED_SHA:-origin/main}"
           release_sha="$(git rev-parse "${release_sha}^{commit}")"
           if ! git merge-base --is-ancestor "$release_sha" origin/main; then
             echo "${release_sha} is not a commit on main." >&2
@@ -65,10 +65,21 @@ jobs:
             echo "release_sha=$release_sha"
             echo "release_timestamp=$release_timestamp"
           } >> "$GITHUB_OUTPUT"
+      - name: Find the last published Preview in this commit's history
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ steps.target.outputs.release_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            | jq -s add > "$RUNNER_TEMP/releases.json"
+          node scripts/desktop-release.mjs baseline "$RELEASE_SHA" "$RUNNER_TEMP/releases.json"
       - name: Check for installed-app changes
         id: scope
         env:
-          BEFORE_SHA: ${{ github.event.before }}
+          BEFORE_SHA: ${{ steps.baseline.outputs.previous_tag }}
           EVENT_NAME: ${{ github.event_name }}
           RELEASE_SHA: ${{ steps.target.outputs.release_sha }}
         shell: bash
@@ -79,13 +90,6 @@ jobs:
           else
             node scripts/desktop-release.mjs changed "$BEFORE_SHA" "$RELEASE_SHA"
           fi
-      - name: Wait without dropping a main push
-        if: steps.scope.outputs.should_release == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: bash scripts/wait-preview-queue.sh
-
   version:
     name: Choose Preview version
     needs: queue
@@ -207,6 +211,7 @@ jobs:
           DISPLAY_VERSION: ${{ needs.version.outputs.display_version }}
           RELEASE_SHA: ${{ needs.queue.outputs.release_sha }}
           TAG: ${{ needs.version.outputs.tag }}
+          PREVIOUS_TAG: ${{ needs.queue.outputs.previous_tag }}
         shell: bash
         run: |
           set -euo pipefail
@@ -284,7 +289,8 @@ jobs:
           node "$GITHUB_WORKSPACE/release-tools/scripts/desktop-release.mjs" notes \
             "$RELEASE_SHA" \
             "$GITHUB_REPOSITORY" \
-            "$generated_notes"
+            "$generated_notes" \
+            "$PREVIOUS_TAG"
           {
             echo "> [!WARNING]"
             echo "> This Preview is functional, but experimental. Expect bugs and incomplete features; macOS is the primary development target, while Windows and Linux may be less polished."
@@ -341,16 +347,16 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.release_sha }}
       # Historical package jobs check out the tested SHA, then overlay the
-      # current upload helper so URL rewriting stays current. Include every
-      # local import of github-release-assets.mjs or Node cannot load it.
+      # current upload helper and cache action, even for targets predating them.
+      # Include every local import of github-release-assets.mjs.
       - name: Load the current release asset helper
-        if: runner.os == 'macOS'
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           sparse-checkout: |
             scripts/github-release-assets.mjs
             scripts/release-assets.mjs
+            .github/actions/prepare-media/action.yml
           sparse-checkout-cone-mode: false
           path: release-tools
       - name: Install Linux build dependencies
@@ -406,13 +412,8 @@ jobs:
             mingw-w64-ucrt-x86_64-yasm
             mingw-w64-ucrt-x86_64-zlib
       - run: npm ci
-      - name: Build and validate the pinned LGPL media sidecars
-        if: runner.os != 'Windows'
-        run: npm run prepare:media
-      - name: Build and validate the pinned LGPL Windows media sidecars
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
-        run: bash scripts/build-ffmpeg-sidecars.sh
+      - name: Prepare cached LGPL media sidecars
+        uses: ./release-tools/.github/actions/prepare-media
       - name: Prepare the release-only version
         if: runner.os != 'macOS'
         run: node scripts/prepare-release-build.mjs "${{ needs.prepare.outputs.app_version }}"

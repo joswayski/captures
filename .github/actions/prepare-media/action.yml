@@ -1,0 +1,56 @@
+name: Prepare cached media sidecars
+description: Restore or build pinned unsigned FFmpeg binaries, then validate before caching.
+runs:
+  using: composite
+  steps:
+    - name: Fingerprint the native media toolchain
+      id: toolchain
+      shell: ${{ runner.os == 'Windows' && 'msys2 {0}' || 'bash' }}
+      run: |
+        set -euo pipefail
+        node --input-type=module <<'NODE'
+        import { createHash } from 'node:crypto';
+        import { execFileSync } from 'node:child_process';
+        import { appendFileSync } from 'node:fs';
+        const compiler = process.platform === 'win32' ? 'gcc' : 'cc';
+        const fingerprint = [
+          process.env.ImageOS,
+          process.env.ImageVersion,
+          execFileSync(compiler, ['--version'], { encoding: 'utf8' }),
+          execFileSync('rustc', ['-vV'], { encoding: 'utf8' }),
+          process.platform === 'darwin'
+            ? execFileSync('xcrun', ['--show-sdk-version'], { encoding: 'utf8' })
+            : execFileSync('pkg-config', ['--modversion', 'zlib'], { encoding: 'utf8' }),
+        ].join('\n');
+        appendFileSync(process.env.GITHUB_OUTPUT, `digest=${createHash('sha256').update(fingerprint).digest('hex')}\n`);
+        NODE
+    - name: Restore unsigned media cache
+      id: cache
+      uses: actions/cache/restore@v4
+      with:
+        key: ffmpeg-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.digest }}-${{ hashFiles('scripts/build-ffmpeg-sidecars.sh', 'scripts/validate-ffmpeg-sidecars.mjs', 'apps/desktop/src-tauri/ffmpeg/BUILD_CONFIG.txt', 'apps/desktop/src-tauri/ffmpeg/NOTICE.md', 'rust-toolchain.toml') }}
+        path: |
+          apps/desktop/src-tauri/binaries/ffmpeg-*
+          apps/desktop/src-tauri/binaries/ffprobe-*
+          apps/desktop/src-tauri/ffmpeg/COPYING.LGPLv2.1
+          target/ffmpeg-build/*.tar.xz
+          target/ffmpeg-build/*.tar.xz.asc
+          target/ffmpeg-dist
+    # Always runs: the script verifies the source checksum, recreates notices,
+    # and exercises both binaries even when compilation can be skipped.
+    - name: Build or validate media sidecars
+      shell: ${{ runner.os == 'Windows' && 'msys2 {0}' || 'bash' }}
+      run: bash scripts/build-ffmpeg-sidecars.sh
+    # Save now, not as a post-job hook: packaging may sign the binaries later.
+    - name: Save validated unsigned media cache
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        key: ${{ steps.cache.outputs.cache-primary-key }}
+        path: |
+          apps/desktop/src-tauri/binaries/ffmpeg-*
+          apps/desktop/src-tauri/binaries/ffprobe-*
+          apps/desktop/src-tauri/ffmpeg/COPYING.LGPLv2.1
+          target/ffmpeg-build/*.tar.xz
+          target/ffmpeg-build/*.tar.xz.asc
+          target/ffmpeg-dist
