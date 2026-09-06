@@ -541,10 +541,48 @@ describe("Preferences", () => {
     render(<Preferences />);
 
     expect(await screen.findByText("Version 0.1.0")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "download from captur.es" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Check Now" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("check_for_updates"));
+  });
+
+  it("always offers an installer download that can replace a broken copy", async () => {
+    window.history.replaceState({}, "", "/?view=preferences&platform=linux");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_settings") return settings;
+      if (command === "get_update_status") {
+        return { state: "idle", current_version: "0.1.0", current_display_version: "0.1.0" };
+      }
+      if (command === "set_shortcut_capture_suppressed") return undefined;
+      if (command === "open_update_download_page") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<Preferences />);
+
+    expect(
+      await screen.findByText(/If this copy cannot update itself/u),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/~\/\.local\/bin\/Captures\.AppImage/u)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "download from captur.es" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_update_download_page"));
+  });
+
+  it("tells macOS and Windows users to install over the current copy", async () => {
+    window.history.replaceState({}, "", "/?view=preferences&platform=macos");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_settings") return settings;
+      if (command === "get_update_status") {
+        return { state: "idle", current_version: "0.1.0", current_display_version: "0.1.0" };
+      }
+      if (command === "set_shortcut_capture_suppressed") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<Preferences />);
+
+    expect(await screen.findByText(/install over it/u)).toBeInTheDocument();
+    expect(screen.queryByText(/Captures\.AppImage/u)).not.toBeInTheDocument();
   });
 
   it("can hide release notes on update notices", async () => {
@@ -591,6 +629,7 @@ describe("Preferences", () => {
     expect(await screen.findByText("Version 0.1.1 is available")).toBeInTheDocument();
     expect(screen.queryByText(/12\.6 MB/u)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "View release" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "download from captur.es" })).toBeInTheDocument();
   });
 
   it("links a failed update to the website download page", async () => {

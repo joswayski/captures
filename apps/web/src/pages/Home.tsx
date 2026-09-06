@@ -117,7 +117,8 @@ export default function Home({
                 </h2>
                 <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
                   Builds are available after every merge and may contain bugs or incomplete
-                  features. Please give feedback in the app, on{" "}
+                  features. {installRecoveryCopy(detectedDownload)} Please give feedback in the
+                  app, on{" "}
                   <a
                     href={X_URL}
                     target="_blank"
@@ -247,6 +248,13 @@ function linuxAlternativeDownload(download: PreviewDownload) {
 
 function linuxAlternativeLabel(download: PreviewDownload) {
   return download.id === "linux-deb" ? ".deb for Ubuntu / Debian" : "AppImage";
+}
+
+function installRecoveryCopy(download: PreviewDownload) {
+  if (download.family === "linux") {
+    return "Installing a Debian package replaces the current app. For the AppImage, copy it over ~/.local/bin/Captures.AppImage and make it executable; running it from Downloads starts a second copy. Settings and captures stay.";
+  }
+  return "Installing a download replaces the current app without deleting settings or captures.";
 }
 
 function availabilityLabel(download: PreviewDownload | null) {

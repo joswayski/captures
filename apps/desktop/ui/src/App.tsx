@@ -652,18 +652,35 @@ function useUpdateStatus() {
 const OPEN_CAPTURES_UPDATE_WARNING =
   "Open captures will close. Unsaved edits are kept as drafts.";
 
-function UpdateDownloadFallback() {
+function UpdateDownloadFallback({ source }: { source: "notice" | "preferences" }) {
+  const download = (
+    <button
+      type="button"
+      className="update-download-fallback-link"
+      onClick={() => void invoke("open_update_download_page")}
+    >
+      download from captur.es
+    </button>
+  );
+  const linuxRecovery = detectShortcutPlatform() === "linux";
   return (
     <p className="update-download-fallback">
-      You can also{" "}
-      <button
-        type="button"
-        className="update-download-fallback-link"
-        onClick={() => void invoke("open_update_download_page")}
-      >
-        download from captur.es
-      </button>
-      .
+      {source === "preferences" ? (
+        linuxRecovery ? (
+          <>
+            If this copy cannot update itself, {download}. Debian packages replace this
+            app; AppImage users should replace ~/.local/bin/Captures.AppImage. Settings
+            and captures stay.
+          </>
+        ) : (
+          <>
+            If this copy cannot update itself, {download} and install over it. Settings and
+            captures stay.
+          </>
+        )
+      ) : (
+        <>You can also {download}.</>
+      )}
     </p>
   );
 }
@@ -913,7 +930,7 @@ export function UpdateNotice() {
         {error && (
           <>
             <p className="update-error" role="alert">{error}</p>
-            <UpdateDownloadFallback />
+            <UpdateDownloadFallback source="notice" />
           </>
         )}
 
@@ -1043,7 +1060,10 @@ function UpdatePreferences({
     <section className="settings-card update-settings" id="updates" aria-labelledby="updates-heading">
       <header className="settings-card-header">
         <h2 id="updates-heading">Updates</h2>
-        <p>Preview builds update after every successful merge and may contain incomplete features.</p>
+        <p>
+          Preview builds check for a new version automatically. Update now installs it in
+          place.
+        </p>
       </header>
       <div className="settings-utility-row update-settings-row">
         <div className="settings-utility-copy">
@@ -1087,7 +1107,7 @@ function UpdatePreferences({
         <p className="update-settings-warning">{OPEN_CAPTURES_UPDATE_WARNING}</p>
       )}
       {actionError && <p className="update-settings-error" role="alert">{actionError}</p>}
-      {(actionError || status?.state === "error") && <UpdateDownloadFallback />}
+      <UpdateDownloadFallback source="preferences" />
       <label className="check-row switch-row">
         <input
           type="checkbox"
