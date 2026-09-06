@@ -3021,6 +3021,9 @@ export function RecordingSelector() {
   const activeWindowCornerRadius = activeWindowLayout?.cornerRadius ?? session.window_corner_radius;
   const displayCornerRadius = Math.max(0, session.display_corner_radius ?? 0);
   const canStart = canStartSelection;
+  const snapshotClipPath = targetMode === "region" && selectedRect
+    ? captureDimClipPath(selectedRect)
+    : undefined;
 
   const switchDisplay = async (displayId: string) => {
     if (displayId === session.display.id || switchingDisplay || starting) return;
@@ -3143,6 +3146,7 @@ export function RecordingSelector() {
           src={session.snapshot_url}
           alt=""
           draggable={false}
+          style={snapshotClipPath ? { clipPath: snapshotClipPath } : undefined}
           onLoad={() => revealSelector(session.id, freezeFrameRevealKey(session))}
           onError={() => {
             setError("The frozen preview could not load. You can still select from the live desktop.");
@@ -5873,6 +5877,9 @@ function CaptureOverlay() {
       ? hoveredWindowLayout
       : null;
   const displayCornerRadius = Math.max(0, session.display_corner_radius ?? 0);
+  const snapshotClipPath = mode === "region" && dimHole
+    ? captureDimClipPath(dimHole)
+    : undefined;
 
   return (
     <main
@@ -5907,6 +5914,7 @@ function CaptureOverlay() {
           src={session.snapshot_url}
           alt=""
           draggable={false}
+          style={snapshotClipPath ? { clipPath: snapshotClipPath } : undefined}
           onLoad={() => void revealOverlay()}
           onError={() => void revealOverlay()}
         />
