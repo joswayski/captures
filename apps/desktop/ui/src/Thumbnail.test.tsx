@@ -1685,7 +1685,7 @@ describe("Thumbnail", () => {
     expect(within(card).getByRole("button", { name: "Delete" })).toBeInTheDocument();
   });
 
-  it("does not teleport the collapsed pile while dragging through mid-screen", async () => {
+  it("flips the collapsed pile around mid-screen without waiting for drop", async () => {
     Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1_200 });
 
@@ -1735,7 +1735,7 @@ describe("Thumbnail", () => {
     );
 
     const tops: number[] = [];
-    for (const screenY of [640, 520, 400, 280, 160]) {
+    for (const screenY of [640, 520, 400]) {
       fireEvent.pointerMove(window, {
         pointerId: 1,
         screenX: 40,
@@ -1746,6 +1746,19 @@ describe("Thumbnail", () => {
         expect(stack).toHaveClass("thumbnail-stack-dragging");
       });
       expect(stack).not.toHaveClass("thumbnail-stack-anchor-top");
+      tops.push(cardTop());
+    }
+
+    for (const screenY of [280, 160]) {
+      fireEvent.pointerMove(window, {
+        pointerId: 1,
+        screenX: 40,
+        screenY,
+        bubbles: true,
+      });
+      await waitFor(() => {
+        expect(stack).toHaveClass("thumbnail-stack-anchor-top");
+      });
       tops.push(cardTop());
     }
 
@@ -1768,7 +1781,7 @@ describe("Thumbnail", () => {
       screenX: 40,
       screenY: 80,
     });
-    for (const screenY of [200, 320, 440, 560, 680]) {
+    for (const screenY of [200, 320]) {
       fireEvent.pointerMove(window, {
         pointerId: 2,
         screenX: 40,
@@ -1779,6 +1792,18 @@ describe("Thumbnail", () => {
         expect(stack).toHaveClass("thumbnail-stack-dragging");
       });
       expect(stack).toHaveClass("thumbnail-stack-anchor-top");
+      tops.push(cardTop());
+    }
+    for (const screenY of [440, 560, 680]) {
+      fireEvent.pointerMove(window, {
+        pointerId: 2,
+        screenX: 40,
+        screenY,
+        bubbles: true,
+      });
+      await waitFor(() => {
+        expect(stack).not.toHaveClass("thumbnail-stack-anchor-top");
+      });
       tops.push(cardTop());
     }
     const downTops = tops.slice(-5);

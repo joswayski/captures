@@ -6076,11 +6076,10 @@ export function Thumbnail() {
   ));
   const stackRef = useRef<HTMLElement>(null);
   const stackDrag = useRef<CollapsedThumbnailStackDrag | null>(null);
-  // Keep the press-time top/bottom layout for the whole drag. Flipping it
-  // mid-screen teleports compact cards across the tall window until the
-  // converted frame catches up.
+  // Native collapsed windows retain their expanded height. Track which end
+  // currently owns the compact pile so a live midpoint flip can convert that
+  // tall frame without moving the visible previews.
   const collapsedLayoutAnchorRef = useRef<ThumbnailStackAnchor>("bottom");
-  const collapsedFrameRef = useRef<{ x: number; y: number } | null>(null);
   const collapsedStackPointerCleanup = useRef<(() => void) | null>(null);
   const skipCollapsedStackClick = useRef(false);
   const stackFanCollapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -7188,7 +7187,6 @@ export function Thumbnail() {
           thumbnailStackBiasFromFrameX(next.x, work.x, work.width),
           stackSideRef.current,
         ));
-        collapsedFrameRef.current = next;
         return next;
       } catch {
         applyThumbnailStackGravity(
@@ -7199,7 +7197,6 @@ export function Thumbnail() {
           "set_mini_preview_stack_position",
           { x, y, anchor },
         );
-        collapsedFrameRef.current = next;
         return next;
       }
     }
@@ -7224,22 +7221,28 @@ export function Thumbnail() {
       thumbnailStackBiasFromHarness(written.x, viewport.width),
       stackSideRef.current,
     ));
-    collapsedFrameRef.current = written;
     return written;
   };
 
-  const settleCollapsedStackAnchor = async () => {
-    const frame = collapsedFrameRef.current;
-    if (!frame) return;
+  const moveCollapsedStackFrame = async (x: number, y: number) => {
     const from = collapsedLayoutAnchorRef.current;
     const contentHeight = collapsedContentHeight();
     if (isTauri()) {
       try {
         const nativeGeometry = await collapsedNativeGeometry();
-        const { frameHeight, workTop, workHeight } = nativeGeometry;
+        const { frameHeight, work, workTop, workHeight } = nativeGeometry;
+        const sourceFrame = clampThumbnailStackFrame(
+          x,
+          y,
+          340,
+          frameHeight,
+          work,
+          contentHeight,
+          from,
+        );
         const gravity = thumbnailStackGravityFromWorkArea({
           pileBottom: thumbnailStackVisualPileBottom({
-            y: frame.y,
+            y: sourceFrame.y,
             frameHeight,
             contentHeight,
             anchor: from,
@@ -7250,9 +7253,11 @@ export function Thumbnail() {
           bottomGap: 12,
         });
         const nextAnchor = thumbnailStackAnchorFromGravity(gravity, from);
-        if (nextAnchor === from) return;
+        if (nextAnchor === from) {
+          return placeCollapsedStackFrame(x, y, from, nativeGeometry);
+        }
         const converted = convertThumbnailStackFrameAnchor(
-          frame,
+          sourceFrame,
           from,
           nextAnchor,
           frameHeight,
@@ -7264,31 +7269,38 @@ export function Thumbnail() {
         // DOM anchor changes and native position IPC catches up; otherwise
         // the new alignment can paint at the opposite edge for one frame.
         const stack = stackRef.current;
-        if (stack) stack.style.translate = `0 ${converted.y - frame.y}px`;
+        if (stack) stack.style.translate = `0 ${converted.y - sourceFrame.y}px`;
         commitStackAnchor(nextAnchor);
         try {
-          await placeCollapsedStackFrame(converted.x, converted.y, nextAnchor, nativeGeometry);
+          const next = await placeCollapsedStackFrame(
+            converted.x,
+            converted.y,
+            nextAnchor,
+            nativeGeometry,
+          );
+          stackDrag.current?.rebaseFrame(next, sourceFrame);
+          return next;
         } finally {
           stack?.style.removeProperty("translate");
         }
-        return;
       } catch {
         collapsedLayoutAnchorRef.current = from;
         commitStackAnchor(from);
-        return;
+        return placeCollapsedStackFrame(x, y, from);
       }
     }
+
     const viewport = { width: window.innerWidth, height: window.innerHeight };
     const gravity = thumbnailStackGravityFromHarness({
-      offsetY: frame.y,
+      offsetY: y,
       anchor: from,
       viewportHeight: viewport.height,
       contentHeight,
     });
     const nextAnchor = thumbnailStackAnchorFromGravity(gravity, from);
-    if (nextAnchor === from) return;
+    if (nextAnchor === from) return placeCollapsedStackFrame(x, y, from);
     const converted = convertHarnessStackOffsetAnchor(
-      frame,
+      { x, y },
       from,
       nextAnchor,
       viewport.height,
@@ -7296,10 +7308,12 @@ export function Thumbnail() {
     );
     collapsedLayoutAnchorRef.current = nextAnchor;
     const stack = stackRef.current;
-    if (stack) stack.style.translate = `0 ${converted.y - frame.y}px`;
+    if (stack) stack.style.translate = `0 ${converted.y - y}px`;
     commitStackAnchor(nextAnchor);
     try {
-      await placeCollapsedStackFrame(converted.x, converted.y, nextAnchor);
+      const next = await placeCollapsedStackFrame(converted.x, converted.y, nextAnchor);
+      stackDrag.current?.rebaseFrame(next, { x, y });
+      return next;
     } finally {
       stack?.style.removeProperty("translate");
     }
@@ -7315,13 +7329,8 @@ export function Thumbnail() {
         }
         return readHarnessStackOffset();
       },
-      moveFrame: async (x, y) => placeCollapsedStackFrame(
-        x,
-        y,
-        collapsedLayoutAnchorRef.current,
-      ),
+      moveFrame: moveCollapsedStackFrame,
       reducedMotion: prefersReducedMotion,
-      onDrop: settleCollapsedStackAnchor,
       onSway: (sway) => applyThumbnailStackDragSway(stackRef.current, sway),
       onDraggingChange: (dragging) => {
         const stack = stackRef.current;

@@ -298,9 +298,8 @@ export function thumbnailStackAnchorFromGravity(
 
 /**
  * Compact cards sit on one end of a full-height stack (`bottom: 52px` or
- * `top: 52px`). Flipping that layout mid-drag teleports the pile across the
- * window until the frame conversion catches up, so collapsed dragging keeps
- * the press-time anchor and only settles after drop.
+ * `top: 52px`). Frame-anchor conversion keeps their screen position stable
+ * when the stack crosses the midpoint during a drag.
  */
 export function thumbnailStackHarnessCardTop({
   offsetY,
