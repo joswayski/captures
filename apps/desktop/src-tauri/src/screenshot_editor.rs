@@ -26,9 +26,9 @@ use crate::{
 };
 
 pub(crate) const SCREENSHOT_EDITOR_WINDOW_PREFIX: &str = "screenshot-editor-";
-const MAX_EDITOR_PNG_BYTES: usize = 256 * 1024 * 1024;
-const MAX_EDITOR_DIMENSION: u32 = 16_384;
-const MAX_EDITOR_PIXELS: u64 = 100_000_000;
+pub(crate) const MAX_EDITOR_PNG_BYTES: usize = 256 * 1024 * 1024;
+pub(crate) const MAX_EDITOR_DIMENSION: u32 = 16_384;
+pub(crate) const MAX_EDITOR_PIXELS: u64 = 100_000_000;
 
 use crate::models::ScreenshotFormat as ScreenshotEditFormat;
 
@@ -81,20 +81,23 @@ pub fn open_screenshot_editor(
     if state.find_artifact(&artifact_id).is_none() {
         return Err("the screenshot is no longer available".to_owned());
     }
+    show_screenshot_editor(&app, &artifact_id).map_err(|error| error.to_string())
+}
 
+pub(crate) fn show_screenshot_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppError> {
     let label = format!("{SCREENSHOT_EDITOR_WINDOW_PREFIX}{artifact_id}");
     // Opening the editor is an intentional focus change; do not hand activation
     // back to whatever app was frontmost before a prior capture shortcut.
     #[cfg(target_os = "macos")]
     captures_macos_window::clear_frontmost_app_anchor();
     if let Some(window) = app.get_webview_window(&label) {
-        crate::reveal_and_focus_document_window(&window).map_err(|error| error.to_string())?;
+        crate::reveal_and_focus_document_window(&window)?;
         return Ok(());
     }
 
-    let (theme, background) = crate::document_window_chrome(&app);
+    let (theme, background) = crate::document_window_chrome(app);
     WebviewWindowBuilder::new(
-        &app,
+        app,
         label,
         WebviewUrl::App(
             format!("index.html?view=screenshot-editor&artifact_id={artifact_id}").into(),
@@ -113,8 +116,7 @@ pub fn open_screenshot_editor(
     .on_page_load(crate::document_window_page_load_handler(
         "failed to reveal screenshot editor",
     ))
-    .build()
-    .map_err(|error| error.to_string())?;
+    .build()?;
     Ok(())
 }
 
@@ -675,16 +677,32 @@ fn decode_editor_png(bytes: &[u8]) -> Result<RgbaImage, AppError> {
     let image = image::load_from_memory_with_format(bytes, ImageFormat::Png)
         .map_err(|error| AppError::Image(error.to_string()))?
         .into_rgba8();
-    let pixels = u64::from(image.width()) * u64::from(image.height());
-    if image.width() > MAX_EDITOR_DIMENSION
-        || image.height() > MAX_EDITOR_DIMENSION
-        || pixels > MAX_EDITOR_PIXELS
-    {
+    ensure_editor_image_limits(image.width(), image.height())?;
+    Ok(image)
+}
+
+pub(crate) fn decode_still_image_file(path: &Path) -> Result<RgbaImage, AppError> {
+    let metadata = fs::metadata(path)?;
+    if metadata.len() > u64::try_from(MAX_EDITOR_PNG_BYTES).unwrap_or(u64::MAX) {
+        return Err(AppError::Image(
+            "this image is too large to open in Captures".to_owned(),
+        ));
+    }
+    let image = image::open(path)
+        .map_err(|error| AppError::Image(error.to_string()))?
+        .into_rgba8();
+    ensure_editor_image_limits(image.width(), image.height())?;
+    Ok(image)
+}
+
+pub(crate) fn ensure_editor_image_limits(width: u32, height: u32) -> Result<(), AppError> {
+    let pixels = u64::from(width) * u64::from(height);
+    if width > MAX_EDITOR_DIMENSION || height > MAX_EDITOR_DIMENSION || pixels > MAX_EDITOR_PIXELS {
         return Err(AppError::Image(format!(
-            "edited screenshots are limited to {MAX_EDITOR_DIMENSION} pixels per side and {MAX_EDITOR_PIXELS} total pixels"
+            "images are limited to {MAX_EDITOR_DIMENSION} pixels per side and {MAX_EDITOR_PIXELS} total pixels"
         )));
     }
-    Ok(image)
+    Ok(())
 }
 
 /// Encode a captured PNG using the user's default screenshot save format.
@@ -1010,8 +1028,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        ScreenshotEditFormat, ScreenshotExportQualityMode, composite_onto_white, encode_export,
-        encode_export_with_limit, encoded_len, resolve_editor_draft_asset, unique_export_path,
+        ScreenshotEditFormat, ScreenshotExportQualityMode, composite_onto_white,
+        decode_still_image_file, encode_export, encode_export_with_limit, encoded_len,
+        ensure_editor_image_limits, resolve_editor_draft_asset, unique_export_path,
         validate_draft_component_id, validated_destination, write_export_atomically,
     };
 
@@ -1035,6 +1054,36 @@ mod tests {
                 255,
             ])
         })
+    }
+
+    #[test]
+    fn opens_png_jpeg_and_webp_files_from_disk() {
+        let directory = tempdir().expect("temporary directory");
+        for (format, name) in [
+            (ScreenshotEditFormat::Png, "still.png"),
+            (ScreenshotEditFormat::Jpeg, "still.jpg"),
+            (ScreenshotEditFormat::Webp, "still.webp"),
+        ] {
+            let bytes = encode_export(
+                &sample(),
+                format,
+                ScreenshotExportQualityMode::Preserve,
+                100,
+                None,
+            )
+            .expect("image encoded");
+            let path = directory.path().join(name);
+            std::fs::write(&path, bytes).expect("image written");
+            let image = decode_still_image_file(&path).expect("image opened");
+            assert_eq!((image.width(), image.height()), (3, 2), "{name}");
+        }
+    }
+
+    #[test]
+    fn rejects_images_over_the_editor_dimension_limit() {
+        assert!(ensure_editor_image_limits(10_000, 10_000).is_ok());
+        assert!(ensure_editor_image_limits(16_385, 1).is_err());
+        assert!(ensure_editor_image_limits(10_001, 10_001).is_err());
     }
 
     #[test]

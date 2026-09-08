@@ -44,6 +44,7 @@ use uuid::Uuid;
 mod crash_report;
 mod feedback;
 mod models;
+mod open_media;
 mod recording;
 mod screenshot_editor;
 mod session_end;
@@ -92,7 +93,7 @@ enum AppError {
 }
 
 type CommandResult<T> = Result<T, String>;
-const AUTOSTART_ARG: &str = "--captures-autostart";
+pub(crate) const AUTOSTART_ARG: &str = "--captures-autostart";
 const TRAY_ICON_ID: &str = "main";
 const ONBOARDING_WINDOW_LABEL: &str = "onboarding";
 const RECORDING_EDITOR_WINDOW_PREFIX: &str = "recording-editor-";
@@ -139,8 +140,13 @@ pub fn run() {
     let protocol_state = state.clone();
 
     let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            focus_or_show_primary_app_window(app);
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            let paths = open_media::open_paths_from_cli_args(args, Some(PathBuf::from(cwd)));
+            if paths.is_empty() {
+                focus_or_show_primary_app_window(app);
+                return;
+            }
+            open_media::enqueue_or_open(app, paths);
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -385,18 +391,22 @@ pub fn run() {
             refresh_autostart_registration(app);
             let restarted_after_update = updates::take_update_restart_pending();
             crash_report::initialize(&handle, restarted_after_update);
+            let opening_files = open_media::finish_setup(&handle);
             if pending_capture.is_none() {
                 let onboarding_completed =
                     app.state::<Arc<AppState>>().settings().onboarding_completed;
-                match interactive_launch_action(
+                if let Some(action) = interactive_launch_action(
                     onboarding_completed,
                     restarted_after_update || launched_from_autostart(),
+                    opening_files,
                 ) {
-                    InteractiveLaunchAction::Onboarding => show_onboarding(&handle),
-                    InteractiveLaunchAction::StartupNotice => {
-                        show_startup_notice(&handle, STARTUP_NOTICE_AUTOSTART_VISIBLE);
+                    match action {
+                        InteractiveLaunchAction::Onboarding => show_onboarding(&handle),
+                        InteractiveLaunchAction::StartupNotice => {
+                            show_startup_notice(&handle, STARTUP_NOTICE_AUTOSTART_VISIBLE);
+                        }
+                        InteractiveLaunchAction::Preferences => show_preferences(&handle),
                     }
-                    InteractiveLaunchAction::Preferences => show_preferences(&handle),
                 }
             }
             if let Some(mode) = pending_capture {
@@ -412,7 +422,7 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building Captures")
-        .run(|_app, event| match event {
+        .run(|app, event| match event {
             tauri::RunEvent::ExitRequested { code, api, .. } => {
                 if crash_report::should_prevent_exit(code) {
                     api.prevent_exit();
@@ -420,8 +430,19 @@ pub fn run() {
             }
             tauri::RunEvent::Exit => crash_report::mark_clean_exit(),
             #[cfg(target_os = "macos")]
-            tauri::RunEvent::Reopen { .. } => focus_or_show_primary_app_window(_app),
-            _ => {}
+            tauri::RunEvent::Reopen { .. } => focus_or_show_primary_app_window(app),
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            tauri::RunEvent::Opened { urls } => {
+                let paths = urls
+                    .into_iter()
+                    .filter_map(|url| url.to_file_path().ok())
+                    .collect();
+                open_media::enqueue_or_open(app, paths);
+            }
+            _ => {
+                #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+                let _ = app;
+            }
         });
 }
 
@@ -438,17 +459,22 @@ enum InteractiveLaunchAction {
 
 /// First interactive launch opens Preferences, not a capture overlay.
 /// Autostart and post-update restarts stay in the tray with the startup notice.
+/// Opening a file from the OS skips those windows and goes to the matching editor.
 fn interactive_launch_action(
     onboarding_completed: bool,
     launched_quietly: bool,
-) -> InteractiveLaunchAction {
-    if !onboarding_completed {
+    opening_files: bool,
+) -> Option<InteractiveLaunchAction> {
+    if opening_files {
+        return None;
+    }
+    Some(if !onboarding_completed {
         InteractiveLaunchAction::Onboarding
     } else if launched_quietly {
         InteractiveLaunchAction::StartupNotice
     } else {
         InteractiveLaunchAction::Preferences
-    }
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10622,17 +10648,19 @@ mod tests {
     #[test]
     fn interactive_launch_opens_preferences_instead_of_a_capture() {
         assert_eq!(
-            interactive_launch_action(false, false),
-            InteractiveLaunchAction::Onboarding
+            interactive_launch_action(false, false, false),
+            Some(InteractiveLaunchAction::Onboarding)
         );
         assert_eq!(
-            interactive_launch_action(true, true),
-            InteractiveLaunchAction::StartupNotice
+            interactive_launch_action(true, true, false),
+            Some(InteractiveLaunchAction::StartupNotice)
         );
         assert_eq!(
-            interactive_launch_action(true, false),
-            InteractiveLaunchAction::Preferences
+            interactive_launch_action(true, false, false),
+            Some(InteractiveLaunchAction::Preferences)
         );
+        assert_eq!(interactive_launch_action(true, false, true), None);
+        assert_eq!(interactive_launch_action(false, false, true), None);
     }
 
     #[test]

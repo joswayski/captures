@@ -359,6 +359,30 @@ pub fn save_history_recording(
         .ok_or_else(|| AppError::Task("recording history media was not written".to_owned()))
 }
 
+/// Record an opened recording in capture history without copying the media file.
+/// Playback stays on `entry.saved_path`.
+pub fn save_history_recording_reference(
+    entry: &HistoryEntry,
+    poster_png: &[u8],
+) -> Result<(), AppError> {
+    if entry.kind == ArtifactKind::Screenshot || entry.kind.recording_kind().is_none() {
+        return Err(AppError::Task(
+            "recording history metadata is incomplete".to_owned(),
+        ));
+    }
+    if entry
+        .saved_path
+        .as_deref()
+        .is_none_or(|path| !Path::new(path).is_file())
+    {
+        return Err(AppError::Task(
+            "recording media is no longer available".to_owned(),
+        ));
+    }
+    let directory = crate::models::history_directory();
+    save_history_entry_in(&directory, entry, None, poster_png, None).map(|_| ())
+}
+
 /// Rewrite history metadata in place (for example after a permanent save) without
 /// replacing recovery media already stored in the entry directory.
 pub fn update_history_entry_metadata(entry: &HistoryEntry) -> Result<(), AppError> {

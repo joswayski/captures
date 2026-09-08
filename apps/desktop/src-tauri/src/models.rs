@@ -1380,7 +1380,7 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        AppSettings, Appearance, ColorTheme, CustomThemeSettings, HistoryEntry,
+        AppSettings, Appearance, ArtifactKind, ColorTheme, CustomThemeSettings, HistoryEntry,
         MiniPreviewPlacement, RecordingArtifact, RecordingCapabilities, ScreenshotFormat,
         VideoFormat, macos_screenshot_hotkeys_conflicting_with, migrate_output_directory,
         migrate_settings, platform_can_exclude_recording_controls, recording_controls_are_excluded,
@@ -1852,6 +1852,33 @@ mod tests {
         assert_eq!(json["missing"], true);
         assert_eq!(json["saved_path"], "/missing/Captures_recording.mp4");
         assert!(json.get("fields").is_none());
+    }
+
+    #[test]
+    fn opened_recordings_play_from_the_original_file_when_history_has_no_copy() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let saved_path = "/tmp/opened-clip.mp4";
+        let entry = HistoryEntry {
+            id,
+            kind: ArtifactKind::Video,
+            preview_url: String::new(),
+            full_url: String::new(),
+            width: 1_280,
+            height: 720,
+            size_bytes: 8,
+            created_at: "2026-09-08T12:00:00Z".to_owned(),
+            mode: None,
+            saved_path: Some(saved_path.to_owned()),
+            mime_type: Some("video/mp4".to_owned()),
+            duration_ms: Some(1_000),
+            target: Some(RecordingTarget::Display {
+                display_id: "opened-file".to_owned(),
+            }),
+            has_system_audio: true,
+            has_microphone_audio: false,
+            dropped_frames: 0,
+        };
+        assert_eq!(entry.recording_media_path().as_deref(), Some(saved_path));
     }
 
     #[test]

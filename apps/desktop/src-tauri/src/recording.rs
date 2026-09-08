@@ -2860,6 +2860,82 @@ pub fn open_recording_editor(
     show_recording_editor(&app, &artifact_id).map_err(|error| error.to_string())
 }
 
+pub(crate) async fn open_recording_from_path(
+    app: &AppHandle,
+    path: PathBuf,
+    kind: RecordingKind,
+) -> Result<(), AppError> {
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    if let Some(artifact_id) = crate::open_media::existing_recording_id(&state, &path) {
+        ensure_recording_artifact_loaded(&state, &artifact_id)
+            .map_err(|error| AppError::Task(error))?;
+        return show_recording_editor(app, &artifact_id);
+    }
+
+    let app_for_tools = app.clone();
+    let path_for_task = path.clone();
+    let (probe, poster_png) = tauri::async_runtime::spawn_blocking(move || {
+        let toolchain = media_toolchain(&app_for_tools);
+        let probe = toolchain
+            .probe(&path_for_task)
+            .map_err(|error| AppError::Task(error.to_string()))?;
+        let poster_path =
+            std::env::temp_dir().join(format!("captures-open-poster-{}.png", Uuid::new_v4()));
+        toolchain
+            .create_poster(&path_for_task, &poster_path, &CancelToken::default())
+            .map_err(|error| AppError::Task(error.to_string()))?;
+        let poster_png = fs::read(&poster_path)?;
+        let _ = fs::remove_file(&poster_path);
+        Ok::<_, AppError>((probe, poster_png))
+    })
+    .await
+    .map_err(|error| AppError::Task(error.to_string()))??;
+
+    let artifact_id = Uuid::new_v4().to_string();
+    let saved_path = path.to_string_lossy().into_owned();
+    let mut artifact = RecordingArtifact {
+        id: artifact_id.clone(),
+        kind,
+        path: saved_path.clone(),
+        saved_path: Some(saved_path),
+        media_url: recording_media_url(&artifact_id),
+        poster_url: recording_poster_url(&artifact_id),
+        mime_type: crate::open_media::recording_mime_type(&path, &probe.metadata.mime_type),
+        duration_ms: probe.metadata.duration_ms.unwrap_or(0),
+        width: probe.metadata.width,
+        height: probe.metadata.height,
+        size_bytes: probe.metadata.size_bytes,
+        dropped_frames: 0,
+        has_system_audio: probe.has_audio,
+        has_microphone_audio: false,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        target: crate::open_media::opened_recording_target(),
+        missing: false,
+    };
+    let history_entry = HistoryEntry::from_recording(&artifact);
+    let history_saved = match storage::save_history_recording_reference(&history_entry, &poster_png)
+    {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("failed to save opened recording history: {error}");
+            false
+        }
+    };
+    artifact.missing = !Path::new(&artifact.path).is_file();
+    state
+        .recording_artifacts
+        .lock()
+        .push(RecordingArtifactData {
+            summary: artifact,
+            poster_png,
+        });
+    if history_saved {
+        state.history.lock().insert(0, history_entry);
+        let _ = app.emit("capture-history-changed", ());
+    }
+    show_recording_editor(app, &artifact_id)
+}
+
 fn ensure_recording_artifact_loaded(state: &AppState, artifact_id: &str) -> Result<(), String> {
     if state
         .recording_artifacts
@@ -4633,7 +4709,7 @@ fn recording_overlay_content_protected(app: &AppHandle) -> bool {
     })
 }
 
-fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppError> {
+pub(crate) fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppError> {
     let label = format!("recording-editor-{artifact_id}");
     // Opening the editor is intentional; keep Captures focused instead of
     // restoring the app that was frontmost when recording started.

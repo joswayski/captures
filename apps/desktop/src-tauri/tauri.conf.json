@@ -30,6 +30,64 @@
     "category": "Utility",
     "shortDescription": "A lightweight screen capture utility",
     "longDescription": "Capture screenshots, videos, and GIFs with a quick, lightweight workflow.",
+    "fileAssociations": [
+      {
+        "ext": ["png"],
+        "mimeType": "image/png",
+        "name": "PNG image",
+        "description": "PNG image",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": ["jpg", "jpeg"],
+        "mimeType": "image/jpeg",
+        "name": "JPEG image",
+        "description": "JPEG image",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": ["webp"],
+        "mimeType": "image/webp",
+        "name": "WebP image",
+        "description": "WebP image",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": ["gif"],
+        "mimeType": "image/gif",
+        "name": "GIF",
+        "description": "GIF",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": ["mp4"],
+        "mimeType": "video/mp4",
+        "name": "MPEG-4 video",
+        "description": "MPEG-4 video",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": ["webm"],
+        "mimeType": "video/webm",
+        "name": "WebM video",
+        "description": "WebM video",
+        "role": "Editor",
+        "rank": "Alternate"
+      }
+    ],
+    "linux": {
+      "deb": {
+        "desktopTemplate": "./linux/captures.desktop"
+      },
+      "rpm": {
+        "desktopTemplate": "./linux/captures.desktop"
+      }
+    },
     "macOS": {
       "minimumSystemVersion": "13.0",
       "entitlements": "./Entitlements.plist"
