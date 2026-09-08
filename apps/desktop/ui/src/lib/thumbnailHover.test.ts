@@ -14,8 +14,10 @@ import {
   thumbnailLostPointerCaptureShouldEndDrag,
   setThumbnailCardHoverSuppressed,
   shouldIgnoreThumbnailCursorEvents,
+  shouldLockThumbnailCardHoverOnNewCapture,
   shouldLockThumbnailCardHoverOnStackMotion,
   shouldRecoverThumbnailAfterNullPolls,
+  thumbnailCardHoverLockHoldsInitialPointerMove,
   thumbnailCardHoverLockReleased,
   thumbnailCssCursor,
   thumbnailCursorSyncAction,
@@ -1303,6 +1305,19 @@ describe("thumbnail card hover lock", () => {
     expect(shouldLockThumbnailCardHoverOnStackMotion("expanding", "collapsed")).toBe(true);
     expect(shouldLockThumbnailCardHoverOnStackMotion("expanded", "expanding")).toBe(true);
     expect(shouldLockThumbnailCardHoverOnStackMotion("expanded", "collapsed")).toBe(true);
+  });
+
+  it("locks hover when a new capture joins the stack", () => {
+    expect(shouldLockThumbnailCardHoverOnNewCapture(0, 0)).toBe(false);
+    expect(shouldLockThumbnailCardHoverOnNewCapture(0, 1)).toBe(true);
+    expect(shouldLockThumbnailCardHoverOnNewCapture(1, 2)).toBe(true);
+    expect(shouldLockThumbnailCardHoverOnNewCapture(2, 2)).toBe(false);
+    expect(shouldLockThumbnailCardHoverOnNewCapture(2, 1)).toBe(false);
+  });
+
+  it("holds the first DOM pointermove after a preview appears, but not after expand", () => {
+    expect(thumbnailCardHoverLockHoldsInitialPointerMove("appear")).toBe(true);
+    expect(thumbnailCardHoverLockHoldsInitialPointerMove("motion")).toBe(false);
   });
 
   it("releases the lock only after the pointer leaves or moves past slop", () => {

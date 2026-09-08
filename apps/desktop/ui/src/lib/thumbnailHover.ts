@@ -67,6 +67,17 @@ export const THUMBNAIL_HOVER_STALE_ATTRIBUTE = "data-thumbnail-hover-stale";
 export const THUMBNAIL_CARD_HOVER_LOCK_SLOP_PX = 4;
 
 /**
+ * Why card hover chrome is currently idle.
+ *
+ * `motion` — collapse/expand left the pointer over a card that was not hovered
+ * as a live preview. The next real DOM pointermove is user intent.
+ * `appear` — a newly shown stack, or a new capture added to one, appeared
+ * under a leftover pointer. The first sample is often a synthetic pointermove
+ * at that same point and must not count as a hover.
+ */
+export type ThumbnailCardHoverLockKind = "motion" | "appear";
+
+/**
  * Keeps a freshly opened editor control in its passive “In editor” state until
  * the pointer actually leaves it. Without this latch, the stationary click
  * immediately counts as hover and the new status morphs straight into the
@@ -249,7 +260,8 @@ export function thumbnailCardHoverLockReleased(
 /**
  * Collapse, expand, and reduced-motion jumps all leave the pointer over a card
  * that was not hovered as a live preview. Keep hover locked through those
- * transitions. The initial expanded mount must not lock.
+ * transitions. The initial expanded mount must not lock for motion — new
+ * captures use {@link shouldLockThumbnailCardHoverOnNewCapture} instead.
  */
 export function shouldLockThumbnailCardHoverOnStackMotion(
   stackMotion: string | undefined,
@@ -258,6 +270,29 @@ export function shouldLockThumbnailCardHoverOnStackMotion(
   if (!stackMotion) return false;
   if (stackMotion !== "expanded") return true;
   return Boolean(previousStackMotion && previousStackMotion !== "expanded");
+}
+
+/**
+ * True when a new preview joined the stack. The always-on-top window is often
+ * shown under a leftover capture cursor, and growing toward that cursor can
+ * slide Delete onto the same point — especially after the pile was dragged to
+ * the top-left, where Show less and Delete share a corner.
+ */
+export function shouldLockThumbnailCardHoverOnNewCapture(
+  previousCount: number,
+  nextCount: number,
+): boolean {
+  return nextCount > previousCount;
+}
+
+/**
+ * Collapse/expand: the first DOM pointermove should unlock immediately.
+ * Appear: that first sample is often a synthetic move at a stationary cursor.
+ */
+export function thumbnailCardHoverLockHoldsInitialPointerMove(
+  kind: ThumbnailCardHoverLockKind,
+): boolean {
+  return kind === "appear";
 }
 
 export function thumbnailStackHasLiveHitTarget(root: Document = document): boolean {

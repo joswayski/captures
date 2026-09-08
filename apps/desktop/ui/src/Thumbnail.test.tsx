@@ -15,6 +15,7 @@ import {
   thumbnailCollapsedPadding,
 } from "./lib/thumbnailLayout";
 import {
+  THUMBNAIL_CARD_HOVER_LOCK_SLOP_PX,
   THUMBNAIL_HOVER_STALE_ATTRIBUTE,
   THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE,
   THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE,
@@ -58,6 +59,20 @@ function useArtifactFixture(artifacts: CaptureArtifact[]) {
       ? Promise.resolve(artifacts)
       : invokeDefault(command, args, options)
   ));
+}
+
+/** A preview that appeared under the cursor ignores the first sample. */
+function movePointerPastAppearHoverLock(
+  target: Document | Element | Window,
+  clientX: number,
+  clientY: number,
+) {
+  fireEvent.pointerMove(target, { clientX, clientY, pointerType: "mouse" });
+  fireEvent.pointerMove(target, {
+    clientX: clientX + THUMBNAIL_CARD_HOVER_LOCK_SLOP_PX + 1,
+    clientY,
+    pointerType: "mouse",
+  });
 }
 
 describe("Thumbnail", () => {
@@ -147,6 +162,7 @@ describe("Thumbnail", () => {
     });
     pointerReady = true;
     window.dispatchEvent(new Event("captures-thumbnail-ready"));
+    movePointerPastAppearHoverLock(window, 40, 20);
 
     await waitFor(() => {
       expect(edit).toHaveAttribute("data-native-pointer-hover", "true");
@@ -220,6 +236,7 @@ describe("Thumbnail", () => {
     imageRef.current = image;
     pointerReady = true;
     window.dispatchEvent(new Event("captures-thumbnail-ready"));
+    movePointerPastAppearHoverLock(window, 40, 80);
 
     await waitFor(() => {
       expect(card).toHaveAttribute("data-thumbnail-native-active", "true");
@@ -243,6 +260,186 @@ describe("Thumbnail", () => {
         "reassert_thumbnail_cursor",
         { kind: "grab" },
       );
+    });
+  });
+
+  it("does not hover Delete when a preview appears under a stationary pointer", async () => {
+    const deleteButtonRef = { current: null as HTMLElement | null };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [artifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: artifact.id };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        return { x: 40, y: 20, inside: true };
+      }
+      return undefined;
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => deleteButtonRef.current),
+    });
+
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const stack = card.closest(".thumbnail-stack")!;
+    const trash = within(card).getByRole("button", { name: "Delete" });
+    deleteButtonRef.current = trash;
+    vi.spyOn(trash, "getBoundingClientRect").mockReturnValue({
+      x: 28,
+      y: 10,
+      top: 10,
+      left: 28,
+      right: 56,
+      bottom: 38,
+      width: 28,
+      height: 28,
+      toJSON: () => ({}),
+    });
+    window.dispatchEvent(new Event("captures-thumbnail-ready"));
+
+    await waitFor(() => {
+      expect(stack).toHaveAttribute(THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE, "true");
+    });
+    expect(trash).not.toHaveAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
+    expect(card).not.toHaveAttribute("data-thumbnail-native-active");
+
+    movePointerPastAppearHoverLock(window, 40, 20);
+
+    await waitFor(() => {
+      expect(stack).not.toHaveAttribute(THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE);
+      expect(trash).toHaveAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
+    });
+  });
+
+  it("clears Delete hover when the thumbnail window is shown under a leftover pointer", async () => {
+    const deleteButtonRef = { current: null as HTMLElement | null };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [artifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: artifact.id };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        return { x: 40, y: 20, inside: true };
+      }
+      return undefined;
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => deleteButtonRef.current),
+    });
+
+    render(<Thumbnail />);
+    const card = await screen.findByRole("article");
+    const stack = card.closest(".thumbnail-stack")!;
+    const trash = within(card).getByRole("button", { name: "Delete" });
+    deleteButtonRef.current = trash;
+    vi.spyOn(trash, "getBoundingClientRect").mockReturnValue({
+      x: 28,
+      y: 10,
+      top: 10,
+      left: 28,
+      right: 56,
+      bottom: 38,
+      width: 28,
+      height: 28,
+      toJSON: () => ({}),
+    });
+    movePointerPastAppearHoverLock(window, 40, 20);
+    await waitFor(() => {
+      expect(trash).toHaveAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
+    });
+
+    fireEvent(window, new Event("captures-thumbnail-resumed"));
+
+    await waitFor(() => {
+      expect(stack).toHaveAttribute(THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE, "true");
+    });
+    expect(trash).not.toHaveAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
+
+    fireEvent.pointerMove(window, { clientX: 40, clientY: 20, pointerType: "mouse" });
+    expect(stack).toHaveAttribute(THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE, "true");
+    expect(trash).not.toHaveAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
+
+    fireEvent.pointerMove(window, {
+      clientX: 40 + THUMBNAIL_CARD_HOVER_LOCK_SLOP_PX + 1,
+      clientY: 20,
+      pointerType: "mouse",
+    });
+    await waitFor(() => {
+      expect(stack).not.toHaveAttribute(THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE);
+      expect(trash).toHaveAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
+    });
+  });
+
+  it("does not hover Delete on a new capture that appears under the pointer", async () => {
+    type CaptureCompletedHandler = (event: { payload: CaptureArtifact }) => void;
+    let onCaptureCompleted: CaptureCompletedHandler | null = null;
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      if (event === "capture-completed") {
+        onCaptureCompleted = handler as CaptureCompletedHandler;
+      }
+      return () => undefined;
+    });
+    const deleteButtonRef = { current: null as HTMLElement | null };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [artifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: artifact.id };
+      }
+      if (command === "get_thumbnail_pointer_position") {
+        return { x: 40, y: 20, inside: true };
+      }
+      return undefined;
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => deleteButtonRef.current),
+    });
+
+    render(<Thumbnail />);
+    await screen.findByRole("article");
+    await waitFor(() => expect(onCaptureCompleted).not.toBeNull());
+    movePointerPastAppearHoverLock(window, 40, 20);
+
+    await act(async () => {
+      onCaptureCompleted?.({ payload: secondArtifact });
+    });
+
+    const cards = await screen.findAllByRole("article");
+    expect(cards).toHaveLength(2);
+    const stack = cards[0].closest(".thumbnail-stack")!;
+    const newest = cards[cards.length - 1];
+    const trash = within(newest).getByRole("button", { name: "Delete" });
+    deleteButtonRef.current = trash;
+    vi.spyOn(trash, "getBoundingClientRect").mockReturnValue({
+      x: 28,
+      y: 10,
+      top: 10,
+      left: 28,
+      right: 56,
+      bottom: 38,
+      width: 28,
+      height: 28,
+      toJSON: () => ({}),
+    });
+
+    await waitFor(() => {
+      expect(stack).toHaveAttribute(THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE, "true");
+    });
+    expect(trash).not.toHaveAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
+
+    fireEvent.pointerMove(window, { clientX: 40, clientY: 20, pointerType: "mouse" });
+    expect(trash).not.toHaveAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
+
+    fireEvent.pointerMove(window, {
+      clientX: 40 + THUMBNAIL_CARD_HOVER_LOCK_SLOP_PX + 1,
+      clientY: 20,
+      pointerType: "mouse",
+    });
+    await waitFor(() => {
+      expect(stack).not.toHaveAttribute(THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE);
+      expect(trash).toHaveAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
     });
   });
 
@@ -313,6 +510,11 @@ describe("Thumbnail", () => {
     });
 
     fireEvent.pointerMove(image, { clientX: 80, clientY: 90, pointerType: "mouse" });
+    fireEvent.pointerMove(image, {
+      clientX: 80 + THUMBNAIL_CARD_HOVER_LOCK_SLOP_PX + 1,
+      clientY: 90,
+      pointerType: "mouse",
+    });
 
     await waitFor(() => {
       expect(document.documentElement).toHaveAttribute("data-thumbnail-cursor", "grab");
@@ -2503,6 +2705,7 @@ describe("Thumbnail", () => {
     pointerTarget = minimize;
     pointerReady = true;
     window.dispatchEvent(new Event("captures-thumbnail-ready"));
+    movePointerPastAppearHoverLock(window, 40, 20);
 
     await waitFor(() => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith(
