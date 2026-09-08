@@ -435,9 +435,7 @@ pub(crate) fn existing_recording_id(state: &AppState, path: &Path) -> Option<Str
         })
         .or_else(|| {
             state.history.lock().iter().find_map(|entry| {
-                if entry.kind.recording_kind().is_none() {
-                    return None;
-                }
+                entry.kind.recording_kind()?;
                 entry
                     .saved_path
                     .as_deref()

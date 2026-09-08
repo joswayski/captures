@@ -2867,8 +2867,7 @@ pub(crate) async fn open_recording_from_path(
 ) -> Result<(), AppError> {
     let state = app.state::<Arc<AppState>>().inner().clone();
     if let Some(artifact_id) = crate::open_media::existing_recording_id(&state, &path) {
-        ensure_recording_artifact_loaded(&state, &artifact_id)
-            .map_err(|error| AppError::Task(error))?;
+        ensure_recording_artifact_loaded(&state, &artifact_id).map_err(AppError::Task)?;
         return show_recording_editor(app, &artifact_id);
     }
 
