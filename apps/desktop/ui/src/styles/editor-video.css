@@ -6,7 +6,9 @@
   width: 100%;
   min-height: 100%;
   padding: var(--s-8) var(--s-8) 112px;
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior-x: none;
   color: var(--text);
   background: var(--surface-canvas);
 }
@@ -380,8 +382,9 @@
 }
 
 .timeline-filmstrip i {
+  width: 0;
   min-width: 0;
-  flex: 1;
+  flex: 1 1 0;
   background-repeat: no-repeat;
   background-color: var(--n-6);
 }
@@ -460,6 +463,17 @@
   font-variant-numeric: tabular-nums;
   transform: translateX(-50%);
   white-space: nowrap;
+}
+
+.timeline-trim-start > span {
+  left: 0;
+  transform: none;
+}
+
+.timeline-trim-end > span {
+  left: auto;
+  right: 0;
+  transform: none;
 }
 
 .timeline-trim-handle:hover > span,
