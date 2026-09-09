@@ -49,7 +49,10 @@ import {
   recordingEditedFileStem,
   recordingFilenameError,
   recordingUserFacingDefaults,
+  timelineHandleTrim,
   timelineKeyboardDelta,
+  timelineTimeAtClientX,
+  timelineTimeFromPointerDrag,
   type EditorCropHandle,
 } from "./lib/recordingEditor";
 import { isPointerOverCaptureGuidance } from "./lib/captureGuidance";
@@ -4067,11 +4070,14 @@ export function RecordingEditor() {
   const previewMediaRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const timelineScrubbingRef = useRef(false);
-  const trimDragRef = useRef<"start" | "end" | null>(null);
   /** Pending trim-handle press; edge only moves after a small drag threshold. */
   const trimPointerRef = useRef<{
     edge: "start" | "end";
     startX: number;
+    lastX: number;
+    startTime: number;
+    min: number;
+    max: number;
     dragging: boolean;
   } | null>(null);
   const cropDragRef = useRef<EditorCropDrag | null>(null);
@@ -4592,50 +4598,73 @@ export function RecordingEditor() {
   const timelineTimeAtPointer = (clientX: number) => {
     const bounds = timelineRef.current?.getBoundingClientRect();
     if (!bounds) return 0;
-    return clampNumber(((clientX - bounds.left) / Math.max(1, bounds.width)) * duration, 0, duration);
+    return timelineTimeAtClientX(clientX, bounds, duration);
+  };
+  const applyTrimHandleDrag = (clientX: number) => {
+    const pending = trimPointerRef.current;
+    const bounds = timelineRef.current?.getBoundingClientRect();
+    if (!pending || !bounds) return;
+    const next = timelineTimeFromPointerDrag({
+      startTime: pending.startTime,
+      startX: pending.startX,
+      lastX: pending.lastX,
+      clientX,
+      trackLeft: bounds.left,
+      trackWidth: bounds.width,
+      duration,
+      min: pending.min,
+      max: pending.max,
+    });
+    pending.lastX = next.lastX;
+    pending.startX = next.startX;
+    pending.startTime = next.startTime;
+    if (pending.edge === "start") setTrimStart(next.time);
+    else setTrimEnd(next.time);
+    seekTo(next.time);
   };
   const updateTimelinePointer = (clientX: number) => {
-    const next = timelineTimeAtPointer(clientX);
-    if (trimDragRef.current === "start") {
-      const value = Math.min(next, trimEnd - 1);
-      setTrimStart(value);
-      seekTo(value);
-    } else if (trimDragRef.current === "end") {
-      const value = Math.max(next, trimStart + 1);
-      setTrimEnd(value);
-      seekTo(value);
-    } else if (timelineScrubbingRef.current) {
-      seekTo(next);
-    }
+    if (timelineScrubbingRef.current) seekTo(timelineTimeAtPointer(clientX));
   };
   const beginTrimHandlePointer = (
     edge: "start" | "end",
     event: React.PointerEvent<HTMLButtonElement>,
   ) => {
+    const time = edge === "start" ? trimStart : trimEnd;
     trimPointerRef.current = {
       edge,
       startX: event.clientX,
+      lastX: event.clientX,
+      startTime: time,
+      min: edge === "start" ? 0 : trimStart + 1,
+      max: edge === "start" ? trimEnd - 1 : duration,
       dragging: false,
     };
-    trimDragRef.current = null;
-    seekTo(edge === "start" ? trimStart : trimEnd);
-    event.currentTarget.setPointerCapture(event.pointerId);
+    seekTo(time);
+    // Capture on the untransformed track. Capturing the handle (which has
+    // translateX and moves every frame) can rewrite clientX in WKWebView.
+    (timelineRef.current ?? event.currentTarget).setPointerCapture(event.pointerId);
     event.preventDefault();
     event.stopPropagation();
   };
-  const moveTrimHandlePointer = (event: React.PointerEvent<HTMLButtonElement>) => {
+  const moveTrimHandlePointer = (event: React.PointerEvent<HTMLElement>) => {
     const pending = trimPointerRef.current;
     if (!pending) return;
     if (!pending.dragging) {
       if (Math.abs(event.clientX - pending.startX) < TRIM_DRAG_THRESHOLD_PX) return;
       pending.dragging = true;
-      trimDragRef.current = pending.edge;
     }
-    if (trimDragRef.current) updateTimelinePointer(event.clientX);
+    applyTrimHandleDrag(event.clientX);
+    event.stopPropagation();
+  };
+  const handleTimelinePointerMove = (event: React.PointerEvent<HTMLElement>) => {
+    if (trimPointerRef.current) {
+      moveTrimHandlePointer(event);
+      return;
+    }
+    updateTimelinePointer(event.clientX);
   };
   const endTrimHandlePointer = () => {
     trimPointerRef.current = null;
-    trimDragRef.current = null;
   };
   const startCropDrag = (event: React.PointerEvent<HTMLElement>, handle: EditorCropHandle) => {
     if (!cropEnabled || !previewMediaRef.current) return;
@@ -4943,14 +4972,16 @@ export function RecordingEditor() {
             timelineScrubbingRef.current = true;
             updateTimelinePointer(event.clientX);
           }}
-          onPointerMove={(event) => {
-            if (timelineScrubbingRef.current || trimDragRef.current) updateTimelinePointer(event.clientX);
-          }}
+          onPointerMove={handleTimelinePointerMove}
           onPointerUp={() => {
             timelineScrubbingRef.current = false;
             endTrimHandlePointer();
           }}
           onPointerCancel={() => {
+            timelineScrubbingRef.current = false;
+            endTrimHandlePointer();
+          }}
+          onLostPointerCapture={() => {
             timelineScrubbingRef.current = false;
             endTrimHandlePointer();
           }}
@@ -4973,14 +5004,14 @@ export function RecordingEditor() {
             type="button"
             role="slider"
             className="timeline-trim-handle timeline-trim-start"
-            style={{ left: `${trimStart / duration * 100}%` }}
+            style={{ ["--trim" as string]: timelineHandleTrim(trimStart, duration) }}
             aria-label="Trim start"
             aria-valuemin={0}
             aria-valuemax={Math.max(0, trimEnd - 1)}
             aria-valuenow={Math.round(trimStart)}
             aria-valuetext={formatEditorTime(trimStart, duration)}
             onPointerDown={(event) => beginTrimHandlePointer("start", event)}
-            onPointerMove={moveTrimHandlePointer}
+            onPointerMove={handleTimelinePointerMove}
             onPointerUp={endTrimHandlePointer}
             onPointerCancel={endTrimHandlePointer}
             onKeyDown={(event) => {
@@ -4996,14 +5027,14 @@ export function RecordingEditor() {
             type="button"
             role="slider"
             className="timeline-trim-handle timeline-trim-end"
-            style={{ left: `${trimEnd / duration * 100}%` }}
+            style={{ ["--trim" as string]: timelineHandleTrim(trimEnd, duration) }}
             aria-label="Trim end"
             aria-valuemin={Math.min(duration, trimStart + 1)}
             aria-valuemax={duration}
             aria-valuenow={Math.round(trimEnd)}
             aria-valuetext={formatEditorTime(trimEnd, duration)}
             onPointerDown={(event) => beginTrimHandlePointer("end", event)}
-            onPointerMove={moveTrimHandlePointer}
+            onPointerMove={handleTimelinePointerMove}
             onPointerUp={endTrimHandlePointer}
             onPointerCancel={endTrimHandlePointer}
             onKeyDown={(event) => {
