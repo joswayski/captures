@@ -295,6 +295,18 @@ export function thumbnailCardHoverLockHoldsInitialPointerMove(
   return kind === "appear";
 }
 
+/**
+ * Native stack sync can grow or move the window after an appear lock already
+ * sampled an origin. The next window-relative sample then jumps by a card slot
+ * with no physical pointer movement and must not unlock Delete.
+ */
+export function thumbnailAppearHoverLockShouldResampleOrigin(
+  locked: boolean,
+  kind: ThumbnailCardHoverLockKind,
+): boolean {
+  return locked && kind === "appear";
+}
+
 export function thumbnailStackHasLiveHitTarget(root: Document = document): boolean {
   if (root.querySelector(".thumbnail-stack-dragging")) return true;
   if (root.querySelector(

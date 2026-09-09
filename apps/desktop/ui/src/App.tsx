@@ -109,6 +109,7 @@ import {
   shouldLockThumbnailCardHoverOnStackMotion,
   shouldRecoverThumbnailAfterNullPolls,
   thumbnailCardHoverLockHoldsInitialPointerMove,
+  thumbnailAppearHoverLockShouldResampleOrigin,
   thumbnailCardHoverLockReleased,
   thumbnailCursorSyncAction,
   thumbnailNullPollNeedsDesktopInputRecovery,
@@ -6479,6 +6480,9 @@ export function Thumbnail() {
     );
     // The hover tracker lives in a later effect. Skip 0→N: that mount locks
     // appear itself, and this event would fire before the listener exists.
+    // After sync_thumbnail_stack, `captures-thumbnail-layout-changed` discards
+    // any origin sampled against the pre-resize window so a bottom-anchored
+    // grow cannot look like the pointer moved.
     if (
       previousCount > 0
       && shouldLockThumbnailCardHoverOnNewCapture(previousCount, artifacts.length)
@@ -6952,6 +6956,15 @@ export function Thumbnail() {
       schedulePoll(0);
     };
 
+    const onThumbnailLayoutChanged = () => {
+      // sync_thumbnail_stack may have just grown a bottom-anchored window.
+      // Drop any origin taken in the old coordinate space, then poll again.
+      if (thumbnailAppearHoverLockShouldResampleOrigin(cardHoverLocked, cardHoverLockKind)) {
+        cardHoverLockOrigin = null;
+      }
+      pollImmediately();
+    };
+
     const updateThumbnailHitTest = (event: Event) => {
       const detail = event instanceof CustomEvent
         ? (event as CustomEvent<{
@@ -7044,7 +7057,7 @@ export function Thumbnail() {
     window.addEventListener("captures-thumbnail-resumed", resumeFromNativeShow);
     document.addEventListener("resume", resumeFromSuspension as EventListener);
     window.addEventListener("captures-thumbnail-ready", pollImmediately);
-    window.addEventListener("captures-thumbnail-layout-changed", pollImmediately);
+    window.addEventListener("captures-thumbnail-layout-changed", onThumbnailLayoutChanged);
     window.addEventListener(
       THUMBNAIL_HIT_TEST_CHANGED_EVENT,
       updateThumbnailHitTest,
@@ -7077,7 +7090,7 @@ export function Thumbnail() {
       window.removeEventListener("captures-thumbnail-resumed", resumeFromNativeShow);
       document.removeEventListener("resume", resumeFromSuspension as EventListener);
       window.removeEventListener("captures-thumbnail-ready", pollImmediately);
-      window.removeEventListener("captures-thumbnail-layout-changed", pollImmediately);
+      window.removeEventListener("captures-thumbnail-layout-changed", onThumbnailLayoutChanged);
       window.removeEventListener(
         THUMBNAIL_HIT_TEST_CHANGED_EVENT,
         updateThumbnailHitTest,

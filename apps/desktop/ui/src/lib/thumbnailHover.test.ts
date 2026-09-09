@@ -17,6 +17,7 @@ import {
   shouldLockThumbnailCardHoverOnNewCapture,
   shouldLockThumbnailCardHoverOnStackMotion,
   shouldRecoverThumbnailAfterNullPolls,
+  thumbnailAppearHoverLockShouldResampleOrigin,
   thumbnailCardHoverLockHoldsInitialPointerMove,
   thumbnailCardHoverLockReleased,
   thumbnailCssCursor,
@@ -1318,6 +1319,12 @@ describe("thumbnail card hover lock", () => {
   it("holds the first DOM pointermove after a preview appears, but not after expand", () => {
     expect(thumbnailCardHoverLockHoldsInitialPointerMove("appear")).toBe(true);
     expect(thumbnailCardHoverLockHoldsInitialPointerMove("motion")).toBe(false);
+  });
+
+  it("re-samples the appear-lock origin after native stack layout sync", () => {
+    expect(thumbnailAppearHoverLockShouldResampleOrigin(true, "appear")).toBe(true);
+    expect(thumbnailAppearHoverLockShouldResampleOrigin(true, "motion")).toBe(false);
+    expect(thumbnailAppearHoverLockShouldResampleOrigin(false, "appear")).toBe(false);
   });
 
   it("releases the lock only after the pointer leaves or moves past slop", () => {

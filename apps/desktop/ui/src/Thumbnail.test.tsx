@@ -443,6 +443,89 @@ describe("Thumbnail", () => {
     });
   });
 
+  it("does not unlock Delete hover when the native stack grows under a stationary pointer", async () => {
+    type CaptureCompletedHandler = (event: { payload: CaptureArtifact }) => void;
+    let onCaptureCompleted: CaptureCompletedHandler | null = null;
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      if (event === "capture-completed") {
+        onCaptureCompleted = handler as CaptureCompletedHandler;
+      }
+      return () => undefined;
+    });
+    const deleteButtonRef = { current: null as HTMLElement | null };
+    let pointer = { x: 40, y: 20 + THUMBNAIL_CARD_SLOT_PX, inside: true };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifacts") return [artifact];
+      if (command === "get_clipboard_state") {
+        return { revision: 0, artifact_id: artifact.id };
+      }
+      if (command === "get_thumbnail_pointer_position") return pointer;
+      return undefined;
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => deleteButtonRef.current),
+    });
+
+    render(<Thumbnail />);
+    await screen.findByRole("article");
+    await waitFor(() => expect(onCaptureCompleted).not.toBeNull());
+    movePointerPastAppearHoverLock(window, pointer.x, pointer.y);
+
+    await act(async () => {
+      onCaptureCompleted?.({ payload: secondArtifact });
+    });
+
+    const cards = await screen.findAllByRole("article");
+    expect(cards).toHaveLength(2);
+    const stack = cards[0].closest(".thumbnail-stack")!;
+    const newest = cards[cards.length - 1];
+    const trash = within(newest).getByRole("button", { name: "Delete" });
+    deleteButtonRef.current = trash;
+    vi.spyOn(trash, "getBoundingClientRect").mockReturnValue({
+      x: 28,
+      y: 10,
+      top: 10,
+      left: 28,
+      right: 56,
+      bottom: 38,
+      width: 28,
+      height: 28,
+      toJSON: () => ({}),
+    });
+
+    await waitFor(() => {
+      expect(stack).toHaveAttribute(THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE, "true");
+    });
+    expect(trash).not.toHaveAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
+
+    // Native sync grew the bottom-anchored window. The same physical pointer
+    // is now a card slot higher in window space — not a real move.
+    pointer = { x: 40, y: 20, inside: true };
+    await act(async () => {
+      window.dispatchEvent(new Event("captures-thumbnail-layout-changed"));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(stack).toHaveAttribute(THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE, "true");
+    });
+    expect(trash).not.toHaveAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
+
+    fireEvent.pointerMove(window, { clientX: 40, clientY: 20, pointerType: "mouse" });
+    expect(trash).not.toHaveAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
+
+    fireEvent.pointerMove(window, {
+      clientX: 40 + THUMBNAIL_CARD_HOVER_LOCK_SLOP_PX + 1,
+      clientY: 20,
+      pointerType: "mouse",
+    });
+    await waitFor(() => {
+      expect(stack).not.toHaveAttribute(THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE);
+      expect(trash).toHaveAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
+    });
+  });
+
   it("preserves native hover when pointer polling is briefly unavailable", async () => {
     let pointerPolls = 0;
     vi.mocked(invoke).mockImplementation(async (command) => {
