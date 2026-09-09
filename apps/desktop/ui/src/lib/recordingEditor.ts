@@ -235,6 +235,81 @@ export function formatEditorTime(milliseconds: number, duration: number): string
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
+export function timelineRatio(timeMs: number, durationMs: number): number {
+  const duration = Math.max(1, durationMs);
+  if (!Number.isFinite(timeMs)) return 0;
+  return clamp(timeMs / duration, 0, 1);
+}
+
+/** `--trim` progress for CSS handle geometry (0 at start, 1 at end). */
+export function timelineHandleTrim(timeMs: number, durationMs: number): string {
+  return String(timelineRatio(timeMs, durationMs));
+}
+
+export function timelineTimeAtClientX(
+  clientX: number,
+  track: { left: number; width: number },
+  durationMs: number,
+): number {
+  const duration = Math.max(1, durationMs);
+  const width = Math.max(1, track.width);
+  return clamp(((clientX - track.left) / width) * duration, 0, duration);
+}
+
+export type TimelinePointerDrag = {
+  startTime: number;
+  startX: number;
+  lastX: number;
+  clientX: number;
+  trackLeft: number;
+  trackWidth: number;
+  duration: number;
+  min: number;
+  max: number;
+};
+
+/**
+ * Map a trim-handle drag from the pointer-down origin, not the handle's current
+ * `left`. Large in-bounds steps (fast mouse or coalesced touch) are applied.
+ * Only a `clientX` that is not even near the track — the old WebKit rewrite
+ * after capturing a transformed handle — is treated as a glitch.
+ */
+export function timelineTimeFromPointerDrag(input: TimelinePointerDrag): {
+  time: number;
+  lastX: number;
+  startX: number;
+  startTime: number;
+} {
+  const duration = Math.max(1, input.duration);
+  const width = Math.max(1, input.trackWidth);
+  const currentTime = clamp(
+    input.startTime + ((input.lastX - input.startX) / width) * duration,
+    input.min,
+    input.max,
+  );
+  const slack = width;
+  const minX = input.trackLeft - slack;
+  const maxX = input.trackLeft + width + slack;
+  if (input.clientX < minX || input.clientX > maxX) {
+    return {
+      time: currentTime,
+      lastX: input.lastX,
+      startX: input.startX,
+      startTime: input.startTime,
+    };
+  }
+  return {
+    time: clamp(
+      input.startTime + ((input.clientX - input.startX) / width) * duration,
+      input.min,
+      input.max,
+    ),
+    lastX: input.clientX,
+    startX: input.startX,
+    startTime: input.startTime,
+  };
+}
+
 export function timelineKeyboardDelta(key: string, duration: number): number | null {
   const step = duration < 60_000 ? 1 : 10;
   if (key === "ArrowLeft" || key === "ArrowDown") return -step;

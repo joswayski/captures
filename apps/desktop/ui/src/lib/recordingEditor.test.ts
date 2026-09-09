@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import {
   capturesTimestampStem,
   isHistoryRecoveryMediaPath,
@@ -5,7 +8,16 @@ import {
   recordingInitialOutputFormat,
   recordingSourceFormat,
   recordingUserFacingDefaults,
+  timelineHandleTrim,
+  timelineRatio,
+  timelineTimeAtClientX,
+  timelineTimeFromPointerDrag,
 } from "./recordingEditor";
+
+const editorVideoStyles = readFileSync(
+  resolve(process.cwd(), "ui/src/styles/editor-video.css"),
+  "utf8",
+);
 
 describe("recordingUserFacingDefaults", () => {
   it("prefers a permanent Captures-folder save over private recovery media", () => {
@@ -118,5 +130,68 @@ describe("recordingInitialOutputFormat", () => {
 
   it("never converts a GIF recording to the video preference", () => {
     expect(recordingInitialOutputFormat("gif", "webm")).toBe("gif");
+  });
+});
+
+describe("timeline trim handle geometry", () => {
+  it("keeps handle centers on the filmstrip via token inset, not overflowed 0% / 100%", () => {
+    expect(timelineRatio(0, 8_750)).toBe(0);
+    expect(timelineRatio(8_750, 8_750)).toBe(1);
+    expect(timelineHandleTrim(0, 8_750)).toBe("0");
+    expect(timelineHandleTrim(4_375, 8_750)).toBe("0.5");
+    expect(timelineHandleTrim(8_750, 8_750)).toBe("1");
+    expect(editorVideoStyles).toMatch(/--timeline-inset:\s*var\(--s-2\)/);
+    expect(editorVideoStyles).toMatch(/\.timeline-filmstrip\s*\{[^}]*inset:\s*var\(--timeline-inset\)/s);
+    expect(editorVideoStyles).toMatch(
+      /left:\s*calc\(\s*var\(--timeline-inset\)\s*\+\s*\(var\(--trim\) \* \(100% - \(var\(--timeline-inset\) \* 2\)\)\)/s,
+    );
+  });
+
+  it("maps a pointer on the track to a clamped timeline time", () => {
+    expect(timelineTimeAtClientX(500, { left: 0, width: 1_000 }, 8_750)).toBe(4_375);
+    expect(timelineTimeAtClientX(-20, { left: 0, width: 1_000 }, 8_750)).toBe(0);
+    expect(timelineTimeAtClientX(2_000, { left: 0, width: 1_000 }, 8_750)).toBe(8_750);
+  });
+
+  it("applies large in-bounds steps and ignores coordinates that are not near the track", () => {
+    const start = {
+      startTime: 2_000,
+      startX: 228.57142857142858,
+      lastX: 228.57142857142858,
+      trackLeft: 0,
+      trackWidth: 1_000,
+      duration: 8_750,
+      min: 0,
+      max: 6_749,
+    };
+    expect(timelineTimeFromPointerDrag({ ...start, clientX: start.startX + 50 }).time)
+      .toBeCloseTo(2_437.5, 5);
+    expect(timelineTimeFromPointerDrag({ ...start, clientX: start.startX + 500 }).time)
+      .toBeCloseTo(6_375, 5);
+
+    const glitch = timelineTimeFromPointerDrag({ ...start, clientX: 9_000 });
+    expect(glitch.time).toBe(2_000);
+    expect(glitch.lastX).toBe(start.lastX);
+    expect(glitch.startX).toBe(start.startX);
+    expect(timelineTimeFromPointerDrag({
+      ...glitch,
+      clientX: 9_050,
+      trackLeft: 0,
+      trackWidth: 1_000,
+      duration: 8_750,
+      min: 0,
+      max: 6_749,
+    }).time).toBe(2_000);
+    expect(timelineTimeFromPointerDrag({
+      ...start,
+      ...glitch,
+      clientX: start.startX + 50,
+    }).time).toBeCloseTo(2_437.5, 5);
+  });
+
+  it("clips horizontal overflow so trim handles cannot scroll the editor offscreen", () => {
+    expect(editorVideoStyles).toMatch(/\.recording-editor\s*\{[^}]*overflow-x:\s*hidden/s);
+    expect(editorVideoStyles).toMatch(/\.timeline-filmstrip i\s*\{[^}]*flex:\s*1 1 0/s);
+    expect(editorVideoStyles).toMatch(/\.timeline-trim-end > span\s*\{[^}]*right:\s*0/s);
   });
 });

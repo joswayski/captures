@@ -176,6 +176,10 @@ describe("RecordingEditor", () => {
       "aria-valuetext",
       "0:08.750",
     );
+    expect(screen.getByRole("slider", { name: "Trim start" }).style.getPropertyValue("--trim"))
+      .toBe("0");
+    expect(screen.getByRole("slider", { name: "Trim end" }).style.getPropertyValue("--trim"))
+      .toBe("1");
     const track = container.querySelector<HTMLElement>(".timeline-track");
     expect(track).not.toBeNull();
     track!.setPointerCapture = vi.fn();
@@ -246,6 +250,7 @@ describe("RecordingEditor", () => {
     trimEnd.setPointerCapture = vi.fn();
     const track = container.querySelector<HTMLElement>(".timeline-track");
     expect(track).not.toBeNull();
+    track!.setPointerCapture = vi.fn();
     vi.spyOn(track!, "getBoundingClientRect").mockReturnValue({
       x: 0,
       y: 0,
@@ -325,6 +330,50 @@ describe("RecordingEditor", () => {
     expect(container.querySelector(".timeline-playhead")).toHaveStyle({
       left: `${2_000 / artifact.duration_ms * 100}%`,
     });
+  });
+
+  it("does not slam trim handles to the far end when pointer capture reports a wild clientX", async () => {
+    const { container } = render(<RecordingEditor />);
+    expect(await screen.findByRole("heading", { name: "Edit recording" })).toBeInTheDocument();
+    const trimStart = screen.getByRole("slider", { name: "Trim start" });
+    const trimEnd = screen.getByRole("slider", { name: "Trim end" });
+    const track = container.querySelector<HTMLElement>(".timeline-track");
+    expect(track).not.toBeNull();
+    track!.setPointerCapture = vi.fn();
+    vi.spyOn(track!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1_000,
+      bottom: 78,
+      width: 1_000,
+      height: 78,
+      toJSON: () => undefined,
+    });
+
+    fireEvent.keyDown(trimStart, { key: "PageUp" });
+    fireEvent.keyDown(trimStart, { key: "PageUp" });
+    fireEvent.keyDown(trimEnd, { key: "PageDown" });
+    fireEvent.keyDown(trimEnd, { key: "PageDown" });
+    expect(trimStart).toHaveAttribute("aria-valuetext", "0:02.000");
+    expect(trimEnd).toHaveAttribute("aria-valuetext", "0:06.750");
+
+    const startClientX = (2_000 / artifact.duration_ms) * 1_000;
+    fireEvent.pointerDown(trimStart, { pointerId: 1, clientX: startClientX });
+    fireEvent.pointerMove(trimStart, { pointerId: 1, clientX: 9_000 });
+    expect(trimStart).toHaveAttribute("aria-valuetext", "0:02.000");
+    fireEvent.pointerMove(trimStart, { pointerId: 1, clientX: 9_050 });
+    expect(trimStart).toHaveAttribute("aria-valuetext", "0:02.000");
+    fireEvent.pointerMove(trimStart, { pointerId: 1, clientX: startClientX + 50 });
+    expect(trimStart).toHaveAttribute("aria-valuetext", "0:02.438");
+    fireEvent.pointerUp(trimStart, { pointerId: 1 });
+
+    const endClientX = (6_750 / artifact.duration_ms) * 1_000;
+    fireEvent.pointerDown(trimEnd, { pointerId: 2, clientX: endClientX });
+    fireEvent.pointerMove(trimEnd, { pointerId: 2, clientX: endClientX - 200 });
+    expect(trimEnd).toHaveAttribute("aria-valuetext", "0:05.000");
+    fireEvent.pointerUp(trimEnd, { pointerId: 2 });
   });
 
   it("updates the playhead every animation frame while the preview is playing", async () => {

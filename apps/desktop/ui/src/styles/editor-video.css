@@ -6,7 +6,9 @@
   width: 100%;
   min-height: 100%;
   padding: var(--s-8) var(--s-8) 112px;
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior-x: none;
   color: var(--text);
   background: var(--surface-canvas);
 }
@@ -361,6 +363,7 @@
 }
 
 .timeline-track {
+  --timeline-inset: var(--s-2);
   position: relative;
   height: 76px;
   border: 1px solid var(--border);
@@ -372,7 +375,7 @@
 
 .timeline-filmstrip {
   position: absolute;
-  inset: 4px;
+  inset: var(--timeline-inset);
   display: flex;
   overflow: hidden;
   border-radius: var(--r-xs);
@@ -380,8 +383,9 @@
 }
 
 .timeline-filmstrip i {
+  width: 0;
   min-width: 0;
-  flex: 1;
+  flex: 1 1 0;
   background-repeat: no-repeat;
   background-color: var(--n-6);
 }
@@ -410,10 +414,15 @@
 }
 
 .timeline-trim-handle {
+  --trim: 0;
   position: absolute;
   z-index: 5;
   top: -3px;
-  width: 8px;
+  left: calc(
+    var(--timeline-inset)
+    + (var(--trim) * (100% - (var(--timeline-inset) * 2)))
+  );
+  width: calc(var(--timeline-inset) * 2);
   height: 82px;
   border: 0;
   border-radius: var(--r-xs);
@@ -439,11 +448,11 @@
 }
 
 .timeline-trim-handle::before {
-  left: 2px;
+  left: var(--s-1);
 }
 
 .timeline-trim-handle::after {
-  right: 2px;
+  right: var(--s-1);
 }
 
 .timeline-trim-handle > span {
@@ -460,6 +469,17 @@
   font-variant-numeric: tabular-nums;
   transform: translateX(-50%);
   white-space: nowrap;
+}
+
+.timeline-trim-start > span {
+  left: 0;
+  transform: none;
+}
+
+.timeline-trim-end > span {
+  left: auto;
+  right: 0;
+  transform: none;
 }
 
 .timeline-trim-handle:hover > span,
