@@ -894,6 +894,39 @@ describe("RecordingEditor", () => {
     expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".webm");
   });
 
+  it("lets Save overwrite an opened WebM when the default video format is MP4", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_recording_artifact") {
+        return {
+          ...artifact,
+          path: "/Users/josevalerio/Movies/clip.webm",
+          saved_path: "/Users/josevalerio/Movies/clip.webm",
+          mime_type: "video/webm",
+        };
+      }
+      if (command === "get_settings") return settings;
+      if (command === "prepare_recording_timeline_preview") return timeline;
+      if (command === "start_recording_export") return "export-1";
+      if (command === "estimate_recording_export") return { sizeBytes: artifact.size_bytes, exact: true };
+      if (command === "preview_recording_export") return { beforePng: [1, 2], afterPng: [3, 4] };
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<RecordingEditor />);
+    await screen.findByRole("heading", { name: "Edit recording" });
+    expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".webm");
+    expect(screen.getByRole("checkbox", { name: "Save as new file" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Save as new file" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("start_recording_export", {
+        request: expect.objectContaining({
+          overwrite_source: true,
+          export: expect.objectContaining({ format: "webm" }),
+        }),
+      });
+    });
+  });
+
   it("keeps GIF recordings as GIF even when the default video format is WebM", async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_recording_artifact") {

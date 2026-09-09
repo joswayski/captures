@@ -5,6 +5,8 @@ import {
   capturesTimestampStem,
   isHistoryRecoveryMediaPath,
   recordingEditedFileStem,
+  recordingInitialOutputFormat,
+  recordingSourceFormat,
   recordingUserFacingDefaults,
   timelineHandleTrim,
   timelineRatio,
@@ -80,6 +82,54 @@ describe("recordingEditedFileStem", () => {
     expect(recordingEditedFileStem("Captures_clip")).toBe("Captures_clip-edited");
     expect(recordingEditedFileStem("Captures_clip-edited")).toBe("Captures_clip-edited");
     expect(recordingEditedFileStem("Captures_clip-copy")).toBe("Captures_clip-copy");
+  });
+});
+
+describe("recordingSourceFormat", () => {
+  it("keeps GIFs as GIF regardless of mime or path", () => {
+    expect(recordingSourceFormat({
+      kind: "gif",
+      mime_type: "video/mp4",
+      path: "/tmp/clip.mp4",
+    })).toBe("gif");
+  });
+
+  it("uses the container mime type for opened WebM files", () => {
+    expect(recordingSourceFormat({
+      kind: "video",
+      mime_type: "video/webm",
+      path: "/Users/example/Movies/clip.webm",
+      saved_path: "/Users/example/Movies/clip.webm",
+    })).toBe("webm");
+  });
+
+  it("falls back to the path extension when mime is generic", () => {
+    expect(recordingSourceFormat({
+      kind: "video",
+      mime_type: "video/mp4",
+      path: "/Users/example/Movies/clip.webm",
+      saved_path: "/Users/example/Movies/clip.webm",
+    })).toBe("webm");
+    expect(recordingSourceFormat({
+      kind: "video",
+      mime_type: "application/octet-stream",
+      path: "/Users/example/Captures/Captures_clip.mp4",
+    })).toBe("mp4");
+  });
+});
+
+describe("recordingInitialOutputFormat", () => {
+  it("keeps opened WebM as WebM when the video preference is MP4 so Save can overwrite", () => {
+    expect(recordingInitialOutputFormat("webm", "mp4")).toBe("webm");
+  });
+
+  it("honors an explicit WebM or GIF video preference for MP4 recordings", () => {
+    expect(recordingInitialOutputFormat("mp4", "webm")).toBe("webm");
+    expect(recordingInitialOutputFormat("mp4", "gif")).toBe("gif");
+  });
+
+  it("never converts a GIF recording to the video preference", () => {
+    expect(recordingInitialOutputFormat("gif", "webm")).toBe("gif");
   });
 });
 

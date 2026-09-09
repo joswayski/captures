@@ -160,6 +160,8 @@ npm run build:signed -- --skip-notarize
 
 Windows builds produce an NSIS installer, MSI package, and unpackaged executable under `target/release`. Linux builds produce AppImage and Debian packages.
 
+Installed packages register **Open With** for PNG, JPEG, WebP, GIF, MP4, and WebM (`bundle.fileAssociations` in `apps/desktop/src-tauri/tauri.conf.json`, rank Alternate so Captures is not the default app). `npm run dev` does not. Debian and RPM packages use `apps/desktop/src-tauri/linux/captures.desktop` so the launcher receives those files (`Exec=… %U`). AppImage builds still need a desktop entry with `%U` for Open With to work.
+
 ## Platform architecture
 
 - macOS recording uses ScreenCaptureKit and VideoToolbox.

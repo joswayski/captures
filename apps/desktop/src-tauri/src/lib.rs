@@ -44,6 +44,7 @@ use uuid::Uuid;
 mod crash_report;
 mod feedback;
 mod models;
+mod open_media;
 mod recording;
 mod screenshot_editor;
 mod session_end;
@@ -92,7 +93,7 @@ enum AppError {
 }
 
 type CommandResult<T> = Result<T, String>;
-const AUTOSTART_ARG: &str = "--captures-autostart";
+pub(crate) const AUTOSTART_ARG: &str = "--captures-autostart";
 const TRAY_ICON_ID: &str = "main";
 const ONBOARDING_WINDOW_LABEL: &str = "onboarding";
 const RECORDING_EDITOR_WINDOW_PREFIX: &str = "recording-editor-";
@@ -139,8 +140,13 @@ pub fn run() {
     let protocol_state = state.clone();
 
     let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            focus_or_show_primary_app_window(app);
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            let paths = open_media::open_paths_from_cli_args(args, Some(PathBuf::from(cwd)));
+            if paths.is_empty() {
+                focus_or_show_primary_app_window(app);
+                return;
+            }
+            open_media::enqueue_or_open(app, paths);
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -385,18 +391,22 @@ pub fn run() {
             refresh_autostart_registration(app);
             let restarted_after_update = updates::take_update_restart_pending();
             crash_report::initialize(&handle, restarted_after_update);
+            let opening_files = open_media::finish_setup(&handle);
             if pending_capture.is_none() {
                 let onboarding_completed =
                     app.state::<Arc<AppState>>().settings().onboarding_completed;
-                match interactive_launch_action(
-                    onboarding_completed,
-                    restarted_after_update || launched_from_autostart(),
-                ) {
-                    InteractiveLaunchAction::Onboarding => show_onboarding(&handle),
-                    InteractiveLaunchAction::StartupNotice => {
-                        show_startup_notice(&handle, STARTUP_NOTICE_AUTOSTART_VISIBLE);
+                let launched_quietly = restarted_after_update || launched_from_autostart();
+                if let Some(action) =
+                    interactive_launch_action(onboarding_completed, launched_quietly, opening_files)
+                {
+                    #[cfg(target_os = "macos")]
+                    if should_defer_macos_open_with_launch(opening_files, launched_quietly) {
+                        schedule_macos_open_with_launch(&handle, action);
+                    } else {
+                        perform_interactive_launch(&handle, action);
                     }
-                    InteractiveLaunchAction::Preferences => show_preferences(&handle),
+                    #[cfg(not(target_os = "macos"))]
+                    perform_interactive_launch(&handle, action);
                 }
             }
             if let Some(mode) = pending_capture {
@@ -412,7 +422,7 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building Captures")
-        .run(|_app, event| match event {
+        .run(|app, event| match event {
             tauri::RunEvent::ExitRequested { code, api, .. } => {
                 if crash_report::should_prevent_exit(code) {
                     api.prevent_exit();
@@ -420,8 +430,26 @@ pub fn run() {
             }
             tauri::RunEvent::Exit => crash_report::mark_clean_exit(),
             #[cfg(target_os = "macos")]
-            tauri::RunEvent::Reopen { .. } => focus_or_show_primary_app_window(_app),
-            _ => {}
+            tauri::RunEvent::Reopen { .. } => focus_or_show_primary_app_window(app),
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            tauri::RunEvent::Opened { urls } => {
+                let paths: Vec<_> = urls
+                    .into_iter()
+                    .filter_map(|url| url.to_file_path().ok())
+                    .collect();
+                #[cfg(target_os = "macos")]
+                if paths
+                    .iter()
+                    .any(|path| open_media::classify_media_path(path).is_some())
+                {
+                    cancel_deferred_macos_launch();
+                }
+                open_media::enqueue_or_open(app, paths);
+            }
+            _ => {
+                #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+                let _ = app;
+            }
         });
 }
 
@@ -438,17 +466,75 @@ enum InteractiveLaunchAction {
 
 /// First interactive launch opens Preferences, not a capture overlay.
 /// Autostart and post-update restarts stay in the tray with the startup notice.
+/// Opening a file from the OS skips those windows and goes to the matching editor.
 fn interactive_launch_action(
     onboarding_completed: bool,
     launched_quietly: bool,
-) -> InteractiveLaunchAction {
-    if !onboarding_completed {
+    opening_files: bool,
+) -> Option<InteractiveLaunchAction> {
+    if opening_files {
+        return None;
+    }
+    Some(if !onboarding_completed {
         InteractiveLaunchAction::Onboarding
     } else if launched_quietly {
         InteractiveLaunchAction::StartupNotice
     } else {
         InteractiveLaunchAction::Preferences
+    })
+}
+
+fn perform_interactive_launch(app: &AppHandle, action: InteractiveLaunchAction) {
+    match action {
+        InteractiveLaunchAction::Onboarding => show_onboarding(app),
+        InteractiveLaunchAction::StartupNotice => {
+            show_startup_notice(app, STARTUP_NOTICE_AUTOSTART_VISIBLE);
+        }
+        InteractiveLaunchAction::Preferences => show_preferences(app),
     }
+}
+
+/// Finder delivers Open With documents through `RunEvent::Opened` after setup.
+/// Wait briefly so cold launches do not flash Onboarding or Preferences first.
+#[cfg(any(test, target_os = "macos"))]
+fn should_defer_macos_open_with_launch(opening_files: bool, launched_quietly: bool) -> bool {
+    !opening_files && !launched_quietly
+}
+
+#[cfg(target_os = "macos")]
+const MACOS_OPEN_WITH_LAUNCH_GRACE: Duration = Duration::from_millis(500);
+
+#[cfg(target_os = "macos")]
+struct DeferredMacosLaunch {
+    action: Option<InteractiveLaunchAction>,
+}
+
+#[cfg(target_os = "macos")]
+static DEFERRED_MACOS_LAUNCH: Mutex<DeferredMacosLaunch> =
+    Mutex::new(DeferredMacosLaunch { action: None });
+
+#[cfg(target_os = "macos")]
+fn deferred_macos_launch() -> std::sync::MutexGuard<'static, DeferredMacosLaunch> {
+    DEFERRED_MACOS_LAUNCH
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(target_os = "macos")]
+fn schedule_macos_open_with_launch(app: &AppHandle, action: InteractiveLaunchAction) {
+    deferred_macos_launch().action = Some(action);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(MACOS_OPEN_WITH_LAUNCH_GRACE).await;
+        if let Some(action) = deferred_macos_launch().action.take() {
+            perform_interactive_launch(&app, action);
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn cancel_deferred_macos_launch() {
+    deferred_macos_launch().action = None;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -8916,12 +9002,13 @@ mod tests {
         recording_chrome_should_restore_after_snapshot, refine_window_chrome_from_snapshot,
         resolve_startup_notice_placement, resolve_window_capture,
         screenshot_countdown_seconds_for_capture_ui, should_claim_region_cursor_after_freeze,
-        should_claim_region_cursor_on_shortcut_press, should_freeze_visible_capture_ui,
-        should_prefetch_freeze_on_shortcut_press, should_trigger_shortcut,
-        startup_notice_fallback_edge_from_insets, startup_notice_url, take_ready_or_defer_windows,
-        thumbnail_clamp_aligned_frame, thumbnail_collapsed_frame_height, thumbnail_cursor_action,
-        thumbnail_cursor_ignore_update, thumbnail_geometry, thumbnail_pointer_in_space,
-        thumbnail_pointer_position, thumbnail_preserve_current_height, thumbnail_stack_height,
+        should_claim_region_cursor_on_shortcut_press, should_defer_macos_open_with_launch,
+        should_freeze_visible_capture_ui, should_prefetch_freeze_on_shortcut_press,
+        should_trigger_shortcut, startup_notice_fallback_edge_from_insets, startup_notice_url,
+        take_ready_or_defer_windows, thumbnail_clamp_aligned_frame,
+        thumbnail_collapsed_frame_height, thumbnail_cursor_action, thumbnail_cursor_ignore_update,
+        thumbnail_geometry, thumbnail_pointer_in_space, thumbnail_pointer_position,
+        thumbnail_preserve_current_height, thumbnail_stack_height,
         thumbnail_stack_should_be_visible, thumbnail_visible_window_height, thumbnail_window_top,
         track_shortcut_suppression, tray_accelerator, tray_icon_rect_is_usable,
         tray_notice_window_size, viewer_window_label, window_display_crop_is_safe,
@@ -10622,17 +10709,22 @@ mod tests {
     #[test]
     fn interactive_launch_opens_preferences_instead_of_a_capture() {
         assert_eq!(
-            interactive_launch_action(false, false),
-            InteractiveLaunchAction::Onboarding
+            interactive_launch_action(false, false, false),
+            Some(InteractiveLaunchAction::Onboarding)
         );
         assert_eq!(
-            interactive_launch_action(true, true),
-            InteractiveLaunchAction::StartupNotice
+            interactive_launch_action(true, true, false),
+            Some(InteractiveLaunchAction::StartupNotice)
         );
         assert_eq!(
-            interactive_launch_action(true, false),
-            InteractiveLaunchAction::Preferences
+            interactive_launch_action(true, false, false),
+            Some(InteractiveLaunchAction::Preferences)
         );
+        assert_eq!(interactive_launch_action(true, false, true), None);
+        assert_eq!(interactive_launch_action(false, false, true), None);
+        assert!(should_defer_macos_open_with_launch(false, false));
+        assert!(!should_defer_macos_open_with_launch(true, false));
+        assert!(!should_defer_macos_open_with_launch(false, true));
     }
 
     #[test]
