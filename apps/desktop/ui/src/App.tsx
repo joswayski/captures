@@ -48,6 +48,8 @@ import {
   formatEditorTime,
   recordingEditedFileStem,
   recordingFilenameError,
+  recordingInitialOutputFormat,
+  recordingSourceFormat,
   recordingUserFacingDefaults,
   timelineKeyboardDelta,
   type EditorCropHandle,
@@ -4130,11 +4132,11 @@ export function RecordingEditor() {
       const initialFilenameStem = initialSave.stem;
       const initialDestinationDirectory = initialSave.directory;
       const preferredVideoFormat = loadedSettings?.recording.video_format ?? "mp4";
-      const initialOutputFormat = loaded.kind === "gif"
-        ? "gif"
-        : preferredVideoFormat === "gif" || preferredVideoFormat === "webm"
-          ? preferredVideoFormat
-          : "mp4";
+      const sourceFormat = recordingSourceFormat(loaded);
+      const initialOutputFormat = recordingInitialOutputFormat(
+        sourceFormat,
+        preferredVideoFormat,
+      );
       const initialSizeMode = initialOutputFormat === "gif" ? "compress" : "preserve";
       const initialGifFps = loadedSettings?.recording.gif_fps ?? 15;
       const initialGifMaxWidth = loadedSettings?.recording.gif_max_width ?? 800;
@@ -4161,7 +4163,7 @@ export function RecordingEditor() {
       setMono(false);
       setFilenameStem(initialFilenameStem);
       setDestinationDirectory(initialDestinationDirectory);
-      setMakeCopy(false);
+      setMakeCopy(initialOutputFormat !== sourceFormat);
       setPreviewPlaying(false);
       setExported(null);
       setSavedFingerprint(null);
@@ -4484,7 +4486,7 @@ export function RecordingEditor() {
   });
   const sourceDirectory = originalSave.directory;
   const sourceStem = originalSave.stem;
-  const sourceFormat = artifact.kind === "gif" ? "gif" : "mp4";
+  const sourceFormat = recordingSourceFormat(artifact);
   const formatRequiresCopy = outputFormat !== sourceFormat;
   const alreadySaved = Boolean(exported && savedFingerprint === exportFingerprint);
   const maximumBytes = sizeMode === "maximum"

@@ -168,6 +168,42 @@ export function recordingEditedFileStem(stem: string): string {
   return `${trimmed}-edited`;
 }
 
+export type RecordingExportFormat = "mp4" | "gif" | "webm";
+
+function recordingPathExtension(path: string | null | undefined): string {
+  const name = path?.split(/[\\/]/).at(-1)?.toLowerCase() ?? "";
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 ? name.slice(dot + 1) : "";
+}
+
+/** Container the recording editor can overwrite in place. */
+export function recordingSourceFormat(artifact: {
+  kind: string;
+  mime_type?: string | null;
+  path?: string | null;
+  saved_path?: string | null;
+}): RecordingExportFormat {
+  if (artifact.kind === "gif") return "gif";
+  const mime = artifact.mime_type?.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (mime === "image/gif") return "gif";
+  if (mime === "video/webm" || mime === "audio/webm") return "webm";
+  const extension = recordingPathExtension(artifact.saved_path) || recordingPathExtension(artifact.path);
+  if (extension === "gif") return "gif";
+  if (extension === "webm") return "webm";
+  return "mp4";
+}
+
+export function recordingInitialOutputFormat(
+  sourceFormat: RecordingExportFormat,
+  preferredVideoFormat: string,
+): RecordingExportFormat {
+  if (sourceFormat === "gif") return "gif";
+  if (preferredVideoFormat === "gif" || preferredVideoFormat === "webm") {
+    return preferredVideoFormat;
+  }
+  return sourceFormat;
+}
+
 export function recordingFilenameError(fileStem: string): string {
   const trimmed = fileStem.trim();
   const reserved = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;

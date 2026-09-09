@@ -281,36 +281,143 @@ async fn open_one(app: &AppHandle, path: PathBuf) -> Result<(), AppError> {
 async fn open_still(app: &AppHandle, path: PathBuf) -> Result<(), AppError> {
     let state = app.state::<Arc<AppState>>().inner().clone();
     if let Some(artifact_id) = existing_screenshot_id(&state, &path) {
-        load_screenshot_if_needed(&state, &artifact_id).await?;
+        if !should_reload_opened_still(screenshot_editor::screenshot_editor_is_open(
+            app,
+            &artifact_id,
+        )) {
+            return screenshot_editor::show_screenshot_editor(app, &artifact_id);
+        }
+        let pixels = decode_opened_still(path.clone()).await?;
+        replace_opened_still(app, &state, &artifact_id, &path, pixels);
+        let _ = screenshot_editor::discard_screenshot_editor_draft_files(&artifact_id);
         return screenshot_editor::show_screenshot_editor(app, &artifact_id);
     }
 
-    let path_for_decode = path.clone();
-    let (image_png, preview_png, width, height) = tauri::async_runtime::spawn_blocking(move || {
-        let image = screenshot_editor::decode_still_image_file(&path_for_decode)?;
-        let width = image.width();
-        let height = image.height();
-        let image_png = storage::encode_png(&image)?;
-        let preview_png = storage::encode_thumbnail_png(&image)?;
-        Ok::<_, AppError>((image_png, preview_png, width, height))
+    let pixels = decode_opened_still(path.clone()).await?;
+    let artifact_id = Uuid::new_v4().to_string();
+    store_opened_still(
+        app,
+        &state,
+        OpenedStillStore {
+            artifact_id: &artifact_id,
+            path: &path,
+            created_at: Utc::now().to_rfc3339(),
+            mode: CaptureMode::Display,
+            pixels,
+            replace_history: false,
+        },
+    );
+    screenshot_editor::show_screenshot_editor(app, &artifact_id)
+}
+
+const fn should_reload_opened_still(editor_is_open: bool) -> bool {
+    !editor_is_open
+}
+
+struct OpenedStillPixels {
+    image_png: Vec<u8>,
+    preview_png: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
+struct OpenedStillStore<'a> {
+    artifact_id: &'a str,
+    path: &'a Path,
+    created_at: String,
+    mode: CaptureMode,
+    pixels: OpenedStillPixels,
+    replace_history: bool,
+}
+
+async fn decode_opened_still(path: PathBuf) -> Result<OpenedStillPixels, AppError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let image = screenshot_editor::decode_still_image_file(&path)?;
+        Ok(OpenedStillPixels {
+            width: image.width(),
+            height: image.height(),
+            image_png: storage::encode_png(&image)?,
+            preview_png: storage::encode_thumbnail_png(&image)?,
+        })
     })
     .await
-    .map_err(|error| AppError::Task(error.to_string()))??;
+    .map_err(|error| AppError::Task(error.to_string()))?
+}
 
-    let artifact_id = Uuid::new_v4().to_string();
-    let created_at = Utc::now().to_rfc3339();
+fn replace_opened_still(
+    app: &AppHandle,
+    state: &AppState,
+    artifact_id: &str,
+    path: &Path,
+    pixels: OpenedStillPixels,
+) {
+    let (created_at, mode, had_history) = {
+        let artifacts = state.artifacts.lock();
+        if let Some(existing) = artifacts.iter().find(|artifact| artifact.id == artifact_id) {
+            (
+                existing.created_at.clone(),
+                existing.mode,
+                existing.history_saved,
+            )
+        } else {
+            drop(artifacts);
+            state
+                .history
+                .lock()
+                .iter()
+                .find_map(|entry| {
+                    (entry.id == artifact_id && entry.kind == ArtifactKind::Screenshot).then(|| {
+                        (
+                            entry.created_at.clone(),
+                            entry.mode.unwrap_or(CaptureMode::Display),
+                            true,
+                        )
+                    })
+                })
+                .unwrap_or_else(|| (Utc::now().to_rfc3339(), CaptureMode::Display, false))
+        }
+    };
+    store_opened_still(
+        app,
+        state,
+        OpenedStillStore {
+            artifact_id,
+            path,
+            created_at,
+            mode,
+            pixels,
+            replace_history: had_history,
+        },
+    );
+}
+
+fn store_opened_still(app: &AppHandle, state: &AppState, opened: OpenedStillStore<'_>) {
+    let OpenedStillStore {
+        artifact_id,
+        path,
+        created_at,
+        mode,
+        pixels,
+        replace_history,
+    } = opened;
+    let OpenedStillPixels {
+        image_png,
+        preview_png,
+        width,
+        height,
+    } = pixels;
     let size_bytes = u64::try_from(image_png.len()).unwrap_or(u64::MAX);
     let saved_path = path.to_string_lossy().into_owned();
     let history_entry = HistoryEntry {
-        id: artifact_id.clone(),
+        id: artifact_id.to_owned(),
         kind: ArtifactKind::Screenshot,
-        preview_url: history_preview_url(&artifact_id),
-        full_url: history_full_url(&artifact_id),
+        preview_url: history_preview_url(artifact_id),
+        full_url: history_full_url(artifact_id),
         width,
         height,
         size_bytes,
         created_at: created_at.clone(),
-        mode: Some(CaptureMode::Display),
+        mode: Some(mode),
         saved_path: Some(saved_path.clone()),
         mime_type: None,
         duration_ms: None,
@@ -327,71 +434,52 @@ async fn open_still(app: &AppHandle, path: PathBuf) -> Result<(), AppError> {
                 false
             }
         };
-    let artifact = CaptureArtifact {
-        id: artifact_id.clone(),
-        path: Some(saved_path),
-        preview_url: artifact_url(&artifact_id),
-        full_url: artifact_full_url(&artifact_id),
-        width,
-        height,
-        size_bytes,
-        created_at,
-        mode: CaptureMode::Display,
-        history_saved,
-        clipboard_copy_status: ClipboardCopyStatus::Skipped,
-        image_png,
-        preview_png,
-    };
-    state.artifacts.lock().push(artifact);
+    {
+        let mut artifacts = state.artifacts.lock();
+        if let Some(existing) = artifacts
+            .iter_mut()
+            .find(|artifact| artifact.id == artifact_id)
+        {
+            existing.path = Some(saved_path);
+            existing.preview_url = artifact_url(artifact_id);
+            existing.full_url = artifact_full_url(artifact_id);
+            existing.width = width;
+            existing.height = height;
+            existing.size_bytes = size_bytes;
+            existing.history_saved = history_saved;
+            existing.clipboard_copy_status = ClipboardCopyStatus::Skipped;
+            existing.image_png = image_png;
+            existing.preview_png = preview_png;
+        } else {
+            artifacts.push(CaptureArtifact {
+                id: artifact_id.to_owned(),
+                path: Some(saved_path),
+                preview_url: artifact_url(artifact_id),
+                full_url: artifact_full_url(artifact_id),
+                width,
+                height,
+                size_bytes,
+                created_at,
+                mode,
+                history_saved,
+                clipboard_copy_status: ClipboardCopyStatus::Skipped,
+                image_png,
+                preview_png,
+            });
+        }
+    }
     if history_saved {
-        state.history.lock().insert(0, history_entry);
+        let mut history = state.history.lock();
+        if replace_history
+            && let Some(existing) = history.iter_mut().find(|entry| entry.id == artifact_id)
+        {
+            *existing = history_entry;
+        } else {
+            history.retain(|entry| entry.id != artifact_id);
+            history.insert(0, history_entry);
+        }
         let _ = app.emit("capture-history-changed", ());
     }
-    screenshot_editor::show_screenshot_editor(app, &artifact_id)
-}
-
-async fn load_screenshot_if_needed(state: &AppState, artifact_id: &str) -> Result<(), AppError> {
-    if state.find_artifact(artifact_id).is_some() {
-        return Ok(());
-    }
-    let entry = state
-        .history
-        .lock()
-        .iter()
-        .find(|entry| entry.id == artifact_id)
-        .cloned()
-        .ok_or(AppError::HistoryUnavailable)?;
-    if entry.kind != ArtifactKind::Screenshot {
-        return Err(AppError::HistoryUnavailable);
-    }
-    let mode = entry.mode.ok_or(AppError::HistoryUnavailable)?;
-    let history_artifact_id = artifact_id.to_owned();
-    let (image_png, preview_png) = tauri::async_runtime::spawn_blocking(move || {
-        storage::load_history_images(&history_artifact_id)
-    })
-    .await
-    .map_err(|error| AppError::Task(error.to_string()))??;
-    let path = entry
-        .saved_path
-        .as_ref()
-        .filter(|saved| Path::new(saved).is_file())
-        .cloned();
-    state.artifacts.lock().push(CaptureArtifact {
-        id: entry.id,
-        path,
-        preview_url: artifact_url(artifact_id),
-        full_url: artifact_full_url(artifact_id),
-        width: entry.width,
-        height: entry.height,
-        size_bytes: entry.size_bytes,
-        created_at: entry.created_at,
-        mode,
-        history_saved: true,
-        clipboard_copy_status: ClipboardCopyStatus::Skipped,
-        image_png,
-        preview_png,
-    });
-    Ok(())
 }
 
 fn existing_screenshot_id(state: &AppState, path: &Path) -> Option<String> {
@@ -525,7 +613,8 @@ mod tests {
 
     use super::{
         OpenedMediaKind, classify_media_path, is_cli_flag, open_paths_from_cli_args,
-        parse_file_url, path_from_open_argument, recording_mime_type, skip_program_name,
+        parse_file_url, path_from_open_argument, recording_mime_type, should_reload_opened_still,
+        skip_program_name,
     };
 
     fn write_png(path: &std::path::Path) {
@@ -539,6 +628,12 @@ mod tests {
                 image::ExtendedColorType::Rgba8,
             )
             .expect("png written");
+    }
+
+    #[test]
+    fn reloads_closed_stills_from_disk_and_keeps_an_open_editor() {
+        assert!(should_reload_opened_still(false));
+        assert!(!should_reload_opened_still(true));
     }
 
     #[test]

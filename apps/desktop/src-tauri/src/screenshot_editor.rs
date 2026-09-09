@@ -84,8 +84,17 @@ pub fn open_screenshot_editor(
     show_screenshot_editor(&app, &artifact_id).map_err(|error| error.to_string())
 }
 
+pub(crate) fn screenshot_editor_is_open(app: &AppHandle, artifact_id: &str) -> bool {
+    app.get_webview_window(&screenshot_editor_window_label(artifact_id))
+        .is_some()
+}
+
+fn screenshot_editor_window_label(artifact_id: &str) -> String {
+    format!("{SCREENSHOT_EDITOR_WINDOW_PREFIX}{artifact_id}")
+}
+
 pub(crate) fn show_screenshot_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppError> {
-    let label = format!("{SCREENSHOT_EDITOR_WINDOW_PREFIX}{artifact_id}");
+    let label = screenshot_editor_window_label(artifact_id);
     // Opening the editor is an intentional focus change; do not hand activation
     // back to whatever app was frontmost before a prior capture shortcut.
     #[cfg(target_os = "macos")]
