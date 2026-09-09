@@ -176,12 +176,10 @@ describe("RecordingEditor", () => {
       "aria-valuetext",
       "0:08.750",
     );
-    expect(screen.getByRole("slider", { name: "Trim start" })).toHaveStyle({
-      left: "calc(0% + 4px)",
-    });
-    expect(screen.getByRole("slider", { name: "Trim end" })).toHaveStyle({
-      left: "calc(100% - 4px)",
-    });
+    expect(screen.getByRole("slider", { name: "Trim start" }).style.getPropertyValue("--trim"))
+      .toBe("0");
+    expect(screen.getByRole("slider", { name: "Trim end" }).style.getPropertyValue("--trim"))
+      .toBe("1");
     const track = container.querySelector<HTMLElement>(".timeline-track");
     expect(track).not.toBeNull();
     track!.setPointerCapture = vi.fn();
@@ -366,6 +364,8 @@ describe("RecordingEditor", () => {
     fireEvent.pointerMove(trimStart, { pointerId: 1, clientX: 9_000 });
     expect(trimStart).toHaveAttribute("aria-valuetext", "0:02.000");
     fireEvent.pointerMove(trimStart, { pointerId: 1, clientX: 9_050 });
+    expect(trimStart).toHaveAttribute("aria-valuetext", "0:02.000");
+    fireEvent.pointerMove(trimStart, { pointerId: 1, clientX: startClientX + 50 });
     expect(trimStart).toHaveAttribute("aria-valuetext", "0:02.438");
     fireEvent.pointerUp(trimStart, { pointerId: 1 });
 

@@ -199,27 +199,15 @@ export function formatEditorTime(milliseconds: number, duration: number): string
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
-/**
- * Horizontal inset that keeps an 8px centered trim handle inside the track.
- * Must match `.timeline-filmstrip { inset: 4px }` so the handle center sits on
- * the filmstrip edge instead of overflowing the editor.
- */
-export const TIMELINE_HANDLE_INSET_PX = 4;
-
 export function timelineRatio(timeMs: number, durationMs: number): number {
   const duration = Math.max(1, durationMs);
   if (!Number.isFinite(timeMs)) return 0;
   return clamp(timeMs / duration, 0, 1);
 }
 
-/** CSS `left` for a trim handle so 0% / 100% stay fully on the filmstrip. */
-export function timelineHandleLeft(timeMs: number, durationMs: number): string {
-  const ratio = timelineRatio(timeMs, durationMs);
-  const percent = ratio * 100;
-  const offset = TIMELINE_HANDLE_INSET_PX * (1 - 2 * ratio);
-  if (offset === 0) return `${percent}%`;
-  if (offset < 0) return `calc(${percent}% - ${-offset}px)`;
-  return `calc(${percent}% + ${offset}px)`;
+/** `--trim` progress for CSS handle geometry (0 at start, 1 at end). */
+export function timelineHandleTrim(timeMs: number, durationMs: number): string {
+  return String(timelineRatio(timeMs, durationMs));
 }
 
 export function timelineTimeAtClientX(
@@ -237,6 +225,7 @@ export type TimelinePointerDrag = {
   startX: number;
   lastX: number;
   clientX: number;
+  trackLeft: number;
   trackWidth: number;
   duration: number;
   min: number;
@@ -245,11 +234,9 @@ export type TimelinePointerDrag = {
 
 /**
  * Map a trim-handle drag from the pointer-down origin, not the handle's current
- * `left`. Absolute `clientX` vs the track can jump after `setPointerCapture` on a
- * transformed handle (WebKit), which previously slammed both edges to 0% / 100%.
- *
- * A single-event jump larger than ~35% of the track is treated as a coordinate
- * glitch: keep the current time and re-origin so later moves still work.
+ * `left`. Large in-bounds steps (fast mouse or coalesced touch) are applied.
+ * Only a `clientX` that is not even near the track — the old WebKit rewrite
+ * after capturing a transformed handle — is treated as a glitch.
  */
 export function timelineTimeFromPointerDrag(input: TimelinePointerDrag): {
   time: number;
@@ -264,13 +251,15 @@ export function timelineTimeFromPointerDrag(input: TimelinePointerDrag): {
     input.min,
     input.max,
   );
-  const maxStep = Math.max(64, width * 0.35);
-  if (Math.abs(input.clientX - input.lastX) > maxStep) {
+  const slack = width;
+  const minX = input.trackLeft - slack;
+  const maxX = input.trackLeft + width + slack;
+  if (input.clientX < minX || input.clientX > maxX) {
     return {
       time: currentTime,
-      lastX: input.clientX,
-      startX: input.clientX,
-      startTime: currentTime,
+      lastX: input.lastX,
+      startX: input.startX,
+      startTime: input.startTime,
     };
   }
   return {

@@ -49,7 +49,7 @@ import {
   recordingEditedFileStem,
   recordingFilenameError,
   recordingUserFacingDefaults,
-  timelineHandleLeft,
+  timelineHandleTrim,
   timelineKeyboardDelta,
   timelineTimeAtClientX,
   timelineTimeFromPointerDrag,
@@ -4604,6 +4604,7 @@ export function RecordingEditor() {
       startX: pending.startX,
       lastX: pending.lastX,
       clientX,
+      trackLeft: bounds.left,
       trackWidth: bounds.width,
       duration,
       min: pending.min,
@@ -4998,7 +4999,7 @@ export function RecordingEditor() {
             type="button"
             role="slider"
             className="timeline-trim-handle timeline-trim-start"
-            style={{ left: timelineHandleLeft(trimStart, duration) }}
+            style={{ ["--trim" as string]: timelineHandleTrim(trimStart, duration) }}
             aria-label="Trim start"
             aria-valuemin={0}
             aria-valuemax={Math.max(0, trimEnd - 1)}
@@ -5021,7 +5022,7 @@ export function RecordingEditor() {
             type="button"
             role="slider"
             className="timeline-trim-handle timeline-trim-end"
-            style={{ left: timelineHandleLeft(trimEnd, duration) }}
+            style={{ ["--trim" as string]: timelineHandleTrim(trimEnd, duration) }}
             aria-label="Trim end"
             aria-valuemin={Math.min(duration, trimStart + 1)}
             aria-valuemax={duration}
