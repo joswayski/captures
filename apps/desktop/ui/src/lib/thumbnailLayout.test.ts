@@ -924,6 +924,13 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).not.toMatch(
       /\.thumbnail-stack\[data-thumbnail-suppress-card-hover="true"\] \.thumbnail-card:focus-within/,
     );
+    expect(thumbnailStyles).toMatch(
+      /html:not\(\.thumbnail-native-tracking\) \.icon-button\.delete:hover/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.icon-button\.delete\[data-native-pointer-hover="true"\]/,
+    );
+    expect(thumbnailStyles).not.toMatch(/(?:^|\n)\.icon-button\.delete:hover/m);
   });
 
   it("reports hidden previews at each scroll edge", () => {

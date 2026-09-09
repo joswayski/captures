@@ -591,7 +591,12 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
     box-shadow 0.14s ease;
 }
 
-.icon-button:hover,
+/*
+ * Native pointer tracking owns button chrome. Ungated :hover stays sticky when
+ * the always-on-top window appears under a leftover capture cursor, which made
+ * Delete look pressed without a real mouse enter.
+ */
+html:not(.thumbnail-native-tracking) .icon-button:hover,
 .icon-button[data-native-pointer-hover="true"] {
   background: var(--glass-raised);
   transform: translateY(-1px) scale(1.04);
@@ -609,7 +614,7 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
   color: var(--theme-signal-text);
 }
 
-.icon-button.delete:hover,
+html:not(.thumbnail-native-tracking) .icon-button.delete:hover,
 .icon-button.delete[data-native-pointer-hover="true"] {
   color: #fff;
   background: var(--theme-signal);
@@ -648,7 +653,7 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-top-action
   white-space: nowrap;
 }
 
-.icon-button:hover::after,
+html:not(.thumbnail-native-tracking) .icon-button:hover::after,
 .icon-button[data-native-pointer-hover="true"]::after,
 .icon-button:focus-visible::after {
   opacity: 1;
@@ -776,7 +781,7 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
   transform: translateY(0);
 }
 
-.thumbnail-editor-control:hover .thumbnail-editor-control-face,
+html:not(.thumbnail-native-tracking) .thumbnail-editor-control:hover .thumbnail-editor-control-face,
 .thumbnail-editor-control[data-native-pointer-hover="true"] .thumbnail-editor-control-face {
   background: var(--glass-raised);
   transform: translateY(-1px) scale(1.04);
@@ -812,7 +817,7 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
   left: 8px;
 }
 
-.thumbnail-editor-control:hover .thumbnail-editor-control-tip,
+html:not(.thumbnail-native-tracking) .thumbnail-editor-control:hover .thumbnail-editor-control-tip,
 .thumbnail-editor-control[data-native-pointer-hover="true"] .thumbnail-editor-control-tip,
 .thumbnail-editor-control:focus-visible .thumbnail-editor-control-tip {
   opacity: 1;
@@ -869,7 +874,7 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
 }
 
 /* Hover while present fills with accent and shows the action label. */
-.thumbnail-editor-control.is-present:not([data-editor-just-opened="true"]):hover .thumbnail-editor-control-face,
+html:not(.thumbnail-native-tracking) .thumbnail-editor-control.is-present:not([data-editor-just-opened="true"]):hover .thumbnail-editor-control-face,
 .thumbnail-editor-control.is-present:not([data-editor-just-opened="true"])[data-native-pointer-hover="true"] .thumbnail-editor-control-face,
 .thumbnail-editor-control.is-present:not([data-editor-just-opened="true"]):focus-visible .thumbnail-editor-control-face {
   color: var(--theme-accent-ink);
@@ -906,13 +911,13 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover .thumbnail-editor-con
   opacity: 0;
 }
 
-.thumbnail-editor-control.is-present:not([data-editor-just-opened="true"]):hover .label-rest,
+html:not(.thumbnail-native-tracking) .thumbnail-editor-control.is-present:not([data-editor-just-opened="true"]):hover .label-rest,
 .thumbnail-editor-control.is-present:not([data-editor-just-opened="true"])[data-native-pointer-hover="true"] .label-rest,
 .thumbnail-editor-control.is-present:not([data-editor-just-opened="true"]):focus-visible .label-rest {
   opacity: 0;
 }
 
-.thumbnail-editor-control.is-present:not([data-editor-just-opened="true"]):hover .label-hover,
+html:not(.thumbnail-native-tracking) .thumbnail-editor-control.is-present:not([data-editor-just-opened="true"]):hover .label-hover,
 .thumbnail-editor-control.is-present:not([data-editor-just-opened="true"])[data-native-pointer-hover="true"] .label-hover,
 .thumbnail-editor-control.is-present:not([data-editor-just-opened="true"]):focus-visible .label-hover {
   opacity: 1;
@@ -1020,7 +1025,7 @@ html:not(.thumbnail-native-tracking) .thumbnail-stack[data-thumbnail-suppress-ca
   background: var(--theme-accent);
 }
 
-.thumbnail-main-actions button:hover,
+html:not(.thumbnail-native-tracking) .thumbnail-main-actions button:hover,
 .thumbnail-main-actions button[data-native-pointer-hover="true"] {
   filter: brightness(1.12);
   transform: translateY(-1px);
@@ -1138,7 +1143,7 @@ html:has(.thumbnail-card:hover):not(:has(
   cursor: grab;
 }
 
-html:not(:has(.thumbnail-stack-dragging)):not(:has(.thumbnail-card.thumbnail-file-dragging)):has(
+html:not(.thumbnail-native-tracking):not(:has(.thumbnail-stack-dragging)):not(:has(.thumbnail-card.thumbnail-file-dragging)):has(
   :is(
     .thumbnail-stack-toolbar,
     .thumbnail-stack-control,
@@ -1149,7 +1154,7 @@ html:not(:has(.thumbnail-stack-dragging)):not(:has(.thumbnail-card.thumbnail-fil
     .thumbnail-editor-control
   ):hover:not(:disabled):not([data-thumbnail-hover-stale])
 ),
-html:not(:has(.thumbnail-stack-dragging)):not(:has(.thumbnail-card.thumbnail-file-dragging)):has(
+html:not(.thumbnail-native-tracking):not(:has(.thumbnail-stack-dragging)):not(:has(.thumbnail-card.thumbnail-file-dragging)):has(
   :is(
     .thumbnail-stack-toolbar,
     .thumbnail-stack-control,

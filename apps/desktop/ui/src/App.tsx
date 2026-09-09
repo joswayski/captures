@@ -97,6 +97,7 @@ import {
   armThumbnailCollapsedHover,
   clearThumbnailCssCursor,
   clearThumbnailNativeHover,
+  forceClearThumbnailCssHover,
   markThumbnailEditorControlOpened,
   rearmThumbnailEditorControlHover,
   releaseThumbnailCapturedHover,
@@ -107,8 +108,11 @@ import {
   setThumbnailCollapsedHoverStale,
   setThumbnailNativeActiveCard,
   shouldIgnoreThumbnailCursorEvents,
+  shouldLockThumbnailCardHoverOnNewCapture,
   shouldLockThumbnailCardHoverOnStackMotion,
   shouldRecoverThumbnailAfterNullPolls,
+  thumbnailCardHoverLockHoldsInitialPointerMove,
+  thumbnailAppearHoverLockShouldResampleOrigin,
   thumbnailCardHoverLockReleased,
   thumbnailCursorSyncAction,
   thumbnailNullPollNeedsDesktopInputRecovery,
@@ -117,6 +121,7 @@ import {
   thumbnailUnknownPointerShouldIgnoreCursorEvents,
   withThumbnailPointerTimeout,
   THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS,
+  type ThumbnailCardHoverLockKind,
   type ThumbnailCursorKind,
 } from "./lib/thumbnailHover";
 import {
@@ -6499,10 +6504,24 @@ export function Thumbnail() {
   }, [applyClipboardState]);
 
   useLayoutEffect(() => {
+    const previousCount = previousArtifactCount.current;
     const shouldReveal = shouldScrollThumbnailStackToEnd(
-      previousArtifactCount.current,
+      previousCount,
       artifacts.length,
     );
+    // The hover tracker lives in a later effect. Skip 0→N: that mount locks
+    // appear itself, and this event would fire before the listener exists.
+    // After sync_thumbnail_stack, `captures-thumbnail-layout-changed` discards
+    // any origin sampled against the pre-resize window so a bottom-anchored
+    // grow cannot look like the pointer moved.
+    if (
+      previousCount > 0
+      && shouldLockThumbnailCardHoverOnNewCapture(previousCount, artifacts.length)
+    ) {
+      window.dispatchEvent(new CustomEvent(THUMBNAIL_HIT_TEST_CHANGED_EVENT, {
+        detail: { appear: true },
+      }));
+    }
     previousArtifactCount.current = artifacts.length;
     const fromTop = stackAnchorRef.current === "top";
     if (shouldReveal && stackRef.current) {
@@ -6607,7 +6626,8 @@ export function Thumbnail() {
     if (!hasThumbnailCards) return;
     // Keep one native hover tracker for the lifetime of the thumbnail window.
     // Restart only when the stack crosses between empty and non-empty; ordinary
-    // card additions/removals preserve hover presentation and native cursors.
+    // card additions still poll, but they lock hover until the pointer moves
+    // so a leftover capture cursor cannot light Delete.
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let polling = false;
@@ -6621,6 +6641,7 @@ export function Thumbnail() {
     let pointerPollSupported = true;
     let cursorHandoffTimers: ReturnType<typeof setTimeout>[] = [];
     let cardHoverLocked = false;
+    let cardHoverLockKind: ThumbnailCardHoverLockKind = "motion";
     let cardHoverLockOrigin: { x: number; y: number } | null = null;
     /**
      * Clicks and document-window handoffs can make macOS restore the frontmost
@@ -6745,15 +6766,25 @@ export function Thumbnail() {
       setIgnoreCursorEvents(true, true);
     };
 
-    const lockCardHover = () => {
+    const lockCardHover = (kind: ThumbnailCardHoverLockKind = "motion") => {
       cardHoverLocked = true;
+      cardHoverLockKind = kind;
       cardHoverLockOrigin = null;
       setThumbnailCardHoverSuppressed(true);
+      if (kind !== "appear") return;
+      // WebKit keeps :hover on the node that was under the cursor when the
+      // window became hit-testable. Drop that paint so Delete cannot stay pink
+      // while native hover is suppressed.
+      clearNativeClasses();
+      document.querySelectorAll<HTMLElement>(
+        ".thumbnail-card, .icon-button, .thumbnail-main-actions button, .thumbnail-editor-control",
+      ).forEach((element) => forceClearThumbnailCssHover(element));
     };
 
     const unlockCardHover = () => {
       if (!cardHoverLocked) return;
       cardHoverLocked = false;
+      cardHoverLockKind = "motion";
       cardHoverLockOrigin = null;
       setThumbnailCardHoverSuppressed(false);
     };
@@ -6767,8 +6798,10 @@ export function Thumbnail() {
       // Capture the origin only after cards are in their expanded layout.
       if (thumbnailStackHoldsCollapsedPose()) return;
       if (options.fromPointerMove && !cardHoverLockOrigin) {
-        unlockCardHover();
-        return;
+        if (!thumbnailCardHoverLockHoldsInitialPointerMove(cardHoverLockKind)) {
+          unlockCardHover();
+          return;
+        }
       }
       if (!cardHoverLockOrigin) {
         if (position.inside) {
@@ -6933,6 +6966,10 @@ export function Thumbnail() {
 
     const resumeFromNativeShow = () => {
       if (document.hidden) return;
+      // Showing after a capture typically places a new card under the leftover
+      // overlay pointer. Lock hover before recovering so CSS :hover cannot
+      // paint Delete while the poll re-arms.
+      lockCardHover("appear");
       // The native command already restored the window and z-order. Reset only
       // the WebView-side polling state so this event cannot recursively invoke
       // refresh_thumbnail_interactivity.
@@ -6950,18 +6987,30 @@ export function Thumbnail() {
       schedulePoll(0);
     };
 
+    const onThumbnailLayoutChanged = () => {
+      // sync_thumbnail_stack may have just grown a bottom-anchored window.
+      // Drop any origin taken in the old coordinate space, then poll again.
+      if (thumbnailAppearHoverLockShouldResampleOrigin(cardHoverLocked, cardHoverLockKind)) {
+        cardHoverLockOrigin = null;
+      }
+      pollImmediately();
+    };
+
     const updateThumbnailHitTest = (event: Event) => {
       const detail = event instanceof CustomEvent
         ? (event as CustomEvent<{
           stackMotion?: string;
           previousStackMotion?: string;
+          appear?: boolean;
         }>).detail
         : undefined;
       if (shouldLockThumbnailCardHoverOnStackMotion(
         detail?.stackMotion,
         detail?.previousStackMotion,
       )) {
-        lockCardHover();
+        lockCardHover("motion");
+      } else if (detail?.appear) {
+        lockCardHover("appear");
       }
       clearNativeHover();
       const applyHitTest = () => {
@@ -7039,7 +7088,7 @@ export function Thumbnail() {
     window.addEventListener("captures-thumbnail-resumed", resumeFromNativeShow);
     document.addEventListener("resume", resumeFromSuspension as EventListener);
     window.addEventListener("captures-thumbnail-ready", pollImmediately);
-    window.addEventListener("captures-thumbnail-layout-changed", pollImmediately);
+    window.addEventListener("captures-thumbnail-layout-changed", onThumbnailLayoutChanged);
     window.addEventListener(
       THUMBNAIL_HIT_TEST_CHANGED_EVENT,
       updateThumbnailHitTest,
@@ -7051,6 +7100,9 @@ export function Thumbnail() {
         applyStackClickThrough();
       })
       .catch(() => undefined);
+    // First capture (and a tracker that missed `captures-thumbnail-resumed`
+    // while the stack was empty) often appears under the overlay pointer.
+    lockCardHover("appear");
     schedulePoll(0);
     return () => {
       cancelled = true;
@@ -7069,7 +7121,7 @@ export function Thumbnail() {
       window.removeEventListener("captures-thumbnail-resumed", resumeFromNativeShow);
       document.removeEventListener("resume", resumeFromSuspension as EventListener);
       window.removeEventListener("captures-thumbnail-ready", pollImmediately);
-      window.removeEventListener("captures-thumbnail-layout-changed", pollImmediately);
+      window.removeEventListener("captures-thumbnail-layout-changed", onThumbnailLayoutChanged);
       window.removeEventListener(
         THUMBNAIL_HIT_TEST_CHANGED_EVENT,
         updateThumbnailHitTest,
