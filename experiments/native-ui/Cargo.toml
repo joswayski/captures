@@ -1,0 +1,38 @@
+[package]
+name = "captures-ui-probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Deliberately outside the shipping workspace and release pipeline.
+[workspace]
+
+[dependencies]
+captures-capture = { path = "../../crates/captures-capture" }
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde = { version = "1", features = ["derive"] }
+base64 = "0.22"
+tauri = { version = "=2.11.5", features = ["custom-protocol"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "captures-gtk-probe"
+path = "src/gtk.rs"
+
+[[bin]]
+name = "captures-tauri-probe"
+path = "src/tauri.rs"
+
+[profile.release]
+strip = true
+
+[profile.dev]
+debug = 0

@@ -171,6 +171,9 @@ and height stay proportional.
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for local setup, validation, and packaging.
+An isolated [native UI feasibility experiment](docs/native-ui-evaluation.md)
+compares Linux toolkit widgets with Tauri; it is not part of Preview and does not
+replace the cross-platform app.
 
 ## License and trademarks
 
