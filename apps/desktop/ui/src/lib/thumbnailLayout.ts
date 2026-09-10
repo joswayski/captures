@@ -403,14 +403,16 @@ export function applyThumbnailStackGravity(
 ) {
   if (!stack) return;
   const clamped = clampGravity(gravity);
-  stack.style.setProperty(
-    THUMBNAIL_STACK_GRAVITY_VAR,
-    String(Number(clamped.toFixed(4))),
-  );
-  stack.style.setProperty(
-    THUMBNAIL_STACK_CENTER_PROXIMITY_VAR,
-    String(Number((1 - Math.abs(clamped)).toFixed(4))),
-  );
+  const gravityText = String(Number(clamped.toFixed(4)));
+  const proximityText = String(Number((1 - Math.abs(clamped)).toFixed(4)));
+  if (
+    stack.style.getPropertyValue(THUMBNAIL_STACK_GRAVITY_VAR) === gravityText
+    && stack.style.getPropertyValue(THUMBNAIL_STACK_CENTER_PROXIMITY_VAR) === proximityText
+  ) {
+    return;
+  }
+  stack.style.setProperty(THUMBNAIL_STACK_GRAVITY_VAR, gravityText);
+  stack.style.setProperty(THUMBNAIL_STACK_CENTER_PROXIMITY_VAR, proximityText);
 }
 
 export type ThumbnailStackWorkGravity = {

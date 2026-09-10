@@ -21,6 +21,7 @@ import {
   setThumbnailStackPressing,
   thumbnailStackDragExceededThreshold,
   thumbnailStackMeasuredFrameHeight,
+  thumbnailWorkAreaContains,
   writeHarnessStackOffset,
 } from "./thumbnailStackDrag";
 
@@ -686,5 +687,24 @@ describe("stack dragging class helpers", () => {
     expect(stack).toHaveClass(THUMBNAIL_STACK_DRAG_SWAY_CLASS);
     setThumbnailStackDragging(stack, false);
     expect(stack).not.toHaveClass(THUMBNAIL_STACK_DRAG_SWAY_CLASS);
+  });
+
+  it("skips writing identical sway values so a paused pointer does not restyle the pile", () => {
+    const stack = document.createElement("main");
+    const setProperty = vi.spyOn(stack.style, "setProperty");
+    applyThumbnailStackDragSway(stack, { x: 1.5, y: -0.25 });
+    expect(setProperty).toHaveBeenCalledTimes(2);
+    applyThumbnailStackDragSway(stack, { x: 1.5, y: -0.25 });
+    expect(setProperty).toHaveBeenCalledTimes(2);
+    applyThumbnailStackDragSway(stack, { x: 1.25, y: -0.25 });
+    expect(setProperty).toHaveBeenCalledTimes(4);
+  });
+
+  it("treats a point inside a work area, including a small margin, as on that display", () => {
+    const work = { x: 0, y: 0, width: 1_920, height: 1_080 };
+    expect(thumbnailWorkAreaContains(100, 100, work)).toBe(true);
+    expect(thumbnailWorkAreaContains(-10, 10, work)).toBe(false);
+    expect(thumbnailWorkAreaContains(-10, 10, work, 16)).toBe(true);
+    expect(thumbnailWorkAreaContains(2_000, 10, work, 16)).toBe(false);
   });
 });

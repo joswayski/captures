@@ -514,6 +514,14 @@ describe("thumbnail stack layout", () => {
     expect(disabledSave?.[1]).toMatch(/opacity:\s*1/);
     expect(bottomBar?.[1]).toMatch(/z-index:\s*8/);
     expect(dustChip?.[1]).toMatch(/filter:\s*blur\(2px\) brightness\(0\.5\)/);
+    expect(dustChip?.[1]).toMatch(/will-change:\s*transform, opacity/);
+    expect(thumbnailStyles).toMatch(/\.thumbnail-dust-canvas\s*\{/);
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-compact > \.thumbnail-card :is\(\.thumbnail-top-actions, \.thumbnail-main-actions\)\s*\{[^}]*content-visibility:\s*hidden/,
+    );
+    expect(thumbnailStyles).toMatch(
+      /\.thumbnail-stack-minimized\.thumbnail-stack-dragging > \.thumbnail-card\s*\{[^}]*will-change:\s*transform/,
+    );
   });
 
   it("fades the mini-preview frame with the delete dissolve", () => {

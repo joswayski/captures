@@ -223,6 +223,11 @@ export function thumbnailStackHoldsCollapsedPose(root: Document = document): boo
   ));
 }
 
+/** True while the collapsed pile is being dragged across the desktop. */
+export function thumbnailStackIsDragging(root: ParentNode = document): boolean {
+  return Boolean(root.querySelector(".thumbnail-stack-dragging"));
+}
+
 /**
  * True when preview cards must not show Copy/Save/Edit hover chrome. Compact
  * and animating stacks are decorative; after expand the suppress marker stays
@@ -308,7 +313,7 @@ export function thumbnailAppearHoverLockShouldResampleOrigin(
 }
 
 export function thumbnailStackHasLiveHitTarget(root: Document = document): boolean {
-  if (root.querySelector(".thumbnail-stack-dragging")) return true;
+  if (thumbnailStackIsDragging(root)) return true;
   if (root.querySelector(
     ".thumbnail-stack-minimizing, .thumbnail-stack-expanding, .thumbnail-stack-clearing",
   )) {
@@ -345,7 +350,7 @@ export function shouldIgnoreThumbnailCursorEvents(
   position: ThumbnailPointerPosition,
   root: Document = document,
 ): boolean {
-  if (root.querySelector(".thumbnail-stack-dragging")) return false;
+  if (thumbnailStackIsDragging(root)) return false;
   if (!thumbnailStackHasLiveHitTarget(root)) return true;
   if (!position.inside) return true;
   const target = thumbnailElementFromPoint(position.x, position.y, root);

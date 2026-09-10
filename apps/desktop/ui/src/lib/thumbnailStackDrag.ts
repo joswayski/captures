@@ -288,13 +288,33 @@ export function writeHarnessStackOffset(
   return clamped;
 }
 
+export function thumbnailWorkAreaContains(
+  x: number,
+  y: number,
+  work: Pick<ThumbnailStackWorkArea, "x" | "y" | "width" | "height">,
+  margin = 0,
+): boolean {
+  return x >= work.x - margin
+    && x <= work.x + work.width + margin
+    && y >= work.y - margin
+    && y <= work.y + work.height + margin;
+}
+
 export function applyThumbnailStackDragSway(
   stack: HTMLElement | null,
   sway: ThumbnailStackPoint,
 ) {
   if (!stack) return;
-  stack.style.setProperty(THUMBNAIL_DRAG_SWAY_X_VAR, String(sway.x));
-  stack.style.setProperty(THUMBNAIL_DRAG_SWAY_Y_VAR, String(sway.y));
+  const x = String(sway.x);
+  const y = String(sway.y);
+  if (
+    stack.style.getPropertyValue(THUMBNAIL_DRAG_SWAY_X_VAR) === x
+    && stack.style.getPropertyValue(THUMBNAIL_DRAG_SWAY_Y_VAR) === y
+  ) {
+    return;
+  }
+  stack.style.setProperty(THUMBNAIL_DRAG_SWAY_X_VAR, x);
+  stack.style.setProperty(THUMBNAIL_DRAG_SWAY_Y_VAR, y);
 }
 
 export function clearThumbnailStackDragSway(stack: HTMLElement | null) {
