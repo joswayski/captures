@@ -1953,6 +1953,38 @@ describe("Thumbnail", () => {
     );
   });
 
+  it("pauses native hover polling during a pile drag and resumes on drop", async () => {
+    vi.useFakeTimers();
+    useArtifactFixture([artifact, secondArtifact]);
+    const invokeDefault = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation((command, args, options) => (
+      command === "get_thumbnail_pointer_position"
+        ? Promise.resolve({ x: 0, y: 0, inside: false })
+        : invokeDefault(command, args, options)
+    ));
+    render(<Thumbnail />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const polls = () => vi.mocked(invoke).mock.calls.filter(([command]) => command === "get_thumbnail_pointer_position").length;
+    fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32 + THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
+    });
+    expect(polls()).toBeGreaterThan(0);
+    const expand = screen.getByRole("button", { name: "Expand 2 previews" });
+    fireEvent.pointerDown(expand, { button: 0, pointerId: 1, screenX: 40, screenY: 400 });
+    fireEvent.pointerMove(window, { pointerId: 1, screenX: 120, screenY: 340 });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const stack = expand.closest(".thumbnail-stack")!;
+    expect(stack).toHaveClass("thumbnail-stack-dragging");
+    const before = polls();
+    await act(async () => { await vi.advanceTimersByTimeAsync(320); });
+    expect(polls()).toBe(before);
+    fireEvent.pointerUp(window, { pointerId: 1 });
+    await act(async () => { await vi.advanceTimersByTimeAsync(80); });
+    expect(stack).not.toHaveClass("thumbnail-stack-dragging");
+    expect(polls()).toBeGreaterThan(before);
+  });
+
   it("does not turn a press during drop settlement into an expand click", async () => {
     useArtifactFixture([artifact, secondArtifact]);
     render(<Thumbnail />);

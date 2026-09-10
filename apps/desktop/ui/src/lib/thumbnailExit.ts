@@ -131,8 +131,8 @@ export function coverBackgroundLayout(
  * Delay starts at the trash button and expands radially; after the front
  * leaves the origin, delays get progressively more irregular so the wave
  * reads organic instead of a perfect circle.
- * Uses CSS background-position (not canvas) so custom-protocol previews work
- * without tainting or pixel-read restrictions.
+ * Supplies matching source coordinates to the canvas and CSS-background
+ * renderers; neither renderer reads capture pixels.
  *
  * Every grid cell is retained. Rendering each cell as a clipped slice of one
  * full-size rounded surface preserves the exact corner arc without removing
@@ -323,14 +323,11 @@ export const THUMBNAIL_DUST_EASE = {
   y2: 1,
 } as const;
 
-/** Same filter as `.thumbnail-dust` so the canvas path matches the DOM fallback. */
-export const THUMBNAIL_DUST_FILTER = "blur(2px) brightness(0.5)";
-
 /**
- * Extra source pixels so a 2px Gaussian blur is not clipped at the card edge
- * before chips are sliced.
+ * Transparent padding around each prefiltered chip. Blur is applied after
+ * slicing, like CSS overflow + filter, so flying fragments keep soft edges.
  */
-const THUMBNAIL_DUST_SOURCE_BLUR_PAD_PX = 8;
+const THUMBNAIL_DUST_CHIP_BLUR_PAD_PX = 8;
 
 const THUMBNAIL_DUST_TRANSFORM_LIFT_AT = 0.14;
 const THUMBNAIL_DUST_OPACITY_KEYS = [
@@ -467,10 +464,9 @@ export function resetThumbnailDustCanvasPaintCache(): void {
 }
 
 /**
- * True when this document can display a 2D canvas. jsdom's stub context does
- * not round-trip pixels, so delete still mounts the DOM-chip fallback there.
- * A later production canvas may be tainted by `captures-capture://`; that is
- * fine because we only paint, never read back.
+ * Require the actual blur/brightness operation, not just a drawable canvas.
+ * WKWebView can paint pixels while Canvas 2D filters are unavailable/disabled.
+ * Probe only synthetic pixels: custom-protocol capture bitmaps are never read.
  */
 export function thumbnailDustCanvasIsPaintable(): boolean {
   if (cachedDustCanvasPaintable !== null) return cachedDustCanvasPaintable;
@@ -480,17 +476,20 @@ export function thumbnailDustCanvasIsPaintable(): boolean {
   }
   try {
     const probe = document.createElement("canvas");
-    probe.width = 2;
-    probe.height = 2;
+    probe.width = 8;
+    probe.height = 8;
     const context = probe.getContext("2d");
-    if (!context || typeof context.drawImage !== "function") {
+    if (!context || !("filter" in context) || typeof context.roundRect !== "function") {
       cachedDustCanvasPaintable = false;
       return false;
     }
-    context.fillStyle = "#010203";
-    context.fillRect(0, 0, 2, 2);
-    const pixel = context.getImageData(0, 0, 1, 1).data;
-    cachedDustCanvasPaintable = pixel[0] === 1 && pixel[1] === 2 && pixel[2] === 3;
+    context.filter = "blur(1px) brightness(0.5)";
+    context.fillStyle = "white";
+    context.fillRect(2, 2, 4, 4);
+    const center = context.getImageData(3, 3, 1, 1).data;
+    const edge = context.getImageData(1, 3, 1, 1).data;
+    cachedDustCanvasPaintable = center[0] >= 125 && center[0] <= 129
+      && edge[3] > 0 && edge[3] < center[3];
   } catch {
     cachedDustCanvasPaintable = false;
   }
@@ -507,50 +506,6 @@ function dustSourceIsReady(image: CanvasImageSource): boolean {
   return true;
 }
 
-function clipDustSourceRoundedRect(
-  context: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  radius: number,
-) {
-  const nextRadius = Math.max(0, Math.min(radius, width / 2, height / 2));
-  context.beginPath();
-  if (typeof context.roundRect === "function") {
-    context.roundRect(x, y, width, height, nextRadius);
-  } else {
-    context.rect(x, y, width, height);
-  }
-  context.clip();
-}
-
-function paintThumbnailDustSource(
-  context: CanvasRenderingContext2D,
-  image: CanvasImageSource,
-  particle: ThumbnailDustParticle,
-  blurPad: number,
-) {
-  context.save();
-  clipDustSourceRoundedRect(
-    context,
-    blurPad,
-    blurPad,
-    particle.cardWidth,
-    particle.cardHeight,
-    THUMBNAIL_CARD_BORDER_RADIUS_PX,
-  );
-  context.filter = THUMBNAIL_DUST_FILTER;
-  context.drawImage(
-    image,
-    blurPad + particle.surfaceOffsetX,
-    blurPad + particle.surfaceOffsetY,
-    particle.surfaceWidth,
-    particle.surfaceHeight,
-  );
-  context.restore();
-}
-
 function devicePixelRatioNow(): number {
   if (typeof window === "undefined" || !Number.isFinite(window.devicePixelRatio)) {
     return 1;
@@ -561,8 +516,9 @@ function devicePixelRatioNow(): number {
 /**
  * Paint the dissolve on one canvas instead of hundreds of filter-animating
  * DOM chips. Custom-protocol previews may taint the bitmap; we never read
- * pixels from it. Returns `null` when this host cannot paint (jsdom, a
- * missing 2D context, or an unloaded image) so the caller can mount chips.
+ * pixels from it. Returns `null` when this host cannot paint (jsdom,
+ * missing filters/rounded clipping, or an unloaded image) so the caller can
+ * mount the unchanged DOM chips instead.
  */
 export function playThumbnailDustCanvas(
   canvas: HTMLCanvasElement,
@@ -583,7 +539,7 @@ export function playThumbnailDustCanvas(
   const sample = particles[0];
   if (!sample) return null;
   const pad = THUMBNAIL_DUST_LAYER_PAD_PX;
-  const blurPad = THUMBNAIL_DUST_SOURCE_BLUR_PAD_PX;
+  const blurPad = THUMBNAIL_DUST_CHIP_BLUR_PAD_PX;
   const cssWidth = sample.cardWidth + pad * 2;
   const cssHeight = sample.cardHeight + pad * 2;
   const dpr = devicePixelRatioNow();
@@ -593,22 +549,51 @@ export function playThumbnailDustCanvas(
   canvas.height = Math.max(1, Math.round(cssHeight * dpr));
 
   const source = document.createElement("canvas");
-  const sourceCssWidth = sample.cardWidth + blurPad * 2;
-  const sourceCssHeight = sample.cardHeight + blurPad * 2;
-  source.width = Math.max(1, Math.round(sourceCssWidth * dpr));
-  source.height = Math.max(1, Math.round(sourceCssHeight * dpr));
+  // Include transparent pixels beyond the far edge for the 0.55px chip overlap.
+  source.width = Math.ceil((sample.cardWidth + 1) * dpr);
+  source.height = Math.ceil((sample.cardHeight + 1) * dpr);
   const sourceContext = source.getContext("2d", { alpha: true });
   if (!sourceContext) return null;
-  sourceContext.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const tiles = document.createElement("canvas");
+  const columns = Math.ceil(Math.sqrt(particles.length));
+  const cellWidth = Math.ceil((Math.max(...particles.map((p) => p.width)) + blurPad * 2) * dpr);
+  const cellHeight = Math.ceil((Math.max(...particles.map((p) => p.height)) + blurPad * 2) * dpr);
+  tiles.width = columns * cellWidth;
+  tiles.height = Math.ceil(particles.length / columns) * cellHeight;
+  const tilesContext = tiles.getContext("2d", { alpha: true });
+  if (!tilesContext) return null;
+  const atlas = document.createElement("canvas");
+  atlas.width = tiles.width;
+  atlas.height = tiles.height;
+  const atlasContext = atlas.getContext("2d", { alpha: true });
+  if (!atlasContext) return null;
   try {
-    paintThumbnailDustSource(sourceContext, image, sample, blurPad);
+    sourceContext.setTransform(dpr, 0, 0, dpr, 0, 0);
+    sourceContext.beginPath();
+    sourceContext.roundRect(0, 0, sample.cardWidth, sample.cardHeight,
+      Math.min(THUMBNAIL_CARD_BORDER_RADIUS_PX, sample.cardWidth / 2, sample.cardHeight / 2));
+    sourceContext.clip();
+    sourceContext.drawImage(image, sample.surfaceOffsetX, sample.surfaceOffsetY,
+      sample.surfaceWidth, sample.surfaceHeight);
+
+    // Separate the sharp chips with transparent padding, then filter the atlas
+    // in one pass. Filtering each draw into a large canvas is far more costly.
+    particles.forEach((particle, index) => {
+      tilesContext.drawImage(source,
+        particle.sourceLeft * dpr, particle.sourceTop * dpr,
+        particle.width * dpr, particle.height * dpr,
+        (index % columns) * cellWidth + blurPad * dpr,
+        Math.floor(index / columns) * cellHeight + blurPad * dpr,
+        particle.width * dpr, particle.height * dpr);
+    });
+    // Canvas filters use backing pixels, unlike CSS filters.
+    atlasContext.filter = `blur(${2 * dpr}px) brightness(0.5)`;
+    atlasContext.drawImage(tiles, 0, 0);
   } catch {
     // Custom-protocol images can throw on drawImage in some WebViews.
     return null;
   }
 
-  const sourceScaleX = source.width / sourceCssWidth;
-  const sourceScaleY = source.height / sourceCssHeight;
   const now = options.now ?? (() => performance.now());
   const frame = options.frame
     ?? ((callback: FrameRequestCallback) => requestAnimationFrame(callback));
@@ -620,23 +605,18 @@ export function playThumbnailDustCanvas(
 
   const paint = (time: number) => {
     if (stopped) return;
+    frameId = 0;
     const elapsedMs = Math.max(0, time - startedAt);
     context.setTransform(1, 0, 0, 1, 0, 0);
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     let stillRunning = false;
-    for (const particle of particles) {
+    for (let index = 0; index < particles.length; index += 1) {
+      const particle = particles[index];
       const visual = thumbnailDustVisualAt(particle, elapsedMs);
-      if (visual.opacity <= 0.004) {
-        if (elapsedMs < particle.delayMs + particle.durationMs) stillRunning = true;
-        continue;
-      }
-      stillRunning = stillRunning || elapsedMs < particle.delayMs + particle.durationMs;
-      const sampleLeft = Math.max(0, particle.sourceLeft);
-      const sampleTop = Math.max(0, particle.sourceTop);
-      const sampleWidth = Math.max(0.5, Math.min(particle.width, particle.cardWidth - sampleLeft + 0.55));
-      const sampleHeight = Math.max(0.5, Math.min(particle.height, particle.cardHeight - sampleTop + 0.55));
+      if (visual.opacity <= 0) continue;
+      stillRunning = true;
       context.save();
       context.globalAlpha = visual.opacity;
       context.translate(
@@ -646,15 +626,15 @@ export function playThumbnailDustCanvas(
       context.rotate(visual.rotate * (Math.PI / 180));
       context.scale(visual.scale, visual.scale);
       context.drawImage(
-        source,
-        (blurPad + sampleLeft) * sourceScaleX,
-        (blurPad + sampleTop) * sourceScaleY,
-        sampleWidth * sourceScaleX,
-        sampleHeight * sourceScaleY,
-        -particle.width / 2,
-        -particle.height / 2,
-        particle.width,
-        particle.height,
+        atlas,
+        (index % columns) * cellWidth,
+        Math.floor(index / columns) * cellHeight,
+        cellWidth,
+        cellHeight,
+        -particle.width / 2 - blurPad,
+        -particle.height / 2 - blurPad,
+        cellWidth / dpr,
+        cellHeight / dpr,
       );
       context.restore();
     }
@@ -664,7 +644,13 @@ export function playThumbnailDustCanvas(
     }
   };
 
-  frameId = frame(paint);
+  // Paint before the source image begins fading, and catch first-paint failures
+  // while the caller can still select the DOM fallback.
+  try {
+    paint(startedAt);
+  } catch {
+    return null;
+  }
   return () => {
     stopped = true;
     if (frameId !== 0) cancelFrame(frameId);

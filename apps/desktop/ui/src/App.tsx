@@ -8366,9 +8366,6 @@ export function ThumbnailCard({
           ref={dustLayerRef}
           className="thumbnail-dust-layer"
           aria-hidden="true"
-          style={dustDomFallback
-            ? { "--dust-preview": cssUrl(artifact.preview_url) } as CSSProperties
-            : undefined}
         >
           {dustDomFallback ? dustParticles.map((particle) => (
             <span
