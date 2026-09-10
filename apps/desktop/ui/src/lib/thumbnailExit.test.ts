@@ -291,6 +291,14 @@ describe("thumbnail exit effects", () => {
     const stop = playThumbnailDustAnimations(chips, particles);
     expect(animateCalls).toHaveLength(particles.length);
 
+    // A paint-triggering property here multiplies work by ~200 chips/frame.
+    for (const call of animateCalls) {
+      for (const frame of call.keyframes) {
+        expect(Object.keys(frame).every((key) => ["opacity", "transform", "offset"].includes(key)))
+          .toBe(true);
+      }
+    }
+
     const first = animateCalls[0];
     expect(first.options.delay).toBe(particles[0].delayMs);
     expect(first.options.duration).toBe(particles[0].durationMs);

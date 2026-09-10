@@ -1011,6 +1011,21 @@ describe("ThumbnailCard", () => {
     });
   });
 
+  it("keeps dust image URLs with parentheses valid in CSS", () => {
+    const previewUrl = "captures-capture://artifact/capture(1)";
+    render(
+      <ThumbnailCard
+        artifact={{ ...artifact(null), preview_url: previewUrl }}
+        clipboardCurrent={false}
+        viewerActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
+    act(() => screen.getByRole("button", { name: "Delete" }).click());
+    const surface = screen.getByRole("article").querySelector<HTMLElement>(".thumbnail-dust-surface")!;
+    expect(surface.style.backgroundImage).toBe('url("captures-capture://artifact/capture(1)")');
+  });
+
   it("finishes deletion if the webview never dispatches animationend", async () => {
     vi.useFakeTimers();
     const onRemoved = vi.fn();

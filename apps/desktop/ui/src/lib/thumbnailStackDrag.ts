@@ -25,6 +25,10 @@ const THUMBNAIL_STACK_DRAG_SWAY_DEFAULT_DT_MS = 16;
 /** Ignore huge pauses so a backgrounded tab cannot snap the pile. */
 const THUMBNAIL_STACK_DRAG_SWAY_MAX_DT_MS = 48;
 
+/** Stop repainting once the remaining pose is well below a visible subpixel. */
+const THUMBNAIL_STACK_DRAG_SWAY_POSITION_EPSILON_PX = 0.001;
+const THUMBNAIL_STACK_DRAG_SWAY_VELOCITY_EPSILON_PX_PER_SECOND = 0.01;
+
 /** Harness-only: CSS translation of `#root` from its default bottom-left strip. */
 export const THUMBNAIL_HARNESS_DRAG_X_VAR = "--thumbnail-stack-drag-x";
 export const THUMBNAIL_HARNESS_DRAG_Y_VAR = "--thumbnail-stack-drag-y";
@@ -544,7 +548,7 @@ export class CollapsedThumbnailStackDrag {
   }
 
   private startSwayLoop() {
-    if (this.swayRaf !== 0 || !this.host.onSway) return;
+    if (this.swayRaf !== 0 || !this.host.onSway || this.host.reducedMotion()) return;
     const step = (now: number) => {
       if (this.pointerId === null || !this.dragging) {
         this.swayRaf = 0;
@@ -556,9 +560,27 @@ export class CollapsedThumbnailStackDrag {
         this.tickSway(now, 0, 0);
         this.host.onSway?.(this.sway);
       }
+      if (this.swayIsSettled()) {
+        this.sway = { x: 0, y: 0 };
+        this.swayVelocity = { x: 0, y: 0 };
+        this.swayDrive = { x: 0, y: 0 };
+        this.lastTickMs = 0;
+        this.swayRaf = 0;
+        this.host.onSway?.(this.sway);
+        return;
+      }
       this.swayRaf = requestAnimationFrame(step);
     };
     this.swayRaf = requestAnimationFrame(step);
+  }
+
+  private swayIsSettled(): boolean {
+    return Math.abs(this.sway.x) <= THUMBNAIL_STACK_DRAG_SWAY_POSITION_EPSILON_PX
+      && Math.abs(this.sway.y) <= THUMBNAIL_STACK_DRAG_SWAY_POSITION_EPSILON_PX
+      && Math.abs(this.swayDrive.x) <= THUMBNAIL_STACK_DRAG_SWAY_POSITION_EPSILON_PX
+      && Math.abs(this.swayDrive.y) <= THUMBNAIL_STACK_DRAG_SWAY_POSITION_EPSILON_PX
+      && Math.abs(this.swayVelocity.x) <= THUMBNAIL_STACK_DRAG_SWAY_VELOCITY_EPSILON_PX_PER_SECOND
+      && Math.abs(this.swayVelocity.y) <= THUMBNAIL_STACK_DRAG_SWAY_VELOCITY_EPSILON_PX_PER_SECOND;
   }
 
   private stopSwayLoop() {

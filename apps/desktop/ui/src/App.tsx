@@ -8388,6 +8388,7 @@ export function ThumbnailCard({
                   top: -particle.sourceTop,
                   width: particle.cardWidth,
                   height: particle.cardHeight,
+                  backgroundImage: cssUrl(artifact.preview_url),
                   backgroundSize: `${particle.surfaceWidth}px ${particle.surfaceHeight}px`,
                   backgroundPosition: `${particle.surfaceOffsetX}px ${particle.surfaceOffsetY}px`,
                 }}

@@ -1314,26 +1314,15 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
   };
 
   const observer = new MutationObserver((records) => {
-    for (const record of records) {
-      if (record.type === "childList") {
-        // Cards are direct children. Ignore dust-chip and chrome subtree noise.
-        if (record.target === stack) {
-          queueApply();
-          return;
-        }
-        continue;
-      }
-      if (record.type !== "attributes") continue;
-      const target = record.target;
-      if (!(target instanceof HTMLElement)) continue;
-      if (
-        target === stack
-        || target.classList.contains("thumbnail-card")
-      ) {
-        queueApply();
-        return;
-      }
-    }
+    // Only stack membership/mode and direct card classes affect held slots.
+    // Dust, hover controls, and editor labels mutate below cards without
+    // changing layout; don't rescan every card for those updates.
+    if (records.some(({ target, type }) => target === stack || (
+      type === "attributes"
+      && target instanceof HTMLElement
+      && target.parentElement === stack
+      && target.classList.contains("thumbnail-card")
+    ))) queueApply();
   });
   observer.observe(stack, {
     childList: true,

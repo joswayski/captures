@@ -265,18 +265,19 @@ export function playThumbnailDustAnimations(
     // Some jsdom/test environments stub Element.animate.
     if (typeof chip.animate !== "function") continue;
 
+    // Keep flight compositor-only. Interpolating a tiny box-shadow on every
+    // chip repaints the filtered image slices every frame; the existing blur
+    // and opacity already soften their edges without that extra paint work.
     const animation = chip.animate(
       [
         {
           opacity: 1,
           transform: "translate3d(0, 0, 0) rotate(0deg) scale(1)",
-          boxShadow: "none",
           offset: 0,
         },
         {
           opacity: 1,
           transform: `translate3d(${particle.dx * 0.06}px, ${particle.dy * 0.06}px, 0) rotate(${particle.rotate * 0.08}deg) scale(0.98)`,
-          boxShadow: "0 0 0 0.5px rgba(0, 0, 0, .08), 0 1px 3px rgba(0, 0, 0, .14)",
           offset: 0.14,
         },
         {
@@ -290,7 +291,6 @@ export function playThumbnailDustAnimations(
         {
           opacity: 0,
           transform: `translate3d(${particle.dx}px, ${particle.dy}px, 0) rotate(${particle.rotate}deg) scale(0.18)`,
-          boxShadow: "none",
           offset: 1,
         },
       ],

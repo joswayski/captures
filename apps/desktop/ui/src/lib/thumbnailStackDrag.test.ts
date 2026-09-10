@@ -26,6 +26,7 @@ import {
 } from "./thumbnailStackDrag";
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   document.documentElement.style.removeProperty(THUMBNAIL_HARNESS_DRAG_X_VAR);
   document.documentElement.style.removeProperty(THUMBNAIL_HARNESS_DRAG_Y_VAR);
   document.body.replaceChildren();
@@ -142,6 +143,29 @@ describe("harness stack offset", () => {
 });
 
 describe("CollapsedThumbnailStackDrag", () => {
+  function installFakeRaf() {
+    let nextId = 1;
+    const callbacks = new Map<number, FrameRequestCallback>();
+    const request = vi.fn((callback: FrameRequestCallback) => {
+      const id = nextId++;
+      callbacks.set(id, callback);
+      return id;
+    });
+    const cancel = vi.fn((id: number) => callbacks.delete(id));
+    vi.stubGlobal("requestAnimationFrame", request);
+    vi.stubGlobal("cancelAnimationFrame", cancel);
+    return {
+      request,
+      cancel,
+      get pending() { return callbacks.size; },
+      frame(now: number) {
+        const queued = [...callbacks.values()];
+        callbacks.clear();
+        queued.forEach((callback) => callback(now));
+      },
+    };
+  }
+
   it("keeps the session locked through anchor conversion and ignores duplicate releases", async () => {
     let finishSettlement!: () => void;
     const settled = new Promise<void>((resolve) => { finishSettlement = resolve; });
@@ -479,6 +503,77 @@ describe("CollapsedThumbnailStackDrag", () => {
     }
 
     expect(Math.abs(sways.at(-1)!.x)).toBeLessThan(Math.abs(carried));
+  });
+
+  it("stops sway frames after settling during a long stationary hold and restarts on movement", async () => {
+    const raf = installFakeRaf();
+    const sways: { x: number; y: number }[] = [];
+    let now = 0;
+    const drag = new CollapsedThumbnailStackDrag({
+      getFrame: () => ({ x: 0, y: 0 }),
+      moveFrame: (x, y) => ({ x, y }),
+      reducedMotion: () => false,
+      now: () => now,
+      onSway: (sway) => sways.push({ ...sway }),
+    });
+
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 0 });
+    now = 16;
+    await drag.pointerMove({ pointerId: 1, screenX: 20, screenY: -60 });
+    expect(sways.at(-1)!.x).toBeLessThan(0);
+    expect(sways.at(-1)!.y).toBeGreaterThan(0);
+    for (let frame = 0; frame < 1_000 && raf.pending > 0; frame += 1) {
+      now += 16;
+      raf.frame(now);
+    }
+
+    expect(raf.pending).toBe(0);
+    expect(sways.at(-1)).toEqual({ x: 0, y: 0 });
+    const settledRequests = raf.request.mock.calls.length;
+    now += 10_000;
+    expect(raf.request).toHaveBeenCalledTimes(settledRequests);
+
+    await drag.pointerMove({ pointerId: 1, screenX: 32, screenY: -78 });
+    expect(sways.at(-1)!.x).toBeLessThan(0);
+    expect(sways.at(-1)!.y).toBeGreaterThan(0);
+    expect(raf.pending).toBe(1);
+    expect(raf.request).toHaveBeenCalledTimes(settledRequests + 1);
+    await drag.pointerUp({ pointerId: 1 });
+  });
+
+  it("does not schedule sway frames when reduced motion is enabled", async () => {
+    const raf = installFakeRaf();
+    const onSway = vi.fn();
+    const drag = new CollapsedThumbnailStackDrag({
+      getFrame: () => ({ x: 0, y: 0 }),
+      moveFrame: (x, y) => ({ x, y }),
+      reducedMotion: () => true,
+      onSway,
+    });
+
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 0 });
+    const moved = await drag.pointerMove({ pointerId: 1, screenX: 20, screenY: 0 });
+    expect(moved?.sway).toEqual({ x: 0, y: 0 });
+    expect(onSway).toHaveBeenLastCalledWith({ x: 0, y: 0 });
+    expect(raf.request).not.toHaveBeenCalled();
+    await drag.pointerUp({ pointerId: 1 });
+  });
+
+  it("cancels a pending sway frame on release", async () => {
+    const raf = installFakeRaf();
+    const drag = new CollapsedThumbnailStackDrag({
+      getFrame: () => ({ x: 0, y: 0 }),
+      moveFrame: (x, y) => ({ x, y }),
+      reducedMotion: () => false,
+      onSway: vi.fn(),
+    });
+
+    drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 0 });
+    await drag.pointerMove({ pointerId: 1, screenX: 20, screenY: 0 });
+    expect(raf.pending).toBe(1);
+    await drag.pointerUp({ pointerId: 1 });
+    expect(raf.cancel).toHaveBeenCalledOnce();
+    expect(raf.pending).toBe(0);
   });
 
   it("gives a faster carry more trailing motion over the same time", async () => {
