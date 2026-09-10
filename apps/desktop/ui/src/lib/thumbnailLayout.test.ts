@@ -1338,6 +1338,43 @@ describe("thumbnail stack layout", () => {
     }
   });
 
+  it("ignores mutations inside cards but observes card exits and stack changes", async () => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    stack.innerHTML = '<article class="thumbnail-card"><button>Edit</button></article><article class="thumbnail-card"></article>';
+    const survivor = stack.children[0] as HTMLElement;
+    const exiting = stack.children[1] as HTMLElement;
+    const dispose = createThumbnailStackShiftController(stack);
+    const scans = vi.spyOn(stack, "querySelectorAll");
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      scans.mockClear();
+      survivor.querySelector("button")!.classList.add("hover");
+      survivor.append(document.createElement("span"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(scans).not.toHaveBeenCalled();
+
+      exiting.classList.add("thumbnail-exiting", "thumbnail-exit-delete", "thumbnail-exit-dust");
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
+      expect(survivor.style.translate).toBe(`0 ${THUMBNAIL_CARD_SLOT_PX}px`);
+
+      stack.classList.add("thumbnail-stack-anchor-top");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(survivor.style.translate).toBe("");
+
+      stack.classList.remove("thumbnail-stack-anchor-top");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(survivor.style.translate).toBe(`0 ${THUMBNAIL_CARD_SLOT_PX}px`);
+      exiting.remove();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(survivor.style.translate).toBe("");
+    } finally {
+      dispose();
+      scans.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("does not rewrite a settled shift class from its own mutation observer", async () => {
     vi.useFakeTimers();
     const originalMutationObserver = globalThis.MutationObserver;
@@ -1369,7 +1406,11 @@ describe("thumbnail stack layout", () => {
       const add = vi.spyOn(survivor.classList, "add");
       const callback = observer.callback;
       if (!callback) throw new Error("stack controller did not create a mutation observer");
-      callback([], {} as MutationObserver);
+      const mutations = new originalMutationObserver(() => undefined);
+      mutations.observe(survivor, { attributes: true });
+      survivor.setAttribute("class", survivor.className);
+      callback(mutations.takeRecords(), mutations);
+      mutations.disconnect();
       await Promise.resolve();
 
       expect(add).not.toHaveBeenCalled();
