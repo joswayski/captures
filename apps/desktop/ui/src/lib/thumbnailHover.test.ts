@@ -25,6 +25,7 @@ import {
   thumbnailNullPollNeedsDesktopInputRecovery,
   thumbnailStackHasLiveHitTarget,
   thumbnailStackHoldsCollapsedPose,
+  thumbnailStackIsDragging,
   thumbnailStackSuppressesCardHover,
   thumbnailUnknownPointerShouldIgnoreCursorEvents,
   THUMBNAIL_CARD_HOVER_LOCK_SLOP_PX,
@@ -1352,5 +1353,12 @@ describe("thumbnail card hover lock", () => {
     expect(document.querySelector(".thumbnail-stack"))
       .toHaveAttribute(THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE, "true");
     expect(thumbnailStackSuppressesCardHover()).toBe(true);
+  });
+
+  it("detects an in-progress collapsed pile drag", () => {
+    document.body.innerHTML = `<main class="thumbnail-stack thumbnail-stack-minimized"></main>`;
+    expect(thumbnailStackIsDragging()).toBe(false);
+    document.querySelector(".thumbnail-stack")!.classList.add("thumbnail-stack-dragging");
+    expect(thumbnailStackIsDragging()).toBe(true);
   });
 });

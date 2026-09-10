@@ -1,8 +1,11 @@
 import {
   buildThumbnailDustParticles,
   coverBackgroundLayout,
+  cubicBezierProgress,
   playThumbnailDustAnimations,
+  playThumbnailDustCanvas,
   prefersReducedMotion,
+  resetThumbnailDustCanvasPaintCache,
   THUMBNAIL_CARD_FALLBACK_HEIGHT,
   THUMBNAIL_CARD_FALLBACK_WIDTH,
   THUMBNAIL_DELETE_ORIGIN_X,
@@ -10,9 +13,15 @@ import {
   THUMBNAIL_DISSOLVE_WAVE_MS,
   THUMBNAIL_DUST_LAYER_PAD_PX,
   thumbnailDeleteOriginX,
+  thumbnailDustCanvasIsPaintable,
+  thumbnailDustVisualAt,
 } from "./thumbnailExit";
 
 const pad = THUMBNAIL_DUST_LAYER_PAD_PX;
+
+afterEach(() => {
+  resetThumbnailDustCanvasPaintCache();
+});
 
 describe("thumbnail exit effects", () => {
   it("mirrors delete dust origins with right-side controls", () => {
@@ -307,5 +316,61 @@ describe("thumbnail exit effects", () => {
     // @ts-expect-error intentional host probe
     plain.animate = undefined;
     expect(() => playThumbnailDustAnimations([plain], particles)).not.toThrow();
+  });
+
+  it("eases the dissolve clock with the same cubic-bezier as WAAPI", () => {
+    expect(cubicBezierProgress(0.28, 0, 0.12, 1, 0)).toBe(0);
+    expect(cubicBezierProgress(0.28, 0, 0.12, 1, 1)).toBe(1);
+    const mid = cubicBezierProgress(0.28, 0, 0.12, 1, 0.5);
+    expect(mid).toBeGreaterThan(0);
+    expect(mid).toBeLessThan(1);
+  });
+
+  it("keeps chips at rest until their delay, then fades them out by the duration", () => {
+    const [particle] = buildThumbnailDustParticles(80, 40, {
+      cols: 1,
+      rows: 1,
+      random: () => 0.5,
+      chromeLeadMs: 0,
+    });
+    const rest = thumbnailDustVisualAt(particle, particle.delayMs);
+    expect(rest.opacity).toBe(1);
+    expect(rest.dx).toBe(0);
+    expect(rest.dy).toBe(0);
+    expect(rest.scale).toBe(1);
+
+    const mid = thumbnailDustVisualAt(
+      particle,
+      particle.delayMs + particle.durationMs * 0.25,
+    );
+    expect(mid.opacity).toBeGreaterThan(0);
+    expect(mid.opacity).toBeLessThan(1);
+    expect(mid.dy).toBeLessThan(0);
+    expect(mid.scale).toBeLessThan(1);
+
+    const done = thumbnailDustVisualAt(
+      particle,
+      particle.delayMs + particle.durationMs,
+    );
+    expect(done.opacity).toBe(0);
+    expect(done.dx).toBeCloseTo(particle.dx);
+    expect(done.dy).toBeCloseTo(particle.dy);
+    expect(done.scale).toBeCloseTo(0.18);
+  });
+
+  it("does not start a canvas dissolve when this host cannot paint pixels", () => {
+    resetThumbnailDustCanvasPaintCache();
+    expect(thumbnailDustCanvasIsPaintable()).toBe(false);
+    const particles = buildThumbnailDustParticles(40, 20, {
+      cols: 1,
+      rows: 1,
+      random: () => 0.5,
+    });
+    const canvas = document.createElement("canvas");
+    const image = document.createElement("img");
+    Object.defineProperty(image, "complete", { value: true });
+    Object.defineProperty(image, "naturalWidth", { value: 40 });
+    Object.defineProperty(image, "naturalHeight", { value: 20 });
+    expect(playThumbnailDustCanvas(canvas, image, particles)).toBeNull();
   });
 });

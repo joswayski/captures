@@ -1549,7 +1549,8 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
  * Intentionally no CSS `filter` on this layer: a parent filter flattens chips
  * into one compositor surface and Windows WebView2 then often drops per-chip
  * transform animation, leaving only the opacity fade. Dim is applied per chip
- * instead, and flight is driven by the Web Animations API.
+ * (or baked into the canvas source) instead. Flight prefers one canvas; the
+ * DOM chips below are the fallback when a 2D context cannot paint.
  */
 .thumbnail-dust-layer {
   --dust-pad: 120px;
@@ -1567,16 +1568,25 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
   animation: thumbnail-dust-clip 2.55s cubic-bezier(0.33, 0, 0.2, 1) forwards;
 }
 
+.thumbnail-dust-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
 .thumbnail-dust {
   position: absolute;
   display: block;
   border-radius: 0;
   overflow: hidden;
+  contain: layout style;
   filter: blur(2px) brightness(0.5);
   opacity: 1;
   transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
   box-shadow: none;
-  will-change: transform, opacity;
   backface-visibility: hidden;
 }
 
@@ -1585,6 +1595,7 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
   display: block;
   overflow: hidden;
   border-radius: var(--dust-radius, 12px);
+  background-image: var(--dust-preview);
   background-repeat: no-repeat;
   pointer-events: none;
 }
@@ -2495,6 +2506,16 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
   display: none;
 }
 
+/*
+ * Compact cards never show Copy/Save/Close hover chrome (pointer-events are
+ * off and hover is suppressed). Skip painting that subtree while the pile
+ * is dragged or fanned so each frame is only the stacked screenshots.
+ */
+.thumbnail-stack-compact > .thumbnail-card :is(.thumbnail-top-actions, .thumbnail-main-actions) {
+  visibility: hidden;
+  content-visibility: hidden;
+}
+
 .thumbnail-collapsed-hit-target {
   --thumbnail-peek-up: max(
     0px,
@@ -2640,6 +2661,10 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
  * Skip a transform transition here so the lean can track the pointer;
  * dropping the dragging class lets hover-ready ease back to rest.
  */
+.thumbnail-stack-minimized.thumbnail-stack-dragging > .thumbnail-card {
+  will-change: transform;
+}
+
 .thumbnail-stack-minimized.thumbnail-stack-dragging.thumbnail-stack-drag-sway > .thumbnail-card {
   transition:
     box-shadow var(--dur-4) var(--ease-out);

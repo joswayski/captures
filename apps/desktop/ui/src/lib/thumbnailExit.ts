@@ -314,3 +314,359 @@ export function playThumbnailDustAnimations(
     }
   };
 }
+
+/** Matches `playThumbnailDustAnimations` / CSS `cubic-bezier(0.28, 0, 0.12, 1)`. */
+export const THUMBNAIL_DUST_EASE = {
+  x1: 0.28,
+  y1: 0,
+  x2: 0.12,
+  y2: 1,
+} as const;
+
+/** Same filter as `.thumbnail-dust` so the canvas path matches the DOM fallback. */
+export const THUMBNAIL_DUST_FILTER = "blur(2px) brightness(0.5)";
+
+/**
+ * Extra source pixels so a 2px Gaussian blur is not clipped at the card edge
+ * before chips are sliced.
+ */
+const THUMBNAIL_DUST_SOURCE_BLUR_PAD_PX = 8;
+
+const THUMBNAIL_DUST_TRANSFORM_LIFT_AT = 0.14;
+const THUMBNAIL_DUST_OPACITY_KEYS = [
+  { at: 0, value: 1 },
+  { at: THUMBNAIL_DUST_TRANSFORM_LIFT_AT, value: 1 },
+  { at: 0.5, value: 0.72 },
+  { at: 0.82, value: 0 },
+  { at: 1, value: 0 },
+] as const;
+
+export type ThumbnailDustVisual = {
+  opacity: number;
+  dx: number;
+  dy: number;
+  rotate: number;
+  scale: number;
+};
+
+function lerp(start: number, end: number, t: number): number {
+  return start + (end - start) * t;
+}
+
+function sampleCubicBezier(t: number, a: number, b: number): number {
+  const inverse = 1 - t;
+  return 3 * inverse * inverse * t * a + 3 * inverse * t * t * b + t * t * t;
+}
+
+function sampleCubicBezierDerivative(t: number, a: number, b: number): number {
+  const inverse = 1 - t;
+  return 3 * inverse * inverse * a + 6 * inverse * t * (b - a) + 3 * t * t * (1 - b);
+}
+
+/**
+ * CSS `cubic-bezier` y for x in [0, 1]. Newton with a binary-search fallback
+ * so a near-flat tangent cannot stall the dissolve clock.
+ */
+export function cubicBezierProgress(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  x: number,
+): number {
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+  let t = x;
+  for (let step = 0; step < 8; step += 1) {
+    const currentX = sampleCubicBezier(t, x1, x2);
+    const delta = currentX - x;
+    if (Math.abs(delta) < 1e-6) {
+      return sampleCubicBezier(t, y1, y2);
+    }
+    const derivative = sampleCubicBezierDerivative(t, x1, x2);
+    if (Math.abs(derivative) < 1e-6) break;
+    t = Math.min(1, Math.max(0, t - delta / derivative));
+  }
+  let low = 0;
+  let high = 1;
+  t = x;
+  for (let step = 0; step < 12; step += 1) {
+    const currentX = sampleCubicBezier(t, x1, x2);
+    if (currentX < x) low = t;
+    else high = t;
+    t = (low + high) / 2;
+  }
+  return sampleCubicBezier(t, y1, y2);
+}
+
+function lerpStepped(
+  keys: readonly { at: number; value: number }[],
+  t: number,
+): number {
+  const first = keys[0];
+  const last = keys[keys.length - 1];
+  if (!first || !last || t <= first.at) return first?.value ?? 0;
+  if (t >= last.at) return last.value;
+  for (let index = 1; index < keys.length; index += 1) {
+    const next = keys[index];
+    const previous = keys[index - 1];
+    if (!next || !previous || t > next.at) continue;
+    const span = next.at - previous.at;
+    return lerp(previous.value, next.value, span <= 0 ? 1 : (t - previous.at) / span);
+  }
+  return last.value;
+}
+
+/**
+ * Visual pose at `elapsedMs` from the dissolve start, matching the WAAPI
+ * keyframes (easing on the whole duration, then linear keyframe mix).
+ */
+export function thumbnailDustVisualAt(
+  particle: ThumbnailDustParticle,
+  elapsedMs: number,
+): ThumbnailDustVisual {
+  const localMs = elapsedMs - particle.delayMs;
+  if (localMs <= 0) {
+    return { opacity: 1, dx: 0, dy: 0, rotate: 0, scale: 1 };
+  }
+  const linear = Math.min(1, localMs / Math.max(1, particle.durationMs));
+  const t = cubicBezierProgress(
+    THUMBNAIL_DUST_EASE.x1,
+    THUMBNAIL_DUST_EASE.y1,
+    THUMBNAIL_DUST_EASE.x2,
+    THUMBNAIL_DUST_EASE.y2,
+    linear,
+  );
+  const opacity = lerpStepped(THUMBNAIL_DUST_OPACITY_KEYS, t);
+  const lift = THUMBNAIL_DUST_TRANSFORM_LIFT_AT;
+  if (t <= lift) {
+    const mix = lift <= 0 ? 1 : t / lift;
+    return {
+      opacity,
+      dx: lerp(0, particle.dx * 0.06, mix),
+      dy: lerp(0, particle.dy * 0.06, mix),
+      rotate: lerp(0, particle.rotate * 0.08, mix),
+      scale: lerp(1, 0.98, mix),
+    };
+  }
+  const mix = (t - lift) / (1 - lift);
+  return {
+    opacity,
+    dx: lerp(particle.dx * 0.06, particle.dx, mix),
+    dy: lerp(particle.dy * 0.06, particle.dy, mix),
+    rotate: lerp(particle.rotate * 0.08, particle.rotate, mix),
+    scale: lerp(0.98, 0.18, mix),
+  };
+}
+
+let cachedDustCanvasPaintable: boolean | null = null;
+
+/** Test hook so jsdom and real-canvas probes do not leak across cases. */
+export function resetThumbnailDustCanvasPaintCache(): void {
+  cachedDustCanvasPaintable = null;
+}
+
+/**
+ * True when this document can display a 2D canvas. jsdom's stub context does
+ * not round-trip pixels, so delete still mounts the DOM-chip fallback there.
+ * A later production canvas may be tainted by `captures-capture://`; that is
+ * fine because we only paint, never read back.
+ */
+export function thumbnailDustCanvasIsPaintable(): boolean {
+  if (cachedDustCanvasPaintable !== null) return cachedDustCanvasPaintable;
+  if (typeof document === "undefined") {
+    cachedDustCanvasPaintable = false;
+    return false;
+  }
+  try {
+    const probe = document.createElement("canvas");
+    probe.width = 2;
+    probe.height = 2;
+    const context = probe.getContext("2d");
+    if (!context || typeof context.drawImage !== "function") {
+      cachedDustCanvasPaintable = false;
+      return false;
+    }
+    context.fillStyle = "#010203";
+    context.fillRect(0, 0, 2, 2);
+    const pixel = context.getImageData(0, 0, 1, 1).data;
+    cachedDustCanvasPaintable = pixel[0] === 1 && pixel[1] === 2 && pixel[2] === 3;
+  } catch {
+    cachedDustCanvasPaintable = false;
+  }
+  return cachedDustCanvasPaintable;
+}
+
+function dustSourceIsReady(image: CanvasImageSource): boolean {
+  if (image instanceof HTMLImageElement) {
+    return image.complete && image.naturalWidth > 0 && image.naturalHeight > 0;
+  }
+  if (typeof HTMLCanvasElement !== "undefined" && image instanceof HTMLCanvasElement) {
+    return image.width > 0 && image.height > 0;
+  }
+  return true;
+}
+
+function clipDustSourceRoundedRect(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  const nextRadius = Math.max(0, Math.min(radius, width / 2, height / 2));
+  context.beginPath();
+  if (typeof context.roundRect === "function") {
+    context.roundRect(x, y, width, height, nextRadius);
+  } else {
+    context.rect(x, y, width, height);
+  }
+  context.clip();
+}
+
+function paintThumbnailDustSource(
+  context: CanvasRenderingContext2D,
+  image: CanvasImageSource,
+  particle: ThumbnailDustParticle,
+  blurPad: number,
+) {
+  context.save();
+  clipDustSourceRoundedRect(
+    context,
+    blurPad,
+    blurPad,
+    particle.cardWidth,
+    particle.cardHeight,
+    THUMBNAIL_CARD_BORDER_RADIUS_PX,
+  );
+  context.filter = THUMBNAIL_DUST_FILTER;
+  context.drawImage(
+    image,
+    blurPad + particle.surfaceOffsetX,
+    blurPad + particle.surfaceOffsetY,
+    particle.surfaceWidth,
+    particle.surfaceHeight,
+  );
+  context.restore();
+}
+
+function devicePixelRatioNow(): number {
+  if (typeof window === "undefined" || !Number.isFinite(window.devicePixelRatio)) {
+    return 1;
+  }
+  return Math.max(1, window.devicePixelRatio);
+}
+
+/**
+ * Paint the dissolve on one canvas instead of hundreds of filter-animating
+ * DOM chips. Custom-protocol previews may taint the bitmap; we never read
+ * pixels from it. Returns `null` when this host cannot paint (jsdom, a
+ * missing 2D context, or an unloaded image) so the caller can mount chips.
+ */
+export function playThumbnailDustCanvas(
+  canvas: HTMLCanvasElement,
+  image: CanvasImageSource,
+  particles: readonly ThumbnailDustParticle[],
+  options: {
+    now?: () => number;
+    frame?: (callback: FrameRequestCallback) => number;
+    cancelFrame?: (id: number) => void;
+  } = {},
+): (() => void) | null {
+  if (particles.length === 0 || !dustSourceIsReady(image) || !thumbnailDustCanvasIsPaintable()) {
+    return null;
+  }
+  const context = canvas.getContext("2d", { alpha: true });
+  if (!context) return null;
+
+  const sample = particles[0];
+  if (!sample) return null;
+  const pad = THUMBNAIL_DUST_LAYER_PAD_PX;
+  const blurPad = THUMBNAIL_DUST_SOURCE_BLUR_PAD_PX;
+  const cssWidth = sample.cardWidth + pad * 2;
+  const cssHeight = sample.cardHeight + pad * 2;
+  const dpr = devicePixelRatioNow();
+  canvas.style.width = `${cssWidth}px`;
+  canvas.style.height = `${cssHeight}px`;
+  canvas.width = Math.max(1, Math.round(cssWidth * dpr));
+  canvas.height = Math.max(1, Math.round(cssHeight * dpr));
+
+  const source = document.createElement("canvas");
+  const sourceCssWidth = sample.cardWidth + blurPad * 2;
+  const sourceCssHeight = sample.cardHeight + blurPad * 2;
+  source.width = Math.max(1, Math.round(sourceCssWidth * dpr));
+  source.height = Math.max(1, Math.round(sourceCssHeight * dpr));
+  const sourceContext = source.getContext("2d", { alpha: true });
+  if (!sourceContext) return null;
+  sourceContext.setTransform(dpr, 0, 0, dpr, 0, 0);
+  try {
+    paintThumbnailDustSource(sourceContext, image, sample, blurPad);
+  } catch {
+    // Custom-protocol images can throw on drawImage in some WebViews.
+    return null;
+  }
+
+  const sourceScaleX = source.width / sourceCssWidth;
+  const sourceScaleY = source.height / sourceCssHeight;
+  const now = options.now ?? (() => performance.now());
+  const frame = options.frame
+    ?? ((callback: FrameRequestCallback) => requestAnimationFrame(callback));
+  const cancelFrame = options.cancelFrame
+    ?? ((id: number) => cancelAnimationFrame(id));
+  const startedAt = now();
+  let frameId = 0;
+  let stopped = false;
+
+  const paint = (time: number) => {
+    if (stopped) return;
+    const elapsedMs = Math.max(0, time - startedAt);
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    let stillRunning = false;
+    for (const particle of particles) {
+      const visual = thumbnailDustVisualAt(particle, elapsedMs);
+      if (visual.opacity <= 0.004) {
+        if (elapsedMs < particle.delayMs + particle.durationMs) stillRunning = true;
+        continue;
+      }
+      stillRunning = stillRunning || elapsedMs < particle.delayMs + particle.durationMs;
+      const sampleLeft = Math.max(0, particle.sourceLeft);
+      const sampleTop = Math.max(0, particle.sourceTop);
+      const sampleWidth = Math.max(0.5, Math.min(particle.width, particle.cardWidth - sampleLeft + 0.55));
+      const sampleHeight = Math.max(0.5, Math.min(particle.height, particle.cardHeight - sampleTop + 0.55));
+      context.save();
+      context.globalAlpha = visual.opacity;
+      context.translate(
+        particle.left + particle.width / 2 + visual.dx,
+        particle.top + particle.height / 2 + visual.dy,
+      );
+      context.rotate(visual.rotate * (Math.PI / 180));
+      context.scale(visual.scale, visual.scale);
+      context.drawImage(
+        source,
+        (blurPad + sampleLeft) * sourceScaleX,
+        (blurPad + sampleTop) * sourceScaleY,
+        sampleWidth * sourceScaleX,
+        sampleHeight * sourceScaleY,
+        -particle.width / 2,
+        -particle.height / 2,
+        particle.width,
+        particle.height,
+      );
+      context.restore();
+    }
+
+    if (stillRunning) {
+      frameId = frame(paint);
+    }
+  };
+
+  frameId = frame(paint);
+  return () => {
+    stopped = true;
+    if (frameId !== 0) cancelFrame(frameId);
+  };
+}

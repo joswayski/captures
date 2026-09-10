@@ -403,14 +403,16 @@ export function applyThumbnailStackGravity(
 ) {
   if (!stack) return;
   const clamped = clampGravity(gravity);
-  stack.style.setProperty(
-    THUMBNAIL_STACK_GRAVITY_VAR,
-    String(Number(clamped.toFixed(4))),
-  );
-  stack.style.setProperty(
-    THUMBNAIL_STACK_CENTER_PROXIMITY_VAR,
-    String(Number((1 - Math.abs(clamped)).toFixed(4))),
-  );
+  const gravityText = String(Number(clamped.toFixed(4)));
+  const proximityText = String(Number((1 - Math.abs(clamped)).toFixed(4)));
+  if (
+    stack.style.getPropertyValue(THUMBNAIL_STACK_GRAVITY_VAR) === gravityText
+    && stack.style.getPropertyValue(THUMBNAIL_STACK_CENTER_PROXIMITY_VAR) === proximityText
+  ) {
+    return;
+  }
+  stack.style.setProperty(THUMBNAIL_STACK_GRAVITY_VAR, gravityText);
+  stack.style.setProperty(THUMBNAIL_STACK_CENTER_PROXIMITY_VAR, proximityText);
 }
 
 export type ThumbnailStackWorkGravity = {
@@ -1311,7 +1313,28 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
     });
   };
 
-  const observer = new MutationObserver(queueApply);
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      if (record.type === "childList") {
+        // Cards are direct children. Ignore dust-chip and chrome subtree noise.
+        if (record.target === stack) {
+          queueApply();
+          return;
+        }
+        continue;
+      }
+      if (record.type !== "attributes") continue;
+      const target = record.target;
+      if (!(target instanceof HTMLElement)) continue;
+      if (
+        target === stack
+        || target.classList.contains("thumbnail-card")
+      ) {
+        queueApply();
+        return;
+      }
+    }
+  });
   observer.observe(stack, {
     childList: true,
     subtree: true,

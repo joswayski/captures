@@ -120,6 +120,7 @@ import {
   thumbnailNullPollNeedsDesktopInputRecovery,
   thumbnailStackHasLiveHitTarget,
   thumbnailStackHoldsCollapsedPose,
+  thumbnailStackIsDragging,
   thumbnailUnknownPointerShouldIgnoreCursorEvents,
   withThumbnailPointerTimeout,
   THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS,
@@ -129,6 +130,7 @@ import {
 import {
   buildThumbnailDustParticles,
   playThumbnailDustAnimations,
+  playThumbnailDustCanvas,
   prefersReducedMotion,
   THUMBNAIL_CARD_FALLBACK_HEIGHT,
   THUMBNAIL_CARD_FALLBACK_WIDTH,
@@ -153,6 +155,7 @@ import {
   setThumbnailStackDragging,
   setThumbnailStackPressing,
   thumbnailStackMeasuredFrameHeight,
+  thumbnailWorkAreaContains,
   writeHarnessStackOffset,
 } from "./lib/thumbnailStackDrag";
 import {
@@ -6200,6 +6203,13 @@ export function Thumbnail() {
   const stackRef = useRef<HTMLElement>(null);
   const stackDrag = useRef<CollapsedThumbnailStackDrag | null>(null);
   const collapsedContentYRef = useRef<number | null>(null);
+  const collapsedDragGeometryRef = useRef<{
+    contentHeight: number;
+    frameHeight: number;
+    work: { x: number; y: number; width: number; height: number; bottomGap: number };
+    workTop: number;
+    workHeight: number;
+  } | null>(null);
   // The browser harness emulates the native collapsed frame's fixed origin.
   const harnessCollapsedLayout = useRef({ fixed: false, padding: THUMBNAIL_STACK_CONTROL_GUTTER_PX });
   const collapsedStackPointerCleanup = useRef<(() => void) | null>(null);
@@ -6735,7 +6745,7 @@ export function Thumbnail() {
       // A live card somewhere in a preserved-height window must not make the
       // empty chrome eat desktop input. Prefer pass-through until a poll proves
       // the pointer is on a card. An in-progress pile drag is the exception.
-      const dragging = Boolean(document.querySelector(".thumbnail-stack-dragging"));
+      const dragging = thumbnailStackIsDragging();
       setIgnoreCursorEvents(
         thumbnailUnknownPointerShouldIgnoreCursorEvents(dragging, pointerPollSupported)
           || !thumbnailStackHasLiveHitTarget(),
@@ -6865,7 +6875,7 @@ export function Thumbnail() {
       clearNativeClasses();
       clearThumbnailCssCursor();
       cursorKind = "default";
-      const dragging = Boolean(document.querySelector(".thumbnail-stack-dragging"));
+      const dragging = thumbnailStackIsDragging();
       if (!thumbnailStackHasLiveHitTarget()) {
         // Exiting-only stacks must stay click-through. Re-arming here would
         // undo the Close/Delete pass-through for ~3s on Windows/Linux.
@@ -6892,43 +6902,49 @@ export function Thumbnail() {
       let delay = 250;
       let recovered = false;
       try {
-        // Timeout so a hung IPC after sleep cannot leave `polling` stuck true.
-        const position = await withThumbnailPointerTimeout(
-          invoke<ThumbnailPointerPosition | null>("get_thumbnail_pointer_position"),
-        );
-        if (cancelled || generation !== pointerPollGeneration) return;
-        if (!position) {
-          consecutiveNullPolls += 1;
-          if (!thumbnailStackHasLiveHitTarget()) {
-            setIgnoreCursorEvents(true);
-            delay = 40;
-          } else {
-            // Wayland (and hung IPC) can still return null. Recover only when
-            // the tall window is still eating desktop events, or native hover
-            // tracking is stuck. Click-through with an unknown pointer is safe
-            // and must not loop recover. Exiting stacks stay click-through.
-            const needsRecovery = thumbnailNullPollNeedsDesktopInputRecovery(
-              ignoringCursorEvents,
-              document.documentElement.classList.contains("thumbnail-native-tracking"),
-              pointerPollSupported,
-            );
-            if (
-              needsRecovery
-              && shouldRecoverThumbnailAfterNullPolls(consecutiveNullPolls)
-            ) {
-              recovered = true;
-              recoverInteractivity();
-              return;
+        if (thumbnailStackIsDragging()) {
+          // Window moves already run through pointer events. Skip native
+          // pointer IPC so drag samples are not queued behind hover polls.
+          delay = 80;
+        } else {
+          // Timeout so a hung IPC after sleep cannot leave `polling` stuck true.
+          const position = await withThumbnailPointerTimeout(
+            invoke<ThumbnailPointerPosition | null>("get_thumbnail_pointer_position"),
+          );
+          if (cancelled || generation !== pointerPollGeneration) return;
+          if (!position) {
+            consecutiveNullPolls += 1;
+            if (!thumbnailStackHasLiveHitTarget()) {
+              setIgnoreCursorEvents(true);
+              delay = 40;
+            } else {
+              // Wayland (and hung IPC) can still return null. Recover only when
+              // the tall window is still eating desktop events, or native hover
+              // tracking is stuck. Click-through with an unknown pointer is safe
+              // and must not loop recover. Exiting stacks stay click-through.
+              const needsRecovery = thumbnailNullPollNeedsDesktopInputRecovery(
+                ignoringCursorEvents,
+                document.documentElement.classList.contains("thumbnail-native-tracking"),
+                pointerPollSupported,
+              );
+              if (
+                needsRecovery
+                && shouldRecoverThumbnailAfterNullPolls(consecutiveNullPolls)
+              ) {
+                recovered = true;
+                recoverInteractivity();
+                return;
+              }
+              // A focus handoff can briefly make the native pointer query
+              // unavailable. Preserve the last presentation until a real sample
+              // confirms that the pointer moved away so the card cannot flash.
+              delay = 40;
             }
-            // A focus handoff can briefly make the native pointer query
-            // unavailable. Preserve the last presentation until a real sample
-            // confirms that the pointer moved away so the card cannot flash.
+          } else {
+            consecutiveNullPolls = 0;
+            applyNativeHover(position);
             delay = 40;
           }
-        } else {
-          consecutiveNullPolls = 0;
-          applyNativeHover(position);
-          delay = 40;
         }
       } catch {
         if (cancelled || generation !== pointerPollGeneration) return;
@@ -7027,6 +7043,7 @@ export function Thumbnail() {
     };
 
     const onPointerMove = (event: PointerEvent) => {
+      if (thumbnailStackIsDragging()) return;
       if (cardHoverLocked) {
         const wasLocked = cardHoverLocked;
         maybeUnlockCardHover(
@@ -7379,7 +7396,15 @@ export function Thumbnail() {
     );
     if (isTauri()) {
       try {
-        const { work, workTop, workHeight } = await collapsedNativeGeometry();
+        let geometry = collapsedDragGeometryRef.current;
+        if (
+          !geometry
+          || !thumbnailWorkAreaContains(x, y, geometry.work, 48)
+        ) {
+          geometry = await collapsedNativeGeometry();
+          collapsedDragGeometryRef.current = geometry;
+        }
+        const { work, workTop, workHeight } = geometry;
         const next = await invoke<{ x: number; y: number; contentY: number }>(
           "set_mini_preview_stack_position",
           { x, y, anchor },
@@ -7454,12 +7479,13 @@ export function Thumbnail() {
         if (currentWindow) {
           const scale = await currentWindow.scaleFactor();
           const position = await currentWindow.outerPosition();
-          const { frameHeight } = await collapsedNativeGeometry();
+          const geometry = await collapsedNativeGeometry();
+          collapsedDragGeometryRef.current = geometry;
           const padding = thumbnailCollapsedPadding(
             stackRef.current?.querySelectorAll(":scope > .thumbnail-card").length ?? 1,
           );
           const contentY = collapsedContentYRef.current
-            ?? frameHeight - padding - THUMBNAIL_CARD_HEIGHT_PX;
+            ?? geometry.frameHeight - padding - THUMBNAIL_CARD_HEIGHT_PX;
           return { x: position.x / scale, y: position.y / scale + contentY };
         }
         return readHarnessStackOffset();
@@ -7548,6 +7574,7 @@ export function Thumbnail() {
       void drag.pointerUp({ pointerId: upEvent.pointerId }).catch(() => "ignored" as const)
         .then((outcome) => {
           setThumbnailStackDragging(stackRef.current, false);
+          collapsedDragGeometryRef.current = null;
           window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
           if (options.expand !== false && outcome === "expand") setStackCollapsed(false);
         });
@@ -7817,6 +7844,8 @@ export function ThumbnailCard({
   const [dropRejected, setDropRejected] = useState(false);
   const [exit, setExit] = useState<"dismiss" | "delete" | null>(null);
   const [dustParticles, setDustParticles] = useState<ThumbnailDustParticle[] | null>(null);
+  /** jsdom / failed canvas paint mounts the per-chip DOM fallback. */
+  const [dustDomFallback, setDustDomFallback] = useState(false);
   /** Optimistically morph Edit into In editor while the native window opens. */
   const [editorOpening, setEditorOpening] = useState(false);
   /**
@@ -7870,6 +7899,7 @@ export function ThumbnailCard({
   } | null>(null);
   const cardRef = useRef<HTMLElement>(null);
   const dustLayerRef = useRef<HTMLDivElement>(null);
+  const dustCanvasRef = useRef<HTMLCanvasElement>(null);
   const fileDraggingRef = useRef(false);
   const exitAction = useRef<string | null>(null);
   /**
@@ -7958,15 +7988,25 @@ export function ThumbnailCard({
     return () => window.clearTimeout(timer);
   }, [editorPresenceLingering]);
 
-  // WAAPI chip flight — avoids CSS custom-property keyframes that WebView2 drops.
-  // Depend on `exit` too so the layer is mounted before we query chips.
-  useEffect(() => {
+  // Canvas flight when the host can paint; otherwise WAAPI on DOM chips.
+  // Layout so the first dissolve frame is already in motion, not a static grid.
+  useLayoutEffect(() => {
     if (exit !== "delete" || !dustParticles || dustParticles.length === 0) return;
     const layer = dustLayerRef.current;
     if (!layer) return;
+    if (!dustDomFallback) {
+      const canvas = dustCanvasRef.current;
+      const image = cardRef.current?.querySelector("img");
+      if (canvas && image) {
+        const stop = playThumbnailDustCanvas(canvas, image, dustParticles);
+        if (stop) return stop;
+      }
+      setDustDomFallback(true);
+      return;
+    }
     const chips = layer.querySelectorAll(".thumbnail-dust");
     return playThumbnailDustAnimations(chips, dustParticles);
-  }, [dustParticles, exit]);
+  }, [dustDomFallback, dustParticles, exit]);
 
   const showSavedFeedback = () => {
     if (isExitLocked()) return;
@@ -8135,6 +8175,7 @@ export function ThumbnailCard({
         setExit(null);
         setExitChrome(null);
         setDustParticles(null);
+        setDustDomFallback(false);
         setError(String(error));
         window.dispatchEvent(new Event(THUMBNAIL_HIT_TEST_CHANGED_EVENT));
         void invoke("refresh_thumbnail_interactivity").catch(() => undefined);
@@ -8180,6 +8221,7 @@ export function ThumbnailCard({
       }));
     } else {
       setDustParticles(null);
+      setDustDomFallback(false);
     }
     setExit(kind);
     // Re-run the native hit test after React marks this card non-interactive.
@@ -8320,8 +8362,15 @@ export function ThumbnailCard({
         />
       </div>
       {usingDust && (
-        <div ref={dustLayerRef} className="thumbnail-dust-layer" aria-hidden="true">
-          {dustParticles.map((particle) => (
+        <div
+          ref={dustLayerRef}
+          className="thumbnail-dust-layer"
+          aria-hidden="true"
+          style={dustDomFallback
+            ? { "--dust-preview": cssUrl(artifact.preview_url) } as CSSProperties
+            : undefined}
+        >
+          {dustDomFallback ? dustParticles.map((particle) => (
             <span
               key={particle.id}
               className="thumbnail-dust"
@@ -8339,13 +8388,14 @@ export function ThumbnailCard({
                   top: -particle.sourceTop,
                   width: particle.cardWidth,
                   height: particle.cardHeight,
-                  backgroundImage: `url(${JSON.stringify(artifact.preview_url).slice(1, -1)})`,
                   backgroundSize: `${particle.surfaceWidth}px ${particle.surfaceHeight}px`,
                   backgroundPosition: `${particle.surfaceOffsetX}px ${particle.surfaceOffsetY}px`,
                 }}
               />
             </span>
-          ))}
+          )) : (
+            <canvas ref={dustCanvasRef} className="thumbnail-dust-canvas" />
+          )}
         </div>
       )}
       <div className="thumbnail-top-actions">
