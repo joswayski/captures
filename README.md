@@ -171,9 +171,11 @@ and height stay proportional.
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for local setup, validation, and packaging.
-An isolated [native UI feasibility experiment](docs/native-ui-evaluation.md)
-compares Linux toolkit widgets with Tauri; it is not part of Preview and does not
-replace the cross-platform app.
+An isolated [Linux-native experiment](docs/linux-native-implementation.md) implements
+capture, animated mini previews, basic image/canvas editing, and recording with GTK
+instead of a webview. Its before/after comparisons, benchmarks, and remaining feature
+gaps are documented separately. It is X11-only, uses a separate capture library,
+and is not part of Preview or a replacement for the cross-platform app above.
 
 ## License and trademarks
 

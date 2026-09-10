@@ -114,17 +114,78 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 The [native UI evaluation](docs/native-ui-evaluation.md) explains the scope and
 limitations. The standalone `experiments/native-ui` workspace is not included in
-the normal gates, Preview packaging, or default Rust workspace. Build its two
-minimal Linux screenshot frontends with the usual Linux Tauri dependencies:
+the normal gates, Preview packaging, or default Rust workspace. It contains two
+minimal controls and the expanded `captures-linux-native` app. Build with the usual
+Linux Tauri dependencies and FFmpeg/ffprobe on PATH (the native app currently uses
+system media tools rather than the shipping app's packaged sidecars):
 
 ```sh
 CARGO_BUILD_JOBS=1 cargo build --release --locked --manifest-path experiments/native-ui/Cargo.toml
 cargo fmt --manifest-path experiments/native-ui/Cargo.toml -- --check
 CARGO_BUILD_JOBS=1 cargo test --release --locked --manifest-path experiments/native-ui/Cargo.toml
 CARGO_BUILD_JOBS=1 cargo clippy --release --locked --manifest-path experiments/native-ui/Cargo.toml --all-targets -- -D warnings
+experiments/native-ui/target/release/captures-linux-native
+# Original minimal controls, run separately:
 experiments/native-ui/target/release/captures-gtk-probe
 # Or, in a separate run:
 experiments/native-ui/target/release/captures-tauri-probe
+```
+
+The expanded app requires X11 and currently targets the primary display. See the
+[implementation and parity report](docs/linux-native-implementation.md) before
+using it for anything important. It has no tray, global shortcuts, installer, or
+updater. Close its main window to quit; finish/save editing and recording first.
+Its independent data directory is `$XDG_DATA_HOME/captures-linux-native` (normally
+`~/.local/share/captures-linux-native`). Override with `CAPTURES_NATIVE_DATA` for
+disposable runs. Settings and captures do not migrate from the Tauri application.
+Capture/export always creates new files; imported sources are not overwritten.
+Use `--open /absolute/file.png`, `--open /absolute/file.mp4`, `--preferences`,
+`--history`, or `--previews /absolute/a.png /absolute/b.png` to open a specific state.
+
+The expanded app's automated checks use a disposable X11 desktop, compositor,
+AT-SPI, and a test-only ScreenSaver DBus authority; the app itself still executes
+the real fail-closed session checks. Never run that fixture in your personal DBus
+session. `openbox`, `xcompmgr`, `python3-dbus`, `python3-gi`, `python3-pyatspi`,
+`xdotool`, `xvfb`, and `xauth` are included in orb setup; ImageMagick and FFmpeg are
+also required. Use `/usr/bin/python3` so it finds Debian's GI/AT-SPI modules.
+
+```sh
+# In an orb, keep the isolated desktop supervised:
+amp orb service start captures-native-lab --command 'dbus-run-session -- xvfb-run -a -s "-screen 0 1280x800x24" /usr/bin/python3 experiments/native-ui/native_desktop.py /tmp/captures-native-lab'
+/usr/bin/python3 experiments/native-ui/native_check.py \
+  --lab /tmp/captures-native-lab --artifacts .amp/in/artifacts/linux-native
+
+# Build the unchanged Tauri source app with its production assets first:
+npm run build --workspace @captures/desktop
+CARGO_BUILD_JOBS=1 cargo build --release --locked -p captures-desktop --bin captures \
+  --features tauri/custom-protocol --target-dir experiments/native-ui/target
+ffmpeg -y -loop 1 -i /tmp/captures-native-lab/fixture.png -t 4 \
+  -c:v libx264 -pix_fmt yuv420p /tmp/captures-native-lab/fixture.mp4
+
+# No builds, browser automation, or UI smoke tests concurrently with measurement.
+/usr/bin/python3 experiments/native-ui/native_comparison.py \
+  --lab /tmp/captures-native-lab --artifacts .amp/in/artifacts/linux-native \
+  > /tmp/linux-native-features.json
+```
+
+Inspect the measured Preferences/image-editor images before accepting the numbers.
+The timing is **first mapped window, not UI/content readiness**. Raw samples cover
+unequal feature completeness; they do not establish recording or energy gains.
+`--inspect` also captures the video editor, which is excluded from the measured
+states because the actual Tauri player could not decode the fixture in this orb.
+
+To reproduce the labelled review gallery, capture `before-*.png` from the dev
+harness: `recording-selector` for menu/region/window (set `target`, drag/select as
+appropriate), `thumbnail` for expanded/collapsed previews (wait for the transition),
+`recording-hud` for controls, `history`, and
+`recording-editor&artifact_id=recording-1` with the local sample clip decoded.
+Use `mock=1&stage=1&platform=linux`. Preferences and image-editor comparisons use
+the actual-app captures from `native_comparison.py`, not the browser harness.
+
+```sh
+/usr/bin/python3 experiments/native-ui/native_gallery.py \
+  --artifacts .amp/in/artifacts/linux-native --output .amp/in/artifacts/linux-native-review
+amp orb service start captures-native-review --command 'python3 -m http.server "$PORT" --bind 0.0.0.0 --directory .amp/in/artifacts/linux-native-review' --portal
 ```
 
 Capture includes the probe window. **Save PNG** creates numbered files in

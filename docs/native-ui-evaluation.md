@@ -3,6 +3,13 @@
 This is an experimental feasibility study, not a replacement for Captures Preview
 or a commitment to ship a native frontend. The shipping application is unchanged.
 
+**Historical baseline:** the 46 ms / 18.6 MiB numbers below describe the original
+minimal screenshot probe, not a complete native Captures. The subsequent
+[Linux-native implementation report](linux-native-implementation.md) covers the
+expanded app, feature-by-feature screenshots, new measurements against the actual
+Tauri application, and explicit parity gaps. The user's Linux-first evaluation
+supersedes this study's original macOS-first recommendation.
+
 ## What “native” would change
 
 Captures is already a compiled Rust desktop application using native capture APIs.

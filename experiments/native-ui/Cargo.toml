@@ -9,8 +9,13 @@ publish = false
 
 [dependencies]
 captures-capture = { path = "../../crates/captures-capture" }
-image = { version = "0.25", default-features = false, features = ["png"] }
+captures-recording = { path = "../../crates/captures-recording" }
+captures-recording-xcap = { path = "../../crates/captures-recording-xcap" }
+captures-media = { path = "../../crates/captures-media" }
+captures-session = { path = "../../crates/captures-session" }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 base64 = "0.22"
 tauri = { version = "=2.11.5", features = ["custom-protocol"] }
 
@@ -30,6 +35,10 @@ path = "src/gtk.rs"
 [[bin]]
 name = "captures-tauri-probe"
 path = "src/tauri.rs"
+
+[[bin]]
+name = "captures-linux-native"
+path = "src/native.rs"
 
 [profile.release]
 strip = true
