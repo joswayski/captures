@@ -74,11 +74,13 @@ operation fields, units, ownership, cleanup and failure behavior.
 
 ## Before/after pictures and benchmarks
 
-No native macOS after picture or performance result was collected in the Linux
-orb. Browser harness screenshots are **before design references only**, not a
-native macOS baseline. Linux timings/RSS cannot establish macOS performance.
-The repository includes an executable Mac measurement procedure instead of
-invented numbers.
+PR CI renders actual SwiftUI/AppKit light and dark Preferences content at
+980 × 720 and uploads the PNGs as `captures-native-macos-references`. These are
+static layout references, not animation or capture tests. Browser harness
+screenshots are **before design references only**, not a native macOS baseline.
+No matched Mac performance results have been collected; Linux timings/RSS and
+CI build/test durations cannot establish app performance. The repository includes
+an executable Mac measurement procedure instead of invented numbers.
 
 Build both release apps. Use the same Mac, screen/scaling, window content size,
 appearance, fixture, audio sources and settings. Quit the other app before each

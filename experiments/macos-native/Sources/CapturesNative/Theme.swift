@@ -20,6 +20,10 @@ enum NativeTheme {
     static func metric(_ name: String) -> CGFloat {
         CGFloat(Double(value(name).replacingOccurrences(of: "px", with: "")) ?? 0)
     }
+    // Match the settings CSS's 52ch explanatory-copy measure in the native font.
+    static var settingsCopyWidth: CGFloat {
+        ("0" as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: metric("text-sm"))]).width * 52
+    }
     static func color(_ name: String, _ scheme: ColorScheme = .dark) -> Color { Color(css: value(name, scheme)) }
     static func canvas(_ scheme: ColorScheme) -> Color { color("surface-canvas", scheme) }
     static func raised(_ scheme: ColorScheme) -> Color { color("surface-raised", scheme) }
@@ -111,7 +115,9 @@ struct SectionTitle: View {
         VStack(alignment: .leading, spacing: NativeTheme.metric("s-2")) {
             Text(title).font(.system(size: NativeTheme.metric("text-lg"), weight: .semibold))
             if let subtitle { Text(subtitle).font(.system(size: NativeTheme.metric("text-sm")))
-                .foregroundColor(NativeTheme.muted(scheme)) }
+                .foregroundColor(NativeTheme.color("text-subtle", scheme))
+                .frame(maxWidth: NativeTheme.settingsCopyWidth, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true) }
         }
     }
 }

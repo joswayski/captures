@@ -29,6 +29,8 @@ struct PreferencesView: View {
                                 withAnimation(NativeTheme.motion) { proxy.scrollTo(section, anchor: .top) }
                             } label: {
                                 Text(section).frame(maxWidth: .infinity, alignment: .leading)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(NativeTheme.color(selected == section ? "text" : "text-subtle", scheme))
                                     .padding(.horizontal, NativeTheme.metric("s-4"))
                                     .frame(height: NativeTheme.metric("h-md"))
                                     .background(selected == section ? NativeTheme.color("surface-active", scheme) : .clear)
@@ -78,8 +80,8 @@ struct PreferencesView: View {
         HStack(spacing: NativeTheme.metric("s-6")) {
             VStack(alignment: .leading, spacing: NativeTheme.metric("s-1")) {
                 Text("Preferences").font(.system(size: NativeTheme.metric("text-xl"), weight: .semibold))
-                Text(store.saveStatus).font(.system(size: NativeTheme.metric("text-xs")))
-                    .foregroundColor(NativeTheme.muted(scheme))
+                Text(store.saveStatus).font(.system(size: NativeTheme.metric("text-sm")))
+                    .foregroundColor(NativeTheme.color("text-subtle", scheme))
             }
             Spacer()
             if finding || !query.isEmpty {
@@ -128,7 +130,10 @@ struct PreferencesView: View {
             VStack(alignment: .leading, spacing: NativeTheme.metric("s-4")) {
                 Text("Accent color").fontWeight(.medium)
                 Text("Used for the capture action, selection, and focus. Status colors keep their meaning.")
-                    .font(.system(size: NativeTheme.metric("text-sm"))).foregroundColor(NativeTheme.muted(scheme))
+                    .font(.system(size: NativeTheme.metric("text-sm")))
+                    .foregroundColor(NativeTheme.color("text-subtle", scheme))
+                    .frame(maxWidth: NativeTheme.settingsCopyWidth, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: NativeTheme.metric("s-2")), count: 5), spacing: NativeTheme.metric("s-2")) {
                     ForEach(["mustard", "ember", "rose", "violet", "cobalt", "aqua", "mint", "lime", "mono", "custom"], id: \.self) { name in
                         paletteButton(name)
@@ -291,7 +296,7 @@ struct PreferencesView: View {
         }.labelsHidden().frame(width: 140)
     }
     private func toggle(_ title: String, _ description: String, _ binding: Binding<Bool>) -> some View {
-        setting(title, description) { Toggle(title, isOn: binding).labelsHidden().toggleStyle(.switch) }
+        setting(title, description, copyWidth: nil) { Toggle(title, isOn: binding).labelsHidden().toggleStyle(.switch) }
     }
 
     private func paletteButton(_ name: String) -> some View {
@@ -318,7 +323,8 @@ struct PreferencesView: View {
                 Spacer(minLength: 0)
                 if store.settings.theme == name { Image(systemName: "checkmark").font(.system(size: NativeTheme.metric("text-2xs"))) }
             }.padding(NativeTheme.metric("s-3"))
-                .frame(maxWidth: .infinity, minHeight: NativeTheme.metric("h-md"), alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: NativeTheme.metric("h-md") + NativeTheme.metric("s-1"), alignment: .leading)
+                .foregroundColor(NativeTheme.color(store.settings.theme == name ? "text" : "text-muted", scheme))
                 .background(store.settings.theme == name ? NativeTheme.field(scheme) : .clear)
                 .cornerRadius(NativeTheme.metric("r-md"))
                 .overlay(RoundedRectangle(cornerRadius: NativeTheme.metric("r-md")).strokeBorder(store.settings.theme == name ? NativeTheme.border(scheme) : .clear))
@@ -326,12 +332,14 @@ struct PreferencesView: View {
             .accessibilityAddTraits(store.settings.theme == name ? .isSelected : [])
     }
 
-    private func setting<Control: View>(_ title: String, _ description: String = "", @ViewBuilder control: () -> Control) -> some View {
+    private func setting<Control: View>(_ title: String, _ description: String = "", copyWidth: CGFloat? = NativeTheme.settingsCopyWidth, @ViewBuilder control: () -> Control) -> some View {
         HStack(spacing: NativeTheme.metric("s-8")) {
             VStack(alignment: .leading, spacing: NativeTheme.metric("s-2")) {
                 Text(title).fontWeight(.medium)
                 if !description.isEmpty { Text(description).font(.system(size: NativeTheme.metric("text-sm")))
-                    .foregroundColor(NativeTheme.muted(scheme)).fixedSize(horizontal: false, vertical: true) }
+                    .foregroundColor(NativeTheme.color("text-subtle", scheme))
+                    .frame(maxWidth: copyWidth, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true) }
             }
             Spacer(minLength: 0)
             control().accessibilityLabel(title)

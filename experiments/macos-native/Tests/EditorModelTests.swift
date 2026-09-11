@@ -240,8 +240,6 @@ final class EditorModelTests: XCTestCase {
         let png = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
         let decoded = try decodePNG(png)
         XCTAssertEqual(try pixel(decoded, x: 0, y: 0), rgba, "Fixture after PNG encoding")
-        let appKit = try XCTUnwrap(NSBitmapImageRep(data: png))
-        print("Fixture \(rgba): CG space \(String(describing: decoded.colorSpace)); AppKit \(appKit.colorSpace); sampled \(String(describing: appKit.colorAt(x: 0, y: 0)?.usingColorSpace(.sRGB)))")
         return png
     }
 
