@@ -171,6 +171,12 @@ and height stay proportional.
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for local setup, validation, and packaging.
+An isolated [Linux-native experiment](docs/linux-native-implementation.md) implements
+capture, animated mini previews, layered image/canvas editing, recording and video
+editing with GTK instead of a webview. It also has native history, preferences,
+shortcuts and recording-draft recovery. Before/after comparisons, benchmarks, and
+remaining parity gaps are documented separately. It is X11-only, stores data separately,
+and is not part of Preview or a replacement for the cross-platform app above.
 
 ## License and trademarks
 

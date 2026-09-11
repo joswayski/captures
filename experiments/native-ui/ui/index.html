@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Captures UI probe</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <h1>Captures · Tauri webview experiment</h1>
+  <p>Display screenshot only. Includes this window. No recording or editor.</p>
+  <nav><button id="capture">Capture display</button><button id="save" disabled>Save PNG</button></nav>
+  <main><img id="preview" alt="Captured display preview" hidden></main>
+  <p id="status" role="status">Ready to capture</p>
+</body>
+</html>

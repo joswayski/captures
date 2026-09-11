@@ -1,0 +1,8 @@
+/* Match the probe's geometry, not production styling. GTK uses its OS theme. */
+body { margin: 24px; font: 14px system-ui, sans-serif; color: CanvasText; background: Canvas; }
+h1 { font-size: inherit; font-weight: normal; margin: 0 0 16px; }
+p { margin: 0 0 16px; }
+nav { display: flex; gap: 12px; }
+button { font: inherit; padding: 6px 12px; }
+main { display: flex; align-items: center; justify-content: center; height: 400px; }
+img { max-width: 720px; max-height: 360px; object-fit: contain; }

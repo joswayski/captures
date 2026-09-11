@@ -34,6 +34,15 @@ packages=(
   pkg-config
   postgresql
   wget
+  # Isolated X11 desktop and input automation for native UI experiments.
+  openbox
+  python3-dbus
+  python3-gi
+  python3-pyatspi
+  xauth
+  xcompmgr
+  xdotool
+  xvfb
   xz-utils
   yasm
   zlib1g-dev

@@ -1,0 +1,34 @@
+{
+  "state": "Current source app, empty Preferences, pre-created hidden webviews; disposable profile; outbound HTTP proxy unavailable; unpackaged",
+  "binary_sha256": "4f014f1565e17e05bb5002b5d65ea39da488af54dc9893342b9653123ecebf26",
+  "samples": [
+    {
+      "rss_mib": 1063.5625,
+      "pss_mib": 490.1669921875,
+      "private_mib": 355.2890625,
+      "processes": 6,
+      "idle_cpu_percent_one_core": 0.7996267383965648
+    },
+    {
+      "rss_mib": 1064.88671875,
+      "pss_mib": 490.32421875,
+      "private_mib": 355.28515625,
+      "processes": 6,
+      "idle_cpu_percent_one_core": 0.7995659604158338
+    },
+    {
+      "rss_mib": 1065.25,
+      "pss_mib": 491.564453125,
+      "private_mib": 356.36328125,
+      "processes": 6,
+      "idle_cpu_percent_one_core": 1.199371198225877
+    }
+  ],
+  "median": {
+    "rss_mib": 1064.88671875,
+    "pss_mib": 490.32421875,
+    "private_mib": 355.2890625,
+    "processes": 6,
+    "idle_cpu_percent_one_core": 0.7996267383965648
+  }
+}

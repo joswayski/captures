@@ -110,6 +110,167 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+### Optional native UI experiment
+
+The [native UI evaluation](docs/native-ui-evaluation.md) explains the scope and
+limitations. The standalone `experiments/native-ui` workspace is not included in
+the normal gates, Preview packaging, or default Rust workspace. It contains two
+minimal controls and the expanded `captures-linux-native` app. Build with the usual
+Linux Tauri dependencies and FFmpeg/ffprobe/ffplay on PATH (the native app currently uses
+system media tools rather than the shipping app's packaged sidecars):
+
+```sh
+CARGO_BUILD_JOBS=1 cargo build --release --locked --manifest-path experiments/native-ui/Cargo.toml
+cargo fmt --manifest-path experiments/native-ui/Cargo.toml -- --check
+CARGO_BUILD_JOBS=1 cargo test --release --locked --manifest-path experiments/native-ui/Cargo.toml
+CARGO_BUILD_JOBS=1 cargo clippy --release --locked --manifest-path experiments/native-ui/Cargo.toml --all-targets -- -D warnings
+experiments/native-ui/target/release/captures-linux-native
+# Original minimal controls, run separately:
+experiments/native-ui/target/release/captures-gtk-probe
+# Or, in a separate run:
+experiments/native-ui/target/release/captures-tauri-probe
+```
+
+The expanded app requires X11 and offers a display picker. See the
+[implementation and parity report](docs/linux-native-implementation.md) before
+using it for anything important. Tray, X11 global shortcuts, single-instance
+routing and opt-in login startup are implemented; installer and updater are not.
+Launch without arguments opens Preferences, as in the shipping app; there is no
+separate native launcher screen. Closing a window leaves the app running. Use
+**Quit Captures** in the tray menu to exit; finish/save recording first.
+Its independent data directory is `$XDG_DATA_HOME/captures-linux-native` (normally
+`~/.local/share/captures-linux-native`). Override with `CAPTURES_NATIVE_DATA` for
+disposable runs. Settings and captures do not migrate from the Tauri application.
+Capture/Export creates new files. The image editor's explicit **Save** overwrites
+the imported source; drafts automatically restore on reopening the same file.
+Recording crash drafts are offered for recovery at startup and from History.
+Use `--capture`, `--record`, or `--gif` for the shared target selector;
+`--open /absolute/file.png`, `--open /absolute/file.mp4`, `--preferences`,
+`--history`, or `--previews /absolute/a.png /absolute/b.png` for a specific window.
+`--canvas` opens the experiment's additional blank-canvas entry point.
+
+The expanded app's automated checks use a disposable X11 desktop, compositor,
+AT-SPI, and a test-only ScreenSaver DBus authority; the app itself still executes
+the real fail-closed session checks. Never run that fixture in your personal DBus
+session. `openbox`, `xcompmgr`, `python3-dbus`, `python3-gi`, `python3-pyatspi`,
+`xdotool`, `xvfb`, and `xauth` are included in orb setup; ImageMagick and FFmpeg are
+also required. Use `/usr/bin/python3` so it finds Debian's GI/AT-SPI modules.
+The lab extracts the neutral SVG from the React harness's `sampleCapture` and
+renders it through GdkPixbuf's SVG loader. Keep `apps/desktop/ui/src/dev/previewBackend.ts`
+with the experiment when transferring a worktree; no screenshot of existing app
+controls is used as the test image.
+
+```sh
+# In an orb, keep the isolated desktop supervised:
+amp orb service start captures-native-lab --command 'dbus-run-session -- xvfb-run -a -s "-screen 0 1280x800x24" /usr/bin/python3 experiments/native-ui/native_desktop.py /tmp/captures-native-lab'
+/usr/bin/python3 experiments/native-ui/native_check.py \
+  --lab /tmp/captures-native-lab --artifacts .amp/in/artifacts/linux-native-parity
+
+# The suite runs capture/preferences, image editor, previews, history and
+# recording checks sequentially. Audio tests need a disposable Pulse server
+# with a monitor source (export PULSE_SERVER to that server before running).
+# Individual checks also accept --lab/--artifacts; history_check needs only --lab.
+# preview_check additionally requires --binary /absolute/path/to/captures-linux-native.
+
+# Build the unchanged Tauri source app with its production assets first:
+npm run build --workspace @captures/desktop
+CARGO_BUILD_JOBS=1 cargo build --release --locked -p captures-desktop --bin captures \
+  --features tauri/custom-protocol --target-dir experiments/native-ui/target
+ffmpeg -nostdin -y -loop 1 -framerate 25 -i /tmp/captures-native-lab/fixture.png \
+  -frames:v 100 -threads 2 -c:v libx264 -pix_fmt yuv420p /tmp/captures-native-lab/fixture.mp4
+
+# No builds, browser automation, or UI smoke tests concurrently with measurement.
+/usr/bin/python3 experiments/native-ui/native_comparison.py \
+  --lab /tmp/captures-native-lab --artifacts .amp/in/artifacts/linux-native-parity \
+  > /tmp/linux-native-features.json
+```
+
+Inspect the measured Preferences/image-editor images before accepting the numbers.
+The timing is **first mapped window, not UI/content readiness**. Raw samples cover
+unequal feature completeness; they do not establish recording or energy gains.
+Memory/CPU samples use matched 980×720 Preferences and 1280×760 editor client areas,
+resized after the first-mapped-window timestamp and before the settling interval.
+The lab removes window-manager decoration constraints for both apps after mapping
+and checks capture dimensions; Openbox otherwise clips a full-width GTK client.
+`--inspect` also captures the video editor, which is excluded from the measured
+states because the actual Tauri player could not decode the fixture in this orb.
+The isolated compositor uses `xcompmgr -n`: alpha compositing without synthetic
+whole-window shadows. `xcompmgr -c` produced oversized rectangular shadows around
+otherwise transparent native overlays; GNOME/KDE compositor behavior needs its
+own verification. This setting applies equally to both measured applications.
+
+To reproduce the labelled review gallery, capture `before-*.png` from the dev
+harness: `recording-selector` for menu/region/window (set `target`, drag/select as
+appropriate), `thumbnail` for expanded/collapsed previews (340×760 CSS viewport at
+DPR 2; wait for the transition and capture both idle and hovered cards),
+`recording-hud` for controls, `history`, and
+`recording-editor&artifact_id=recording-1` with the local sample clip decoded.
+Use `mock=1&stage=1&platform=linux`. Preferences and image-editor comparisons use
+the actual-app captures from `native_comparison.py`, not the browser harness.
+
+```sh
+/usr/bin/python3 experiments/native-ui/native_gallery.py \
+  --artifacts .amp/in/artifacts/linux-native-parity \
+  --before-artifacts .amp/in/artifacts/linux-native \
+  --output .amp/in/artifacts/linux-native-review
+amp orb service start captures-native-review --command 'python3 -m http.server "$PORT" --bind 0.0.0.0 --directory .amp/in/artifacts/linux-native-review' --portal
+```
+
+Capture includes the probe window. **Save PNG** creates numbered files in
+`$TMPDIR/captures-ui-probe` (normally `/tmp/captures-ui-probe` on Linux); set
+`CAPTURES_PROBE_OUTPUT` to use another directory. These are disposable experimental
+captures, separate from Captures history. The GTK frontend is Linux-only; native
+macOS/Windows frontends are not implemented.
+
+For the reproducible Linux warm-launch/idle benchmark, install `xvfb`, `xauth`,
+and `xdotool` (included in orb setup) and use a disposable display/DBus session:
+
+```sh
+LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s '-screen 0 1280x800x24' \
+  dbus-run-session -- sh -c 'python3 experiments/native-ui/benchmark.py > /tmp/native-ui-results.json'
+```
+
+Redirect inside the DBus session as shown: accessibility-service diagnostics can
+otherwise mix with the JSON on the wrapper's stdout.
+
+Do not run builds or other CPU-heavy work during measurement. Results cover the
+two minimal shells, not the full React application. Keep the JSON's individual
+samples alongside any reported summary. See the evaluation for readiness
+milestones, memory accounting, and excluded costs.
+
+The real-window smoke test also requires ImageMagick (`import`, `identify`, and
+`convert`). It clicks Capture and Save, validates the PNG dimensions/content and
+repeat-save bytes, and captures empty, preview, saved, and save-error states:
+
+```sh
+LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s '-screen 0 1280x800x24' \
+  dbus-run-session -- python3 experiments/native-ui/smoke.py \
+  --artifacts .amp/in/artifacts/native-ui
+```
+
+Inspect the resulting images; saving screenshots alone does not verify rendering.
+The preview's black right/bottom areas are the empty Xvfb desktop, not corruption.
+
+For a separate current-app Preferences reference, build its embedded production
+UI, then run with disposable settings/history and an unavailable outbound HTTP
+proxy. **The `tauri/custom-protocol` feature is required when bypassing the Tauri
+CLI**; without it the app can point at its development URL even in a release build.
+
+```sh
+npm run build --workspace @captures/desktop
+CARGO_BUILD_JOBS=1 cargo build --release --locked -p captures-desktop --bin captures --features tauri/custom-protocol
+LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s '-screen 0 1280x800x24' \
+  dbus-run-session -- sh -c 'python3 experiments/native-ui/production_reference.py \
+  target/release/captures --artifacts .amp/in/artifacts/native-ui \
+  > /tmp/current-app-reference.json'
+```
+
+Inspect `production-preferences.png` before accepting its numbers: a native window
+title can appear even when the frontend failed to load. This is three separate
+empty-profile runs, each settled for ten seconds after Preferences becomes
+visible, followed by five seconds of idle CPU sampling. It is not a matched
+workload or a measurement of the packaged Preview, recording, or hidden-tray idle.
+
 ## Packaging
 
 Build Captures on the operating system where the package will run:
