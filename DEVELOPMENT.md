@@ -112,6 +112,13 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ### Optional native UI experiment
 
+The Windows port shares the full GTK3/Cairo frontend with the Linux experiment,
+not the minimal probe. See the [Windows report](docs/windows-native-implementation.md)
+and [Windows build/benchmark instructions](experiments/native-ui/windows/README.md).
+Use MSYS2 MINGW64, Rust 1.94's `x86_64-pc-windows-gnu` target, and
+`bash experiments/native-ui/windows/build.sh`. Its native-only feature set does
+not link Tauri/WebView2. The shipping app and its packages remain unchanged.
+
 The [native UI evaluation](docs/native-ui-evaluation.md) explains the scope and
 limitations. The standalone `experiments/native-ui` workspace is not included in
 the normal gates, Preview packaging, or default Rust workspace. It contains two
@@ -219,8 +226,9 @@ amp orb service start captures-native-review --command 'python3 -m http.server "
 Capture includes the probe window. **Save PNG** creates numbered files in
 `$TMPDIR/captures-ui-probe` (normally `/tmp/captures-ui-probe` on Linux); set
 `CAPTURES_PROBE_OUTPUT` to use another directory. These are disposable experimental
-captures, separate from Captures history. The GTK frontend is Linux-only; native
-macOS/Windows frontends are not implemented.
+captures, separate from Captures history. The minimal GTK probe is Linux-only;
+the full native frontend also has an experimental Windows port. A macOS native
+frontend is not implemented.
 
 For the reproducible Linux warm-launch/idle benchmark, install `xvfb`, `xauth`,
 and `xdotool` (included in orb setup) and use a disposable display/DBus session:

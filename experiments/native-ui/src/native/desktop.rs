@@ -1,7 +1,9 @@
-//! X11 hotkeys and AppIndicator menu, polled on GTK's owning thread.
+//! Native hotkeys and tray menu, polled on GTK's owning thread.
 use crate::settings::Settings;
 use global_hotkey::{GlobalHotKeyManager, hotkey::HotKey};
-use std::{collections::HashSet, path::PathBuf};
+use std::collections::HashSet;
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
 use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
     menu::{Menu, MenuItem},
@@ -26,6 +28,7 @@ pub struct Desktop {
 
 impl Desktop {
     pub fn new() -> Result<Self, String> {
+        #[cfg(target_os = "linux")]
         if std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland") {
             return Err(
                 "Global shortcuts require X11; XWayland grabs are not compositor-wide.".into(),
@@ -63,7 +66,7 @@ impl Desktop {
         }
         let icon = Icon::from_rgba(rgba, 24, 24).map_err(|e| e.to_string())?;
         let tray = TrayIconBuilder::new()
-            .with_tooltip("Captures — Linux native preview")
+            .with_tooltip("Captures — Native experiment")
             .with_menu(Box::new(menu))
             .with_icon(icon)
             .build()
@@ -78,9 +81,18 @@ impl Desktop {
 
     pub fn replace_shortcuts(&mut self, settings: &Settings) -> Result<(), String> {
         let desired = shortcuts(settings)?;
+        #[cfg(target_os = "windows")]
+        if desired.iter().any(|(key, _)| intercepted(key)) {
+            captures_session::ensure_win_shift_s_takeover()?;
+            captures_session::set_win_shift_s_handler(Some(|phase| {
+                if phase == captures_session::WinShiftSPhase::Released {
+                    WIN_SHIFT_S.store(true, std::sync::atomic::Ordering::Release);
+                }
+            }));
+        }
         let mut added = Vec::new();
         for (key, _) in &desired {
-            if self.keys.iter().any(|(old, _)| old == key) {
+            if intercepted(key) || self.keys.iter().any(|(old, _)| old == key) {
                 continue;
             }
             if let Err(error) = self.manager.register(*key) {
@@ -95,7 +107,7 @@ impl Desktop {
         }
         let mut removed = Vec::new();
         for (key, _) in &self.keys {
-            if desired.iter().any(|(new, _)| new == key) {
+            if intercepted(key) || desired.iter().any(|(new, _)| new == key) {
                 continue;
             }
             if let Err(error) = self.manager.unregister(*key) {
@@ -109,12 +121,22 @@ impl Desktop {
             }
             removed.push(*key);
         }
+        #[cfg(target_os = "windows")]
+        captures_session::set_win_shift_s_takeover_enabled(
+            desired.iter().any(|(key, _)| intercepted(key)),
+        );
         self.keys = desired;
         Ok(())
     }
 
     pub fn events(&self) -> Vec<Action> {
         let mut actions = vec![];
+        #[cfg(target_os = "windows")]
+        if WIN_SHIFT_S.swap(false, std::sync::atomic::Ordering::AcqRel)
+            && let Some((_, action)) = self.keys.iter().find(|(key, _)| intercepted(key))
+        {
+            actions.push(*action);
+        }
         while let Ok(event) = tray_icon::menu::MenuEvent::receiver().try_recv() {
             if let Some((_, action)) = self.menu.iter().find(|(item, _)| *item.id() == event.id) {
                 actions.push(*action);
@@ -133,10 +155,21 @@ impl Desktop {
 
 impl Drop for Desktop {
     fn drop(&mut self) {
+        #[cfg(target_os = "windows")]
+        captures_session::set_win_shift_s_takeover_enabled(false);
         for (key, _) in &self.keys {
-            let _ = self.manager.unregister(*key);
+            if !intercepted(key) {
+                let _ = self.manager.unregister(*key);
+            }
         }
     }
+}
+
+#[cfg(target_os = "windows")]
+static WIN_SHIFT_S: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn intercepted(key: &HotKey) -> bool {
+    cfg!(target_os = "windows") && *key == "Super+Shift+S".parse::<HotKey>().unwrap()
 }
 
 pub fn shortcuts(settings: &Settings) -> Result<Vec<(HotKey, Action)>, String> {
@@ -166,6 +199,10 @@ pub fn shortcuts(settings: &Settings) -> Result<Vec<(HotKey, Action)>, String> {
     .collect()
 }
 
+#[cfg(target_os = "windows")]
+pub use crate::windows::set_autostart;
+
+#[cfg(target_os = "linux")]
 pub fn set_autostart(enabled: bool) -> Result<(), String> {
     let config = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)

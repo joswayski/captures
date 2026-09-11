@@ -15,10 +15,11 @@ use captures_recording::{
 };
 use captures_recording_xcap::XcapRecordingSegment;
 use gtk::{glib, prelude::*};
+#[cfg(unix)]
+use std::os::unix::fs::DirBuilderExt;
 use std::{
     cell::{Cell, RefCell},
     fs,
-    os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
     rc::Rc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -49,6 +50,7 @@ struct Session {
     safety_query_in_flight: bool,
     screenshot_in_flight: bool,
     region_border: Option<RegionBorder>,
+    include_controls: bool,
     on_finished: Option<Rc<dyn Fn()>>,
 }
 
@@ -61,6 +63,7 @@ pub struct RecordingActions {
     pub on_finished: Option<Rc<dyn Fn()>>,
     /// Preferred saved-video container. Linux currently ships MP4 and GIF export.
     pub preferred_video_format: ExportFormat,
+    pub include_controls: bool,
 }
 
 impl Default for RecordingActions {
@@ -69,6 +72,7 @@ impl Default for RecordingActions {
             screenshot: None,
             on_finished: None,
             preferred_video_format: ExportFormat::Mp4,
+            include_controls: false,
         }
     }
 }
@@ -125,6 +129,14 @@ pub fn start_with_actions(
     privacy.set_tooltip_text(Some(
         "Linux does not provide reliable recording-window exclusion for this backend.",
     ));
+    if cfg!(target_os = "windows") {
+        privacy.set_text(if actions.include_controls {
+            "These controls will show in recordings"
+        } else {
+            "Controls are excluded from captures"
+        });
+        privacy.set_tooltip_text(Some("Change Include recording controls in captures in Preferences before starting a recording."));
+    }
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     row.set_halign(gtk::Align::Center);
     row.style_context().add_class("recording-hud-main");
@@ -181,6 +193,15 @@ pub fn start_with_actions(
     content.pack_start(&row, false, false, 0);
     root.pack_start(&content, true, true, 0);
     window.add(&root);
+    #[cfg(target_os = "windows")]
+    if let Err(error) = crate::windows::exclude_from_capture(&window, !actions.include_controls) {
+        ui::error(&window, &error);
+        window.close();
+        if let Some(on_finished) = actions.on_finished {
+            on_finished();
+        }
+        return;
+    }
     window.show_all();
 
     let draft_options = recording_manifest_options(&options, output_format);
@@ -196,7 +217,8 @@ pub fn start_with_actions(
                 return;
             }
         };
-    let region_border = RegionBorder::for_target(&options.target);
+    let region_border =
+        RegionBorder::for_target(&options.target, &display, actions.include_controls);
     let session = Rc::new(RefCell::new(Session {
         options,
         output_format,
@@ -214,6 +236,7 @@ pub fn start_with_actions(
         safety_query_in_flight: false,
         screenshot_in_flight: false,
         region_border,
+        include_controls: actions.include_controls,
         on_finished: actions.on_finished,
     }));
     set_controls(&pause, &stop, &discard, false);
@@ -366,6 +389,13 @@ pub fn start_with_actions(
             let show = ui::button("Recording • Show controls");
             show.style_context().add_class("primary");
             notice.add(&show);
+            #[cfg(target_os = "windows")]
+            if let Err(error) = crate::windows::exclude_from_capture(&notice, true) {
+                notice.close();
+                window.show_all();
+                ui::error(&window, &error);
+                return;
+            }
             notice.show_all();
             let window = window.clone();
             show.connect_clicked(move |_| {
@@ -885,15 +915,20 @@ fn begin_screenshot_action(
                 if completed.replace(true) {
                     return;
                 }
-                let target = {
+                let (target, display, include_controls) = {
                     let mut state = session.borrow_mut();
                     state.screenshot_in_flight = false;
                     if state.closing {
                         return;
                     }
-                    state.options.target.clone()
+                    (
+                        state.options.target.clone(),
+                        state.display.clone(),
+                        state.include_controls,
+                    )
                 };
-                session.borrow_mut().region_border = RegionBorder::for_target(&target);
+                session.borrow_mut().region_border =
+                    RegionBorder::for_target(&target, &display, include_controls);
                 window.show_all();
                 screenshot.set_sensitive(true);
                 if resume_after {
@@ -1361,16 +1396,20 @@ fn create_recording_draft(
     options: &RecordingOptions,
 ) -> Result<(DraftStore, RecordingDraftManifest, PathBuf), String> {
     let root = output_directory.join(".captures-recording-drafts");
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&root)
-        .map_err(|error| error.to_string())?;
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    builder.mode(0o700);
+    builder.create(&root).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
     fs::set_permissions(&root, std::os::unix::fs::PermissionsExt::from_mode(0o700))
         .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "windows")]
+    crate::windows::private_directory(&root).map_err(|error| error.to_string())?;
     let store = DraftStore::new(root);
     let manifest = RecordingDraftManifest::new(session_id(), options.clone(), now_ms());
     let directory = store.create(&manifest).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
     fs::set_permissions(
         &directory,
         std::os::unix::fs::PermissionsExt::from_mode(0o700),
@@ -1507,7 +1546,11 @@ struct RegionBorder {
 }
 
 impl RegionBorder {
-    fn for_target(target: &RecordingTarget) -> Option<Self> {
+    fn for_target(
+        target: &RecordingTarget,
+        display: &DisplayDescriptor,
+        include_controls: bool,
+    ) -> Option<Self> {
         let RecordingTarget::Region { rect, .. } = target else {
             return None;
         };
@@ -1545,10 +1588,32 @@ impl RegionBorder {
                 window.add(&fill);
                 window.move_(x, y);
                 window.resize(width.max(1), height.max(1));
+                #[cfg(target_os = "windows")]
+                if let Err(error) = crate::windows::exclude_from_capture(&window, !include_controls)
+                {
+                    eprintln!("Recording guide hidden: {error}");
+                    return window;
+                }
                 window.show_all();
+                #[cfg(target_os = "windows")]
+                {
+                    let scale = display.scale_factor.max(1.);
+                    if let Err(error) = crate::windows::place_window(
+                        &window,
+                        display.x + (f64::from(x) * scale).round() as i32,
+                        display.y + (f64::from(y) * scale).round() as i32,
+                        (f64::from(width) * scale).round() as i32,
+                        (f64::from(height) * scale).round() as i32,
+                    ) {
+                        window.hide();
+                        eprintln!("Recording guide hidden: {error}");
+                    }
+                }
                 window
             })
             .collect();
+        #[cfg(not(target_os = "windows"))]
+        let _ = (display, include_controls);
         Some(Self { windows })
     }
 
@@ -1644,8 +1709,20 @@ fn create_private_work_directory(parent: &Path, purpose: &str) -> Result<PathBuf
         .as_nanos();
     for n in 0.. {
         let path = parent.join(format!(".captures-{purpose}-{stamp}-{n}"));
-        match fs::DirBuilder::new().mode(0o700).create(&path) {
-            Ok(()) => return Ok(path),
+        let builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        let mut builder = builder;
+        #[cfg(unix)]
+        builder.mode(0o700);
+        match builder.create(&path) {
+            Ok(()) => {
+                #[cfg(target_os = "windows")]
+                if let Err(error) = crate::windows::private_directory(&path) {
+                    let _ = fs::remove_dir(&path);
+                    return Err(error.to_string());
+                }
+                return Ok(path);
+            }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error.to_string()),
         }
@@ -2080,9 +2157,11 @@ mod tests {
 
     #[test]
     fn private_work_directories_are_unique_and_do_not_replace_existing_paths() {
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
         let parent = tempfile::tempdir().unwrap();
         let first = create_private_work_directory(parent.path(), "recording").unwrap();
+        #[cfg(unix)]
         assert_eq!(
             fs::metadata(&first).unwrap().permissions().mode() & 0o777,
             0o700
@@ -2102,6 +2181,7 @@ mod tests {
         use captures_recording::{
             AudioOptions, CaptureRect, GifOptions, MaxResolution, RecordingTarget,
         };
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
         let parent = tempfile::tempdir().unwrap();
         let options = RecordingOptions {
@@ -2134,10 +2214,12 @@ mod tests {
         let (store, manifest, directory) =
             create_recording_draft(parent.path(), &gif_manifest_options).unwrap();
         assert_eq!(manifest.options.kind, RecordingKind::Gif);
+        #[cfg(unix)]
         assert_eq!(
             fs::metadata(store.root()).unwrap().permissions().mode() & 0o777,
             0o700
         );
+        #[cfg(unix)]
         assert_eq!(
             fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
             0o700
@@ -2150,6 +2232,7 @@ mod tests {
             directory.join("segment.mp4")
         );
         assert!(checked_draft_media_path(&directory, "../escape.mp4").is_err());
+        #[cfg(unix)]
         std::os::unix::fs::symlink(
             parent.path().join("outside.mp4"),
             directory.join("linked.mp4"),

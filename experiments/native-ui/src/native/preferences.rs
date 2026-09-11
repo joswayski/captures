@@ -1,4 +1,4 @@
-//! Native GTK preferences for the Linux experiment.
+//! Native GTK preferences for the Linux and Windows experiments.
 //!
 //! The caller owns persistence and side effects. Changes are validated and
 //! applied automatically, matching the shipping preferences contract.
@@ -206,6 +206,7 @@ fn switch_row(
     changed: impl Fn(bool) + 'static,
 ) -> gtk::Box {
     let toggle = gtk::Switch::new();
+    toggle.set_valign(gtk::Align::Center);
     toggle.set_active(initial);
     toggle.connect_state_set(move |_, value| {
         changed(value);
@@ -652,7 +653,7 @@ pub fn open(
     );
     changelog.set_sensitive(false);
     system.pack_start(&changelog, false, false, 0);
-    system.pack_start(&row("Updates", "This native Linux build has no automatic update channel. Install updates using the same source used to install Captures.", &ui::label("Managed externally", "muted")),false,false,0);
+    system.pack_start(&row("Updates", "This native build has no automatic update channel. Install updates using the same source used to install Captures.", &ui::label("Managed externally", "muted")),false,false,0);
     let (updates_scroll, updates) = page("Updates", "Update behavior for this build.");
     updates.pack_start(&system, false, false, 0);
 
@@ -862,6 +863,17 @@ pub fn open(
         "Recording",
         "Defaults for new screen recordings. You can still change them in the capture menu.",
     );
+    #[cfg(target_os = "windows")]
+    video.pack_start(
+        &switch_row(
+            "Include recording controls in captures",
+            "Show controls in new recordings for feedback or demos. Off excludes them using Windows capture protection.",
+            initial.include_recording_controls_in_captures,
+            staged(&draft, &committed, &apply, &status, |s, v| {
+                s.include_recording_controls_in_captures = v;
+            }),
+        ), false, false, 0,
+    );
     let video_format = combo(
         &[("mp4", "MP4"), ("gif", "GIF"), ("webm", "WebM")],
         &initial.recording.video_format,
@@ -872,7 +884,7 @@ pub fn open(
     video.pack_start(
         &row(
             "Recording format",
-            "MP4 and GIF export are supported. WebM is unavailable in the Linux media backend.",
+            "MP4 and GIF export are supported. WebM is unavailable in this native media path.",
             &video_format,
         ),
         false,
@@ -1140,7 +1152,11 @@ pub fn open(
     );
     let key_card = card(
         "Global shortcuts",
-        "X11 scope: shortcuts apply only to this native X11 build; desktop-reserved combinations may be unavailable.",
+        if cfg!(target_os = "windows") {
+            "Shortcuts apply while this native build is running. Win+Shift+S replaces Snipping Tool only while assigned here. Quit the other Captures app to avoid conflicts."
+        } else {
+            "X11 scope: shortcuts apply only to this native X11 build; desktop-reserved combinations may be unavailable."
+        },
     );
     let shortcuts = [
         ("New Capture", initial.new_capture_shortcut.clone(), 0u8),
