@@ -44,6 +44,44 @@ FPS to these rates.
 Paths beginning `native-ui/` above are relative to `experiments/`; Swift paths
 are under `experiments/macos-native/Sources/CapturesNative`.
 
+## GTK sidebar thumbnail performance
+
+Linux and Windows shared `editor.rs::setup_sidebar` previously cloned the whole
+document for each layer, rendered a full-resolution canvas, copied its RGBA
+pixels into a Pixbuf, then reduced it to 38×30. It now borrows the selected layer
+and draws directly into a 38×30 Cairo surface. Full-resolution export is unchanged.
+Source PNG decoding still occurs for image layers; this does not introduce a
+cache or remove that cost. Tiny vector antialiasing can differ from rendering
+at full size and downsampling.
+
+An optimized Linux x64 orb microbenchmark compares the exact old raster/Pixbuf
+pipeline with the new surface pipeline in the same binary. Each document has
+one deterministic image and 12 rectangle layers. After one warmup per path,
+five samples alternate which path runs first, with no builds or UI automation
+running concurrently. Times cover all 13 thumbnails, not GTK row construction,
+capture throughput, encoding, or whole-app responsiveness.
+
+| Canvas | Old median (range), ms | New median (range), ms | Median ratio |
+| --- | --- | --- | --- |
+| 1920×1080 | 192.52 (188.46–228.85) | 26.54 (26.30–30.24) | 7.3× |
+| 3840×2160 | 818.93 (801.08–966.81) | 137.86 (116.57–147.41) | 5.9× |
+
+Reproduce with the retained, normally ignored benchmark (no timing assertion):
+
+```sh
+cargo test --release --locked --manifest-path experiments/native-ui/Cargo.toml \
+  --no-default-features --features native --bin captures-linux-native \
+  benchmark_layer_thumbnails -- --ignored --nocapture --test-threads=1
+```
+
+Regression tests check independent expected pixels for asymmetric positioning,
+rotation, off-canvas clipping, isolated/hidden layers, premultiplied alpha and
+image orientation. The actual GTK editor passed its drawing, layer copy/paste,
+rename, undo, reverse crop, PNG/JPEG export and draft/source-save checks before
+and after. Default and selected-layer renders were inspected; thumbnail size
+and layout remain intact. These timings do not establish Windows or macOS
+performance; the SwiftUI frontend is unchanged.
+
 ## Functional and distribution gaps still open
 
 “Missing” means an absent or deliberately restricted code path, not merely lack
@@ -118,9 +156,11 @@ automation running concurrently. Do not trade missing work for a performance win
   `cargo clippy --workspace --all-targets -- -D warnings`: passed; 366 tests
   passed and one database integration test remained normally ignored.
 - Native GTK `cargo test --locked --manifest-path experiments/native-ui/Cargo.toml
-  --no-default-features --features native --bin captures-linux-native`: 58 passed.
+  --no-default-features --features native --bin captures-linux-native`: 60 passed,
+  one manual benchmark ignored by default.
   Native-only build, standalone formatting and all-targets Clippy with denied
-  warnings passed. These used the development profile, not a new release benchmark.
+  warnings passed. Interactive checks used the development binary; the separate
+  optimized thumbnail benchmark and its limitations are documented above.
 - `native_parity_check.py` in the isolated X11/DBus desktop passed: exact
   screenshot pixels, region/window/display capture, lock rejection, global
   shortcut/second-instance routing, Preferences and history. New AT-SPI checks
@@ -141,3 +181,6 @@ automation running concurrently. Do not trade missing work for a performance win
 
 Windows build/runtime and actual macOS UI/TCC were not run in this orb. The
 hardware acceptance list above remains open; these results do not replace it.
+PR CI additionally passed the native macOS compilation/editor/render checks and
+the shipping Tauri Windows, macOS and Linux checks on the compatibility-fix
+commit. This adds Apple-framework build evidence, not physical-device acceptance.
