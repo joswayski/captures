@@ -247,6 +247,9 @@ struct ScreenshotEditor {
     picker_sv_bounds: Arc<Mutex<Bounds<Pixels>>>,
     picker_hue_bounds: Arc<Mutex<Bounds<Pixels>>>,
     picker_alpha_bounds: Arc<Mutex<Bounds<Pixels>>>,
+    stroke_bounds: Arc<Mutex<Bounds<Pixels>>>,
+    stroke_dragging: bool,
+    stroke_focus: FocusHandle,
     editing_text: Option<(usize, Document)>,
     editing_layer_name: Option<usize>,
     numeric_target: NumericTarget,
@@ -536,6 +539,9 @@ impl ScreenshotEditor {
             picker_sv_bounds: Default::default(),
             picker_hue_bounds: Default::default(),
             picker_alpha_bounds: Default::default(),
+            stroke_bounds: Default::default(),
+            stroke_dragging: false,
+            stroke_focus: cx.focus_handle(),
             editing_text: None,
             editing_layer_name: None,
             numeric_target: NumericTarget::CanvasWidth,
@@ -1763,7 +1769,7 @@ impl ScreenshotEditor {
                         .absolute()
                         .left(px(50.))
                         .top(px(142.))
-                        .w(px(154.))
+                        .w(px(3. * 44. + 2.) + metric("--s-2") * 2. + metric("--s-3") * 2.)
                         .p(metric("--s-3"))
                         .flex()
                         .flex_wrap()
@@ -1782,72 +1788,283 @@ impl ScreenshotEditor {
                                 Tool::Diamond,
                                 Tool::Star,
                             ]
-                            .map(|tool| self.tool_button(tool, t, cx)),
+                            .map(|tool| self.tool_button(tool, t, cx).size(px(44.))),
                         ),
                 ))
             })
     }
 
-    fn color_control(&self, t: Theme, cx: &mut Context<Self>) -> Div {
+    fn set_stroke(&mut self, value: f64, cx: &mut Context<Self>) {
+        let value = value.round().clamp(2., 40.);
+        if let Some(index) = self.selected {
+            if self.doc.layers[index].stroke == value {
+                return;
+            }
+            self.doc.layers[index].stroke = value;
+            self.changed();
+            self.rerender(cx);
+        } else {
+            self.stroke = value;
+        }
+        cx.notify();
+    }
+
+    fn drag_stroke(&mut self, position: gpui::Point<Pixels>, cx: &mut Context<Self>) {
+        let bounds = *self.stroke_bounds.lock().expect("stroke bounds");
+        self.set_stroke(stroke_at(position.x, bounds), cx);
+    }
+
+    fn stroke_control(&self, t: Theme, cx: &mut Context<Self>) -> Div {
+        let value = self
+            .selected
+            .map_or(self.stroke, |index| self.doc.layers[index].stroke);
+        let progress = ((value - 2.) / 38.).clamp(0., 1.) as f32;
+        let bounds_slot = self.stroke_bounds.clone();
         div()
             .flex()
             .flex_col()
-            .gap(metric("--s-3"))
+            .gap(metric("--s-2"))
             .child(
                 div()
                     .flex()
-                    .gap(metric("--s-3"))
+                    .items_center()
+                    .justify_between()
+                    .child(div().text_color(t.muted()).child("Stroke width"))
                     .child(
                         div()
-                            .w(px(112.))
-                            .rounded(metric("--r-sm"))
-                            .border_1()
-                            .border_color(t.border())
-                            .bg(t.canvas())
-                            .child(self.color_input.clone()),
-                    )
+                            .text_color(t.muted())
+                            .text_size(metric("--text-xs"))
+                            .child(format!("{value:.0} px")),
+                    ),
+            )
+            .child(
+                div()
+                    .id("stroke-slider")
+                    .key_context("StrokeSlider")
+                    .track_focus(&self.stroke_focus)
+                    .h(px(20.))
+                    .w_full()
+                    .cursor_pointer()
+                    .rounded(metric("--r-sm"))
+                    .focus(|style| style.bg(t.color("--surface-hover")))
                     .child(
-                        self.compact_button("apply-hex-color", "Apply hex", t)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.apply_color(window, cx)),
-                            ),
-                    )
-                    .child(
-                        self.compact_button(
-                            "toggle-color-picker",
-                            if self.color_picker_open {
-                                "Close"
-                            } else {
-                                "Custom"
+                        gpui_canvas(
+                            |_, _, _| {},
+                            move |bounds, _, window, _| {
+                                *bounds_slot.lock().expect("stroke bounds") = bounds;
+                                let track = Bounds::new(
+                                    bounds.origin + point(px(7.), px(8.)),
+                                    size(bounds.size.width - px(14.), px(4.)),
+                                );
+                                window.paint_quad(gpui::quad(
+                                    track,
+                                    px(2.),
+                                    t.color("--n-6"),
+                                    px(0.),
+                                    gpui::transparent_black(),
+                                    Default::default(),
+                                ));
+                                window.paint_quad(gpui::quad(
+                                    Bounds::new(
+                                        track.origin,
+                                        size(track.size.width * progress, track.size.height),
+                                    ),
+                                    px(2.),
+                                    t.accent,
+                                    px(0.),
+                                    gpui::transparent_black(),
+                                    Default::default(),
+                                ));
+                                let thumb = Bounds::new(
+                                    point(
+                                        track.origin.x + track.size.width * progress - px(7.),
+                                        bounds.origin.y + px(3.),
+                                    ),
+                                    size(px(14.), px(14.)),
+                                );
+                                window.paint_quad(gpui::quad(
+                                    thumb,
+                                    px(7.),
+                                    t.accent,
+                                    px(0.),
+                                    gpui::transparent_black(),
+                                    Default::default(),
+                                ));
                             },
-                            t,
                         )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.color_picker_open = !this.color_picker_open;
-                            if this.color_picker_open {
-                                let color = this
-                                    .selected
-                                    .and_then(|index| this.doc.layers.get(index))
-                                    .map_or(this.color, |layer| layer.color);
-                                (
-                                    this.picker_hue,
-                                    this.picker_saturation,
-                                    this.picker_value,
-                                    this.picker_alpha,
-                                ) = color_hsv(color);
-                                this.color_input
-                                    .update(cx, |input, cx| input.set(color_hex(color), cx));
-                            }
-                            cx.notify();
-                        })),
+                        .size_full(),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                            this.stroke_focus.focus(window);
+                            this.begin_picker_change();
+                            this.stroke_dragging = true;
+                            this.drag_stroke(event.position, cx);
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                        let next = match event.keystroke.key.as_str() {
+                            "left" | "down" => value - 1.,
+                            "right" | "up" => value + 1.,
+                            "home" => 2.,
+                            "end" => 40.,
+                            _ => return,
+                        };
+                        this.begin_picker_change();
+                        this.set_stroke(next, cx);
+                        cx.stop_propagation();
+                    })),
+            )
+    }
+
+    fn color_control(&self, t: Theme, cx: &mut Context<Self>) -> Div {
+        let selected = self
+            .selected
+            .and_then(|index| self.doc.layers.get(index))
+            .map_or(self.color, |layer| layer.color);
+        div()
+            .flex()
+            .flex_col()
+            .gap(metric("--s-4"))
+            .child(div().text_color(t.muted()).child("Color"))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_y(metric("--s-4"))
+                    .children(COLOR_SWATCHES.iter().enumerate().map(|(index, &hex)| {
+                        let color = parse_hex_color(hex).expect("preset color");
+                        let active = color_hex(selected)[..7].eq_ignore_ascii_case(hex);
+                        div()
+                            .w(gpui::relative(1. / 6.))
+                            .h(px(36.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .id(("color-swatch", index))
+                                    .size(px(32.))
+                                    .rounded_full()
+                                    .border_2()
+                                    .border_color(if active {
+                                        t.accent
+                                    } else {
+                                        gpui::transparent_black()
+                                    })
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_pointer()
+                                    .child(
+                                        div()
+                                            .size(px(24.))
+                                            .rounded_full()
+                                            .border_1()
+                                            .border_color(t.border())
+                                            .bg(gpui::rgba(
+                                                u32::from_str_radix(
+                                                    &format!("{}ff", &hex[1..]),
+                                                    16,
+                                                )
+                                                .expect("preset rgba"),
+                                            )),
+                                    )
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.color_input.update(cx, |input, cx| {
+                                            input.set(color_hex(color), cx)
+                                        });
+                                        this.apply_color(window, cx);
+                                    })),
+                            )
+                    }))
+                    .child(
+                        div()
+                            .w(gpui::relative(1. / 6.))
+                            .h(px(36.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .id("toggle-color-picker")
+                                    .size(px(24.))
+                                    .rounded(metric("--r-sm"))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_pointer()
+                                    .bg(linear_gradient(
+                                        90.,
+                                        linear_color_stop(gpui::rgba(0xff3b5cff), 0.),
+                                        linear_color_stop(gpui::rgba(0x8b5cf6ff), 1.),
+                                    ))
+                                    .child(
+                                        div()
+                                            .size(px(16.))
+                                            .rounded(metric("--r-xs"))
+                                            .bg(t.raised())
+                                            .child(icon("plus").size(px(16.)).text_color(t.text())),
+                                    )
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.color_picker_open = !this.color_picker_open;
+                                        if this.color_picker_open {
+                                            let color = this
+                                                .selected
+                                                .and_then(|index| this.doc.layers.get(index))
+                                                .map_or(this.color, |layer| layer.color);
+                                            (
+                                                this.picker_hue,
+                                                this.picker_saturation,
+                                                this.picker_value,
+                                                this.picker_alpha,
+                                            ) = color_hsv(color);
+                                            this.color_input.update(cx, |input, cx| {
+                                                input.set(color_hex(color), cx)
+                                            });
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
                     ),
             )
             .when(self.color_picker_open, |picker| {
-                picker.child(self.render_color_picker(t, cx).with_animation(
-                    "color-picker-reveal",
-                    Animation::new(Duration::from_millis(140)).with_easing(gpui::ease_out_quint()),
-                    |picker, progress| picker.opacity(progress),
-                ))
+                picker
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(metric("--s-4"))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .rounded(metric("--r-sm"))
+                                    .border_1()
+                                    .border_color(t.border())
+                                    .bg(t.canvas())
+                                    .child(self.color_input.clone()),
+                            )
+                            .child(
+                                self.compact_button("apply-hex-color", "Apply hex", t)
+                                    .h(metric("--h-lg"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.apply_color(window, cx)
+                                    })),
+                            ),
+                    )
+                    .child(
+                        self.render_color_picker(t, cx).with_animation(
+                            "color-picker-reveal",
+                            Animation::new(Duration::from_millis(140))
+                                .with_easing(gpui::ease_out_quint()),
+                            |picker, progress| picker.opacity(progress),
+                        ),
+                    )
             })
     }
 
@@ -2669,22 +2886,8 @@ impl ScreenshotEditor {
                     layer.opacity * 100.,
                     layer.blend.label()
                 ))
-                .child(
-                    self.compact_button("layer-color", "Next color", t)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.checkpoint();
-                            let layer = &mut this.doc.layers[index];
-                            layer.color = next_color(layer.color);
-                            if layer.fill.is_some() {
-                                layer.fill =
-                                    Some(Color(layer.color.0, layer.color.1, layer.color.2, 0.28));
-                            }
-                            this.changed();
-                            this.rerender(cx);
-                            cx.notify();
-                        })),
-                )
                 .child(self.color_control(t, cx))
+                .child(self.stroke_control(t, cx))
                 .child(
                     div()
                         .flex()
@@ -2710,27 +2913,7 @@ impl ScreenshotEditor {
                                     this.rerender(cx);
                                     cx.notify();
                                 })),
-                        )
-                        .child(self.compact_button("stroke-less", "Stroke −", t).on_click(
-                            cx.listener(move |this, _, _, cx| {
-                                this.checkpoint();
-                                this.doc.layers[index].stroke =
-                                    (this.doc.layers[index].stroke - 1.).max(1.);
-                                this.changed();
-                                this.rerender(cx);
-                                cx.notify();
-                            }),
-                        ))
-                        .child(self.compact_button("stroke-more", "Stroke +", t).on_click(
-                            cx.listener(move |this, _, _, cx| {
-                                this.checkpoint();
-                                this.doc.layers[index].stroke =
-                                    (this.doc.layers[index].stroke + 1.).min(40.);
-                                this.changed();
-                                this.rerender(cx);
-                                cx.notify();
-                            }),
-                        )),
+                        ),
                 )
                 .child(
                     div()
@@ -3227,35 +3410,8 @@ impl ScreenshotEditor {
                 });
         } else if self.tool != Tool::Select {
             properties = properties
-                .child("STYLE")
-                .child(format!("Signal red  •  Stroke {} px", self.stroke as u32))
-                .child(
-                    self.compact_button("default-color", "Next color", t)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.color = next_color(this.color);
-                            cx.notify();
-                        })),
-                )
                 .child(self.color_control(t, cx))
-                .child(
-                    div()
-                        .flex()
-                        .gap(metric("--s-3"))
-                        .child(
-                            self.compact_button("default-stroke-less", "Stroke −", t)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.stroke = (this.stroke - 1.).max(1.);
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            self.compact_button("default-stroke-more", "Stroke +", t)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.stroke = (this.stroke + 1.).min(40.);
-                                    cx.notify();
-                                })),
-                        ),
-                )
+                .child(self.stroke_control(t, cx))
                 .child(
                     self.compact_button(
                         "fill",
@@ -3375,6 +3531,64 @@ impl ScreenshotEditor {
                             .child(properties),
                     ),
             )
+    }
+
+    fn format_control(&self, t: Theme, cx: &mut Context<Self>) -> Div {
+        div()
+            .relative()
+            .flex_none()
+            .child(
+                self.compact_button("format", format!(".{}  ⌄", self.format.extension()), t)
+                    .h(metric("--h-lg"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.format_menu_open = !this.format_menu_open;
+                        cx.notify();
+                    })),
+            )
+            .when(self.format_menu_open, |control| {
+                control.child(gpui::deferred(
+                    div()
+                        .occlude()
+                        .absolute()
+                        .bottom(metric("--h-lg") + metric("--s-4"))
+                        .left_0()
+                        .w(px(126.))
+                        .p(metric("--s-2"))
+                        .flex()
+                        .flex_col()
+                        .gap(metric("--s-1"))
+                        .rounded(metric("--r-lg"))
+                        .border_1()
+                        .border_color(t.border())
+                        .bg(t.color("--surface-overlay"))
+                        .shadow_lg()
+                        .children(
+                            [
+                                (ExportFormat::Png, "PNG"),
+                                (ExportFormat::Jpeg, "JPEG"),
+                                (ExportFormat::Webp, "WebP"),
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, (format, label))| {
+                                self.compact_button(("format-option", index), label, t)
+                                    .w_full()
+                                    .when(self.format == format, |button| {
+                                        button.bg(Hsla {
+                                            a: 0.16,
+                                            ..t.accent
+                                        })
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.format = format;
+                                        this.format_menu_open = false;
+                                        this.comparison = None;
+                                        cx.notify();
+                                    }))
+                            }),
+                        ),
+                ))
+            })
     }
 
     fn footer(&self, t: Theme, cx: &mut Context<Self>) -> Div {
@@ -3554,17 +3768,18 @@ impl ScreenshotEditor {
             .border_t_1()
             .border_color(t.border())
             .bg(t.raised())
-            .child(settings)
+            .when(self.export_open, |footer| footer.child(settings))
             .child(
                 div()
                     .flex()
-                    .items_center()
-                    .gap(metric("--s-4"))
+                    .items_end()
+                    .gap(metric("--s-5"))
                     .child(
                         div()
                             .id("export-settings")
                             .w(px(210.))
-                            .h(px(44.))
+                            .min_w(px(178.))
+                            .h(metric("--h-lg"))
                             .px(metric("--s-4"))
                             .flex()
                             .flex_col()
@@ -3602,7 +3817,9 @@ impl ScreenshotEditor {
                     )
                     .child(
                         div()
-                            .w(px(390.))
+                            .flex_1()
+                            .min_w(px(120.))
+                            .max_w(px(390.))
                             .flex()
                             .flex_col()
                             .gap(metric("--s-1"))
@@ -3622,30 +3839,31 @@ impl ScreenshotEditor {
                                     .child(self.output_name.clone()),
                             ),
                     )
-                    .child(
-                        self.compact_button(
-                            "format",
-                            format!(".{}  ⌄", self.format.extension()),
-                            t,
-                        )
-                        .h(px(36.))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.format_menu_open = !this.format_menu_open;
-                            cx.notify();
-                        })),
-                    )
+                    .child(self.format_control(t, cx))
                     .child(
                         self.compact_button("copy-image", "Copy image", t)
+                            .h(metric("--h-lg"))
+                            .px(metric("--s-5"))
+                            .flex_none()
                             .on_click(cx.listener(Self::copy_image)),
                     )
                     .child(
                         div()
                             .flex_1()
+                            .min_w_0()
+                            .h(metric("--h-lg"))
+                            .flex()
+                            .items_center()
+                            .justify_end()
+                            .text_size(metric("--text-xs"))
                             .text_color(t.muted())
                             .child(self.status.clone()),
                     )
                     .child(
                         self.compact_button("save-new", "Save as new file", t)
+                            .h(metric("--h-lg"))
+                            .px(metric("--s-5"))
+                            .flex_none()
                             .on_click(cx.listener(Self::prompt_export)),
                     )
                     .child(
@@ -3658,7 +3876,8 @@ impl ScreenshotEditor {
                             },
                             t,
                         )
-                        .h(px(36.))
+                        .h(metric("--h-lg"))
+                        .flex_none()
                         .min_w(px(106.))
                         .bg(t.accent)
                         .border_color(t.accent)
@@ -3667,49 +3886,6 @@ impl ScreenshotEditor {
                         .on_click(cx.listener(Self::save_source)),
                     ),
             )
-            .when(self.format_menu_open, |footer| {
-                footer.child(
-                    div()
-                        .absolute()
-                        .bottom(px(62.))
-                        .left(px(616.))
-                        .w(px(126.))
-                        .p(metric("--s-2"))
-                        .flex()
-                        .flex_col()
-                        .gap(metric("--s-1"))
-                        .rounded(metric("--r-lg"))
-                        .border_1()
-                        .border_color(t.border())
-                        .bg(t.color("--surface-overlay"))
-                        .shadow_lg()
-                        .children(
-                            [
-                                (ExportFormat::Png, "PNG"),
-                                (ExportFormat::Jpeg, "JPEG"),
-                                (ExportFormat::Webp, "WebP"),
-                            ]
-                            .into_iter()
-                            .enumerate()
-                            .map(|(index, (format, label))| {
-                                self.compact_button(("format-option", index), label, t)
-                                    .w_full()
-                                    .when(self.format == format, |button| {
-                                        button.bg(Hsla {
-                                            a: 0.16,
-                                            ..t.accent
-                                        })
-                                    })
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.format = format;
-                                        this.format_menu_open = false;
-                                        this.comparison = None;
-                                        cx.notify();
-                                    }))
-                            }),
-                        ),
-                )
-            })
     }
 }
 
@@ -3751,24 +3927,15 @@ fn set_curve(layer: &mut Layer, amount: f64) {
     }];
 }
 
-fn next_color(color: Color) -> Color {
-    let palette = [
-        Color(0.94, 0.24, 0.31, 1.),
-        Color(1., 0.79, 0.16, 1.),
-        Color(0.23, 0.51, 0.96, 1.),
-        Color(0.18, 0.72, 0.43, 1.),
-        Color(1., 1., 1., 1.),
-        Color(0.05, 0.05, 0.06, 1.),
-    ];
-    let current = palette
-        .iter()
-        .position(|candidate| {
-            (candidate.0 - color.0).abs() < 0.02
-                && (candidate.1 - color.1).abs() < 0.02
-                && (candidate.2 - color.2).abs() < 0.02
-        })
-        .unwrap_or(0);
-    palette[(current + 1) % palette.len()]
+// Drawing colors match ScreenshotEditor.tsx; these are document colors, not chrome.
+const COLOR_SWATCHES: [&str; 8] = [
+    "#ff3b5c", "#ff8a22", "#ffd22e", "#36c96b", "#2d9cff", "#8b5cf6", "#111318", "#ffffff",
+];
+
+fn stroke_at(x: Pixels, bounds: Bounds<Pixels>) -> f64 {
+    let track_width = f32::from(bounds.size.width) - 14.;
+    let fraction = (f32::from(x - bounds.origin.x) - 7.) / track_width.max(1.);
+    (2. + f64::from(fraction.clamp(0., 1.)) * 38.).round()
 }
 
 fn document_layer_point(layer: &Layer, local: Point) -> Point {
@@ -3862,11 +4029,31 @@ impl Render for ScreenshotEditor {
                     cx.notify();
                 }
             }))
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                if this.stroke_dragging && event.pressed_button == Some(MouseButton::Left) {
+                    this.drag_stroke(event.position, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.stroke_dragging = false),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.stroke_dragging = false),
+            )
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
                 this.add_paths(paths.paths().to_vec(), cx)
             }))
-            .on_action(cx.listener(|this, _: &Undo, _, cx| this.undo(false, cx)))
-            .on_action(cx.listener(|this, _: &Redo, _, cx| this.undo(true, cx)))
+            .on_action(cx.listener(|this, _: &Undo, window, cx| {
+                this.focus.focus(window);
+                this.undo(false, cx);
+            }))
+            .on_action(cx.listener(|this, _: &Redo, window, cx| {
+                this.focus.focus(window);
+                this.undo(true, cx);
+            }))
             .on_action(cx.listener(|this, _: &DeleteLayer, _, cx| this.delete_selected(cx)))
             .on_action(cx.listener(|this, _: &DuplicateLayer, _, cx| this.duplicate_selected(cx)))
             .on_action(cx.listener(|this, _: &CopyLayer, _, cx| {
@@ -4191,6 +4378,7 @@ impl Render for ScreenshotEditor {
 fn bind_keys(cx: &mut App) {
     text_input::bind_keys(cx);
     let editor = Some("ScreenshotEditor && !EditorTextInput");
+    let canvas = Some("ScreenshotEditor && !EditorTextInput && !StrokeSlider");
     let primary = if cfg!(target_os = "macos") {
         "cmd"
     } else {
@@ -4221,14 +4409,14 @@ fn bind_keys(cx: &mut App) {
             ActualSize,
             Some("ScreenshotEditor"),
         ),
-        KeyBinding::new("left", NudgeLeft, editor),
-        KeyBinding::new("right", NudgeRight, editor),
-        KeyBinding::new("up", NudgeUp, editor),
-        KeyBinding::new("down", NudgeDown, editor),
-        KeyBinding::new("shift-left", NudgeLeftLarge, editor),
-        KeyBinding::new("shift-right", NudgeRightLarge, editor),
-        KeyBinding::new("shift-up", NudgeUpLarge, editor),
-        KeyBinding::new("shift-down", NudgeDownLarge, editor),
+        KeyBinding::new("left", NudgeLeft, canvas),
+        KeyBinding::new("right", NudgeRight, canvas),
+        KeyBinding::new("up", NudgeUp, canvas),
+        KeyBinding::new("down", NudgeDown, canvas),
+        KeyBinding::new("shift-left", NudgeLeftLarge, canvas),
+        KeyBinding::new("shift-right", NudgeRightLarge, canvas),
+        KeyBinding::new("shift-up", NudgeUpLarge, canvas),
+        KeyBinding::new("shift-down", NudgeDownLarge, canvas),
         KeyBinding::new("enter", CommitText, Some("EditorTextInput")),
         KeyBinding::new("escape", CancelText, Some("EditorTextInput")),
     ]);
@@ -4358,6 +4546,22 @@ mod tests {
             let image = image::load_from_memory(&bytes).unwrap();
             assert_eq!((image.width(), image.height()), (19, 11));
             assert!(bytes.len() > 20);
+        }
+    }
+
+    #[test]
+    fn stroke_slider_uses_inset_track_rounding_and_clamps_drag_outside() {
+        // Thumb centers travel from x=107 to x=297, not across the full 204px box.
+        let bounds = Bounds::new(point(px(100.), px(35.)), size(px(204.), px(20.)));
+        for (x, expected) in [
+            (50., 2.),
+            (107., 2.),
+            (153., 11.),
+            (155., 12.),
+            (297., 40.),
+            (350., 40.),
+        ] {
+            assert_eq!(stroke_at(px(x), bounds), expected);
         }
     }
 

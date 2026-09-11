@@ -978,7 +978,11 @@ impl Render for PreviewView {
             .collect();
         if !self.collapsed && count >= 2 {
             input.push(Rect {
-                x: CARD_X,
+                x: if self.right {
+                    FRAME_WIDTH - CARD_X - 170.0
+                } else {
+                    CARD_X
+                },
                 y: if self.top { 8.0 } else { FRAME_HEIGHT - 44.0 },
                 width: 170.0,
                 height: 36.0,
@@ -1041,13 +1045,17 @@ impl Render for PreviewView {
                     .left(px(toolbar_x))
                     .top(px(toolbar_y))
                     .flex()
+                    .items_center()
                     .gap(px(6.0))
                     .child(
                         icon_button("preview-clear-all", "Clear all", theme)
+                            .w(px(80.0))
+                            .h(px(34.0))
                             .on_click(cx.listener(|view, _, _, cx| view.clear_all(cx))),
                     )
                     .child(
                         action_button("preview-show-less", "Show less", theme)
+                            .w(px(84.0))
                             .on_click(cx.listener(|view, _, _, cx| view.set_collapsed(true, cx))),
                     ),
             );

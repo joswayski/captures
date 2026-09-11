@@ -169,11 +169,22 @@ fit canvas, right Layers/contextual-properties panel, and grouped export control
 The following release renders were inspected after the platform/parity changes.
 Pointer checks exercised the six-shape flyout, numeric Apply/Escape, export and
 format menus, appearance switching, and resizing to 980×650 with properties
-scrolling. The smaller dark window shows retained custom export dimensions after
-a canvas resize; window, canvas, and export dimensions are independent.
+scrolling. The footer uses a shared 36px control height and bottom alignment.
+The original eight drawing-color swatches and custom picker replace color
+cycling; stroke width uses a 2–40px slider. Native checks verified exact swatch
+color, drag values, Home/End, arrow adjustment without nudging a layer, and one
+undo per drag. Undo returns focus to the editor when its controls disappear.
 
 ![Updated light editor with shape flyout](images/gpui/editor-parity-light.png)
-![Updated dark editor at 980×650 with scrolled properties](images/gpui/editor-parity-dark-small.png)
+![Updated dark editor at 980×650](images/gpui/editor-parity-dark-small.png)
+
+The expanded-preview Clear all / Show less row now fits its allocated width,
+and its native input region follows the right-aligned controls. Show less was
+clicked to verify collapse. Per-card hover actions could not be reliably
+displayed in this X11 gallery run and remain unverified. The recording editor
+still differs from the original layout; the GIF selector currently exposes
+video-style FPS/resolution labels. These are follow-up parity gaps, not fixed
+by the screenshot-editor control pass.
 
 These are actual application screenshots, not generated design concepts.
 The historical comparison pairs below place release Tauri on the left and the
@@ -204,7 +215,7 @@ and interaction checks above establish only the behaviors they actually ran.
   GIT_CONFIG_VALUE_0=false`); the initial run could not sign their fixture commits.
 - Root `cargo fmt --all -- --check`, `cargo test --workspace` and strict workspace
   Clippy: passed; 366 Rust tests passed, one ignored.
-- GPUI locked tests: 86 passed, including the live X11 Shape/clipboard suite;
+- GPUI locked tests: 87 passed, including the live X11 Shape/clipboard suite;
   formatting, strict all-target Clippy and release build passed.
 - Python measurement-helper tests: six passed.
 - Platform helper policy, shell syntax and workflow formatting checks passed.
