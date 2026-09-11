@@ -76,7 +76,16 @@ if [[ "${1:-}" == --test ]]; then
     -framework SwiftUI -framework AppKit -framework AVKit -framework Carbon \
     -framework ServiceManagement -framework UniformTypeIdentifiers -framework ImageIO \
     -framework XCTest -o "$out/editor-tests"
-  "$out/editor-tests"
+  test_data="$(mktemp -d "$out/test-data.XXXXXX")"
+  trap 'rm -rf "$test_data"' EXIT
+  CAPTURES_NATIVE_DATA="$test_data" "$out/editor-tests"
+  xcrun swiftc -swift-version 5 -parse-as-library -module-name CapturesNativeReferences \
+    -target "$arch-apple-macosx13.0" -sdk "$sdk" \
+    "${sources[@]}" "$experiment/Tests/RenderReferences.swift" \
+    "$out/rust/$rust_target/release/libcaptures_macos_bridge.a" "${native_links[@]}" \
+    -framework SwiftUI -framework AppKit -framework AVKit -framework Carbon \
+    -framework ServiceManagement -framework UniformTypeIdentifiers -framework ImageIO \
+    -o "$out/render-references"
 fi
 printf '\nBuilt (not installed or launched):\n%s\n' "$app"
 printf 'Open this app to test; allow its own Screen Recording and microphone permissions.\n'

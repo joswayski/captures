@@ -57,7 +57,7 @@ final class EditorModelTests: XCTestCase {
         XCTAssertFalse(model.canUndo)
     }
 
-    func testRotateClockwiseSwapsCanvasAndTransformsAsymmetricFrame() {
+    func testRotateClockwisePreservesLocalFrameAndTransformsWorldBounds() {
         let layer = EditorLayer(
             name: "Layer", content: .shape(.ellipse),
             frame: EditorRect(x: 10, y: 20, width: 30, height: 40)
@@ -71,8 +71,80 @@ final class EditorModelTests: XCTestCase {
 
         XCTAssertEqual(model.document.width, 100)
         XCTAssertEqual(model.document.height, 200)
-        XCTAssertEqual(model.document.layers[0].frame, EditorRect(x: 40, y: 10, width: 40, height: 30))
-        XCTAssertEqual(model.document.layers[0].rotation, .pi / 2, accuracy: 0.0001)
+        let clockwise = model.document.layers[0]
+        XCTAssertEqual(clockwise.frame, EditorRect(x: 45, y: 5, width: 30, height: 40))
+        XCTAssertEqual(clockwise.rotation, .pi / 2, accuracy: 0.0001)
+        assertRect(worldBounds(of: clockwise), equals: CGRect(x: 40, y: 10, width: 40, height: 30))
+
+        model.rotateCanvas(clockwise: false)
+        XCTAssertEqual(model.document.width, 200)
+        XCTAssertEqual(model.document.height, 100)
+        XCTAssertEqual(model.document.layers[0].frame, layer.frame)
+        XCTAssertEqual(model.document.layers[0].rotation, 0, accuracy: 0.0001)
+
+        model.undo()
+        XCTAssertEqual(model.document.layers[0], clockwise)
+        model.undo()
+        XCTAssertEqual(model.document.layers[0], layer)
+    }
+
+    func testPixelRendererUsesExactDimensionsAndRotatesAsymmetricColorsClockwise() throws {
+        let red = try solidPNG(.red)
+        let blue = try solidPNG(.blue)
+        let layers = [
+            EditorLayer(name: "top-left", content: .image(red, original: red), frame: EditorRect(x: 0, y: 0, width: 1, height: 1)),
+            EditorLayer(name: "bottom-right", content: .image(blue, original: blue), frame: EditorRect(x: 3, y: 2, width: 1, height: 1)),
+        ]
+        let model = EditorModel(
+            document: EditorDocument(width: 4, height: 3, layers: layers),
+            sourceURL: URL(fileURLWithPath: "/tmp/source.png")
+        )
+
+        model.rotateCanvas(clockwise: true)
+        let png = try model.exportData(format: "png")
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: png))
+
+        XCTAssertEqual(rep.pixelsWide, 3)
+        XCTAssertEqual(rep.pixelsHigh, 4)
+        // Bitmap pixel coordinates start at the top left: clockwise maps
+        // top-left to top-right and bottom-right to bottom-left.
+        assertColor(try XCTUnwrap(rep.colorAt(x: 2, y: 0)), equals: .red)
+        assertColor(try XCTUnwrap(rep.colorAt(x: 0, y: 3)), equals: .blue)
+    }
+
+    func testEraseInverseTransformsRotatedLayerAndRejectsLockedLayer() throws {
+        let opaque = try solidPNG(.white, width: 5, height: 3)
+        let frame = EditorRect(x: 10, y: 20, width: 50, height: 30)
+        let layer = EditorLayer(name: "Rotated", content: .image(opaque, original: opaque), frame: frame, rotation: .pi / 2)
+        let model = EditorModel(
+            document: EditorDocument(width: 80, height: 80, layers: [layer]),
+            sourceURL: URL(fileURLWithPath: "/tmp/source.png")
+        )
+        model.selectedLayerID = layer.id
+
+        // Local point (15, 35) rotates to world point (35, 15), outside the
+        // unrotated frame. Erasing it therefore proves inverse hit testing.
+        try model.erase(at: CGPoint(x: 35, y: 15), radius: 5, restore: false)
+        guard case let .image(edited, _) = model.document.layers[0].content else {
+            return XCTFail("Expected image layer")
+        }
+        let editedRep = try XCTUnwrap(NSBitmapImageRep(data: edited))
+        XCTAssertTrue((0..<editedRep.pixelsWide).contains { x in
+            (0..<editedRep.pixelsHigh).contains { y in
+                (editedRep.colorAt(x: x, y: y)?.alphaComponent ?? 1) < 1
+            }
+        })
+
+        var locked = layer
+        locked.locked = true
+        let lockedModel = EditorModel(
+            document: EditorDocument(width: 80, height: 80, layers: [locked]),
+            sourceURL: URL(fileURLWithPath: "/tmp/source.png")
+        )
+        lockedModel.selectedLayerID = locked.id
+        try lockedModel.erase(at: CGPoint(x: 35, y: 15), radius: 5, restore: false)
+        XCTAssertEqual(lockedModel.document.layers[0], locked)
+        XCTAssertFalse(lockedModel.canUndo)
     }
 
     func testExportRefusesExistingFileWithoutChangingIt() throws {
@@ -100,9 +172,55 @@ final class EditorModelTests: XCTestCase {
     nonisolated static let allTests: [(String, (EditorModelTests) -> () throws -> Void)] = [
         ("testCropTranslatesLayersAndSupportsUndo", { test in { MainActor.assumeIsolated { test.testCropTranslatesLayersAndSupportsUndo() } } }),
         ("testLockedLayerCannotBeDeletedOrReordered", { test in { MainActor.assumeIsolated { test.testLockedLayerCannotBeDeletedOrReordered() } } }),
-        ("testRotateClockwiseSwapsCanvasAndTransformsAsymmetricFrame", { test in { MainActor.assumeIsolated { test.testRotateClockwiseSwapsCanvasAndTransformsAsymmetricFrame() } } }),
+        ("testRotateClockwisePreservesLocalFrameAndTransformsWorldBounds", { test in { MainActor.assumeIsolated { test.testRotateClockwisePreservesLocalFrameAndTransformsWorldBounds() } } }),
+        ("testPixelRendererUsesExactDimensionsAndRotatesAsymmetricColorsClockwise", { test in { try MainActor.assumeIsolated { try test.testPixelRendererUsesExactDimensionsAndRotatesAsymmetricColorsClockwise() } } }),
+        ("testEraseInverseTransformsRotatedLayerAndRejectsLockedLayer", { test in { try MainActor.assumeIsolated { try test.testEraseInverseTransformsRotatedLayerAndRejectsLockedLayer() } } }),
         ("testExportRefusesExistingFileWithoutChangingIt", { test in { try MainActor.assumeIsolated { try test.testExportRefusesExistingFileWithoutChangingIt() } } }),
     ]
+
+    private func worldBounds(of layer: EditorLayer) -> CGRect {
+        let frame = layer.frame.cgRect
+        let center = CGPoint(x: frame.midX, y: frame.midY)
+        let cosine = cos(layer.rotation)
+        let sine = sin(layer.rotation)
+        let corners = [
+            CGPoint(x: frame.minX, y: frame.minY), CGPoint(x: frame.maxX, y: frame.minY),
+            CGPoint(x: frame.maxX, y: frame.maxY), CGPoint(x: frame.minX, y: frame.maxY),
+        ].map { point -> CGPoint in
+            let dx = point.x - center.x
+            let dy = point.y - center.y
+            return CGPoint(x: center.x + dx * cosine - dy * sine, y: center.y + dx * sine + dy * cosine)
+        }
+        let xs = corners.map(\.x)
+        let ys = corners.map(\.y)
+        return CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
+    }
+
+    private func assertRect(_ actual: CGRect, equals expected: CGRect, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(actual.minX, expected.minX, accuracy: 0.0001, file: file, line: line)
+        XCTAssertEqual(actual.minY, expected.minY, accuracy: 0.0001, file: file, line: line)
+        XCTAssertEqual(actual.width, expected.width, accuracy: 0.0001, file: file, line: line)
+        XCTAssertEqual(actual.height, expected.height, accuracy: 0.0001, file: file, line: line)
+    }
+
+    private func solidPNG(_ color: NSColor, width: Int = 1, height: Int = 1) throws -> Data {
+        let rep = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .sRGB, bytesPerRow: width * 4, bitsPerPixel: 32
+        ))
+        for y in 0..<height { for x in 0..<width { rep.setColor(color, atX: x, y: y) } }
+        return try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+    }
+
+    private func assertColor(_ actual: NSColor, equals expected: NSColor, file: StaticString = #filePath, line: UInt = #line) {
+        let lhs = actual.usingColorSpace(.sRGB)!
+        let rhs = expected.usingColorSpace(.sRGB)!
+        XCTAssertEqual(lhs.redComponent, rhs.redComponent, accuracy: 0.01, file: file, line: line)
+        XCTAssertEqual(lhs.greenComponent, rhs.greenComponent, accuracy: 0.01, file: file, line: line)
+        XCTAssertEqual(lhs.blueComponent, rhs.blueComponent, accuracy: 0.01, file: file, line: line)
+        XCTAssertEqual(lhs.alphaComponent, rhs.alphaComponent, accuracy: 0.01, file: file, line: line)
+    }
 }
 
 /// Direct swiftc entry point. Compile this file together with EditorModel.swift

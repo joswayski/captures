@@ -288,6 +288,18 @@ private final class PreviewStackModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([artifact.url])
     }
 
+    func save(_ artifact: Artifact) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = artifact.url.lastPathComponent
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let output = panel.url else { return }
+        do {
+            // FileManager copy refuses existing destinations, including source.
+            // Keep the captured file and its history entry intact.
+            try FileManager.default.copyItem(at: artifact.url, to: output)
+        } catch { AppStore.shared.report(error) }
+    }
+
     func dismiss(_ artifact: Artifact) {
         beginExit(artifact, kind: .dismiss)
     }
@@ -295,7 +307,7 @@ private final class PreviewStackModel: ObservableObject {
     func delete(_ artifact: Artifact) {
         let alert = NSAlert()
         alert.messageText = "Delete capture?"
-        alert.informativeText = "This file will be deleted permanently."
+        alert.informativeText = "This file will be moved to Finder Trash and removed from Capture History."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
@@ -705,7 +717,7 @@ private struct PreviewCardView: View {
         return min(1, max(0, elapsed / duration))
     }
 
-    var body: some View {
+    private var cardSurface: some View {
         ZStack {
             cardMedia
             if !compact {
@@ -730,13 +742,25 @@ private struct PreviewCardView: View {
                 .stroke(Color.white.opacity(state.exit == .delete ? 0 : 0.08))
         )
         .shadow(color: .black.opacity(state.exit == .delete ? 0 : 0.38), radius: 7, y: 6)
+    }
+
+    private var positionedCard: some View {
+        cardSurface
         .opacity(state.exit == .dismiss ? 0 : 1)
         .offset(x: dismissOffset)
         .scaleEffect(state.exit == .delete && state.dust.isEmpty ? 0.8 : compactScale)
-        .rotation3DEffect(.degrees(compact ? -Double(pose * (0.8 - 0.1 * fan) * model.gravity) : 0), axis: (x: 1, y: 0, z: 0), perspective: 1 / 900)
+        .rotation3DEffect(.degrees(tilt), axis: (x: 1, y: 0, z: 0), perspective: 1.0 / 900.0)
         .rotationEffect(.degrees(compactRotation))
         .offset(x: compactOffset.width, y: compactOffset.height + model.survivorOffset(for: state.id))
         .zIndex(Double(80 - depth))
+    }
+
+    private var tilt: Double {
+        compact ? -Double(pose * (0.8 - 0.1 * fan) * model.gravity) : 0
+    }
+
+    var body: some View {
+        positionedCard
         .onHover { inside in
             guard !compact, state.exit == nil else { return }
             withAnimation(model.reduceMotion ? nil : .easeOut(duration: 0.18)) { hovered = inside }
@@ -798,12 +822,15 @@ private struct PreviewCardView: View {
 
             VStack(spacing: 8) {
                 Button(action: { model.copy(state.artifact) }) { Label("Copy", systemImage: "doc.on.doc") }
-                Button(action: { model.reveal(state.artifact) }) { Label("Show in Folder", systemImage: "folder") }
+                Button(action: { model.save(state.artifact) }) { Label("Save", systemImage: "square.and.arrow.down") }
                     .foregroundColor(.black.opacity(0.86))
                     .background(NativeTheme.accent, in: RoundedRectangle(cornerRadius: 7))
             }
             .buttonStyle(PreviewActionButtonStyle())
             .frame(width: 140)
+            .contextMenu {
+                Button("Show in Folder") { model.reveal(state.artifact) }
+            }
         }
         .transition(.opacity)
     }

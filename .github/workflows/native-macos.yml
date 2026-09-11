@@ -34,3 +34,13 @@ jobs:
           name: captures-native-macos-experiment
           path: experiments/macos-native/build/Captures-Native-Experiment.zip
           if-no-files-found: error
+      - name: Render native Preferences references
+        timeout-minutes: 2
+        env:
+          CAPTURES_NATIVE_DATA: ${{ runner.temp }}/captures-native-render-profile
+        run: experiments/macos-native/build/render-references experiments/macos-native/build/references
+      - uses: actions/upload-artifact@v4
+        with:
+          name: captures-native-macos-references
+          path: experiments/macos-native/build/references/*.png
+          if-no-files-found: error

@@ -386,13 +386,21 @@ final class EditorModel: ObservableObject {
             $0.height = width
             for index in $0.layers.indices {
                 let frame = $0.layers[index].frame
+                let center = CGPoint(x: frame.cgRect.midX, y: frame.cgRect.midY)
+                let rotatedCenter: CGPoint
                 if clockwise {
-                    $0.layers[index].frame = EditorRect(x: oldHeight - frame.y - frame.height, y: frame.x, width: frame.height, height: frame.width)
+                    rotatedCenter = CGPoint(x: oldHeight - center.y, y: center.x)
                     $0.layers[index].rotation += .pi / 2
                 } else {
-                    $0.layers[index].frame = EditorRect(x: frame.y, y: oldWidth - frame.x - frame.width, width: frame.height, height: frame.width)
+                    rotatedCenter = CGPoint(x: center.y, y: oldWidth - center.x)
                     $0.layers[index].rotation -= .pi / 2
                 }
+                $0.layers[index].frame = EditorRect(
+                    x: rotatedCenter.x - frame.width / 2,
+                    y: rotatedCenter.y - frame.height / 2,
+                    width: frame.width,
+                    height: frame.height
+                )
             }
         }
     }
@@ -412,8 +420,19 @@ final class EditorModel: ObservableObject {
 
     func erase(at documentPoint: CGPoint, radius: CGFloat, restore: Bool) throws {
         guard let index = selectedLayerIndex else { return }
-        let frame = document.layers[index].frame.cgRect
-        guard frame.contains(documentPoint), case let .image(currentData, originalData) = document.layers[index].content,
+        let layer = document.layers[index]
+        guard !layer.locked else { return }
+        let frame = layer.frame.cgRect
+        let center = CGPoint(x: frame.midX, y: frame.midY)
+        let dx = documentPoint.x - center.x
+        let dy = documentPoint.y - center.y
+        let cosine = cos(-layer.rotation)
+        let sine = sin(-layer.rotation)
+        let localDocumentPoint = CGPoint(
+            x: center.x + dx * cosine - dy * sine,
+            y: center.y + dx * sine + dy * cosine
+        )
+        guard frame.contains(localDocumentPoint), case let .image(currentData, originalData) = layer.content,
               let current = NSImage(data: currentData), let original = NSImage(data: originalData),
               let currentCG = current.cgImage(forProposedRect: nil, context: nil, hints: nil),
               let originalCG = original.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
@@ -426,8 +445,8 @@ final class EditorModel: ObservableObject {
         var originalPixels = [UInt8](repeating: 0, count: pixels.count)
         let originalContext = CGContext(data: &originalPixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
         originalContext.draw(originalCG, in: CGRect(x: 0, y: 0, width: width, height: height))
-        let centerX = (documentPoint.x - frame.minX) / frame.width * CGFloat(width)
-        let centerY = (documentPoint.y - frame.minY) / frame.height * CGFloat(height)
+        let centerX = (localDocumentPoint.x - frame.minX) / frame.width * CGFloat(width)
+        let centerY = (localDocumentPoint.y - frame.minY) / frame.height * CGFloat(height)
         let pixelRadius = max(1, radius * CGFloat(width) / frame.width)
         for y in max(0, Int(centerY - pixelRadius))..<min(height, Int(centerY + pixelRadius + 1)) {
             for x in max(0, Int(centerX - pixelRadius))..<min(width, Int(centerX + pixelRadius + 1))
@@ -448,17 +467,32 @@ final class EditorModel: ObservableObject {
 
     func renderedImage() throws -> NSImage {
         guard document.width > 0, document.height > 0 else { throw EditorError.cannotRender }
-        let size = NSSize(width: document.width, height: document.height)
-        let image = NSImage(size: size)
-        image.lockFocusFlipped(true)
-        defer { image.unlockFocus() }
-        NSColor.clear.setFill()
-        NSRect(origin: .zero, size: size).fill()
-        guard let context = NSGraphicsContext.current?.cgContext else { throw EditorError.cannotRender }
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: nil,
+                width: document.width,
+                height: document.height,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: colorSpace,
+                bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else { throw EditorError.cannotRender }
+        context.setBlendMode(.copy)
+        context.setFillColor(NSColor.clear.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: CGFloat(document.width), height: CGFloat(document.height)))
+        context.setBlendMode(.normal)
+        context.translateBy(x: 0, y: CGFloat(document.height))
+        context.scaleBy(x: 1, y: -1)
+        let graphicsContext = NSGraphicsContext(cgContext: context, flipped: true)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphicsContext
+        defer { NSGraphicsContext.restoreGraphicsState() }
         for layer in document.layers where layer.visible {
             draw(layer, in: context)
         }
-        return image
+        graphicsContext.flushGraphics()
+        guard let image = context.makeImage() else { throw EditorError.cannotRender }
+        return NSImage(cgImage: image, size: NSSize(width: CGFloat(document.width), height: CGFloat(document.height)))
     }
 
     func exportData(format: String, quality: CGFloat = 0.92) throws -> Data {
@@ -522,7 +556,14 @@ final class EditorModel: ObservableObject {
         context.translateBy(x: -frame.midX, y: -frame.midY)
         switch layer.content {
         case let .image(data, _):
-            NSImage(data: data)?.draw(in: frame, from: .zero, operation: .sourceOver, fraction: 1)
+            NSImage(data: data)?.draw(
+                in: frame,
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1,
+                respectFlipped: true,
+                hints: [.interpolation: NSImageInterpolation.high]
+            )
         case let .text(text):
             let font = NSFont.systemFont(ofSize: max(12, frame.height * 0.62), weight: .semibold)
             (text as NSString).draw(in: frame, withAttributes: [.font: font, .foregroundColor: layer.color.nsColor])
