@@ -8,6 +8,7 @@ struct PreferencesView: View {
     @State private var selected = "Appearance"
     @State private var query = ""
     @State private var devices: [[String: String]] = []
+    @State private var microphonePermission = "unknown"
     @State private var loginEnabled = SMAppService.mainApp.status == .enabled
     @FocusState private var finding: Bool
     private let sections = ["Appearance", "Capture", "Shortcuts", "Recording", "GIF export", "Updates", "About"]
@@ -219,9 +220,23 @@ struct PreferencesView: View {
                     Button("Refresh") { loadDevices() }.buttonStyle(CaptureButtonStyle())
                 }
             }
+            .onChange(of: store.settings.microphoneID) { identifier in
+                if !identifier.isEmpty { loadDevices(requestPermission: true) }
+            }
+            if microphonePermission == "denied" {
+                Text("Microphone access is denied. Allow Captures in System Settings › Privacy & Security › Microphone, then try again.")
+                    .font(.system(size: NativeTheme.metric("text-sm")))
+                    .foregroundColor(NativeTheme.signal)
+                Button("Open Microphone Settings") {
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
+                }.buttonStyle(CaptureButtonStyle())
+            } else if microphonePermission == "not_determined" {
+                Button("Allow microphone access") { loadDevices(requestPermission: true) }
+                    .buttonStyle(CaptureButtonStyle())
+            }
             toggle("Exclude Captures controls", "Keep this experiment's windows out of recordings.", $store.settings.excludeControls)
             toggle("Open editor after recording", "Review, trim, crop, and export the recording.", $store.settings.openEditorAfterRecording)
-        }
+        }.onAppear { loadDevices() }
     }
 
     private var gif: some View {
@@ -270,12 +285,16 @@ struct PreferencesView: View {
         }
     }
 
-    private func loadDevices() {
-        Backend.shared.call("describe") { result in
+    private func loadDevices(requestPermission: Bool = false) {
+        Backend.shared.call("microphone_permission", ["request": requestPermission]) { result in
             switch result {
             case .success(let value):
+                microphonePermission = value["status"] as? String ?? "unknown"
                 devices = (value["devices"] as? [[String: Any]] ?? []).map { ["id": $0["id"] as? String ?? "", "name": $0["name"] as? String ?? "Microphone"] }
-            case .failure(let error): store.report(error)
+                if requestPermission && microphonePermission != "authorized" { store.settings.microphoneID = "" }
+            case .failure(let error):
+                if requestPermission { store.settings.microphoneID = "" }
+                store.report(error)
             }
         }
     }

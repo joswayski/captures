@@ -1545,6 +1545,22 @@ struct RegionBorder {
     windows: Vec<gtk::Window>,
 }
 
+fn region_border_geometries(
+    rect: &captures_recording::CaptureRect,
+    origin: (i32, i32),
+) -> Option<[(i32, i32, i32, i32); 4]> {
+    let thickness = 3_i32;
+    let width = i32::try_from(rect.width).ok()?;
+    let height = i32::try_from(rect.height).ok()?;
+    let (x, y) = (origin.0 + rect.x, origin.1 + rect.y);
+    Some([
+        (x, y, width, thickness),
+        (x, y + height - thickness, width, thickness),
+        (x, y, thickness, height),
+        (x + width - thickness, y, thickness, height),
+    ])
+}
+
 impl RegionBorder {
     fn for_target(
         target: &RecordingTarget,
@@ -1554,15 +1570,14 @@ impl RegionBorder {
         let RecordingTarget::Region { rect, .. } = target else {
             return None;
         };
-        let thickness = 3_i32;
-        let width = i32::try_from(rect.width).ok()?;
-        let height = i32::try_from(rect.height).ok()?;
-        let geometries = [
-            (rect.x, rect.y, width, thickness),
-            (rect.x, rect.y + height - thickness, width, thickness),
-            (rect.x, rect.y, thickness, height),
-            (rect.x + width - thickness, rect.y, thickness, height),
-        ];
+        // Regions are monitor-local. Linux GTK positions are desktop-logical;
+        // Windows applies its physical origin and DPI below via SetWindowPos.
+        let origin = if cfg!(target_os = "windows") {
+            (0, 0)
+        } else {
+            (display.x, display.y)
+        };
+        let geometries = region_border_geometries(rect, origin)?;
         let windows = geometries
             .into_iter()
             .map(|(x, y, width, height)| {
@@ -2103,6 +2118,30 @@ fn spin(min: f64, max: f64, step: f64) -> gtk::SpinButton {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn region_guides_translate_all_edges_to_the_selected_monitor() {
+        let rect = captures_recording::CaptureRect {
+            x: 71,
+            y: 43,
+            width: 640,
+            height: 360,
+        };
+        assert_eq!(
+            region_border_geometries(&rect, (-1920, 120)),
+            Some([
+                (-1849, 163, 640, 3),
+                (-1849, 520, 640, 3),
+                (-1849, 163, 3, 360),
+                (-1212, 163, 3, 360),
+            ])
+        );
+        // Windows retains monitor-local input for the later physical placement.
+        assert_eq!(
+            region_border_geometries(&rect, (0, 0)).unwrap()[3],
+            (708, 43, 3, 360)
+        );
+    }
+
     #[test]
     fn segment_inputs_preserve_audio_offsets_and_duration() {
         let info = RecordingSegmentInfo {

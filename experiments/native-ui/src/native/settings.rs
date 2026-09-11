@@ -59,7 +59,12 @@ pub struct RecordingSettings {
 impl Default for RecordingSettings {
     fn default() -> Self {
         Self {
-            video_shortcut: "Control+Shift+Alt+R".into(),
+            video_shortcut: if cfg!(target_os = "windows") {
+                "Super+Alt+R"
+            } else {
+                "Control+Shift+Alt+R"
+            }
+            .into(),
             window_shortcut: "Control+Shift+Alt+W".into(),
             display_shortcut: "Control+Shift+Alt+3".into(),
             gif_shortcut: "Control+Shift+6".into(),
@@ -89,10 +94,20 @@ impl Default for Settings {
             custom_accent: "#32d3ff".into(),
             custom_signal: "#ff4fc3".into(),
             output_directory: data_dir().join("captures"),
-            new_capture_shortcut: "PrintScreen".into(),
+            new_capture_shortcut: if cfg!(target_os = "windows") {
+                "Control+Shift+Space"
+            } else {
+                "PrintScreen"
+            }
+            .into(),
             region_shortcut: "Super+Shift+S".into(),
             window_shortcut: "Alt+PrintScreen".into(),
-            display_shortcut: "Shift+PrintScreen".into(),
+            display_shortcut: if cfg!(target_os = "windows") {
+                "PrintScreen"
+            } else {
+                "Shift+PrintScreen"
+            }
+            .into(),
             auto_copy_to_clipboard: true,
             auto_start_on_selection: false,
             show_mini_previews: true,
@@ -160,8 +175,39 @@ impl Settings {
                 settings.mini_preview_placement = (corner.min(3) as u32) ^ 1;
             }
         }
+        // Earlier builds offered WebM even though the native recorder rejects it.
+        if settings.recording.video_format == "webm" {
+            settings.recording.video_format = "mp4".into();
+        }
+        // The old spin control accepted 1–60, but video capture only accepts
+        // 15/30/60. Round old valid values up without changing GIF frame rates.
+        settings.recording.video_fps = match settings.recording.video_fps {
+            1..=15 => 15,
+            16..=30 => 30,
+            31..=60 => 60,
+            invalid => invalid,
+        };
+        settings.migrate_platform_shortcuts(cfg!(target_os = "windows"));
         settings.validate()?;
         Ok(settings)
+    }
+
+    fn migrate_platform_shortcuts(&mut self, windows: bool) {
+        // Only replace the complete inherited factory set. A partial match may
+        // be intentional customization; never create a duplicate PrintScreen binding.
+        if windows
+            && self.new_capture_shortcut == "PrintScreen"
+            && self.display_shortcut == "Shift+PrintScreen"
+            && self.recording.video_shortcut == "Control+Shift+Alt+R"
+        {
+            let mut migrated = self.clone();
+            migrated.new_capture_shortcut = "Control+Shift+Space".into();
+            migrated.display_shortcut = "PrintScreen".into();
+            migrated.recording.video_shortcut = "Super+Alt+R".into();
+            if crate::desktop::shortcuts(&migrated).is_ok() {
+                *self = migrated;
+            }
+        }
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -193,7 +239,7 @@ impl Settings {
         {
             return Err("Invalid corner or countdown.".into());
         }
-        if !(1..=60).contains(&self.recording.video_fps)
+        if !matches!(self.recording.video_fps, 15 | 30 | 60)
             || !(1..=30).contains(&self.recording.gif_fps)
             || !(2..=256).contains(&self.recording.gif_max_colors)
             || self.recording.gif_max_width < 16
@@ -201,7 +247,7 @@ impl Settings {
             return Err("Invalid recording or GIF limits.".into());
         }
         if !["png", "jpeg", "webp"].contains(&self.screenshot_format.as_str())
-            || !["mp4", "gif", "webm"].contains(&self.recording.video_format.as_str())
+            || !["mp4", "gif"].contains(&self.recording.video_format.as_str())
         {
             return Err("Unsupported output format.".into());
         }
@@ -250,6 +296,74 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unsupported_webm_preferences_migrate_but_cannot_be_saved_again() {
+        let mut settings = Settings::default();
+        settings.recording.video_format = "webm".into();
+        settings.recording.video_fps = 30;
+        assert!(settings.validate().is_err());
+        let migrated = Settings::from_bytes(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert_eq!(migrated.recording.video_format, "mp4");
+        assert_eq!(migrated.recording.video_fps, 30);
+        settings.recording.video_format = "gif".into();
+        let gif = Settings::from_bytes(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert_eq!(gif.recording.video_format, "gif");
+    }
+
+    #[test]
+    fn video_fps_migration_respects_recorder_boundaries_and_preserves_gif_fps() {
+        for (old, expected) in [
+            (1, 15),
+            (15, 15),
+            (16, 30),
+            (24, 30),
+            (30, 30),
+            (31, 60),
+            (60, 60),
+        ] {
+            let mut settings = Settings::default();
+            settings.recording.video_fps = old;
+            settings.recording.gif_fps = 17;
+            assert_eq!(settings.validate().is_ok(), old == expected);
+            let migrated = Settings::from_bytes(&serde_json::to_vec(&settings).unwrap()).unwrap();
+            assert_eq!(migrated.recording.video_fps, expected);
+            assert_eq!(migrated.recording.gif_fps, 17);
+        }
+        for invalid in [0, 61] {
+            let mut settings = Settings::default();
+            settings.recording.video_fps = invalid;
+            assert!(Settings::from_bytes(&serde_json::to_vec(&settings).unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn windows_shortcut_migration_preserves_linux_and_custom_bindings() {
+        let mut legacy = Settings {
+            new_capture_shortcut: "PrintScreen".into(),
+            display_shortcut: "Shift+PrintScreen".into(),
+            ..Settings::default()
+        };
+        legacy.recording.video_shortcut = "Control+Shift+Alt+R".into();
+        legacy.migrate_platform_shortcuts(false);
+        assert_eq!(legacy.new_capture_shortcut, "PrintScreen");
+        let mut customized = legacy.clone();
+        customized.display_shortcut = "Control+Shift+Space".into();
+        customized.migrate_platform_shortcuts(true);
+        assert_eq!(customized.new_capture_shortcut, "PrintScreen");
+        assert_eq!(customized.display_shortcut, "Control+Shift+Space");
+        let mut conflict = legacy.clone();
+        conflict.region_shortcut = "Super+Alt+R".into();
+        conflict.migrate_platform_shortcuts(true);
+        assert_eq!(conflict.recording.video_shortcut, "Control+Shift+Alt+R");
+        assert!(crate::desktop::shortcuts(&conflict).is_ok());
+        legacy.migrate_platform_shortcuts(true);
+        legacy.migrate_platform_shortcuts(true);
+        assert_eq!(legacy.new_capture_shortcut, "Control+Shift+Space");
+        assert_eq!(legacy.display_shortcut, "PrintScreen");
+        assert_eq!(legacy.recording.video_shortcut, "Super+Alt+R");
+        assert!(crate::desktop::shortcuts(&legacy).is_ok());
+    }
+
     #[test]
     fn migrates_native_preferences_without_resetting_output_or_capture_choices() {
         let output = if cfg!(target_os = "windows") {

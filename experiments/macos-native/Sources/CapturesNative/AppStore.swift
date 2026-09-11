@@ -18,7 +18,11 @@ final class AppStore: NSObject, ObservableObject, NSWindowDelegate {
     private override init() {
         super.init()
         do {
-            settings = try NativeStorage.read(NativeSettings.self, from: Self.dataDirectory.appendingPathComponent("settings.json")) ?? NativeSettings()
+            let settingsURL = Self.dataDirectory.appendingPathComponent("settings.json")
+            let loaded = try NativeStorage.read(NativeSettings.self, from: settingsURL) ?? NativeSettings()
+            settings = loaded
+            settings.migrateShortcuts()
+            if settings != loaded { try NativeStorage.write(settings, to: settingsURL) }
             artifacts = NativeStorage.recent(try NativeStorage.read([Artifact].self, from: Self.dataDirectory.appendingPathComponent("history.json")) ?? [])
         } catch { loadingError = error }
         $settings.dropFirst().removeDuplicates().sink { [weak self] _ in

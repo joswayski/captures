@@ -19,6 +19,12 @@ pub struct DescribeRequest {
     pub request_permission: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct MicrophonePermissionRequest {
+    #[serde(default)]
+    pub request: bool,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ScreenshotTarget {

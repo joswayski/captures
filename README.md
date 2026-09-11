@@ -190,6 +190,10 @@ exact visual/animation parity and macOS performance remain unverified. The linke
 notes list functional gaps and the procedure for collecting matched screenshots
 and measurements on a Mac.
 
+The [cross-platform native parity audit](docs/native-parity-audit.md) consolidates
+confirmed defects, follow-up fixes, missing features, and OS testing requirements.
+The experiments are not feature-equivalent to the Tauri app described above.
+
 ## License and trademarks
 
 The source code is licensed under the [Apache License 2.0](LICENSE).

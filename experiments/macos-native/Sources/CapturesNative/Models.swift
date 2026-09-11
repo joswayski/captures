@@ -59,6 +59,16 @@ struct NativeSettings: Codable, Equatable {
     // Carbon key codes and modifier masks. The experiment never modifies the
     // user's macOS Screenshot shortcuts; conflicts are reported instead.
     var shortcuts: [Shortcut] = Shortcut.defaults
+
+    mutating func migrateShortcuts() {
+        let existing = Set(shortcuts.map(\.id))
+        shortcuts.append(contentsOf: Shortcut.defaults.filter { !existing.contains($0.id) })
+    }
+}
+
+struct CaptureRoute: Equatable {
+    var kind: String
+    var target: String
 }
 
 struct Shortcut: Codable, Equatable, Identifiable {
@@ -72,9 +82,23 @@ struct Shortcut: Codable, Equatable, Identifiable {
         Shortcut(id: "window", title: "Capture window", keyCode: 13, modifiers: 768),
         Shortcut(id: "display", title: "Capture display", keyCode: 20, modifiers: 768),
         Shortcut(id: "record", title: "Record region", keyCode: 23, modifiers: 768),
+        Shortcut(id: "record-gif", title: "Record GIF", keyCode: 22, modifiers: 768),
         Shortcut(id: "record-window", title: "Record window", keyCode: 13, modifiers: 2816),
         Shortcut(id: "record-display", title: "Record display", keyCode: 20, modifiers: 2816),
     ]
+
+    static func route(for action: String) -> CaptureRoute? {
+        switch action {
+        case "capture", "region": CaptureRoute(kind: "image", target: "region")
+        case "window": CaptureRoute(kind: "image", target: "window")
+        case "display": CaptureRoute(kind: "image", target: "display")
+        case "record": CaptureRoute(kind: "video", target: "region")
+        case "record-gif": CaptureRoute(kind: "gif", target: "region")
+        case "record-window": CaptureRoute(kind: "video", target: "window")
+        case "record-display": CaptureRoute(kind: "video", target: "display")
+        default: nil
+        }
+    }
 }
 
 enum NativeStorage {

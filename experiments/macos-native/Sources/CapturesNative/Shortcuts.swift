@@ -41,15 +41,8 @@ final class ShortcutManager {
 
     private func invoke(_ id: UInt32) { if let action = actions[id] { route(action) } }
     func route(_ action: String) {
-        switch action {
-        case "capture", "region": CaptureController.shared.show(kind: "image", target: "region")
-        case "window": CaptureController.shared.show(kind: "image", target: "window")
-        case "display": CaptureController.shared.show(kind: "image", target: "display")
-        case "record": CaptureController.shared.show(kind: "video", target: "region")
-        case "record-window": CaptureController.shared.show(kind: "video", target: "window")
-        case "record-display": CaptureController.shared.show(kind: "video", target: "display")
-        default: break
-        }
+        guard let route = Shortcut.route(for: action) else { return }
+        CaptureController.shared.show(kind: route.kind, target: route.target)
     }
 }
 

@@ -875,7 +875,7 @@ pub fn open(
         ), false, false, 0,
     );
     let video_format = combo(
-        &[("mp4", "MP4"), ("gif", "GIF"), ("webm", "WebM")],
+        &[("mp4", "MP4"), ("gif", "GIF")],
         &initial.recording.video_format,
         staged(&draft, &committed, &apply, &status, |s, v| {
             s.recording.video_format = v
@@ -891,13 +891,11 @@ pub fn open(
         false,
         0,
     );
-    let fps = spin(
-        1.,
-        60.,
-        1.,
-        initial.recording.video_fps.into(),
-        staged(&draft, &committed, &apply, &status, |s, v| {
-            s.recording.video_fps = v as u16
+    let fps = combo(
+        &[("15", "15 fps"), ("30", "30 fps"), ("60", "60 fps")],
+        &initial.recording.video_fps.to_string(),
+        staged(&draft, &committed, &apply, &status, |s, v: String| {
+            s.recording.video_fps = v.parse().expect("video FPS choices are integers")
         }),
     );
     video.pack_start(

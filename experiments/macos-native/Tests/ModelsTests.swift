@@ -33,6 +33,16 @@ enum ModelsTests {
         let decoded = try JSONDecoder().decode(NativeSettings.self, from: JSONEncoder().encode(defaults))
         precondition(decoded == defaults)
         precondition(Set(defaults.shortcuts.map(\.id)).count == defaults.shortcuts.count)
-        print("ModelsTests: artifact validation, 30-day boundary, ordering, private atomic storage, settings round-trip passed")
+        precondition(Shortcut.route(for: "record-gif") == CaptureRoute(kind: "gif", target: "region"))
+        precondition(Shortcut.route(for: "unknown") == nil)
+        var customized = defaults
+        customized.shortcuts.removeAll { $0.id == "record-gif" }
+        customized.shortcuts[0].keyCode = 42
+        customized.migrateShortcuts()
+        precondition(customized.shortcuts.first?.keyCode == 42, "Migration overwrote a customized shortcut")
+        precondition(customized.shortcuts.last(where: { $0.id == "record-gif" })?.keyCode == 22)
+        customized.migrateShortcuts()
+        precondition(customized.shortcuts.filter { $0.id == "record-gif" }.count == 1)
+        print("ModelsTests: storage, settings, shortcut routing and migration passed")
     }
 }

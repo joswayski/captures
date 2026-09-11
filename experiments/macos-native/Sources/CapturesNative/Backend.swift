@@ -9,6 +9,7 @@ final class Backend {
     static let shared = Backend()
     private let queue = DispatchQueue(label: "es.captur.native.engine", qos: .userInitiated)
     private let mediaQueue = DispatchQueue(label: "es.captur.native.media", qos: .userInitiated)
+    private let permissionQueue = DispatchQueue(label: "es.captur.native.permission", qos: .userInitiated)
 
     // Never block AppKit on permission prompts, capture, encoding, or Rust's
     // serialized recording state machine. All view callbacks return on main.
@@ -16,7 +17,10 @@ final class Backend {
               completion: @escaping (Result<[String: Any], Error>) -> Void) {
         // Long stateless exports must not delay pause/stop/status or overlay
         // session checks. Rust likewise dispatches these outside its engine.
-        let destination = ["media_probe", "media_export", "image_encode"].contains(op) ? mediaQueue : queue
+        // TCC can wait for user input; neither media exports nor the recording
+        // safety/status queue should wait behind that prompt.
+        let destination = op == "microphone_permission" ? permissionQueue :
+            (["media_probe", "media_export", "image_encode"].contains(op) ? mediaQueue : queue)
         destination.async {
             let result = Result<[String: Any], Error> {
                 var request = fields
