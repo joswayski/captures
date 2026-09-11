@@ -12,7 +12,8 @@ recording playback, history, preferences, shortcuts and recovery. It is much mor
 than the original screenshot probe, but **not yet a no-regressions replacement**.
 The shipping cross-platform Tauri app and its release pipeline are unchanged.
 A subsequent [Windows port](windows-native-implementation.md) now shares this
-frontend. Its verification is documented separately; macOS native work has not started.
+frontend. A separate [macOS-native experiment](macos-native-implementation.md) is
+also in development. Each port's verification is documented separately.
 
 ## Implemented behavior and evidence
 
