@@ -174,15 +174,6 @@ final class EditorModelTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: output), sentinel)
     }
 
-    nonisolated static let allTests: [(String, (EditorModelTests) -> () throws -> Void)] = [
-        ("testCropTranslatesLayersAndSupportsUndo", { test in { MainActor.assumeIsolated { test.testCropTranslatesLayersAndSupportsUndo() } } }),
-        ("testLockedLayerCannotBeDeletedOrReordered", { test in { MainActor.assumeIsolated { test.testLockedLayerCannotBeDeletedOrReordered() } } }),
-        ("testRotateClockwisePreservesLocalFrameAndTransformsWorldBounds", { test in { MainActor.assumeIsolated { test.testRotateClockwisePreservesLocalFrameAndTransformsWorldBounds() } } }),
-        ("testPixelRendererUsesExactDimensionsAndRotatesAsymmetricColorsClockwise", { test in { try MainActor.assumeIsolated { try test.testPixelRendererUsesExactDimensionsAndRotatesAsymmetricColorsClockwise() } } }),
-        ("testEraseInverseTransformsRotatedLayerAndRejectsLockedLayer", { test in { try MainActor.assumeIsolated { try test.testEraseInverseTransformsRotatedLayerAndRejectsLockedLayer() } } }),
-        ("testExportRefusesExistingFileWithoutChangingIt", { test in { try MainActor.assumeIsolated { try test.testExportRefusesExistingFileWithoutChangingIt() } } }),
-    ]
-
     private func worldBounds(of layer: EditorLayer) -> CGRect {
         let frame = layer.frame.cgRect
         let center = CGPoint(x: frame.midX, y: frame.midY)
@@ -234,6 +225,22 @@ final class EditorModelTests: XCTestCase {
 @MainActor
 struct EditorModelTestRunner {
     static func main() {
-        XCTMain([testCase(EditorModelTests.allTests)])
+        let reporter = FailureReporter()
+        XCTestObservationCenter.shared.addTestObserver(reporter)
+        let suite = XCTestSuite(forTestCaseClass: EditorModelTests.self)
+        suite.run()
+        guard let run = suite.testRun, run.executionCount > 0 else {
+            fputs("EditorModelTests: no tests executed\n", stderr)
+            exit(1)
+        }
+        print("EditorModelTests: \(run.executionCount) executed, \(run.totalFailureCount) failures")
+        exit(run.hasSucceeded && run.executionCount == suite.testCaseCount ? 0 : 1)
+    }
+
+    private final class FailureReporter: NSObject, XCTestObservation {
+        func testCase(_ testCase: XCTestCase, didFailWithDescription description: String,
+                      inFile filePath: String?, atLine lineNumber: Int) {
+            fputs("\(testCase.name): \(filePath ?? "unknown"):\(lineNumber): \(description)\n", stderr)
+        }
     }
 }
