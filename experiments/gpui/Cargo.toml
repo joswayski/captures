@@ -1,0 +1,39 @@
+[package]
+name = "captures-gpui"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+publish = false
+
+[workspace]
+
+[dependencies]
+gpui = "=0.2.2"
+anyhow = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+global-hotkey = "=0.8.0"
+ksni = { version = "=0.3.6", default-features = false, features = ["async-io", "blocking"] }
+x11rb = { version = "0.13", features = ["shape"] }
+tempfile = "3"
+base64 = "0.22"
+open = "5"
+trash = "5"
+cairo-rs = { version = "0.18", features = ["png"] }
+jpeg-encoder = "0.6"
+png = "0.17"
+quantette = { version = "0.6", default-features = false, features = ["image", "std", "threads"] }
+webp = { version = "0.3", default-features = false }
+captures-capture = { path = "../../crates/captures-capture" }
+captures-media = { path = "../../crates/captures-media" }
+captures-recording = { path = "../../crates/captures-recording" }
+captures-recording-xcap = { path = "../../crates/captures-recording-xcap" }
+captures-session = { path = "../../crates/captures-session" }
+
+[profile.release]
+strip = true
+
+[profile.dev]
+debug = 0
