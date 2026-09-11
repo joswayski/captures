@@ -31,10 +31,32 @@ struct App {
 }
 
 pub fn run() {
+    #[cfg(target_os = "windows")]
+    let _runtime = match crate::windows::runtime() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            use std::os::windows::ffi::OsStrExt;
+            let text: Vec<u16> = std::ffi::OsStr::new(&error)
+                .encode_wide()
+                .chain(Some(0))
+                .collect();
+            // SAFETY: valid terminated text and no owner; GTK is not initialized.
+            unsafe {
+                windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
+                    std::ptr::null_mut(),
+                    text.as_ptr(),
+                    windows_sys::w!("Captures native startup"),
+                    0x10,
+                );
+            }
+            return;
+        }
+    };
     if let Err(error) = gtk::init() {
-        eprintln!("A Linux graphical session is required: {error}");
+        eprintln!("A graphical desktop session is required: {error}");
         return;
     }
+    #[cfg(target_os = "linux")]
     if std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland")
         || std::env::var_os("DISPLAY").is_none()
     {
@@ -44,11 +66,39 @@ pub fn run() {
         );
         return;
     }
+    #[cfg(target_os = "windows")]
+    let instance = match crate::windows::instance(std::env::args().skip(1).collect()) {
+        Ok(Some(instance)) => instance,
+        Ok(None) => return,
+        Err(error) => {
+            ui::error(&gtk::Window::new(gtk::WindowType::Toplevel), &error);
+            return;
+        }
+    };
+    let flags = gio::ApplicationFlags::HANDLES_COMMAND_LINE;
+    #[cfg(target_os = "windows")]
+    let flags = flags | gio::ApplicationFlags::NON_UNIQUE;
     let application = gtk::Application::new(
-        Some("es.captur.LinuxNativePreview"),
-        gio::ApplicationFlags::HANDLES_COMMAND_LINE,
+        Some(if cfg!(target_os = "windows") {
+            "es.captur.WindowsNativePreview"
+        } else {
+            "es.captur.LinuxNativePreview"
+        }),
+        flags,
     );
     let state = Rc::new(RefCell::new(None::<Rc<App>>));
+    #[cfg(target_os = "windows")]
+    {
+        let state = state.clone();
+        glib::timeout_add_local(Duration::from_millis(30), move || {
+            if let Some(app) = state.borrow().as_ref() {
+                for args in instance.take_commands() {
+                    app.command(&args);
+                }
+            }
+            glib::ControlFlow::Continue
+        });
+    }
     application.connect_command_line(move |application, command| {
         if state.borrow().is_none() {
             *state.borrow_mut() = Some(App::new(application));
@@ -60,6 +110,15 @@ pub fn run() {
             .skip(1)
             .map(|s| s.to_string_lossy().into_owned())
             .collect();
+        app.command(&args);
+        0
+    });
+    application.run();
+}
+
+impl App {
+    fn command(self: &Rc<Self>, args: &[String]) {
+        let app = self;
         match args.first().map(String::as_str) {
             Some("--background") => app.window.hide(),
             Some("--preferences") => app.action(Action::Preferences),
@@ -84,17 +143,16 @@ pub fn run() {
             Some(path) if !path.starts_with('-') => app.open(path.into()),
             _ => app.action(Action::Preferences),
         }
-        0
-    });
-    application.run();
-}
+    }
 
-impl App {
     fn new(application: &gtk::Application) -> Rc<Self> {
         let settings = Settings::load().unwrap_or_else(|e| {
             eprintln!("Native settings: {e}");
             Settings::default()
         });
+        #[cfg(target_os = "windows")]
+        let system_dark = crate::windows::system_dark();
+        #[cfg(not(target_os = "windows"))]
         let system_dark = gtk::Settings::default().is_some_and(|s| {
             s.is_gtk_application_prefer_dark_theme()
                 || s.gtk_theme_name()
@@ -104,7 +162,11 @@ impl App {
         let settings = Rc::new(RefCell::new(settings));
         let window = gtk::Window::new(gtk::WindowType::Toplevel);
         application.add_window(&window);
-        window.set_title("Captures — Linux native");
+        window.set_title(if cfg!(target_os = "windows") {
+            "Captures — Windows native"
+        } else {
+            "Captures — Linux native"
+        });
         // A hidden application owner, not an invented launcher screen. New
         // capture opens the same selector used by the tray and global shortcut.
         let status = ui::label("Ready · Choose a capture target", "muted");
@@ -175,6 +237,24 @@ impl App {
             system_dark: Cell::new(system_dark),
         });
         *weak_slot.borrow_mut() = Rc::downgrade(&app);
+        #[cfg(target_os = "windows")]
+        {
+            let weak = Rc::downgrade(&app);
+            glib::timeout_add_local(Duration::from_secs(2), move || {
+                let Some(app) = weak.upgrade() else {
+                    return glib::ControlFlow::Break;
+                };
+                let dark = crate::windows::system_dark();
+                if app.system_dark.replace(dark) != dark {
+                    let config = app.settings.borrow();
+                    if config.appearance == "system" {
+                        apply_theme(&config, dark);
+                    }
+                }
+                glib::ControlFlow::Continue
+            });
+        }
+        #[cfg(not(target_os = "windows"))]
         if let Some(gtk_settings) = gtk::Settings::default() {
             let weak = Rc::downgrade(&app);
             gtk_settings.connect_gtk_theme_name_notify(move |system| {
@@ -597,6 +677,8 @@ impl App {
                                         on_finished: Some(Rc::new(move || {
                                             finished.finish_capture();
                                         })),
+                                        include_controls: config
+                                            .include_recording_controls_in_captures,
                                         preferred_video_format: match r.video_format.as_str() {
                                             "webm" => captures_media::ExportFormat::WebM,
                                             "gif" => captures_media::ExportFormat::Gif,

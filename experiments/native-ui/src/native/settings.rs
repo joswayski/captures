@@ -1,4 +1,4 @@
-//! Native settings mirror the shipping Linux preference contract, with isolated storage.
+//! Native settings mirror the shipping preference contract, with isolated storage.
 use captures_recording::MaxResolution;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -23,6 +23,7 @@ pub struct Settings {
     pub show_mini_previews: bool,
     pub mini_preview_placement: u32,
     pub include_mini_previews_in_captures: bool,
+    pub include_recording_controls_in_captures: bool,
     pub launch_at_login: bool,
     pub screenshot_countdown_seconds: u8,
     pub freeze_screen: bool,
@@ -97,6 +98,7 @@ impl Default for Settings {
             show_mini_previews: true,
             mini_preview_placement: 0,
             include_mini_previews_in_captures: false,
+            include_recording_controls_in_captures: false,
             launch_at_login: false,
             screenshot_countdown_seconds: 0,
             freeze_screen: true,
@@ -112,6 +114,9 @@ pub fn data_dir() -> PathBuf {
     std::env::var_os("CAPTURES_NATIVE_DATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
+            #[cfg(target_os = "windows")]
+            return gtk::glib::user_data_dir().join("captures-windows-native");
+            #[cfg(not(target_os = "windows"))]
             std::env::var_os("XDG_DATA_HOME")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| {
@@ -213,24 +218,27 @@ impl Settings {
 }
 
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt;
     let parent = path.parent().ok_or("Missing parent directory")?;
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "windows")]
+    crate::windows::private_directory(parent).map_err(|e| e.to_string())?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_nanos();
     let temp = parent.join(format!(".write-{}-{stamp}", std::process::id()));
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&temp)
-        .map_err(|e| e.to_string())?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&temp).map_err(|e| e.to_string())?;
     let result = (|| {
         file.write_all(bytes)
             .and_then(|_| file.sync_all())
             .map_err(|e| e.to_string())?;
+        drop(file);
         std::fs::rename(&temp, path).map_err(|e| e.to_string())
     })();
     if result.is_err() {
@@ -244,8 +252,14 @@ mod tests {
     use super::*;
     #[test]
     fn migrates_native_preferences_without_resetting_output_or_capture_choices() {
-        let settings=Settings::from_bytes(br#"{"output":"/tmp/chosen", "fps":60,"countdown":5,"cursor":false,"corner":3,"appearance":"dark"}"#).unwrap();
-        assert_eq!(settings.output_directory, PathBuf::from("/tmp/chosen"));
+        let output = if cfg!(target_os = "windows") {
+            r"C:\Temp\chosen"
+        } else {
+            "/tmp/chosen"
+        };
+        let fixture = serde_json::json!({"output": output, "fps": 60, "countdown": 5, "cursor": false, "corner": 3, "appearance": "dark"});
+        let settings = Settings::from_bytes(&serde_json::to_vec(&fixture).unwrap()).unwrap();
+        assert_eq!(settings.output_directory, PathBuf::from(output));
         assert_eq!(settings.recording.video_fps, 60);
         assert_eq!(settings.recording.countdown_seconds, 5);
         assert_eq!(settings.screenshot_countdown_seconds, 5);

@@ -26,6 +26,20 @@ pub struct Selection {
 }
 
 pub fn pointer() -> (i32, i32) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::{Foundation::POINT, UI::WindowsAndMessaging::GetCursorPos};
+
+        let mut point = POINT { x: 0, y: 0 };
+        // SAFETY: `point` is valid writable storage for the duration of the call.
+        if unsafe { GetCursorPos(&mut point) } != 0 {
+            (point.x, point.y)
+        } else {
+            (0, 0)
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
     gdk::Display::default()
         .and_then(|d| d.default_seat())
         .and_then(|s| s.pointer())
@@ -62,6 +76,7 @@ fn select_display(
             if !captures_session::capture_session_available() {
                 return Err("Capture is unavailable: desktop locked, inactive, or its session state cannot be verified.".into());
             }
+            captures_session::dismiss_transient_shell_ui_before_capture();
             let backend = XcapBackend;
             let displays = backend.displays().map_err(|e| e.to_string())?;
             let frame = match display {
@@ -110,10 +125,74 @@ pub fn refresh(selection: &Selection, show_cursor: bool) -> Result<RgbaImage, St
         }
         return Ok(image);
     }
-    let frame = XcapBackend
+    let mut frame = XcapBackend
         .capture_display(&selection.display.id)
         .map_err(|e| e.to_string())?;
+    normalize_display_scale(&mut frame.descriptor, selection.display.scale_factor);
     crop(&frame, selection.rect, show_cursor.then_some(cursor))
+}
+
+fn normalize_display_scale(display: &mut DisplayDescriptor, gtk_scale: f64) {
+    #[cfg(target_os = "windows")]
+    {
+        display.scale_factor = gtk_scale.max(1.0);
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = (display, gtk_scale);
+}
+
+fn overlay_point_to_physical(display: &DisplayDescriptor, x: f64, y: f64) -> (f64, f64) {
+    overlay_point_to_global(
+        display,
+        x,
+        y,
+        DisplayDescriptor::reports_physical_geometry(),
+    )
+}
+
+fn overlay_point_to_global(
+    display: &DisplayDescriptor,
+    x: f64,
+    y: f64,
+    physical_geometry: bool,
+) -> (f64, f64) {
+    if physical_geometry {
+        (
+            f64::from(display.x) + x * display.scale_factor,
+            f64::from(display.y) + y * display.scale_factor,
+        )
+    } else {
+        (f64::from(display.x) + x, f64::from(display.y) + y)
+    }
+}
+
+fn physical_window_to_overlay(
+    display: &DisplayDescriptor,
+    window: &WindowDescriptor,
+) -> LogicalRect {
+    window_to_overlay(
+        display,
+        window,
+        DisplayDescriptor::reports_physical_geometry(),
+    )
+}
+
+fn window_to_overlay(
+    display: &DisplayDescriptor,
+    window: &WindowDescriptor,
+    physical_geometry: bool,
+) -> LogicalRect {
+    let scale = if physical_geometry {
+        display.scale_factor.max(1.0)
+    } else {
+        1.0
+    };
+    LogicalRect {
+        x: f64::from(window.x - display.x) / scale,
+        y: f64::from(window.y - display.y) / scale,
+        width: f64::from(window.width) / scale,
+        height: f64::from(window.height) / scale,
+    }
 }
 
 fn crop(
@@ -219,7 +298,7 @@ fn overlay(
     initial_mode: CaptureMode,
     initial_kind: u32,
     settings: Settings,
-    frame: DisplayFrame,
+    mut frame: DisplayFrame,
     displays: Vec<DisplayDescriptor>,
     windows: Vec<WindowDescriptor>,
     cursor: (i32, i32),
@@ -235,6 +314,15 @@ fn overlay(
     window.style_context().add_class("floating");
     if let Some(visual) = gtk::prelude::WidgetExt::screen(&window).and_then(|s| s.rgba_visual()) {
         window.set_visual(Some(&visual));
+    }
+    window.realize();
+    normalize_display_scale(&mut frame.descriptor, f64::from(window.scale_factor()));
+    #[cfg(target_os = "windows")]
+    if let Err(error) = crate::windows::exclude_from_capture(&window, true) {
+        window.close();
+        cancelled();
+        ui::error(&gtk::Window::new(gtk::WindowType::Toplevel), &error);
+        return;
     }
     let (ox, oy, width, height) = frame.descriptor.overlay_geometry();
     window.move_(ox as i32, oy as i32);
@@ -893,7 +981,7 @@ fn overlay(
                     *rect.borrow_mut() = Some(drag_rect(drag, x, y, width, height, aspect));
                 }
             } else if mode.get() == CaptureMode::Window && !locked.get() {
-                let (gx, gy) = (x + frame.descriptor.x as f64, y + frame.descriptor.y as f64);
+                let (gx, gy) = overlay_point_to_physical(&frame.descriptor, x, y);
                 *selected.borrow_mut() = windows
                     .iter()
                     .find(|w| {
@@ -903,12 +991,10 @@ fn overlay(
                             && gy < (w.y as f64 + w.height as f64)
                     })
                     .cloned();
-                *rect.borrow_mut() = selected.borrow().as_ref().map(|w| LogicalRect {
-                    x: (w.x - frame.descriptor.x) as f64,
-                    y: (w.y - frame.descriptor.y) as f64,
-                    width: w.width as f64,
-                    height: w.height as f64,
-                });
+                *rect.borrow_mut() = selected
+                    .borrow()
+                    .as_ref()
+                    .map(|w| physical_window_to_overlay(&frame.descriptor, w));
             }
             if let Some(r) = *rect.borrow() {
                 accept.set_sensitive(r.width >= 2. && r.height >= 2.);
@@ -1169,6 +1255,18 @@ fn overlay(
         glib::Propagation::Proceed
     });
     window.show_all();
+    #[cfg(target_os = "windows")]
+    if let Err(error) = crate::windows::place_window(
+        &window,
+        frame.descriptor.x,
+        frame.descriptor.y,
+        frame.descriptor.width as i32,
+        frame.descriptor.height as i32,
+    ) {
+        window.close();
+        ui::error(&gtk::Window::new(gtk::WindowType::Toplevel), &error);
+        return;
+    }
     aspect.set_visible(initial_mode == CaptureMode::Region);
     monitor.set_visible(initial_mode == CaptureMode::Display);
     options.set_visible(initial_kind != 0);
@@ -1299,6 +1397,20 @@ fn badge(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn display(x: i32, y: i32, width: u32, height: u32, scale_factor: f64) -> DisplayDescriptor {
+        DisplayDescriptor {
+            id: "display".into(),
+            name: "Display".into(),
+            x,
+            y,
+            width,
+            height,
+            scale_factor,
+            is_primary: false,
+        }
+    }
+
     #[test]
     fn move_clamps_to_display_without_resizing() {
         let r = LogicalRect {
@@ -1356,5 +1468,60 @@ mod tests {
         let drawn = drag_rect(Drag::New(100., 50.), 420., 230., 1440., 900., Some(1.));
         assert_eq!((drawn.width, drawn.height), (320., 320.));
         assert_eq!(selection_aspect(Some(3)), Some(1.5));
+    }
+
+    #[test]
+    fn windows_negative_origin_and_gtk_scale_map_to_physical_desktop() {
+        let display = display(-2560, 180, 2560, 1440, 2.0);
+        assert_eq!(
+            overlay_point_to_global(&display, 125.0, 70.0, true),
+            (-2310.0, 320.0)
+        );
+    }
+
+    #[test]
+    fn windows_asymmetric_window_bounds_map_back_to_overlay_space() {
+        let display = display(-2560, 180, 2560, 1440, 2.0);
+        let window = WindowDescriptor {
+            id: "window".into(),
+            title: "Window".into(),
+            app_name: None,
+            z_order: 0,
+            x: -2410,
+            y: 260,
+            width: 901,
+            height: 603,
+            display_id: display.id.clone(),
+            corner_radius: None,
+        };
+        let rect = window_to_overlay(&display, &window, true);
+        assert_eq!(
+            (rect.x, rect.y, rect.width, rect.height),
+            (75.0, 40.0, 450.5, 301.5)
+        );
+    }
+
+    #[test]
+    fn refreshed_crop_uses_preserved_gtk_scale() {
+        let display = display(-2560, 180, 2560, 1440, 2.0);
+        let scale = DisplayDescriptor::overlay_to_buffer_scale_for(
+            display.width,
+            display.height,
+            display.scale_factor,
+            2560,
+            1440,
+            true,
+        );
+        let crop = LogicalRect {
+            x: 75.0,
+            y: 40.0,
+            width: 450.5,
+            height: 301.5,
+        }
+        .to_physical(scale, 2560, 1440);
+        assert_eq!(
+            (crop.x, crop.y, crop.width, crop.height),
+            (150, 80, 901, 603)
+        );
     }
 }

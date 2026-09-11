@@ -7,6 +7,11 @@ publish = false
 # Deliberately outside the shipping workspace and release pipeline.
 [workspace]
 
+[features]
+default = ["native", "tauri-probe"]
+native = ["dep:gtk", "dep:global-hotkey", "dep:tray-icon", "dep:png", "dep:quantette", "dep:jpeg-encoder", "dep:webp"]
+tauri-probe = ["dep:tauri", "dep:tauri-build"]
+
 [dependencies]
 captures-capture = { path = "../../crates/captures-capture" }
 captures-recording = { path = "../../crates/captures-recording" }
@@ -17,19 +22,23 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
-tauri = { version = "=2.11.5", features = ["custom-protocol"] }
+tauri = { version = "=2.11.5", features = ["custom-protocol"], optional = true }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-gtk = "0.18"
-global-hotkey = "=0.8.0"
-tray-icon = { version = "=0.24.2", default-features = false, features = ["gtk"] }
-png = "0.17"
-quantette = { version = "0.6", default-features = false, features = ["image", "std", "threads"] }
-jpeg-encoder = "0.6"
-webp = { version = "0.3", default-features = false }
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+gtk = { version = "0.18", optional = true }
+global-hotkey = { version = "=0.8.0", optional = true }
+tray-icon = { version = "=0.24.2", default-features = false, features = ["gtk"], optional = true }
+png = { version = "0.17", optional = true }
+quantette = { version = "0.6", default-features = false, features = ["image", "std", "threads"], optional = true }
+jpeg-encoder = { version = "0.6", optional = true }
+webp = { version = "0.3", default-features = false, optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+tempfile = "3"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_DataExchange", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]
-tauri-build = { version = "=2.6.3", features = [] }
+tauri-build = { version = "=2.6.3", features = [], optional = true }
 
 [dev-dependencies]
 tempfile = "3"
@@ -37,14 +46,22 @@ tempfile = "3"
 [[bin]]
 name = "captures-gtk-probe"
 path = "src/gtk.rs"
+required-features = ["native"]
 
 [[bin]]
 name = "captures-tauri-probe"
 path = "src/tauri.rs"
+required-features = ["tauri-probe"]
 
 [[bin]]
 name = "captures-linux-native"
 path = "src/native.rs"
+required-features = ["native"]
+
+[[bin]]
+name = "captures-windows-native"
+path = "src/windows.rs"
+required-features = ["native"]
 
 [profile.release]
 strip = true
