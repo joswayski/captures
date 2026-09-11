@@ -49,15 +49,18 @@ private final class RecordingEditorModel: ObservableObject {
         self.artifact = artifact
         player = AVPlayer(url: artifact.url)
         periodicObserver = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 20), queue: .main) { [weak self] time in
-            guard let self else { return }
-            let milliseconds = max(0, time.seconds * 1_000)
-            self.playheadMS = milliseconds
-            if milliseconds >= self.trimEndMS {
-                if self.loopEnabled {
-                    self.seek(to: self.trimStartMS)
-                    self.player.play()
-                } else {
-                    self.player.pause()
+            // AVPlayer guarantees this callback runs on the requested main queue.
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let milliseconds = max(0, time.seconds * 1_000)
+                self.playheadMS = milliseconds
+                if milliseconds >= self.trimEndMS {
+                    if self.loopEnabled {
+                        self.seek(to: self.trimStartMS)
+                        self.player.play()
+                    } else {
+                        self.player.pause()
+                    }
                 }
             }
         }

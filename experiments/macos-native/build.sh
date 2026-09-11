@@ -20,7 +20,7 @@ app="$out/Captures Native Experiment.app"
 mkdir -p "$out"
 # Ask rustc for the platform/link dependencies of the whole static library,
 # including the existing ScreenCaptureKit/Swift media writer, not a guessed list.
-CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo rustc --release --locked \
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo rustc --color never --release --locked \
   --manifest-path "$experiment/bridge/Cargo.toml" --target "$rust_target" \
   --target-dir "$out/rust" --lib -- --print native-static-libs 2>&1 | tee "$out/rust-link.log"
 native_links=()
