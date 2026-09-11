@@ -57,6 +57,14 @@ fields, and custom-styled GTK switches and sliders. The gallery includes a scree
 index; the image-editor check also exercises and captures Save hover/focus without
 exporting. GTK menu behavior and text rasterization are still platform-native.
 
+The final alignment pass bottom-aligns the 36px editor save controls, centers layer
+text, removes doubled property-heading margins, and matches the source header and
+footer padding. History Edit uses the primary accent, with destructive hover on
+the 32px trash control. Collapsed preview corners now use the source X/Y offsets,
+depth scale, 900px perspective and backward tilt; projection tests use independently
+measured browser bounds. Native placement still snaps to four corners, rather than
+reproducing the source's continuous mid-screen gravity and drag sway.
+
 ![Capture toolbar](images/native-ui/capture-menu.webp)
 ![Recording target toolbar](images/native-ui/recording-selector.webp)
 ![Region targeting](images/native-ui/region.webp)
@@ -182,7 +190,7 @@ See [DEVELOPMENT.md](../DEVELOPMENT.md#optional-native-ui-experiment) for comman
   for temporary Git-fixture commits; no global signing configuration was changed.
 - Workspace Rust formatting, tests and Clippy passed. One normally ignored
   database integration test was not counted as passed.
-- Standalone locked release build, formatting, 49 native tests plus two original
+- Standalone locked release build, formatting, 51 native tests plus two original
   probe tests, and Clippy with `-D warnings` passed without dead-code suppression.
 - `native_check.py` runs current capture/preferences, image-editor, pointer-preview,
   history and recording checks sequentially. The combined suite passed, including

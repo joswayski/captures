@@ -221,6 +221,7 @@ fn icon_button(label: &str, icon: &str) -> gtk::Button {
 fn field_label(text: &str, widget: &impl IsA<gtk::Widget>) -> gtk::Box {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 4);
     column.style_context().add_class("editor-export-field");
+    column.set_valign(gtk::Align::End);
     column.pack_start(&ui::label(text, "muted"), false, false, 0);
     column.pack_start(widget, false, false, 0);
     column
@@ -309,8 +310,8 @@ fn open_impl(
     let layers = gtk::Box::new(gtk::Orientation::Vertical, 4);
     layers.set_halign(gtk::Align::Fill);
     layers.set_hexpand(true);
-    layers.set_margin_start(14);
-    layers.set_margin_end(14);
+    layers.set_margin_start(2);
+    layers.set_margin_end(2);
     let properties = gtk::Box::new(gtk::Orientation::Vertical, 7);
     properties.set_halign(gtk::Align::Fill);
     properties.set_hexpand(true);
@@ -522,6 +523,8 @@ fn open_impl(
     let layer_header_spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     layer_header.pack_start(&layer_header_spacer, true, true, 0);
     let add_image = icon_button("Add image layer", "plus");
+    add_image.set_valign(gtk::Align::Center);
+    layer_count.set_valign(gtk::Align::Center);
     layer_header.pack_start(&add_image, false, false, 0);
     sidebar.pack_start(&layer_header, false, false, 0);
     let layer_scroll = gtk::ScrolledWindow::new(gtk::Adjustment::NONE, gtk::Adjustment::NONE);
@@ -556,6 +559,7 @@ fn open_impl(
         .to_owned();
     name.set_text(&initial_name);
     name.set_tooltip_text(Some("Saved filename"));
+    ui::named(&name, "Filename");
     let format = gtk::ComboBoxText::new();
     for f in ["PNG", "JPEG", "WebP"] {
         format.append_text(f)
@@ -610,12 +614,33 @@ fn open_impl(
 
     let save_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     save_row.style_context().add_class("editor-save-row");
-    let disclosure = icon_button("Export settings", "chevron-down");
-    disclosure.set_label(&format!(
-        "Export settings\nPNG · {} × {}",
-        state.borrow().doc.width,
-        state.borrow().doc.height
-    ));
+    let disclosure = gtk::Button::new();
+    ui::named(&disclosure, "Export settings");
+    let disclosure_content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let disclosure_text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    disclosure_text.pack_start(
+        &ui::label("Export settings", "export-disclosure-label"),
+        false,
+        false,
+        0,
+    );
+    disclosure_text.pack_start(
+        &ui::label(
+            &format!(
+                "PNG · {} × {}",
+                state.borrow().doc.width,
+                state.borrow().doc.height
+            ),
+            "export-summary",
+        ),
+        false,
+        false,
+        0,
+    );
+    disclosure_content.pack_start(&disclosure_text, true, true, 0);
+    disclosure_content.pack_end(&ui::icon("chevron-down", 15), false, false, 0);
+    disclosure.add(&disclosure_content);
+    disclosure.set_valign(gtk::Align::End);
     disclosure.style_context().add_class("export-disclosure");
     save_row.pack_start(&disclosure, false, false, 0);
     let filename_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -629,10 +654,12 @@ fn open_impl(
     let copy = icon_button("Copy image", "copy");
     copy.set_label("Copy image");
     copy.style_context().add_class("secondary-action");
+    copy.set_valign(gtk::Align::End);
     save_row.pack_start(&copy, false, false, 0);
     let status = gtk::Box::new(gtk::Orientation::Vertical, 2);
     status.set_hexpand(true);
     status.set_halign(gtk::Align::End);
+    status.set_valign(gtk::Align::End);
     let status_notice = ui::label("", "positive");
     status_notice.set_xalign(1.0);
     let save_hint = ui::label(
@@ -653,10 +680,12 @@ fn open_impl(
     make_copy.set_active(state.borrow().source.is_none());
     make_copy.set_sensitive(state.borrow().source.is_some());
     make_copy.style_context().add_class("make-copy");
+    make_copy.set_valign(gtk::Align::End);
     save_row.pack_start(&make_copy, false, false, 0);
     let save = icon_button("Save", "save");
     save.set_label("Save");
     save.style_context().add_class("primary");
+    save.set_valign(gtk::Align::End);
     save_row.pack_start(&save, false, false, 0);
     footer.pack_start(&save_row, false, false, 0);
     root.pack_start(&footer, false, false, 0);
@@ -872,12 +901,12 @@ fn install_editor_css() {
 .editor-window { background: @captures_surface; color: @captures_text; }
 .editor-window .image-editor { background: @captures_surface; color: @captures_text; }
 .editor-window .editor-header {
-  min-height: 52px; padding: 0 20px; border-bottom: 1px solid @captures_border;
+  min-height: 51px; padding: 0 12px; border-bottom: 1px solid @captures_border;
   background: @captures_raised;
 }
 .editor-window .editor-header button { min-width: 34px; min-height: 34px; padding: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; }
 .editor-window .editor-header button:hover { background: alpha(@captures_text,.07); }
-.editor-window .canvas-toolbar { min-height: 34px; padding: 3px; border: 1px solid @captures_border; border-radius: 9px; background: @captures_sunken; }
+.editor-window .canvas-toolbar { min-height: 26px; padding: 3px; border: 1px solid @captures_border; border-radius: 9px; background: @captures_sunken; }
 .editor-window .canvas-toolbar .toolbar-label, .editor-window .canvas-toolbar .canvas-dimensions { color: @captures_text_muted; font-size: 11px; }
 .editor-window .canvas-toolbar .canvas-dimensions { font-family: monospace; padding: 0 6px; }
 .editor-window .canvas-toolbar spinbutton { min-height: 28px; padding: 0; border: 1px solid transparent; border-radius: 5px; background: transparent; font-family: monospace; font-size: 11px; }
@@ -885,7 +914,7 @@ fn install_editor_css() {
 .editor-window .canvas-toolbar spinbutton entry { min-height: 26px; padding: 0 3px; border: 0; background: transparent; }
 .editor-window .canvas-toolbar spinbutton button { min-width: 14px; min-height: 13px; padding: 0; }
 .editor-window .canvas-toolbar .toolbar-split { min-height: 16px; margin: 6px 3px; }
-.editor-window .canvas-toolbar .canvas-tool { min-width: 84px; padding: 0 10px; font-size: 12px; }
+.editor-window .canvas-toolbar .canvas-tool { min-width: 0; min-height: 26px; padding: 0 8px; font-size: 12px; }
 .editor-window .zoom-group { min-height: 34px; border: 1px solid @captures_border; border-radius: 9px; background: @captures_sunken; }
 .editor-window .zoom-group button { min-width: 30px; min-height: 32px; border-radius: 0; border-right: 1px solid @captures_border; }
 .editor-window .zoom-group scale { min-width: 76px; padding: 0 8px; }
@@ -907,6 +936,7 @@ fn install_editor_css() {
 .editor-window .layers-heading button { min-width: 30px; min-height: 30px; padding: 0; border: 0; border-radius: 7px; background: transparent; }
 .editor-window .properties-scroll { border-top: 1px solid @captures_border; }
 .editor-window .editor-sidebar .section-title { margin: 14px 20px 4px; font-size: 11px; font-weight: 600; opacity: .72; }
+.editor-window .editor-property-section .section-title { margin-left: 0; margin-right: 0; }
 .editor-window .editor-sidebar .muted { color: @captures_text_muted; font-size: 12px; }
 .editor-window .editor-sidebar spinbutton { min-width: 70px; }
 .editor-window .editor-property-section { padding: 0 20px 14px; border-bottom: 1px solid @captures_border; }
@@ -920,18 +950,19 @@ fn install_editor_css() {
 .editor-window .editor-layer-row button { min-width: 25px; min-height: 28px; padding: 0; border: 0; border-radius: 5px; background: transparent; opacity: .72; }
 .editor-window .editor-layer-row button:hover { background: alpha(@captures_text,.10); opacity: 1; }
 
-.editor-window .editor-footer { padding: 12px 20px; border-top: 1px solid @captures_border; background: @captures_raised; }
-.editor-window .export-settings { padding: 16px; border: 1px solid @captures_border; border-radius: 12px; background: @captures_sunken; }
+.editor-window .editor-footer { padding: 8px 12px; border-top: 1px solid @captures_border; background: @captures_raised; }
+.editor-window .export-settings { padding: 12px; border: 1px solid @captures_border; border-radius: 12px; background: @captures_sunken; }
 .editor-window .editor-export-field > label { color: @captures_text_muted; font-size: 11px; }
 .editor-window .editor-export-field entry, .editor-window .editor-export-field spinbutton, .editor-window .editor-export-field combobox button, .editor-window .editor-export-field button { min-height: 36px; border: 1px solid @captures_border; border-radius: 7px; background: @captures_surface; }
 .editor-window .editor-save-row { min-height: 56px; }
-.editor-window .export-disclosure { min-width: 180px; min-height: 48px; padding: 4px 12px 4px 16px; border: 1px solid @captures_border; border-radius: 7px; background: @captures_surface; font-size: 11px; }
-.editor-window .filename-row { min-height: 36px; border: 1px solid @captures_border; border-radius: 7px; background: @captures_surface; }
+.editor-window .export-disclosure { min-width: 158px; min-height: 26px; padding: 4px 8px 4px 12px; border: 1px solid @captures_border; border-radius: 7px; background: @captures_surface; font-size: 12px; }
+.editor-window .export-summary { font-family: monospace; font-size: 10px; color: @captures_text_muted; }
+.editor-window .filename-row { min-height: 34px; border: 1px solid @captures_border; border-radius: 7px; background: @captures_surface; }
 .editor-window .filename-row entry { min-height: 34px; padding: 0 10px; border: 0; background: transparent; }
 .editor-window .filename-row combobox button { min-height: 34px; border: 0; border-left: 1px solid @captures_border; border-radius: 0; background: transparent; }
-.editor-window .secondary-action { min-width: 100px; min-height: 40px; padding: 0 14px; border: 1px solid @captures_border; border-radius: 7px; background: @captures_surface; }
-.editor-window .make-copy { font-size: 11px; color: @captures_text_muted; }
-.editor-window .editor-footer button.primary { min-width: 90px; min-height: 40px; padding: 0 18px; border: 0; border-radius: 7px; color: @captures_accent_ink; background: @captures_accent; font-weight: 600; }
+.editor-window .secondary-action { min-width: 84px; min-height: 34px; padding: 0 12px; border: 1px solid @captures_border; border-radius: 7px; background: @captures_surface; }
+.editor-window .make-copy { min-height: 36px; font-size: 11px; color: @captures_text_muted; }
+.editor-window .editor-footer button.primary { min-width: 82px; min-height: 36px; padding: 0 12px; border: 0; border-radius: 7px; color: @captures_accent_ink; background: @captures_accent; font-weight: 600; }
 .editor-window .editor-footer button.primary:hover { background: @captures_accent_hover; }
 .editor-window .secondary-action, .editor-window .editor-header .add-images { color: @captures_text; }
 .editor-window .secondary-action:hover, .editor-window .export-disclosure:hover, .editor-window .editor-header .add-images:hover { background: alpha(@captures_text,.05); }
@@ -1523,6 +1554,9 @@ fn setup_sidebar(
             row.pack_start(&thumbnail, false, false, 0);
             let layer_copy = gtk::Box::new(gtk::Orientation::Vertical, 1);
             layer_copy.set_hexpand(true);
+            layer_copy.set_valign(gtk::Align::Center);
+            eye.set_valign(gtk::Align::Center);
+            lock.set_valign(gtk::Align::Center);
             layer_copy.style_context().add_class("layer-copy");
             layer_copy.pack_start(&select, false, false, 0);
             let kind = match &l.kind {

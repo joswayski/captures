@@ -47,6 +47,11 @@ def main():
         # Exercise pointer hover without exporting, and check a text-free pixel.
         save = find('Save', frame=editor)
         bounds = save.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+        copy_bounds = find('Copy image', frame=editor).queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+        filename_bounds = find('Filename', role='text', frame=editor).queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+        assert bounds.height == copy_bounds.height == 36, (bounds, copy_bounds)
+        assert bounds.y == copy_bounds.y, (bounds, copy_bounds)
+        assert abs(bounds.y + bounds.height - filename_bounds.y - filename_bounds.height) <= 1
         cmd('xdotool', 'mousemove', bounds.x + bounds.width // 2, bounds.y + bounds.height // 2)
         capture(args.artifacts, 'editor-save-hover', editor)
         sample = f'%[pixel:p{{{bounds.x + 10},{bounds.y + 10}}}]'

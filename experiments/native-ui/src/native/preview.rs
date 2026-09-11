@@ -149,15 +149,69 @@ fn peek_jitter(depth: usize) -> f64 {
     (hashed as f64 / 2_f64.powi(32) * 2. - 1.) * 0.4 * 0.58_f64.powi(depth as i32 - 1)
 }
 
-fn stable_rotation(id: u64, depth: usize) -> f64 {
-    if depth == 0 {
-        return 0.;
+#[derive(Clone, Copy, Debug)]
+struct CardPose {
+    x: f64,
+    y: f64,
+    scale: f64,
+    tilt: f64,
+    z: f64,
+    origin_y: f64,
+    perspective_y: f64,
+}
+
+impl CardPose {
+    fn flat(x: f64, y: f64) -> Self {
+        Self {
+            x,
+            y,
+            scale: 1.,
+            tilt: 0.,
+            z: 0.,
+            origin_y: 0.,
+            perspective_y: 0.,
+        }
     }
-    let hash = (id as u32)
-        .wrapping_mul(0x0100_0193)
-        .wrapping_add(0x811c_9dc5);
-    let sign = if hash & 1 == 0 { -1. } else { 1. };
-    sign * (2.7 + ((hash >> 1) as f64 / 2_f64.powi(31)) * 0.3)
+
+    fn project(self, x: f64, y: f64) -> (f64, f64) {
+        let local_y = (y - self.origin_y) * self.scale;
+        let perspective = 900. / (900. - self.z - local_y * self.tilt.sin());
+        (
+            CARD_X + CARD_W / 2. + (self.x - CARD_X + (x - CARD_W / 2.) * self.scale) * perspective,
+            self.perspective_y
+                + (self.y + self.origin_y + local_y * self.tilt.cos() - self.perspective_y)
+                    * perspective,
+        )
+    }
+}
+
+fn collapsed_pose(depth: usize, hover: f64, top: bool) -> CardPose {
+    let pile_depth = pose(depth as f64);
+    let gravity = if top { -1. } else { 1. };
+    let peek = 13. + hover * 3.;
+    let x_step = -0.8 + hover * 0.2;
+    let scale_step = 0.025 - hover * 0.005;
+    CardPose {
+        x: CARD_X + pile_depth * x_step,
+        // CSS translates from the edge-positioned front card. Importantly,
+        // jitter is inside the gravity multiplication, not part of peek size.
+        y: if top {
+            STACK_EDGE
+        } else {
+            HEIGHT as f64 - STACK_EDGE - CARD_H
+        } + (-pile_depth * peek + peek_jitter(depth)) * gravity,
+        scale: 1. - pile_depth * scale_step,
+        // Native placements snap to corners, where the source's rotateZ is
+        // zero. Its rotateX and translateZ still recede through 900px perspective.
+        tilt: (-pile_depth * (0.8 - hover * 0.1) * gravity).to_radians(),
+        z: -pile_depth * (24. - hover * 6.),
+        origin_y: if top { 0. } else { CARD_H },
+        perspective_y: if top {
+            STACK_EDGE + CARD_H / 2.
+        } else {
+            HEIGHT as f64 - STACK_EDGE - CARD_H / 2.
+        },
+    }
 }
 
 fn visual_index_with_slots(card_index: usize, mut occupied: Vec<usize>) -> usize {
@@ -1549,8 +1603,7 @@ impl Preview {
     fn draw_card(
         cr: &cairo::Context,
         card: &Card,
-        (x, y): (f64, f64),
-        rotation: f64,
+        pose: CardPose,
         alpha: f64,
         dim: f64,
         hover_blur: bool,
@@ -1561,11 +1614,42 @@ impl Preview {
             (t * 9. * std::f64::consts::PI).sin() * 12. * envelope
         });
         let _ = cr.save();
-        cr.translate(x + CARD_W / 2. + shake, y + CARD_H / 2.);
-        cr.rotate(rotation.to_radians());
-        cr.translate(-CARD_W / 2., -CARD_H / 2.);
-        rounded(cr, -2., -2., CARD_W + 4., CARD_H + 4., 14.);
-        cr.set_source_rgba(1., 1., 1., 0.58 * alpha);
+        cr.translate(shake, 0.);
+        if pose.z == 0. && pose.tilt == 0. {
+            cr.translate(pose.x, pose.y);
+            Self::paint_card(cr, card, alpha, dim, hover_blur);
+        } else if let Ok(surface) =
+            cairo::ImageSurface::create(cairo::Format::ARgb32, CARD_W as i32 + 4, CARD_H as i32 + 4)
+            && let Ok(painter) = cairo::Context::new(&surface)
+        {
+            painter.translate(2., 2.);
+            Self::paint_card(&painter, card, 1., dim, hover_blur);
+            // Cairo has affine transforms only. Project one source-pixel strip
+            // at a time to preserve CSS's perspective/rotateX trapezoid, rather
+            // than approximating receding cards with a uniform 2D scale.
+            for row in -2..CARD_H as i32 + 2 {
+                let (_, top) = pose.project(0., row as f64);
+                let (_, bottom) = pose.project(0., row as f64 + 1.);
+                let (left, _) = pose.project(-2., row as f64 + 0.5);
+                let (right, _) = pose.project(CARD_W + 2., row as f64 + 0.5);
+                let _ = cr.save();
+                cr.set_antialias(cairo::Antialias::None);
+                cr.rectangle(0., top, 340., bottom - top);
+                cr.clip();
+                cr.translate(left, top);
+                cr.scale((right - left) / (CARD_W + 4.), bottom - top);
+                let _ = cr.set_source_surface(&surface, 0., -(row as f64 + 2.));
+                let _ = cr.paint_with_alpha(alpha);
+                let _ = cr.restore();
+            }
+        }
+        let _ = cr.restore();
+    }
+
+    fn paint_card(cr: &cairo::Context, card: &Card, alpha: f64, dim: f64, hover_blur: bool) {
+        let _ = cr.save();
+        rounded(cr, -1., -1., CARD_W + 2., CARD_H + 2., 13.);
+        cr.set_source_rgba(1., 1., 1., 0.08 * alpha);
         let _ = cr.fill();
         rounded(cr, 0., 0., CARD_W, CARD_H, 12.);
         cr.clip();
@@ -1605,14 +1689,26 @@ impl Preview {
                 .enumerate()
                 .rev()
             {
-                let y = Self::card_y(&state, depth);
-                let rotation = stable_rotation(card.id, depth) * (1. - state.expansion);
+                let compact = collapsed_pose(depth, state.hover, state.top);
+                let expanded_step = depth as f64 * SLOT;
+                let expanded_y = if state.top {
+                    STACK_EDGE + expanded_step
+                } else {
+                    HEIGHT as f64 - STACK_EDGE - CARD_H - expanded_step
+                };
+                let progress = state.expansion;
                 let fade = (1. - depth.saturating_sub(4) as f64 * 0.12).max(0.28);
                 Self::draw_card(
                     cr,
                     card,
-                    (CARD_X, y),
-                    rotation,
+                    CardPose {
+                        x: compact.x + (CARD_X - compact.x) * progress,
+                        y: compact.y + (expanded_y - compact.y) * progress,
+                        scale: compact.scale + (1. - compact.scale) * progress,
+                        tilt: compact.tilt * (1. - progress),
+                        z: compact.z * (1. - progress),
+                        ..compact
+                    },
                     fade,
                     (depth as f64 * 0.055).min(0.42),
                     false,
@@ -1631,8 +1727,7 @@ impl Preview {
                 Self::draw_card(
                     cr,
                     card,
-                    (CARD_X, y),
-                    0.,
+                    CardPose::flat(CARD_X, y),
                     1.,
                     if card.hovered { 0.5 } else { 0. },
                     card.hovered,
@@ -1652,8 +1747,7 @@ impl Preview {
                     Self::draw_card(
                         cr,
                         &exit.card,
-                        (CARD_X + direction * eased * 150., exit.y),
-                        0.,
+                        CardPose::flat(CARD_X + direction * eased * 150., exit.y),
                         1. - t,
                         t * 0.3,
                         false,
@@ -1790,6 +1884,45 @@ mod tests {
         assert!((peek_jitter(1) - -0.177_334_425_598_382_97).abs() < 1e-12);
         assert!(peek_jitter(4).abs() < peek_jitter(1).abs());
         assert_eq!(peek_jitter(0), 0.);
+    }
+
+    #[test]
+    fn collapsed_corner_geometry_matches_independent_css_values() {
+        let bottom_idle = collapsed_pose(2, 0., false);
+        assert!((bottom_idle.x - 26.455_384_615_384_617).abs() < 1e-12);
+        assert!((bottom_idle.y - 522.868_683_839_235_5).abs() < 1e-12);
+        assert!((bottom_idle.scale - 0.951_730_769_230_769_3).abs() < 1e-12);
+        assert_eq!(bottom_idle.origin_y, CARD_H);
+
+        let top_hover = collapsed_pose(5, 1., true);
+        assert!((top_hover.x - 25.232_758_620_689_655).abs() < 1e-12);
+        assert!((top_hover.y - 125.784_521_298_047_9).abs() < 1e-12);
+        assert!((top_hover.scale - 0.907_758_620_689_655_2).abs() < 1e-12);
+        assert_eq!(top_hover.origin_y, 0.);
+
+        // Jitter follows CSS gravity: it moves in opposite screen directions
+        // for otherwise equivalent top and bottom placements.
+        let top_idle = collapsed_pose(2, 0., true);
+        assert!(
+            (bottom_idle.y - (HEIGHT as f64 - STACK_EDGE - CARD_H) + (top_idle.y - STACK_EDGE))
+                .abs()
+                < 1e-12
+        );
+    }
+
+    #[test]
+    fn collapsed_projection_matches_browser_measured_bounds() {
+        // Chromium's real mini-preview.css, depth 1 at bottom-left, 340×760.
+        // A scale-only implementation misses the width by almost seven pixels.
+        let pose = collapsed_pose(1, 0., false);
+        let top_left = pose.project(0., 0.);
+        let top_right = pose.project(CARD_W, 0.);
+        let bottom = pose.project(0., CARD_H);
+        assert!((top_left.0 - 33.939_960).abs() < 0.001);
+        assert!((top_left.1 - 541.069_092).abs() < 0.001);
+        assert!((top_right.0 - 304.525_379).abs() < 0.001);
+        assert!((bottom.1 - 693.345_459).abs() < 0.001);
+        assert_eq!(collapsed_pose(0, 1., true).project(0., 0.), (28., 52.));
     }
 
     #[test]

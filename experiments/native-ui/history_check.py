@@ -12,7 +12,7 @@ import time
 import pyatspi
 
 from benchmark import stop
-from native_check import click, find, wait
+from native_check import click, cmd, find, wait
 
 
 def checked(name):
@@ -46,6 +46,19 @@ def main():
             wait(lambda: find("Captures — History", "frame"))
             for name in ("Restore history-first.png", "Delete history-first.png from History", "Delete all captures", "All 2", "Screenshots 2"):
                 wait(lambda name=name: find(name, frame="Captures — History"))
+            edit = find('Edit history-first.png', frame='Captures — History').queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+            trash = find('Delete history-first.png from History', frame='Captures — History').queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+            cmd('xdotool', 'mousemove', 0, 0)
+            time.sleep(.3)
+            cmd('import', '-window', 'root', profile/'idle.png')
+            pixel = cmd('convert', profile/'idle.png', '-format', f'%[hex:p{{{edit.x+10},{edit.y+10}}}]', 'info:')
+            assert pixel[:6].lower() == 'ffca28', ('Edit lost the primary accent', pixel)
+            assert trash.width == trash.height == 32, trash
+            cmd('xdotool', 'mousemove', trash.x+16, trash.y+16)
+            time.sleep(.3)
+            cmd('import', '-window', 'root', profile/'hover.png')
+            pixel = cmd('convert', profile/'hover.png', '-format', f'%[hex:p{{{trash.x+7},{trash.y+7}}}]', 'info:')
+            assert pixel[:6].lower() == 'ef4650', ('Trash lost its destructive hover', pixel)
             assert checked("All 2")
             click("All 2", "Captures — History", pointer=True)
             wait(lambda: checked("All 2"))

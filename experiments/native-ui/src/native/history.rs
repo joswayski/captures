@@ -340,6 +340,7 @@ pub fn open_with_restore(
         actions.set_margin_end(12);
         actions.set_margin_bottom(12);
         let button = ui::button("Edit");
+        button.style_context().add_class("primary");
         button.set_size_request(111, -1);
         ui::named(&button, &format!("Edit {name}"));
         let action = open.clone();
