@@ -11,7 +11,8 @@ build now implements those interactions alongside layered image editing, embedde
 recording playback, history, preferences, shortcuts and recovery. It is much more
 than the original screenshot probe, but **not yet a no-regressions replacement**.
 The shipping cross-platform Tauri app and its release pipeline are unchanged.
-Windows/macOS reimplementations have not started.
+A separate [macOS-native experiment](macos-native-implementation.md) is now in
+development. A Windows reimplementation has not started.
 
 ## Implemented behavior and evidence
 

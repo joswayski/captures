@@ -152,6 +152,23 @@ final class EditorModelTests: XCTestCase {
         XCTAssertFalse(lockedModel.canUndo)
     }
 
+    func testImportedFileDraftSurvivesANewArtifactIdentity() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("imported.png")
+        let original = try solidPNG(.blue, width: 7, height: 3)
+        try original.write(to: source)
+        let first = try EditorModel(artifact: Artifact(path: source.path, kind: "image"))
+        defer { first.clearDraft() }
+        first.resizeCanvas(width: 11, height: 5)
+        let reopened = try EditorModel(artifact: Artifact(path: source.path, kind: "image"))
+        XCTAssertTrue(reopened.restoredDraft)
+        XCTAssertEqual(reopened.document.width, 11)
+        XCTAssertEqual(reopened.document.height, 5)
+        XCTAssertEqual(try Data(contentsOf: source), original)
+    }
+
     func testExportRefusesExistingFileWithoutChangingIt() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

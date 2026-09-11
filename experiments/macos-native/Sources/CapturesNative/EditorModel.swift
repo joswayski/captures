@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import CoreGraphics
 import CoreImage
+import CryptoKit
 import Foundation
 
 struct EditorPoint: Codable, Equatable, Hashable {
@@ -208,7 +209,9 @@ final class EditorModel: ObservableObject {
         let sourceData = try Data(contentsOf: sourceURL)
         let clean = try EditorDocument(imageData: sourceData)
         let directory = AppStore.dataDirectory.appendingPathComponent("image-editor-drafts", isDirectory: true)
-        draftURL = directory.appendingPathComponent("\(artifact.id.uuidString).json")
+        let identity = sourceURL.standardizedFileURL.resolvingSymlinksInPath().path
+        let key = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
+        draftURL = directory.appendingPathComponent("\(key).json")
         if let data = try? Data(contentsOf: draftURL), let draft = try? JSONDecoder().decode(EditorDocument.self, from: data) {
             document = draft
             restoredDraft = true
@@ -538,10 +541,7 @@ final class EditorModel: ObservableObject {
 
     private func saveDraft() {
         do {
-            try FileManager.default.createDirectory(at: draftURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(document)
-            try data.write(to: draftURL, options: [.atomic])
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: draftURL.path)
+            try NativeStorage.write(document, to: draftURL)
         } catch {
             AppStore.shared.report(error)
         }
@@ -562,7 +562,7 @@ final class EditorModel: ObservableObject {
                 operation: .sourceOver,
                 fraction: 1,
                 respectFlipped: true,
-                hints: [.interpolation: NSImageInterpolation.high]
+                hints: [.interpolation: NSImageInterpolation.high.rawValue]
             )
         case let .text(text):
             let font = NSFont.systemFont(ofSize: max(12, frame.height * 0.62), weight: .semibold)
