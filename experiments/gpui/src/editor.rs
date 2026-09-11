@@ -6,7 +6,7 @@ mod encoder;
 mod model;
 mod text_input;
 
-use crate::ui::{Theme, button, metric, root, theme};
+use crate::ui::{Theme, button, icon, metric, root, theme};
 use anyhow::{Context as _, Result};
 use gpui::{
     Animation, AnimationExt as _, App, Bounds, ClipboardItem, Context, Div, ElementId, Entity,
@@ -58,6 +58,7 @@ actions!(
         NudgeDownLarge,
         CommitText,
         CancelText,
+        SaveSource,
     ]
 );
 
@@ -200,6 +201,7 @@ struct ScreenshotEditor {
     crop: Option<Rect>,
     crop_ratio: Option<f64>,
     zoom: f64,
+    zoom_fit: bool,
     color: Color,
     stroke: f64,
     fill_shapes: bool,
@@ -227,6 +229,8 @@ struct ScreenshotEditor {
     output_height: u32,
     output_aspect_locked: bool,
     export_open: bool,
+    shape_menu_open: bool,
+    format_menu_open: bool,
     comparison: Option<(Arc<Image>, usize, usize)>,
     comparison_split: f32,
     comparison_dragging: bool,
@@ -482,6 +486,7 @@ impl ScreenshotEditor {
             crop: None,
             crop_ratio: None,
             zoom: 1.,
+            zoom_fit: true,
             color: initial_color,
             stroke: 4.,
             fill_shapes: false,
@@ -513,6 +518,8 @@ impl ScreenshotEditor {
             output_height,
             output_aspect_locked: true,
             export_open: false,
+            shape_menu_open: false,
+            format_menu_open: false,
             comparison: None,
             comparison_split: 0.5,
             comparison_dragging: false,
@@ -831,6 +838,7 @@ impl ScreenshotEditor {
 
     fn select_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
         self.tool = tool;
+        self.shape_menu_open = false;
         if matches!(tool, Tool::Crop | Tool::Pen | Tool::RemoveBackground) {
             self.selected = None;
         }
@@ -1246,6 +1254,7 @@ impl ScreenshotEditor {
         } else if amount > 0. {
             self.zoom = (self.zoom / 1.12).max(0.05);
         }
+        self.zoom_fit = false;
         if (self.zoom - old_zoom).abs() > f64::EPSILON {
             let bounds = *self.canvas_bounds.lock().expect("canvas bounds");
             let ratio = (self.zoom / old_zoom) as f32;
@@ -1421,6 +1430,10 @@ impl ScreenshotEditor {
     }
 
     fn prompt_export(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.export_to_new_path(cx);
+    }
+
+    fn export_to_new_path(&mut self, cx: &mut Context<Self>) {
         let directory = self
             .source
             .as_deref()
@@ -1479,14 +1492,13 @@ impl ScreenshotEditor {
         .detach();
     }
 
-    fn save_source(
-        &mut self,
-        event: &gpui::ClickEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn save_source(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.save_primary(cx);
+    }
+
+    fn save_primary(&mut self, cx: &mut Context<Self>) {
         let Some(path) = self.source.clone() else {
-            return self.prompt_export(event, window, cx);
+            return self.export_to_new_path(cx);
         };
         let doc = self.doc.clone();
         let format = match path
@@ -1598,14 +1610,38 @@ impl ScreenshotEditor {
 
     fn tool_button(&self, tool: Tool, t: Theme, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
         let active = self.tool == tool;
-        button(("tool", tool as usize), tool.label(), t)
-            .w_full()
-            .px(metric("--s-3"))
-            .when(active, |b| {
-                b.bg(t.accent)
-                    .text_color(t.glass_text())
-                    .border_color(t.accent)
-            })
+        let icon_name = match tool {
+            Tool::Select => "select",
+            Tool::Crop => "crop",
+            Tool::Text => "text",
+            Tool::Rectangle => "rectangle",
+            Tool::Ellipse => "ellipse",
+            Tool::Line => "line",
+            Tool::Triangle => "triangle",
+            Tool::Diamond => "diamond",
+            Tool::Star => "star",
+            Tool::Arrow => "arrow",
+            Tool::Pen => "pen",
+            Tool::RemoveBackground => "remove-bg",
+        };
+        div()
+            .id(("tool", tool as usize))
+            .relative()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(38.))
+            .flex_none()
+            .rounded(metric("--r-lg"))
+            .text_color(t.muted())
+            .cursor_pointer()
+            .hover(move |button| button.bg(t.color("--surface-hover")).text_color(t.text()))
+            .child(icon(icon_name).size(px(18.)).text_color(if active {
+                t.accent_ink
+            } else {
+                t.muted()
+            }))
+            .when(active, |b| b.bg(t.accent).text_color(t.accent_ink))
             .on_click(cx.listener(move |this, _, _, cx| this.select_tool(tool, cx)))
     }
 
@@ -1616,6 +1652,140 @@ impl ScreenshotEditor {
         t: Theme,
     ) -> gpui::Stateful<Div> {
         button(id, label, t).h(metric("--h-sm")).px(metric("--s-4"))
+    }
+
+    fn icon_button(
+        &self,
+        id: impl Into<ElementId>,
+        icon_name: &'static str,
+        t: Theme,
+    ) -> gpui::Stateful<Div> {
+        div()
+            .id(id)
+            .size(px(30.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(metric("--r-md"))
+            .text_color(t.muted())
+            .cursor_pointer()
+            .hover(move |button| button.bg(t.color("--surface-hover")).text_color(t.text()))
+            .child(icon(icon_name).size(px(16.)).text_color(t.muted()))
+    }
+
+    fn render_tool_rail(&self, t: Theme, cx: &mut Context<Self>) -> Div {
+        let shape_active = matches!(
+            self.tool,
+            Tool::Rectangle
+                | Tool::Ellipse
+                | Tool::Line
+                | Tool::Triangle
+                | Tool::Diamond
+                | Tool::Star
+        );
+        let shape_icon = match self.tool {
+            Tool::Ellipse => "ellipse",
+            Tool::Line => "line",
+            Tool::Triangle => "triangle",
+            Tool::Diamond => "diamond",
+            Tool::Star => "star",
+            _ => "shapes",
+        };
+        let shape_trigger = div()
+            .id("shape-tool")
+            .relative()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(38.))
+            .flex_none()
+            .rounded(metric("--r-lg"))
+            .text_color(t.muted())
+            .cursor_pointer()
+            .hover(move |button| button.bg(t.color("--surface-hover")).text_color(t.text()))
+            .child(icon(shape_icon).size(px(18.)).text_color(if shape_active {
+                t.accent_ink
+            } else {
+                t.muted()
+            }))
+            .child(
+                div()
+                    .absolute()
+                    .right(px(5.))
+                    .bottom(px(3.))
+                    .child(icon("chevron-down").size(px(7.)).text_color(t.muted())),
+            )
+            .when(shape_active, |button| {
+                button.bg(t.accent).text_color(t.accent_ink)
+            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                if !matches!(
+                    this.tool,
+                    Tool::Rectangle
+                        | Tool::Ellipse
+                        | Tool::Line
+                        | Tool::Triangle
+                        | Tool::Diamond
+                        | Tool::Star
+                ) {
+                    this.tool = Tool::Rectangle;
+                    this.selected = None;
+                }
+                this.shape_menu_open = !this.shape_menu_open;
+                cx.notify();
+            }));
+
+        div()
+            .relative()
+            .w(px(56.))
+            .flex_none()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(metric("--s-1"))
+            .px(metric("--s-3"))
+            .py(metric("--s-4"))
+            .border_r_1()
+            .border_color(t.border())
+            .bg(t.raised())
+            .child(self.tool_button(Tool::Select, t, cx))
+            .child(self.tool_button(Tool::Crop, t, cx))
+            .child(self.tool_button(Tool::Text, t, cx))
+            .child(shape_trigger)
+            .child(self.tool_button(Tool::Arrow, t, cx))
+            .child(self.tool_button(Tool::Pen, t, cx))
+            .child(self.tool_button(Tool::RemoveBackground, t, cx))
+            .when(self.shape_menu_open, |rail| {
+                rail.child(gpui::deferred(
+                    div()
+                        .occlude()
+                        .absolute()
+                        .left(px(50.))
+                        .top(px(142.))
+                        .w(px(154.))
+                        .p(metric("--s-3"))
+                        .flex()
+                        .flex_wrap()
+                        .gap(metric("--s-2"))
+                        .rounded(metric("--r-lg"))
+                        .border_1()
+                        .border_color(t.border())
+                        .bg(t.color("--surface-overlay"))
+                        .shadow_lg()
+                        .children(
+                            [
+                                Tool::Rectangle,
+                                Tool::Ellipse,
+                                Tool::Line,
+                                Tool::Triangle,
+                                Tool::Diamond,
+                                Tool::Star,
+                            ]
+                            .map(|tool| self.tool_button(tool, t, cx)),
+                        ),
+                ))
+            })
     }
 
     fn color_control(&self, t: Theme, cx: &mut Context<Self>) -> Div {
@@ -2175,8 +2345,9 @@ impl ScreenshotEditor {
                     .flex()
                     .items_center()
                     .gap(metric("--s-3"))
-                    .p(metric("--s-3"))
-                    .rounded(metric("--r-sm"))
+                    .min_h(px(54.))
+                    .px(metric("--s-3"))
+                    .rounded(metric("--r-lg"))
                     .cursor_pointer()
                     .on_mouse_down(
                         MouseButton::Left,
@@ -2226,9 +2397,9 @@ impl ScreenshotEditor {
                         cx.notify();
                     }))
                     .child(
-                        self.compact_button(
+                        self.icon_button(
                             ("visibility", index),
-                            if visible { "◉" } else { "○" },
+                            if visible { "eye" } else { "hide" },
                             t,
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -2240,16 +2411,49 @@ impl ScreenshotEditor {
                             cx.notify();
                         })),
                     )
-                    .child(div().flex_1().child(name))
                     .child(
-                        self.compact_button(("lock", index), if locked { "⌑" } else { "◇" }, t)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.checkpoint();
-                                this.doc.layers[index].locked = !this.doc.layers[index].locked;
-                                this.changed();
-                                cx.notify();
-                            })),
+                        div()
+                            .size(px(40.))
+                            .h(px(30.))
+                            .overflow_hidden()
+                            .rounded(metric("--r-sm"))
+                            .border_1()
+                            .border_color(t.border())
+                            .child(img(self.rendered.clone()).size_full()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(metric("--s-1"))
+                            .text_size(metric("--text-sm"))
+                            .child(name)
+                            .child(
+                                div()
+                                    .text_size(metric("--text-xs"))
+                                    .text_color(t.color("--text-subtle"))
+                                    .child(if locked {
+                                        "Locked background"
+                                    } else {
+                                        "Image layer"
+                                    }),
+                            ),
+                    )
+                    .child(
+                        self.icon_button(
+                            ("lock", index),
+                            if locked { "lock" } else { "unlock" },
+                            t,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.checkpoint();
+                            this.doc.layers[index].locked = !this.doc.layers[index].locked;
+                            this.changed();
+                            cx.notify();
+                        })),
                     ),
             );
         }
@@ -2275,12 +2479,7 @@ impl ScreenshotEditor {
                         .map(|(index, (ratio, label))| {
                             self.compact_button(("crop-ratio", index), label, t)
                                 .when(self.crop_ratio == ratio, |button| {
-                                    button.bg(t.accent).text_color(Hsla {
-                                        h: 0.,
-                                        s: 0.,
-                                        l: 0.08,
-                                        a: 1.,
-                                    })
+                                    button.bg(t.accent).text_color(t.accent_ink)
                                 })
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.crop_ratio = ratio;
@@ -3026,7 +3225,7 @@ impl ScreenshotEditor {
                             ),
                     )
                 });
-        } else {
+        } else if self.tool != Tool::Select {
             properties = properties
                 .child("STYLE")
                 .child(format!("Signal red  •  Stroke {} px", self.stroke as u32))
@@ -3081,16 +3280,31 @@ impl ScreenshotEditor {
             .border_l_1()
             .border_color(t.border())
             .bg(t.raised())
-            .p(metric("--s-5"))
-            .gap(metric("--s-4"))
             .child(
                 div()
+                    .h(px(48.))
+                    .flex_none()
                     .flex()
                     .items_center()
-                    .child(format!("Layers  {}", self.doc.layers.len()))
+                    .px(metric("--s-5"))
+                    .border_b_1()
+                    .border_color(t.border())
+                    .child("Layers")
+                    .child(
+                        div()
+                            .ml(metric("--s-3"))
+                            .px(metric("--s-2"))
+                            .rounded(px(10.))
+                            .bg(t.color("--surface-sunken"))
+                            .text_size(metric("--text-xs"))
+                            .text_color(t.color("--text-subtle"))
+                            .child(self.doc.layers.len().to_string()),
+                    )
                     .child(div().flex_1())
                     .child(
-                        self.compact_button("merge-visible", "Merge visible", t)
+                        self.compact_button("merge-visible", "⋈", t)
+                            .w(px(30.))
+                            .px_0()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 let indices = this
                                     .doc
@@ -3103,7 +3317,9 @@ impl ScreenshotEditor {
                             })),
                     )
                     .child(
-                        self.compact_button("flatten", "Flatten", t)
+                        self.compact_button("flatten", "▣", t)
+                            .w(px(30.))
+                            .px_0()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 let indices = (0..this.doc.layers.len()).collect();
                                 this.merge_layers(indices, "Flattened image", cx);
@@ -3115,13 +3331,47 @@ impl ScreenshotEditor {
                     .id("sidebar-scroll")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .child(layers)
+                    .flex()
+                    .flex_col()
                     .child(
                         div()
-                            .mt(metric("--s-4"))
+                            .id("layer-list-scroll")
+                            .h(px(174.))
+                            .flex_none()
+                            .overflow_y_scroll()
+                            .px(metric("--s-4"))
+                            .py(metric("--s-3"))
+                            .child(layers),
+                    )
+                    .child(
+                        div()
+                            .id("properties-scroll")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
                             .border_t_1()
                             .border_color(t.border())
+                            .px(metric("--s-5"))
+                            .pb(metric("--s-6"))
+                            .when(
+                                self.selected.is_some() || self.tool != Tool::Select,
+                                |panel| {
+                                    panel.child(
+                                        div()
+                                            .h(px(48.))
+                                            .flex()
+                                            .items_center()
+                                            .border_b_1()
+                                            .border_color(t.border())
+                                            .child(
+                                                self.selected
+                                                    .and_then(|index| self.doc.layers.get(index))
+                                                    .map(|layer| layer.name.clone())
+                                                    .unwrap_or_else(|| self.tool.label().into()),
+                                            ),
+                                    )
+                                },
+                            )
                             .child(properties),
                     ),
             )
@@ -3141,10 +3391,25 @@ impl ScreenshotEditor {
                 .child(
                     self.compact_button(
                         "output-size",
-                        match self.output_scale {
-                            scale if (scale - 1.).abs() < f64::EPSILON => "Output: Original",
-                            scale if (scale - 0.75).abs() < f64::EPSILON => "Output: 75%",
-                            _ => "Output: 50%",
+                        match (self.output_width, self.output_height) {
+                            size if size == (self.doc.width, self.doc.height) => "Output: Original",
+                            size if size
+                                == (
+                                    (f64::from(self.doc.width) * 0.75).round() as u32,
+                                    (f64::from(self.doc.height) * 0.75).round() as u32,
+                                ) =>
+                            {
+                                "Output: 75%"
+                            }
+                            size if size
+                                == (
+                                    (f64::from(self.doc.width) * 0.5).round() as u32,
+                                    (f64::from(self.doc.height) * 0.5).round() as u32,
+                                ) =>
+                            {
+                                "Output: 50%"
+                            }
+                            _ => "Output: Custom",
                         },
                         t,
                     )
@@ -3186,21 +3451,6 @@ impl ScreenshotEditor {
                                 cx,
                             );
                         })),
-                )
-                .child(
-                    div()
-                        .w(px(72.))
-                        .rounded(metric("--r-sm"))
-                        .border_1()
-                        .border_color(t.border())
-                        .bg(t.canvas())
-                        .child(self.numeric_input.clone()),
-                )
-                .child(
-                    self.compact_button("apply-output-number", "Apply", t)
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.apply_numeric(window, cx)),
-                        ),
                 )
                 .child(
                     self.compact_button(
@@ -3294,11 +3544,13 @@ impl ScreenshotEditor {
                 });
         }
         div()
+            .relative()
             .flex_none()
             .flex()
             .flex_col()
             .gap(metric("--s-3"))
-            .p(metric("--s-4"))
+            .px(metric("--s-5"))
+            .py(metric("--s-4"))
             .border_t_1()
             .border_color(t.border())
             .bg(t.raised())
@@ -3309,31 +3561,78 @@ impl ScreenshotEditor {
                     .items_center()
                     .gap(metric("--s-4"))
                     .child(
-                        self.compact_button("export-settings", "Export settings", t)
+                        div()
+                            .id("export-settings")
+                            .w(px(210.))
+                            .h(px(44.))
+                            .px(metric("--s-4"))
+                            .flex()
+                            .flex_col()
+                            .justify_center()
+                            .gap(metric("--s-1"))
+                            .rounded(metric("--r-md"))
+                            .border_1()
+                            .border_color(t.border())
+                            .bg(t.color("--control"))
+                            .cursor_pointer()
+                            .hover(move |button| button.bg(t.color("--control-hover")))
+                            .child(div().text_size(metric("--text-sm")).child(
+                                if self.export_open {
+                                    "Export settings  ⌃"
+                                } else {
+                                    "Export settings  ⌄"
+                                },
+                            ))
+                            .child(
+                                div()
+                                    .text_size(metric("--text-xs"))
+                                    .text_color(t.color("--text-subtle"))
+                                    .child(format!(
+                                        "{}  •  {} × {}",
+                                        self.format.extension().to_uppercase(),
+                                        self.output_width,
+                                        self.output_height
+                                    )),
+                            )
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.export_open = !this.export_open;
+                                this.format_menu_open = false;
                                 cx.notify();
                             })),
                     )
                     .child(
                         div()
-                            .w(px(190.))
-                            .rounded(metric("--r-sm"))
-                            .border_1()
-                            .border_color(t.border())
-                            .bg(t.canvas())
-                            .child(self.output_name.clone()),
+                            .w(px(390.))
+                            .flex()
+                            .flex_col()
+                            .gap(metric("--s-1"))
+                            .child(
+                                div()
+                                    .text_size(metric("--text-xs"))
+                                    .text_color(t.muted())
+                                    .child("Filename"),
+                            )
+                            .child(
+                                div()
+                                    .h(px(36.))
+                                    .rounded(metric("--r-md"))
+                                    .border_1()
+                                    .border_color(t.border())
+                                    .bg(t.color("--surface-field"))
+                                    .child(self.output_name.clone()),
+                            ),
                     )
                     .child(
-                        self.compact_button("format", format!(".{}", self.format.extension()), t)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.format = match this.format {
-                                    ExportFormat::Png => ExportFormat::Jpeg,
-                                    ExportFormat::Jpeg => ExportFormat::Webp,
-                                    ExportFormat::Webp => ExportFormat::Png,
-                                };
-                                cx.notify();
-                            })),
+                        self.compact_button(
+                            "format",
+                            format!(".{}  ⌄", self.format.extension()),
+                            t,
+                        )
+                        .h(px(36.))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.format_menu_open = !this.format_menu_open;
+                            cx.notify();
+                        })),
                     )
                     .child(
                         self.compact_button("copy-image", "Copy image", t)
@@ -3350,18 +3649,67 @@ impl ScreenshotEditor {
                             .on_click(cx.listener(Self::prompt_export)),
                     )
                     .child(
-                        button("save-source", "Save", t)
-                            .bg(t.accent)
-                            .border_color(t.accent)
-                            .text_color(Hsla {
-                                h: 0.,
-                                s: 0.,
-                                l: 0.08,
-                                a: 1.,
-                            })
-                            .on_click(cx.listener(Self::save_source)),
+                        button(
+                            "save-source",
+                            if cfg!(target_os = "macos") {
+                                "Save  ⌘S"
+                            } else {
+                                "Save  Ctrl+S"
+                            },
+                            t,
+                        )
+                        .h(px(36.))
+                        .min_w(px(106.))
+                        .bg(t.accent)
+                        .border_color(t.accent)
+                        .text_color(t.accent_ink)
+                        .child(icon("save").size(px(14.)).text_color(t.accent_ink))
+                        .on_click(cx.listener(Self::save_source)),
                     ),
             )
+            .when(self.format_menu_open, |footer| {
+                footer.child(
+                    div()
+                        .absolute()
+                        .bottom(px(62.))
+                        .left(px(616.))
+                        .w(px(126.))
+                        .p(metric("--s-2"))
+                        .flex()
+                        .flex_col()
+                        .gap(metric("--s-1"))
+                        .rounded(metric("--r-lg"))
+                        .border_1()
+                        .border_color(t.border())
+                        .bg(t.color("--surface-overlay"))
+                        .shadow_lg()
+                        .children(
+                            [
+                                (ExportFormat::Png, "PNG"),
+                                (ExportFormat::Jpeg, "JPEG"),
+                                (ExportFormat::Webp, "WebP"),
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, (format, label))| {
+                                self.compact_button(("format-option", index), label, t)
+                                    .w_full()
+                                    .when(self.format == format, |button| {
+                                        button.bg(Hsla {
+                                            a: 0.16,
+                                            ..t.accent
+                                        })
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.format = format;
+                                        this.format_menu_open = false;
+                                        this.comparison = None;
+                                        cx.notify();
+                                    }))
+                            }),
+                        ),
+                )
+            })
     }
 }
 
@@ -3472,7 +3820,7 @@ fn handles(layer: &Layer) -> [Point; 8] {
 }
 
 impl Render for ScreenshotEditor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
         if !self.source_ready {
             return root(t)
@@ -3480,27 +3828,28 @@ impl Render for ScreenshotEditor {
                 .p(metric("--s-8"))
                 .child(self.status.clone());
         }
-        let tools = [
-            Tool::Select,
-            Tool::Crop,
-            Tool::Text,
-            Tool::Rectangle,
-            Tool::Ellipse,
-            Tool::Line,
-            Tool::Triangle,
-            Tool::Diamond,
-            Tool::Star,
-            Tool::Arrow,
-            Tool::Pen,
-            Tool::RemoveBackground,
-        ];
+        if self.zoom_fit {
+            let viewport = window.viewport_size();
+            let available_width = (f64::from(f32::from(viewport.width)) - 56. - 320. - 64.).max(1.);
+            let footer_height = if self.export_open { 154. } else { 68. };
+            let available_height =
+                (f64::from(f32::from(viewport.height)) - 52. - footer_height - 64.).max(1.);
+            self.zoom = (available_width / f64::from(self.doc.width))
+                .min(available_height / f64::from(self.doc.height))
+                .clamp(0.05, 8.);
+        }
         root(t)
             .id("screenshot-editor")
             .relative()
             .track_focus(&self.focus)
             .key_context("ScreenshotEditor")
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                if event.keystroke.key == "space" && !this.input_focused(window, cx) {
+                if event.keystroke.key == "escape" && this.numeric_input.read(cx).is_focused(window)
+                {
+                    this.focus.focus(window);
+                    cx.stop_propagation();
+                    cx.notify();
+                } else if event.keystroke.key == "space" && !this.input_focused(window, cx) {
                     this.space_pan = true;
                     cx.stop_propagation();
                     cx.notify();
@@ -3544,14 +3893,17 @@ impl Render for ScreenshotEditor {
             }))
             .on_action(cx.listener(|this, _: &ZoomIn, _, cx| {
                 this.zoom = (this.zoom * 1.25).min(8.);
+                this.zoom_fit = false;
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ZoomOut, _, cx| {
                 this.zoom = (this.zoom / 1.25).max(0.05);
+                this.zoom_fit = false;
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ActualSize, _, cx| {
                 this.zoom = 1.;
+                this.zoom_fit = false;
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &NudgeLeft, _, cx| this.nudge(-1., 0., cx)))
@@ -3564,120 +3916,176 @@ impl Render for ScreenshotEditor {
             .on_action(cx.listener(|this, _: &NudgeDownLarge, _, cx| this.nudge(0., 10., cx)))
             .on_action(cx.listener(|this, _: &CommitText, window, cx| this.commit_text(window, cx)))
             .on_action(cx.listener(|this, _: &CancelText, window, cx| this.cancel_text(window, cx)))
+            .on_action(cx.listener(|this, _: &SaveSource, _, cx| this.save_primary(cx)))
             .child(
                 div()
                     .h(px(52.))
                     .flex_none()
                     .flex()
                     .items_center()
-                    .gap(metric("--s-4"))
+                    .gap(metric("--s-5"))
                     .px(metric("--s-5"))
                     .border_b_1()
                     .border_color(t.border())
                     .bg(t.raised())
-                    .child("Canvas")
-                    .child(
-                        self.compact_button("canvas-width", format!("W {}", self.doc.width), t)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.begin_numeric(
-                                    NumericTarget::CanvasWidth,
-                                    f64::from(this.doc.width),
-                                    window,
-                                    cx,
-                                );
-                            })),
-                    )
-                    .child(
-                        self.compact_button("canvas-height", format!("H {}", self.doc.height), t)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.begin_numeric(
-                                    NumericTarget::CanvasHeight,
-                                    f64::from(this.doc.height),
-                                    window,
-                                    cx,
-                                );
-                            })),
-                    )
                     .child(
                         div()
-                            .w(px(72.))
-                            .rounded(metric("--r-sm"))
+                            .h(px(34.))
+                            .flex()
+                            .items_center()
+                            .gap(metric("--s-2"))
+                            .p(metric("--s-1"))
+                            .rounded(metric("--r-lg"))
                             .border_1()
                             .border_color(t.border())
-                            .bg(t.canvas())
-                            .child(self.numeric_input.clone()),
-                    )
-                    .child(self.compact_button("apply-number", "Apply", t).on_click(
-                        cx.listener(|this, _, window, cx| this.apply_numeric(window, cx)),
-                    ))
-                    .child(
-                        self.compact_button("trim", "Trim edges", t)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.checkpoint();
-                                trim_to_content(&mut this.doc, 0.);
-                                this.changed();
-                                this.rerender(cx);
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        self.compact_button(
-                            "background",
-                            match self.doc.background {
-                                None => "Background: Transparent",
-                                Some(Color(r, g, b, _)) if r + g + b < 1. => "Background: Black",
-                                Some(_) => "Background: Off-white",
-                            },
-                            t,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.checkpoint();
-                            this.doc.background = match this.doc.background {
-                                None => Some(Color(247. / 255., 247. / 255., 245. / 255., 1.)),
-                                Some(Color(r, g, b, _)) if r + g + b > 1. => {
-                                    Some(Color(0., 0., 0., 1.))
-                                }
-                                _ => None,
-                            };
-                            this.changed();
-                            this.rerender(cx);
-                            cx.notify();
-                        })),
+                            .bg(t.color("--surface-sunken"))
+                            .child(
+                                div()
+                                    .px(metric("--s-3"))
+                                    .text_size(metric("--text-xs"))
+                                    .text_color(t.color("--text-subtle"))
+                                    .child("Canvas"),
+                            )
+                            .child(
+                                self.compact_button(
+                                    "canvas-width",
+                                    format!("W  {}", self.doc.width),
+                                    t,
+                                )
+                                .border_color(gpui::transparent_black())
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
+                                        this.begin_numeric(
+                                            NumericTarget::CanvasWidth,
+                                            f64::from(this.doc.width),
+                                            window,
+                                            cx,
+                                        );
+                                    },
+                                )),
+                            )
+                            .child("×")
+                            .child(
+                                self.compact_button(
+                                    "canvas-height",
+                                    format!("H  {}", self.doc.height),
+                                    t,
+                                )
+                                .border_color(gpui::transparent_black())
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
+                                        this.begin_numeric(
+                                            NumericTarget::CanvasHeight,
+                                            f64::from(this.doc.height),
+                                            window,
+                                            cx,
+                                        );
+                                    },
+                                )),
+                            )
+                            .child(
+                                self.compact_button("trim", "Trim edges", t)
+                                    .border_color(gpui::transparent_black())
+                                    .child(icon("trim").size(px(13.)).text_color(t.muted()))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.checkpoint();
+                                        trim_to_content(&mut this.doc, 0.);
+                                        this.changed();
+                                        this.rerender(cx);
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                self.compact_button(
+                                    "background",
+                                    match self.doc.background {
+                                        None => "Background  ◫",
+                                        Some(Color(r, g, b, _)) if r + g + b < 1. => {
+                                            "Background  ■"
+                                        }
+                                        Some(_) => "Background  □",
+                                    },
+                                    t,
+                                )
+                                .border_color(gpui::transparent_black())
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.checkpoint();
+                                        this.doc.background = match this.doc.background {
+                                            None => Some(Color(
+                                                247. / 255.,
+                                                247. / 255.,
+                                                245. / 255.,
+                                                1.,
+                                            )),
+                                            Some(Color(r, g, b, _)) if r + g + b > 1. => {
+                                                Some(Color(0., 0., 0., 1.))
+                                            }
+                                            _ => None,
+                                        };
+                                        this.changed();
+                                        this.rerender(cx);
+                                        cx.notify();
+                                    },
+                                )),
+                            ),
                     )
                     .child(div().flex_1())
+                    .when(self.numeric_input.read(cx).is_focused(window), |header| {
+                        header
+                            .child(
+                                div()
+                                    .w(px(72.))
+                                    .rounded(metric("--r-sm"))
+                                    .border_1()
+                                    .border_color(t.border())
+                                    .bg(t.canvas())
+                                    .child(self.numeric_input.clone()),
+                            )
+                            .child(self.compact_button("apply-number", "Apply", t).on_click(
+                                cx.listener(|this, _, window, cx| this.apply_numeric(window, cx)),
+                            ))
+                    })
                     .child(
-                        self.compact_button("undo", "↶", t)
+                        self.icon_button("undo", "undo", t)
                             .on_click(cx.listener(|this, _, _, cx| this.undo(false, cx))),
                     )
                     .child(
-                        self.compact_button("redo", "↷", t)
+                        self.icon_button("redo", "redo", t)
                             .on_click(cx.listener(|this, _, _, cx| this.undo(true, cx))),
                     )
                     .child(
-                        self.compact_button("zoom-out", "−", t)
+                        self.icon_button("zoom-out", "minus", t)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.zoom = (this.zoom / 1.25).max(0.05);
+                                this.zoom_fit = false;
                                 cx.notify();
                             })),
                     )
                     .child(format!("{:.0}%", self.zoom * 100.))
-                    .child(
-                        self.compact_button("zoom-in", "＋", t)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.zoom = (this.zoom * 1.25).min(8.);
-                                cx.notify();
-                            })),
-                    )
-                    .child(self.compact_button("fit", "Fit", t).on_click(cx.listener(
+                    .child(self.icon_button("zoom-in", "plus", t).on_click(cx.listener(
                         |this, _, _, cx| {
-                            this.zoom = (760. / f64::from(this.doc.width))
-                                .min(500. / f64::from(this.doc.height))
-                                .clamp(0.05, 8.);
+                            this.zoom = (this.zoom * 1.25).min(8.);
+                            this.zoom_fit = false;
                             cx.notify();
                         },
                     )))
                     .child(
+                        self.icon_button("fit", "fit", t)
+                            .when(self.zoom_fit, |button| {
+                                button.bg(Hsla {
+                                    a: 0.16,
+                                    ..t.accent
+                                })
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.zoom_fit = true;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
                         self.compact_button("add-image", "Add images", t)
+                            .child(icon("image").size(px(14.)).text_color(t.muted()))
                             .on_click(cx.listener(Self::prompt_add_image)),
                     ),
             )
@@ -3698,19 +4106,7 @@ impl Render for ScreenshotEditor {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(
-                        div()
-                            .w(px(96.))
-                            .flex_none()
-                            .flex()
-                            .flex_col()
-                            .gap(metric("--s-3"))
-                            .p(metric("--s-3"))
-                            .border_r_1()
-                            .border_color(t.border())
-                            .bg(t.raised())
-                            .children(tools.map(|tool| self.tool_button(tool, t, cx))),
-                    )
+                    .child(self.render_tool_rail(t, cx))
                     .child(
                         div()
                             .id("canvas-scroll")
@@ -3795,14 +4191,20 @@ impl Render for ScreenshotEditor {
 fn bind_keys(cx: &mut App) {
     text_input::bind_keys(cx);
     let editor = Some("ScreenshotEditor && !EditorTextInput");
+    let primary = if cfg!(target_os = "macos") {
+        "cmd"
+    } else {
+        "ctrl"
+    };
     cx.bind_keys([
-        KeyBinding::new("ctrl-z", Undo, editor),
-        KeyBinding::new("ctrl-shift-z", Redo, editor),
-        KeyBinding::new("ctrl-y", Redo, editor),
+        KeyBinding::new(&format!("{primary}-z"), Undo, editor),
+        KeyBinding::new(&format!("{primary}-shift-z"), Redo, editor),
+        KeyBinding::new(&format!("{primary}-y"), Redo, editor),
         KeyBinding::new("delete", DeleteLayer, editor),
-        KeyBinding::new("ctrl-d", DuplicateLayer, editor),
-        KeyBinding::new("ctrl-c", CopyLayer, editor),
-        KeyBinding::new("ctrl-v", PasteLayer, editor),
+        KeyBinding::new(&format!("{primary}-d"), DuplicateLayer, editor),
+        KeyBinding::new(&format!("{primary}-c"), CopyLayer, editor),
+        KeyBinding::new(&format!("{primary}-v"), PasteLayer, editor),
+        KeyBinding::new(&format!("{primary}-s"), SaveSource, editor),
         KeyBinding::new("v", SelectTool, editor),
         KeyBinding::new("c", CropTool, editor),
         KeyBinding::new("t", TextTool, editor),
@@ -3812,9 +4214,13 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("a", ArrowTool, editor),
         KeyBinding::new("p", PenTool, editor),
         KeyBinding::new("b", RemoveBackgroundTool, editor),
-        KeyBinding::new("ctrl-=", ZoomIn, Some("ScreenshotEditor")),
-        KeyBinding::new("ctrl--", ZoomOut, Some("ScreenshotEditor")),
-        KeyBinding::new("ctrl-0", ActualSize, Some("ScreenshotEditor")),
+        KeyBinding::new(&format!("{primary}-="), ZoomIn, Some("ScreenshotEditor")),
+        KeyBinding::new(&format!("{primary}--"), ZoomOut, Some("ScreenshotEditor")),
+        KeyBinding::new(
+            &format!("{primary}-0"),
+            ActualSize,
+            Some("ScreenshotEditor"),
+        ),
         KeyBinding::new("left", NudgeLeft, editor),
         KeyBinding::new("right", NudgeRight, editor),
         KeyBinding::new("up", NudgeUp, editor),
@@ -3869,6 +4275,10 @@ pub fn open(path: PathBuf, cx: &mut App) -> Result<()> {
                                 editor.restored = restored;
                                 editor.dirty = restored;
                                 editor.rendered = rendered;
+                                editor.numeric_target = NumericTarget::CanvasWidth;
+                                editor.numeric_input.update(cx, |input, cx| {
+                                    input.set(editor.doc.width.to_string(), cx)
+                                });
                                 editor.status = if restored {
                                     "Unsaved editing draft restored".into()
                                 } else {

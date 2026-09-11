@@ -148,6 +148,7 @@ pub fn settings_changed(cx: &mut App) {
         ..Default::default()
     };
     theme.accent = ui::accent(&settings.theme, &settings.custom_accent);
+    theme.accent_ink = ui::accent_ink(&settings.theme, &settings.custom_accent);
     theme.signal = ui::signal(&settings.theme, &settings.custom_signal);
     cx.set_global(theme);
     if let Some(desktop) = cx.global_mut::<State>().desktop.as_mut()
@@ -157,6 +158,20 @@ pub fn settings_changed(cx: &mut App) {
     }
     if let Err(error) = desktop::login(settings.launch_at_login) {
         ui::error(error, cx);
+    }
+    for (title, excluded) in [
+        (
+            "Captures GPUI Previews",
+            !settings.include_mini_previews_in_captures,
+        ),
+        (
+            "Captures GPUI Recording controls",
+            !settings.include_recording_controls_in_captures,
+        ),
+    ] {
+        if let Err(error) = desktop::exclude_from_capture(title, excluded) {
+            ui::error(error, cx);
+        }
     }
     cx.refresh_windows();
 }
@@ -331,6 +346,7 @@ fn begin(mode: CaptureMode, kind: u32, display: Option<String>, cx: &mut App) {
     ui::job(
         cx,
         move || {
+            captures_session::dismiss_transient_shell_ui_before_capture();
             std::thread::sleep(Duration::from_millis(80));
             capture::prepare(display, desktop::pointer())
         },

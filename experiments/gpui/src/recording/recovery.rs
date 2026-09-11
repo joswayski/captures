@@ -1,5 +1,5 @@
 use anyhow::Result;
-use captures_media::{CancelToken, MediaToolchain, RecordingAudioLayout, RecordingSegmentInput};
+use captures_media::{CancelToken, RecordingAudioLayout, RecordingSegmentInput};
 use captures_recording::{DraftStore, RecordingDraftManifest, RecordingKind, RecordingState};
 use gpui::{
     App, AppContext, Bounds, Context, IntoElement, PromptLevel, Render, Window, WindowBounds,
@@ -260,7 +260,7 @@ fn recover_one(store: &DraftStore, id: &str) -> std::result::Result<PathBuf, Str
                 })
             })
             .collect::<std::result::Result<Vec<_>, String>>()?;
-        let tools = MediaToolchain::from_command_names();
+        let tools = crate::media::toolchain();
         tools.verify().map_err(|error| error.to_string())?;
         let cancel = CancelToken::default();
         let extension = if manifest.options.kind == RecordingKind::Gif {

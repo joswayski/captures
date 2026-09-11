@@ -81,9 +81,8 @@ impl Selector {
                     this.picker = (this.picker != Some(picker)).then_some(picker);
                     if picker == Picker::Microphone && !this.microphones_loaded {
                         this.microphones_loaded = true;
-                        let task = cx.background_spawn(async {
-                            captures_recording_xcap::microphone_devices()
-                        });
+                        let task =
+                            cx.background_spawn(async { crate::recording::microphone_devices() });
                         cx.spawn(async move |entity, cx| {
                             let devices = task.await;
                             let _ = entity.update(cx, |this, cx| {

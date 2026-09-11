@@ -1,5 +1,5 @@
 use anyhow::{Context as _, Result};
-use captures_media::{CancelToken, MediaToolchain};
+use captures_media::CancelToken;
 use gpui::{Image, ImageFormat};
 use image::{DynamicImage, GenericImageView, ImageFormat as SourceFormat, imageops::FilterType};
 use std::{
@@ -48,7 +48,7 @@ fn source_image(path: &Path) -> Result<(DynamicImage, Option<(u32, u32)>)> {
     if let Ok(image) = image::open(path) {
         return Ok((image, None));
     }
-    let toolchain = MediaToolchain::from_command_names();
+    let toolchain = crate::media::toolchain();
     let probe = toolchain
         .probe(path)
         .with_context(|| format!("probe preview media {}", path.display()))?;

@@ -1,4 +1,4 @@
-# GPUI Linux implementation
+# GPUI implementation
 
 `experiments/gpui` is a separate Rust application using published **GPUI 0.2.2**
 for custom windows and GPU rendering. It reuses Captures' capture, recording,
@@ -9,8 +9,9 @@ image documents; FFmpeg handles media decoding and export.
 **This is not yet a feature-equivalent replacement for the shipping app.** It
 implements the capture/editor/recording workflow, rather than a static launcher,
 but the gaps and unverified combinations below still matter. The Tauri Preview
-build, installers, and update channel are unchanged. This integration is explicitly
-gated to Linux/X11; it does not establish macOS, Windows, or Wayland support.
+build, installers, and update channel are unchanged. The shared UI now has native
+adapters for Linux/X11, macOS, and Windows. Linux/X11 has rendered workflow checks;
+macOS and Windows runtime verification remains pending. Wayland is still gated out.
 
 ## Implemented surfaces
 
@@ -26,8 +27,11 @@ gated to Linux/X11; it does not establish macOS, Windows, or Wayland support.
 
 ## Data and safety
 
-The GPUI profile uses `$XDG_DATA_HOME/captures-gpui` (normally
-`~/.local/share/captures-gpui`), overridden by `CAPTURES_GPUI_DATA`. It never
+The GPUI profile uses `$XDG_DATA_HOME/captures-gpui` on Linux (normally
+`~/.local/share/captures-gpui`), `~/Library/Application Support/captures-gpui`
+on macOS, and `%LOCALAPPDATA%/captures-gpui` on Windows. `CAPTURES_GPUI_DATA`
+overrides that location. Private storage uses owner-only Unix permissions or
+Windows ACLs; settings replacement is atomic. It never
 migrates or writes the Tauri or GTK experiment's settings/history. Quit other
 Captures builds before testing overlapping shortcuts. The GPUI build does not
 clear another application's OS shortcut assignments.
@@ -48,6 +52,22 @@ logind session; it does not disable the production gate. On Linux, controls can
 appear in recordings: use Hide controls when needed. Window-exclusion options
 cannot make X11 provide capture exclusion it does not support.
 
+macOS recording uses the shared ScreenCaptureKit backend rather than xcap's
+recording path. Screen/microphone permission requests recheck session safety
+after the prompt. ScreenCaptureKit's whole-app exclusion applies when both
+preview and recording-control inclusion are off; mixed inclusion cannot be
+represented by this backend's current app-level filter. The AppKit sharing flag
+is only a legacy best-effort hint, not a guarantee for modern capture APIs.
+Windows applies native display affinity to excluded preview/control windows.
+These native branches still need real desktop capture tests.
+
+The UI remains shared: platform adapters handle tray/menu integration, shortcuts,
+file clipboard/reveal, activation, login startup, and privacy. File copying uses
+X11 URI targets, an AppKit file URL, or Windows `CF_HDROP`; clipboard support does
+not implement cross-application dragging. Media tools resolve relative to bundles
+and standard installed locations without changing PATH. Fresh profiles use the
+shipping app's OS-specific shortcuts; existing custom bindings remain unchanged.
+
 The parent integration repairs GPUI 0.2.2's forced X11 popup decorations only for
 this process's notification windows. Region guides are positioned after mapping
 and have empty native input regions, because initial bounds alone allow a window
@@ -59,10 +79,14 @@ not inferred from the GPUI element tree.
 
 - Native cross-application XDND file dragging is missing. GPUI's in-app drag API
   is not a native drag source; clipboard support is not a substitute for it.
-- WebM export returns a visible unsupported error from the shared Linux media
+- WebM export returns a visible unsupported error from the shared media
   backend. MP4 and GIF export are implemented.
-- No GPUI packaging/update channel, feedback transport, crash diagnostics, or
-  shipping onboarding/update/launch-notice workflow is configured.
+- Test-only native packages and PR build jobs are available through the
+  [platform helpers](../experiments/gpui/platform/README.md). There is no GPUI
+  distribution/update channel, feedback transport, crash diagnostics, or
+  shipping onboarding/update/launch-notice workflow. macOS bundles do not yet
+  advertise Finder document associations; CLI/file-URL routing is not proof of
+  native Open With event handling.
 - A finalized mixed audio stream cannot be split back into independent system
   and microphone tracks. Available separate tracks are handled separately;
   ffplay failure currently does not surface a warning in the editor.
@@ -79,6 +103,8 @@ not inferred from the GPUI element tree.
 Measured on September 11, 2026 in a two-vCPU Linux orb using Mesa 25.0.7
 llvmpipe, Xvfb (1600×1000), Openbox and xcompmgr. Both applications were release
 builds; Tauri embedded the production frontend with `tauri/custom-protocol`.
+These measurements describe the original Linux baseline, before the subsequent
+editor-parity and platform-adapter changes; they are not refreshed measurements.
 Preferences used matching 980×720 client windows; image editors used 1280×760
 windows with the same 960×540 fixture. Both used fresh isolated profiles, dark
 appearance and software rendering. The screenshots were inspected for actual
@@ -138,11 +164,23 @@ Ten trials do not establish a reliable tail-latency distribution.
 
 ## Rendered comparison and interaction evidence
 
+The updated editor uses the shipping layout's left SVG tool rail, centered
+fit canvas, right Layers/contextual-properties panel, and grouped export controls.
+The following release renders were inspected after the platform/parity changes.
+Pointer checks exercised the six-shape flyout, numeric Apply/Escape, export and
+format menus, appearance switching, and resizing to 980×650 with properties
+scrolling. The smaller dark window shows retained custom export dimensions after
+a canvas resize; window, canvas, and export dimensions are independent.
+
+![Updated light editor with shape flyout](images/gpui/editor-parity-light.png)
+![Updated dark editor at 980×650 with scrolled properties](images/gpui/editor-parity-dark-small.png)
+
 These are actual application screenshots, not generated design concepts.
-Comparison pairs place release Tauri on the left and release GPUI on the right
-at identical client dimensions. Light mode is an additional visual check, not
-another performance dataset. GPUI has similar broad structure, but different
-spacing, controls and canvas layout; these images do not establish exact parity.
+The historical comparison pairs below place release Tauri on the left and the
+original pre-parity GPUI build on the right at identical client dimensions.
+They correspond to the benchmark baseline, not the updated editor above. Light
+mode is an additional visual check, not another performance dataset. None of
+these images establishes exact visual or interaction parity.
 
 ![Dark Preferences: Tauri left, GPUI right](images/gpui/preferences-dark.png)
 ![Dark image editor: Tauri left, GPUI right](images/gpui/image-dark.png)
@@ -161,11 +199,18 @@ and interaction checks above establish only the behaviors they actually ran.
 ## Verification performed
 
 - `npm run check`: passed, including 830 desktop tests and production web builds.
+  The orb run disabled inherited Git signing only for the command's disposable
+  test repositories (`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign
+  GIT_CONFIG_VALUE_0=false`); the initial run could not sign their fixture commits.
 - Root `cargo fmt --all -- --check`, `cargo test --workspace` and strict workspace
   Clippy: passed; 366 Rust tests passed, one ignored.
-- GPUI locked tests: 81 passed, including the live X11 Shape/clipboard suite;
+- GPUI locked tests: 86 passed, including the live X11 Shape/clipboard suite;
   formatting, strict all-target Clippy and release build passed.
 - Python measurement-helper tests: six passed.
+- Platform helper policy, shell syntax and workflow formatting checks passed.
+  Full native macOS/Windows builds and runtime checks were unavailable in the
+  Linux orb; isolated exact-dependency adapter type checks do not substitute
+  for the new native CI jobs or physical-desktop testing.
 - `capture_check.py`: exact 730×450 pixel comparison; private history and no
   automatic publication; IPC, Escape, lock cancellation and tray lifetime;
   failed asynchronous source opening cannot expose a placeholder Save action.
@@ -176,4 +221,4 @@ and interaction checks above establish only the behaviors they actually ran.
 These checks ran in the isolated Linux/X11 fixture. They do not cover the
 physical-desktop and product gaps listed above.
 
-Build and repeatable test commands are in [DEVELOPMENT.md](../DEVELOPMENT.md#gpui-linux-implementation).
+Build and repeatable test commands are in [DEVELOPMENT.md](../DEVELOPMENT.md#gpui-implementation).

@@ -37,6 +37,7 @@ pub fn icon(name: &'static str) -> gpui::Svg {
 pub struct Theme {
     pub dark: bool,
     pub accent: Hsla,
+    pub accent_ink: Hsla,
     pub signal: Hsla,
 }
 
@@ -47,6 +48,7 @@ impl Default for Theme {
         Self {
             dark: true,
             accent: color(THEMES, "--theme-accent"),
+            accent_ink: color(THEMES, "--theme-accent-ink"),
             signal: color(THEMES, "--theme-signal"),
         }
     }
@@ -103,6 +105,39 @@ pub fn accent(name: &str, custom: &str) -> Hsla {
 
 pub fn signal(name: &str, custom: &str) -> Hsla {
     palette(name, custom, "--theme-signal")
+}
+
+pub fn accent_ink(name: &str, custom: &str) -> Hsla {
+    if name != "custom" {
+        return palette(name, "", "--theme-accent-ink");
+    }
+    // Same preferredInk contrast policy as shared/themes.ts. Foreground must
+    // follow the accent, not the window's light/dark canvas color.
+    let background = luminance(accent(name, custom));
+    let dark = color(THEMES, "--theme-accent-ink");
+    if (background.max(luminance(dark)) + 0.05) / (background.min(luminance(dark)) + 0.05) >= 4.5 {
+        dark
+    } else if 1.05 / (background + 0.05) >= 4.5 {
+        color(DESIGN, "--positive-ink")
+    } else {
+        rgba(0x000000ff).into()
+    }
+}
+
+fn luminance(color: Hsla) -> f32 {
+    let color: gpui::Rgba = color.into();
+    [color.r, color.g, color.b]
+        .into_iter()
+        .zip([0.2126, 0.7152, 0.0722])
+        .map(|(channel, weight)| {
+            weight
+                * if channel <= 0.03928 {
+                    channel / 12.92
+                } else {
+                    ((channel + 0.055) / 1.055).powf(2.4)
+                }
+        })
+        .sum()
 }
 
 fn palette(name: &str, custom: &str, token: &str) -> Hsla {
@@ -258,6 +293,15 @@ pub fn error(message: impl Into<String>, cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn accent_foreground_follows_palette_and_custom_contrast_not_appearance() {
+        assert_eq!(accent_ink("mustard", ""), rgba(0x17181bff).into());
+        assert_eq!(accent_ink("violet", ""), rgba(0xffffffff).into());
+        assert_eq!(accent_ink("custom", "#ffffff"), rgba(0x17181bff).into());
+        assert_eq!(accent_ink("custom", "#000000"), rgba(0xffffffff).into());
+        assert_eq!(accent_ink("custom", "#777777"), rgba(0x000000ff).into());
+    }
+
     #[test]
     fn appearance_aliases_and_fixed_glass_are_distinct() {
         let dark = Theme::default();

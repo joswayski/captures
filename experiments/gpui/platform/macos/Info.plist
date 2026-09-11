@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key>
+  <string>captures-gpui</string>
+  <key>CFBundleIdentifier</key>
+  <string>io.github.joswayski.captures.gpui-experiment</string>
+  <key>CFBundleName</key>
+  <string>Captures GPUI Experiment</string>
+  <key>CFBundleDisplayName</key>
+  <string>Captures GPUI Experiment</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>CFBundleIconFile</key>
+  <string>icon.icns</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSPrincipalClass</key>
+  <string>NSApplication</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>Capture screenshots, GIFs, or video from the display, window, or region you select.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Include system audio in a recording only when you enable it.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Include microphone audio in a recording only when you select a microphone.</string>
+</dict>
+</plist>

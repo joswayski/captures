@@ -7,7 +7,6 @@ use crate::{
     settings::{atomic_write, data_dir},
     ui::{Theme, button, metric, root, theme},
 };
-use captures_media::MediaToolchain;
 use gpui::{
     App, AppContext, Bounds, Context, Entity, IntoElement, ObjectFit, Render, RetainAllImageCache,
     SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions, div, image_cache, img,
@@ -164,17 +163,12 @@ fn source_is_private(root: &Path, source: &Path) -> bool {
 }
 
 fn set_private_permissions(path: &Path, mode: u32) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-            .map_err(|error| format!("Could not protect GPUI Capture History data: {error}"))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (path, mode);
-        Ok(())
-    }
+    let result = if mode == 0o700 {
+        crate::desktop::private_directory(path)
+    } else {
+        crate::desktop::private_file(path)
+    };
+    result.map_err(|error| format!("Could not protect GPUI Capture History data: {error}"))
 }
 
 /// Add a saved capture to the isolated GPUI history and create an independent
@@ -247,7 +241,7 @@ fn add_at(root: &Path, path: &Path) -> Result<(), String> {
                 (width, height, None, false)
             }
             Kind::Gif | Kind::Video => {
-                let probe = MediaToolchain::from_command_names()
+                let probe = crate::media::toolchain()
                     .probe(&library_path)
                     .map_err(|error| error.to_string())?;
                 (
@@ -262,7 +256,7 @@ fn add_at(root: &Path, path: &Path) -> Result<(), String> {
             Kind::Screenshot | Kind::Gif => Some(library_path.clone()),
             Kind::Video => {
                 let poster = directory.join("poster.jpg");
-                let output = Command::new("ffmpeg")
+                let output = Command::new(crate::media::tool("ffmpeg"))
                     .args(["-v", "error", "-y", "-i"])
                     .arg(&library_path)
                     .args([

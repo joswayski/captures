@@ -5,9 +5,9 @@
 //! no GTK window and no webview.
 
 mod cache;
-mod geometry;
+pub(crate) mod geometry;
 #[cfg(target_os = "linux")]
-mod x11;
+pub(crate) mod x11;
 
 use crate::{
     app,
@@ -208,8 +208,7 @@ pub fn show(cx: &mut App) -> Result<()> {
     let placement = settings(cx).mini_preview_placement.min(3);
     let bounds = home_bounds(placement, cx);
     let initial_origin = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
-    #[cfg(target_os = "linux")]
-    x11::clear_cached_window();
+    crate::desktop::clear_preview_input_region();
     let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -239,6 +238,18 @@ pub fn show(cx: &mut App) -> Result<()> {
         },
     )?;
     global_mut(cx).handle = Some(handle);
+    cx.spawn(async move |cx| {
+        Timer::after(Duration::from_millis(50)).await;
+        let _ = cx.update(|cx| {
+            if let Err(error) = crate::desktop::exclude_from_capture(
+                TITLE,
+                !settings(cx).include_mini_previews_in_captures,
+            ) {
+                ui::error(error, cx);
+            }
+        });
+    })
+    .detach();
     Ok(())
 }
 
@@ -257,8 +268,7 @@ pub fn hide(cx: &mut App) {
             window.remove_window();
         });
     }
-    #[cfg(target_os = "linux")]
-    x11::clear_cached_window();
+    crate::desktop::clear_preview_input_region();
 }
 
 fn ensure_global(cx: &mut App) {
@@ -629,13 +639,10 @@ impl PreviewView {
         };
         if !cache::is_image(&card.path) {
             let uri = file_uri(&card.path);
-            #[cfg(target_os = "linux")]
-            if let Err(error) = x11::copy_file_uri(uri.clone()) {
+            if let Err(error) = crate::desktop::copy_file(&card.path) {
                 ui::error(error.to_string(), cx);
                 cx.write_to_clipboard(ClipboardItem::new_string(uri));
             }
-            #[cfg(not(target_os = "linux"))]
-            cx.write_to_clipboard(ClipboardItem::new_string(uri));
             card.copied = true;
             if let Some(global_card) = global_mut(cx).cards.iter_mut().find(|item| item.id == id) {
                 global_card.copied = true;
@@ -977,9 +984,15 @@ impl Render for PreviewView {
                 height: 36.0,
             });
         }
-        #[cfg(target_os = "linux")]
-        let _ = x11::set_input_region(&input, window.scale_factor(), self.initial_origin);
-
+        let input: Vec<_> = input
+            .iter()
+            .map(|rect| (rect.x, rect.y, rect.width, rect.height))
+            .collect();
+        let _ = crate::desktop::set_preview_input_region(
+            &input,
+            window.scale_factor(),
+            self.initial_origin,
+        );
         let mut root = div()
             .relative()
             .w(px(FRAME_WIDTH))
@@ -1245,17 +1258,10 @@ fn finish_save(id: u64, result: std::result::Result<PathBuf, String>, cx: &mut A
 }
 
 fn reveal(path: &std::path::Path) -> std::result::Result<(), String> {
-    let directory = path
-        .parent()
-        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
-    std::process::Command::new("xdg-open")
-        .arg(directory)
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("show {}: {error}", path.display()))
+    crate::desktop::reveal(path)
 }
 
-fn file_uri(path: &std::path::Path) -> String {
+pub(crate) fn file_uri(path: &std::path::Path) -> String {
     let absolute = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let mut uri = String::from("file://");
     for byte in absolute.as_os_str().as_encoded_bytes() {

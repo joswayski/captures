@@ -15,6 +15,49 @@ use captures_recording::RecordingOptions;
 use gpui::App;
 use std::path::PathBuf;
 
+#[cfg(target_os = "macos")]
+use captures_recording_macos::MacRecordingSegment as RecordingSegment;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use captures_recording_xcap::XcapRecordingSegment as RecordingSegment;
+
+pub(crate) fn microphone_devices() -> Vec<captures_recording::AudioDevice> {
+    #[cfg(target_os = "macos")]
+    return captures_recording_macos::microphone_devices();
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    return captures_recording_xcap::microphone_devices();
+}
+
+fn start_segment(
+    options: &RecordingOptions,
+    path: &std::path::Path,
+    display: &DisplayDescriptor,
+    exclude_app: bool,
+) -> Result<RecordingSegment, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = display;
+        if !options.audio.microphone_muted
+            && options.audio.microphone_device_id.is_some()
+            && !captures_recording_macos::request_microphone_access()
+        {
+            return Err("Microphone access was denied. Allow Captures GPUI in System Settings → Privacy & Security → Microphone, or record without a microphone.".into());
+        }
+        // Permission prompts can stay open while the desktop locks.
+        if !captures_session::capture_session_available() {
+            return Err("Recording cancelled: desktop session became locked or inactive.".into());
+        }
+        captures_capture::XcapBackend
+            .ensure_permission(false)
+            .map_err(|error| error.to_string())?;
+        RecordingSegment::start(options, path, exclude_app).map_err(|error| error.to_string())
+    }
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    {
+        let _ = exclude_app;
+        RecordingSegment::start(options, path, display).map_err(|error| error.to_string())
+    }
+}
+
 /// Starts countdown and recording, then presents the always-dark recording HUD.
 pub fn start(
     options: RecordingOptions,

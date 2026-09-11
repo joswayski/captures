@@ -65,11 +65,33 @@ pub struct RecordingSettings {
 
 impl Default for RecordingSettings {
     fn default() -> Self {
+        let shortcuts = if cfg!(target_os = "macos") {
+            [
+                "Super+Shift+5",
+                "Super+Shift+Alt+W",
+                "Super+Shift+Alt+3",
+                "Super+Shift+6",
+            ]
+        } else if cfg!(target_os = "windows") {
+            [
+                "Super+Alt+R",
+                "Control+Shift+Alt+W",
+                "Control+Shift+Alt+3",
+                "Control+Shift+6",
+            ]
+        } else {
+            [
+                "Control+Shift+Alt+R",
+                "Control+Shift+Alt+W",
+                "Control+Shift+Alt+3",
+                "Control+Shift+6",
+            ]
+        };
         Self {
-            video_shortcut: "Control+Shift+Alt+R".into(),
-            window_shortcut: "Control+Shift+Alt+W".into(),
-            display_shortcut: "Control+Shift+Alt+3".into(),
-            gif_shortcut: "Control+Shift+6".into(),
+            video_shortcut: shortcuts[0].into(),
+            window_shortcut: shortcuts[1].into(),
+            display_shortcut: shortcuts[2].into(),
+            gif_shortcut: shortcuts[3].into(),
             video_format: "mp4".into(),
             video_fps: 60,
             video_max_resolution: MaxResolution::Original,
@@ -90,16 +112,38 @@ impl Default for RecordingSettings {
 
 impl Default for Settings {
     fn default() -> Self {
+        let shortcuts = if cfg!(target_os = "macos") {
+            [
+                "Super+Shift+Space",
+                "Super+Shift+4",
+                "Super+Shift+W",
+                "Super+Shift+3",
+            ]
+        } else if cfg!(target_os = "windows") {
+            [
+                "Control+Shift+Space",
+                "Super+Shift+S",
+                "Alt+PrintScreen",
+                "PrintScreen",
+            ]
+        } else {
+            [
+                "PrintScreen",
+                "Super+Shift+S",
+                "Alt+PrintScreen",
+                "Shift+PrintScreen",
+            ]
+        };
         Self {
             appearance: "system".into(),
             theme: "mustard".into(),
             custom_accent: "#32d3ff".into(),
             custom_signal: "#ff4fc3".into(),
             output_directory: data_dir().join("captures"),
-            new_capture_shortcut: "PrintScreen".into(),
-            region_shortcut: "Super+Shift+S".into(),
-            window_shortcut: "Alt+PrintScreen".into(),
-            display_shortcut: "Shift+PrintScreen".into(),
+            new_capture_shortcut: shortcuts[0].into(),
+            region_shortcut: shortcuts[1].into(),
+            window_shortcut: shortcuts[2].into(),
+            display_shortcut: shortcuts[3].into(),
             auto_copy_to_clipboard: true,
             auto_start_on_selection: false,
             show_mini_previews: true,
@@ -122,11 +166,9 @@ pub fn data_dir() -> PathBuf {
     std::env::var_os("CAPTURES_GPUI_DATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            std::env::var_os("XDG_DATA_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| {
-                    PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share")
-                })
+            directories::BaseDirs::new()
+                .expect("the current account must have a local application-data directory")
+                .data_local_dir()
                 .join("captures-gpui")
         })
 }
@@ -241,34 +283,15 @@ fn is_hex_color(value: &str) -> bool {
 }
 
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    #[cfg(unix)]
-    use std::os::unix::fs::OpenOptionsExt;
-
     let parent = path.parent().ok_or("Missing parent directory.")?;
-    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|error| error.to_string())?
-        .as_nanos();
-    let temporary = parent.join(format!(".write-{}-{stamp}", std::process::id()));
-    let mut options = std::fs::OpenOptions::new();
-    options.create_new(true).write(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    let mut file = options
-        .open(&temporary)
+    crate::desktop::private_directory(parent).map_err(|error| error.to_string())?;
+    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;
+    crate::desktop::private_file(file.path()).map_err(|error| error.to_string())?;
+    file.write_all(bytes)
+        .and_then(|()| file.as_file().sync_all())
         .map_err(|error| error.to_string())?;
-    let result = (|| {
-        file.write_all(bytes)
-            .and_then(|()| file.sync_all())
-            .map_err(|error| error.to_string())?;
-        drop(file);
-        std::fs::rename(&temporary, path).map_err(|error| error.to_string())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(temporary);
-    }
-    result
+    file.persist(path).map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -331,6 +354,18 @@ mod tests {
         atomic_write(&path, b"new").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"new");
         assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
         std::fs::remove_dir_all(directory).unwrap();
     }
 

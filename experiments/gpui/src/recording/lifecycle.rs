@@ -1,13 +1,10 @@
 use anyhow::{Context as _, Result, anyhow};
 use captures_capture::DisplayDescriptor;
-use captures_media::{
-    CancelToken, ExportFormat, MediaToolchain, RecordingAudioLayout, RecordingSegmentInput,
-};
+use captures_media::{CancelToken, ExportFormat, RecordingAudioLayout, RecordingSegmentInput};
 use captures_recording::{
     DraftStore, RecordingDraftManifest, RecordingKind, RecordingOptions, RecordingSegmentInfo,
     RecordingSegmentManifest, RecordingState, RecordingTarget,
 };
-use captures_recording_xcap::XcapRecordingSegment;
 use gpui::{
     Animation, AnimationExt, AnyWindowHandle, App, AppContext, Bounds, Context, Global,
     IntoElement, PromptLevel, Render, Timer, Window, WindowBackgroundAppearance, WindowBounds,
@@ -22,7 +19,7 @@ use std::{
 };
 
 use super::{
-    editor,
+    RecordingSegment, editor,
     model::{HudPhase, PendingAction, format_time},
 };
 use crate::ui::{metric, theme};
@@ -91,7 +88,7 @@ pub(super) struct RecordingHud {
     store: DraftStore,
     manifest: RecordingDraftManifest,
     segments: Vec<RecordingSegmentInfo>,
-    active: Option<XcapRecordingSegment>,
+    active: Option<RecordingSegment>,
     phase: HudPhase,
     pending: PendingAction,
     generation: u64,
@@ -207,6 +204,9 @@ impl RecordingHud {
         let generation = self.generation;
         let options = self.options.clone();
         let display = self.display.clone();
+        let settings = cx.global::<crate::settings::Settings>();
+        let exclude_app = !settings.include_mini_previews_in_captures
+            && !settings.include_recording_controls_in_captures;
         let path = self.work_directory.join(format!(
             "gpui-segment-{:03}.mp4",
             self.manifest.segments.len()
@@ -215,7 +215,7 @@ impl RecordingHud {
             if !captures_session::capture_session_available() {
                 return Err("Screen capture is unavailable while the desktop session is locked or inactive.".to_owned());
             }
-            XcapRecordingSegment::start(&options, &path, &display).map_err(|error| error.to_string())
+            super::start_segment(&options, &path, &display, exclude_app)
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -228,7 +228,7 @@ impl RecordingHud {
     fn segment_started(
         &mut self,
         generation: u64,
-        result: Result<XcapRecordingSegment, String>,
+        result: Result<RecordingSegment, String>,
         cx: &mut Context<Self>,
     ) {
         if generation != self.generation
@@ -275,7 +275,7 @@ impl RecordingHud {
                     }
                     if matches!(this.phase, HudPhase::Recording) {
                         if let Some(warning) =
-                            this.active.as_ref().and_then(XcapRecordingSegment::warning)
+                            this.active.as_ref().and_then(RecordingSegment::warning)
                         {
                             this.warning = Some(warning);
                         }
@@ -1048,6 +1048,16 @@ pub(super) fn start(
     })?;
     let hud = cx.read_window(&handle, |hud, _| hud)?;
     cx.set_global(ActiveRecording { hud });
+    cx.defer(|cx| {
+        let excluded = !cx
+            .global::<crate::settings::Settings>()
+            .include_recording_controls_in_captures;
+        if let Err(error) =
+            crate::desktop::exclude_from_capture("Captures GPUI Recording controls", excluded)
+        {
+            crate::ui::error(error, cx);
+        }
+    });
     Ok(())
 }
 
@@ -1060,9 +1070,11 @@ fn open_region_guides(
         return Ok(Vec::new());
     };
     let mut windows = Vec::with_capacity(4);
-    for (index, (x, y, width, height)) in region_border_geometries(rect, (display.x, display.y))
-        .into_iter()
-        .enumerate()
+    let (origin_x, origin_y) = display.overlay_position();
+    for (index, (x, y, width, height)) in
+        region_border_geometries(rect, (origin_x.round() as i32, origin_y.round() as i32))
+            .into_iter()
+            .enumerate()
     {
         let title = format!("Captures GPUI Recording region {index} ({x},{y})");
         let window_title = title.clone();
@@ -1151,31 +1163,16 @@ fn create_draft(
     options: &RecordingOptions,
 ) -> Result<(DraftStore, RecordingDraftManifest, PathBuf)> {
     let root = crate::settings::data_dir().join("recording-drafts");
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(&root)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
-    }
+    crate::desktop::private_directory(&root)?;
     let store = DraftStore::new(root);
     let manifest = RecordingDraftManifest::new(session_id(), options.clone(), now_ms());
     let directory = store.create(&manifest)?;
+    crate::desktop::private_directory(&directory)?;
     fs::write(
         directory.join("destination.txt"),
         output.as_os_str().as_encoded_bytes(),
     )?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
-    }
+    crate::desktop::private_file(&directory.join("destination.txt"))?;
     Ok((store, manifest, directory))
 }
 
@@ -1252,7 +1249,7 @@ fn finalize_segments(
         "mp4"
     };
     let staging = work.join(format!("finished.{extension}"));
-    let media = MediaToolchain::from_command_names();
+    let media = crate::media::toolchain();
     media.verify().map_err(|error| error.to_string())?;
     let cancel = CancelToken::default();
     let inputs = segment_inputs(segments);

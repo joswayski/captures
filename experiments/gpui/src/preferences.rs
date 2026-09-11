@@ -203,7 +203,12 @@ impl Preferences {
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.recording_shortcut.is_none() {
-            if event.keystroke.modifiers.control && event.keystroke.key.eq_ignore_ascii_case("f") {
+            let primary = if cfg!(target_os = "macos") {
+                event.keystroke.modifiers.platform
+            } else {
+                event.keystroke.modifiers.control
+            };
+            if primary && event.keystroke.key.eq_ignore_ascii_case("f") {
                 self.find_open = true;
                 window.focus(&self.search.read(cx).handle());
                 cx.stop_propagation();
@@ -1199,7 +1204,7 @@ pub fn open(cx: &mut App) -> anyhow::Result<()> {
         cx.set_global(Settings::load().map_err(anyhow::Error::msg)?);
     }
     let settings = cx.global::<Settings>().clone();
-    let devices = cx.background_spawn(async { captures_recording_xcap::microphone_devices() });
+    let devices = cx.background_spawn(async { crate::recording::microphone_devices() });
     let window = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(

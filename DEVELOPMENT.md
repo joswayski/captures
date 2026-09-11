@@ -281,16 +281,24 @@ empty-profile runs, each settled for ten seconds after Preferences becomes
 visible, followed by five seconds of idle CPU sampling. It is not a matched
 workload or a measurement of the packaged Preview, recording, or hidden-tray idle.
 
-## GPUI Linux implementation
+## GPUI implementation
 
 The isolated `experiments/gpui` workspace uses published GPUI 0.2.2 and Rust 1.94.
-It is not the Tauri packaging command and is currently Linux/X11-only. See the
+It is not the Tauri packaging command. The shared UI has Linux/X11, macOS, and
+Windows adapters; Wayland is still gated out. Native macOS/Windows runtime
+verification is pending. See the
 [implementation and parity notes](docs/gpui-implementation.md) before testing.
+The [native build helpers](experiments/gpui/platform/README.md) cover Xcode/Metal,
+Windows MSVC/Cairo/FXC, and test-only package layouts. PR CI runs those native
+builds without publishing a release. The Linux CI smoke check verifies a mapped
+window, not painted pixels; use the workflow checks below for rendered behavior.
 In addition to the Linux build dependencies above, it needs Cairo, XKB/X11, and a
 working Vulkan renderer (`libcairo2-dev`, `libxkbcommon-x11-dev`, `libvulkan1` and
 `mesa-vulkan-drivers` on Debian). Recording/editing need `ffmpeg`, `ffprobe`, and
-`ffplay` on PATH. Audio needs a working PulseAudio/PipeWire source. Native file
-prompts need a functioning desktop portal.
+`ffplay`. The resolver checks bundled tools next to the executable on Linux and
+Windows, or `Contents/Resources/bin` on macOS, then standard Homebrew locations
+on macOS and PATH. It never changes the process PATH. Linux audio needs a working
+PulseAudio/PipeWire source and native file prompts need a functioning desktop portal.
 
 ```sh
 cargo fmt --manifest-path experiments/gpui/Cargo.toml -- --check
@@ -308,8 +316,11 @@ experiments/gpui/target/release/captures-gpui --open /absolute/path/to/image.png
 Other entry points are `--history`, `--window`, `--display`, `--record`, `--gif`,
 `--canvas`, `--previews FILE...`, and `--background`. Later invocations forward to
 the existing process. Settings/history/drafts use `CAPTURES_GPUI_DATA`, or the
-separate `captures-gpui` XDG data directory. Login startup is opt-in and writes
-only `autostart/captures-gpui.desktop`.
+separate `captures-gpui` directory under the OS-local application-data location
+(XDG on Linux, Application Support on macOS, LocalAppData on Windows). Login
+startup is opt-in: `autostart/captures-gpui.desktop` on Linux,
+`Library/LaunchAgents/io.captures.gpui.plist` on macOS, and the current-user
+`Run/CapturesGpui` registry value on Windows. None modifies the shipping app's profile.
 
 For repeatable native UI checks, reuse the disposable X11/DBus test desktop, not
 a personal desktop. In an Amp orb, start it as a supervised service:

@@ -37,6 +37,12 @@ pub fn prepare(display: Option<String>, pointer: (i32, i32)) -> Result<Prepared,
         return Err("Capture is unavailable: the desktop is locked, inactive, or its session cannot be verified.".into());
     }
     let backend = XcapBackend;
+    backend
+        .ensure_permission(true)
+        .map_err(|error| error.to_string())?;
+    if !captures_session::capture_session_available() {
+        return Err("Capture cancelled: desktop session became locked or inactive.".into());
+    }
     let frame = match display {
         Some(id) => backend.capture_display(&id),
         None => backend.capture_display_at_point(Some(pointer)),
@@ -57,6 +63,9 @@ pub fn pixels(selection: &Selection) -> Result<image::RgbaImage, String> {
     if !captures_session::capture_session_available() {
         return Err("Capture cancelled: desktop session unavailable".into());
     }
+    XcapBackend
+        .ensure_permission(false)
+        .map_err(|error| error.to_string())?;
     let pointer = PointerCursor {
         position: selection.pointer,
         image: None,
@@ -143,6 +152,7 @@ pub fn open(
     cx: &mut App,
 ) -> anyhow::Result<WindowHandle<Selector>> {
     let (x, y, w, h) = prepared.frame.descriptor.overlay_geometry();
+    let pointer = (prepared.frame.descriptor.x, prepared.frame.descriptor.y);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds {
             origin: point(px(x as f32), px(y as f32)),
@@ -179,7 +189,7 @@ pub fn open(
                 microphones: vec![],
                 microphones_loaded: false,
                 focus,
-                pointer: (x as i32, y as i32),
+                pointer,
             }
         })
     })
@@ -256,7 +266,12 @@ impl Selector {
         let (x, y) = (f64::from(event.position.x), f64::from(event.position.y));
         let (width, height) = self.dimensions();
         let display = &self.prepared.frame.descriptor;
-        self.pointer = (display.x + x as i32, display.y + y as i32);
+        self.pointer = geometry::pointer_position(
+            display,
+            x,
+            y,
+            DisplayDescriptor::reports_physical_geometry(),
+        );
         if let Some((anchor, origin)) = self.panel_drag {
             self.panel_origin = point(
                 (origin.x + event.position.x - anchor.x)
@@ -287,12 +302,11 @@ impl Selector {
                 .windows
                 .iter()
                 .find(|w| {
-                    let r = LogicalRect {
-                        x: f64::from(w.x - display.x),
-                        y: f64::from(w.y - display.y),
-                        width: f64::from(w.width),
-                        height: f64::from(w.height),
-                    };
+                    let r = geometry::window_rect(
+                        w,
+                        display,
+                        DisplayDescriptor::reports_physical_geometry(),
+                    );
                     w.display_id == display.id && contains(r, x, y)
                 })
                 .cloned();
@@ -303,11 +317,12 @@ impl Selector {
                     width,
                     height,
                 },
-                |w| LogicalRect {
-                    x: f64::from(w.x - display.x),
-                    y: f64::from(w.y - display.y),
-                    width: f64::from(w.width),
-                    height: f64::from(w.height),
+                |w| {
+                    geometry::window_rect(
+                        w,
+                        display,
+                        DisplayDescriptor::reports_physical_geometry(),
+                    )
                 },
             );
             self.window_target = target;

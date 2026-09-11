@@ -1,7 +1,6 @@
 use anyhow::Result;
 use captures_media::{
-    CancelToken, ExportFormat, ExportProgress, MediaToolchain, ProbeResult, QualityPreset,
-    TimelineSpriteSpec,
+    CancelToken, ExportFormat, ExportProgress, ProbeResult, QualityPreset, TimelineSpriteSpec,
 };
 use gpui::{
     App, AppContext, Bounds, Context, Hsla, Image, ImageFormat, ImageSource, IntoElement,
@@ -122,7 +121,7 @@ impl RecordingEditor {
     fn load(&mut self, cx: &mut Context<Self>) {
         let source = self.source.clone();
         let task = cx.background_spawn(async move {
-            let media = MediaToolchain::from_command_names();
+            let media = crate::media::toolchain();
             media.verify().map_err(|error| error.to_string())?;
             let probe = media.probe(&source).map_err(|error| error.to_string())?;
             let (has_system_audio, has_microphone_audio) = audio_layout(&source, &probe);
@@ -233,7 +232,7 @@ impl RecordingEditor {
         };
         let task = cx.background_spawn(async move {
             let path = scratch.join(format!("frame-{at}.png"));
-            MediaToolchain::from_command_names()
+            crate::media::toolchain()
                 .extract_frame(&source, at, &path, &CancelToken::default())
                 .map_err(|error| error.to_string())?;
             fs::read(path)
@@ -508,7 +507,10 @@ impl RecordingEditor {
             return;
         };
         if settings.format == ExportFormat::WebM {
-            self.error = Some("WebM export is not available in the shipping Linux media backend. Choose MP4 or GIF.".into());
+            self.error = Some(
+                "WebM export is not available in the shared media backend. Choose MP4 or GIF."
+                    .into(),
+            );
             cx.notify();
             return;
         }
@@ -531,7 +533,7 @@ impl RecordingEditor {
         );
         self.notice = Some("Preparing before / after comparison…".into());
         let task = cx.background_spawn(async move {
-            let tools = MediaToolchain::from_command_names();
+            let tools = crate::media::toolchain();
             let cancel = CancelToken::default();
             tools
                 .extract_frame(&source, at, &before, &cancel)
@@ -580,7 +582,10 @@ impl RecordingEditor {
             return;
         };
         if settings.format == ExportFormat::WebM {
-            self.error = Some("WebM export is not available in the shipping Linux media backend. Choose MP4 or GIF.".into());
+            self.error = Some(
+                "WebM export is not available in the shared media backend. Choose MP4 or GIF."
+                    .into(),
+            );
             cx.notify();
             return;
         }
@@ -674,7 +679,7 @@ impl RecordingEditor {
         self.error = None;
         let (progress_tx, progress_rx) = mpsc::channel();
         let task = cx.background_spawn(async move {
-            let result = MediaToolchain::from_command_names()
+            let result = crate::media::toolchain()
                 .export(&source, &temporary, &edit, &spec, &cancel, |progress| {
                     let _ = progress_tx.send(progress);
                 })
@@ -1261,7 +1266,7 @@ impl Render for RecordingEditor {
                 if let Some(s) = this.settings.as_mut() {
                     s.format = match s.format { ExportFormat::Mp4 => ExportFormat::Gif, ExportFormat::Gif => ExportFormat::WebM, ExportFormat::WebM => ExportFormat::Mp4 };
                     if s.format == ExportFormat::Gif && s.quality == QualityPreset::Preserve { s.quality = QualityPreset::Standard; }
-                    if s.format == ExportFormat::WebM { this.error = Some("WebM is shown for parity, but the shipping Linux MediaToolchain does not provide a WebM encoder.".into()); }
+                    if s.format == ExportFormat::WebM { this.error = Some("WebM export is not available in the shared media backend. Choose MP4 or GIF.".into()); }
                 }
                 cx.notify();
             })))
@@ -1510,14 +1515,7 @@ fn private_scratch(label: &str) -> std::io::Result<PathBuf> {
             .unwrap_or_default()
             .as_millis()
     ));
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(&path)?;
+    crate::desktop::private_directory(&path)?;
     Ok(path)
 }
 
@@ -1631,7 +1629,7 @@ fn audio_layout(source: &Path, probe: &ProbeResult) -> (bool, bool) {
     if probe.audio_stream_count >= 2 {
         return (true, true);
     }
-    let output = Command::new("ffprobe")
+    let output = Command::new(crate::media::tool("ffprobe"))
         .args([
             "-v",
             "error",
@@ -1706,7 +1704,7 @@ fn decode_playback(request: PlaybackDecode, sender: mpsc::SyncSender<PlaybackMes
         cancel,
     } = request;
     let filter = format!("fps=30,scale={width}:{height}");
-    let mut child = match Command::new("ffmpeg")
+    let mut child = match Command::new(crate::media::tool("ffmpeg"))
         .args(["-hide_banner", "-loglevel", "error", "-ss"])
         .arg(format!("{:.3}", start_ms as f64 / 1_000.0))
         .arg("-i")
@@ -1736,7 +1734,7 @@ fn decode_playback(request: PlaybackDecode, sender: mpsc::SyncSender<PlaybackMes
         .into_iter()
         .filter(|(_, muted, volume)| !muted && *volume > 0)
         .map(|(stream, _, volume)| {
-            Command::new("ffplay")
+            Command::new(crate::media::tool("ffplay"))
                 .args(["-nodisp", "-autoexit", "-loglevel", "error", "-ss"])
                 .arg(format!("{:.3}", start_ms as f64 / 1_000.0))
                 .arg("-t")
@@ -1820,7 +1818,7 @@ mod tests {
     fn editor_specs_produce_real_cropped_mp4_and_gif_outputs() {
         let directory = private_scratch("export-test").unwrap();
         let source = directory.join("source.mp4");
-        let generated = Command::new("ffmpeg")
+        let generated = Command::new(crate::media::tool("ffmpeg"))
             .args([
                 "-hide_banner",
                 "-loglevel",
@@ -1838,7 +1836,7 @@ mod tests {
             .expect("run FFmpeg fixture generator");
         assert!(generated.success());
 
-        let media = MediaToolchain::from_command_names();
+        let media = crate::media::toolchain();
         let mut settings = EditorSettings::new(640, 360, 2_000, false, false);
         settings.trim_start_ms = 250;
         settings.trim_end_ms = 1_250;

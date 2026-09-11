@@ -34,6 +34,11 @@ static BINDINGS: Once = Once::new();
 
 pub fn bind_keys(cx: &mut App) {
     BINDINGS.call_once(|| {
+        let [select_all, paste, copy, cut] = if cfg!(target_os = "macos") {
+            ["cmd-a", "cmd-v", "cmd-c", "cmd-x"]
+        } else {
+            ["ctrl-a", "ctrl-v", "ctrl-c", "ctrl-x"]
+        };
         cx.bind_keys([
             KeyBinding::new("backspace", Backspace, Some("CapturesInput")),
             KeyBinding::new("delete", Delete, Some("CapturesInput")),
@@ -41,10 +46,10 @@ pub fn bind_keys(cx: &mut App) {
             KeyBinding::new("right", Right, Some("CapturesInput")),
             KeyBinding::new("shift-left", SelectLeft, Some("CapturesInput")),
             KeyBinding::new("shift-right", SelectRight, Some("CapturesInput")),
-            KeyBinding::new("ctrl-a", SelectAll, Some("CapturesInput")),
-            KeyBinding::new("ctrl-v", Paste, Some("CapturesInput")),
-            KeyBinding::new("ctrl-c", Copy, Some("CapturesInput")),
-            KeyBinding::new("ctrl-x", Cut, Some("CapturesInput")),
+            KeyBinding::new(select_all, SelectAll, Some("CapturesInput")),
+            KeyBinding::new(paste, Paste, Some("CapturesInput")),
+            KeyBinding::new(copy, Copy, Some("CapturesInput")),
+            KeyBinding::new(cut, Cut, Some("CapturesInput")),
             KeyBinding::new("home", Home, Some("CapturesInput")),
             KeyBinding::new("end", End, Some("CapturesInput")),
             KeyBinding::new("enter", Submit, Some("CapturesInput")),

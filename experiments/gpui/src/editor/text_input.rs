@@ -24,7 +24,8 @@ actions!(
         End,
         Paste,
         Cut,
-        Copy
+        Copy,
+        Undo
     ]
 );
 
@@ -37,6 +38,7 @@ pub struct TextInput {
     layout: Option<ShapedLine>,
     bounds: Option<Bounds<Pixels>>,
     selecting: bool,
+    undo: Vec<(SharedString, Range<usize>, bool)>,
 }
 
 impl TextInput {
@@ -50,6 +52,7 @@ impl TextInput {
             layout: None,
             bounds: None,
             selecting: false,
+            undo: Vec::new(),
         }
     }
 
@@ -57,6 +60,7 @@ impl TextInput {
         self.content = value.into();
         self.selection = self.content.len()..self.content.len();
         self.marked = None;
+        self.undo.clear();
         cx.notify();
     }
 
@@ -176,6 +180,15 @@ impl TextInput {
             self.replace_text_in_range(None, "", window, cx);
         }
     }
+    fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some((content, selection, reversed)) = self.undo.pop() {
+            self.content = content;
+            self.selection = selection;
+            self.reversed = reversed;
+            self.marked = None;
+            cx.notify();
+        }
+    }
     fn index_at(&self, position: gpui::Point<Pixels>) -> usize {
         let (Some(bounds), Some(line)) = (self.bounds, self.layout.as_ref()) else {
             return 0;
@@ -279,6 +292,11 @@ impl EntityInputHandler for TextInput {
             .or(self.marked.clone())
             .unwrap_or(self.selection.clone());
         let range = self.boundary(range.start)..self.boundary(range.end);
+        if &self.content[range.clone()] == text {
+            return;
+        }
+        self.undo
+            .push((self.content.clone(), self.selection.clone(), self.reversed));
         self.content = format!(
             "{}{}{}",
             &self.content[..range.start],
@@ -508,6 +526,7 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::undo))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
@@ -522,6 +541,11 @@ impl Render for TextInput {
 }
 
 pub fn bind_keys(cx: &mut App) {
+    let primary = if cfg!(target_os = "macos") {
+        "cmd"
+    } else {
+        "ctrl"
+    };
     cx.bind_keys([
         gpui::KeyBinding::new("backspace", Backspace, Some("EditorTextInput")),
         gpui::KeyBinding::new("delete", Delete, Some("EditorTextInput")),
@@ -529,11 +553,12 @@ pub fn bind_keys(cx: &mut App) {
         gpui::KeyBinding::new("right", Right, Some("EditorTextInput")),
         gpui::KeyBinding::new("shift-left", SelectLeft, Some("EditorTextInput")),
         gpui::KeyBinding::new("shift-right", SelectRight, Some("EditorTextInput")),
-        gpui::KeyBinding::new("ctrl-a", SelectAll, Some("EditorTextInput")),
+        gpui::KeyBinding::new(&format!("{primary}-a"), SelectAll, Some("EditorTextInput")),
         gpui::KeyBinding::new("home", Home, Some("EditorTextInput")),
         gpui::KeyBinding::new("end", End, Some("EditorTextInput")),
-        gpui::KeyBinding::new("ctrl-v", Paste, Some("EditorTextInput")),
-        gpui::KeyBinding::new("ctrl-x", Cut, Some("EditorTextInput")),
-        gpui::KeyBinding::new("ctrl-c", Copy, Some("EditorTextInput")),
+        gpui::KeyBinding::new(&format!("{primary}-v"), Paste, Some("EditorTextInput")),
+        gpui::KeyBinding::new(&format!("{primary}-x"), Cut, Some("EditorTextInput")),
+        gpui::KeyBinding::new(&format!("{primary}-c"), Copy, Some("EditorTextInput")),
+        gpui::KeyBinding::new(&format!("{primary}-z"), Undo, Some("EditorTextInput")),
     ]);
 }

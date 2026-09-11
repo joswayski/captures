@@ -1,4 +1,36 @@
-use captures_capture::LogicalRect;
+use captures_capture::{DisplayDescriptor, LogicalRect, WindowDescriptor};
+
+/// Xcap window bounds are physical on Windows; GPUI pointer events are DIPs.
+pub fn window_rect(
+    window: &WindowDescriptor,
+    display: &DisplayDescriptor,
+    physical: bool,
+) -> LogicalRect {
+    let scale = if physical {
+        display.scale_factor.max(1.)
+    } else {
+        1.
+    };
+    LogicalRect {
+        x: f64::from(window.x - display.x) / scale,
+        y: f64::from(window.y - display.y) / scale,
+        width: f64::from(window.width) / scale,
+        height: f64::from(window.height) / scale,
+    }
+}
+
+/// Store the selected pointer in the same global units as the capture backend.
+pub fn pointer_position(display: &DisplayDescriptor, x: f64, y: f64, physical: bool) -> (i32, i32) {
+    let scale = if physical {
+        display.scale_factor.max(1.)
+    } else {
+        1.
+    };
+    (
+        display.x + (x * scale).round() as i32,
+        display.y + (y * scale).round() as i32,
+    )
+}
 
 #[derive(Clone, Copy, Debug)]
 pub enum Drag {
@@ -82,6 +114,53 @@ pub fn drag_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_dpi_maps_offset_window_and_pointer_without_scaling_global_origin_twice() {
+        let display = DisplayDescriptor {
+            id: "left".into(),
+            name: "Left".into(),
+            x: -3000,
+            y: 180,
+            width: 3000,
+            height: 1800,
+            scale_factor: 1.5,
+            is_primary: false,
+        };
+        let window = WindowDescriptor {
+            id: "window".into(),
+            title: "Example".into(),
+            app_name: None,
+            z_order: 1,
+            x: -2700,
+            y: 480,
+            width: 900,
+            height: 450,
+            display_id: "left".into(),
+            corner_radius: None,
+        };
+        assert_eq!(
+            window_rect(&window, &display, true),
+            LogicalRect {
+                x: 200.,
+                y: 200.,
+                width: 600.,
+                height: 300.
+            }
+        );
+        assert_eq!(pointer_position(&display, 240., 330., true), (-2640, 675));
+        assert_eq!(
+            window_rect(&window, &display, false),
+            LogicalRect {
+                x: 300.,
+                y: 300.,
+                width: 900.,
+                height: 450.
+            }
+        );
+        assert_eq!(pointer_position(&display, 240., 330., false), (-2760, 510));
+    }
+
     #[test]
     fn reverse_drag_and_aspect_stay_inside_display() {
         let r = drag_rect(Drag::New(200., 180.), -40., 40., 800., 600., Some(16. / 9.));

@@ -15,8 +15,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 global-hotkey = "=0.8.0"
-ksni = { version = "=0.3.6", default-features = false, features = ["async-io", "blocking"] }
-x11rb = { version = "0.13", features = ["shape"] }
+directories = "6"
+url = "2"
 tempfile = "3"
 base64 = "0.22"
 open = "5"
@@ -29,8 +29,42 @@ webp = { version = "0.3", default-features = false }
 captures-capture = { path = "../../crates/captures-capture" }
 captures-media = { path = "../../crates/captures-media" }
 captures-recording = { path = "../../crates/captures-recording" }
-captures-recording-xcap = { path = "../../crates/captures-recording-xcap" }
 captures-session = { path = "../../crates/captures-session" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "=0.3.6", default-features = false, features = ["async-io", "blocking"] }
+x11rb = { version = "0.13", features = ["shape"] }
+libc = "0.2"
+captures-recording-xcap = { path = "../../crates/captures-recording-xcap" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+core-graphics = "0.25"
+dispatch2 = "0.3"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSPasteboard", "NSResponder", "NSScreen", "NSWindow", "NSWorkspace"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSString", "NSURL"] }
+tray-icon = "=0.24.2"
+captures-recording-macos = { path = "../../crates/captures-recording-macos" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+tray-icon = "=0.24.2"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_Storage_FileSystem",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+captures-recording-xcap = { path = "../../crates/captures-recording-xcap" }
 
 [profile.release]
 strip = true
