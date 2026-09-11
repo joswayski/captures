@@ -271,6 +271,41 @@ empty-profile runs, each settled for ten seconds after Preferences becomes
 visible, followed by five seconds of idle CPU sampling. It is not a matched
 workload or a measurement of the packaged Preview, recording, or hidden-tray idle.
 
+## macOS-native experiment
+
+This is a separate SwiftUI/AppKit application, not the Tauri packaging command
+below. Build on a Mac with full Xcode (macOS 26 SDK), Rust 1.94, and Python 3:
+
+```sh
+# Optional: prepare the repository's redistributable media sidecars.
+# Without these, install FFmpeg/ffprobe locally, e.g. brew install ffmpeg.
+npm run prepare:media
+bash experiments/macos-native/check.sh
+open 'experiments/macos-native/build/Captures Native Experiment.app'
+```
+
+`check.sh` runs portable tests and Rust bridge checks, then builds the native
+bundle and runs editor XCTest tests on macOS. `build.sh` builds just the app;
+`build.sh --test` also runs editor tests. Neither installs or launches anything.
+The PR-only **Native macOS experiment** workflow builds a downloadable,
+ad-hoc-signed test ZIP; it does not publish a Preview or notarize the app. A ZIP
+built without sidecars needs local FFmpeg/ffprobe for recording finalization and
+media export. Set `CAPTURES_NATIVE_FFMPEG` / `CAPTURES_NATIVE_FFPROBE` to override
+discovery. The default search includes `/opt/homebrew/bin` and `/usr/local/bin`.
+
+Quit shipping Captures before testing conflicting shortcuts. The native app has
+its own Screen Recording and microphone permissions. It never clears the system
+Screenshot shortcuts automatically; conflicts appear in Preferences. Settings,
+history, and drafts use `~/Library/Application Support/Captures Native Experiment`
+(override with `CAPTURES_NATIVE_DATA`). Screenshot/recording destinations are
+chosen separately in Preferences. No existing profile is migrated or deleted.
+
+On Linux, `SWIFTC=/path/to/swiftc bash experiments/macos-native/check.sh` checks
+Swift syntax, Foundation models, Python tooling, and the Rust bridge. It cannot
+typecheck Apple frameworks, link the app, or execute the editor tests. See
+[implementation and comparison notes](docs/macos-native-implementation.md) for
+parity gaps, native visual review, and measurement commands.
+
 ## Packaging
 
 Build Captures on the operating system where the package will run:

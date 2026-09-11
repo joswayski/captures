@@ -178,6 +178,14 @@ shortcuts and recording-draft recovery. Before/after comparisons, benchmarks, an
 remaining parity gaps are documented separately. It is X11-only, stores data separately,
 and is not part of Preview or a replacement for the cross-platform app above.
 
+An isolated [macOS-native experiment](docs/macos-native-implementation.md) uses
+SwiftUI/AppKit and the existing Rust capture/media engines without a webview.
+It includes native capture, recording, editors, previews, history, and preferences,
+with shared design tokens. It is a separate local-test app, not a Preview replacement;
+exact visual/animation parity and macOS performance remain unverified. The linked
+notes list functional gaps and the procedure for collecting matched screenshots
+and measurements on a Mac.
+
 ## License and trademarks
 
 The source code is licensed under the [Apache License 2.0](LICENSE).
