@@ -134,11 +134,8 @@ final class EditorModelTests: XCTestCase {
             return XCTFail("Expected image layer")
         }
         let editedRep = try XCTUnwrap(NSBitmapImageRep(data: edited))
-        XCTAssertTrue((0..<editedRep.pixelsWide).contains { x in
-            (0..<editedRep.pixelsHigh).contains { y in
-                (editedRep.colorAt(x: x, y: y)?.alphaComponent ?? 1) < 1
-            }
-        })
+        XCTAssertEqual(try XCTUnwrap(editedRep.colorAt(x: 0, y: 1)).alphaComponent, 0)
+        assertColor(try XCTUnwrap(editedRep.colorAt(x: 4, y: 0)), equals: .white)
 
         var locked = layer
         locked.locked = true
@@ -222,8 +219,14 @@ final class EditorModelTests: XCTestCase {
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
             colorSpaceName: .deviceRGB, bytesPerRow: width * 4, bitsPerPixel: 32
         ))
-        for y in 0..<height { for x in 0..<width { rep.setColor(color, atX: x, y: y) } }
-        return try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+        // setColor requires the bitmap's color space; catalog/system colors
+        // otherwise log an unknown color-space warning and leave empty pixels.
+        let deviceColor = try XCTUnwrap(color.usingColorSpace(.deviceRGB))
+        for y in 0..<height { for x in 0..<width { rep.setColor(deviceColor, atX: x, y: y) } }
+        let png = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+        let decoded = try XCTUnwrap(NSBitmapImageRep(data: png))
+        assertColor(try XCTUnwrap(decoded.colorAt(x: 0, y: 0)), equals: color)
+        return png
     }
 
     private func assertColor(_ actual: NSColor, equals expected: NSColor, file: StaticString = #filePath, line: UInt = #line) {
