@@ -67,10 +67,16 @@ if [[ "${1:-}" == --test ]]; then
     [[ "$(basename "$source")" == Main.swift ]] || sources+=("$source")
   done
   python3 "$experiment/tokens.py" "$out/tokens.json"
-  test_frameworks="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/Library/Frameworks"
+  test_platform="$(xcode-select -p)/Platforms/MacOSX.platform/Developer"
+  # XCTest's Swift overlay lives beside the developer libraries, not inside
+  # the Objective-C framework. Direct executables also need its runtime paths.
   xcrun swiftc -swift-version 5 -parse-as-library -module-name CapturesNativeTests \
     -target "$arch-apple-macosx13.0" -sdk "$sdk" \
-    -F "$test_frameworks" -Xlinker -rpath -Xlinker "$test_frameworks" \
+    -I "$test_platform/usr/lib" -L "$test_platform/usr/lib" \
+    -F "$test_platform/Library/Frameworks" \
+    -Xlinker -rpath -Xlinker "$test_platform/usr/lib" \
+    -Xlinker -rpath -Xlinker "$test_platform/Library/Frameworks" \
+    -Xlinker -rpath -Xlinker "$test_platform/Library/PrivateFrameworks" \
     "${sources[@]}" "$experiment/Tests/EditorModelTests.swift" \
     "$out/rust/$rust_target/release/libcaptures_macos_bridge.a" "${native_links[@]}" \
     -framework SwiftUI -framework AppKit -framework AVKit -framework Carbon \
