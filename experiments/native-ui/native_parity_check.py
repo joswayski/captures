@@ -34,7 +34,9 @@ def main():
         profile = Path(temp)
         env = dict(os.environ, CAPTURES_NATIVE_DATA=str(profile), XDG_CONFIG_HOME=str(profile/'config'))
         # Disable pointer/auto-copy only where pixel comparison requires it.
-        (profile/'settings.json').write_text(json.dumps(dict(output_directory=str(profile/'captures'), show_cursor_in_screenshots=False, recording=dict(countdown_seconds=0))))
+        # An earlier native build allowed this unsupported preference. Loading
+        # it must recover to MP4 without losing the rest of the user's settings.
+        (profile/'settings.json').write_text(json.dumps(dict(output_directory=str(profile/'captures'), show_cursor_in_screenshots=False, recording=dict(countdown_seconds=0, video_format='webm', video_fps=24))))
         with (profile/'app.log').open('w+') as log:
             process = subprocess.Popen([str(binary), '--capture'], env=env, stdout=log, stderr=log, start_new_session=True)
             try:
@@ -127,6 +129,21 @@ def main():
                 click(mustard, 'Captures Preferences', pointer=True)
                 wait(lambda: (value := json.loads((profile/'settings.json').read_text()))['appearance']=='light' and value['theme']=='mustard')
                 click('Recording preferences section', 'Captures Preferences')
+                rates = find('30 fps', 'combo box', 'Captures Preferences')
+                assert rates, 'Legacy 24 fps must migrate to a supported video rate'
+                assert [node.name for node in walk(rates) if node.getRoleName() == 'menu item'] == ['15 fps', '30 fps', '60 fps']
+                choose('30 fps', 0, 'Captures Preferences')
+                wait(lambda: json.loads((profile/'settings.json').read_text())['recording']['video_fps']==15)
+                formats = find('MP4', 'combo box', 'Captures Preferences')
+                assert formats, 'Legacy WebM must load as MP4'
+                assert [node.name for node in walk(formats) if node.getRoleName() == 'menu item'] == ['MP4', 'GIF'], 'Only supported recording formats may be offered'
+                choose('MP4', 1, 'Captures Preferences')
+                assert find('GIF', 'combo box', 'Captures Preferences')
+                wait(lambda: json.loads((profile/'settings.json').read_text())['recording']['video_format']=='gif')
+                capture(args.artifacts, 'preferences-recording-gif', 'Captures Preferences')
+                choose('GIF', 0, 'Captures Preferences')
+                wait(lambda: json.loads((profile/'settings.json').read_text())['recording']['video_format']=='mp4')
+                print('PASS recording defaults: legacy WebM/24 fps migrate; only MP4/GIF and 15/30/60 fps selectable and persisted', flush=True)
                 capture(args.artifacts, 'preferences-recording', 'Captures Preferences')
                 close_preferences()
                 # A second invocation must route to the running application and exit.

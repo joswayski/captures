@@ -28,9 +28,9 @@ use serde_json::{Value, json};
 use crate::{
     protocol::{
         self, BridgeResult, DescribeRequest, Envelope, FreezeCreateRequest, FreezeDiscardRequest,
-        ImageEncodeRequest, ImageFormat, MediaExportRequest, MediaPathRequest, RecordMuteRequest,
-        RecordStartRequest, RecoverDiscardRequest, RecoverRequest, ScreenshotRequest,
-        ScreenshotTarget, failure_json, success_json,
+        ImageEncodeRequest, ImageFormat, MediaExportRequest, MediaPathRequest,
+        MicrophonePermissionRequest, RecordMuteRequest, RecordStartRequest, RecoverDiscardRequest,
+        RecoverRequest, ScreenshotRequest, ScreenshotTarget, failure_json, success_json,
     },
     storage::{
         self, Draft, PendingSegment, checked_draft_file, complete_segment, create_draft,
@@ -83,11 +83,39 @@ enum OperationLane {
     Recovery,
 }
 
+#[cfg(any(target_os = "macos", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MicrophonePermissionOperation {
+    Authorized,
+    Request,
+    NotDetermined,
+    Denied,
+}
+
+#[cfg(any(target_os = "macos", test))]
+const fn microphone_permission_operation(
+    authorized: bool,
+    can_request: bool,
+    request: bool,
+) -> MicrophonePermissionOperation {
+    if authorized {
+        MicrophonePermissionOperation::Authorized
+    } else if can_request && request {
+        MicrophonePermissionOperation::Request
+    } else if can_request {
+        MicrophonePermissionOperation::NotDetermined
+    } else {
+        MicrophonePermissionOperation::Denied
+    }
+}
+
 fn operation_lane(operation: &str) -> OperationLane {
     match operation {
-        "image_encode" | "media_probe" | "media_export" | "recover_list" => {
-            OperationLane::Stateless
-        }
+        "image_encode"
+        | "media_probe"
+        | "media_export"
+        | "recover_list"
+        | "microphone_permission" => OperationLane::Stateless,
         "recover" | "recover_discard" => OperationLane::Recovery,
         _ => OperationLane::RecordingEngine,
     }
@@ -116,6 +144,9 @@ fn dispatch_direct(request: &str) -> Option<BridgeResult<Value>> {
             "image_encode" => protocol::parse(&value).and_then(Engine::image_encode),
             "media_probe" => protocol::parse(&value).and_then(Engine::media_probe),
             "media_export" => protocol::parse(&value).and_then(Engine::media_export),
+            "microphone_permission" => {
+                protocol::parse(&value).and_then(Engine::microphone_permission)
+            }
             "recover_list" => Engine::recover_list(),
             _ => unreachable!(),
         }),
@@ -314,6 +345,14 @@ impl Engine {
         }))
     }
 
+    fn microphone_permission(request: MicrophonePermissionRequest) -> BridgeResult<Value> {
+        let status = microphone_permission_status(request.request);
+        Ok(json!({
+            "status": status,
+            "devices": captures_recording_macos::microphone_devices(),
+        }))
+    }
+
     fn screenshot(&self, request: ScreenshotRequest) -> BridgeResult<Value> {
         if !captures_session::capture_session_available() {
             return Err(
@@ -451,6 +490,13 @@ impl Engine {
             return Err("a recording is already active".to_owned());
         }
         request.options.validate().map_err(str::to_owned)?;
+        // TCC prompts belong to the independent permission lane, never the
+        // lifecycle worker. Revalidate saved selections without waiting for UI.
+        if request.options.audio.microphone_device_id.is_some()
+            && microphone_permission_status(false) != "authorized"
+        {
+            return Err("Microphone access is required for the selected input. Open Preferences > Recording and allow microphone access; if denied, open Microphone Settings there. Then start the recording again.".to_owned());
+        }
         if !captures_session::capture_session_available() {
             return Err(
                 "screen recording is unavailable while the console is locked or inactive"
@@ -793,6 +839,28 @@ impl Engine {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn microphone_permission_status(request: bool) -> &'static str {
+    use captures_recording_macos::{
+        microphone_authorized, microphone_can_request, request_microphone_access,
+    };
+    match microphone_permission_operation(
+        microphone_authorized(),
+        microphone_can_request(),
+        request,
+    ) {
+        MicrophonePermissionOperation::Authorized => "authorized",
+        MicrophonePermissionOperation::Request if request_microphone_access() => "authorized",
+        MicrophonePermissionOperation::NotDetermined => "not_determined",
+        MicrophonePermissionOperation::Request | MicrophonePermissionOperation::Denied => "denied",
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+const fn microphone_permission_status(_request: bool) -> &'static str {
+    "unavailable"
+}
+
 impl RecordingSession {
     fn begin_segment(&mut self) -> BridgeResult<()> {
         if !captures_session::capture_session_available() {
@@ -1126,9 +1194,64 @@ mod tests {
     use captures_recording::RecordingState;
 
     use super::{
-        Engine, Lifecycle, OperationLane, Reservation, ensure_recovery_idle, operation_lane,
-        scaled_dimensions,
+        Engine, Lifecycle, MicrophonePermissionOperation, OperationLane, Reservation,
+        ensure_recovery_idle, microphone_permission_operation, operation_lane, scaled_dimensions,
     };
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn microphone_discovery_uses_the_direct_lane_without_screen_permission() {
+        let response = super::dispatch_direct(r#"{"op":"microphone_permission"}"#)
+            .expect("permission operation must not wait for the recording worker")
+            .unwrap();
+        assert_eq!(response["status"], "unavailable");
+        assert_eq!(response["devices"], serde_json::json!([]));
+        assert!(
+            super::dispatch_direct(r#"{"op":"microphone_permission","request":"true"}"#)
+                .unwrap()
+                .is_err()
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn saved_microphone_without_permission_cannot_create_a_recording() {
+        let output = tempfile::tempdir().unwrap();
+        let mut engine = Engine::default();
+        let request = serde_json::json!({
+            "op": "record_start", "output_dir": output.path(),
+            "options": {
+                "kind": "video", "target": {"type": "display", "display_id": "test"},
+                "frames_per_second": 30, "max_resolution": "original",
+                "countdown_seconds": 0, "show_cursor": true,
+                "audio": {"microphone_device_id": "saved-device"}
+            }
+        });
+        let error = engine.dispatch(&request.to_string()).unwrap_err();
+        assert!(error.contains("Microphone access is required"), "{error}");
+        assert!(engine.recording.is_none());
+        assert_eq!(std::fs::read_dir(output.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn microphone_permission_contract_requests_only_when_needed_and_allowed() {
+        assert_eq!(
+            microphone_permission_operation(true, true, true),
+            MicrophonePermissionOperation::Authorized
+        );
+        assert_eq!(
+            microphone_permission_operation(false, true, true),
+            MicrophonePermissionOperation::Request
+        );
+        assert_eq!(
+            microphone_permission_operation(false, true, false),
+            MicrophonePermissionOperation::NotDetermined
+        );
+        assert_eq!(
+            microphone_permission_operation(false, false, true),
+            MicrophonePermissionOperation::Denied
+        );
+    }
 
     #[test]
     fn long_stateless_operations_are_not_routed_to_recording_engine() {
@@ -1137,6 +1260,7 @@ mod tests {
             "media_probe",
             "media_export",
             "recover_list",
+            "microphone_permission",
         ] {
             assert_eq!(operation_lane(operation), OperationLane::Stateless);
         }

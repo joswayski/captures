@@ -405,6 +405,25 @@ pub fn paint(ctx: &cairo::Context, doc: &Document) -> Result<(), String> {
     }
     Ok(())
 }
+/// Rasterize only this layer at sidebar size. Canvas coordinates and clipping
+/// stay the same, but no full-resolution document copy or RGBA readback is needed.
+pub fn render_layer_thumbnail(
+    doc: &Document,
+    layer: &Layer,
+    width: i32,
+    height: i32,
+) -> Result<cairo::ImageSurface, String> {
+    let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, width, height)
+        .map_err(|e| e.to_string())?;
+    let context = cairo::Context::new(&surface).map_err(|e| e.to_string())?;
+    context.scale(
+        width as f64 / doc.width as f64,
+        height as f64 / doc.height as f64,
+    );
+    draw_layer(&context, layer)?;
+    Ok(surface)
+}
+
 pub fn render(doc: &Document) -> Result<RgbaImage, String> {
     let mut surface =
         cairo::ImageSurface::create(cairo::Format::ARgb32, doc.width as i32, doc.height as i32)
@@ -837,6 +856,138 @@ pub fn layer_bounds(l: &Layer) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn thumbnail_pixel(doc: &Document, layer: &Layer, x: usize, y: usize) -> u32 {
+        let mut surface = render_layer_thumbnail(doc, layer, 38, 30).unwrap();
+        assert_eq!((surface.width(), surface.height()), (38, 30));
+        let offset = y * surface.stride() as usize + x * 4;
+        let data = surface.data().unwrap();
+        u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap())
+    }
+
+    #[test]
+    fn thumbnails_preserve_canvas_coordinates_alpha_rotation_and_visibility() {
+        let mut doc = Document::transparent(380, 300);
+        let index = doc.add(
+            LayerKind::Rectangle,
+            Rect {
+                x: 40.,
+                y: 60.,
+                w: 100.,
+                h: 80.,
+            },
+            Color(1., 0., 0., 1.),
+            0.,
+        );
+        doc.layers[index].fill = Some(Color(1., 0., 0., 1.));
+        doc.layers[index].opacity = 0.5;
+        let layer = doc.layers[index].clone();
+        // A second layer must not leak into this layer's thumbnail.
+        doc.layers[index].frame = Rect {
+            x: 0.,
+            y: 0.,
+            w: 380.,
+            h: 300.,
+        };
+        assert_eq!(thumbnail_pixel(&doc, &layer, 9, 10), 0x80800000);
+        assert_eq!(thumbnail_pixel(&doc, &layer, 1, 1), 0);
+        assert_eq!(thumbnail_pixel(&doc, &layer, 6, 14), 0);
+        let mut rotated = layer.clone();
+        rotated.rotation = PI / 2.;
+        assert_eq!(thumbnail_pixel(&doc, &rotated, 6, 14), 0x80800000);
+        rotated.visible = false;
+        assert_eq!(thumbnail_pixel(&doc, &rotated, 6, 14), 0);
+        let mut clipped = layer;
+        clipped.frame.x = -50.;
+        assert_eq!(thumbnail_pixel(&doc, &clipped, 0, 10), 0x80800000);
+        assert_eq!(thumbnail_pixel(&doc, &clipped, 6, 10), 0);
+    }
+
+    #[test]
+    fn thumbnail_image_keeps_pixel_orientation_and_transparency() {
+        let mut doc = Document::new(image());
+        doc.width = 380;
+        doc.height = 300;
+        // Each source pixel covers one thumbnail pixel, at a nonzero origin.
+        doc.layers[0].frame = Rect {
+            x: 30.,
+            y: 60.,
+            w: 100.,
+            h: 80.,
+        };
+        assert_eq!(thumbnail_pixel(&doc, &doc.layers[0], 3, 6), 0xff14508c);
+        assert_eq!(thumbnail_pixel(&doc, &doc.layers[0], 5, 9), 0x805f0f23);
+        assert_eq!(thumbnail_pixel(&doc, &doc.layers[0], 2, 9), 0);
+    }
+
+    #[test]
+    #[ignore = "manual release-profile thumbnail pipeline benchmark"]
+    fn benchmark_layer_thumbnails() {
+        use std::{hint::black_box, time::Instant};
+        for (width, height) in [(1920, 1080), (3840, 2160)] {
+            let mut doc = Document::new(RgbaImage::from_fn(width, height, |x, y| {
+                image::Rgba([(x % 251) as u8, (y % 239) as u8, ((x + y) % 233) as u8, 255])
+            }));
+            for i in 0..12 {
+                doc.add(
+                    LayerKind::Rectangle,
+                    Rect {
+                        x: (i * 70) as f64,
+                        y: (i * 35) as f64,
+                        w: 300.,
+                        h: 160.,
+                    },
+                    Color::default(),
+                    4.,
+                );
+            }
+            let old = || {
+                for layer in &doc.layers {
+                    let mut single = doc.clone();
+                    single.layers = vec![layer.clone()];
+                    let image = render(&single).unwrap();
+                    black_box(
+                        crate::ui::pixbuf(&image)
+                            .scale_simple(38, 30, gtk::gdk_pixbuf::InterpType::Bilinear)
+                            .unwrap(),
+                    );
+                }
+            };
+            let new = || {
+                for layer in &doc.layers {
+                    black_box(render_layer_thumbnail(&doc, layer, 38, 30).unwrap());
+                }
+            };
+            old();
+            new();
+            let mut old_ms = Vec::new();
+            let mut new_ms = Vec::new();
+            for sample in 0..5 {
+                for baseline in [sample % 2 == 0, sample % 2 != 0] {
+                    let start = Instant::now();
+                    if baseline {
+                        old();
+                    } else {
+                        new();
+                    }
+                    let elapsed = start.elapsed().as_secs_f64() * 1000.;
+                    if baseline {
+                        old_ms.push(elapsed);
+                    } else {
+                        new_ms.push(elapsed);
+                    }
+                }
+            }
+            println!(
+                "{}",
+                serde_json::json!({
+                    "width": width, "height": height, "layers": doc.layers.len(),
+                    "old_ms": old_ms, "new_ms": new_ms,
+                })
+            );
+        }
+    }
+
     fn image() -> RgbaImage {
         let mut i = RgbaImage::from_pixel(10, 8, image::Rgba([20, 80, 140, 255]));
         i.put_pixel(2, 3, image::Rgba([190, 30, 70, 128]));

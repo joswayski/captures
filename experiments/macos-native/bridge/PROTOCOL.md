@@ -6,8 +6,9 @@ The bridge is a standalone Rust `staticlib` with no Tauri dependency. Include
 once with `captures_native_free`. Calls are synchronous. Recording lifecycle,
 capture discovery, and screenshots execute on one bridge-owned background
 thread. Stateless `image_encode`, `media_probe`, `media_export`, and
-`recover_list` work executes on the calling thread so long media jobs cannot
-block recording safety ticks. Recovery assembly/discard executes on the caller
+`recover_list` work, plus `microphone_permission`, executes on the calling thread
+so long media jobs or permission prompts cannot block recording safety ticks.
+Recovery assembly/discard executes on the caller
 under a bridge-wide reservation after the recording worker confirms it is idle.
 Swift must not call any potentially long operation on its main thread.
 
@@ -64,6 +65,13 @@ Artifact values are `{"path":string,"width":number,"height":number,"kind":
   screen-recording permission flow. It does not request microphone permission.
   Discovery returns an error without enumerating capture targets when the
   console is locked or inactive.
+- `{"op":"microphone_permission","request":false}` returns
+  `{"status":"authorized|not_determined|denied|unavailable","devices":[AudioDevice]}`.
+  It needs no Screen Recording grant and captures no screen or microphone audio.
+  `request` defaults to false. True requests microphone access only if macOS
+  still allows a prompt; denied/restricted access requires System Settings.
+  `unavailable` is the non-macOS test stub. Swift uses a separate permission
+  queue; waiting for a TCC response must not block recording controls or safety ticks.
 - `{"op":"session_status"}` returns `{"available":bool}` from the recording
   worker. It is the cheap pre-overlay check and does not enumerate targets or
   request permission.
@@ -101,7 +109,11 @@ are mode `0700` and are never returned by `recover_list`.
 
 - `record_start`: `{"op":"record_start","options":RecordingOptions,
   "exclude_app":false,"output_dir":"..."}` returns status and starts capture
-  immediately. The Swift flow owns any pre-start countdown UI.
+  immediately. The Swift flow owns any pre-start countdown UI. A selected
+  microphone requires authorization before creating a recording draft; a
+  persisted selection without permission returns an actionable error directing
+  the user to Preferences. Start never waits for a permission prompt on the
+  lifecycle worker or silently omits an unauthorized microphone.
 - `record_pause`, `record_resume`, `record_restart`, `record_status`,
   `record_stop`, and `record_discard` take only `op`.
 - `record_mute`: `{"op":"record_mute","muted":true}`.

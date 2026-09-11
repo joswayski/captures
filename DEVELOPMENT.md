@@ -227,8 +227,10 @@ Capture includes the probe window. **Save PNG** creates numbered files in
 `$TMPDIR/captures-ui-probe` (normally `/tmp/captures-ui-probe` on Linux); set
 `CAPTURES_PROBE_OUTPUT` to use another directory. These are disposable experimental
 captures, separate from Captures history. The minimal GTK probe is Linux-only;
-the full native frontend also has an experimental Windows port. A macOS native
-frontend is not implemented.
+the full GTK frontend also has an experimental Windows port. The separate
+[macOS-native experiment](#macos-native-experiment) uses SwiftUI/AppKit. See the
+[cross-platform parity audit](docs/native-parity-audit.md) for confirmed defects,
+fixes, missing features, and OS acceptance checks.
 
 For the reproducible Linux warm-launch/idle benchmark, install `xvfb`, `xauth`,
 and `xdotool` (included in orb setup) and use a disposable display/DBus session:

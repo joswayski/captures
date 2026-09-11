@@ -1511,14 +1511,9 @@ fn setup_sidebar(
             if state.selected == Some(index) {
                 row.style_context().add_class("selected")
             }
-            let mut thumbnail_document = state.doc.clone();
-            thumbnail_document.layers = vec![l.clone()];
-            let thumbnail = render(&thumbnail_document)
+            let thumbnail = render_layer_thumbnail(&state.doc, l, 38, 30)
                 .ok()
-                .and_then(|image| {
-                    ui::pixbuf(&image).scale_simple(38, 30, gtk::gdk_pixbuf::InterpType::Bilinear)
-                })
-                .map(|pixbuf| gtk::Image::from_pixbuf(Some(&pixbuf)))
+                .map(|surface| gtk::Image::from_surface(Some(&surface)))
                 .unwrap_or_default();
             thumbnail.set_tooltip_text(Some("Layer thumbnail"));
             let select = gtk::Entry::new();
