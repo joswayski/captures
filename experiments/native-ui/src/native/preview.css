@@ -1,0 +1,88 @@
+/* Preview-only provider. Source geometry mirrors mini-preview.css. */
+.preview-hit {
+  color: transparent;
+  background: transparent;
+  background-image: none;
+  border: 0;
+  box-shadow: none;
+}
+.preview-hit label { color: transparent; }
+
+.preview-toolbar { background: transparent; }
+
+button.preview-icon-button,
+button.preview-edit-button,
+button.preview-stack-control {
+  min-width: 16px;
+  min-height: 16px;
+  padding: 5px;
+  color: @captures_glass_text;
+  background-color: rgba(10, 10, 14, 0.88);
+  background-image: none;
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  border-radius: 6px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.26);
+}
+button.preview-icon-button:hover,
+button.preview-edit-button:hover,
+button.preview-stack-control:hover {
+  background-color: rgba(42, 42, 47, 0.94);
+  border-color: rgba(255, 255, 255, 0.30);
+}
+.preview-show-less-label { color: @captures_glass_text; font-size: 10px; font-weight: 600; }
+button.preview-icon-button.delete { color: #ffb4ad; }
+button.preview-icon-button.delete:hover {
+  color: #ffffff;
+  background-color: @captures_signal;
+}
+
+button.preview-main-action {
+  min-width: 118px;
+  min-height: 20px;
+  padding: 5px 10px;
+  color: @captures_glass_text;
+  background-color: rgba(10, 10, 14, 0.90);
+  background-image: none;
+  border: 1px solid rgba(255, 255, 255, 0.30);
+  border-radius: 6px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.32);
+  font-size: 12px;
+  font-weight: 600;
+}
+button.preview-main-action:last-child {
+  color: @captures_accent_ink;
+  background-color: @captures_accent;
+  border-color: transparent;
+}
+button.preview-main-action label { color: inherit; font-size: 12px; font-weight: 600; }
+
+.preview-meta-chip {
+  padding: 3px 6px;
+  color: @captures_glass_text;
+  background-color: rgba(10, 10, 14, 0.66);
+  border-radius: 4px;
+  font-size: 10px;
+  font-feature-settings: "tnum";
+}
+.preview-copied-chip {
+  padding: 3px 8px;
+  color: #eafff0;
+  background-color: rgba(10, 22, 15, 0.90);
+  border: 1px solid rgba(53, 163, 93, 0.55);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+button.preview-overflow-cue {
+  min-width: 44px;
+  min-height: 20px;
+  padding: 0;
+  color: @captures_glass_text;
+  background-color: rgba(10, 10, 14, 0.88);
+  background-image: none;
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.38);
+}
+button.preview-overflow-cue:first-child { border-radius: 0 0 8px 8px; }
+button.preview-overflow-cue:last-child { border-radius: 8px 8px 0 0; }

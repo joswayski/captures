@@ -1,0 +1,76 @@
+/* Resolved from shared/design.css and shared/themes.css before GTK loads it. */
+@define-color captures_accent var(--theme-accent);
+@define-color captures_accent_ink var(--theme-accent-ink);
+@define-color captures_signal var(--theme-signal);
+@define-color captures_glass var(--glass-strong);
+@define-color captures_glass_text var(--glass-text);
+@define-color captures_surface var(--surface-canvas);
+@define-color captures_raised var(--surface-raised);
+@define-color captures_sunken var(--surface-sunken);
+@define-color captures_text var(--text);
+@define-color captures_text_muted var(--text-subtle);
+@define-color captures_border var(--border);
+* { font-family: var(--font-sans); font-size: var(--text-md); }
+window { background-color: var(--surface-canvas); color: var(--text); }
+window.floating { background-color: transparent; }
+label { color: inherit; font-family: inherit; font-size: inherit; font-weight: inherit; }
+.title { font-size: var(--text-xl); font-weight: 600; }
+.muted { color: var(--text-subtle); }
+.section-title { font-weight: 600; }
+button { background-image: none; background-color: var(--control); color: var(--text); border: 1px solid var(--control-border); border-radius: var(--r-md); padding: var(--s-3) var(--s-5); box-shadow: none; text-shadow: none; }
+button:hover { background-color: var(--control-hover); }
+button:checked { background-color: var(--surface-selected); border-color: var(--theme-accent); }
+button:disabled { opacity: 0.45; }
+button.primary { background-color: var(--theme-accent); color: var(--theme-accent-ink); border-color: transparent; }
+button.primary label { color: var(--theme-accent-ink); }
+button.destructive { color: var(--danger-text); background-color: var(--danger-surface); }
+button.icon-button { padding: var(--s-3); min-width: var(--s-6); min-height: var(--s-6); }
+button:focus, entry:focus { border-color: var(--theme-accent); }
+entry, spinbutton { background-color: var(--surface-field); color: var(--text); border-color: var(--control-border); border-radius: var(--r-md); }
+entry { padding: var(--s-3) var(--s-4); }
+checkbutton check { background-image: none; background-color: var(--surface-field); border-color: var(--control-border); }
+checkbutton check:checked, switch:checked { background-color: var(--theme-accent); color: var(--theme-accent-ink); }
+scrolledwindow, viewport { background-color: transparent; }
+.toolbar { padding: var(--s-5); border-bottom: 1px solid var(--border-subtle); background-color: var(--surface-raised); }
+.sidebar { background-color: var(--surface-sunken); border-right: 1px solid var(--border-subtle); padding: var(--s-5); }
+.sidebar button { background-color: transparent; border-color: transparent; }
+.sidebar button:checked { background-color: var(--surface-active); }
+.page-header { padding: var(--s-6) var(--s-8); border-bottom: 1px solid var(--border-subtle); }
+.settings-card { background-color: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--r-lg); }
+.settings-row { padding: var(--s-5) var(--s-6); border-bottom: 1px solid var(--border-subtle); }
+.history-card { padding: var(--s-5); background-color: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--r-lg); }
+.glass { background-color: var(--glass-strong); color: var(--glass-text); border-radius: var(--r-xl); }
+.capture-menu { padding: var(--s-6); }
+.glass label { color: var(--glass-text); }
+.glass .muted { color: var(--glass-text-muted); }
+.glass button { background-image: none; background-color: var(--glass-raised); color: var(--glass-text); border-color: var(--glass-border); }
+.glass button:hover { background-color: var(--glass-hover); }
+.glass button:checked { background-color: var(--glass-active); border-color: var(--glass-border-strong); }
+.glass button.primary, .glass button.primary label { background-color: var(--theme-accent); color: var(--theme-accent-ink); }
+.glass button.destructive { color: var(--theme-signal); }
+.glass combobox button, .glass entry, .glass spinbutton { background-color: var(--glass-raised); color: var(--glass-text); }
+.capture-selector { border: 1px solid var(--glass-border); border-radius: var(--r-2xl); box-shadow: var(--glass-shadow); }
+.capture-panel-top { padding: var(--s-4); }
+.capture-selector button { min-height: var(--h-md); padding: 0 var(--s-5); font-weight: var(--weight-medium); }
+.capture-selector .capture-segmented { padding: 3px; background-color: rgba(0,0,0,0.32); border: 1px solid transparent; border-radius: var(--r-lg); }
+.capture-selector .capture-segmented button { min-height: var(--h-sm); border: 0; border-radius: var(--r-sm); font-size: var(--text-sm); background-color: transparent; color: var(--glass-text-muted); }
+.capture-selector .capture-segmented button:checked { background-color: var(--glass-raised); box-shadow: inset 0 0 0 1px var(--glass-border); color: var(--glass-text); }
+.capture-selector .capture-segmented button:checked label { color: var(--glass-text); }
+.capture-selector .capture-segmented button label { color: inherit; }
+.capture-selector .capture-close { min-width: var(--h-md); min-height: var(--h-md); padding: 0; border: 0; background-color: transparent; color: var(--glass-text-subtle); }
+.capture-selector .capture-primary { min-width: 80px; min-height: var(--h-xl); padding: 0 var(--s-6); border: 0; border-radius: var(--r-lg); font-weight: var(--weight-semibold); }
+.capture-selector combobox button { min-height: var(--h-lg); padding: 0 var(--s-5); background-color: rgba(0,0,0,0.3); }
+.capture-selector .capture-options { padding: var(--s-5); border-top: 1px solid var(--glass-border); }
+.capture-selector .capture-field-label { color: var(--glass-text-subtle); font-size: var(--text-2xs); font-weight: var(--weight-semibold); }
+.capture-selector .capture-selector-note { padding: 0 var(--s-5) var(--s-4); min-height: var(--s-7); color: var(--glass-text-subtle); font-size: var(--text-xs); }
+.capture-guidance { padding: var(--s-4) var(--s-6); border: 1px solid var(--glass-border-strong); border-radius: var(--r-xl); background-color: var(--glass-strong); color: var(--glass-text); box-shadow: var(--glass-shadow); }
+.capture-guidance .muted { color: var(--glass-text-muted); font-size: var(--text-xs); }
+.capture-display { color: var(--glass-text); }
+.capture-display-icon { padding: var(--s-4) var(--s-6); border: 1px solid var(--glass-border-strong); border-radius: var(--r-xl); background-color: var(--glass); }
+.capture-display .title { font-size: var(--text-2xl); }
+.capture-display .muted { color: var(--glass-text-muted); }
+.capture-record-dot { color: var(--theme-signal); }
+.capture-options switch { min-height: 16px; min-width: 30px; padding: 1px; border-radius: var(--r-pill); background-image: none; background-color: rgba(0,0,0,0.35); border: 1px solid var(--glass-border-strong); color: transparent; }
+.capture-options switch slider { min-height: 12px; min-width: 12px; border-radius: var(--r-pill); border: 0; background-image: none; background-color: var(--glass-text-subtle); box-shadow: none; }
+.capture-options switch:checked { background-color: var(--theme-accent); border-color: transparent; }
+.capture-options switch:checked slider { background-color: var(--theme-accent-ink); }

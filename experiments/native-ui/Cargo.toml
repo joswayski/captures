@@ -21,6 +21,12 @@ tauri = { version = "=2.11.5", features = ["custom-protocol"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
+global-hotkey = "=0.8.0"
+tray-icon = { version = "=0.24.2", default-features = false, features = ["gtk"] }
+png = "0.17"
+quantette = { version = "0.6", default-features = false, features = ["image", "std", "threads"] }
+jpeg-encoder = "0.6"
+webp = { version = "0.3", default-features = false }
 
 [build-dependencies]
 tauri-build = { version = "=2.6.3", features = [] }

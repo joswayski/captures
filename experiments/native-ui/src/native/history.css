@@ -1,0 +1,21 @@
+.native-history { padding: 32px 24px 48px; background-color: @captures_surface; color: @captures_text; }
+.native-history-shell { padding: 0; }
+.native-history-eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 1px; color: @captures_text_muted; }
+.native-history-title { font-size: 28px; font-weight: 600; }
+.native-history-toolbar { padding-bottom: 12px; border-bottom: 1px solid @captures_border; }
+.native-history-filter { min-height: 28px; padding: 0 8px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: @captures_text_muted; }
+.native-history-filter:checked { border-color: @captures_border; background-color: @captures_raised; color: @captures_text; }
+.native-history-clear { border-color: transparent; background: transparent; color: @captures_text_muted; }
+.native-history-clear.confirm { color: @captures_signal; background-color: alpha(@captures_signal, 0.12); }
+.native-history-grid { padding-top: 24px; }
+.native-history-grid flowboxchild { padding: 0; }
+.native-history-card { min-width: 252px; padding: 0; background-color: @captures_raised; border: 1px solid @captures_border; border-radius: 14px; }
+.native-history-image { min-height: 168px; background-color: @captures_sunken; border-bottom: 1px solid @captures_border; }
+.native-history-delete { min-width: 32px; min-height: 32px; padding: 5px; border-radius: 8px; }
+.native-history-delete.confirm { color: white; background-color: @captures_signal; }
+.native-history-card-body { padding: 12px; }
+.native-history-date { font-weight: 500; }
+.native-history-actions button { min-height: 32px; padding: 0 8px; }
+.native-history-empty { padding: 104px 0; }
+.native-history-empty-icon { min-width: 52px; min-height: 52px; border: 1px solid @captures_border; border-radius: 14px; background-color: @captures_raised; }
+.native-history-empty-title { font-size: 15px; font-weight: 600; }

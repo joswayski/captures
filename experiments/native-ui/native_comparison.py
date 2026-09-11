@@ -19,6 +19,9 @@ import time
 from benchmark import process_tree, resources, stop
 
 
+WINDOW_SIZES = {'preferences': (980, 720), 'image-editor': (1280, 760), 'video-editor': (1280, 760)}
+
+
 def visible(title):
     result=subprocess.run(['xdotool','search','--onlyvisible','--name',title],capture_output=True,text=True)
     return result.stdout.strip().splitlines()[-1] if result.returncode==0 else None
@@ -57,6 +60,14 @@ def trial(binary, implementation, state, lab, artifacts, settle, idle):
                         raise RuntimeError(f'{implementation} {state} failed: {log.read().decode(errors="replace")}')
                     time.sleep(.005)
                 mapped_ms=(time.perf_counter()-start)*1000
+                # Match client viewport area before settling/memory samples.
+                # Mapping timing ends above, before this common resize.
+                subprocess.run(['xdotool', 'windowsize', '--sync', window,
+                                *map(str, WINDOW_SIZES[state])], check=True)
+                # Use exact client-area captures, as editor_check.py does.
+                # Otherwise Openbox's border clips a 1280px client by one pixel.
+                subprocess.run(['xdotool', 'set_window', '--overrideredirect', '1', window], check=True)
+                subprocess.run(['xdotool', 'windowmove', window, '0', '0'], check=True)
                 time.sleep(settle)
                 memory=resources(process.pid)
                 before=process_tree(process.pid)
@@ -67,7 +78,12 @@ def trial(binary, implementation, state, lab, artifacts, settle, idle):
                 if before.keys()!=after.keys() or process.poll() is not None:
                     raise RuntimeError('Process tree changed during idle sample')
                 if artifacts:
-                    subprocess.run(['import','-window',window,str(artifacts/f'{implementation}-{state}-measured.png')],check=True)
+                    screenshot = artifacts/f'{implementation}-{state}-measured.png'
+                    subprocess.run(['import','-window',window,str(screenshot)],check=True)
+                    header = screenshot.read_bytes()[:24]
+                    actual = tuple(int.from_bytes(header[offset:offset+4], 'big') for offset in (16, 20))
+                    if actual != WINDOW_SIZES[state]:
+                        raise RuntimeError(f'{implementation} {state} viewport is {actual}, expected {WINDOW_SIZES[state]}')
                 return dict(memory,first_window_mapped_ms=mapped_ms,
                             idle_cpu_percent_one_core=100*(sum(after.values())-sum(before.values()))/os.sysconf('SC_CLK_TCK')/elapsed)
             finally:
@@ -105,12 +121,14 @@ def main():
     if args.inspect:
         return
     print(json.dumps(dict(recorded_at=datetime.now(timezone.utc).isoformat(),
-        environment='Debian 12, Xvfb 1280x800, Openbox+xcompmgr, software GL, 2 vCPU; isolated verified-unlocked DBus fixture',
-        scope='Whole source Tauri app versus partial native frontend; shared input files, unequal feature completeness. No performance extrapolation to macOS/Windows.',
-        timing='Time to first mapped native target window, not rendered content readiness; 5s settling then 2s idle CPU sample.',
+        environment='Debian 12, Xvfb 1280x800, Openbox+xcompmgr -n (no synthetic compositor shadows), software GL, 2 vCPU; isolated verified-unlocked DBus fixture',
+        scope='Whole source Tauri app versus expanded GTK parity build; shared input files, remaining OS/interaction differences. No performance extrapolation to macOS/Windows.',
+        timing=f'Time to first mapped target window, not rendered content readiness; {args.settle:g}s settling then {args.idle:g}s idle CPU sample.',
+        client_viewports=WINDOW_SIZES,
+        source_base=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
         binaries={name:dict(bytes=p.stat().st_size,sha256=hashlib.sha256(p.read_bytes()).hexdigest()) for name,p in binaries.items()},
         inputs={name:hashlib.sha256((args.lab/name).read_bytes()).hexdigest() for name in ['fixture.png','fixture.mp4']},
-        excluded='Video playback: Tauri reports NotSupportedError in this orb. Native uses frame scrubbing and external playback; no matched playback benchmark.',
+        excluded='Video playback: actual Tauri player previously reported NotSupportedError in this orb. Native now embeds FFmpeg frame playback with headless ffplay audio; no matched playback benchmark. Capture/encoding throughput and animation FPS are not measured.',
         samples=samples,
         medians={state:{name:{key:statistics.median(row[key] for row in rows) for key in rows[0]} for name,rows in by_name.items()} for state,by_name in samples.items()},
     ),indent=2))

@@ -8,6 +8,7 @@ fail-closed session checks. SetActive can exercise lock cancellation.
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -47,13 +48,28 @@ def main():
     # Do not let Openbox's default PrintScreen binding steal the app's shortcut.
     config = ET.parse('/etc/xdg/openbox/rc.xml')
     keyboard = config.find('{http://openbox.org/3.4/rc}keyboard')
-    keyboard.clear()
+    for binding in list(keyboard):
+        if 'print' in binding.get('key', '').lower():
+            keyboard.remove(binding)
     config.write(directory / 'openbox.xml')
+    # Composite real alpha, without xcompmgr's whole-window synthetic shadows.
+    # Its -c mode leaves rectangular shadows behind sparse RGBA overlays in
+    # this lab; those are not part of either application's rendered chrome.
     processes = [subprocess.Popen(['openbox', '--config-file', str(directory/'openbox.xml')]),
-                 subprocess.Popen(['xcompmgr', '-c'])]
+                 subprocess.Popen(['xcompmgr', '-n'])]
     fixture = directory / 'fixture.png'
-    source = Path(__file__).resolve().parents[2] / 'docs/images/capture-selection.jpg'
-    subprocess.run(['convert', str(source), '-resize', '960x540!', str(fixture)], check=True)
+    # Reuse the React harness's neutral source image, not a screenshot containing
+    # Captures controls that could be mistaken for native application chrome.
+    source = Path(__file__).resolve().parents[2] / 'apps/desktop/ui/src/dev/previewBackend.ts'
+    template = re.search(r'function sampleCapture\(.*?const svg = `(.+?)`;',
+                         source.read_text(), re.DOTALL)
+    if template is None:
+        raise RuntimeError('React sampleCapture fixture changed; update the lab extractor')
+    svg = template.group(1).replace('${width}', '960').replace('${height}', '540')
+    loader = GdkPixbuf.PixbufLoader.new_with_type('svg')
+    loader.write(svg.encode())
+    loader.close()
+    loader.get_pixbuf().savev(str(fixture), 'png', [], [])
     window = Gtk.Window(title='Reference content — Captures comparison')
     window.set_default_size(980, 610)
     window.move(210, 80)

@@ -1,12 +1,27 @@
 {
-  "recorded_at": "2026-09-10T22:04:14.007875+00:00",
-  "environment": "Debian 12, Xvfb 1280x800, Openbox+xcompmgr, software GL, 2 vCPU; isolated verified-unlocked DBus fixture",
-  "scope": "Whole source Tauri app versus partial native frontend; shared input files, unequal feature completeness. No performance extrapolation to macOS/Windows.",
-  "timing": "Time to first mapped native target window, not rendered content readiness; 5s settling then 2s idle CPU sample.",
+  "recorded_at": "2026-09-11T03:32:13.265359+00:00",
+  "environment": "Debian 12, Xvfb 1280x800, Openbox+xcompmgr -n (no synthetic compositor shadows), software GL, 2 vCPU; isolated verified-unlocked DBus fixture",
+  "scope": "Whole source Tauri app versus expanded GTK parity build; shared input files, remaining OS/interaction differences. No performance extrapolation to macOS/Windows.",
+  "timing": "Time to first mapped target window, not rendered content readiness; 5s settling then 2s idle CPU sample.",
+  "client_viewports": {
+    "preferences": [
+      980,
+      720
+    ],
+    "image-editor": [
+      1280,
+      760
+    ],
+    "video-editor": [
+      1280,
+      760
+    ]
+  },
+  "source_base": "a281077f5ecbae352e0eb3af88626a16b467b14c",
   "binaries": {
     "native": {
-      "bytes": 8945872,
-      "sha256": "589431eaa2b7ff9d701804a91e51b766383f2a9dde8d0e3ea43c184449f08429"
+      "bytes": 12156152,
+      "sha256": "2ea65aee0b85c58a74db12bcb8a397587078cda74a1b6b8295996a4b5484b26e"
     },
     "tauri": {
       "bytes": 36110208,
@@ -14,180 +29,180 @@
     }
   },
   "inputs": {
-    "fixture.png": "f2e1e3e19a878e284ab237afe00a244571da6844082097066c2e23287512eafa",
-    "fixture.mp4": "629a4898673725cab7202c9e6134a83055483bfa2577d8d8d1b89b9abce70e52"
+    "fixture.png": "15c12956d49deabf390df9cea2c1cac2fd6db85ba169b4c120d62ea85cb53e68",
+    "fixture.mp4": "8e5a9f6ec1dfb5ea4374a0d5cb6056df13c9d49c9d25485eeef8c5534ec5c682"
   },
-  "excluded": "Video playback: Tauri reports NotSupportedError in this orb. Native uses frame scrubbing and external playback; no matched playback benchmark.",
+  "excluded": "Video playback: actual Tauri player previously reported NotSupportedError in this orb. Native now embeds FFmpeg frame playback with headless ffplay audio; no matched playback benchmark. Capture/encoding throughput and animation FPS are not measured.",
   "samples": {
     "preferences": {
       "native": [
         {
-          "rss_mib": 40.7109375,
-          "pss_mib": 27.4990234375,
-          "private_mib": 21.19140625,
+          "rss_mib": 50.30859375,
+          "pss_mib": 38.173828125,
+          "private_mib": 32.296875,
           "processes": 1,
-          "first_window_mapped_ms": 126.25676600146107,
+          "first_window_mapped_ms": 550.4667460008932,
           "idle_cpu_percent_one_core": 0.0
         },
         {
-          "rss_mib": 40.63671875,
-          "pss_mib": 27.37890625,
-          "private_mib": 21.046875,
+          "rss_mib": 50.24609375,
+          "pss_mib": 38.22265625,
+          "private_mib": 32.37109375,
           "processes": 1,
-          "first_window_mapped_ms": 125.33193899980688,
+          "first_window_mapped_ms": 574.5168709981954,
+          "idle_cpu_percent_one_core": 0.9999307832914136
+        },
+        {
+          "rss_mib": 50.375,
+          "pss_mib": 38.345703125,
+          "private_mib": 32.484375,
+          "processes": 1,
+          "first_window_mapped_ms": 578.4467330013285,
           "idle_cpu_percent_one_core": 0.0
         },
         {
-          "rss_mib": 40.66796875,
-          "pss_mib": 27.4052734375,
-          "private_mib": 21.10546875,
+          "rss_mib": 50.11328125,
+          "pss_mib": 38.150390625,
+          "private_mib": 32.33203125,
           "processes": 1,
-          "first_window_mapped_ms": 138.67787800154474,
+          "first_window_mapped_ms": 580.7836359999783,
           "idle_cpu_percent_one_core": 0.0
         },
         {
-          "rss_mib": 40.48046875,
-          "pss_mib": 27.3046875,
-          "private_mib": 21.01953125,
+          "rss_mib": 50.19921875,
+          "pss_mib": 38.201171875,
+          "private_mib": 32.3515625,
           "processes": 1,
-          "first_window_mapped_ms": 128.00544800120406,
-          "idle_cpu_percent_one_core": 0.0
-        },
-        {
-          "rss_mib": 40.38671875,
-          "pss_mib": 27.2314453125,
-          "private_mib": 21.0234375,
-          "processes": 1,
-          "first_window_mapped_ms": 140.32425400000648,
+          "first_window_mapped_ms": 572.2693190000427,
           "idle_cpu_percent_one_core": 0.0
         }
       ],
       "tauri": [
         {
-          "rss_mib": 1066.828125,
-          "pss_mib": 481.2314453125,
-          "private_mib": 350.5546875,
+          "rss_mib": 1079.1875,
+          "pss_mib": 506.759765625,
+          "private_mib": 364.08984375,
           "processes": 6,
-          "first_window_mapped_ms": 1056.140257998777,
-          "idle_cpu_percent_one_core": 13.99881126294266
+          "first_window_mapped_ms": 1103.8619709979685,
+          "idle_cpu_percent_one_core": 15.49908693328268
         },
         {
-          "rss_mib": 1066.7578125,
-          "pss_mib": 483.126953125,
-          "private_mib": 352.42578125,
+          "rss_mib": 1078.85546875,
+          "pss_mib": 504.025390625,
+          "private_mib": 361.2578125,
           "processes": 6,
-          "first_window_mapped_ms": 1115.7528709991311,
-          "idle_cpu_percent_one_core": 12.499310969235859
+          "first_window_mapped_ms": 1054.9329189998389,
+          "idle_cpu_percent_one_core": 13.998826891309175
         },
         {
-          "rss_mib": 1065.375,
-          "pss_mib": 482.423828125,
-          "private_mib": 351.75,
+          "rss_mib": 1080.35546875,
+          "pss_mib": 505.8349609375,
+          "private_mib": 363.22265625,
           "processes": 6,
-          "first_window_mapped_ms": 1153.9945530003024,
-          "idle_cpu_percent_one_core": 13.999117628611911
+          "first_window_mapped_ms": 1185.9223690007639,
+          "idle_cpu_percent_one_core": 16.998530570507203
         },
         {
-          "rss_mib": 1060.63671875,
-          "pss_mib": 476.86328125,
-          "private_mib": 346.125,
+          "rss_mib": 1082.65234375,
+          "pss_mib": 509.9765625,
+          "private_mib": 367.421875,
           "processes": 6,
-          "first_window_mapped_ms": 1120.268403999944,
-          "idle_cpu_percent_one_core": 18.99875910555207
+          "first_window_mapped_ms": 1137.9844270013564,
+          "idle_cpu_percent_one_core": 8.999374367982226
         },
         {
-          "rss_mib": 1065.26953125,
-          "pss_mib": 481.9599609375,
-          "private_mib": 351.2890625,
+          "rss_mib": 1068.53125,
+          "pss_mib": 496.3681640625,
+          "private_mib": 353.80859375,
           "processes": 6,
-          "first_window_mapped_ms": 1057.500914999764,
-          "idle_cpu_percent_one_core": 12.998940046934848
+          "first_window_mapped_ms": 1057.998881999083,
+          "idle_cpu_percent_one_core": 15.99921371065281
         }
       ]
     },
     "image-editor": {
       "native": [
         {
-          "rss_mib": 41.21875,
-          "pss_mib": 26.861328125,
-          "private_mib": 19.359375,
+          "rss_mib": 50.12890625,
+          "pss_mib": 36.6630859375,
+          "private_mib": 29.06640625,
           "processes": 1,
-          "first_window_mapped_ms": 124.62329699883412,
+          "first_window_mapped_ms": 531.7446329972881,
           "idle_cpu_percent_one_core": 0.0
         },
         {
-          "rss_mib": 39.21484375,
-          "pss_mib": 25.611328125,
-          "private_mib": 19.1015625,
+          "rss_mib": 50.26171875,
+          "pss_mib": 36.796875,
+          "private_mib": 29.203125,
           "processes": 1,
-          "first_window_mapped_ms": 148.54214600018167,
+          "first_window_mapped_ms": 484.85873000026913,
           "idle_cpu_percent_one_core": 0.0
         },
         {
-          "rss_mib": 41.21875,
-          "pss_mib": 26.76171875,
-          "private_mib": 19.24609375,
+          "rss_mib": 50.2265625,
+          "pss_mib": 36.5908203125,
+          "private_mib": 28.98828125,
           "processes": 1,
-          "first_window_mapped_ms": 135.52182099920174,
+          "first_window_mapped_ms": 549.2399309987377,
           "idle_cpu_percent_one_core": 0.0
         },
         {
-          "rss_mib": 41.17578125,
-          "pss_mib": 26.765625,
-          "private_mib": 19.2734375,
+          "rss_mib": 50.0234375,
+          "pss_mib": 36.4970703125,
+          "private_mib": 28.953125,
           "processes": 1,
-          "first_window_mapped_ms": 151.22439299921098,
+          "first_window_mapped_ms": 530.6289090003702,
           "idle_cpu_percent_one_core": 0.0
         },
         {
-          "rss_mib": 41.28515625,
-          "pss_mib": 26.76171875,
-          "private_mib": 19.26171875,
+          "rss_mib": 50.19921875,
+          "pss_mib": 34.74609375,
+          "private_mib": 26.1953125,
           "processes": 1,
-          "first_window_mapped_ms": 148.6024699988775,
-          "idle_cpu_percent_one_core": 0.0
+          "first_window_mapped_ms": 543.450720000692,
+          "idle_cpu_percent_one_core": 0.4999683410043899
         }
       ],
       "tauri": [
         {
-          "rss_mib": 1213.734375,
-          "pss_mib": 595.3017578125,
-          "private_mib": 434.7265625,
+          "rss_mib": 1200.19921875,
+          "pss_mib": 596.4912109375,
+          "private_mib": 425.9765625,
           "processes": 6,
-          "first_window_mapped_ms": 1047.2954030010442,
-          "idle_cpu_percent_one_core": 53.99649506053265
+          "first_window_mapped_ms": 1099.6062040030665,
+          "idle_cpu_percent_one_core": 45.997287907935345
         },
         {
-          "rss_mib": 1210.8203125,
-          "pss_mib": 594.9775390625,
-          "private_mib": 434.671875,
+          "rss_mib": 1205.16015625,
+          "pss_mib": 601.6943359375,
+          "private_mib": 431.0625,
           "processes": 6,
-          "first_window_mapped_ms": 1297.1113469993725,
-          "idle_cpu_percent_one_core": 39.49731562417213
+          "first_window_mapped_ms": 1086.2827669989201,
+          "idle_cpu_percent_one_core": 42.49786720205792
         },
         {
-          "rss_mib": 1216.4296875,
-          "pss_mib": 598.353515625,
-          "private_mib": 438.0078125,
+          "rss_mib": 1207.921875,
+          "pss_mib": 604.7490234375,
+          "private_mib": 434.33984375,
           "processes": 6,
-          "first_window_mapped_ms": 1078.536463999626,
-          "idle_cpu_percent_one_core": 46.4960597844003
+          "first_window_mapped_ms": 1042.914308996842,
+          "idle_cpu_percent_one_core": 32.99811138610806
         },
         {
-          "rss_mib": 1037.82421875,
-          "pss_mib": 507.884765625,
-          "private_mib": 376.109375,
+          "rss_mib": 1200.28125,
+          "pss_mib": 596.8466796875,
+          "private_mib": 426.21484375,
           "processes": 6,
-          "first_window_mapped_ms": 1035.9752730000764,
-          "idle_cpu_percent_one_core": 38.496981316956365
+          "first_window_mapped_ms": 1078.2910410016484,
+          "idle_cpu_percent_one_core": 33.99822998410002
         },
         {
-          "rss_mib": 1161.55078125,
-          "pss_mib": 585.8115234375,
-          "private_mib": 437.640625,
+          "rss_mib": 1204.0234375,
+          "pss_mib": 600.5712890625,
+          "private_mib": 430.109375,
           "processes": 6,
-          "first_window_mapped_ms": 1307.9439409993938,
-          "idle_cpu_percent_one_core": 32.99812610239444
+          "first_window_mapped_ms": 1092.8966820029018,
+          "idle_cpu_percent_one_core": 26.997881219751154
         }
       ]
     }
@@ -195,38 +210,38 @@
   "medians": {
     "preferences": {
       "native": {
-        "rss_mib": 40.63671875,
-        "pss_mib": 27.37890625,
-        "private_mib": 21.046875,
+        "rss_mib": 50.24609375,
+        "pss_mib": 38.201171875,
+        "private_mib": 32.3515625,
         "processes": 1,
-        "first_window_mapped_ms": 128.00544800120406,
+        "first_window_mapped_ms": 574.5168709981954,
         "idle_cpu_percent_one_core": 0.0
       },
       "tauri": {
-        "rss_mib": 1065.375,
-        "pss_mib": 481.9599609375,
-        "private_mib": 351.2890625,
+        "rss_mib": 1079.1875,
+        "pss_mib": 505.8349609375,
+        "private_mib": 363.22265625,
         "processes": 6,
-        "first_window_mapped_ms": 1115.7528709991311,
-        "idle_cpu_percent_one_core": 13.99881126294266
+        "first_window_mapped_ms": 1103.8619709979685,
+        "idle_cpu_percent_one_core": 15.49908693328268
       }
     },
     "image-editor": {
       "native": {
-        "rss_mib": 41.21875,
-        "pss_mib": 26.76171875,
-        "private_mib": 19.26171875,
+        "rss_mib": 50.19921875,
+        "pss_mib": 36.5908203125,
+        "private_mib": 28.98828125,
         "processes": 1,
-        "first_window_mapped_ms": 148.54214600018167,
+        "first_window_mapped_ms": 531.7446329972881,
         "idle_cpu_percent_one_core": 0.0
       },
       "tauri": {
-        "rss_mib": 1210.8203125,
-        "pss_mib": 594.9775390625,
-        "private_mib": 434.7265625,
+        "rss_mib": 1204.0234375,
+        "pss_mib": 600.5712890625,
+        "private_mib": 430.109375,
         "processes": 6,
-        "first_window_mapped_ms": 1078.536463999626,
-        "idle_cpu_percent_one_core": 39.49731562417213
+        "first_window_mapped_ms": 1086.2827669989201,
+        "idle_cpu_percent_one_core": 33.99822998410002
       }
     }
   }
