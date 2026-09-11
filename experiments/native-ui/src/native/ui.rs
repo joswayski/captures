@@ -228,6 +228,41 @@ fn theme_tokens(dark: bool, theme: &str, accent: &str, signal: &str) -> BTreeMap
                         contrast(a).total_cmp(&contrast(b))
                     })
                     .unwrap();
+                // Match shared/themes.ts interactiveShade: move away from the
+                // chosen ink, preserving contrast instead of hovering mustard.
+                let light_ink = ink == inks[1];
+                let toward = if light_ink {
+                    gdk::RGBA::BLACK
+                } else {
+                    gdk::RGBA::parse(&inks[1]).unwrap()
+                };
+                let mix = |from: gdk::RGBA, amount: f64| {
+                    let channel = |a: f64, b: f64| ((a + (b - a) * amount) * 255.).round() / 255.;
+                    gdk::RGBA::new(
+                        channel(from.red(), toward.red()),
+                        channel(from.green(), toward.green()),
+                        channel(from.blue(), toward.blue()),
+                        1.,
+                    )
+                };
+                let candidate = mix(color, if light_ink { 0.06 } else { 0.1 });
+                let fg = luminance(gdk::RGBA::parse(&ink).unwrap());
+                let hover = (0..=25)
+                    .map(|step| mix(candidate, step as f64 * 0.04))
+                    .find(|color| {
+                        let bg = luminance(*color);
+                        (bg.max(fg) + 0.05) / (bg.min(fg) + 0.05) >= 4.5
+                    })
+                    .unwrap_or(toward);
+                values.insert(
+                    format!("theme-{role}-hover"),
+                    format!(
+                        "#{:02x}{:02x}{:02x}",
+                        (hover.red() * 255.).round() as u8,
+                        (hover.green() * 255.).round() as u8,
+                        (hover.blue() * 255.).round() as u8
+                    ),
+                );
                 values.insert(format!("theme-{role}-ink"), ink);
             }
         }
@@ -391,6 +426,8 @@ mod theme_tests {
             let colors = theme_tokens(dark, "custom", "#0000ff", "#ff0000");
             assert_eq!(colors["theme-accent-ink"], "#f6f6f8");
             assert_eq!(colors["theme-signal-ink"], "#17181b");
+            assert_eq!(colors["theme-accent-hover"], "#0000f0");
+            assert_eq!(colors["theme-signal-hover"], "#fe1919");
         }
     }
     #[test]

@@ -41,7 +41,22 @@ def main():
         # anchor the native client at the same exact viewport before comparing.
         cmd('xdotool', 'set_window', '--overrideredirect', '1', window)
         cmd('xdotool', 'windowmove', window, '0', '0')
+        cmd('xdotool', 'mousemove', 0, 0)
         capture(args.artifacts, 'editor-default-1280x800', editor)
+        # Scoped editor CSS must not override the shared primary hover treatment.
+        # Exercise pointer hover without exporting, and check a text-free pixel.
+        save = find('Save', frame=editor)
+        bounds = save.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+        cmd('xdotool', 'mousemove', bounds.x + bounds.width // 2, bounds.y + bounds.height // 2)
+        capture(args.artifacts, 'editor-save-hover', editor)
+        sample = f'%[pixel:p{{{bounds.x + 10},{bounds.y + 10}}}]'
+        idle, hovered = [cmd('convert', args.artifacts / f'after-{state}.png', '-format', sample, 'info:')
+                         for state in ['editor-default-1280x800', 'editor-save-hover']]
+        assert idle != hovered, ('Save hover did not change its painted surface', idle, hovered)
+        cmd('xdotool', 'mousemove', 0, 0)
+        save.queryComponent().grabFocus()
+        assert save.getState().contains(pyatspi.STATE_FOCUSED)
+        capture(args.artifacts, 'editor-save-focus', editor)
         area = find(role='drawing area', frame=editor).queryComponent().getExtents(
             pyatspi.DESKTOP_COORDS
         )

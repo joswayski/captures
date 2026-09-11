@@ -7,8 +7,10 @@
 }
 .native-preferences-brand { padding: 0 6px 16px; font-size: 13px; font-weight: 600; }
 .native-preferences-mark { min-width: 16px; min-height: 16px; padding: 5px; border-radius: 6px; color: @captures_accent_ink; background: @captures_accent; }
-.native-preferences-nav { padding: 0 8px; min-height: 32px; border: 0; border-radius: 6px; background: transparent; color: @captures_text_muted; }
+.native-preferences-nav { padding: 0 8px; min-height: 32px; border: 0; border-radius: 6px; background: transparent; color: @captures_text_muted; box-shadow: none; }
+.native-preferences-nav:hover { background-color: alpha(@captures_text, 0.05); color: @captures_text; }
 .native-preferences-nav:checked { background-color: alpha(@captures_text, 0.08); color: @captures_text; }
+.native-preferences-nav:focus, .native-theme-option:focus { box-shadow: 0 0 0 2px alpha(@captures_accent, 0.24); }
 .native-preferences-body { background-color: @captures_surface; }
 .native-preferences-header { min-height: 31px; padding: 16px 24px; border-bottom: 1px solid @captures_border; }
 .native-preferences-header .muted { font-size: 12px; }
@@ -22,8 +24,8 @@
 .native-preferences-section-title { font-size: 15px; font-weight: 600; }
 .native-preferences-row { padding: 12px 16px; border-top: 1px solid alpha(@captures_text, 0.06); }
 .native-preferences-row-title { font-weight: 500; }
-.native-preferences switch { min-width: 34px; min-height: 20px; }
-.native-preferences combobox button, .native-preferences spinbutton, .native-preferences entry { min-height: 32px; }
+.native-preferences combobox button, .native-preferences spinbutton, .native-preferences entry { min-height: 30px; }
+.native-preferences spinbutton entry { min-height: 0; }
 .native-theme-options { min-width: 0; }
 .native-theme-option {
   min-width: 0;

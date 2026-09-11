@@ -51,6 +51,12 @@ from the React harness's SVG fixture. No screenshot of app controls is embedded 
 that input. Preview comparisons use equal 340×760 stack frames and distinct native
 fixture colors to expose file-identity mistakes; they are not pixel-diff tests.
 
+The controls refinement uses source-sized button typography, neutral borders and
+subtle shadows, accent hover and keyboard-focus states, flat dropdown/numeric
+fields, and custom-styled GTK switches and sliders. The gallery includes a screen
+index; the image-editor check also exercises and captures Save hover/focus without
+exporting. GTK menu behavior and text rasterization are still platform-native.
+
 ![Capture toolbar](images/native-ui/capture-menu.webp)
 ![Recording target toolbar](images/native-ui/recording-selector.webp)
 ![Region targeting](images/native-ui/region.webp)
@@ -91,7 +97,9 @@ The original **46 ms / 18.6 MiB** figures belong only to the
 [minimal probe](native-ui-evaluation.md), not this expanded build. Timing below is
 **first mapped target window, not content readiness**.
 
-11 September 2026; medians recomputed independently from all 20 samples:
+11 September 2026; medians recomputed independently from all 20 samples. These
+measurements precede the follow-up control-styling refinement; the refreshed gallery
+is visual evidence, not a new benchmark run:
 
 | Metric | Tauri source app | Expanded native build |
 | --- | ---: | ---: |

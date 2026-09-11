@@ -77,10 +77,10 @@ def main():
             run('convert', work/'pair.miff', '-gravity', 'north', '-splice', '0x90',
                 '-font', 'DejaVu-Sans', '-pointsize', '28', '-fill', '#202124', '-annotate', '+0+14', title,
                 '-pointsize', '18', '-annotate', '+0+55', note, '-quality', '88', args.output/f'{name}.webp')
-            sections.append(f'<section><h2>{html.escape(title)}</h2><p>{html.escape(note)}</p>'
+            sections.append(f'<section id="{name}"><h2>{html.escape(title)}</h2><p>{html.escape(note)}</p>'
                             f'<a href="{name}.webp"><img src="{name}.webp" alt="{html.escape(title)} before and after"></a></section>')
         run('convert', args.artifacts/'after-canvas.png', '-quality', '88', args.output/'canvas.webp')
-    sections.append('<section><h2>Native transparent canvas</h2><p>Canvas authoring uses the same layer editor. Checkerboard is UI-only; exported pixels retain alpha.</p><img src="canvas.webp" alt="Native blank transparent canvas"></section>')
+    sections.append('<section id="canvas"><h2>Native transparent canvas</h2><p>Canvas authoring uses the same layer editor. Checkerboard is UI-only; exported pixels retain alpha.</p><img src="canvas.webp" alt="Native blank transparent canvas"></section>')
     for title, filename in [('Tauri dust - React harness action', 'tauri-dust.webm'), ('Native dust - GTK/Cairo action', 'native-dust.mp4')]:
         source = (args.before_artifacts / filename) if filename.startswith('tauri') else (args.artifacts / 'after-preview-delete-dust.mp4')
         if source.exists():
@@ -92,6 +92,7 @@ def main():
 <title>Captures: Linux native review</title><style>
 body{margin:0;background:#fafafa;color:#202124;font:16px/1.6 system-ui,sans-serif}main{max-width:1500px;margin:auto;padding:32px}
 h1{font-size:32px;line-height:1.2}h2{font-size:22px}p{max-width:950px}section{margin:48px 0;border-top:1px solid #ddd;padding-top:16px}
+nav{display:flex;flex-wrap:wrap;gap:8px;max-width:1100px;margin:24px 0}nav a{padding:6px 12px;border:1px solid #d8d8de;border-radius:8px;background:white;color:inherit;text-decoration:none;font-size:14px}nav a:hover{background:#ededf0}nav a:focus-visible{outline:2px solid #555;outline-offset:2px}
 img,video{display:block;max-width:100%;height:auto;margin:12px 0}video{width:960px}.notice{border-left:4px solid #444;padding-left:16px}
 </style><main><h1>Captures: Linux native before / after</h1>
 <p class="notice"><strong>Linux-native fidelity pass, not a certified no-regressions replacement.</strong> These layouts now follow the existing React surfaces rather than an alternative GTK design. Stacking, particles, layered editing, embedded video playback and recovery remain implemented. Wayland, distribution and physical desktop validation are still open. Tauri remains the shipping app. Screenshots are not benchmark evidence.</p>
@@ -99,7 +100,10 @@ img,video{display:block;max-width:100%;height:auto;margin:12px 0}video{width:960
 <p>Native lab: X11/Openbox with normal alpha compositing and no compositor-generated window shadows. GNOME/KDE and Wayland behavior have not been verified.</p>
 <p><a href="https://github.com/joswayski/captures/pull/512">Pull request, feature matrix, measured results and reproduction</a></p>
 '''
-    (args.output/'index.html').write_text(page + '\n'.join(sections) + '</main></html>')
+    navigation = '<nav aria-label="Screens">' + ''.join(
+        f'<a href="#{name}">{html.escape(title)}</a>' for name, title, _ in PAIRS
+    ) + '<a href="#canvas">Transparent canvas</a></nav>'
+    (args.output/'index.html').write_text(page + navigation + '\n'.join(sections) + '</main></html>')
 
 
 if __name__ == '__main__':

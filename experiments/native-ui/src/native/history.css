@@ -3,9 +3,11 @@
 .native-history-eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 1px; color: @captures_text_muted; }
 .native-history-title { font-size: 28px; font-weight: 600; }
 .native-history-toolbar { padding-bottom: 12px; border-bottom: 1px solid @captures_border; }
-.native-history-filter { min-height: 28px; padding: 0 8px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: @captures_text_muted; }
+.native-history-filter { min-height: 28px; padding: 0 8px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: @captures_text_muted; box-shadow: none; }
+.native-history-filter:hover, .native-history-clear:hover { background-color: alpha(@captures_text, 0.05); color: @captures_text; }
 .native-history-filter:checked { border-color: @captures_border; background-color: @captures_raised; color: @captures_text; }
-.native-history-clear { border-color: transparent; background: transparent; color: @captures_text_muted; }
+.native-history-clear { border-color: transparent; background: transparent; color: @captures_text_muted; box-shadow: none; }
+.native-history-filter:focus, .native-history-clear:focus { box-shadow: 0 0 0 2px alpha(@captures_accent, 0.24); }
 .native-history-clear.confirm { color: @captures_signal; background-color: alpha(@captures_signal, 0.12); }
 .native-history-grid { padding-top: 24px; }
 .native-history-grid flowboxchild { padding: 0; }

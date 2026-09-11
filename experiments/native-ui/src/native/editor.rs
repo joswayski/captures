@@ -932,6 +932,11 @@ fn install_editor_css() {
 .editor-window .secondary-action { min-width: 100px; min-height: 40px; padding: 0 14px; border: 1px solid @captures_border; border-radius: 7px; background: @captures_surface; }
 .editor-window .make-copy { font-size: 11px; color: @captures_text_muted; }
 .editor-window .editor-footer button.primary { min-width: 90px; min-height: 40px; padding: 0 18px; border: 0; border-radius: 7px; color: @captures_accent_ink; background: @captures_accent; font-weight: 600; }
+.editor-window .editor-footer button.primary:hover { background: @captures_accent_hover; }
+.editor-window .secondary-action, .editor-window .editor-header .add-images { color: @captures_text; }
+.editor-window .secondary-action:hover, .editor-window .export-disclosure:hover, .editor-window .editor-header .add-images:hover { background: alpha(@captures_text,.05); }
+.editor-window .editor-export-field spinbutton entry { min-height: 0; border: 0; background: transparent; }
+.editor-window .editor-export-field spinbutton button { min-height: 0; border: 0; border-left: 1px solid @captures_border; border-radius: 0; background: transparent; }
 .editor-window .editor-footer .positive { color: #27864c; font-size: 11px; }
 .editor-window .editor-footer .muted { color: @captures_text_muted; font-size: 11px; }
 "#);
