@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import XCTest
 
 @MainActor
@@ -94,8 +95,8 @@ final class EditorModelTests: XCTestCase {
     }
 
     func testPixelRendererUsesExactDimensionsAndRotatesAsymmetricColorsClockwise() throws {
-        let red = try solidPNG(.red)
-        let blue = try solidPNG(.blue)
+        let red = try solidPNG(.red, rgba: [255, 0, 0, 255])
+        let blue = try solidPNG(.blue, rgba: [0, 0, 255, 255])
         let layers = [
             EditorLayer(name: "top-left", content: .image(red, original: red), frame: EditorRect(x: 0, y: 0, width: 1, height: 1)),
             EditorLayer(name: "bottom-right", content: .image(blue, original: blue), frame: EditorRect(x: 3, y: 2, width: 1, height: 1)),
@@ -106,19 +107,22 @@ final class EditorModelTests: XCTestCase {
         )
 
         model.rotateCanvas(clockwise: true)
+        let rendered = try XCTUnwrap(model.renderedImage().cgImage(forProposedRect: nil, context: nil, hints: nil))
+        XCTAssertEqual(try pixel(rendered, x: 2, y: 0), [255, 0, 0, 255], "Rendered red before encoding")
+        XCTAssertEqual(try pixel(rendered, x: 0, y: 3), [0, 0, 255, 255], "Rendered blue before encoding")
         let png = try model.exportData(format: "png")
-        let rep = try XCTUnwrap(NSBitmapImageRep(data: png))
+        let image = try decodePNG(png)
 
-        XCTAssertEqual(rep.pixelsWide, 3)
-        XCTAssertEqual(rep.pixelsHigh, 4)
+        XCTAssertEqual(image.width, 3)
+        XCTAssertEqual(image.height, 4)
         // Bitmap pixel coordinates start at the top left: clockwise maps
         // top-left to top-right and bottom-right to bottom-left.
-        assertColor(try XCTUnwrap(rep.colorAt(x: 2, y: 0)), equals: .red)
-        assertColor(try XCTUnwrap(rep.colorAt(x: 0, y: 3)), equals: .blue)
+        XCTAssertEqual(try pixel(image, x: 2, y: 0), [255, 0, 0, 255], "Exported red")
+        XCTAssertEqual(try pixel(image, x: 0, y: 3), [0, 0, 255, 255], "Exported blue")
     }
 
     func testEraseInverseTransformsRotatedLayerAndRejectsLockedLayer() throws {
-        let opaque = try solidPNG(.white, width: 5, height: 3)
+        let opaque = try solidPNG(.white, rgba: [255, 255, 255, 255], width: 5, height: 3)
         let frame = EditorRect(x: 10, y: 20, width: 50, height: 30)
         let layer = EditorLayer(name: "Rotated", content: .image(opaque, original: opaque), frame: frame, rotation: .pi / 2)
         let model = EditorModel(
@@ -133,16 +137,15 @@ final class EditorModelTests: XCTestCase {
         guard case let .image(edited, _) = model.document.layers[0].content else {
             return XCTFail("Expected image layer")
         }
-        let editedRep = try XCTUnwrap(NSBitmapImageRep(data: edited))
-        XCTAssertEqual(try XCTUnwrap(editedRep.colorAt(x: 0, y: 1)).alphaComponent, 0)
-        assertColor(try XCTUnwrap(editedRep.colorAt(x: 4, y: 0)), equals: .white)
+        let editedImage = try decodePNG(edited)
+        XCTAssertEqual(try pixel(editedImage, x: 0, y: 1), [0, 0, 0, 0])
+        XCTAssertEqual(try pixel(editedImage, x: 4, y: 0), [255, 255, 255, 255])
 
         try model.erase(at: CGPoint(x: 35, y: 15), radius: 5, restore: true)
         guard case let .image(restored, _) = model.document.layers[0].content else {
             return XCTFail("Expected restored image layer")
         }
-        let restoredRep = try XCTUnwrap(NSBitmapImageRep(data: restored))
-        assertColor(try XCTUnwrap(restoredRep.colorAt(x: 0, y: 1)), equals: .white)
+        XCTAssertEqual(try pixel(decodePNG(restored), x: 0, y: 1), [255, 255, 255, 255])
 
         var locked = layer
         locked.locked = true
@@ -161,7 +164,7 @@ final class EditorModelTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let source = directory.appendingPathComponent("imported.png")
-        let original = try solidPNG(.blue, width: 7, height: 3)
+        let original = try solidPNG(.blue, rgba: [0, 0, 255, 255], width: 7, height: 3)
         try original.write(to: source)
         let first = try EditorModel(artifact: Artifact(path: source.path, kind: "image"))
         defer { first.clearDraft() }
@@ -220,7 +223,7 @@ final class EditorModelTests: XCTestCase {
         XCTAssertEqual(actual.height, expected.height, accuracy: 0.0001, file: file, line: line)
     }
 
-    private func solidPNG(_ color: NSColor, width: Int = 1, height: Int = 1) throws -> Data {
+    private func solidPNG(_ color: NSColor, rgba: [UInt8], width: Int = 1, height: Int = 1) throws -> Data {
         let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
         let context = try XCTUnwrap(CGContext(
             data: nil, width: width, height: height, bitsPerComponent: 8,
@@ -231,20 +234,41 @@ final class EditorModelTests: XCTestCase {
         // device-RGB bitmap initializer/setColor path. Verify the encoded input.
         context.setFillColor(try XCTUnwrap(color.usingColorSpace(.sRGB)).cgColor)
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-        let rep = NSBitmapImageRep(cgImage: try XCTUnwrap(context.makeImage()))
+        let original = try XCTUnwrap(context.makeImage())
+        XCTAssertEqual(try pixel(original, x: 0, y: 0), rgba, "Fixture before PNG encoding")
+        let rep = NSBitmapImageRep(cgImage: original)
         let png = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
-        let decoded = try XCTUnwrap(NSBitmapImageRep(data: png))
-        assertColor(try XCTUnwrap(decoded.colorAt(x: 0, y: 0)), equals: color)
+        let decoded = try decodePNG(png)
+        XCTAssertEqual(try pixel(decoded, x: 0, y: 0), rgba, "Fixture after PNG encoding")
+        let appKit = try XCTUnwrap(NSBitmapImageRep(data: png))
+        print("Fixture \(rgba): CG space \(String(describing: decoded.colorSpace)); AppKit \(appKit.colorSpace); sampled \(String(describing: appKit.colorAt(x: 0, y: 0)?.usingColorSpace(.sRGB)))")
         return png
     }
 
-    private func assertColor(_ actual: NSColor, equals expected: NSColor, file: StaticString = #filePath, line: UInt = #line) {
-        let lhs = actual.usingColorSpace(.sRGB)!
-        let rhs = expected.usingColorSpace(.sRGB)!
-        XCTAssertEqual(lhs.redComponent, rhs.redComponent, accuracy: 0.01, file: file, line: line)
-        XCTAssertEqual(lhs.greenComponent, rhs.greenComponent, accuracy: 0.01, file: file, line: line)
-        XCTAssertEqual(lhs.blueComponent, rhs.blueComponent, accuracy: 0.01, file: file, line: line)
-        XCTAssertEqual(lhs.alphaComponent, rhs.alphaComponent, accuracy: 0.01, file: file, line: line)
+    private func decodePNG(_ data: Data) throws -> CGImage {
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil))
+        return try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+    }
+
+    /// Honor the decoded profile, then inspect literal sRGB RGBA8 bytes without
+    /// NSBitmapImageRep.colorAt's additional NSColor color-space interpretation.
+    private func pixel(_ image: CGImage, x: Int, y: Int) throws -> [UInt8] {
+        guard (0..<image.width).contains(x), (0..<image.height).contains(y) else {
+            XCTFail("Pixel (\(x), \(y)) outside \(image.width) × \(image.height)")
+            return []
+        }
+        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
+            bytesPerRow: image.width * 4, space: space,
+            bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.setBlendMode(.copy)
+        context.interpolationQuality = .none
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let bytes = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
+        let offset = y * context.bytesPerRow + x * 4
+        return withExtendedLifetime(context) { (0..<4).map { bytes[offset + $0] } }
     }
 }
 
