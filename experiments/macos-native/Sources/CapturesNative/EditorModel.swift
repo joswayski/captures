@@ -317,7 +317,7 @@ final class EditorModel: ObservableObject {
     }
 
     func updateSelected(_ body: (inout EditorLayer) -> Void) {
-        guard let index = selectedLayerIndex else { return }
+        guard let index = selectedLayerIndex, !document.layers[index].locked else { return }
         mutate { body(&$0.layers[index]) }
     }
 
@@ -326,7 +326,7 @@ final class EditorModel: ObservableObject {
     }
 
     func updateSelectedLive(_ body: (inout EditorLayer) -> Void) {
-        guard let index = selectedLayerIndex else { return }
+        guard let index = selectedLayerIndex, !document.layers[index].locked else { return }
         body(&document.layers[index])
         dirty = true
     }

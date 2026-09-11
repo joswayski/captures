@@ -52,8 +52,13 @@ final class EditorModelTests: XCTestCase {
         model.selectedLayerID = locked.id
         model.deleteSelected()
         model.reorderSelected(by: 1)
+        model.updateSelected { $0.rotation = .pi }
+        model.beginInteractiveEdit()
+        model.updateSelectedLive { $0.frame.width = 31 }
+        model.endInteractiveEdit()
 
         XCTAssertEqual(model.document.layers.map(\.id), [locked.id, editable.id])
+        XCTAssertEqual(model.document.layers[0], locked)
         XCTAssertFalse(model.canUndo)
     }
 
@@ -207,7 +212,7 @@ final class EditorModelTests: XCTestCase {
         let rep = try XCTUnwrap(NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-            colorSpaceName: .sRGB, bytesPerRow: width * 4, bitsPerPixel: 32
+            colorSpaceName: .deviceRGB, bytesPerRow: width * 4, bitsPerPixel: 32
         ))
         for y in 0..<height { for x in 0..<width { rep.setColor(color, atX: x, y: y) } }
         return try XCTUnwrap(rep.representation(using: .png, properties: [:]))

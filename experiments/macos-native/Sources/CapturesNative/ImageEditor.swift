@@ -91,6 +91,7 @@ private struct ImageEditorSurface: View {
     @State private var comparisonBefore: NSImage?
     @State private var comparisonAfter: NSImage?
     @State private var comparisonSplit: CGFloat = 0.5
+    @State private var comparisonGeneration = UUID()
     @State private var exportSettingsOpen = false
     @State private var notice = ""
 
@@ -117,6 +118,7 @@ private struct ImageEditorSurface: View {
         }
         .background(NativeTheme.canvas(colorScheme))
         .foregroundStyle(NativeTheme.text(colorScheme))
+        .disabled(exporting)
         .onAppear {
             syncDimensions()
             let preferred = store.settings.screenshotFormat.lowercased() == "jpg" ? "jpeg" : store.settings.screenshotFormat.lowercased()
@@ -124,6 +126,8 @@ private struct ImageEditorSurface: View {
         }
         .onChange(of: model.document.width) { _ in syncDimensions() }
         .onChange(of: model.document.height) { _ in syncDimensions() }
+        .onChange(of: exportSettingsOpen) { if !$0 { dismissComparison() } }
+        .onDisappear { dismissComparison() }
         .animation(NativeTheme.motion, value: tool)
         .animation(NativeTheme.standard, value: exportSettingsOpen)
     }
@@ -534,8 +538,8 @@ private struct ImageEditorSurface: View {
             showExportError("The source format \(sourceExtension.uppercased()) cannot be replaced by the native editor. Export a PNG, JPEG, or WebP copy instead.")
             return
         }
+        let directory = AppStore.dataDirectory.appendingPathComponent("image-editor-work/\(UUID().uuidString)", isDirectory: true)
         do {
-            let directory = AppStore.dataDirectory.appendingPathComponent("image-editor-work/\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let input = directory.appendingPathComponent("flattened.png")
             try model.exportData(format: "png").write(to: input, options: [.atomic])
@@ -563,6 +567,7 @@ private struct ImageEditorSurface: View {
                 }
             }
         } catch {
+            try? FileManager.default.removeItem(at: directory)
             store.report(error)
             notice = error.localizedDescription
         }
@@ -581,8 +586,8 @@ private struct ImageEditorSurface: View {
             showExportError("Export only creates new files. Choose a filename that does not already exist.")
             return
         }
+        let directory = AppStore.dataDirectory.appendingPathComponent("image-editor-work/\(UUID().uuidString)", isDirectory: true)
         do {
-            let directory = AppStore.dataDirectory.appendingPathComponent("image-editor-work/\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let input = directory.appendingPathComponent("flattened.png")
             try model.exportData(format: "png").write(to: input, options: [.atomic])
@@ -604,6 +609,7 @@ private struct ImageEditorSurface: View {
                 }
             }
         } catch {
+            try? FileManager.default.removeItem(at: directory)
             store.report(error)
             notice = error.localizedDescription
         }
@@ -633,7 +639,7 @@ private struct ImageEditorSurface: View {
                 } else {
                     ZStack { Color.black.opacity(0.3); ProgressView("Encoding comparison…") }
                 }
-                Button { comparisonBefore = nil; comparisonAfter = nil } label: { Image(systemName: "xmark") }
+                Button(action: dismissComparison) { Image(systemName: "xmark") }
                     .buttonStyle(CaptureButtonStyle(glass: true))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing).padding(10)
             }
@@ -642,9 +648,11 @@ private struct ImageEditorSurface: View {
 
     private func prepareComparison() {
         guard !comparisonPending else { return }
+        let generation = UUID()
+        comparisonGeneration = generation
+        let directory = AppStore.dataDirectory.appendingPathComponent("image-comparisons/\(UUID().uuidString)", isDirectory: true)
         do {
             let before = try model.renderedImage()
-            let directory = AppStore.dataDirectory.appendingPathComponent("image-comparisons/\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let input = directory.appendingPathComponent("before.png")
             let output = directory.appendingPathComponent("after.\(exportFormat)")
@@ -653,8 +661,9 @@ private struct ImageEditorSurface: View {
             comparisonAfter = nil
             comparisonPending = true
             Backend.shared.call("image_encode", imageEncodeFields(input: input, output: output)) { result in
-                comparisonPending = false
                 defer { try? FileManager.default.removeItem(at: directory) }
+                guard comparisonGeneration == generation else { return }
+                comparisonPending = false
                 switch result {
                 case .success:
                     do {
@@ -669,9 +678,17 @@ private struct ImageEditorSurface: View {
                 }
             }
         } catch {
+            try? FileManager.default.removeItem(at: directory)
             store.report(error)
             notice = error.localizedDescription
         }
+    }
+
+    private func dismissComparison() {
+        comparisonGeneration = UUID()
+        comparisonPending = false
+        comparisonBefore = nil
+        comparisonAfter = nil
     }
 
     private func imageEncodeFields(input: URL, output: URL, format: String? = nil) -> [String: Any] {
