@@ -177,6 +177,10 @@ editing with GTK instead of a webview. It also has native history, preferences,
 shortcuts and recording-draft recovery. Before/after comparisons, benchmarks, and
 remaining parity gaps are documented separately. It is X11-only, stores data separately,
 and is not part of Preview or a replacement for the cross-platform app above.
+An experimental [Windows-native port](docs/windows-native-implementation.md) reuses
+that GTK/Cairo frontend with Windows desktop integration. It also stores data
+separately and is not shipped in Preview. Windows hardware testing, visual parity,
+and performance measurements are pending; Linux benchmark numbers do not apply.
 
 ## License and trademarks
 

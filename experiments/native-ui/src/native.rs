@@ -1,44 +1,50 @@
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[path = "native/app.rs"]
 mod app;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[path = "native/capture.rs"]
 mod capture;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[path = "native/desktop.rs"]
 mod desktop;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[path = "native/editor.rs"]
 mod editor;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[path = "native/history.rs"]
 mod history;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[path = "native/preferences.rs"]
 mod preferences;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[path = "native/preview.rs"]
 mod preview;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[path = "native/recording.rs"]
 mod recording;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[path = "native/recovery.rs"]
 mod recovery;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[path = "native/settings.rs"]
 mod settings;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[path = "native/ui.rs"]
 mod ui;
 
-#[cfg(target_os = "linux")]
+#[cfg(target_os = "windows")]
+#[path = "native/windows.rs"]
+mod windows;
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn main() {
     app::run();
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 fn main() {
-    eprintln!("The native frontend is Linux-only. Use the shipping Tauri app on other platforms.");
+    eprintln!(
+        "The native experiment supports Linux and Windows. Use the shipping Tauri app on other platforms."
+    );
     std::process::exit(1);
 }

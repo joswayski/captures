@@ -8,13 +8,14 @@ use crate::ui;
 use gtk::{gdk, glib, prelude::*};
 use image::RgbaImage;
 use model::*;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::{
     cell::RefCell,
     collections::hash_map::DefaultHasher,
     f64::consts::PI,
     hash::{Hash, Hasher},
     io::Write,
-    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -102,19 +103,7 @@ struct State {
 type Refresh = Rc<RefCell<Option<Box<dyn Fn()>>>>;
 
 fn native_data() -> PathBuf {
-    std::env::var_os("CAPTURES_NATIVE_DATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::var_os("XDG_DATA_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| {
-                    std::env::var_os("HOME")
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| PathBuf::from("."))
-                        .join(".local/share")
-                })
-                .join("captures-linux-native")
-        })
+    crate::settings::data_dir()
 }
 fn draft_path(source: Option<&Path>, image: &RgbaImage) -> PathBuf {
     let mut h = DefaultHasher::new();
@@ -138,23 +127,27 @@ fn write_draft(s: &State) -> Result<(), String> {
 }
 fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path.parent().ok_or("invalid output path")?;
+    // Source Save can target a user's existing directory; never replace that
+    // directory's ACL. Only the app-owned draft directory inherits a private ACL.
+    #[cfg(target_os = "windows")]
+    if parent == native_data().join("editor-drafts") {
+        crate::windows::private_directory(parent).map_err(|e| e.to_string())?;
+    }
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or("invalid output filename")?;
     for nonce in 0..100_u32 {
         let staging = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), nonce));
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&staging)
-        {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        match options.open(&staging) {
             Ok(mut file) => {
-                let result = file
-                    .write_all(bytes)
-                    .and_then(|_| file.sync_all())
-                    .and_then(|_| std::fs::rename(&staging, path));
+                let result = file.write_all(bytes).and_then(|_| file.sync_all());
+                drop(file);
+                let result = result.and_then(|_| std::fs::rename(&staging, path));
                 if result.is_err() {
                     let _ = std::fs::remove_file(&staging);
                 }
@@ -2379,19 +2372,18 @@ fn setup_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::{MetadataExt, symlink};
     #[test]
     fn independent_draft_path_never_uses_tauri_name() {
         let i = RgbaImage::new(2, 3);
         let p = draft_path(Some(Path::new("/tmp/a.png")), &i);
-        assert!(
-            p.to_string_lossy()
-                .contains("captures-linux-native/editor-drafts")
-        );
+        assert_eq!(p.parent().unwrap(), native_data().join("editor-drafts"));
         assert!(!p.to_string_lossy().contains("screenshot-editor-drafts"));
     }
 
     #[test]
+    #[cfg(unix)]
     fn private_atomic_draft_does_not_follow_predictable_symlinks() {
         let directory = tempfile::tempdir().unwrap();
         let victim = directory.path().join("victim");

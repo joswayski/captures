@@ -1,7 +1,7 @@
 #[cfg(not(target_os = "linux"))]
 fn main() {
     eprintln!(
-        "The GTK widget prototype is Linux-only; no macOS/Windows native frontend is implemented."
+        "The minimal GTK probe is Linux-only; use captures-windows-native for the Windows experiment."
     );
     std::process::exit(1);
 }
