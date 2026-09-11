@@ -442,11 +442,15 @@ final class EditorModel: ObservableObject {
         let width = currentCG.width
         let height = currentCG.height
         let colorSpace = CGColorSpaceCreateDeviceRGB()
-        var pixels = [UInt8](repeating: 0, count: width * height * 4)
-        let context = CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        let bitmapInfo = CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
+        // Let Core Graphics own these buffers. Passing &array to an initializer
+        // would leave its retained data pointer outside Swift's borrow lifetime.
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: colorSpace, bitmapInfo: bitmapInfo),
+              let originalContext = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: colorSpace, bitmapInfo: bitmapInfo),
+              let pixels = context.data?.assumingMemoryBound(to: UInt8.self),
+              let originalPixels = originalContext.data?.assumingMemoryBound(to: UInt8.self) else { throw EditorError.cannotRender }
+        defer { withExtendedLifetime((context, originalContext)) {} }
         context.draw(currentCG, in: CGRect(x: 0, y: 0, width: width, height: height))
-        var originalPixels = [UInt8](repeating: 0, count: pixels.count)
-        let originalContext = CGContext(data: &originalPixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
         originalContext.draw(originalCG, in: CGRect(x: 0, y: 0, width: width, height: height))
         let centerX = (localDocumentPoint.x - frame.minX) / frame.width * CGFloat(width)
         let centerY = (localDocumentPoint.y - frame.minY) / frame.height * CGFloat(height)
@@ -455,10 +459,10 @@ final class EditorModel: ObservableObject {
             for x in max(0, Int(centerX - pixelRadius))..<min(width, Int(centerX + pixelRadius + 1))
                 where hypot(CGFloat(x) - centerX, CGFloat(y) - centerY) <= pixelRadius {
                 let offset = (y * width + x) * 4
-                if restore {
-                    pixels[offset..<(offset + 4)] = originalPixels[offset..<(offset + 4)]
-                } else {
-                    pixels[offset + 3] = 0
+                for component in 0..<4 {
+                    // Fully transparent premultiplied pixels must also have
+                    // zero color channels, not just zero alpha.
+                    pixels[offset + component] = restore ? originalPixels[offset + component] : 0
                 }
             }
         }

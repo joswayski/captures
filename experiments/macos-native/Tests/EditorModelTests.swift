@@ -137,6 +137,13 @@ final class EditorModelTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(editedRep.colorAt(x: 0, y: 1)).alphaComponent, 0)
         assertColor(try XCTUnwrap(editedRep.colorAt(x: 4, y: 0)), equals: .white)
 
+        try model.erase(at: CGPoint(x: 35, y: 15), radius: 5, restore: true)
+        guard case let .image(restored, _) = model.document.layers[0].content else {
+            return XCTFail("Expected restored image layer")
+        }
+        let restoredRep = try XCTUnwrap(NSBitmapImageRep(data: restored))
+        assertColor(try XCTUnwrap(restoredRep.colorAt(x: 0, y: 1)), equals: .white)
+
         var locked = layer
         locked.locked = true
         let lockedModel = EditorModel(
