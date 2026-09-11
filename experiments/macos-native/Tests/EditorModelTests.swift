@@ -214,15 +214,17 @@ final class EditorModelTests: XCTestCase {
     }
 
     private func solidPNG(_ color: NSColor, width: Int = 1, height: Int = 1) throws -> Data {
-        let rep = try XCTUnwrap(NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
-            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-            colorSpaceName: .deviceRGB, bytesPerRow: width * 4, bitsPerPixel: 32
+        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 4, space: space,
+            bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
         ))
-        // setColor requires the bitmap's color space; catalog/system colors
-        // otherwise log an unknown color-space warning and leave empty pixels.
-        let deviceColor = try XCTUnwrap(color.usingColorSpace(.deviceRGB))
-        for y in 0..<height { for x in 0..<width { rep.setColor(deviceColor, atX: x, y: y) } }
+        // Use an explicit Core Graphics color space rather than AppKit's legacy
+        // device-RGB bitmap initializer/setColor path. Verify the encoded input.
+        context.setFillColor(try XCTUnwrap(color.usingColorSpace(.sRGB)).cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let rep = NSBitmapImageRep(cgImage: try XCTUnwrap(context.makeImage()))
         let png = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
         let decoded = try XCTUnwrap(NSBitmapImageRep(data: png))
         assertColor(try XCTUnwrap(decoded.colorAt(x: 0, y: 0)), equals: color)
