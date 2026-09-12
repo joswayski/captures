@@ -1808,7 +1808,11 @@ func imageEditorReferenceView(artifact: Artifact, state: String) -> AnyView {
             return AnyView(ImageEditorSurface(
                 artifact: artifact, model: model,
                 initialZoom: 1.65,
-                initialViewPan: CGSize(width: -170, height: 48)
+                // At 165%, the source fixture's only warm feature (the moon at
+                // document x ≈ 786) is outside the 904 pt viewport at -170 pt.
+                // This still demonstrates a substantial asymmetric pan while
+                // keeping the moon, blue scene, and selected ellipse visible.
+                initialViewPan: CGSize(width: -500, height: -90)
             ))
         case "erase":
             return AnyView(ImageEditorSurface(artifact: artifact, model: model, initialTool: .erase))

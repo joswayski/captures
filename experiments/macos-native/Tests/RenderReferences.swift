@@ -146,6 +146,9 @@ enum RenderReferences {
                 guard hasVisibleContent(bitmap) else {
                     fputs("Native \(fixture.name) reference contained no visible surface content.\n", stderr); exit(1)
                 }
+                guard let data = bitmap.representation(using: .png, properties: [:]) else { exit(1) }
+                do { try data.write(to: output.appendingPathComponent("\(fixture.name).png"), options: .withoutOverwriting) }
+                catch { fputs("Reference write: \(error)\n", stderr); exit(1) }
                 if [
                     "previews-collapsed", "previews-collapsed-fanned", "previews-expanded",
                     "image-editor", "image-editor-shapes", "image-editor-properties",
@@ -154,12 +157,9 @@ enum RenderReferences {
                     "image-editor-erase", "image-editor-wand",
                 ].contains(fixture.name),
                    !hasSharedFixtureFeature(bitmap) {
-                    fputs("Native \(fixture.name) reference omitted the shared source fixture's distinctive media content.\n", stderr)
+                    fputs("Native \(fixture.name) reference omitted the shared source fixture's distinctive media content; diagnostic PNG saved.\n", stderr)
                     exit(1)
                 }
-                guard let data = bitmap.representation(using: .png, properties: [:]) else { exit(1) }
-                do { try data.write(to: output.appendingPathComponent("\(fixture.name).png"), options: .withoutOverwriting) }
-                catch { fputs("Reference write: \(error)\n", stderr); exit(1) }
                 if fixture.name == "recording-editor-layout", !hasTimelineFilmstrip(bitmap) {
                     fputs("Native recording-editor-layout reference did not contain decoded filmstrip frames within 10 seconds; diagnostic PNG saved.\n", stderr)
                     exit(1)
