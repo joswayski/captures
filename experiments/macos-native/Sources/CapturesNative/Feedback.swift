@@ -37,12 +37,13 @@ private final class FeedbackModel: ObservableObject {
         status = ""
         let submittedMessage = message
         let trimmedContact = contact.trimmingCharacters(in: .whitespacesAndNewlines)
+        let draft: [String: Any] = [
+            "category": category,
+            "message": submittedMessage,
+            "contact": trimmedContact.isEmpty ? NSNull() as Any : trimmedContact as Any,
+        ]
         Backend.shared.call("feedback_submit", [
-            "draft": [
-                "category": category,
-                "message": submittedMessage,
-                "contact": trimmedContact.isEmpty ? NSNull() : trimmedContact,
-            ],
+            "draft": draft,
             "context": Self.context,
         ]) { [weak self] result in
             guard let self else { return }

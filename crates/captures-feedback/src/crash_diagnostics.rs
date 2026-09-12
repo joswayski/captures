@@ -50,6 +50,7 @@ impl DiagnosticPreview {
 /// Profile-scoped session state. Use a distinct profile path per app/profile.
 pub struct CrashSession {
     directory: PathBuf,
+    running_marker: String,
 }
 
 impl CrashSession {
@@ -68,8 +69,12 @@ impl CrashSession {
                 fs::rename(directory.join(PANIC), directory.join(PREVIOUS_PANIC))?;
             }
         }
-        fs::write(&current, marker_now())?;
-        Ok(Self { directory })
+        let running_marker = marker_now();
+        fs::write(&current, &running_marker)?;
+        Ok(Self {
+            directory,
+            running_marker,
+        })
     }
 
     /// Reads retained evidence without consuming it, for preview/consent UI.
@@ -99,6 +104,13 @@ impl CrashSession {
     pub fn mark_clean_exit(&self) -> io::Result<()> {
         remove_if_exists(&self.directory.join(CURRENT))?;
         remove_if_exists(&self.directory.join(PANIC))
+    }
+
+    /// Re-arm the same live session if an approved quit/restart is cancelled
+    /// after cleanup. Unlike `start`, this never rotates retained evidence or
+    /// installs another panic hook, and preserves the session's original time.
+    pub fn resume_after_cancelled_exit(&self) -> io::Result<()> {
+        fs::write(self.directory.join(CURRENT), &self.running_marker)
     }
 
     /// Precompute these paths for platform-owned async-signal-safe shutdown
@@ -554,6 +566,25 @@ mod tests {
                 .preview()
                 .unclean_exit
         );
+    }
+
+    #[test]
+    fn cancelled_exit_rearms_same_session_without_rotating_prior_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        let first = CrashSession::start(root.path()).unwrap();
+        fs::write(first.directory.join(PANIC), "Previous panic").unwrap();
+        let session = CrashSession::start(root.path()).unwrap();
+        let previous = session.preview();
+        let current = fs::read(session.directory.join(CURRENT)).unwrap();
+        session.mark_clean_exit().unwrap();
+        session.resume_after_cancelled_exit().unwrap();
+        session.resume_after_cancelled_exit().unwrap();
+        assert_eq!(fs::read(session.directory.join(CURRENT)).unwrap(), current);
+        assert_eq!(session.preview(), previous);
+        session.dismiss_previous().unwrap();
+        let after_abnormal_exit = CrashSession::start(root.path()).unwrap().preview();
+        assert!(after_abnormal_exit.unclean_exit);
+        assert!(!after_abnormal_exit.has_exception_evidence());
     }
 
     #[test]
