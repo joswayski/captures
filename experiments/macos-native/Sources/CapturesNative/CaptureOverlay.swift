@@ -1368,6 +1368,7 @@ private final class RecordingHUDModel: ObservableObject {
         }
     }
 
+    @MainActor
     func restart() {
         confirm(
             title: "Restart recording?",
@@ -1391,6 +1392,7 @@ private final class RecordingHUDModel: ObservableObject {
         }
     }
 
+    @MainActor
     func discard() {
         confirm(
             title: "Delete recording?",
@@ -1499,6 +1501,7 @@ private final class RecordingHUDModel: ObservableObject {
         AppStore.shared.report(error)
     }
 
+    @MainActor
     private func confirm(title: String, message: String, action: String, destructive: Bool = false, perform: @escaping () -> Void) {
         CaptureDialogController.shared.present(
             title: title,

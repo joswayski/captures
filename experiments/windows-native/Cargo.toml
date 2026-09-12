@@ -9,15 +9,20 @@ publish = false
 
 [dependencies]
 captures-capture = { path = "../../crates/captures-capture" }
+captures-image = { path = "../../crates/captures-image" }
 captures-media = { path = "../../crates/captures-media" }
 captures-recording = { path = "../../crates/captures-recording" }
 captures-recording-xcap = { path = "../../crates/captures-recording-xcap" }
 captures-session = { path = "../../crates/captures-session" }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+jpeg-encoder = "0.6"
+png = "0.17"
+quantette = { version = "0.6", default-features = false, features = ["image", "std", "threads"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
 uuid = { version = "1", features = ["v4"] }
+webp = { version = "0.3", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
@@ -34,6 +39,7 @@ windows = { version = "0.61", features = [
   "Win32_Graphics_Dxgi_Common",
   "Win32_Graphics_Gdi",
   "Win32_Graphics_Imaging",
+  "Win32_Security",
   "Win32_Storage_FileSystem",
   "Win32_System_Com",
   "Win32_System_DataExchange",

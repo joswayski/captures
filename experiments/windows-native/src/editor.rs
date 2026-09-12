@@ -1,5 +1,6 @@
 use crate::geometry::{Point, Rect};
-use image::{Rgba, RgbaImage};
+use image::RgbaImage;
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tool {
@@ -20,7 +21,12 @@ pub enum Shape {
     Line(Point, Point),
     Rectangle(Rect),
     Ellipse(Rect),
-    Text { origin: Point, value: String },
+    Text {
+        origin: Point,
+        value: String,
+        font_size: f32,
+        font_data: Arc<[u8]>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -29,12 +35,14 @@ pub struct Layer {
     pub shape: Shape,
     pub color: [u8; 4],
     pub stroke: f32,
+    pub fill: Option<[u8; 4]>,
+    pub rotation_degrees: f32,
     pub visible: bool,
 }
 
 #[derive(Clone)]
 pub struct Document {
-    original: RgbaImage,
+    original: Arc<RgbaImage>,
     pub crop: Rect,
     pub layers: Vec<Layer>,
     undo: Vec<Vec<Layer>>,
@@ -51,7 +59,7 @@ impl Document {
             height: image.height() as f32,
         };
         Self {
-            original: image,
+            original: Arc::new(image),
             crop,
             layers: Vec::new(),
             undo: Vec::new(),
@@ -69,6 +77,8 @@ impl Document {
             shape,
             color,
             stroke: stroke.clamp(1.0, 48.0),
+            fill: None,
+            rotation_degrees: 0.0,
             visible: true,
         });
         id
@@ -106,111 +116,89 @@ impl Document {
         self.redo.clear();
     }
 
-    pub fn render(&self) -> RgbaImage {
-        let crop =
-            self.crop
-                .to_logical()
-                .to_physical(1.0, self.original.width(), self.original.height());
-        let mut output =
-            image::imageops::crop_imm(&self.original, crop.x, crop.y, crop.width, crop.height)
-                .to_image();
-        for layer in self.layers.iter().filter(|layer| layer.visible) {
-            draw_layer(
-                &mut output,
-                layer,
-                Point {
-                    x: self.crop.x,
-                    y: self.crop.y,
-                },
-            );
-        }
-        output
+    pub fn render(&self) -> Result<RgbaImage, String> {
+        captures_image::render(&captures_image::Document {
+            source: self.original.clone(),
+            crop: Some(captures_image::PixelRect {
+                x: self.crop.x.max(0.0).round() as u32,
+                y: self.crop.y.max(0.0).round() as u32,
+                width: self.crop.width.max(1.0).round() as u32,
+                height: self.crop.height.max(1.0).round() as u32,
+            }),
+            layers: self
+                .layers
+                .iter()
+                .filter(|layer| layer.visible)
+                .map(to_raster_layer)
+                .collect(),
+        })
+    }
+
+    pub fn hit_test(&self, point: Point, tolerance: f32) -> Option<u64> {
+        self.layers.iter().rev().find_map(|layer| {
+            let raster = to_raster_layer(layer);
+            raster
+                .hit_test(to_raster_point(point), tolerance)
+                .then_some(layer.id)
+        })
     }
 }
 
-fn draw_layer(image: &mut RgbaImage, layer: &Layer, offset: Point) {
-    let color = Rgba(layer.color);
-    let line = |image: &mut RgbaImage, a: Point, b: Point| {
-        draw_line(
-            image,
-            Point {
-                x: a.x - offset.x,
-                y: a.y - offset.y,
-            },
-            Point {
-                x: b.x - offset.x,
-                y: b.y - offset.y,
-            },
-            layer.stroke,
-            color,
-        )
-    };
-    match &layer.shape {
+fn to_raster_layer(layer: &Layer) -> captures_image::Layer {
+    let shape = match &layer.shape {
         Shape::Stroke(points) => {
-            for pair in points.windows(2) {
-                line(image, pair[0], pair[1]);
-            }
+            captures_image::Shape::Freehand(points.iter().copied().map(to_raster_point).collect())
         }
-        Shape::Arrow(a, b) | Shape::Line(a, b) => line(image, *a, *b),
-        Shape::Rectangle(rect) => {
-            let a = Point {
+        Shape::Arrow(start, end) => captures_image::Shape::Arrow {
+            start: to_raster_point(*start),
+            end: to_raster_point(*end),
+        },
+        Shape::Line(start, end) => captures_image::Shape::Line {
+            start: to_raster_point(*start),
+            end: to_raster_point(*end),
+        },
+        Shape::Rectangle(rect) => captures_image::Shape::Rectangle {
+            origin: to_raster_point(Point {
                 x: rect.x,
                 y: rect.y,
-            };
-            let b = Point {
-                x: rect.x + rect.width,
+            }),
+            width: rect.width,
+            height: rect.height,
+        },
+        Shape::Ellipse(rect) => captures_image::Shape::Ellipse {
+            origin: to_raster_point(Point {
+                x: rect.x,
                 y: rect.y,
-            };
-            let c = Point {
-                x: b.x,
-                y: rect.y + rect.height,
-            };
-            let d = Point { x: rect.x, y: c.y };
-            line(image, a, b);
-            line(image, b, c);
-            line(image, c, d);
-            line(image, d, a);
-        }
-        Shape::Ellipse(rect) => {
-            let center = Point {
-                x: rect.x + rect.width / 2.0,
-                y: rect.y + rect.height / 2.0,
-            };
-            let mut previous = None;
-            for step in 0..=64 {
-                let angle = step as f32 * std::f32::consts::TAU / 64.0;
-                let point = Point {
-                    x: center.x + rect.width / 2.0 * angle.cos(),
-                    y: center.y + rect.height / 2.0 * angle.sin(),
-                };
-                if let Some(last) = previous {
-                    line(image, last, point);
-                }
-                previous = Some(point);
-            }
-        }
-        Shape::Text { .. } => {} // DirectWrite owns live text; flattened by the Windows renderer.
+            }),
+            width: rect.width,
+            height: rect.height,
+        },
+        Shape::Text {
+            origin,
+            value,
+            font_size,
+            font_data,
+        } => captures_image::Shape::Text {
+            origin: to_raster_point(*origin),
+            text: value.clone(),
+            font_size: *font_size,
+            font_data: font_data.clone(),
+        },
+    };
+    captures_image::Layer {
+        id: layer.id,
+        shape,
+        color: layer.color,
+        stroke_width: layer.stroke,
+        fill: layer.fill,
+        rotation_degrees: layer.rotation_degrees,
     }
 }
 
-fn draw_line(image: &mut RgbaImage, a: Point, b: Point, width: f32, color: Rgba<u8>) {
-    let distance = (b.x - a.x).abs().max((b.y - a.y).abs()).ceil().max(1.0) as u32;
-    let radius = (width / 2.0).ceil() as i32;
-    for step in 0..=distance {
-        let t = step as f32 / distance as f32;
-        let x = (a.x + (b.x - a.x) * t).round() as i32;
-        let y = (a.y + (b.y - a.y) * t).round() as i32;
-        for oy in -radius..=radius {
-            for ox in -radius..=radius {
-                if ox * ox + oy * oy <= radius * radius
-                    && let (Ok(px), Ok(py)) = (u32::try_from(x + ox), u32::try_from(y + oy))
-                    && px < image.width()
-                    && py < image.height()
-                {
-                    image.put_pixel(px, py, color);
-                }
-            }
-        }
+fn to_raster_point(point: Point) -> captures_image::Point {
+    captures_image::Point {
+        x: point.x,
+        y: point.y,
     }
 }
 
@@ -250,6 +238,6 @@ mod tests {
             width: 33.0,
             height: 17.0,
         };
-        assert_eq!(document.render().dimensions(), (33, 17));
+        assert_eq!(document.render().unwrap().dimensions(), (33, 17));
     }
 }

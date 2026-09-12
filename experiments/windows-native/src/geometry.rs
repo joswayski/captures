@@ -50,6 +50,18 @@ impl Rect {
     }
 }
 
+pub fn rounded_contains(point: Point, rect: Rect, radius: f32) -> bool {
+    if !rect.contains(point) {
+        return false;
+    }
+    let radius = radius.max(0.0).min(rect.width.min(rect.height) / 2.0);
+    let nearest_x = point.x.clamp(rect.x + radius, rect.x + rect.width - radius);
+    let nearest_y = point
+        .y
+        .clamp(rect.y + radius, rect.y + rect.height - radius);
+    (point.x - nearest_x).powi(2) + (point.y - nearest_y).powi(2) <= radius.powi(2)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SelectionDrag {
     Create { anchor: Point },
@@ -203,5 +215,19 @@ mod tests {
                 height: 100.0
             }
         );
+    }
+
+    #[test]
+    fn rounded_hit_test_excludes_only_corner_cutouts() {
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 60.0,
+        };
+        assert!(!rounded_contains(Point { x: 10.0, y: 20.0 }, rect, 12.0));
+        assert!(rounded_contains(Point { x: 16.0, y: 26.0 }, rect, 12.0));
+        assert!(rounded_contains(Point { x: 60.0, y: 20.0 }, rect, 12.0));
+        assert!(!rounded_contains(Point { x: 111.0, y: 50.0 }, rect, 12.0));
     }
 }

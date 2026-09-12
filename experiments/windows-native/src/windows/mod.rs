@@ -7,8 +7,8 @@ use captures_recording::{
 };
 use captures_recording_xcap::XcapRecordingSegment;
 use captures_windows_native::{
-    geometry::{Point, Rect, SelectionDrag, update_selection},
-    history::{Artifact, History, safe_delete},
+    geometry::{Point, Rect, SelectionDrag, rounded_contains, update_selection},
+    history::{Artifact, History, move_to_trash, restore_from_trash, safe_delete},
     settings::{Settings, data_dir},
     state::{AppState, RecordingUi, Surface},
     theme::{palette, theme_colors},
@@ -23,26 +23,18 @@ use std::{
 };
 use windows::{
     Win32::{
-        Foundation::{HANDLE, HMODULE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-        Graphics::{
-            Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_11_0},
-            Direct3D11::{
-                D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice,
-                ID3D11Device,
-            },
-            DirectComposition::{
-                DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget,
-                IDCompositionVisual,
-            },
-            Dxgi::{IDXGIAdapter, IDXGIDevice},
-            Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT},
+        Foundation::{
+            CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, POINT,
+            RECT, WPARAM,
         },
+        Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT, ScreenToClient},
         System::{
             Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize},
             DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
             LibraryLoader::GetModuleHandleW,
             Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock},
             Ole::{OleInitialize, OleUninitialize},
+            Threading::CreateMutexW,
         },
         UI::{
             HiDpi::{
@@ -60,20 +52,15 @@ use windows::{
             WindowsAndMessaging::*,
         },
     },
-    core::{Interface, PCWSTR, w},
+    core::{PCWSTR, w},
 };
 
 const CLASS: PCWSTR = w!("CapturesWindowsNativeWindow");
 const WM_TRAY: u32 = WM_APP + 1;
+const WM_ACTIVATE_INSTANCE: u32 = WM_APP + 2;
 const TIMER_ANIMATION: usize = 1;
 const HOTKEY_CAPTURE: i32 = 100;
 const HOTKEY_DISPLAY: i32 = 101;
-
-struct Composition {
-    _device: IDCompositionDevice,
-    _target: IDCompositionTarget,
-    _root: IDCompositionVisual,
-}
 
 struct RecordingSession {
     options: RecordingOptions,
@@ -87,21 +74,39 @@ struct RecordingSession {
 struct App {
     hwnd: HWND,
     renderer: Option<Renderer>,
-    composition: Option<Composition>,
     state: AppState,
     settings: Settings,
     history: History,
     recording: Option<RecordingSession>,
+    recording_mode: CaptureMode,
     editor_drag: Option<Point>,
     next_session_check: Instant,
     width: u32,
     height: u32,
     dpi: f32,
     tray: NOTIFYICONDATAW,
+    instance_mutex: HANDLE,
+    delete_return: Surface,
 }
 
 pub fn run() -> Result<(), String> {
     unsafe {
+        let instance_mutex =
+            CreateMutexW(None, false, w!("Local\\CapturesWindowsNativeExperiment"))
+                .map_err(win_error)?;
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            for _ in 0..100 {
+                if let Ok(existing) = FindWindowW(CLASS, PCWSTR::null()) {
+                    PostMessageW(Some(existing), WM_ACTIVATE_INSTANCE, WPARAM(0), LPARAM(0))
+                        .map_err(win_error)?;
+                    CloseHandle(instance_mutex).map_err(win_error)?;
+                    return Ok(());
+                }
+                std::thread::sleep(Duration::from_millis(30));
+            }
+            CloseHandle(instance_mutex).map_err(win_error)?;
+            return Err("primary Captures instance did not become ready".into());
+        }
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
             .map_err(win_error)?;
         CoInitializeEx(None, COINIT_APARTMENTTHREADED)
@@ -122,32 +127,48 @@ pub fn run() -> Result<(), String> {
         if RegisterClassExW(&class) == 0 {
             return Err(last_error("register window class"));
         }
-        let settings = Settings::load()?;
+        let mut settings = Settings::load()?;
+        if let Some(appearance) = argument_value("--appearance") {
+            settings.appearance = appearance;
+            settings.validate()?;
+        }
         fs::create_dir_all(&settings.output_directory).map_err(|e| e.to_string())?;
         let history = History::load(&data_dir())?;
         let mut state = AppState::default();
-        let requested_view = std::env::args().skip_while(|arg| arg != "--view").nth(1);
+        let requested_view = argument_value("--view");
         if let Some(view) = requested_view.as_deref() {
-            prepare_fixture(&mut state, view);
+            let fixture_image = argument_value("--fixture-image")
+                .map(image::open)
+                .transpose()
+                .map_err(|error| format!("cannot open fixture image: {error}"))?
+                .map(|image| image.to_rgba8());
+            prepare_fixture(
+                &mut state,
+                view,
+                fixture_image,
+                argument_value("--fixture-video").map(PathBuf::from),
+            );
         }
         let app = Box::new(App {
             hwnd: HWND::default(),
             renderer: None,
-            composition: None,
             state,
             settings,
             history,
             recording: None,
+            recording_mode: CaptureMode::Region,
             editor_drag: None,
             next_session_check: Instant::now(),
             width: 420,
             height: 430,
             dpi: 96.0,
             tray: NOTIFYICONDATAW::default(),
+            instance_mutex,
+            delete_return: Surface::Menu,
         });
         let raw = Box::into_raw(app);
         let _hwnd = CreateWindowExW(
-            WS_EX_TOOLWINDOW,
+            WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP,
             CLASS,
             w!("Captures"),
             WS_POPUP | WS_VISIBLE,
@@ -210,11 +231,33 @@ unsafe extern "system" fn wndproc(
                 LRESULT(0)
             }
             WM_ERASEBKGND => LRESULT(1),
+            WM_MOUSEACTIVATE
+                if matches!(app.state.surface, Surface::Preview | Surface::RecordingHud) =>
+            {
+                LRESULT(MA_NOACTIVATE as isize)
+            }
+            WM_NCHITTEST if app.state.surface == Surface::Preview => {
+                let mut cursor = POINT {
+                    x: point(lparam.0).x as i32,
+                    y: point(lparam.0).y as i32,
+                };
+                let _ = ScreenToClient(hwnd, &mut cursor);
+                if app.preview_contains(Point {
+                    x: cursor.x as f32 * 96.0 / app.dpi,
+                    y: cursor.y as f32 * 96.0 / app.dpi,
+                }) {
+                    LRESULT(HTCLIENT as isize)
+                } else {
+                    LRESULT(HTTRANSPARENT as isize)
+                }
+            }
             WM_SIZE => {
                 app.width = loword(lparam.0) as u32;
                 app.height = hiword(lparam.0) as u32;
-                if let Some(renderer) = &app.renderer {
-                    renderer.resize(app.width, app.height)
+                if let Some(renderer) = &mut app.renderer {
+                    if let Err(error) = renderer.resize(app.width, app.height, app.dpi) {
+                        app.set_error(error.to_string());
+                    }
                 };
                 LRESULT(0)
             }
@@ -293,6 +336,10 @@ unsafe extern "system" fn wndproc(
                 app.show_surface(Surface::Menu, 420, 430, false);
                 LRESULT(0)
             }
+            WM_ACTIVATE_INSTANCE => {
+                app.show_surface(Surface::Menu, 420, 430, false);
+                LRESULT(0)
+            }
             WM_CLOSE => {
                 let _ = ShowWindow(hwnd, SW_HIDE);
                 LRESULT(0)
@@ -301,6 +348,7 @@ unsafe extern "system" fn wndproc(
                 app.remove_tray();
                 let _ = UnregisterHotKey(Some(hwnd), HOTKEY_CAPTURE);
                 let _ = UnregisterHotKey(Some(hwnd), HOTKEY_DISPLAY);
+                let _ = CloseHandle(app.instance_mutex);
                 PostQuitMessage(0);
                 LRESULT(0)
             }
@@ -321,7 +369,6 @@ impl App {
             self.renderer = Some(
                 Renderer::new(self.hwnd, self.width, self.height, self.dpi).map_err(win_error)?,
             );
-            self.composition = Some(composition(self.hwnd)?);
             SetTimer(Some(self.hwnd), TIMER_ANIMATION, 16, None);
             RegisterHotKey(
                 Some(self.hwnd),
@@ -368,6 +415,9 @@ impl App {
         if let Some(renderer) = &mut self.renderer {
             let _ = renderer.draw(
                 &self.state,
+                &self.settings,
+                self.history.entries(),
+                self.recording_mode,
                 palette(light, accent, signal),
                 self.width as f32 * 96.0 / self.dpi,
                 self.height as f32 * 96.0 / self.dpi,
@@ -514,9 +564,39 @@ impl App {
                     }
                 }
                 Surface::RecordingSelector => {
-                    if p.y > 375.0 {
-                        self.start_capture(CaptureMode::Region, true)
+                    if (78.0..140.0).contains(&p.y) {
+                        self.recording_mode = CaptureMode::Region;
+                    } else if (150.0..212.0).contains(&p.y) {
+                        self.recording_mode = CaptureMode::Window;
+                    } else if (222.0..284.0).contains(&p.y) {
+                        self.recording_mode = CaptureMode::Display;
+                    } else if (326.0..370.0).contains(&p.y) {
+                        match (p.x / 104.0).floor() as usize {
+                            0 => {
+                                self.settings.recording.show_cursor =
+                                    !self.settings.recording.show_cursor
+                            }
+                            1 => {
+                                self.settings.recording.highlight_clicks =
+                                    !self.settings.recording.highlight_clicks
+                            }
+                            2 => {
+                                self.settings.recording.show_keystrokes =
+                                    !self.settings.recording.show_keystrokes
+                            }
+                            3 => {
+                                self.settings.recording.capture_system_audio =
+                                    !self.settings.recording.capture_system_audio
+                            }
+                            _ => return,
+                        }
+                        if let Err(error) = self.settings.save() {
+                            self.set_error(error);
+                        }
+                    } else if p.y > 375.0 {
+                        self.start_capture(self.recording_mode, true)
                     }
+                    let _ = InvalidateRect(Some(self.hwnd), None, false);
                 }
                 Surface::Preview => {
                     if p.y > self.height as f32 * 96.0 / self.dpi - 42.0 {
@@ -525,9 +605,16 @@ impl App {
                                 self.state.edit_image(preview.image.clone());
                                 self.show_surface(Surface::ScreenshotEditor, 1100, 720, false)
                             }
+                        } else if p.x < 170.0 {
+                            if let Some(preview) = self.state.previews.first() {
+                                if let Err(error) = copy_image(self.hwnd, &preview.image) {
+                                    self.set_error(error);
+                                }
+                            }
                         } else if p.x > 250.0 {
                             if let Some(preview) = self.state.previews.first() {
                                 self.state.pending_delete = Some(preview.artifact.clone());
+                                self.delete_return = Surface::Preview;
                                 self.show_surface(Surface::DeleteConfirmation, 480, 300, false)
                             }
                         }
@@ -540,7 +627,7 @@ impl App {
                         self.confirm_delete()
                     } else if p.y > h / 2.0 + 30.0 {
                         self.state.pending_delete = None;
-                        self.show_surface(Surface::Preview, 340, 200, true)
+                        self.show_delete_return()
                     }
                 }
                 Surface::RecordingHud => self.hud_click(p),
@@ -634,18 +721,46 @@ impl App {
         let Some(artifact) = self.history.entries().get(index).cloned() else {
             return;
         };
-        if artifact.kind != captures_windows_native::history::ArtifactKind::Image {
-            return;
-        }
-        match image::open(&artifact.path) {
-            Ok(image) => {
-                self.state
-                    .add_preview(artifact, image.to_rgba8(), Instant::now());
-                unsafe {
-                    self.show_preview();
+        let local_x = p.x - (36.0 + index as f32 * 210.0);
+        let button = ((218.0..246.0).contains(&p.y) && local_x >= 0.0)
+            .then(|| (local_x / 57.0).floor() as usize);
+        match button {
+            Some(0)
+                if !artifact.is_trashed()
+                    && artifact.kind == captures_windows_native::history::ArtifactKind::Image =>
+            {
+                match image::open(&artifact.path) {
+                    Ok(image) => {
+                        self.state.edit_image(image.to_rgba8());
+                        unsafe { self.show_surface(Surface::ScreenshotEditor, 1100, 720, false) };
+                    }
+                    Err(error) => self.set_error(error.to_string()),
                 }
             }
-            Err(error) => self.set_error(error.to_string()),
+            Some(1) if artifact.is_trashed() => {
+                let old = artifact.path.clone();
+                match restore_from_trash(
+                    &artifact,
+                    &self.settings.output_directory,
+                    &data_dir().join("trash"),
+                ) {
+                    Ok(restored) => {
+                        if let Err(error) = self.history.replace_entry(&old, restored) {
+                            self.set_error(error);
+                        }
+                    }
+                    Err(error) => self.set_error(error),
+                }
+                unsafe {
+                    let _ = InvalidateRect(Some(self.hwnd), None, false);
+                }
+            }
+            Some(2) => {
+                self.state.pending_delete = Some(artifact);
+                self.delete_return = Surface::History;
+                unsafe { self.show_surface(Surface::DeleteConfirmation, 480, 300, false) };
+            }
+            _ => {}
         }
     }
 
@@ -657,10 +772,35 @@ impl App {
                     self.show_surface(Surface::Menu, 420, 430, false);
                 }
                 return;
-            }
-            if p.x > width - 236.0 {
+            } else if p.x > width - 160.0 {
+                let Some(result) = self.state.editor.as_ref().map(|document| document.render())
+                else {
+                    return;
+                };
+                let image = match result {
+                    Ok(image) => image,
+                    Err(error) => {
+                        self.set_error(error);
+                        return;
+                    }
+                };
+                match self.save_image(&image) {
+                    Ok(artifact) => {
+                        let _ = self.history.add(artifact.clone());
+                        self.state.add_preview(artifact, image, Instant::now());
+                        unsafe { self.show_preview() };
+                    }
+                    Err(error) => self.set_error(error),
+                }
+                return;
+            } else if p.x > width - 236.0 {
                 if let Some(document) = &self.state.editor {
-                    let _ = copy_image(self.hwnd, &document.render());
+                    match document.render() {
+                        Ok(image) => {
+                            let _ = copy_image(self.hwnd, &image);
+                        }
+                        Err(error) => self.set_error(error),
+                    }
                 }
                 return;
             }
@@ -837,22 +977,21 @@ impl App {
             .create_new(true)
             .open(&path)
             .map_err(|e| e.to_string())?;
-        let mut writer = BufWriter::new(file);
-        let format = match extension.as_str() {
-            "jpeg" => image::ImageFormat::Jpeg,
-            "webp" => image::ImageFormat::WebP,
-            _ => image::ImageFormat::Png,
+        let bytes = match extension.as_str() {
+            "jpeg" => captures_windows_native::encoder::encode_jpeg(image, 92),
+            "webp" => captures_windows_native::encoder::encode_webp(image, None),
+            _ => captures_windows_native::encoder::encode_png(image, None),
         };
-        image::DynamicImage::ImageRgba8(image.clone())
-            .write_to(&mut writer, format)
-            .map_err(|e| e.to_string())?;
+        std::io::Write::write_all(&mut BufWriter::new(file), &bytes?).map_err(|e| e.to_string())?;
         Ok(Artifact::from_path(path, image.width(), image.height()))
     }
     unsafe fn show_preview(&mut self) {
         unsafe {
             let work = work_area();
+            let logical_height =
+                200 + self.state.previews.len().saturating_sub(1).min(4) as i32 * 28;
             let x = work.right - scale(368, self.dpi);
-            let y = work.bottom - scale(228, self.dpi);
+            let y = work.bottom - scale(logical_height + 28, self.dpi);
             self.state.surface = Surface::Preview;
             let _ = SetWindowPos(
                 self.hwnd,
@@ -860,7 +999,7 @@ impl App {
                 x,
                 y,
                 scale(340, self.dpi),
-                scale(200, self.dpi),
+                scale(logical_height, self.dpi),
                 SWP_SHOWWINDOW | SWP_NOACTIVATE,
             );
             let _ = SetWindowDisplayAffinity(
@@ -873,6 +1012,23 @@ impl App {
             );
             let _ = InvalidateRect(Some(self.hwnd), None, false);
         }
+    }
+
+    fn preview_contains(&self, point: Point) -> bool {
+        let count = self.state.previews.len().min(5);
+        (0..count).any(|index| {
+            let y = (count - 1 - index) as f32 * 28.0;
+            rounded_contains(
+                point,
+                Rect {
+                    x: 0.0,
+                    y,
+                    width: 340.0,
+                    height: 200.0,
+                },
+                14.0,
+            )
+        })
     }
 
     unsafe fn start_recording(&mut self, target: RecordingTarget, display: DisplayDescriptor) {
@@ -1083,19 +1239,44 @@ impl App {
     unsafe fn confirm_delete(&mut self) {
         unsafe {
             if let Some(artifact) = self.state.pending_delete.take() {
-                match safe_delete(&artifact.path, &self.settings.output_directory) {
-                    Ok(()) => {
-                        let _ = self.history.remove_entry(&artifact.path);
+                let old = artifact.path.clone();
+                let result = if artifact.is_trashed() {
+                    safe_delete(&old, &data_dir().join("trash")).map(|()| None)
+                } else {
+                    move_to_trash(
+                        &artifact,
+                        &self.settings.output_directory,
+                        &data_dir().join("trash"),
+                    )
+                    .map(Some)
+                };
+                match result {
+                    Ok(Some(trashed)) => {
+                        let _ = self.history.replace_entry(&old, trashed);
                         self.state
                             .previews
-                            .retain(|p| p.artifact.path != artifact.path);
-                        self.show_surface(Surface::Menu, 420, 430, false)
+                            .retain(|preview| preview.artifact.path != old);
+                        self.show_delete_return()
+                    }
+                    Ok(None) => {
+                        let _ = self.history.remove_entry(&old);
+                        self.show_delete_return()
                     }
                     Err(error) => {
                         self.set_error(error);
-                        self.show_surface(Surface::Preview, 340, 200, true)
+                        self.show_delete_return()
                     }
                 }
+            }
+        }
+    }
+
+    unsafe fn show_delete_return(&mut self) {
+        unsafe {
+            match self.delete_return {
+                Surface::Preview if !self.state.previews.is_empty() => self.show_preview(),
+                Surface::History => self.show_surface(Surface::History, 720, 430, false),
+                _ => self.show_surface(Surface::Menu, 420, 430, false),
             }
         }
     }
@@ -1129,36 +1310,6 @@ impl App {
                 self.tray.cbSize = 0;
             }
         }
-    }
-}
-
-unsafe fn composition(hwnd: HWND) -> Result<Composition, String> {
-    unsafe {
-        let mut d3d = None;
-        D3D11CreateDevice(
-            None::<&IDXGIAdapter>,
-            D3D_DRIVER_TYPE_HARDWARE,
-            HMODULE::default(),
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            Some(&[D3D_FEATURE_LEVEL_11_0]),
-            D3D11_SDK_VERSION,
-            Some(&mut d3d),
-            None,
-            None,
-        )
-        .map_err(win_error)?;
-        let d3d: ID3D11Device = d3d.ok_or("D3D11 returned no device")?;
-        let dxgi: IDXGIDevice = d3d.cast().map_err(win_error)?;
-        let device: IDCompositionDevice = DCompositionCreateDevice(&dxgi).map_err(win_error)?;
-        let target = device.CreateTargetForHwnd(hwnd, true).map_err(win_error)?;
-        let root = device.CreateVisual().map_err(win_error)?;
-        target.SetRoot(&root).map_err(win_error)?;
-        device.Commit().map_err(win_error)?;
-        Ok(Composition {
-            _device: device,
-            _target: target,
-            _root: root,
-        })
     }
 }
 
@@ -1271,14 +1422,21 @@ fn point(value: isize) -> Point {
     }
 }
 
-fn prepare_fixture(state: &mut AppState, view: &str) {
-    let image = RgbaImage::from_fn(1280, 720, |x, y| {
-        let block = ((x / 80) + (y / 80)) % 2;
-        if block == 0 {
-            image::Rgba([38, 38, 45, 255])
-        } else {
-            image::Rgba([49, 52, 65, 255])
-        }
+fn prepare_fixture(
+    state: &mut AppState,
+    view: &str,
+    fixture_image: Option<RgbaImage>,
+    fixture_video: Option<PathBuf>,
+) {
+    let image = fixture_image.unwrap_or_else(|| {
+        RgbaImage::from_fn(1280, 720, |x, y| {
+            let block = ((x / 80) + (y / 80)) % 2;
+            if block == 0 {
+                image::Rgba([38, 38, 45, 255])
+            } else {
+                image::Rgba([49, 52, 65, 255])
+            }
+        })
     });
     match view {
         "editor" => state.edit_image(image),
@@ -1296,7 +1454,20 @@ fn prepare_fixture(state: &mut AppState, view: &str) {
                 source: None,
             });
         }
-        "recording-editor" => state.surface = Surface::RecordingEditor,
+        "recording-editor" => {
+            state.surface = Surface::RecordingEditor;
+            state.recording_preview = Some(image);
+            state.recording = Some(RecordingUi {
+                state: RecordingState::Editor,
+                kind: RecordingKind::Video,
+                started: Instant::now(),
+                elapsed_before_pause: Duration::ZERO,
+                muted: false,
+                hidden: false,
+                warning: None,
+                source: fixture_video,
+            });
+        }
         "preview" => {
             let path = data_dir().join("fixture-preview.png");
             state.add_preview(
@@ -1318,6 +1489,15 @@ fn prepare_fixture(state: &mut AppState, view: &str) {
         }
         _ => {}
     }
+}
+fn argument_value(name: &str) -> Option<String> {
+    let mut arguments = std::env::args();
+    while let Some(argument) = arguments.next() {
+        if argument == name {
+            return arguments.next();
+        }
+    }
+    None
 }
 fn loword(value: isize) -> u16 {
     value as u16

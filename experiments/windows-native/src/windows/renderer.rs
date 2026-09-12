@@ -1,24 +1,34 @@
 use captures_windows_native::{
     geometry::{Rect, cover},
+    history::{Artifact, ArtifactKind},
+    settings::Settings,
     state::{AppState, Surface},
     theme::{Color, Palette},
 };
 use image::RgbaImage;
 use windows::{
     Win32::{
-        Foundation::HWND,
+        Foundation::{HMODULE, HWND},
         Graphics::{
             Direct2D::{
                 Common::{
                     D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F,
                     D2D1_PIXEL_FORMAT,
                 },
-                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_BITMAP_PROPERTIES,
+                D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET,
+                D2D1_BITMAP_PROPERTIES1, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
                 D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-                D2D1_FEATURE_LEVEL_DEFAULT, D2D1_HWND_RENDER_TARGET_PROPERTIES,
-                D2D1_PRESENT_OPTIONS_IMMEDIATELY, D2D1_RENDER_TARGET_PROPERTIES,
-                D2D1_RENDER_TARGET_TYPE_HARDWARE, D2D1CreateFactory, ID2D1Bitmap, ID2D1Factory,
-                ID2D1HwndRenderTarget, ID2D1SolidColorBrush,
+                D2D1_INTERPOLATION_MODE_LINEAR, D2D1CreateFactory, ID2D1Bitmap1,
+                ID2D1DeviceContext, ID2D1Factory1, ID2D1SolidColorBrush,
+            },
+            Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_11_0},
+            Direct3D11::{
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice,
+                ID3D11Device,
+            },
+            DirectComposition::{
+                DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget,
+                IDCompositionVisual,
             },
             DirectWrite::{
                 DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
@@ -27,50 +37,97 @@ use windows::{
                 DWRITE_TEXT_ALIGNMENT_CENTER, DWriteCreateFactory, IDWriteFactory,
                 IDWriteTextFormat,
             },
-            Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM,
+            Dxgi::{
+                Common::{
+                    DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_UNKNOWN,
+                    DXGI_SAMPLE_DESC,
+                },
+                DXGI_PRESENT, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG,
+                DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIAdapter,
+                IDXGIDevice, IDXGIFactory2, IDXGISurface, IDXGISwapChain1,
+            },
         },
     },
-    core::{HSTRING, Result},
+    core::{HSTRING, Interface, Result},
 };
 use windows_numerics::Vector2;
 
 pub struct Renderer {
-    target: ID2D1HwndRenderTarget,
+    target: ID2D1DeviceContext,
+    swap_chain: IDXGISwapChain1,
+    back_buffer: Option<ID2D1Bitmap1>,
+    _d3d: ID3D11Device,
+    _composition_device: IDCompositionDevice,
+    _composition_target: IDCompositionTarget,
+    _composition_root: IDCompositionVisual,
     _write: IDWriteFactory,
     body: IDWriteTextFormat,
     strong: IDWriteTextFormat,
     title: IDWriteTextFormat,
     image_key: Option<(usize, u32, u32)>,
-    image: Option<ID2D1Bitmap>,
+    image: Option<ID2D1Bitmap1>,
 }
 
 impl Renderer {
     pub fn new(hwnd: HWND, width: u32, height: u32, dpi: f32) -> Result<Self> {
         unsafe {
-            let factory: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
-            let properties = D2D1_RENDER_TARGET_PROPERTIES {
-                r#type: D2D1_RENDER_TARGET_TYPE_HARDWARE,
-                pixelFormat: D2D1_PIXEL_FORMAT {
-                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            let mut d3d = None;
+            D3D11CreateDevice(
+                None::<&IDXGIAdapter>,
+                D3D_DRIVER_TYPE_HARDWARE,
+                HMODULE::default(),
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                Some(&[D3D_FEATURE_LEVEL_11_0]),
+                D3D11_SDK_VERSION,
+                Some(&mut d3d),
+                None,
+                None,
+            )?;
+            let d3d: ID3D11Device = d3d.expect("D3D11 succeeded without a device");
+            let dxgi: IDXGIDevice = d3d.cast()?;
+            let adapter = dxgi.GetAdapter()?;
+            let factory: IDXGIFactory2 = adapter.GetParent()?;
+            let descriptor = DXGI_SWAP_CHAIN_DESC1 {
+                Width: width,
+                Height: height,
+                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                Stereo: false.into(),
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
                 },
-                dpiX: dpi,
-                dpiY: dpi,
-                usage: Default::default(),
-                minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
+                BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                BufferCount: 2,
+                SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+                AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
+                ..Default::default()
             };
-            let hwnd_properties = D2D1_HWND_RENDER_TARGET_PROPERTIES {
-                hwnd,
-                pixelSize: D2D_SIZE_U { width, height },
-                presentOptions: D2D1_PRESENT_OPTIONS_IMMEDIATELY,
-            };
-            let target = factory.CreateHwndRenderTarget(&properties, &hwnd_properties)?;
+            let swap_chain = factory.CreateSwapChainForComposition(&d3d, &descriptor, None)?;
+
+            let d2d_factory: ID2D1Factory1 =
+                D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
+            let d2d_device = d2d_factory.CreateDevice(&dxgi)?;
+            let target = d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
+            let back_buffer = bind_back_buffer(&target, &swap_chain, dpi)?;
+
+            let composition_device: IDCompositionDevice = DCompositionCreateDevice(&dxgi)?;
+            let composition_target = composition_device.CreateTargetForHwnd(hwnd, true)?;
+            let composition_root = composition_device.CreateVisual()?;
+            composition_root.SetContent(&swap_chain)?;
+            composition_target.SetRoot(&composition_root)?;
+            composition_device.Commit()?;
             let write: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
             let body = text_format(&write, 13.0, false)?;
             let strong = text_format(&write, 13.0, true)?;
             let title = text_format(&write, 22.0, true)?;
             Ok(Self {
                 target,
+                swap_chain,
+                back_buffer: Some(back_buffer),
+                _d3d: d3d,
+                _composition_device: composition_device,
+                _composition_target: composition_target,
+                _composition_root: composition_root,
                 _write: write,
                 body,
                 strong,
@@ -81,15 +138,33 @@ impl Renderer {
         }
     }
 
-    pub fn resize(&self, width: u32, height: u32) {
+    pub fn resize(&mut self, width: u32, height: u32, dpi: f32) -> Result<()> {
         unsafe {
-            let _ = self.target.Resize(&D2D_SIZE_U { width, height });
+            if width == 0 || height == 0 {
+                return Ok(());
+            }
+            self.target.SetTarget(None);
+            self.back_buffer = None;
+            self.image = None;
+            self.image_key = None;
+            self.swap_chain.ResizeBuffers(
+                0,
+                width,
+                height,
+                DXGI_FORMAT_UNKNOWN,
+                DXGI_SWAP_CHAIN_FLAG(0),
+            )?;
+            self.back_buffer = Some(bind_back_buffer(&self.target, &self.swap_chain, dpi)?);
+            Ok(())
         }
     }
 
     pub fn draw(
         &mut self,
         state: &AppState,
+        settings: &Settings,
+        history: &[Artifact],
+        recording_mode: captures_capture::CaptureMode,
         palette: Palette,
         width: f32,
         height: f32,
@@ -97,22 +172,26 @@ impl Renderer {
         unsafe {
             self.target.BeginDraw();
             self.target.Clear(Some(&color(match state.surface {
-                Surface::Overlay | Surface::Preview | Surface::RecordingHud => palette.glass,
+                Surface::Preview => Color(0, 0, 0, 0),
+                Surface::Overlay | Surface::RecordingHud => palette.glass,
                 _ => palette.canvas,
             })));
             match state.surface {
                 Surface::Menu => self.menu(palette, width, height)?,
                 Surface::Overlay => self.overlay(state, palette, width, height)?,
                 Surface::ScreenshotEditor => self.image_editor(state, palette, width, height)?,
-                Surface::RecordingSelector => self.recording_selector(palette, width, height)?,
+                Surface::RecordingSelector => {
+                    self.recording_selector(settings, recording_mode, palette, width, height)?
+                }
                 Surface::RecordingHud => self.recording_hud(state, palette, width, height)?,
-                Surface::RecordingEditor => self.recording_editor(palette, width, height)?,
+                Surface::RecordingEditor => self.recording_editor(state, palette, width, height)?,
                 Surface::Preview => self.preview(state, palette, width, height)?,
-                Surface::History => self.history(palette, width, height)?,
+                Surface::History => self.history(history, palette, width, height)?,
                 Surface::Preferences => self.preferences(palette, width, height)?,
                 Surface::DeleteConfirmation => self.confirmation(state, palette, width, height)?,
             }
-            self.target.EndDraw(None, None)
+            self.target.EndDraw(None, None)?;
+            self.swap_chain.Present(1, DXGI_PRESENT(0)).ok()
         }
     }
 
@@ -365,16 +444,17 @@ impl Renderer {
                 "Done",
             );
             if let Some(document) = state.editor.as_ref() {
-                let image = document.render();
-                self.bitmap(
-                    &image,
-                    Rect {
-                        x: 76.0,
-                        y: 80.0,
-                        width: w - 300.0,
-                        height: h - 130.0,
-                    },
-                )?;
+                if let Ok(image) = document.render() {
+                    self.bitmap(
+                        &image,
+                        Rect {
+                            x: 76.0,
+                            y: 80.0,
+                            width: w - 300.0,
+                            height: h - 130.0,
+                        },
+                    )?;
+                }
             }
             self.panel(
                 Rect {
@@ -434,7 +514,14 @@ impl Renderer {
         }
     }
 
-    unsafe fn recording_selector(&self, p: Palette, w: f32, _h: f32) -> Result<()> {
+    unsafe fn recording_selector(
+        &self,
+        settings: &Settings,
+        selected: captures_capture::CaptureMode,
+        p: Palette,
+        w: f32,
+        _h: f32,
+    ) -> Result<()> {
         unsafe {
             self.text(
                 "Record your screen",
@@ -467,6 +554,30 @@ impl Renderer {
                     b,
                     "○",
                 );
+                if selected
+                    == [
+                        captures_capture::CaptureMode::Region,
+                        captures_capture::CaptureMode::Window,
+                        captures_capture::CaptureMode::Display,
+                    ][i]
+                {
+                    let brush = self.brush(p.accent)?;
+                    self.target.DrawRoundedRectangle(
+                        &windows::Win32::Graphics::Direct2D::D2D1_ROUNDED_RECT {
+                            rect: to_d2d(Rect {
+                                x: 20.0,
+                                y: 78.0 + i as f32 * 72.0,
+                                width: w - 40.0,
+                                height: 62.0,
+                            }),
+                            radiusX: 10.0,
+                            radiusY: 10.0,
+                        },
+                        &brush,
+                        2.0,
+                        None,
+                    );
+                }
             }
             self.text(
                 "Video · 60 FPS · Original",
@@ -480,10 +591,10 @@ impl Renderer {
                 &self.body,
             );
             for (index, (label, enabled)) in [
-                ("Cursor", true),
-                ("Clicks", false),
-                ("Keys", false),
-                ("Audio", false),
+                ("Cursor", settings.recording.show_cursor),
+                ("Clicks", settings.recording.highlight_clicks),
+                ("Keys", settings.recording.show_keystrokes),
+                ("Audio", settings.recording.capture_system_audio),
             ]
             .iter()
             .enumerate()
@@ -631,7 +742,13 @@ impl Renderer {
         }
     }
 
-    unsafe fn recording_editor(&self, p: Palette, w: f32, h: f32) -> Result<()> {
+    unsafe fn recording_editor(
+        &mut self,
+        state: &AppState,
+        p: Palette,
+        w: f32,
+        h: f32,
+    ) -> Result<()> {
         unsafe {
             self.text(
                 "Recording editor",
@@ -673,6 +790,17 @@ impl Renderer {
                 },
                 p.raised,
             );
+            if let Some(preview) = &state.recording_preview {
+                self.bitmap(
+                    preview,
+                    Rect {
+                        x: 82.0,
+                        y: 126.0,
+                        width: w - 342.0,
+                        height: h - 286.0,
+                    },
+                )?;
+            }
             self.text("Crop & size\nOriginal resolution\n\nAudio\nSystem  100%\nMicrophone  100%\n\nFormat",Rect{x:w-216.0,y:94.0,width:172.0,height:200.0},p.muted,&self.body);
             self.button(
                 Rect {
@@ -741,14 +869,17 @@ impl Renderer {
         }
     }
 
-    unsafe fn preview(&mut self, state: &AppState, p: Palette, w: f32, h: f32) -> Result<()> {
+    unsafe fn preview(&mut self, state: &AppState, p: Palette, w: f32, _h: f32) -> Result<()> {
         unsafe {
-            if let Some(preview) = state.previews.first() {
+            let count = state.previews.len().min(5);
+            for index in (0..count).rev() {
+                let preview = &state.previews[index];
+                let y = (count - 1 - index) as f32 * 28.0;
                 let media = Rect {
                     x: 0.0,
-                    y: 0.0,
+                    y,
                     width: w,
-                    height: h - 38.0,
+                    height: 162.0,
                 };
                 if let Some(start) = preview.dismissing {
                     self.bitmap_fragments(
@@ -762,17 +893,17 @@ impl Renderer {
                 self.panel(
                     Rect {
                         x: 0.0,
-                        y: h - 38.0,
+                        y: y + 162.0,
                         width: w,
                         height: 38.0,
                     },
                     p.glass,
                 );
                 self.text(
-                    "Edit        Copy        Save        Delete",
+                    "Edit        Copy        Saved       Delete",
                     Rect {
                         x: 12.0,
-                        y: h - 31.0,
+                        y: y + 169.0,
                         width: w - 24.0,
                         height: 24.0,
                     },
@@ -783,7 +914,7 @@ impl Renderer {
             Ok(())
         }
     }
-    unsafe fn history(&self, p: Palette, w: f32, _h: f32) -> Result<()> {
+    unsafe fn history(&self, history: &[Artifact], p: Palette, w: f32, _h: f32) -> Result<()> {
         unsafe {
             self.text(
                 "Capture History",
@@ -807,7 +938,7 @@ impl Renderer {
                 p.muted,
                 &self.body,
             );
-            for i in 0..3 {
+            for (i, artifact) in history.iter().take(3).enumerate() {
                 self.panel(
                     Rect {
                         x: 28.0 + i as f32 * 210.0,
@@ -817,8 +948,47 @@ impl Renderer {
                     },
                     p.raised,
                 );
+                self.text(
+                    artifact
+                        .path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("Capture"),
+                    Rect {
+                        x: 36.0 + i as f32 * 210.0,
+                        y: 126.0,
+                        width: 174.0,
+                        height: 42.0,
+                    },
+                    p.text,
+                    &self.strong,
+                );
+                self.text(
+                    if artifact.is_trashed() {
+                        "In Trash"
+                    } else {
+                        "Saved"
+                    },
+                    Rect {
+                        x: 36.0 + i as f32 * 210.0,
+                        y: 174.0,
+                        width: 174.0,
+                        height: 24.0,
+                    },
+                    if artifact.is_trashed() {
+                        p.signal
+                    } else {
+                        p.muted
+                    },
+                    &self.body,
+                );
                 let x = 36.0 + i as f32 * 210.0;
                 for (button, label) in ["Edit", "Restore", "Delete"].iter().enumerate() {
+                    let enabled = match button {
+                        0 => !artifact.is_trashed() && artifact.kind == ArtifactKind::Image,
+                        1 => artifact.is_trashed(),
+                        _ => true,
+                    };
                     self.button(
                         Rect {
                             x: x + button as f32 * 57.0,
@@ -826,8 +996,14 @@ impl Renderer {
                             width: 54.0,
                             height: 28.0,
                         },
-                        p.field,
-                        if *label == "Delete" { p.signal } else { p.text },
+                        if enabled { p.field } else { p.canvas },
+                        if !enabled {
+                            p.muted
+                        } else if *label == "Delete" {
+                            p.signal
+                        } else {
+                            p.text
+                        },
                         label,
                     );
                 }
@@ -937,8 +1113,16 @@ impl Renderer {
                 },
                 p.raised,
             );
+            let permanent = state
+                .pending_delete
+                .as_ref()
+                .is_some_and(Artifact::is_trashed);
             self.text(
-                "Delete this capture?",
+                if permanent {
+                    "Delete permanently?"
+                } else {
+                    "Move capture to Trash?"
+                },
                 Rect {
                     x: w / 2.0 - 152.0,
                     y: h / 2.0 - 67.0,
@@ -955,7 +1139,14 @@ impl Renderer {
                 .and_then(|v| v.to_str())
                 .unwrap_or("This file");
             self.text(
-                &format!("{name} will be permanently removed."),
+                &format!(
+                    "{name} will {}.",
+                    if permanent {
+                        "be permanently removed"
+                    } else {
+                        "remain available to restore"
+                    }
+                ),
                 Rect {
                     x: w / 2.0 - 152.0,
                     y: h / 2.0 - 27.0,
@@ -985,7 +1176,7 @@ impl Renderer {
                 },
                 p.signal,
                 Color(255, 255, 255, 255),
-                "Delete",
+                if permanent { "Delete" } else { "Move to Trash" },
             );
             Ok(())
         }
@@ -1266,7 +1457,8 @@ impl Renderer {
                 self.image.as_ref().unwrap(),
                 Some(&to_d2d(fitted)),
                 1.0,
-                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                D2D1_INTERPOLATION_MODE_LINEAR,
+                None,
                 None,
             );
             Ok(())
@@ -1280,13 +1472,14 @@ impl Renderer {
                 return Ok(());
             }
             let bytes = bgra(image);
-            let properties = D2D1_BITMAP_PROPERTIES {
+            let properties = D2D1_BITMAP_PROPERTIES1 {
                 pixelFormat: D2D1_PIXEL_FORMAT {
                     format: DXGI_FORMAT_B8G8R8A8_UNORM,
                     alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
                 },
                 dpiX: 96.0,
                 dpiY: 96.0,
+                ..Default::default()
             };
             self.image = Some(self.target.CreateBitmap(
                 D2D_SIZE_U {
@@ -1335,8 +1528,9 @@ impl Renderer {
                         self.image.as_ref().unwrap(),
                         Some(&to_d2d(fragment)),
                         1.0 - local,
-                        D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                        D2D1_INTERPOLATION_MODE_LINEAR,
                         Some(&source),
+                        None,
                     );
                 }
             }
@@ -1368,8 +1562,9 @@ impl Renderer {
                 self.image.as_ref().unwrap(),
                 Some(&source),
                 1.0,
-                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                D2D1_INTERPOLATION_MODE_LINEAR,
                 Some(&source),
+                None,
             );
             Ok(())
         }
@@ -1402,6 +1597,29 @@ fn to_d2d(rect: Rect) -> D2D_RECT_F {
         top: rect.y,
         right: rect.x + rect.width,
         bottom: rect.y + rect.height,
+    }
+}
+unsafe fn bind_back_buffer(
+    target: &ID2D1DeviceContext,
+    swap_chain: &IDXGISwapChain1,
+    dpi: f32,
+) -> Result<ID2D1Bitmap1> {
+    unsafe {
+        let surface: IDXGISurface = swap_chain.GetBuffer(0)?;
+        let properties = D2D1_BITMAP_PROPERTIES1 {
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            },
+            dpiX: dpi,
+            dpiY: dpi,
+            bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+            ..Default::default()
+        };
+        let bitmap = target.CreateBitmapFromDxgiSurface(&surface, Some(&properties))?;
+        target.SetTarget(&bitmap);
+        target.SetDpi(dpi, dpi);
+        Ok(bitmap)
     }
 }
 fn color(value: Color) -> D2D1_COLOR_F {

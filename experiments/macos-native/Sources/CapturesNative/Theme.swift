@@ -37,6 +37,7 @@ enum NativeTheme {
     static var glassMuted: Color { color("glass-text-muted") }
     static var accent: Color { Color(css: AppStore.shared.settings.accentHex) }
     static var signal: Color { Color(css: AppStore.shared.settings.signalHex) }
+    static var saved: Color { color("positive") }
     static var motion: Animation { .timingCurve(0.16, 1, 0.3, 1, duration: duration("dur-4")) }
     static var standard: Animation { .timingCurve(0.2, 0.8, 0.2, 1, duration: duration("dur-2")) }
     static func duration(_ name: String) -> Double {
@@ -201,11 +202,18 @@ struct CaptureChoice<Value: Hashable>: View {
     let title: String
     @Binding var selection: Value
     let options: [CaptureOption<Value>]
+    var opensAbove = false
     @State private var open = false
     @Environment(\.colorScheme) private var scheme
 
     private var selectedLabel: String {
         options.first(where: { $0.value == selection })?.label ?? "Choose"
+    }
+
+    private var optionPanelHeight: CGFloat {
+        CGFloat(options.count) * NativeTheme.metric("h-md")
+            + CGFloat(max(0, options.count - 1)) * 3
+            + NativeTheme.metric("s-3") * 2
     }
 
     var body: some View {
@@ -247,12 +255,14 @@ struct CaptureChoice<Value: Hashable>: View {
                 .background(NativeTheme.raised(scheme), in: RoundedRectangle(cornerRadius: NativeTheme.metric("r-lg")))
                 .overlay(RoundedRectangle(cornerRadius: NativeTheme.metric("r-lg")).stroke(NativeTheme.border(scheme)))
                 .shadow(color: .black.opacity(scheme == .dark ? 0.42 : 0.16), radius: 18, y: 8)
-                .offset(y: NativeTheme.metric("h-md") + NativeTheme.metric("s-2"))
+                .offset(y: opensAbove
+                        ? -(optionPanelHeight + NativeTheme.metric("s-2"))
+                        : NativeTheme.metric("h-md") + NativeTheme.metric("s-2"))
                 .zIndex(100)
             }
         }
         .zIndex(open ? 100 : 0)
-        .background(Button("") { open = false }.keyboardShortcut(.cancelAction).hidden())
+        .onExitCommand { open = false }
     }
 }
 

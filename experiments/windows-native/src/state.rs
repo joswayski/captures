@@ -127,6 +127,7 @@ pub struct AppState {
     pub pending_delete: Option<Artifact>,
     pub status: Option<(String, Instant)>,
     pub display: Option<DisplayDescriptor>,
+    pub recording_preview: Option<RgbaImage>,
 }
 
 impl Default for AppState {
@@ -141,6 +142,7 @@ impl Default for AppState {
             pending_delete: None,
             status: None,
             display: None,
+            recording_preview: None,
         }
     }
 }
