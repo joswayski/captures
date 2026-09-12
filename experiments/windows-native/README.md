@@ -25,9 +25,11 @@ desktop. The helper temporarily changes the primary display mode when needed and
 only in a disposable test desktop, not an interactive user session. It restores the previous display
 mode and thread DPI context during cleanup. Its PNGs are runtime review artifacts and intentionally
 ignored by Git. In addition to prepared visual states, the editor input-smoke fixture changes the
-canvas width, selects a shape, and draws it through real HWND keyboard and pointer messages; the
-resulting image still requires inspection and is not a substitute for broader accessibility, IME,
-or hardware-input testing. The Linux cross-check used during development is:
+canvas width, selects a shape, and draws it through real HWND keyboard and pointer messages. A second
+input-smoke fixture selects Eraser, switches to Erase, and paints through the same native pointer
+route. The resulting images still require inspection and are not substitutes for broader
+accessibility, IME, physical-pointer, or hardware-input testing. The Linux cross-check used during
+development is:
 
 ```sh
 cargo check --manifest-path experiments/windows-native/Cargo.toml --target x86_64-pc-windows-gnu
@@ -56,10 +58,14 @@ The current native chrome uses the shipping editor's icon-led tool rail, separat
 three-column shape flyout, empty default inspector, locked-background layer row, grouped canvas/zoom
 header, and filename/export footer. Switches share the shipping 30-by-18 geometry and have distinct
 on, off, and disabled states. Light and dark runtime fixtures cover default, imported-image, shapes,
-export, selected-properties, and selected-line editor states.
+export, selected-properties, selected-line, and erased-source editor states.
 Selected annotations can be moved, resized, and rotated, and their color, stroke, and supported fill
 state can be edited with undo/redo. Selected layers can also change opacity and blend mode, move to
 the front or back, duplicate, delete, lock, hide, and—when they are images—be renamed.
+The Eraser tool targets the topmost visible image (including locked image layers and the locked
+original screenshot). Its contiguous or global color wand, continuous soft erase brush, and restore
+brush edit real alpha pixels, clear an active solid canvas background, and commit each action as one
+undoable transaction. Restore uses pixels frozen before that image's first alpha edit.
 The recording editor probes real media, decodes playback frames, seeks, trims, chooses quality,
 exports through `captures-media`, and can either preserve the source or safely replace it. Probe,
 paused-frame extraction, compression comparison, and export run outside the Win32 message thread.
@@ -87,8 +93,8 @@ off-thread `captures-feedback` client enforces transport validation, timeout, no
 cooldown; no feedback or telemetry is sent at startup. Fixture rendering never submits the form.
 Crash collection and crash-reporting consent are not implemented, so raw panic text is never sent.
 
-The eraser tool, merge/flatten and image flip/rotate layer actions, recording crop, and preview audio
-are not implemented. Their controls are
+Merge/flatten and image flip/rotate layer actions, recording crop, and preview audio are not
+implemented. Their controls are
 omitted or explicitly marked unavailable rather than presented as working. Windows DirectComposition
 fixtures are required to assess final pixel-level parity; they cannot be rendered in the Linux orb.
 

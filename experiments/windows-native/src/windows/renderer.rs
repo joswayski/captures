@@ -1,5 +1,5 @@
 use captures_windows_native::{
-    editor::Tool,
+    editor::{RemoveBackgroundMode, Tool},
     geometry::{
         Rect, contain, cover, editor_layer_lock_button, editor_layer_visibility_button,
         editor_shape_flyout_cell, recording_editor_timeline_track, screenshot_editor_canvas,
@@ -820,6 +820,7 @@ impl Renderer {
                 (Tool::Rectangle, "shapes"),
                 (Tool::Arrow, "arrow"),
                 (Tool::Pen, "pen"),
+                (Tool::Eraser, "eraser"),
             ]
             .iter()
             .enumerate()
@@ -1065,220 +1066,271 @@ impl Renderer {
                     },
                     p.border,
                 )?;
-                let property_color = selected_layer.map_or(state.editor_color, |layer| layer.color);
-                let property_stroke =
-                    selected_layer.map_or(state.editor_stroke, |layer| layer.stroke);
-                let property_fill = selected_layer.map_or(state.editor_fill, |layer| layer.fill);
-                let property_color_hex = format!(
-                    "#{:02x}{:02x}{:02x}",
-                    property_color[0], property_color[1], property_color[2]
-                );
-                self.text(
-                    &selected_layer.map_or_else(
-                        || tool_label(state.editor_tool).to_owned(),
-                        |layer| blend_mode_label(layer.blend_mode).to_owned(),
-                    ),
-                    Rect {
-                        x: sidebar_x + 20.0,
-                        y: properties_y,
-                        width: 90.0,
-                        height: 24.0,
-                    },
-                    p.text,
-                    &self.strong,
-                );
-                if selected_layer.is_some() {
-                    for (index, label) in ["Front", "Back", "Copy", "Delete"].iter().enumerate() {
+                if state.editor_tool == Tool::Eraser {
+                    self.text(
+                        "Eraser",
+                        Rect {
+                            x: sidebar_x + 20.0,
+                            y: properties_y,
+                            width: 272.0,
+                            height: 24.0,
+                        },
+                        p.text,
+                        &self.strong,
+                    );
+                    for (index, (mode, label)) in [
+                        (RemoveBackgroundMode::Wand, "Wand"),
+                        (RemoveBackgroundMode::Erase, "Erase"),
+                        (RemoveBackgroundMode::Restore, "Restore"),
+                    ]
+                    .iter()
+                    .enumerate()
+                    {
                         self.button(
                             Rect {
-                                x: sidebar_x + 112.0 + index as f32 * 46.0,
-                                y: properties_y - 3.0,
-                                width: 44.0,
-                                height: 28.0,
+                                x: sidebar_x + 20.0 + index as f32 * 92.0,
+                                y: properties_y + 28.0,
+                                width: 86.0,
+                                height: 32.0,
                             },
-                            p.field,
-                            if *label == "Delete" { p.signal } else { p.text },
+                            if state.editor_remove_mode == *mode {
+                                p.accent
+                            } else {
+                                p.field
+                            },
+                            if state.editor_remove_mode == *mode {
+                                contrast_ink(p.accent)
+                            } else {
+                                p.text
+                            },
                             label,
                         );
                     }
-                }
-                if let Some((image_width, image_height, opacity, rotation)) = selected_layer
-                    .and_then(|layer| match &layer.shape {
-                        captures_windows_native::editor::Shape::Image { width, height, .. } => {
-                            Some((*width, *height, layer.opacity, layer.rotation_degrees))
-                        }
-                        _ => None,
-                    })
-                {
-                    self.property_value(
-                        sidebar_x,
-                        properties_y + 34.0,
-                        "Blend mode",
-                        blend_mode_label(selected_layer.expect("selected image").blend_mode),
-                        p,
-                    );
-                    self.property_value(
-                        sidebar_x,
-                        properties_y + 64.0,
-                        "Dimensions",
-                        &format!("{image_width:.0} × {image_height:.0} px"),
-                        p,
-                    );
-                    self.property_stepper(
-                        captures_windows_native::geometry::Point {
-                            x: sidebar_x,
-                            y: properties_y + 94.0,
-                        },
-                        "Opacity",
-                        &format!("{}%", (u16::from(opacity) * 100 + 127) / 255),
-                        "−10%",
-                        "+10%",
-                        p,
-                    );
-                    self.property_stepper(
-                        captures_windows_native::geometry::Point {
-                            x: sidebar_x,
-                            y: properties_y + 134.0,
-                        },
-                        "Rotation",
-                        &format!("{rotation:.0}°"),
-                        "−15°",
-                        "+15°",
-                        p,
-                    );
-                } else {
-                    self.text(
-                        "Stroke color",
-                        Rect {
-                            x: sidebar_x + 20.0,
-                            y: properties_y + 34.0,
-                            width: 92.0,
-                            height: 28.0,
-                        },
-                        p.muted,
-                        &self.body,
-                    );
-                    self.button(
-                        Rect {
-                            x: sidebar_x + 116.0,
-                            y: properties_y + 31.0,
-                            width: 132.0,
-                            height: 32.0,
-                        },
-                        p.field,
-                        p.text,
-                        if state.editor_editing_color {
-                            &state.editor_color_hex
-                        } else {
-                            &property_color_hex
-                        },
-                    );
-                    let swatch = self.brush(Color(
-                        property_color[0],
-                        property_color[1],
-                        property_color[2],
-                        property_color[3],
-                    ))?;
-                    self.target.FillEllipse(
-                        &windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE {
-                            point: Vector2 {
-                                X: sidebar_x + 276.0,
-                                Y: properties_y + 47.0,
+                    if state.editor_remove_mode == RemoveBackgroundMode::Wand {
+                        self.property_stepper(
+                            captures_windows_native::geometry::Point {
+                                x: sidebar_x,
+                                y: properties_y + 78.0,
                             },
-                            radiusX: 13.0,
-                            radiusY: 13.0,
-                        },
-                        &swatch,
-                    );
-                    self.text(
-                        "Stroke width",
-                        Rect {
-                            x: sidebar_x + 20.0,
-                            y: properties_y + 74.0,
-                            width: 100.0,
-                            height: 28.0,
-                        },
-                        p.muted,
-                        &self.body,
-                    );
-                    self.button(
-                        Rect {
-                            x: sidebar_x + 184.0,
-                            y: properties_y + 70.0,
-                            width: 52.0,
-                            height: 32.0,
-                        },
-                        p.field,
-                        p.text,
-                        "−",
-                    );
-                    self.text(
-                        &format!("{property_stroke:.0} px"),
-                        Rect {
-                            x: sidebar_x + 120.0,
-                            y: properties_y + 74.0,
-                            width: 64.0,
-                            height: 28.0,
-                        },
-                        p.text,
-                        &self.body,
-                    );
-                    self.button(
-                        Rect {
-                            x: sidebar_x + 240.0,
-                            y: properties_y + 70.0,
-                            width: 52.0,
-                            height: 32.0,
-                        },
-                        p.field,
-                        p.text,
-                        "+",
-                    );
-                    self.text(
-                        if selected_layer.is_none_or(|layer| layer.supports_fill()) {
-                            "Fill shape"
-                        } else {
-                            "Fill unavailable"
-                        },
-                        Rect {
-                            x: sidebar_x + 20.0,
-                            y: properties_y + 114.0,
-                            width: 150.0,
-                            height: 28.0,
-                        },
-                        p.muted,
-                        &self.body,
-                    );
-                    if selected_layer.is_none_or(|layer| layer.supports_fill()) {
+                            "Tolerance",
+                            &state.editor_wand_tolerance.to_string(),
+                            "−8",
+                            "+8",
+                            p,
+                        );
+                        self.text(
+                            "Contiguous only",
+                            Rect {
+                                x: sidebar_x + 20.0,
+                                y: properties_y + 120.0,
+                                width: 180.0,
+                                height: 28.0,
+                            },
+                            p.muted,
+                            &self.body,
+                        );
                         self.toggle(
                             Rect {
-                                x: sidebar_x + 248.0,
-                                y: properties_y + 118.0,
-                                width: 36.0,
-                                height: 20.0,
+                                x: sidebar_x + 254.0,
+                                y: properties_y + 124.0,
+                                width: 30.0,
+                                height: 18.0,
                             },
                             p,
-                            property_fill.is_some(),
+                            state.editor_wand_contiguous,
                             false,
                         )?;
+                    } else {
+                        self.property_stepper(
+                            captures_windows_native::geometry::Point {
+                                x: sidebar_x,
+                                y: properties_y + 78.0,
+                            },
+                            "Size",
+                            &format!("{} px", state.editor_remove_brush_size),
+                            "−4",
+                            "+4",
+                            p,
+                        );
+                        self.property_stepper(
+                            captures_windows_native::geometry::Point {
+                                x: sidebar_x,
+                                y: properties_y + 118.0,
+                            },
+                            "Softness",
+                            &format!("{}%", state.editor_remove_softness),
+                            "−10%",
+                            "+10%",
+                            p,
+                        );
                     }
                     self.text(
-                        "Rotation",
+                        "Choose an image, then click or paint on its pixels.",
                         Rect {
                             x: sidebar_x + 20.0,
-                            y: properties_y + 154.0,
-                            width: 90.0,
-                            height: 28.0,
+                            y: properties_y + 158.0,
+                            width: 272.0,
+                            height: 34.0,
                         },
                         p.muted,
                         &self.body,
                     );
-                    if let Some(layer) = selected_layer {
+                } else {
+                    let property_color =
+                        selected_layer.map_or(state.editor_color, |layer| layer.color);
+                    let property_stroke =
+                        selected_layer.map_or(state.editor_stroke, |layer| layer.stroke);
+                    let property_fill =
+                        selected_layer.map_or(state.editor_fill, |layer| layer.fill);
+                    let property_color_hex = format!(
+                        "#{:02x}{:02x}{:02x}",
+                        property_color[0], property_color[1], property_color[2]
+                    );
+                    self.text(
+                        &selected_layer.map_or_else(
+                            || tool_label(state.editor_tool).to_owned(),
+                            |layer| blend_mode_label(layer.blend_mode).to_owned(),
+                        ),
+                        Rect {
+                            x: sidebar_x + 20.0,
+                            y: properties_y,
+                            width: 90.0,
+                            height: 24.0,
+                        },
+                        p.text,
+                        &self.strong,
+                    );
+                    if selected_layer.is_some() {
+                        for (index, label) in ["Front", "Back", "Copy", "Delete"].iter().enumerate()
+                        {
+                            self.button(
+                                Rect {
+                                    x: sidebar_x + 112.0 + index as f32 * 46.0,
+                                    y: properties_y - 3.0,
+                                    width: 44.0,
+                                    height: 28.0,
+                                },
+                                p.field,
+                                if *label == "Delete" { p.signal } else { p.text },
+                                label,
+                            );
+                        }
+                    }
+                    if let Some((image_width, image_height, opacity, rotation)) = selected_layer
+                        .and_then(|layer| match &layer.shape {
+                            captures_windows_native::editor::Shape::Image {
+                                width, height, ..
+                            } => Some((*width, *height, layer.opacity, layer.rotation_degrees)),
+                            _ => None,
+                        })
+                    {
+                        self.property_value(
+                            sidebar_x,
+                            properties_y + 34.0,
+                            "Blend mode",
+                            blend_mode_label(selected_layer.expect("selected image").blend_mode),
+                            p,
+                        );
+                        self.property_value(
+                            sidebar_x,
+                            properties_y + 64.0,
+                            "Dimensions",
+                            &format!("{image_width:.0} × {image_height:.0} px"),
+                            p,
+                        );
+                        self.property_stepper(
+                            captures_windows_native::geometry::Point {
+                                x: sidebar_x,
+                                y: properties_y + 94.0,
+                            },
+                            "Opacity",
+                            &format!("{}%", (u16::from(opacity) * 100 + 127) / 255),
+                            "−10%",
+                            "+10%",
+                            p,
+                        );
+                        self.property_stepper(
+                            captures_windows_native::geometry::Point {
+                                x: sidebar_x,
+                                y: properties_y + 134.0,
+                            },
+                            "Rotation",
+                            &format!("{rotation:.0}°"),
+                            "−15°",
+                            "+15°",
+                            p,
+                        );
+                    } else {
                         self.text(
-                            &format!("{:.0}°", layer.rotation_degrees),
+                            "Stroke color",
+                            Rect {
+                                x: sidebar_x + 20.0,
+                                y: properties_y + 34.0,
+                                width: 92.0,
+                                height: 28.0,
+                            },
+                            p.muted,
+                            &self.body,
+                        );
+                        self.button(
+                            Rect {
+                                x: sidebar_x + 116.0,
+                                y: properties_y + 31.0,
+                                width: 132.0,
+                                height: 32.0,
+                            },
+                            p.field,
+                            p.text,
+                            if state.editor_editing_color {
+                                &state.editor_color_hex
+                            } else {
+                                &property_color_hex
+                            },
+                        );
+                        let swatch = self.brush(Color(
+                            property_color[0],
+                            property_color[1],
+                            property_color[2],
+                            property_color[3],
+                        ))?;
+                        self.target.FillEllipse(
+                            &windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE {
+                                point: Vector2 {
+                                    X: sidebar_x + 276.0,
+                                    Y: properties_y + 47.0,
+                                },
+                                radiusX: 13.0,
+                                radiusY: 13.0,
+                            },
+                            &swatch,
+                        );
+                        self.text(
+                            "Stroke width",
+                            Rect {
+                                x: sidebar_x + 20.0,
+                                y: properties_y + 74.0,
+                                width: 100.0,
+                                height: 28.0,
+                            },
+                            p.muted,
+                            &self.body,
+                        );
+                        self.button(
+                            Rect {
+                                x: sidebar_x + 184.0,
+                                y: properties_y + 70.0,
+                                width: 52.0,
+                                height: 32.0,
+                            },
+                            p.field,
+                            p.text,
+                            "−",
+                        );
+                        self.text(
+                            &format!("{property_stroke:.0} px"),
                             Rect {
                                 x: sidebar_x + 120.0,
-                                y: properties_y + 154.0,
+                                y: properties_y + 74.0,
                                 width: 64.0,
                                 height: 28.0,
                             },
@@ -1287,49 +1339,112 @@ impl Renderer {
                         );
                         self.button(
                             Rect {
-                                x: sidebar_x + 184.0,
-                                y: properties_y + 150.0,
-                                width: 52.0,
-                                height: 32.0,
-                            },
-                            p.field,
-                            p.text,
-                            "−15°",
-                        );
-                        self.button(
-                            Rect {
                                 x: sidebar_x + 240.0,
-                                y: properties_y + 150.0,
+                                y: properties_y + 70.0,
                                 width: 52.0,
                                 height: 32.0,
                             },
                             p.field,
                             p.text,
-                            "+15°",
+                            "+",
                         );
-                        self.property_stepper(
-                            captures_windows_native::geometry::Point {
-                                x: sidebar_x,
-                                y: properties_y + 194.0,
-                            },
-                            "Opacity",
-                            &format!("{}%", (u16::from(layer.opacity) * 100 + 127) / 255),
-                            "−10%",
-                            "+10%",
-                            p,
-                        );
-                    } else {
                         self.text(
-                            "Select a layer to rotate",
+                            if selected_layer.is_none_or(|layer| layer.supports_fill()) {
+                                "Fill shape"
+                            } else {
+                                "Fill unavailable"
+                            },
                             Rect {
-                                x: sidebar_x + 120.0,
-                                y: properties_y + 154.0,
-                                width: 172.0,
+                                x: sidebar_x + 20.0,
+                                y: properties_y + 114.0,
+                                width: 150.0,
                                 height: 28.0,
                             },
                             p.muted,
                             &self.body,
                         );
+                        if selected_layer.is_none_or(|layer| layer.supports_fill()) {
+                            self.toggle(
+                                Rect {
+                                    x: sidebar_x + 248.0,
+                                    y: properties_y + 118.0,
+                                    width: 36.0,
+                                    height: 20.0,
+                                },
+                                p,
+                                property_fill.is_some(),
+                                false,
+                            )?;
+                        }
+                        self.text(
+                            "Rotation",
+                            Rect {
+                                x: sidebar_x + 20.0,
+                                y: properties_y + 154.0,
+                                width: 90.0,
+                                height: 28.0,
+                            },
+                            p.muted,
+                            &self.body,
+                        );
+                        if let Some(layer) = selected_layer {
+                            self.text(
+                                &format!("{:.0}°", layer.rotation_degrees),
+                                Rect {
+                                    x: sidebar_x + 120.0,
+                                    y: properties_y + 154.0,
+                                    width: 64.0,
+                                    height: 28.0,
+                                },
+                                p.text,
+                                &self.body,
+                            );
+                            self.button(
+                                Rect {
+                                    x: sidebar_x + 184.0,
+                                    y: properties_y + 150.0,
+                                    width: 52.0,
+                                    height: 32.0,
+                                },
+                                p.field,
+                                p.text,
+                                "−15°",
+                            );
+                            self.button(
+                                Rect {
+                                    x: sidebar_x + 240.0,
+                                    y: properties_y + 150.0,
+                                    width: 52.0,
+                                    height: 32.0,
+                                },
+                                p.field,
+                                p.text,
+                                "+15°",
+                            );
+                            self.property_stepper(
+                                captures_windows_native::geometry::Point {
+                                    x: sidebar_x,
+                                    y: properties_y + 194.0,
+                                },
+                                "Opacity",
+                                &format!("{}%", (u16::from(layer.opacity) * 100 + 127) / 255),
+                                "−10%",
+                                "+10%",
+                                p,
+                            );
+                        } else {
+                            self.text(
+                                "Select a layer to rotate",
+                                Rect {
+                                    x: sidebar_x + 120.0,
+                                    y: properties_y + 154.0,
+                                    width: 172.0,
+                                    height: 28.0,
+                                },
+                                p.muted,
+                                &self.body,
+                            );
+                        }
                     }
                 }
             }
@@ -3290,6 +3405,15 @@ impl Renderer {
                     line(cx + 2.0, cy + 4.0, right, top + 2.0);
                     line(left, bottom, right, bottom);
                 }
+                "eraser" => {
+                    polygon(&[
+                        (left + 3.0, bottom - 5.0),
+                        (cx - 2.0, top + 2.0),
+                        (right - 1.0, cy - 2.0),
+                        (cx + 3.0, bottom - 5.0),
+                    ]);
+                    line(left, bottom - 2.0, right, bottom - 2.0);
+                }
                 "shapes" => {
                     self.target.DrawRectangle(
                         &D2D_RECT_F {
@@ -4006,6 +4130,7 @@ fn tool_label(tool: Tool) -> &'static str {
         Tool::Triangle => "Triangle",
         Tool::Diamond => "Diamond",
         Tool::Star => "Star",
+        Tool::Eraser => "Eraser",
     }
 }
 

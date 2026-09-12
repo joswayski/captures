@@ -223,11 +223,13 @@ function Assert-NonBlank([Drawing.Bitmap]$bitmap, [string]$view) {
   if ($colors.Count -lt 4) { throw "$view capture is blank or nearly uniform ($($colors.Count) sampled colors)" }
 }
 
-function Save-View([string]$appearance, [string]$view, [string]$artifactView = $view, [bool]$inputSmoke = $false) {
+function Save-View([string]$appearance, [string]$view, [string]$artifactView = $view, [bool]$inputSmoke = $false, [bool]$eraserInputSmoke = $false) {
   $source = if ($view -eq "recording-editor") { $videoFrame } else { $ImagePath }
   Remove-Item (Join-Path $profile "render-driver.txt") -Force -ErrorAction SilentlyContinue
   $recordingReadyFile = Join-Path $profile "recording-frame-presented.txt"
   Remove-Item $recordingReadyFile -Force -ErrorAction SilentlyContinue
+  $eraserAppliedFile = Join-Path $profile "editor-eraser-applied.txt"
+  Remove-Item $eraserAppliedFile -Force -ErrorAction SilentlyContinue
   # Start-Process flattens ArgumentList, so explicitly quote paths that may contain spaces.
   $arguments = @("--view", $view, "--appearance", $appearance, "--fixture-image", ('"{0}"' -f $source), "--fixture-video", ('"{0}"' -f $VideoPath))
   $process = Start-Process $exe -ArgumentList $arguments -PassThru
@@ -272,6 +274,21 @@ function Save-View([string]$appearance, [string]$view, [string]$artifactView = $
       [CapturesFixtureNative]::DragLogical($handle, 250, 190, 430, 330)
       Start-Sleep -Milliseconds 1000
     }
+    if ($eraserInputSmoke) {
+      # Select Eraser, choose its Erase mode, and paint through the real rail,
+      # property, capture, pointer-move, and pointer-up routes.
+      [CapturesFixtureNative]::ClickLogical($handle, 28, 396)
+      [CapturesFixtureNative]::ClickLogical($handle, 930, 220)
+      [CapturesFixtureNative]::DragLogical($handle, 350, 250, 550, 380)
+      for ($attempt = 0; $attempt -lt 100 -and !(Test-Path $eraserAppliedFile); $attempt++) {
+        if ($process.HasExited) { throw "$view exited before applying the eraser input smoke" }
+        Start-Sleep -Milliseconds 50
+      }
+      if (!(Test-Path $eraserAppliedFile) -or (Get-Content $eraserAppliedFile -Raw).Trim() -ne "erase:alpha-changed") {
+        throw "$appearance-$artifactView did not select Erase and change image alpha pixels"
+      }
+      Start-Sleep -Milliseconds 500
+    }
     # Revalidate after composition settles; never capture an off-screen partial window.
     [void][CapturesFixtureNative]::PositionAndValidateWindow($handle)
     $rect = New-Object CapturesFixtureNative+RECT
@@ -306,10 +323,11 @@ try {
   Start-Sleep -Milliseconds 500
   $env:CAPTURES_WINDOWS_NATIVE_DATA = $profile
   foreach ($appearance in @("light", "dark")) {
-    foreach ($view in @("menu", "editor", "editor-image", "editor-shapes", "editor-export", "editor-properties", "editor-line", "recording-selector", "recording-hud", "recording-editor", "preview", "history", "preferences", "preferences-capture", "preferences-recording", "preferences-appearance", "feedback", "delete-confirmation")) {
+    foreach ($view in @("menu", "editor", "editor-image", "editor-shapes", "editor-export", "editor-properties", "editor-line", "editor-eraser", "recording-selector", "recording-hud", "recording-editor", "preview", "history", "preferences", "preferences-capture", "preferences-recording", "preferences-appearance", "feedback", "delete-confirmation")) {
       Save-View $appearance $view
     }
     Save-View $appearance "editor" "editor-input-smoke" $true
+    Save-View $appearance "editor" "editor-eraser-input-smoke" $false $true
   }
 } finally {
   $env:CAPTURES_WINDOWS_NATIVE_DATA = $previousData

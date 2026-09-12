@@ -13,7 +13,9 @@ use captures_recording::{
 use captures_recording_xcap::XcapRecordingSegment;
 use captures_windows_native::{
     async_state::{SaveTracker, accepts_document_request},
-    editor::{BlendMode, FreehandGesture, Layer, resize_from_corner},
+    editor::{
+        BlendMode, FreehandGesture, ImageTarget, Layer, RemoveBackgroundMode, resize_from_corner,
+    },
     geometry::{
         Point, Rect, SelectionDrag, editor_layer_lock_button, editor_layer_visibility_button,
         editor_shape_flyout_index, recording_editor_timeline_track, rounded_contains,
@@ -152,6 +154,7 @@ struct App {
     recording_mode: CaptureMode,
     editor_drag: Option<Point>,
     editor_freehand: Option<FreehandGesture>,
+    editor_remove_stroke: Option<(ImageTarget, Vec<Point>)>,
     editor_transform: Option<EditorTransform>,
     editor_text_origin: Option<Point>,
     editor_text: String,
@@ -304,6 +307,7 @@ pub fn run() -> Result<(), String> {
             recording_mode: CaptureMode::Region,
             editor_drag: None,
             editor_freehand: None,
+            editor_remove_stroke: None,
             editor_transform: None,
             editor_text_origin: None,
             editor_text: String::new(),
@@ -900,6 +904,19 @@ impl App {
                 return;
             }
             if self.state.surface == Surface::ScreenshotEditor
+                && self.editor_remove_stroke.is_some()
+                && let Some(source) = self.editor_source_point_unbounded(p)
+            {
+                if let Some((_, points)) = &mut self.editor_remove_stroke
+                    && points
+                        .last()
+                        .is_none_or(|last| (last.x - source.x).hypot(last.y - source.y) >= 0.5)
+                {
+                    points.push(source);
+                }
+                return;
+            }
+            if self.state.surface == Surface::ScreenshotEditor
                 && let Some(source) = self.editor_source_point_unbounded(p)
                 && let Some(transform) = &self.editor_transform
                 && let Some(layer) = transform.update(source)
@@ -1377,7 +1394,7 @@ impl App {
                 document.redo();
                 self.state.selected_layer = None;
             }
-        } else if p.x < 56.0 && (64.0..352.0).contains(&p.y) {
+        } else if p.x < 56.0 && (64.0..400.0).contains(&p.y) {
             let index = ((p.y - 64.0) / 48.0).floor() as usize;
             if index == 3 {
                 self.state.editor_shapes_open = !self.state.editor_shapes_open;
@@ -1399,6 +1416,7 @@ impl App {
                 captures_windows_native::editor::Tool::Rectangle,
                 captures_windows_native::editor::Tool::Arrow,
                 captures_windows_native::editor::Tool::Pen,
+                captures_windows_native::editor::Tool::Eraser,
             ]
             .get(index)
             {
@@ -1483,6 +1501,106 @@ impl App {
                 .as_ref()
                 .map_or(0, |document| document.layers.len().min(3));
             let properties_y = (176.0 + count as f32 * 52.0).min(footer_y - 194.0);
+            if self.state.editor_tool == captures_windows_native::editor::Tool::Eraser {
+                if let Some(mode) = [
+                    RemoveBackgroundMode::Wand,
+                    RemoveBackgroundMode::Erase,
+                    RemoveBackgroundMode::Restore,
+                ]
+                .into_iter()
+                .enumerate()
+                .find_map(|(index, mode)| {
+                    Rect {
+                        x: sidebar_x + 20.0 + index as f32 * 92.0,
+                        y: properties_y + 28.0,
+                        width: 86.0,
+                        height: 32.0,
+                    }
+                    .contains(p)
+                    .then_some(mode)
+                }) {
+                    self.state.editor_remove_mode = mode;
+                } else if (Rect {
+                    x: sidebar_x + 184.0,
+                    y: properties_y + 74.0,
+                    width: 52.0,
+                    height: 32.0,
+                })
+                .contains(p)
+                {
+                    if self.state.editor_remove_mode == RemoveBackgroundMode::Wand {
+                        self.state.editor_wand_tolerance =
+                            self.state.editor_wand_tolerance.saturating_sub(8);
+                    } else {
+                        self.state.editor_remove_brush_size =
+                            self.state.editor_remove_brush_size.saturating_sub(4).max(4);
+                    }
+                } else if (Rect {
+                    x: sidebar_x + 240.0,
+                    y: properties_y + 74.0,
+                    width: 52.0,
+                    height: 32.0,
+                })
+                .contains(p)
+                {
+                    if self.state.editor_remove_mode == RemoveBackgroundMode::Wand {
+                        self.state.editor_wand_tolerance =
+                            self.state.editor_wand_tolerance.saturating_add(8).min(120);
+                    } else {
+                        self.state.editor_remove_brush_size = self
+                            .state
+                            .editor_remove_brush_size
+                            .saturating_add(4)
+                            .min(120);
+                    }
+                } else if self.state.editor_remove_mode == RemoveBackgroundMode::Wand
+                    && (Rect {
+                        x: sidebar_x + 254.0,
+                        y: properties_y + 124.0,
+                        width: 30.0,
+                        height: 18.0,
+                    })
+                    .contains(p)
+                {
+                    self.state.editor_wand_contiguous = !self.state.editor_wand_contiguous;
+                } else if self.state.editor_remove_mode != RemoveBackgroundMode::Wand {
+                    let adjustment = if (Rect {
+                        x: sidebar_x + 184.0,
+                        y: properties_y + 114.0,
+                        width: 52.0,
+                        height: 32.0,
+                    })
+                    .contains(p)
+                    {
+                        Some(false)
+                    } else if (Rect {
+                        x: sidebar_x + 240.0,
+                        y: properties_y + 114.0,
+                        width: 52.0,
+                        height: 32.0,
+                    })
+                    .contains(p)
+                    {
+                        Some(true)
+                    } else {
+                        None
+                    };
+                    if let Some(increase) = adjustment {
+                        self.state.editor_remove_softness = if increase {
+                            self.state
+                                .editor_remove_softness
+                                .saturating_add(10)
+                                .min(100)
+                        } else {
+                            self.state.editor_remove_softness.saturating_sub(10)
+                        };
+                    }
+                }
+                unsafe {
+                    let _ = InvalidateRect(Some(self.hwnd), None, false);
+                }
+                return;
+            }
             if let Some(id) = self.state.selected_layer
                 && (properties_y - 4.0..properties_y + 28.0).contains(&p.y)
             {
@@ -1713,6 +1831,41 @@ impl App {
                 ));
             } else if self.state.editor_tool == captures_windows_native::editor::Tool::Pen {
                 self.editor_freehand = Some(FreehandGesture::begin(source));
+            } else if self.state.editor_tool == captures_windows_native::editor::Tool::Eraser {
+                let target = self
+                    .state
+                    .editor
+                    .as_ref()
+                    .and_then(|document| document.hit_test_image(source));
+                let Some(target) = target else {
+                    self.state.status = Some((
+                        "Click an image layer to remove or restore its background".into(),
+                        Instant::now(),
+                    ));
+                    return;
+                };
+                if self.state.editor_remove_mode == RemoveBackgroundMode::Wand {
+                    if let Some(document) = self.state.editor.as_mut() {
+                        match document.remove_background_wand(
+                            target,
+                            source,
+                            self.state.editor_wand_tolerance,
+                            self.state.editor_wand_contiguous,
+                        ) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                self.state.status = Some((
+                                    "No matching pixels found; increase tolerance".into(),
+                                    Instant::now(),
+                                ))
+                            }
+                            Err(error) => self.set_error(error),
+                        }
+                    }
+                } else {
+                    self.editor_remove_stroke = Some((target, vec![source]));
+                    unsafe { SetCapture(self.hwnd) };
+                }
             } else {
                 self.editor_drag = Some(source);
             }
@@ -1720,6 +1873,38 @@ impl App {
     }
 
     unsafe fn editor_pointer_up(&mut self, p: Point) {
+        if let Some((target, mut points)) = self.editor_remove_stroke.take() {
+            if let Some(end) = self.editor_source_point_unbounded(p) {
+                points.push(end);
+            }
+            if let Some(document) = self.state.editor.as_mut() {
+                let result = document.remove_background_stroke(
+                    target,
+                    &points,
+                    self.state.editor_remove_brush_size as f32,
+                    self.state.editor_remove_softness as f32,
+                    self.state.editor_remove_mode == RemoveBackgroundMode::Restore,
+                );
+                match result {
+                    Ok(true)
+                        if self.fixture_mode
+                            && self.state.editor_remove_mode == RemoveBackgroundMode::Erase =>
+                    {
+                        let _ = fs::write(
+                            data_dir().join("editor-eraser-applied.txt"),
+                            "erase:alpha-changed",
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => self.set_error(error),
+                }
+            }
+            unsafe {
+                let _ = ReleaseCapture();
+                let _ = InvalidateRect(Some(self.hwnd), None, false);
+            }
+            return;
+        }
         if let Some(transform) = self.editor_transform.take() {
             if let Some(source) = self.editor_source_point_unbounded(p)
                 && let Some(layer) = transform.update(source)
@@ -3994,6 +4179,24 @@ fn prepare_fixture(
                 state.selected_layer = Some(id);
                 state.editor_tool = captures_windows_native::editor::Tool::Select;
             }
+        }
+        "editor-eraser" => {
+            state.edit_image(image);
+            if let Some(document) = state.editor.as_mut() {
+                let _ = document.remove_background_stroke(
+                    captures_windows_native::editor::ImageTarget::Source,
+                    &[
+                        Point { x: 470.0, y: 220.0 },
+                        Point { x: 570.0, y: 300.0 },
+                        Point { x: 670.0, y: 380.0 },
+                    ],
+                    84.0,
+                    18.0,
+                    false,
+                );
+            }
+            state.editor_tool = captures_windows_native::editor::Tool::Eraser;
+            state.editor_remove_mode = RemoveBackgroundMode::Restore;
         }
         "recording-selector" => state.surface = Surface::RecordingSelector,
         "recording-hud" => {

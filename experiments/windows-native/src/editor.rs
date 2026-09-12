@@ -22,6 +22,20 @@ pub enum Tool {
     Triangle,
     Diamond,
     Star,
+    Eraser,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RemoveBackgroundMode {
+    Wand,
+    Erase,
+    Restore,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImageTarget {
+    Source,
+    Layer(u64),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -89,6 +103,7 @@ pub struct Layer {
     pub id: u64,
     pub name: String,
     pub shape: Shape,
+    pub original_pixels: Option<Arc<RgbaImage>>,
     pub color: [u8; 4],
     pub stroke: f32,
     pub fill: Option<[u8; 4]>,
@@ -332,6 +347,7 @@ pub fn resize_from_corner(layer: &Layer, corner: usize, pointer: Point) -> Optio
 pub struct Document {
     id: u64,
     original: Arc<RgbaImage>,
+    source: Arc<RgbaImage>,
     pub crop: Rect,
     pub canvas_width: u32,
     pub canvas_height: u32,
@@ -346,6 +362,7 @@ pub struct Document {
 #[derive(Clone)]
 struct Snapshot {
     crop: Rect,
+    source: Arc<RgbaImage>,
     canvas_width: u32,
     canvas_height: u32,
     background: Option<[u8; 4]>,
@@ -360,9 +377,11 @@ impl Document {
             width: image.width() as f32,
             height: image.height() as f32,
         };
+        let original = Arc::new(image);
         Self {
             id: NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed),
-            original: Arc::new(image),
+            original: original.clone(),
+            source: original,
             crop,
             canvas_width: crop.width.round() as u32,
             canvas_height: crop.height.round() as u32,
@@ -395,6 +414,7 @@ impl Document {
             id,
             name: default_layer_name(&shape).into(),
             shape,
+            original_pixels: None,
             color,
             stroke: stroke.clamp(1.0, 48.0),
             fill: None,
@@ -678,6 +698,7 @@ impl Document {
     fn snapshot(&self) -> Snapshot {
         Snapshot {
             crop: self.crop,
+            source: self.source.clone(),
             canvas_width: self.canvas_width,
             canvas_height: self.canvas_height,
             background: self.background,
@@ -687,6 +708,7 @@ impl Document {
 
     fn restore(&mut self, snapshot: Snapshot) {
         self.crop = snapshot.crop;
+        self.source = snapshot.source;
         self.canvas_width = snapshot.canvas_width;
         self.canvas_height = snapshot.canvas_height;
         self.background = snapshot.background;
@@ -715,7 +737,7 @@ impl Document {
                 .min(self.original.height().saturating_sub(crop_y) as f32) as u32;
         if crop_width > 0 && crop_height > 0 {
             let original = self
-                .original
+                .source
                 .view(crop_x, crop_y, crop_width, crop_height)
                 .to_image();
             image::imageops::overlay(&mut source, &original, 0, 0);
@@ -759,6 +781,143 @@ impl Document {
         }
     }
 
+    pub fn hit_test_image(&self, point: Point) -> Option<ImageTarget> {
+        self.layers
+            .iter()
+            .rev()
+            .filter(|layer| layer.visible)
+            .find_map(|layer| image_pixel(layer, point).map(|_| ImageTarget::Layer(layer.id)))
+            .or_else(|| source_pixel(&self.source, point).map(|_| ImageTarget::Source))
+    }
+
+    pub fn remove_background_wand(
+        &mut self,
+        target: ImageTarget,
+        point: Point,
+        tolerance: u8,
+        contiguous: bool,
+    ) -> Result<bool, String> {
+        let (pixels, sample) = self.target_pixels_and_point(target, point)?;
+        let mut edited = pixels.as_ref().clone();
+        if remove_color_to_transparent(&mut edited, sample.0, sample.1, tolerance, contiguous) == 0
+        {
+            return Ok(false);
+        }
+        self.replace_target_pixels(target, Arc::new(edited));
+        Ok(true)
+    }
+
+    pub fn remove_background_stroke(
+        &mut self,
+        target: ImageTarget,
+        points: &[Point],
+        brush_size: f32,
+        softness: f32,
+        restore: bool,
+    ) -> Result<bool, String> {
+        let first = points.first().ok_or("Background brush stroke is empty")?;
+        let (pixels, first_pixel) = self.target_pixels_and_point(target, *first)?;
+        let original = if restore {
+            Some(
+                self.target_original_pixels(target)
+                    .ok_or("Nothing to restore yet — remove some background first")?,
+            )
+        } else {
+            None
+        };
+        let display_width = match target {
+            ImageTarget::Source => pixels.width() as f32,
+            ImageTarget::Layer(id) => self
+                .layers
+                .iter()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| match layer.shape {
+                    Shape::Image { width, .. } => Some(width),
+                    _ => None,
+                })
+                .ok_or("Image layer is unavailable")?,
+        };
+        let radius = (brush_size * pixels.width() as f32 / display_width.max(1.0) * 0.5).max(1.0);
+        let hardness = 1.0 - (softness / 100.0).clamp(0.0, 1.0);
+        let mut edited = pixels.as_ref().clone();
+        let mut previous = first_pixel;
+        let mut changed = 0;
+        for point in points {
+            let Ok((_, next)) = self.target_pixels_and_point(target, *point) else {
+                continue;
+            };
+            changed += stroke_background_brush(
+                &mut edited,
+                previous,
+                next,
+                radius,
+                restore,
+                original.as_deref(),
+                hardness,
+            );
+            previous = next;
+        }
+        if changed == 0 {
+            return Ok(false);
+        }
+        self.replace_target_pixels(target, Arc::new(edited));
+        Ok(true)
+    }
+
+    fn target_pixels_and_point(
+        &self,
+        target: ImageTarget,
+        point: Point,
+    ) -> Result<(Arc<RgbaImage>, (u32, u32)), String> {
+        match target {
+            ImageTarget::Source => source_pixel(&self.source, point)
+                .map(|pixel| (self.source.clone(), pixel))
+                .ok_or_else(|| "Point is outside the source image".into()),
+            ImageTarget::Layer(id) => self
+                .layers
+                .iter()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| match &layer.shape {
+                    Shape::Image { pixels, .. } => {
+                        image_pixel(layer, point).map(|pixel| (pixels.clone(), pixel))
+                    }
+                    _ => None,
+                })
+                .ok_or_else(|| "Point is outside the image layer".into()),
+        }
+    }
+
+    fn target_original_pixels(&self, target: ImageTarget) -> Option<Arc<RgbaImage>> {
+        match target {
+            ImageTarget::Source => Some(self.original.clone()),
+            ImageTarget::Layer(id) => self
+                .layers
+                .iter()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.original_pixels.clone()),
+        }
+    }
+
+    fn replace_target_pixels(&mut self, target: ImageTarget, pixels: Arc<RgbaImage>) {
+        self.checkpoint();
+        self.background = None;
+        match target {
+            ImageTarget::Source => self.source = pixels,
+            ImageTarget::Layer(id) => {
+                if let Some(layer) = self.layers.iter_mut().find(|layer| layer.id == id)
+                    && let Shape::Image {
+                        pixels: current, ..
+                    } = &mut layer.shape
+                {
+                    if layer.original_pixels.is_none() {
+                        layer.original_pixels = Some(current.clone());
+                    }
+                    *current = pixels;
+                }
+            }
+        }
+    }
+
     pub fn hit_test(&self, point: Point, tolerance: f32) -> Option<u64> {
         self.layers
             .iter()
@@ -771,6 +930,198 @@ impl Document {
                     .then_some(layer.id)
             })
     }
+}
+
+fn source_pixel(image: &RgbaImage, point: Point) -> Option<(u32, u32)> {
+    (point.x >= 0.0
+        && point.y >= 0.0
+        && point.x < image.width() as f32
+        && point.y < image.height() as f32)
+        .then(|| (point.x.floor() as u32, point.y.floor() as u32))
+}
+
+fn image_pixel(layer: &Layer, point: Point) -> Option<(u32, u32)> {
+    let Shape::Image {
+        origin,
+        width,
+        height,
+        pixels,
+    } = &layer.shape
+    else {
+        return None;
+    };
+    if *width <= 0.0 || *height <= 0.0 || pixels.width() == 0 || pixels.height() == 0 {
+        return None;
+    }
+    let center = Point {
+        x: origin.x + width / 2.0,
+        y: origin.y + height / 2.0,
+    };
+    let local = rotate(point, center, -layer.rotation_degrees);
+    let ratio_x = (local.x - origin.x) / width;
+    let ratio_y = (local.y - origin.y) / height;
+    if !(0.0..1.0).contains(&ratio_x) || !(0.0..1.0).contains(&ratio_y) {
+        return None;
+    }
+    Some((
+        (ratio_x * pixels.width() as f32).floor() as u32,
+        (ratio_y * pixels.height() as f32).floor() as u32,
+    ))
+}
+
+fn remove_color_to_transparent(
+    image: &mut RgbaImage,
+    start_x: u32,
+    start_y: u32,
+    tolerance: u8,
+    contiguous: bool,
+) -> usize {
+    let target = *image.get_pixel(start_x, start_y);
+    if target[3] == 0 {
+        return 0;
+    }
+    let matches = |pixel: &Rgba<u8>| {
+        pixel[3] > 0 && (0..3).all(|channel| pixel[channel].abs_diff(target[channel]) <= tolerance)
+    };
+    if !contiguous {
+        let mut changed = 0;
+        for pixel in image.pixels_mut() {
+            if matches(pixel) {
+                *pixel = Rgba([0, 0, 0, 0]);
+                changed += 1;
+            }
+        }
+        return changed;
+    }
+    let width = image.width();
+    let height = image.height();
+    let mut visited = vec![false; width as usize * height as usize];
+    let mut queue = std::collections::VecDeque::from([(start_x, start_y)]);
+    let mut changed = 0;
+    while let Some((x, y)) = queue.pop_front() {
+        let index = y as usize * width as usize + x as usize;
+        if visited[index] {
+            continue;
+        }
+        visited[index] = true;
+        if !matches(image.get_pixel(x, y)) {
+            continue;
+        }
+        image.put_pixel(x, y, Rgba([0, 0, 0, 0]));
+        changed += 1;
+        if x > 0 {
+            queue.push_back((x - 1, y));
+        }
+        if x + 1 < width {
+            queue.push_back((x + 1, y));
+        }
+        if y > 0 {
+            queue.push_back((x, y - 1));
+        }
+        if y + 1 < height {
+            queue.push_back((x, y + 1));
+        }
+    }
+    changed
+}
+
+fn stroke_background_brush(
+    working: &mut RgbaImage,
+    from: (u32, u32),
+    to: (u32, u32),
+    radius: f32,
+    restore: bool,
+    original: Option<&RgbaImage>,
+    hardness: f32,
+) -> usize {
+    let dx = to.0 as f32 - from.0 as f32;
+    let dy = to.1 as f32 - from.1 as f32;
+    let distance = dx.hypot(dy);
+    if distance < 0.001 {
+        return stamp_background_brush(
+            working,
+            to.0 as f32,
+            to.1 as f32,
+            radius,
+            restore,
+            original,
+            hardness,
+        );
+    }
+    let steps = (distance / (radius * 0.35).max(0.5)).ceil().max(1.0) as usize;
+    (0..=steps)
+        .map(|step| {
+            let progress = step as f32 / steps as f32;
+            stamp_background_brush(
+                working,
+                from.0 as f32 + dx * progress,
+                from.1 as f32 + dy * progress,
+                radius,
+                restore,
+                original,
+                hardness,
+            )
+        })
+        .sum()
+}
+
+fn stamp_background_brush(
+    working: &mut RgbaImage,
+    center_x: f32,
+    center_y: f32,
+    radius: f32,
+    restore: bool,
+    original: Option<&RgbaImage>,
+    hardness: f32,
+) -> usize {
+    if restore && original.is_none() {
+        return 0;
+    }
+    let radius = radius.max(0.5);
+    let hard_start = radius * hardness.clamp(0.0, 1.0);
+    let min_x = (center_x - radius).floor().max(0.0) as u32;
+    let max_x = (center_x + radius).ceil().min(working.width() as f32 - 1.0) as u32;
+    let min_y = (center_y - radius).floor().max(0.0) as u32;
+    let max_y = (center_y + radius)
+        .ceil()
+        .min(working.height() as f32 - 1.0) as u32;
+    let mut changed = 0;
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let distance = (x as f32 + 0.5 - center_x).hypot(y as f32 + 0.5 - center_y);
+            if distance > radius {
+                continue;
+            }
+            let strength = if distance <= hard_start || radius == hard_start {
+                1.0
+            } else {
+                (1.0 - (distance - hard_start) / (radius - hard_start)).clamp(0.0, 1.0)
+            };
+            let before = *working.get_pixel(x, y);
+            let after = if restore {
+                let source = *original
+                    .expect("restore source checked above")
+                    .get_pixel(x, y);
+                Rgba(std::array::from_fn(|channel| {
+                    (before[channel] as f32
+                        + (source[channel] as f32 - before[channel] as f32) * strength)
+                        .round() as u8
+                }))
+            } else {
+                let alpha = (before[3] as f32 * (1.0 - strength)).round() as u8;
+                if alpha == 0 {
+                    Rgba([0, 0, 0, 0])
+                } else {
+                    Rgba([before[0], before[1], before[2], alpha])
+                }
+            };
+            if after != before {
+                working.put_pixel(x, y, after);
+                changed += 1;
+            }
+        }
+    }
+    changed
 }
 
 fn translate_raster_shape(shape: &mut captures_image::Shape, offset: captures_image::Point) {
@@ -1073,6 +1424,164 @@ mod tests {
     }
 
     #[test]
+    fn contiguous_wand_edits_source_pixels_clears_background_and_undoes() {
+        let mut source = RgbaImage::from_pixel(7, 5, Rgba([190, 20, 30, 255]));
+        source.put_pixel(4, 1, Rgba([248, 248, 245, 255]));
+        source.put_pixel(4, 2, Rgba([250, 247, 244, 255]));
+        source.put_pixel(6, 4, Rgba([249, 249, 246, 255]));
+        let mut document = Document::new(source);
+        assert!(Arc::ptr_eq(&document.original, &document.source));
+        assert!(document.set_background(Some([9, 11, 13, 255])));
+
+        assert!(
+            document
+                .remove_background_wand(ImageTarget::Source, Point { x: 4.2, y: 2.2 }, 5, true,)
+                .unwrap()
+        );
+        assert_eq!(document.background, None);
+        let rendered = document.render().unwrap();
+        assert_eq!(rendered.get_pixel(4, 1).0, [0, 0, 0, 0]);
+        assert_eq!(rendered.get_pixel(4, 2).0, [0, 0, 0, 0]);
+        assert_eq!(rendered.get_pixel(6, 4).0, [249, 249, 246, 255]);
+        assert_eq!(rendered.get_pixel(0, 0).0, [190, 20, 30, 255]);
+        assert!(!Arc::ptr_eq(&document.original, &document.source));
+
+        assert!(document.undo());
+        assert_eq!(document.background, Some([9, 11, 13, 255]));
+        let restored = document.render().unwrap();
+        assert_eq!(restored.get_pixel(4, 1).0, [248, 248, 245, 255]);
+        assert_eq!(restored.get_pixel(4, 2).0, [250, 247, 244, 255]);
+    }
+
+    #[test]
+    fn global_wand_reaches_disconnected_matches_and_soft_brush_has_alpha_falloff() {
+        let mut source = RgbaImage::from_pixel(9, 7, Rgba([20, 40, 60, 255]));
+        source.put_pixel(1, 1, Rgba([244, 242, 238, 255]));
+        source.put_pixel(7, 5, Rgba([242, 245, 240, 255]));
+        source.put_pixel(4, 3, Rgba([238, 242, 238, 255]));
+        let mut document = Document::new(source);
+
+        assert!(
+            document
+                .remove_background_wand(ImageTarget::Source, Point { x: 1.2, y: 1.4 }, 5, false,)
+                .unwrap()
+        );
+        let global = document.render().unwrap();
+        assert_eq!(global.get_pixel(1, 1)[3], 0);
+        assert_eq!(global.get_pixel(7, 5)[3], 0);
+        assert_eq!(global.get_pixel(4, 3).0, [238, 242, 238, 255]);
+
+        assert!(document.undo());
+        assert!(
+            document
+                .remove_background_stroke(
+                    ImageTarget::Source,
+                    &[Point { x: 4.0, y: 3.0 }],
+                    6.0,
+                    100.0,
+                    false,
+                )
+                .unwrap()
+        );
+        let soft = document.render().unwrap();
+        let center = soft.get_pixel(4, 3)[3];
+        let feather = soft.get_pixel(6, 3)[3];
+        assert!(
+            center > 0 && center < feather,
+            "soft center must be translucent"
+        );
+        assert!(feather < 255, "soft edge must change alpha");
+        assert_eq!(soft.get_pixel(0, 0)[3], 255);
+    }
+
+    #[test]
+    fn eraser_targets_topmost_locked_rotated_image_and_restore_uses_frozen_pixels() {
+        let mut document = Document::new(RgbaImage::from_pixel(80, 60, Rgba([2, 4, 8, 255])));
+        let mut inset = RgbaImage::from_pixel(6, 4, Rgba([30, 70, 150, 255]));
+        inset.put_pixel(2, 1, Rgba([201, 91, 37, 220]));
+        let id = document.add_image(inset, 0, "Inset".into());
+        assert!(document.set_layer_rotation(id, 90.0));
+        assert!(document.toggle_locked(id));
+        let layer = document.layers.iter().find(|layer| layer.id == id).unwrap();
+        let Shape::Image {
+            origin,
+            width,
+            height,
+            ..
+        } = layer.shape
+        else {
+            panic!("expected image");
+        };
+        let center = Point {
+            x: origin.x + width / 2.0,
+            y: origin.y + height / 2.0,
+        };
+        let sample = rotate(
+            Point {
+                x: origin.x + width * 2.5 / 6.0,
+                y: origin.y + height * 1.5 / 4.0,
+            },
+            center,
+            90.0,
+        );
+        assert_eq!(
+            document.hit_test_image(sample),
+            Some(ImageTarget::Layer(id))
+        );
+
+        assert!(
+            document
+                .remove_background_stroke(ImageTarget::Layer(id), &[sample], 1.0, 0.0, false)
+                .unwrap()
+        );
+        let erased = document.layers.iter().find(|layer| layer.id == id).unwrap();
+        let Shape::Image { pixels, .. } = &erased.shape else {
+            panic!("expected image");
+        };
+        assert_eq!(pixels.get_pixel(2, 1).0, [0, 0, 0, 0]);
+        assert_eq!(
+            erased.original_pixels.as_ref().unwrap().get_pixel(2, 1).0,
+            [201, 91, 37, 220]
+        );
+
+        assert!(
+            document
+                .remove_background_stroke(ImageTarget::Layer(id), &[sample], 1.0, 0.0, true)
+                .unwrap()
+        );
+        let restored = document.layers.iter().find(|layer| layer.id == id).unwrap();
+        let Shape::Image { pixels, .. } = &restored.shape else {
+            panic!("expected image");
+        };
+        assert_eq!(pixels.get_pixel(2, 1).0, [201, 91, 37, 220]);
+        assert!(document.undo());
+        let Shape::Image { pixels, .. } = &document.layers.last().unwrap().shape else {
+            panic!("expected image");
+        };
+        assert_eq!(pixels.get_pixel(2, 1).0, [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn fast_hard_erase_stroke_has_no_gaps_and_is_one_undo_step() {
+        let source = RgbaImage::from_pixel(31, 9, Rgba([80, 120, 160, 255]));
+        let mut document = Document::new(source);
+        let points = [Point { x: 2.0, y: 4.0 }, Point { x: 28.0, y: 4.0 }];
+        assert!(
+            document
+                .remove_background_stroke(ImageTarget::Source, &points, 3.0, 0.0, false)
+                .unwrap()
+        );
+        let erased = document.render().unwrap();
+        assert_eq!(erased.get_pixel(2, 4)[3], 0);
+        assert_eq!(erased.get_pixel(15, 4)[3], 0);
+        assert_eq!(erased.get_pixel(28, 4)[3], 0);
+        assert_eq!(erased.get_pixel(15, 0)[3], 255);
+        assert!(document.undo());
+        assert_eq!(document.render().unwrap().get_pixel(15, 4)[3], 255);
+        assert!(!document.undo());
+    }
+
+    #[test]
     fn undo_capacity_keeps_the_newest_checkpoint() {
         let mut document = Document::new(RgbaImage::new(100, 100));
         for x in 0..70 {
@@ -1230,6 +1739,7 @@ mod tests {
             id: 9,
             name: "Line".into(),
             shape: Shape::Line(Point { x: 10.0, y: 20.0 }, Point { x: 90.0, y: 20.0 }),
+            original_pixels: None,
             color: [1, 2, 3, 255],
             stroke: 4.0,
             fill: None,
@@ -1269,6 +1779,7 @@ mod tests {
                 width: 80.0,
                 height: 35.0,
             }),
+            original_pixels: None,
             color: [4, 5, 6, 255],
             stroke: 3.0,
             fill: Some([7, 8, 9, 128]),
@@ -1468,6 +1979,7 @@ mod tests {
                 height: 40.0,
                 pixels: Arc::new(RgbaImage::new(20, 10)),
             },
+            original_pixels: None,
             color: [255; 4],
             stroke: 1.0,
             fill: None,
