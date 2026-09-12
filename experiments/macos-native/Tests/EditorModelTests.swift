@@ -396,6 +396,31 @@ final class EditorModelTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: source), original)
     }
 
+    func testReferenceModelsRemainIndependentWhenBuiltInEitherStateOrder() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("shared-reference.png")
+        try solidPNG(.blue, rgba: [0, 0, 255, 255], width: 7, height: 3).write(to: source)
+        let artifact = Artifact(path: source.path, kind: "image", width: 7, height: 3)
+
+        let propertiesFirst = try makeImageEditorReferenceModel(artifact: artifact)
+        defer { propertiesFirst.clearDraft() }
+        propertiesFirst.addShape(.rectangle, at: CGPoint(x: 2, y: 1))
+        let overflowSecond = try makeImageEditorReferenceModel(artifact: artifact)
+        defer { overflowSecond.clearDraft() }
+
+        XCTAssertEqual(propertiesFirst.document.layers.count, 2)
+        XCTAssertEqual(overflowSecond.document.layers.count, 1)
+        XCTAssertFalse(overflowSecond.restoredDraft)
+
+        overflowSecond.addShape(.rectangle, at: CGPoint(x: 8, y: 1))
+        let propertiesThird = try makeImageEditorReferenceModel(artifact: artifact)
+        defer { propertiesThird.clearDraft() }
+        XCTAssertEqual(propertiesThird.document.layers.count, 1)
+        XCTAssertFalse(propertiesThird.restoredDraft)
+    }
+
     func testBackgroundWandRemovesOnlyConnectedMatchingColorAndSupportsUndo() throws {
         let source = try splitPNG()
         let layer = EditorLayer(

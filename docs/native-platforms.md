@@ -89,8 +89,8 @@ These are implemented experiments, not drop-in replacements. In particular:
   and need correction. Static fixtures do not verify picker or text input.
   Inspected recording
   fixtures show decoded paused frames, not playback timing or hardware video decode.
-- **macOS:** Swift builds, 11 XCTest tests, normal layouts, and independent real
-  video/dust compositor checks passed in [the native CI run](https://github.com/joswayski/captures/actions/runs/34721634028).
+- **macOS:** Swift builds, 18 XCTest tests, normal layouts, and independent real
+  video/dust compositor checks passed in [the native CI run](https://github.com/joswayski/captures/actions/runs/34724020586).
   The inspected dust frame contains displaced source fragments and transparent
   holes; the video frame contains only Captures' custom controls. These checks
   do not establish performance or full interaction parity. Capture permissions, microphone/audio,
@@ -100,10 +100,12 @@ These are implemented experiments, not drop-in replacements. In particular:
   bounded canvas expansion, and local crash review with explicit Send/Dismiss.
   Restart prepares its helper before clearing the session marker and restores
   tracking if cleanup fails. Bridge tests reject duplicate crash startup before
-  it mutates session files. New AppKit tests and these surfaces require native
-  CI. The latest app compiled and signed, but the separate test build exposed an
-  onboarding dependency on the excluded app entry point; a shared restart
-  protocol now removes that dependency, pending native verification.
+  it mutates session files. Native CI verified the onboarding restart protocol
+  in app/test/reference source sets, new AppKit pixel/expansion tests, and a real
+  76 KB recording estimate. Crash consent and feedback layouts were inspected;
+  no request was submitted. Inspection found persisted drafts contaminating
+  successive editor reference states. Reference-only models now start from fresh
+  source documents; the isolation regression and clean rerender await CI.
 
 ## Feature parity acceptance
 
@@ -126,7 +128,7 @@ largest editor/capture/settings gap; Linux still lacks its live microphone
 meter and first-run/launch flows; macOS still needs richer image-layer/viewport
 operations. Its new live recording estimate uses the real save pipeline; a Linux
 bridge check verified exact source/full-encode sizes and independently reproduced
-sampled estimates, while Swift presentation still requires native CI.
+sampled estimates. Native CI now verifies a successful Swift estimate display.
 Shared native feedback transport now has loopback tests for exact request fields,
 concurrent submission cooldown, retries, Unicode limits and response bounds;
 frontend integration and consent flows remain in progress. It makes no automatic
@@ -135,8 +137,9 @@ and redacted panic evidence, and summarizes caller-supplied OS reports only afte
 native executable identity/timestamp checks. Tests cover a real subprocess panic,
 retention across clean relaunch, path redaction, modern macOS IPS, UTF-16 Windows
 WER and Linux Apport. macOS now integrates shutdown tracking and review/Send/
-Dismiss UI, pending native lifecycle and rendering verification; other platform
-integrations remain ongoing. An unclean marker alone is not a proven crash.
+Dismiss UI, with native layout evidence but physical lifecycle verification still
+pending; other platform integrations remain ongoing. An unclean marker alone is
+not a proven crash.
 Native installer/Open With registration,
 signed updater/channel, and production-profile migration are separate rollout
 gates, not satisfied by local command-line routing. Never install a Tauri update

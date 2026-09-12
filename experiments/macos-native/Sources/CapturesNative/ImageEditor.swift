@@ -1426,9 +1426,21 @@ private struct ImageEditorSurface: View {
 }
 
 @MainActor
+func makeImageEditorReferenceModel(artifact: Artifact) throws -> EditorModel {
+    let source = try Data(contentsOf: artifact.url)
+    return EditorModel(
+        document: try EditorDocument(imageData: source),
+        sourceURL: artifact.url
+    )
+}
+
+@MainActor
 func imageEditorReferenceView(artifact: Artifact, state: String) -> AnyView {
     do {
-        let model = try EditorModel(artifact: artifact)
+        // Reference states share one shipping image for visual comparison, but
+        // each must start from its decoded source rather than the persisted app
+        // draft identity used by a real editor window.
+        let model = try makeImageEditorReferenceModel(artifact: artifact)
         switch state {
         case "shapes":
             model.selectedLayerID = nil
