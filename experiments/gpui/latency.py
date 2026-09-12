@@ -25,7 +25,7 @@ SPEC = importlib.util.spec_from_file_location("gpui_benchmark", HERE / "benchmar
 gpui_benchmark = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gpui_benchmark)
 
-PATCH = (494, 176, 13, 9)  # Surrounds (500, 180), on the expected top edge.
+PATCH = (1044, 176, 13, 9)  # Moving top-right handle, opaque mustard in all three apps.
 START = (320, 180)
 END = (1050, 630)
 EXPECTED = (0xFF, 0xCA, 0x28)
@@ -124,7 +124,8 @@ def exact_window(title, pid):
 
 
 def open_fresh_selector(x11, process, implementation, log, inject_shortcut=True, timeout=20):
-    title = "Captures" if implementation == "tauri" else "Captures GPUI Select target"
+    title = {"tauri": "Captures", "gpui": "Captures GPUI Select target",
+             "native": "Captures — Select target"}[implementation]
     x11.motion(100, 100)
     if inject_shortcut:
         # Shipping Captures intentionally ignores capture shortcuts while its
@@ -212,7 +213,7 @@ def run(binary, implementation, samples, warmups, artifacts=None):
             for index in range(warmups + samples):
                 # A new process as well as a new selector prevents stale pixels and
                 # lets benchmark.stop provide isolated process-tree cleanup.
-                command = ([str(binary), "--capture"] if implementation == "gpui"
+                command = ([str(binary), "--capture"] if implementation in ("gpui", "native")
                            else [str(binary)])
                 with tempfile.TemporaryFile() as log:
                     process = subprocess.Popen(command, env=env, stdout=log, stderr=log,
@@ -252,7 +253,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lab", type=Path, required=True)
     parser.add_argument("--binary", required=True)
-    parser.add_argument("--implementation", choices=("tauri", "gpui"), required=True)
+    parser.add_argument("--implementation", choices=("tauri", "gpui", "native"), required=True)
     parser.add_argument("--samples", type=int, default=10)
     parser.add_argument("--warmups", type=int, default=2)
     parser.add_argument("--output", type=Path, required=True)
@@ -281,7 +282,9 @@ def main():
         "configuration": {"samples": args.samples, "warmups": args.warmups},
         "samples": rows, "summary": summarize(rows), "polling_overhead_estimate": overhead,
         "methodology": ("Fresh real selector per trial; timestamp immediately before XTestFakeMotionEvent+XFlush, "
-                        "then poll the compositor's ROOT-window pixels until the mustard selection border appears."),
+                        "then poll the compositor's ROOT-window pixels until the opaque mustard top-right handle appears. "
+                        "The same 13x9 patch and color tolerance apply to all implementations; sampling the "
+                        "handle avoids missing GTK's anti-aliased 1.5px mid-edge stroke."),
         "caveats": ("Linux X11 software Mesa 25/Xvfb/Openbox/xcompmgr event-to-observed-compositor-pixel only; "
                     "not physical display latency and must not be extrapolated to hardware or other platforms. "
                     "Runs made while builds or integration work are active are not final benchmark results."),

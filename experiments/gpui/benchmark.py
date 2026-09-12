@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproducible Linux/X11 comparison of release-source Tauri and GPUI builds.
+"""Reproducible Linux/X11 comparison of release Tauri, GPUI and full GTK builds.
 
 This measures whole process trees for matched, production-reachable states. Feature and
 interaction parity are assessed separately; equal window sizes alone are not
@@ -52,6 +52,14 @@ TITLES = {
     ("gpui", "previews-expanded"): "^Captures GPUI Previews$",
     ("gpui", "history"): "^Captures GPUI Capture History$",
     ("gpui", "recording-hud"): "^Captures GPUI Recording controls$",
+    ("native", "preferences"): "^Captures Preferences$",
+    ("native", "image"): "^Captures — Image editor$",
+    ("native", "video-editor"): "^Edit recording — Captures$",
+    ("native", "screenshot-selection"): "^Captures — Select target$",
+    ("native", "recording-selection"): "^Captures — Select target$",
+    ("native", "previews-collapsed"): "^Captures — Mini previews$",
+    ("native", "previews-expanded"): "^Captures — Mini previews$",
+    ("native", "recording-hud"): "^Captures recording controls$",
 }
 METRICS = ("rss_mib", "pss_mib", "private_mib", "processes",
            "first_window_mapped_ms", "idle_cpu_percent_one_core")
@@ -92,6 +100,9 @@ def command(binary, implementation, state, fixture, appearance):
     if implementation == "tauri":
         return ([str(binary), str(fixture)] if state in ("image", "video-editor")
                 else [str(binary)])
+    if implementation == "native":
+        return ([str(binary), "--open", str(fixture)] if state in ("image", "video-editor")
+                else [str(binary), "--preferences"])
     args = [str(binary), "--appearance", appearance]
     if state in ("image", "video-editor"):
         return args + ["--open", str(fixture)]
@@ -132,8 +143,8 @@ def complete_region_selection(process, implementation, shortcut):
     subprocess.run(["xdotool", "mouseup", "1"], check=True)
     # Let the asynchronous frontend commit the completed drag before confirming.
     time.sleep(.5)
-    if shortcut == "Print":
-        # Both native screenshot menus put Capture here in the 1600×1000 lab.
+    if shortcut == "Print" and implementation != "native":
+        # Tauri and GPUI put Capture here in the 1600×1000 lab.
         subprocess.run(["xdotool", "mousemove", "1160", "915", "click", "1"], check=True)
     else:
         subprocess.run(["xdotool", "windowfocus", "--sync", selector], check=True)
@@ -154,15 +165,15 @@ def prepare_state(process, implementation, state, profile):
         if implementation == "tauri":
             count = len(list((profile / "data/captures/capture-history").glob("*/metadata.json")))
         else:
-            count = len(json.loads((profile / "gpui/history.json").read_text()))
+            count = len(json.loads((profile / implementation / "history.json").read_text()))
         if count != 3:
             raise RuntimeError(f"expected three completed captures, got {count}")
         window = wait_window(TITLES[(implementation, state)], process.pid, maximum_width=400)
         geometry = subprocess.check_output(["xdotool", "getwindowgeometry", "--shell", window], text=True)
         height = int(next(line[7:] for line in geometry.splitlines() if line.startswith("HEIGHT=")))
-        # GPUI starts collapsed in a fixed 340×760 transparent frame. Tauri
+        # GPUI/GTK start collapsed in a fixed 340×760 transparent frame. Tauri
         # starts expanded; neither frame's height reliably identifies collapse.
-        if implementation == "gpui" and state == "previews-expanded":
+        if implementation in ("gpui", "native") and state == "previews-expanded":
             subprocess.run(["xdotool", "mousemove", "--window", window, "170", "620", "click", "1", "key", "Escape"], check=True)
             time.sleep(1)
         elif implementation == "tauri" and state == "previews-collapsed":
@@ -175,8 +186,9 @@ def prepare_state(process, implementation, state, profile):
         complete_region_selection(process, implementation, "ctrl+shift+alt+r")
         # Mapping the GPUI HUD can precede its countdown. Wait for the shared
         # durable recording state before applying the common settling interval.
-        root = profile / ("gpui/recording-drafts" if implementation == "gpui"
-                          else "data/captures/recording-recovery")
+        root = profile / {"gpui": "gpui/recording-drafts",
+                          "native": "captures/.captures-recording-drafts",
+                          "tauri": "data/captures/recording-recovery"}[implementation]
         deadline = time.monotonic() + 30
         while not any(json.loads(path.read_text()).get("state") == "recording"
                       for path in root.glob("*/manifest.json")):
@@ -197,6 +209,13 @@ def profile_environment(profile, appearance):
     config.mkdir(parents=True)
     runtime = profile / "runtime"
     runtime.mkdir(mode=0o700)
+    native = profile / "native"
+    native.mkdir()
+    (native / "settings.json").write_text(json.dumps({
+        "appearance": appearance,
+        "output_directory": str(profile / "captures"),
+        "launch_at_login": False,
+    }))
     (config / "settings.json").write_text(json.dumps({
         "settings_schema_version": 5,
         "onboarding_completed": True,
@@ -210,6 +229,7 @@ def profile_environment(profile, appearance):
     return dict(os.environ, HOME=str(profile), XDG_CONFIG_HOME=str(profile / "config"),
                 XDG_DATA_HOME=str(profile / "data"), XDG_CACHE_HOME=str(profile / "cache"),
                 CAPTURES_GPUI_DATA=str(profile / "gpui"), XDG_RUNTIME_DIR=str(runtime),
+                CAPTURES_NATIVE_DATA=str(native),
                 LIBGL_ALWAYS_SOFTWARE="1",
                 HTTP_PROXY="http://127.0.0.1:9", HTTPS_PROXY="http://127.0.0.1:9",
                 ALL_PROXY="http://127.0.0.1:9", NO_PROXY="localhost,127.0.0.1")
@@ -243,7 +263,7 @@ def trial(binary, implementation, state, fixture, settle, idle, appearance,
                 if state.endswith("-selection"):
                     # Tauri deliberately ignores capture shortcuts while its
                     # Preferences has focus. Activate the same external fixture
-                    # for both apps before timing the real shortcut.
+                    # for every app before timing the real shortcut.
                     deadline = time.monotonic() + 30
                     while not find_window(TITLES[(implementation, "preferences")], process.pid):
                         if process.poll() is not None or time.monotonic() > deadline:
@@ -309,8 +329,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lab", type=Path, required=True)
     parser.add_argument("--artifacts", type=Path, required=True)
-    parser.add_argument("--tauri", required=True, help="absolute release-source Tauri binary")
-    parser.add_argument("--gpui", required=True, help="absolute release-source GPUI binary")
+    parser.add_argument("--tauri", help="absolute release-source Tauri binary")
+    parser.add_argument("--gpui", help="absolute release-source GPUI binary")
+    parser.add_argument("--native", help="absolute full captures-linux-native GTK binary (not minimal probe)")
     parser.add_argument("--video-fixture", help="absolute MP4/WebM for matched production open-file editors")
     parser.add_argument("--states", nargs="+", choices=list(dict.fromkeys(
         state for _, state in TITLES if state != "history")),
@@ -332,8 +353,11 @@ def main():
     video_fixture = (absolute_file(parser, args.video_fixture, "--video-fixture")
                      if args.video_fixture else None)
     os.environ.update(json.loads(environment_file.read_text()))
-    binaries = {"tauri": absolute_file(parser, args.tauri, "--tauri"),
-                "gpui": absolute_file(parser, args.gpui, "--gpui")}
+    binaries = {name: absolute_file(parser, value, f"--{name}")
+                for name in ("tauri", "gpui", "native")
+                if (value := getattr(args, name))}
+    if not binaries:
+        parser.error("provide at least one of --tauri, --gpui, --native")
     args.artifacts.mkdir(parents=True, exist_ok=True)
     appearance = args.appearance if args.inspect else "dark"
     states = [state for state in WINDOW_SIZES if state != "video-editor" or video_fixture]
@@ -353,7 +377,9 @@ def main():
         if args.inspect:
             continue
         for index in range(args.runs):
-            order = ("tauri", "gpui") if index % 2 == 0 else ("gpui", "tauri")
+            names = list(binaries)
+            offset = index % len(names)
+            order = names[offset:] + names[:offset]
             for name in order:
                 result = trial(binaries[name], name, state, fixture, args.settle, args.idle, appearance,
                                args.artifacts / f"{name}-{state}-trial-{index + 1}.png")
@@ -368,13 +394,16 @@ def main():
     root = Path(__file__).resolve().parents[2]
     report = {
         "recorded_at": datetime.now(timezone.utc).isoformat(),
-        "scope": ("Linux X11 release-source whole-process-tree comparison of Tauri and GPUI. "
+        "scope": ("Linux X11 release-source whole-process-tree comparison of the supplied Tauri, GPUI and/or full GTK implementations. "
                   "Preferences and media editors use their production entry paths; screenshot and recording "
                   "selectors use each app's real configured global shortcut. Matched client size and appearance; "
                   "feature/interaction parity is assessed separately."),
         "caveats": ("First mapped window is not readiness. No FPS or energy measurement, and no "
                     "extrapolation to macOS, Windows, or other Linux environments. Overlay resource samples "
-                    "retain the Preferences used to enter them, for both apps. Preview/HUD timing includes "
+                    "retain the Preferences used to enter them. Native means the full GTK/Cairo experiment, "
+                    "not a minimal native window or AppKit/Win32. Native captures publish files while the "
+                    "other implementations keep private copies; these are settled-state costs, not capture throughput. "
+                    "Preview/HUD timing includes "
                     "multi-step fixture setup and deliberate waits; do not compare it as startup latency. "
                     "The idle_cpu field measures active capture CPU for recording-hud."),
         "environment": {
@@ -388,6 +417,7 @@ def main():
         },
         "configuration": {"runs": args.runs, "settle_seconds": args.settle,
                           "idle_seconds": args.idle, "appearance": appearance,
+                          "implementations": list(binaries),
                           "client_viewports": {state: WINDOW_SIZES.get(state, "native") for state in states}},
         "source_base": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
         "binaries": {name: {"path": str(path), "bytes": path.stat().st_size,
@@ -400,8 +430,8 @@ def main():
             "matched": states,
             "unmatched": {
                 "history": "Symmetric production tray activation was not verified in this X11 fixture; no history benchmark is claimed.",
-                "export-timings": "Exports require editor IPC/UI interaction and completion signaling; neither app exposes a symmetric production CLI workflow.",
-                **({} if video_fixture else {"video-editor": "Not run: supply --video-fixture only after verifying actual playback in both apps."}),
+                "export-timings": "Exports require editor IPC/UI interaction and completion signaling; the apps do not expose a symmetric production CLI workflow.",
+                **({} if video_fixture else {"video-editor": "Not run: supply --video-fixture only after verifying actual playback in every supplied app."}),
             },
         },
         "samples": samples,

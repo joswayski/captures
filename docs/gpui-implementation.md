@@ -133,40 +133,61 @@ the sidebar; lower color controls may require scrolling at smaller viewports.
 ## Updated resource comparison
 
 September 12, 2026: the updated GPUI release versus the unchanged production
-Tauri binary from the baseline below. Same two-vCPU Mesa 25 llvmpipe/X11 lab,
-fresh profiles, five alternating trials per frontend, five seconds settling and
-two seconds CPU sampling. Each row measures the entire application process tree.
+Tauri binary from the baseline below, plus the full **GTK3/Cairo native experiment**
+(`captures-linux-native`, not the minimal GTK probe). Same two-vCPU Mesa 25
+llvmpipe/X11 lab, fixtures, fresh profiles, five trials per frontend, five seconds
+settling and two seconds CPU sampling. Tauri/GPUI resources reuse the verified
+alternating trials; native trials ran subsequently, **not three-way interleaved**.
+Each row measures the entire application process tree, not the external compositor.
 PSS apportions shared pages, unlike summed RSS, which can count them repeatedly.
 
-| State | Tauri PSS, MiB | GPUI PSS, MiB | Tauri CPU, % one core | GPUI CPU, % one core |
-| --- | ---: | ---: | ---: | ---: |
-| Preferences | 595.1 | 160.8 | 20.0 | 1.5 |
-| Screenshot editor | 693.4 | 169.7 | 45.0 | 2.0 |
-| Screenshot selector | 737.0 | 214.9 | 0.5 | 2.0 |
-| Recording selector | 749.4 | 215.2 | 0.0 | 2.0 |
-| Three collapsed previews | 914.6 | 222.1 | 5.0 | 2.0 |
-| Three expanded previews | 880.2 | 221.5 | 5.5 | 2.0 |
-| Active region recording | 1004.7 | 257.9 | 133.5 | 120.0 |
+| State | Frontend | PSS MiB | Private MiB | RSS MiB | Processes | CPU, % one core | First mapped window, ms |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Preferences | Tauri | 595.1 | 439.3 | 1201.3 | 6 | 20.0 | 1193 |
+| Preferences | GPUI | 160.8 | 159.6 | 166.0 | 1 | 1.5 | 643 |
+| Preferences | GTK native | 40.2 | 36.1 | 50.3 | 1 | 0.5 | 591 |
+| Screenshot editor | Tauri | 693.4 | 519.8 | 1323.7 | 6 | 45.0 | 1302 |
+| Screenshot editor | GPUI | 169.7 | 168.5 | 175.1 | 1 | 2.0 | 649 |
+| Screenshot editor | GTK native | 38.6 | 32.7 | 50.2 | 1 | 0.5 | 544 |
+| Screenshot selector | Tauri | 737.0 | 552.1 | 1380.8 | 6 | 0.5 | 235 |
+| Screenshot selector | GPUI | 214.9 | 213.6 | 220.3 | 1 | 2.0 | 462 |
+| Screenshot selector | GTK native | 63.8 | 56.5 | 77.3 | 1 | 0.5 | 299 |
+| Recording selector | Tauri | 749.4 | 564.4 | 1393.3 | 6 | 0.0 | 301 |
+| Recording selector | GPUI | 215.2 | 213.9 | 220.6 | 1 | 2.0 | 381 |
+| Recording selector | GTK native | 64.2 | 56.7 | 77.7 | 1 | 0.5 | 350 |
+| Three collapsed previews | Tauri | 914.6 | 733.2 | 1580.9 | 6 | 5.0 | — |
+| Three collapsed previews | GPUI | 222.1 | 220.8 | 227.5 | 1 | 2.0 | — |
+| Three collapsed previews | GTK native | 53.7 | 46.2 | 67.3 | 1 | 1.0 | — |
+| Three expanded previews | Tauri | 880.2 | 692.8 | 1549.9 | 6 | 5.5 | — |
+| Three expanded previews | GPUI | 221.5 | 220.3 | 226.8 | 1 | 2.0 | — |
+| Three expanded previews | GTK native | 53.7 | 46.1 | 67.4 | 1 | 1.0 | — |
+| Active region recording | Tauri | 1004.7 | 811.9 | 1977.5 | 8 | 133.5 | — |
+| Active region recording | GPUI | 257.9 | 256.7 | 263.2 | 1 | 120.0 | — |
+| Active region recording | GTK native | 94.0 | 86.4 | 107.6 | 1 | 100.5 | — |
 
 All values are medians. Recording CPU is **active capture**, not idle; 100% means
 one fully occupied core. Recording waits for the durable `recording` state before
-the common settling interval; both inspected HUDs read 0:07. The overlay rows
-retain the initial Preferences window in both applications. Preview rows follow
+the common settling interval; inspected HUDs read 0:06–0:07. The overlay rows
+retain the initial Preferences window in each application. Preview rows follow
 three real 730×450 captures, verified by independent history entries. These are
-application-state costs, not the incremental cost of a single menu.
+application-state costs, not the incremental cost of a single menu. The native
+experiment publishes screenshots automatically; Tauri/GPUI keep private copies.
+This is not a capture/save-throughput comparison or proof of feature parity.
 
 Initial collapsed-stack samples were rejected: immediate synthetic clicks could
 pass through Tauri before native pointer polling enabled hit testing. All five
 pairs were rerun with hover/animation waits, and all ten trial screenshots were
 inspected as collapsed piles. The window retains transparent space, so frame
 height alone cannot establish collapse. Raw results include this provenance.
+The native warmup surfaces and all ten measured collapsed/expanded screenshots
+were also inspected, confirming three completed cards and the expected state.
 
-GPUI uses substantially less memory here, but does not win every metric. Idle
-selectors use more CPU. Median screenshot-selector mapping took 462 ms for GPUI
-versus 235 ms for Tauri; recording-selector mapping took 381 versus 301 ms.
-Preferences mapped in 643 versus 1193 ms, and the image editor in 649 versus
-1302 ms. **Mapping is not first useful paint.** Preview/HUD setup includes
-deliberate automation waits, so its timing is not a startup comparison.
+GPUI uses 71–76% less PSS than Tauri here, but 2.7–4.4× the GTK experiment's PSS.
+GTK has the lowest PSS in every state, but Tauri maps both selectors faster.
+**Mapping is not first useful paint.** Preview/HUD setup includes deliberate
+automation waits, so its timing is omitted rather than called startup latency.
+The release executables are 34.4 MiB (Tauri), 37.1 MiB (GPUI) and 11.6 MiB (GTK);
+these exclude shared libraries/media tools and are not installer sizes.
 
 No physical-GPU, macOS, Windows, Wayland, energy, sustained playback, long-recording
 or export-throughput claims follow from this run. Tauri's H.264 preview returned
@@ -175,7 +196,34 @@ plugins; comparing that error state to GPUI's working decoder would be invalid.
 History also lacks a verified symmetric production entry path in this fixture.
 Those workloads remain unmeasured, rather than extrapolated from the editor.
 
-[Updated samples, ranges, binary hashes and environment](../experiments/gpui/results/linux-controls.json).
+[Tauri/GPUI samples, ranges, binary hashes and environment](../experiments/gpui/results/linux-controls.json)
+and [matching native resource results](../experiments/gpui/results/linux-native-controls.json).
+
+### Updated three-way input response
+
+All three current binaries were also rerun with two discarded warmups and ten
+measured drag trials each, sequentially Tauri → GPUI → GTK, with no competing
+builds or checks. Median motion-to-observed-pixel latency was **278.6 ms Tauri,
+104.6 ms GPUI and 28.6 ms GTK**; all had 10/10 successful trials. Ranges were
+223.3–371.3 ms, 96.5–166.5 ms and 28.2–31.0 ms, respectively. Median pixel-polling
+overhead was 0.186 ms, 0.130 ms and 0.130 ms. These are software-compositor
+observations, not physical display latency, steady-state FPS or reliable tail
+distributions. A hardware GPU could change these results; this run does not
+establish its memory use or a performance ranking on other platforms.
+
+The original mid-edge detector incorrectly timed out for GTK: its 1.5px Cairo
+stroke is anti-aliased and never produces the expected solid yellow pixel there,
+despite correctly rendering the selection. That [failed detector run](../experiments/gpui/results/latency-native-edge-detector.json)
+is preserved, not reported as five-second application latency. The final runs
+use the **same** 13×9 root-window patch around (1050,180), the moving top-right
+handle, where all three implementations render opaque mustard. Color tolerance,
+drag coordinates, timeout and stale-pixel rejection are unchanged. All three
+730×450 selections and handle positions were visually inspected. This changes
+the observation point from the historical mid-edge results below.
+
+Raw final trials: [Tauri](../experiments/gpui/results/latency-controls-tauri.json),
+[GPUI](../experiments/gpui/results/latency-controls-gpui.json),
+[GTK native](../experiments/gpui/results/latency-controls-native.json).
 
 ## Historical release resource comparison
 
@@ -297,7 +345,11 @@ and interaction checks above establish only the behaviors they actually ran.
   Clippy: passed; 366 Rust tests passed, one ignored.
 - GPUI locked tests: 88 passed;
   formatting, strict all-target Clippy and release build passed.
-- Python helper tests: twelve passed (ten benchmark, two latency).
+- Python helper tests: fifteen passed (eleven benchmark, four latency), including
+  native CLI/profile isolation and moving-handle/stale-pixel detector checks.
+- Three-way comparison: 105 resource samples and 30 successful final input-response
+  samples; summaries were independently recomputed and binary hashes matched.
+  The native comparator built with locked dependencies in release mode.
 - The first current `npm run check` with disposable Git signing disabled hit two
   asynchronous CaptureOverlay test failures (828 passed). The complete rerun
   passed all 830 tests and the production web build; no Tauri source was changed.

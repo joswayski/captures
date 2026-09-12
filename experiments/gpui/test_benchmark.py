@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import struct
 import tempfile
@@ -43,6 +44,21 @@ class BenchmarkHelpersTest(unittest.TestCase):
                          ["/opt/captures", "--appearance", "dark", "--preferences"])
         self.assertEqual(benchmark.command(binary, "gpui", "image", fixture, "light"),
                          ["/opt/captures", "--appearance", "light", "--open", "/tmp/fixture.png"])
+        self.assertEqual(benchmark.command(binary, "native", "preferences", fixture, "dark"),
+                         ["/opt/captures", "--preferences"])
+        self.assertEqual(benchmark.command(binary, "native", "image", fixture, "light"),
+                         ["/opt/captures", "--open", "/tmp/fixture.png"])
+
+    def test_native_profile_configures_appearance_and_isolates_output(self):
+        for appearance in ("light", "dark"):
+            with self.subTest(appearance=appearance), tempfile.TemporaryDirectory() as directory:
+                profile = Path(directory)
+                env = benchmark.profile_environment(profile, appearance)
+                settings = json.loads((Path(env["CAPTURES_NATIVE_DATA"]) / "settings.json").read_text())
+                self.assertEqual(settings["appearance"], appearance)
+                self.assertEqual(settings["output_directory"], str(profile / "captures"))
+                self.assertFalse(settings["launch_at_login"])
+                self.assertNotEqual(env["CAPTURES_NATIVE_DATA"], env["CAPTURES_GPUI_DATA"])
 
     def test_selection_commands_use_real_shortcut_entry_not_gpui_test_cli(self):
         binary = Path("/opt/captures")
@@ -52,6 +68,8 @@ class BenchmarkHelpersTest(unittest.TestCase):
                              ["/opt/captures"])
             self.assertEqual(benchmark.command(binary, "gpui", state, fixture, "dark"),
                              ["/opt/captures", "--appearance", "dark", "--preferences"])
+            self.assertEqual(benchmark.command(binary, "native", state, fixture, "dark"),
+                             ["/opt/captures", "--preferences"])
 
     def test_video_uses_each_production_media_open_contract(self):
         binary = Path("/opt/captures")
@@ -60,6 +78,8 @@ class BenchmarkHelpersTest(unittest.TestCase):
                          ["/opt/captures", "/tmp/fixture.mp4"])
         self.assertEqual(benchmark.command(binary, "gpui", "video-editor", fixture, "dark"),
                          ["/opt/captures", "--appearance", "dark", "--open", "/tmp/fixture.mp4"])
+        self.assertEqual(benchmark.command(binary, "native", "video-editor", fixture, "dark"),
+                         ["/opt/captures", "--open", "/tmp/fixture.mp4"])
 
     def test_selection_shortcuts_are_discriminating(self):
         from unittest.mock import patch

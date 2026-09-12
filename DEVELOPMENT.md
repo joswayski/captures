@@ -347,31 +347,41 @@ Build the real Tauri comparator with production frontend assets, then collect
 Preferences, image-editor, screenshot/recording selector, collapsed/expanded
 three-preview stacks, and active recording HUD screenshots plus whole-process-tree
 metrics. The latter states enter through real capture shortcuts and buttons,
-retaining the initial Preferences window in both process trees. Use only the
+retaining the initial Preferences window in each process tree. The optional native
+comparator is the full GTK/Cairo app, not the minimal GTK probe. Use only the
 1600×1000 disposable lab: this includes actual region recording.
 
 ```sh
 npm run build --workspace @captures/desktop
 CARGO_TARGET_DIR=experiments/gpui/target CARGO_BUILD_JOBS=2 \
   cargo build --release --locked -p captures-desktop --bin captures --features tauri/custom-protocol
+CARGO_TARGET_DIR="$PWD/experiments/gpui/target" CARGO_BUILD_JOBS=2 \
+  cargo build --release --locked --manifest-path experiments/native-ui/Cargo.toml \
+  --no-default-features --features native --bin captures-linux-native
 python3 experiments/gpui/benchmark.py --lab /tmp/captures-gpui-lab \
   --tauri "$PWD/experiments/gpui/target/release/captures" \
   --gpui "$PWD/experiments/gpui/target/release/captures-gpui" \
+  --native "$PWD/experiments/gpui/target/release/captures-linux-native" \
   --artifacts "$PWD/.amp/in/artifacts/gpui" --runs 5 \
   > /tmp/gpui-comparison.json
 ```
 
+Omit binary flags to measure only the supplied implementations. Trial order
+rotates when more than one is supplied. Native screenshots automatically publish
+saved files, unlike the other apps' private capture copies; preview measurements
+compare settled application states, not capture/save throughput.
+
 Use `--inspect --appearance light` for an additional visual-only pass. Inspect
 the actual screenshots before accepting any measurements. Stop builds and other
 workloads before timing. An optional `--video-fixture /absolute/file.mp4` adds
-the paused video editor, but first verify playback in both apps; a loaded timeline
+the paused video editor, but first verify playback in every supplied app; a loaded timeline
 does not establish that the video player works. The current orb's Tauri WebKit
 player reported `NotSupportedError`, so no video-editor comparison is published.
 History and export timing are not measured. Preview/HUD setup time includes
 deliberate waits and is not startup latency; HUD CPU measures active recording,
 not idle. The harness waits for the durable recording state before settling.
 `latency.py` additionally samples XTest drag motion to
-observed compositor pixels (`--lab`, `--binary`, `--implementation tauri|gpui`,
+observed compositor pixels (`--lab`, `--binary`, `--implementation tauri|gpui|native`,
 `--output FILE`, optional `--artifacts DIR`). It records failed trials rather
 than counting them as fast frames. This is software-X11 observation latency,
 not physical display latency, FPS, energy use, or proof of feature parity.
