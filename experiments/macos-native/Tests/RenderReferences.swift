@@ -68,9 +68,21 @@ enum RenderReferences {
             window.contentView = view
             window.makeKeyAndOrderFront(nil)
             application.activate(ignoringOtherApps: true)
-            DispatchQueue.main.asyncAfter(deadline: .now() + (dustCapture ? 0.18 : 0.7)) {
+            let filmstripDeadline = Date().addingTimeInterval(10)
+            func captureWhenReady() {
                 view.layoutSubtreeIfNeeded()
                 view.displayIfNeeded()
+                if fixture.name == "recording-editor-layout",
+                   let readiness = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                    // These are ordinary SwiftUI thumbnail images. This read
+                    // only gates readiness; compositor proof still comes from
+                    // the independent WindowServer capture below.
+                    view.cacheDisplay(in: view.bounds, to: readiness)
+                    if !hasTimelineFilmstrip(readiness), Date() < filmstripDeadline {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { captureWhenReady() }
+                        return
+                    }
+                }
                 if captureAnimations && (dustCapture || fixture.name == "recording-editor-layout") {
                     let name = dustCapture
                         ? "preview-dust-compositor.png" : "recording-editor-compositor.png"
@@ -105,7 +117,7 @@ enum RenderReferences {
                         }
                         guard
                               (dustCapture ? hasDustPresentation(image)
-                                  : hasSharedFixtureFeature(image)) else {
+                                  : hasSharedFixtureFeature(image) && hasTimelineFilmstrip(image)) else {
                             fputs("Compositor capture for \(fixture.name) did not contain its required presented media. Grant Screen Recording permission, verify the window is unobscured, and rerun.\n", stderr)
                             exit(1)
                         }
@@ -138,8 +150,15 @@ enum RenderReferences {
                 guard let data = bitmap.representation(using: .png, properties: [:]) else { exit(1) }
                 do { try data.write(to: output.appendingPathComponent("\(fixture.name).png"), options: .withoutOverwriting) }
                 catch { fputs("Reference write: \(error)\n", stderr); exit(1) }
+                if fixture.name == "recording-editor-layout", !hasTimelineFilmstrip(bitmap) {
+                    fputs("Native recording-editor-layout reference did not contain decoded filmstrip frames within 10 seconds; diagnostic PNG saved.\n", stderr)
+                    exit(1)
+                }
                 print("Rendered native \(fixture.name): \(bitmap.pixelsWide) × \(bitmap.pixelsHigh)")
                 render(index + 1)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + (dustCapture ? 0.18 : 0.7)) {
+                captureWhenReady()
             }
         }
         DispatchQueue.main.async { render(0) }
@@ -245,5 +264,48 @@ enum RenderReferences {
             }
         }
         return warmPixels >= 80 && bluePixels >= 500
+    }
+
+    private static func hasTimelineFilmstrip(_ image: NSImage) -> Bool {
+        guard let bitmap = NSBitmapImageRep(data: image.tiffRepresentation ?? Data()) else { return false }
+        return hasTimelineFilmstrip(bitmap)
+    }
+
+    private static func hasTimelineFilmstrip(_ bitmap: NSBitmapImageRep) -> Bool {
+        // The preview is centered and letterboxed, while the filmstrip spans
+        // nearly the full editor width. Count the source fixture's blue only
+        // in the extreme side bands at the timeline's vertical position, so
+        // a decoded preview cannot make empty thumbnail cells pass. Test both
+        // vertical orientations because NSBitmapImageRep row origins vary by
+        // capture path and backing representation.
+        let xRanges = [
+            bitmap.pixelsWide * 5 / 100..<bitmap.pixelsWide * 15 / 100,
+            bitmap.pixelsWide * 85 / 100..<bitmap.pixelsWide * 95 / 100,
+        ]
+        let yRanges = [
+            bitmap.pixelsHigh * 72 / 100..<bitmap.pixelsHigh * 87 / 100,
+            bitmap.pixelsHigh * 13 / 100..<bitmap.pixelsHigh * 28 / 100,
+        ]
+        for yRange in yRanges {
+            var sourcePixels = [0, 0]
+            for y in stride(from: yRange.lowerBound, to: yRange.upperBound, by: 2) {
+                for (side, xRange) in xRanges.enumerated() {
+                    for x in stride(from: xRange.lowerBound, to: xRange.upperBound, by: 2) {
+                        guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                        if color.alphaComponent > 0.08,
+                           color.blueComponent > 0.18,
+                           color.blueComponent - color.redComponent > 0.05,
+                           color.blueComponent - color.greenComponent > 0.015 {
+                            sourcePixels[side] += 1
+                        }
+                    }
+                }
+            }
+            if sourcePixels.allSatisfy({ $0 >= 40 }) {
+                print("Decoded filmstrip source samples, left/right: \(sourcePixels)")
+                return true
+            }
+        }
+        return false
     }
 }

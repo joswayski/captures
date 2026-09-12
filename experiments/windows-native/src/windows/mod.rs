@@ -1624,7 +1624,10 @@ impl App {
                             probe.has_audio,
                         );
                         match result {
-                            Ok(editor) => {
+                            Ok(mut editor) => {
+                                if self.fixture_mode {
+                                    editor.seek(editor.duration_ms / 3);
+                                }
                                 self.state.recording_editor = Some(editor);
                                 self.state.status = None;
                                 self.restart_playback_worker();

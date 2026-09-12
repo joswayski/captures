@@ -95,9 +95,22 @@ on/off/disabled control references. Recording timelines use one trim track with
 two handles rather than duplicate decorative edges.
 
 The Linux screenshot editor's default, selected-layer, menu-open, and
-export-open states were rendered and inspected under software X11. Updated
-Windows/macOS native fixtures still require their corresponding CI runs; older
-accepted runs above do not validate these newer layouts. Missing Windows image
+export-open states were rendered and inspected under software X11. The
+[macOS parity run](https://github.com/joswayski/captures/actions/runs/34719051965)
+passed Swift build, 11 EditorModel tests, 16 normal references, and the video/dust
+compositor checks. Inspection confirmed corrected controls but found empty
+recording filmstrip cells that the old preview-only validator missed. The fixture
+now waits up to ten seconds for rendered thumbnails and requires source pixels
+at both timeline ends, independently of the video preview. Failed filmstrip
+captures are saved and uploaded for diagnosis; acceptance of this fix remains
+pending native CI. The
+[Windows parity run](https://github.com/joswayski/captures/actions/runs/34719051988)
+passed 38 MSVC tests and rendered 26 fully contained light/dark hardware-driver
+captures, including decoded paused video frames. Inspection found wrapped labels
+and overlapping footer text; the follow-up corrects those and moves the fixture
+playhead between the two trim handles for independent visual verification.
+These corrections still require native render acceptance. Neither run verifies
+continuous playback, audio, or WARP rendering. Missing Windows image
 layers, eraser, editable canvas controls, and non-General preference pages remain
 explicitly unavailable. This pass does not establish full feature parity or
 change the measured revision below.

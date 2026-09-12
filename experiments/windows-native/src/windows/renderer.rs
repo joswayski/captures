@@ -563,7 +563,7 @@ impl Renderer {
                 Rect {
                     x: 370.0,
                     y: 13.0,
-                    width: 48.0,
+                    width: 82.0,
                     height: 26.0,
                 },
                 p.muted,
@@ -854,9 +854,9 @@ impl Renderer {
                     self.text(
                         label,
                         Rect {
-                            x: rect.x + 30.0,
+                            x: rect.x + 27.0,
                             y: rect.y + 9.0,
-                            width: 56.0,
+                            width: 59.0,
                             height: 22.0,
                         },
                         p.text,
@@ -1224,7 +1224,7 @@ impl Renderer {
                 );
                 self.text(
                     &format!(
-                        "Output size   Original · {} × {}       Save quality   Preserve quality       Est. size   after save",
+                        "Output size   Original · {} × {}       Save quality   Preserve quality       Estimate unavailable",
                         document.map_or(0, |value| value.crop.width.round() as u32),
                         document.map_or(0, |value| value.crop.height.round() as u32)
                     ),
@@ -1276,9 +1276,9 @@ impl Renderer {
             self.text(
                 "Saving to Captures folder",
                 Rect {
-                    x: 302.0,
+                    x: 500.0,
                     y: footer_y + 8.0,
-                    width: 184.0,
+                    width: 226.0,
                     height: 18.0,
                 },
                 p.muted,
