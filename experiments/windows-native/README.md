@@ -42,12 +42,17 @@ tool rail and shape flyout, fitted canvas, layers/properties sidebar, and filena
 footer. Filename edits, format changes, Save as new file, layer selection/visibility, copy, and Save
 are functional. Replacing a source is allowed only while its sanitized filename and supported format
 remain unchanged; staged bytes are flushed and synced before replacement. Canvas
-dimension/background/zoom controls are currently read-only and Add images is explicitly unavailable.
+dimension/background/zoom controls are currently read-only. Add images opens the native multi-file
+picker, decodes selected images off the message thread, and adds independently selectable raster
+layers through the shared `captures-image` renderer. Imported layers preserve aspect ratio and can
+be moved, resized, rotated, hidden, exported, and undone/redone. The picker does not yet filter its
+visible file list to supported image formats, and one multi-select import currently creates one undo
+checkpoint per image rather than one checkpoint for the batch.
 The current native chrome uses the shipping editor's icon-led tool rail, separate Arrow tool,
 three-column shape flyout, empty default inspector, locked-background layer row, grouped canvas/zoom
 header, and filename/export footer. Switches share the shipping 30-by-18 geometry and have distinct
-on, off, and disabled states. Light and dark runtime fixtures cover default, shapes, export,
-selected-properties, and selected-line editor states.
+on, off, and disabled states. Light and dark runtime fixtures cover default, imported-image, shapes,
+export, selected-properties, and selected-line editor states.
 Selected annotations can be moved, resized, and rotated, and their color, stroke, and supported fill
 state can be edited with undo/redo.
 The recording editor probes real media, decodes playback frames, seeks, trims, chooses quality,
@@ -64,7 +69,7 @@ changing its custom quality dropdown automatically encode a one-second sample an
 split-frame before/after comparison plus an extrapolated size estimate. Any performance measurement
 must include FFmpeg child-process CPU and memory.
 
-The eraser tool, additional image layers, editable canvas size/background/zoom, recording crop/split
+The eraser tool, editable canvas size/background/zoom, remaining image-layer actions, recording crop
 and preview audio, and the non-General preference pages are not implemented. Their controls are
 omitted or explicitly marked unavailable rather than presented as working. Windows DirectComposition
 fixtures are required to assess final pixel-level parity; they cannot be rendered in the Linux orb.

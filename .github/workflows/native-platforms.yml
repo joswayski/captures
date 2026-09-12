@@ -10,6 +10,7 @@ on:
       - "experiments/native-ui/test_native_comparison.py"
       - "experiments/native-ui/src/native/editor/encoder.rs"
       - "crates/captures-capture/**"
+      - "crates/captures-feedback/**"
       - "crates/captures-image/**"
       - "crates/captures-recording/**"
       - "crates/captures-recording-xcap/**"

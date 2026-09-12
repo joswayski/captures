@@ -25,6 +25,12 @@ pub enum Shape {
     Rectangle(Rect),
     Ellipse(Rect),
     Polygon(Vec<Point>),
+    Image {
+        origin: Point,
+        width: f32,
+        height: f32,
+        pixels: Arc<RgbaImage>,
+    },
     Text {
         origin: Point,
         value: String,
@@ -192,6 +198,25 @@ fn transform_shape(shape: &mut Shape, transform: impl Fn(Point) -> Point) {
             });
             *rect = Rect::from_points(top_left, bottom_right);
         }
+        Shape::Image {
+            origin,
+            width,
+            height,
+            ..
+        } => {
+            let top_left = transform(*origin);
+            let bottom_right = transform(Point {
+                x: origin.x + *width,
+                y: origin.y + *height,
+            });
+            let rect = Rect::from_points(top_left, bottom_right);
+            *origin = Point {
+                x: rect.x,
+                y: rect.y,
+            };
+            *width = rect.width;
+            *height = rect.height;
+        }
         Shape::Text { origin, .. } => *origin = transform(*origin),
     }
 }
@@ -329,6 +354,31 @@ impl Document {
             visible: true,
         });
         id
+    }
+
+    pub fn add_image(&mut self, image: RgbaImage, offset: usize) -> u64 {
+        let source_width = image.width().max(1) as f32;
+        let source_height = image.height().max(1) as f32;
+        let scale = (self.crop.width * 0.55 / source_width)
+            .min(self.crop.height * 0.55 / source_height)
+            .min(1.0);
+        let width = source_width * scale;
+        let height = source_height * scale;
+        let cascade = offset as f32 * 18.0;
+        let origin = Point {
+            x: self.crop.x + (self.crop.width - width) / 2.0 + cascade,
+            y: self.crop.y + (self.crop.height - height) / 2.0 + cascade,
+        };
+        self.add(
+            Shape::Image {
+                origin,
+                width,
+                height,
+                pixels: Arc::new(image),
+            },
+            [255, 255, 255, 255],
+            1.0,
+        )
     }
 
     pub fn delete(&mut self, id: u64) -> bool {
@@ -537,6 +587,17 @@ fn to_raster_layer(layer: &Layer) -> captures_image::Layer {
         Shape::Polygon(points) => {
             captures_image::Shape::Polygon(points.iter().copied().map(to_raster_point).collect())
         }
+        Shape::Image {
+            origin,
+            width,
+            height,
+            pixels,
+        } => captures_image::Shape::Image {
+            origin: to_raster_point(*origin),
+            width: *width,
+            height: *height,
+            pixels: pixels.clone(),
+        },
         Shape::Text {
             origin,
             value,
@@ -849,5 +910,65 @@ mod tests {
         assert_eq!(points.len(), 4);
         assert_eq!(points[1], Point { x: 8.0, y: 3.0 });
         assert_eq!(points[2], Point { x: 13.0, y: 9.0 });
+    }
+
+    #[test]
+    fn imported_image_preserves_aspect_and_is_undoable() {
+        let mut document = Document::new(RgbaImage::new(400, 200));
+        let mut imported = RgbaImage::new(80, 40);
+        imported.put_pixel(79, 0, image::Rgba([17, 91, 203, 255]));
+
+        let id = document.add_image(imported, 0);
+        let layer = document.layers.iter().find(|layer| layer.id == id).unwrap();
+        let Shape::Image {
+            origin,
+            width,
+            height,
+            ..
+        } = &layer.shape
+        else {
+            panic!("expected image layer");
+        };
+        assert_eq!((*width, *height), (80.0, 40.0));
+        assert_eq!(*origin, Point { x: 160.0, y: 80.0 });
+        assert!(
+            document
+                .hit_test(Point { x: 239.0, y: 81.0 }, 0.0)
+                .is_some()
+        );
+        assert!(document.undo());
+        assert!(document.layers.is_empty());
+        assert!(document.redo());
+        assert!(matches!(document.layers[0].shape, Shape::Image { .. }));
+    }
+
+    #[test]
+    fn imported_image_resize_crossing_corner_normalizes_geometry() {
+        let layer = Layer {
+            id: 9,
+            shape: Shape::Image {
+                origin: Point { x: 10.0, y: 20.0 },
+                width: 80.0,
+                height: 40.0,
+                pixels: Arc::new(RgbaImage::new(20, 10)),
+            },
+            color: [255; 4],
+            stroke: 1.0,
+            fill: None,
+            rotation_degrees: 0.0,
+            visible: true,
+        };
+        let resized = resize_from_corner(&layer, 0, Point { x: 110.0, y: 75.0 }).unwrap();
+        let Shape::Image {
+            origin,
+            width,
+            height,
+            ..
+        } = resized.shape
+        else {
+            panic!("expected image layer");
+        };
+        assert_eq!(origin, Point { x: 90.0, y: 60.0 });
+        assert_eq!((width, height), (20.0, 15.0));
     }
 }

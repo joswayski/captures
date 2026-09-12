@@ -5,7 +5,7 @@ The bridge is a standalone Rust `staticlib` with no Tauri dependency. Include
 `captures_native_request`, copy the returned UTF-8 JSON, and release it exactly
 once with `captures_native_free`. Calls are synchronous. Recording lifecycle,
 capture discovery, and screenshots execute on one bridge-owned background
-thread. Stateless `image_encode`, `media_probe`, `media_export`, and
+thread. Stateless `image_encode`, `media_probe`, `media_estimate`, `media_export`, and
 `recover_list` work, plus `microphone_permission`, executes on the calling thread
 so long media jobs or permission prompts cannot block recording safety ticks.
 Recovery assembly/discard executes on the caller
@@ -159,9 +159,16 @@ are not silently presented as engine features.
   unattainable `max_bytes` returns an error rather than resizing or
   misrepresenting success.
 - `{"op":"media_probe","path":"..."}` returns
-  `{"duration_ms":u64,"width":u32,"height":u32,"has_system_audio":bool,
+  `{"duration_ms":u64,"width":u32,"height":u32,"size_bytes":u64,"has_system_audio":bool,
   "has_microphone_audio":bool}`. The first audio stream is exposed as system
   audio and a second stream as microphone audio, matching Captures recordings.
+- `{"op":"media_estimate","path":"...","format":"mp4|gif|webm",
+  "start_ms":u64,"end_ms":u64,"crop"?:RECT,"width"?:u32,"fps"?:1..30,
+  "quality"?:PRESET,"max_bytes"?:u64,"system_volume"?:number,
+  "microphone_volume"?:number,"mono"?:bool}` returns
+  `{"size_bytes":u64,"exact":bool}`. It uses the same edit/export contract as
+  save, encoding the full range up to six seconds or representative samples
+  for longer media. WebM estimates fail with the shared backend limitation.
 - `{"op":"media_export","path":"...","output":"...","format":"mp4|gif|webm",
   "start_ms":u64,"end_ms":u64,"crop"?:{"x":u32,"y":u32,"width":u32,"height":u32},
   "width"?:u32,"fps"?:1..30,"quality"?:"preserve|highest|high|standard|small|tiny",

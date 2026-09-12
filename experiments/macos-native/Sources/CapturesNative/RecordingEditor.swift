@@ -7,6 +7,7 @@ private struct RecordingProbe: Equatable {
     var width: Int
     var height: Int
     var durationMS: Double
+    var sizeBytes: Double
     var hasSystemAudio: Bool
     var hasMicrophoneAudio: Bool
 }
@@ -56,6 +57,9 @@ private final class RecordingEditorModel: ObservableObject {
     @Published var comparisonAfter: NSImage?
     @Published var comparisonPending = false
     @Published var comparisonError = ""
+    @Published var estimatedBytes: Double?
+    @Published var estimateExact = false
+    @Published var estimatePending = false
     @Published var timelineFrames: [NSImage] = []
     var loopEnabled = false
 
@@ -63,6 +67,7 @@ private final class RecordingEditorModel: ObservableObject {
     let player: AVPlayer
     private var periodicObserver: Any?
     private var comparisonGeneration = 0
+    private var estimateGeneration = 0
 
     init(artifact: Artifact) {
         self.artifact = artifact
@@ -98,6 +103,7 @@ private final class RecordingEditorModel: ObservableObject {
                 guard let width = Self.number(response["width"]),
                       let height = Self.number(response["height"]),
                       let duration = Self.number(response["duration_ms"]),
+                      let sizeBytes = Self.number(response["size_bytes"]),
                       width >= 1, height >= 1, duration > 0 else {
                     let error = NSError(domain: "CapturesNative.RecordingEditor", code: 1, userInfo: [NSLocalizedDescriptionKey: "media_probe returned incomplete recording metadata."])
                     self.status = error.localizedDescription
@@ -105,7 +111,7 @@ private final class RecordingEditorModel: ObservableObject {
                     return
                 }
                 self.probe = RecordingProbe(
-                    width: Int(width), height: Int(height), durationMS: duration,
+                    width: Int(width), height: Int(height), durationMS: duration, sizeBytes: sizeBytes,
                     hasSystemAudio: response["has_system_audio"] as? Bool ?? false,
                     hasMicrophoneAudio: response["has_microphone_audio"] as? Bool ?? false
                 )
@@ -266,6 +272,47 @@ private final class RecordingEditorModel: ObservableObject {
         comparisonError = ""
     }
 
+    func prepareEstimate(
+        format: String, width: Int?, quality: String,
+        maxBytes: Int?, systemVolume: Double, microphoneVolume: Double, mono: Bool, gifFPS: Int
+    ) {
+        constrainCrop()
+        estimateGeneration += 1
+        let generation = estimateGeneration
+        estimatePending = true
+        let fields = exportFields(
+            output: nil, format: format, width: width, quality: quality, maxBytes: maxBytes,
+            systemVolume: systemVolume, microphoneVolume: microphoneVolume, mono: mono, gifFPS: gifFPS,
+            trimStartMS: trimStartMS, trimEndMS: trimEndMS, cropEnabled: cropEnabled, crop: crop
+        )
+        Backend.shared.call("media_estimate", fields) { [weak self] result in
+            guard let self, self.estimateGeneration == generation else { return }
+            self.estimatePending = false
+            switch result {
+            case let .success(response):
+                self.estimatedBytes = Self.number(response["size_bytes"])
+                self.estimateExact = response["exact"] as? Bool ?? false
+            case .failure:
+                self.estimatedBytes = nil
+                self.estimateExact = false
+            }
+        }
+    }
+
+    func awaitEstimate() {
+        estimateGeneration += 1
+        estimatePending = true
+        estimatedBytes = nil
+        estimateExact = false
+    }
+
+    func dismissEstimate() {
+        estimateGeneration += 1
+        estimatePending = false
+        estimatedBytes = nil
+        estimateExact = false
+    }
+
     private func loadTimelineFrames(durationMS: Double) {
         let url = artifact.url
         DispatchQueue.global(qos: .utility).async {
@@ -288,16 +335,17 @@ private final class RecordingEditorModel: ObservableObject {
     }
 
     private func exportFields(
-        output: URL, format: String, width: Int?, quality: String,
+        output: URL?, format: String, width: Int?, quality: String,
         maxBytes: Int?, systemVolume: Double, microphoneVolume: Double, mono: Bool, gifFPS: Int,
         trimStartMS: Double, trimEndMS: Double, cropEnabled: Bool, crop: RecordingCrop
     ) -> [String: Any] {
         var fields: [String: Any] = [
-            "path": artifact.path, "output": output.path, "format": format,
+            "path": artifact.path, "format": format,
             "start_ms": Int(trimStartMS.rounded()), "end_ms": Int(trimEndMS.rounded()),
             "quality": quality, "system_volume": systemVolume,
             "microphone_volume": microphoneVolume, "mono": mono,
         ]
+        if let output { fields["output"] = output.path }
         if cropEnabled {
             fields["crop"] = ["x": Int(crop.x), "y": Int(crop.y), "width": Int(crop.width), "height": Int(crop.height)]
         }
@@ -345,6 +393,7 @@ struct RecordingEditorView: View {
     @State private var exportFilename: String
     @State private var comparisonExpanded = true
     @State private var comparisonWork: DispatchWorkItem?
+    @State private var estimateWork: DispatchWorkItem?
     @State private var gifFPS = 15
     @State private var comparisonSplit: CGFloat = 0.5
     @State private var systemVolume = 1.0
@@ -426,7 +475,12 @@ struct RecordingEditorView: View {
                 exportFilename = artifact.url.deletingPathExtension().lastPathComponent
             }
         }
-        .onDisappear { comparisonWork?.cancel(); model.dismissComparison() }
+        .onDisappear {
+            comparisonWork?.cancel()
+            estimateWork?.cancel()
+            model.dismissComparison()
+            model.dismissEstimate()
+        }
         .animation(NativeTheme.motion, value: model.cropEnabled)
         .animation(NativeTheme.standard, value: outputFormat)
     }
@@ -576,16 +630,21 @@ struct RecordingEditorView: View {
             }
             if let probe = model.probe {
                 GeometryReader { geometry in
+                    let frameCount = 12
+                    let filmstripSpacing = CGFloat(frameCount - 1)
+                    let filmstripWidth = max(1, geometry.size.width - 16 - filmstripSpacing)
+                    let frameWidth = filmstripWidth / CGFloat(frameCount)
                     ZStack(alignment: .leading) {
                         RoundedRectangle(cornerRadius: 8).fill(NativeTheme.field(colorScheme)).frame(height: 76)
                         HStack(spacing: 1) {
                             if model.timelineFrames.isEmpty {
-                                ForEach(0..<12, id: \.self) { _ in
-                                    NativeTheme.color("surface-sunken", colorScheme)
+                                ForEach(0..<frameCount, id: \.self) { _ in
+                                    NativeTheme.color("surface-sunken", colorScheme).frame(width: frameWidth)
                                 }
                             } else {
                                 ForEach(Array(model.timelineFrames.enumerated()), id: \.offset) { _, frame in
-                                    Image(nsImage: frame).resizable().scaledToFill().clipped()
+                                    Image(nsImage: frame).resizable().scaledToFill()
+                                        .frame(width: frameWidth).clipped()
                                 }
                             }
                         }
@@ -686,6 +745,21 @@ struct RecordingEditorView: View {
                 CaptureChoice(title: "Frame rate", selection: $gifFPS,
                               options: [8, 10, 12, 15, 20, 24, 30].map { CaptureOption(label: "\($0) FPS", value: $0) })
             }
+            HStack {
+                Text("Est. size")
+                Spacer()
+                Text(estimatedSizeLabel)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                    .foregroundStyle(model.estimatePending ? NativeTheme.muted(colorScheme) : NativeTheme.text(colorScheme))
+                if let delta = estimatedSizeDelta {
+                    Text(delta.label)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(delta.percent < 0 ? Color.green : NativeTheme.signal)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Estimated saved file size")
             if qualityMode != "preserve" {
                 Button {
                     comparisonExpanded.toggle()
@@ -907,6 +981,22 @@ struct RecordingEditorView: View {
         artifact.url.pathExtension.lowercased()
     }
     private var formatRequiresCopy: Bool { sourceFormat != outputFormat }
+    private var estimatedSizeLabel: String {
+        if qualityMode == "maximum" {
+            guard let maximumBytes else { return "—" }
+            return "≤ \(formatBytes(Double(maximumBytes)))"
+        }
+        if model.estimatePending, model.estimatedBytes == nil { return "Estimating…" }
+        guard let bytes = model.estimatedBytes else { return "—" }
+        return "\(model.estimateExact ? "" : "≈ ")\(formatBytes(bytes))"
+    }
+    private var estimatedSizeDelta: (percent: Int, label: String)? {
+        guard qualityMode != "maximum", !model.estimatePending,
+              let estimated = model.estimatedBytes, let source = model.probe?.sizeBytes, source > 0 else { return nil }
+        let percent = Int(((estimated / source - 1) * 100).rounded())
+        guard percent != 0 else { return nil }
+        return (percent, percent < 0 ? "−\(abs(percent))%" : "+\(percent)%")
+    }
 
     private func time(_ milliseconds: Double) -> String {
         let seconds = max(0, milliseconds) / 1_000
@@ -973,6 +1063,7 @@ struct RecordingEditorView: View {
     }
 
     private func scheduleComparison() {
+        scheduleEstimate()
         comparisonWork?.cancel()
         guard comparisonExpanded, qualityMode != "preserve", model.probe != nil else {
             model.dismissComparison()
@@ -988,6 +1079,37 @@ struct RecordingEditorView: View {
         }
         comparisonWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+    }
+
+    private func scheduleEstimate() {
+        estimateWork?.cancel()
+        guard qualityMode != "maximum", model.probe != nil else {
+            model.dismissEstimate()
+            return
+        }
+        // Invalidate a request that is already encoding immediately. Waiting
+        // until this debounce fires would let its stale result look current.
+        model.awaitEstimate()
+        let work = DispatchWorkItem {
+            model.prepareEstimate(
+                format: outputFormat, width: outputWidth(), quality: effectiveQuality,
+                maxBytes: maximumBytes, systemVolume: effectiveSystemVolume,
+                microphoneVolume: effectiveMicrophoneVolume, mono: mono, gifFPS: gifFPS
+            )
+        }
+        estimateWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+
+    private func formatBytes(_ bytes: Double) -> String {
+        let amount = max(0, bytes)
+        if amount < 1_000 { return "\(Int(amount.rounded())) B" }
+        let units = [(1_000_000_000.0, "GB"), (1_000_000.0, "MB"), (1_000.0, "KB")]
+        let unit = units.first { amount >= $0.0 } ?? units[2]
+        let value = amount / unit.0
+        return value < 10 && value.rounded() != value
+            ? String(format: "%.1f %@", value, unit.1)
+            : String(format: "%.0f %@", value, unit.1)
     }
 
     private func sameFile(_ lhs: URL, _ rhs: URL) -> Bool {

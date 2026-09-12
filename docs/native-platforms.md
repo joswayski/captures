@@ -66,22 +66,63 @@ These are implemented experiments, not drop-in replacements. In particular:
   released selection and a saved capture. Recording replacement uses a synced stage
   and explicit confirmation; cancellation preserves the original. Physical
   multi-monitor, hardware GPU, and Wayland behavior remain unverified.
-- **Windows:** editable canvas/background/zoom, image layers, and several layer
-  operations remain incomplete. Recording playback uses a CPU FFmpeg decoder feeding D2D,
-  not Media Foundation/D3D video decoding; playback audio, recording split/video
+- **Windows:** editable canvas/background/zoom and several layer operations
+  remain incomplete. Imported image layers now use the shared raster renderer
+  with native multi-select file picking, asynchronous decode, transformed hit
+  testing, and undo/redo; their new native fixture still needs acceptance.
+  Recording playback uses a CPU FFmpeg decoder feeding D2D,
+  not Media Foundation/D3D video decoding; playback audio, video
   crop, and microphone/countdown parity remain incomplete. Recording segment
   assembly still blocks during stop. Hosted D3D fixture captures do not establish
   physical DPI, capture, clipboard, drag, or cross-process click-through behavior.
-  [The accepted Windows run](https://github.com/joswayski/captures/actions/runs/34712355046)
-  passed MSVC build, 35 tests, strict clippy, and all 24 light/dark captures with
+  [The accepted Windows run](https://github.com/joswayski/captures/actions/runs/34720104027)
+  passed MSVC build, 38 tests, strict clippy, and all 26 light/dark captures with
   hardware drivers and verified full desktop bounds. Inspected recording
   fixtures show decoded paused frames, not playback timing or hardware video decode.
-- **macOS:** Swift builds, 10 XCTest tests, normal layouts, and independent real
-  video/dust compositor checks passed in [the native CI run](https://github.com/joswayski/captures/actions/runs/34711199486).
+- **macOS:** Swift builds, 11 XCTest tests, normal layouts, and independent real
+  video/dust compositor checks passed in [the native CI run](https://github.com/joswayski/captures/actions/runs/34720104041).
   The inspected dust frame contains displaced source fragments and transparent
   holes; the video frame contains only Captures' custom controls. These checks
   do not establish performance or full interaction parity. Capture permissions, microphone/audio,
   session recovery, and physical multi-display behavior still need native use.
+
+## Feature parity acceptance
+
+The full-feature pass compares executable shipping actions, not just visible
+controls or the historical GTK3 audit. These action families must pass on each
+native frontend before claiming application parity:
+
+| Action family | Required behavior and evidence |
+| --- | --- |
+| Capture | Region/window/display; screenshot/recording selection; aspect presets; repeated shortcut behavior; countdown cancellation; session-lock rejection; capability-aware cursor/click/key/audio options. Verify saved pixels and actual options. |
+| Image editing | Import images; draw/text/shapes; select/move/resize/rotate/snap; erase/restore/wand; text/brush styling and shadows; visibility/lock/rename/reorder/duplicate/opacity/blend/merge; crop/trim/expand/background; fit/zoom/pan. Exercise asymmetric documents, undo/redo, and restored drafts. |
+| Image export | PNG/JPEG/WebP; output dimensions; quality/max-size; current estimate/comparison; clipboard; destination/filename; save-new versus safe source replacement. Decode exported bytes and verify dimensions/pixels, cancellation and source safety. |
+| Recording session | Start/pause/resume/restart/countdown; microphone selection/meter/mute; screenshots while recording; hide/restore; discard/stop/recovery. Keep UI responsive during assembly and verify resulting media. |
+| Recording editor | Actual playback/seek/loop; one trim timeline; crop/resize; audio gain/mute/mono; quality/max-size/comparison/estimate; cancel/export/reveal/source replacement. Verify decoded media and edits, not only paused screenshots. |
+| Preview/history | Collapse/expand/corner placement/drag; hover/copy/save/edit/reveal; restore/filter; nondestructive dismiss versus confirmed delete; keyboard and accessibility routes. Check real pointer coordinates and persisted state. |
+| Preferences/integration | Every shipping preference and its runtime consumer; theme/system appearance; shortcuts/conflicts; first-run setup; launch notice; consent-based feedback/crash behavior; file routing; tray/autostart. Reopen with isolated settings to verify persistence. |
+
+Known implementation work remains in all three frontends. Windows has the
+largest editor/capture/settings gap; Linux still lacks its live microphone
+meter and first-run/launch flows; macOS still needs richer image-layer/viewport
+operations. Its new live recording estimate uses the real save pipeline; a Linux
+bridge check verified exact source/full-encode sizes and independently reproduced
+sampled estimates, while Swift presentation still requires native CI.
+Shared native feedback transport now has loopback tests for exact request fields,
+concurrent submission cooldown, retries, Unicode limits and response bounds;
+frontend integration and consent flows remain in progress. It collects no files
+or diagnostics and makes no automatic requests.
+Native installer/Open With registration,
+signed updater/channel, and production-profile migration are separate rollout
+gates, not satisfied by local command-line routing. Never install a Tauri update
+over a native frontend. Publishing a replacement remains a maintainer decision.
+
+Source review also corrected three misleading parity targets: shipping has no
+recording split action (the split slider compares compression), no persisted
+recording-editor edit draft, and no runtime system-audio mute control. Session
+crash recovery and export-time audio controls do exist and remain required.
+WebM is offered in shipping UI but rejected by the shared media toolchain;
+implementing a new codec is not a native-only parity fix.
 
 ## Control parity pass
 
@@ -102,16 +143,21 @@ compositor checks. Inspection confirmed corrected controls but found empty
 recording filmstrip cells that the old preview-only validator missed. The fixture
 now waits up to ten seconds for rendered thumbnails and requires source pixels
 at both timeline ends, independently of the video preview. Failed filmstrip
-captures are saved and uploaded for diagnosis; acceptance of this fix remains
-pending native CI. The
+captures are saved and uploaded for diagnosis. Readiness validation passed in
+[the follow-up run](https://github.com/joswayski/captures/actions/runs/34720104041):
+normal left/right thumbnail samples were 1,446/1,296 and compositor samples
+1,448/1,299, above 40 per side. Inspection then found twelve decoded cells
+overflowing their track; explicit equal cell widths fix that layout, pending
+its next native render. The
 [Windows parity run](https://github.com/joswayski/captures/actions/runs/34719051988)
 passed 38 MSVC tests and rendered 26 fully contained light/dark hardware-driver
 captures, including decoded paused video frames. Inspection found wrapped labels
 and overlapping footer text; the follow-up corrects those and moves the fixture
 playhead between the two trim handles for independent visual verification.
-These corrections still require native render acceptance. Neither run verifies
-continuous playback, audio, or WARP rendering. Missing Windows image
-layers, eraser, editable canvas controls, and non-General preference pages remain
+The [Windows follow-up](https://github.com/joswayski/captures/actions/runs/34720104027)
+verified those corrections in both appearances and a separate one-third playhead.
+Neither run verifies continuous playback, audio, or WARP rendering. Windows
+eraser, editable canvas controls, and non-General preference pages remain
 explicitly unavailable. This pass does not establish full feature parity or
 change the measured revision below.
 

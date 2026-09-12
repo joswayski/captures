@@ -16,6 +16,10 @@ use std::{
 };
 
 pub enum Event {
+    Images {
+        epoch: u64,
+        result: Result<Vec<(PathBuf, RgbaImage)>, String>,
+    },
     Probe {
         epoch: u64,
         source: PathBuf,
@@ -65,6 +69,21 @@ impl MediaWorker {
 
     pub fn try_recv(&self) -> Option<Event> {
         self.receiver.try_recv().ok()
+    }
+
+    pub fn import_images(&self, epoch: u64, paths: Vec<PathBuf>) {
+        let sender = self.sender.clone();
+        thread::spawn(move || {
+            let result = paths
+                .into_iter()
+                .map(|path| {
+                    image::open(&path)
+                        .map(|image| (path, image.to_rgba8()))
+                        .map_err(|error| error.to_string())
+                })
+                .collect();
+            let _ = sender.send(Event::Images { epoch, result });
+        });
     }
 
     pub fn probe(&self, epoch: u64, source: PathBuf) {

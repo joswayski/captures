@@ -46,8 +46,8 @@ use windows::{
         },
         System::{
             Com::{
-                COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize,
-                IDataObject,
+                CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+                CoTaskMemFree, CoUninitialize, IDataObject,
             },
             DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
             LibraryLoader::GetModuleHandleW,
@@ -74,9 +74,10 @@ use windows::{
                 VK_RETURN,
             },
             Shell::{
-                Common::ITEMIDLIST, ILClone, ILCreateFromPathW, ILFindLastID, ILRemoveLastID,
-                NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
-                SHCreateDataObject, Shell_NotifyIconW,
+                Common::ITEMIDLIST, FOS_ALLOWMULTISELECT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM,
+                FileOpenDialog, IFileOpenDialog, ILClone, ILCreateFromPathW, ILFindLastID,
+                ILRemoveLastID, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
+                NOTIFYICONDATAW, SHCreateDataObject, SIGDN_FILESYSPATH, Shell_NotifyIconW,
             },
             WindowsAndMessaging::*,
         },
@@ -1047,7 +1048,17 @@ impl App {
                 self.save_editor_document();
             }
         } else if p.y < 52.0 {
-            if (width - 498.0..width - 460.0).contains(&p.x) {
+            if p.x >= width - 214.0 {
+                match unsafe { choose_editor_images(self.hwnd) } {
+                    Ok(paths) if !paths.is_empty() => {
+                        self.media_epoch = self.media_epoch.wrapping_add(1);
+                        self.media.import_images(self.media_epoch, paths);
+                        self.state.status = Some(("Loading image layers…".into(), Instant::now()));
+                    }
+                    Ok(_) => {}
+                    Err(error) => self.set_error(error),
+                }
+            } else if (width - 498.0..width - 460.0).contains(&p.x) {
                 if let Some(document) = self.state.editor.as_mut() {
                     document.undo();
                     self.state.selected_layer = None;
@@ -1610,6 +1621,28 @@ impl App {
     fn process_media_events(&mut self) {
         while let Some(event) = self.media.try_recv() {
             match event {
+                MediaEvent::Images { epoch, result }
+                    if epoch == self.media_epoch
+                        && self.state.surface == Surface::ScreenshotEditor =>
+                {
+                    match result {
+                        Ok(images) => {
+                            let mut selected = None;
+                            if let Some(document) = self.state.editor.as_mut() {
+                                for (offset, (_, image)) in images.into_iter().enumerate() {
+                                    selected = Some(document.add_image(image, offset));
+                                }
+                            }
+                            self.state.selected_layer = selected;
+                            self.state.editor_tool = captures_windows_native::editor::Tool::Select;
+                            self.state.status = Some(("Added image layers".into(), Instant::now()));
+                        }
+                        Err(error) => self.set_error(format!("Image could not be added: {error}")),
+                    }
+                    unsafe {
+                        let _ = InvalidateRect(Some(self.hwnd), None, false);
+                    }
+                }
                 MediaEvent::Probe {
                     epoch,
                     source,
@@ -2215,6 +2248,37 @@ fn write_image_file(path: &Path, image: &RgbaImage, extension: &str) -> Result<(
         let _ = fs::remove_file(path);
     }
     result
+}
+
+unsafe fn choose_editor_images(owner: HWND) -> Result<Vec<PathBuf>, String> {
+    let dialog: IFileOpenDialog = unsafe {
+        CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)
+            .map_err(|error| error.to_string())?
+    };
+    let options = unsafe { dialog.GetOptions() }.map_err(|error| error.to_string())?;
+    unsafe {
+        dialog.SetOptions(options | FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM)
+    }
+    .map_err(|error| error.to_string())?;
+    if let Err(error) = unsafe { dialog.Show(Some(owner)) } {
+        return if error.code().0 as u32 == 0x8007_04c7 {
+            Ok(Vec::new())
+        } else {
+            Err(error.to_string())
+        };
+    }
+    let items = unsafe { dialog.GetResults() }.map_err(|error| error.to_string())?;
+    let count = unsafe { items.GetCount() }.map_err(|error| error.to_string())?;
+    let mut paths = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let item = unsafe { items.GetItemAt(index) }.map_err(|error| error.to_string())?;
+        let value =
+            unsafe { item.GetDisplayName(SIGDN_FILESYSPATH) }.map_err(|error| error.to_string())?;
+        let path = unsafe { value.to_string() }.map_err(|error| error.to_string());
+        unsafe { CoTaskMemFree(Some(value.0.cast())) };
+        paths.push(PathBuf::from(path?));
+    }
+    Ok(paths)
 }
 
 fn available_named_path(root: &Path, stem: &str, extension: &str) -> PathBuf {
@@ -2857,6 +2921,23 @@ fn prepare_fixture(
     });
     match view {
         "editor" => state.edit_image(image),
+        "editor-image" => {
+            let imported = RgbaImage::from_fn(420, 260, |x, y| {
+                image::Rgba([
+                    (32 + x / 2).min(255) as u8,
+                    (48 + y / 2).min(255) as u8,
+                    if x > y { 210 } else { 82 },
+                    224,
+                ])
+            });
+            state.edit_image(image);
+            if let Some(document) = state.editor.as_mut() {
+                let id = document.add_image(imported, 0);
+                document.set_layer_rotation(id, -8.0);
+                state.selected_layer = Some(id);
+                state.editor_tool = captures_windows_native::editor::Tool::Select;
+            }
+        }
         "editor-shapes" => {
             state.edit_image(image);
             state.editor_tool = captures_windows_native::editor::Tool::Rectangle;

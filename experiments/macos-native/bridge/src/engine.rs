@@ -17,7 +17,8 @@ use captures_capture::{
 };
 use captures_media::{
     AudioEdit, CancelToken, EditSpec, ExportFormat, ExportSpec, MediaToolchain,
-    RecordingAudioLayout, RecordingSegmentInput,
+    RecordingAudioLayout, RecordingSegmentInput, estimate_sample_windows,
+    export_preserves_source_bytes, extrapolate_sampled_size, visual_edit_is_identity,
 };
 use captures_recording::{
     RecordingDraftManifest, RecordingKind, RecordingOptions, RecordingSegmentInfo, RecordingState,
@@ -28,9 +29,10 @@ use serde_json::{Value, json};
 use crate::{
     protocol::{
         self, BridgeResult, DescribeRequest, Envelope, FreezeCreateRequest, FreezeDiscardRequest,
-        ImageEncodeRequest, ImageFormat, MediaExportRequest, MediaPathRequest,
-        MicrophonePermissionRequest, RecordMuteRequest, RecordStartRequest, RecoverDiscardRequest,
-        RecoverRequest, ScreenshotRequest, ScreenshotTarget, failure_json, success_json,
+        ImageEncodeRequest, ImageFormat, MediaEstimateRequest, MediaExportRequest,
+        MediaPathRequest, MicrophonePermissionRequest, RecordMuteRequest, RecordStartRequest,
+        RecoverDiscardRequest, RecoverRequest, ScreenshotRequest, ScreenshotTarget, failure_json,
+        success_json,
     },
     storage::{
         self, Draft, PendingSegment, checked_draft_file, complete_segment, create_draft,
@@ -113,6 +115,7 @@ fn operation_lane(operation: &str) -> OperationLane {
     match operation {
         "image_encode"
         | "media_probe"
+        | "media_estimate"
         | "media_export"
         | "recover_list"
         | "microphone_permission" => OperationLane::Stateless,
@@ -143,6 +146,7 @@ fn dispatch_direct(request: &str) -> Option<BridgeResult<Value>> {
         OperationLane::Stateless => Some(match envelope.op.as_str() {
             "image_encode" => protocol::parse(&value).and_then(Engine::image_encode),
             "media_probe" => protocol::parse(&value).and_then(Engine::media_probe),
+            "media_estimate" => protocol::parse(&value).and_then(Engine::media_estimate),
             "media_export" => protocol::parse(&value).and_then(Engine::media_export),
             "microphone_permission" => {
                 protocol::parse(&value).and_then(Engine::microphone_permission)
@@ -646,6 +650,7 @@ impl Engine {
             "duration_ms": probe.metadata.duration_ms.unwrap_or(0),
             "width": probe.metadata.width,
             "height": probe.metadata.height,
+            "size_bytes": probe.metadata.size_bytes,
             "has_system_audio": probe.audio_stream_count >= 1,
             "has_microphone_audio": probe.audio_stream_count >= 2,
         }))
@@ -763,6 +768,125 @@ impl Engine {
             output_probe.metadata.height,
             kind_for_format(request.format),
         ))
+    }
+
+    fn media_estimate(request: MediaEstimateRequest) -> BridgeResult<Value> {
+        ensure_regular_source(&request.path)?;
+        if request.format == ExportFormat::WebM {
+            return Err("size estimates are not available for WebM".to_owned());
+        }
+        if request.end_ms <= request.start_ms {
+            return Err("media estimate end_ms must be greater than start_ms".to_owned());
+        }
+        if request.fps.is_some() && request.format != ExportFormat::Gif {
+            return Err("fps is accepted only for GIF media estimates".to_owned());
+        }
+        if request.fps.is_some_and(|fps| !(1..=30).contains(&fps)) {
+            return Err("GIF estimate fps must be between 1 and 30".to_owned());
+        }
+        if request.max_bytes == Some(0) {
+            return Err("media estimate max_bytes must be greater than zero".to_owned());
+        }
+        if !(request.system_volume.is_finite()
+            && request.microphone_volume.is_finite()
+            && (0.0..=2.0).contains(&request.system_volume)
+            && (0.0..=2.0).contains(&request.microphone_volume))
+        {
+            return Err("audio volume must be a finite multiplier between 0 and 2".to_owned());
+        }
+        let media = media_toolchain();
+        let probe = media
+            .probe(&request.path)
+            .map_err(|error| error.to_string())?;
+        let source_duration_ms = probe
+            .metadata
+            .duration_ms
+            .ok_or_else(|| "media estimate source duration is unavailable".to_owned())?;
+        let start_ms = request.start_ms.min(source_duration_ms.saturating_sub(1));
+        let end_ms = request.end_ms.min(source_duration_ms).max(start_ms + 1);
+        let trimmed_ms = end_ms - start_ms;
+        let (output_width, output_height) = scaled_dimensions(
+            request.width,
+            request.crop,
+            probe.metadata.width,
+            probe.metadata.height,
+        )?;
+        let edit = EditSpec {
+            trim_start_ms: start_ms,
+            trim_end_ms: Some(end_ms),
+            crop: request.crop,
+            output_width,
+            output_height,
+            audio: AudioEdit {
+                system_volume: request.system_volume,
+                microphone_volume: request.microphone_volume,
+                mute_system_audio: request.system_volume == 0.0,
+                mute_microphone: request.microphone_volume == 0.0,
+                mono_output: request.mono,
+                source_has_system_audio: probe.audio_stream_count >= 1,
+                source_has_microphone_audio: probe.audio_stream_count >= 2,
+            },
+        };
+        let spec = ExportSpec {
+            format: request.format,
+            quality: request.quality,
+            max_size_bytes: request.max_bytes,
+            frames_per_second: request.fps,
+            gif_max_colors: None,
+        };
+        if export_preserves_source_bytes(&probe, &edit, &spec) {
+            return Ok(json!({ "size_bytes": probe.metadata.size_bytes, "exact": true }));
+        }
+        if request.format == ExportFormat::Mp4
+            && request.quality == captures_media::QualityPreset::Preserve
+            && request.max_bytes.is_none()
+            && visual_edit_is_identity(&probe, &edit)
+        {
+            return Ok(json!({ "size_bytes": probe.metadata.size_bytes, "exact": false }));
+        }
+        let windows = estimate_sample_windows(start_ms, trimmed_ms);
+        let exact = windows.len() == 1;
+        let extension = extension_for_format(request.format)?;
+        let scratch =
+            std::env::temp_dir().join(format!("captures-native-estimate-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&scratch).map_err(|error| error.to_string())?;
+        let result = (|| {
+            let mut sampled_bytes = 0_u64;
+            let mut sampled_ms = 0_u64;
+            for (index, (window_start, window_ms)) in windows.iter().copied().enumerate() {
+                let mut sample_edit = edit.clone();
+                sample_edit.trim_start_ms = window_start;
+                sample_edit.trim_end_ms = Some(window_start + window_ms);
+                let mut sample_spec = spec.clone();
+                sample_spec.max_size_bytes = spec.max_size_bytes.map(|cap| {
+                    u64::try_from(
+                        u128::from(cap) * u128::from(window_ms) / u128::from(trimmed_ms.max(1)),
+                    )
+                    .unwrap_or(cap)
+                    .max(1)
+                });
+                let destination = scratch.join(format!("sample-{index}.{extension}"));
+                let outcome = media
+                    .export(
+                        &request.path,
+                        &destination,
+                        &sample_edit,
+                        &sample_spec,
+                        &CancelToken::default(),
+                        |_| {},
+                    )
+                    .map_err(|error| error.to_string())?;
+                sampled_bytes = sampled_bytes.saturating_add(outcome.size_bytes);
+                sampled_ms = sampled_ms.saturating_add(window_ms);
+            }
+            Ok::<_, String>(extrapolate_sampled_size(
+                sampled_bytes,
+                sampled_ms,
+                trimmed_ms,
+            ))
+        })();
+        let _ = fs::remove_dir_all(&scratch);
+        Ok(json!({ "size_bytes": result?, "exact": exact }))
     }
 
     fn recover_list() -> BridgeResult<Value> {
@@ -1266,6 +1390,7 @@ mod tests {
         for operation in [
             "image_encode",
             "media_probe",
+            "media_estimate",
             "media_export",
             "recover_list",
             "microphone_permission",
@@ -1299,6 +1424,25 @@ mod tests {
             .expect("media export is stateless")
             .unwrap_err();
         assert_eq!(error, "media export max_bytes must be greater than zero");
+    }
+
+    #[test]
+    fn media_estimate_validates_the_request_before_running_the_toolchain() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.mp4");
+        std::fs::write(&source, b"not media").unwrap();
+        let request = serde_json::json!({
+            "op": "media_estimate",
+            "path": source,
+            "format": "mp4",
+            "start_ms": 0,
+            "end_ms": 1,
+            "max_bytes": 0
+        });
+        let error = super::dispatch_direct(&request.to_string())
+            .expect("media estimate is stateless")
+            .unwrap_err();
+        assert_eq!(error, "media estimate max_bytes must be greater than zero");
     }
 
     #[test]

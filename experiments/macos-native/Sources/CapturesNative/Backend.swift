@@ -20,7 +20,7 @@ final class Backend {
         // TCC can wait for user input; neither media exports nor the recording
         // safety/status queue should wait behind that prompt.
         let destination = op == "microphone_permission" ? permissionQueue :
-            (["media_probe", "media_export", "image_encode"].contains(op) ? mediaQueue : queue)
+            (["media_probe", "media_estimate", "media_export", "image_encode"].contains(op) ? mediaQueue : queue)
         destination.async {
             let result = Result<[String: Any], Error> {
                 var request = fields

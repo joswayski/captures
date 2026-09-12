@@ -108,6 +108,14 @@ pub enum Shape {
         font_size: f32,
         font_data: Arc<[u8]>,
     },
+    /// Straight-alpha pixels fitted to document-space bounds. Layer color's
+    /// alpha controls opacity; its RGB, stroke width and fill are ignored.
+    Image {
+        origin: Point,
+        width: f32,
+        height: f32,
+        pixels: Arc<RgbaImage>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -215,6 +223,20 @@ impl Layer {
             Shape::Text {
                 origin, font_size, ..
             } => point_ok(origin) && font_size.is_finite() && *font_size > 0.0,
+            Shape::Image {
+                origin,
+                width,
+                height,
+                pixels,
+            } => {
+                point_ok(origin)
+                    && width.is_finite()
+                    && height.is_finite()
+                    && *width > 0.0
+                    && *height > 0.0
+                    && pixels.width() > 0
+                    && pixels.height() > 0
+            }
         };
         if !valid_shape
             || !self.rotation_degrees.is_finite()
@@ -246,6 +268,12 @@ impl Layer {
                 origin,
                 width,
                 height,
+            }
+            | Shape::Image {
+                origin,
+                width,
+                height,
+                ..
             } => Some(Bounds {
                 x: origin.x,
                 y: origin.y,
@@ -283,7 +311,7 @@ impl Layer {
     pub fn bounds(&self) -> Option<Bounds> {
         let mut bounds = self.geometry_bounds().ok()??;
         let center = bounds.center();
-        if !matches!(self.shape, Shape::Text { .. }) {
+        if !matches!(self.shape, Shape::Text { .. } | Shape::Image { .. }) {
             bounds.x -= self.stroke_width / 2.0;
             bounds.y -= self.stroke_width / 2.0;
             bounds.width += self.stroke_width;
@@ -297,7 +325,7 @@ impl Layer {
     }
 
     /// Hit testing uses source pixels. Unfilled shapes select their outline,
-    /// not their empty interior; text selects its glyph bounding rectangle.
+    /// not their empty interior; text and images select their bounding rectangle.
     pub fn hit_test(&self, point: Point, tolerance: f32) -> bool {
         if !point.x.is_finite() || !point.y.is_finite() || !tolerance.is_finite() || tolerance < 0.0
         {
@@ -358,7 +386,7 @@ impl Layer {
                         || ry <= radius
                         || (x / (rx - radius)).powi(2) + (y / (ry - radius)).powi(2) >= 1.0)
             }
-            Shape::Text { .. } => {
+            Shape::Text { .. } | Shape::Image { .. } => {
                 point.x >= bounds.x - tolerance
                     && point.x <= bounds.x + bounds.width + tolerance
                     && point.y >= bounds.y - tolerance
@@ -381,6 +409,39 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
     };
     let center = bounds.center();
     let transform = Transform::from_rotate_at(layer.rotation_degrees, center.x, center.y);
+    if let Shape::Image {
+        origin,
+        width,
+        height,
+        pixels,
+    } = &layer.shape
+    {
+        let mut bitmap =
+            Pixmap::new(pixels.width(), pixels.height()).ok_or("Image layer is too large")?;
+        for (destination, source) in bitmap.pixels_mut().iter_mut().zip(pixels.pixels()) {
+            *destination =
+                tiny_skia::ColorU8::from_rgba(source[0], source[1], source[2], source[3])
+                    .premultiply();
+        }
+        canvas.draw_pixmap(
+            0,
+            0,
+            bitmap.as_ref(),
+            &tiny_skia::PixmapPaint {
+                opacity: f32::from(layer.color[3]) / 255.0,
+                quality: tiny_skia::FilterQuality::Bilinear,
+                ..Default::default()
+            },
+            Transform::from_scale(
+                *width / pixels.width() as f32,
+                *height / pixels.height() as f32,
+            )
+            .post_translate(origin.x, origin.y)
+            .post_concat(transform),
+            None,
+        );
+        return Ok(());
+    }
     if let Shape::Text {
         origin,
         text,
@@ -476,7 +537,7 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
             }
             closed = true;
         }
-        Shape::Text { .. } => unreachable!(),
+        Shape::Text { .. } | Shape::Image { .. } => unreachable!(),
     }
     let Some(path) = path.finish() else {
         return Ok(());

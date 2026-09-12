@@ -98,6 +98,26 @@ pub struct MediaExportRequest {
     pub mono: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct MediaEstimateRequest {
+    pub path: PathBuf,
+    pub format: ExportFormat,
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub crop: Option<CropRect>,
+    pub width: Option<u32>,
+    pub fps: Option<u16>,
+    #[serde(default)]
+    pub quality: QualityPreset,
+    pub max_bytes: Option<u64>,
+    #[serde(default = "one")]
+    pub system_volume: f32,
+    #[serde(default = "one")]
+    pub microphone_volume: f32,
+    #[serde(default)]
+    pub mono: bool,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageFormat {

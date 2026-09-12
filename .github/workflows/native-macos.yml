@@ -5,6 +5,7 @@ on:
     paths:
       - "experiments/macos-native/**"
       - "crates/captures-capture/**"
+      - "crates/captures-feedback/**"
       - "crates/captures-recording/**"
       - "crates/captures-recording-macos/**"
       - "crates/captures-media/**"

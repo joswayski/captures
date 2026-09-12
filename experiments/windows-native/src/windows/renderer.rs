@@ -670,17 +670,17 @@ impl Renderer {
                     width: 16.0,
                     height: 16.0,
                 },
-                p.border,
+                p.text,
             )?;
             self.text(
-                "Add images · unavailable",
+                "Add images",
                 Rect {
                     x: w - 174.0,
                     y: 13.0,
-                    width: 142.0,
+                    width: 150.0,
                     height: 26.0,
                 },
-                p.border,
+                p.text,
                 &self.body,
             );
 
@@ -3416,6 +3416,7 @@ fn shape_label(shape: &captures_windows_native::editor::Shape) -> &'static str {
         Shape::Rectangle(_) => "Rectangle",
         Shape::Ellipse(_) => "Ellipse",
         Shape::Polygon(_) => "Shape",
+        Shape::Image { .. } => "Image",
         Shape::Text { .. } => "Text",
     }
 }
@@ -3429,6 +3430,7 @@ fn shape_icon(shape: &captures_windows_native::editor::Shape) -> &'static str {
         Shape::Rectangle(_) => "rectangle",
         Shape::Ellipse(_) => "ellipse",
         Shape::Polygon(_) => "shapes",
+        Shape::Image { .. } => "image",
         Shape::Text { .. } => "text",
     }
 }

@@ -238,6 +238,108 @@ fn concave_polygons_close_the_outline_and_fill_only_their_interior() {
 }
 
 #[test]
+fn image_pixels_keep_orientation_alpha_and_document_layer_order() {
+    let pixels = Arc::new(RgbaImage::from_fn(3, 2, |x, y| match (x, y) {
+        (0, 0) => Rgba([255, 0, 0, 255]),
+        (1, 0) => Rgba([0, 255, 0, 128]),
+        (2, 1) => Rgba([0, 0, 255, 255]),
+        _ => Rgba([150, 90, 20, 0]),
+    }));
+    let mut image = layer(Shape::Image {
+        origin: point(7.0, 11.0),
+        width: 3.0,
+        height: 2.0,
+        pixels: pixels.clone(),
+    });
+    image.stroke_width = 20.0; // Images have no outline or fill.
+    image.fill = Some([255, 255, 255, 255]);
+    image.color = [13, 27, 41, 128]; // RGB must not tint imported pixels.
+    let rendered = render(&document(vec![image.clone()])).unwrap();
+    assert_eq!(rendered.get_pixel(7, 11).0, [255, 0, 0, 128]);
+    assert_eq!(rendered.get_pixel(8, 11).0, [0, 255, 0, 64]);
+    assert_eq!(rendered.get_pixel(9, 12).0, [0, 0, 255, 128]);
+    assert_eq!(rendered.get_pixel(9, 11)[3], 0);
+    assert_eq!(rendered.get_pixel(6, 11)[3], 0);
+    let mut cover = layer(Shape::Rectangle {
+        origin: point(7.0, 11.0),
+        width: 1.0,
+        height: 1.0,
+    });
+    cover.stroke_width = 0.0;
+    cover.fill = Some([0, 0, 255, 255]);
+    let forward = render(&document(vec![image.clone(), cover.clone()])).unwrap();
+    let reverse = render(&document(vec![cover, image])).unwrap();
+    assert_eq!(forward.get_pixel(7, 11).0, [0, 0, 255, 255]);
+    assert_eq!(reverse.get_pixel(7, 11).0, [128, 0, 127, 255]);
+    assert_eq!(pixels.get_pixel(0, 0).0, [255, 0, 0, 255]);
+}
+
+#[test]
+fn image_scaling_rotation_and_crop_share_document_geometry() {
+    let mut image = layer(Shape::Image {
+        origin: point(10.0, 20.0),
+        width: 8.0,
+        height: 4.0,
+        pixels: Arc::new(RgbaImage::from_fn(4, 2, |x, _| {
+            if x < 2 {
+                Rgba([255, 0, 0, 255])
+            } else {
+                Rgba([0, 0, 255, 255])
+            }
+        })),
+    });
+    image.rotation_degrees = 90.0;
+    let bounds = image.bounds().unwrap();
+    for (actual, expected) in [
+        (bounds.x, 12.0),
+        (bounds.y, 18.0),
+        (bounds.width, 4.0),
+        (bounds.height, 8.0),
+    ] {
+        assert!((actual - expected).abs() < 0.001, "{bounds:?}");
+    }
+    assert!(image.hit_test(point(13.0, 19.0), 0.0));
+    assert!(!image.hit_test(point(10.5, 21.0), 0.0));
+    let mut doc = document(vec![image]);
+    doc.crop = Some(PixelRect {
+        x: 11,
+        y: 17,
+        width: 7,
+        height: 11,
+    });
+    let rendered = render(&doc).unwrap();
+    assert_eq!(rendered.get_pixel(2, 2).0, [255, 0, 0, 255]);
+    assert_eq!(rendered.get_pixel(2, 7).0, [0, 0, 255, 255]);
+    assert_eq!(rendered.get_pixel(0, 2)[3], 0);
+    assert_eq!(rendered.get_pixel(5, 2)[3], 0);
+}
+
+#[test]
+fn image_resampling_interpolates_premultiplied_color_and_clips_off_canvas() {
+    let image = layer(Shape::Image {
+        origin: point(-1.0, 3.0),
+        width: 4.0,
+        height: 2.0,
+        pixels: Arc::new(RgbaImage::from_fn(2, 1, |x, _| {
+            if x == 0 {
+                Rgba([255, 0, 0, 255])
+            } else {
+                Rgba([0, 0, 255, 0])
+            }
+        })),
+    });
+    let rendered = render(&document(vec![image])).unwrap();
+    let edge = rendered.get_pixel(0, 3).0;
+    assert_eq!(&edge[..3], &[255, 0, 0]); // Hidden blue cannot create a halo.
+    assert!((180..=200).contains(&edge[3]), "{edge:?}"); // 3/4 coverage, not nearest-neighbor.
+    let edge = rendered.get_pixel(1, 3).0;
+    assert_eq!(&edge[..3], &[255, 0, 0]);
+    assert!((55..=70).contains(&edge[3]), "{edge:?}"); // 1/4 coverage.
+    assert_eq!(rendered.get_pixel(3, 3)[3], 0);
+    assert_eq!(rendered.get_pixel(0, 2)[3], 0);
+}
+
+#[test]
 fn invalid_geometry_crop_and_font_fail_without_mutating_source() {
     for crop in [
         PixelRect {
@@ -273,6 +375,18 @@ fn invalid_geometry_crop_and_font_fail_without_mutating_source() {
             text: "hello".into(),
             font_size: 16.0,
             font_data: Arc::from([]),
+        },
+        Shape::Image {
+            origin: point(0.0, 0.0),
+            width: 5.0,
+            height: 3.0,
+            pixels: Arc::new(RgbaImage::new(0, 0)),
+        },
+        Shape::Image {
+            origin: point(0.0, 0.0),
+            width: f32::NAN,
+            height: 3.0,
+            pixels: Arc::new(RgbaImage::new(2, 1)),
         },
     ] {
         let invalid = layer(shape);
