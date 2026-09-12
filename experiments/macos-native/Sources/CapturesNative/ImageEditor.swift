@@ -2,6 +2,127 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum EditorViewportMath {
+    static let minimumZoom: CGFloat = 0.05
+    static let maximumZoom: CGFloat = 8
+
+    static func clampedZoom(_ value: CGFloat) -> CGFloat {
+        min(maximumZoom, max(minimumZoom, value))
+    }
+
+    static func wheelZoomFactor(scrollingDeltaY: CGFloat, precise: Bool) -> CGFloat {
+        let pixels = min(240, max(-240, scrollingDeltaY * (precise ? 1 : 16)))
+        return exp(pixels * 0.002)
+    }
+
+    static func sliderPosition(for zoom: CGFloat) -> Double {
+        let span = log(maximumZoom / minimumZoom)
+        return Double(log(clampedZoom(zoom) / minimumZoom) / span)
+    }
+
+    static func zoom(forSliderPosition position: Double) -> CGFloat {
+        let bounded = min(1, max(0, position))
+        return clampedZoom(minimumZoom * exp(CGFloat(bounded) * log(maximumZoom / minimumZoom)))
+    }
+
+    static func documentPoint(anchor: CGPoint, canvasOrigin: CGPoint, zoom: CGFloat) -> CGPoint {
+        CGPoint(x: (anchor.x - canvasOrigin.x) / zoom, y: (anchor.y - canvasOrigin.y) / zoom)
+    }
+
+    static func anchorCorrection(
+        anchor: CGPoint, canvasOrigin: CGPoint, documentPoint: CGPoint, zoom: CGFloat
+    ) -> CGSize {
+        CGSize(
+            width: anchor.x - (canvasOrigin.x + documentPoint.x * zoom),
+            height: anchor.y - (canvasOrigin.y + documentPoint.y * zoom)
+        )
+    }
+
+    static func frame(_ frame: CGRect, matches documentSize: CGSize, zoom: CGFloat) -> Bool {
+        abs(frame.width - documentSize.width * zoom) < 0.5
+            && abs(frame.height - documentSize.height * zoom) < 0.5
+    }
+
+    static func isMostlyOffscreen(viewportSize: CGSize, canvasFrame: CGRect) -> Bool {
+        let viewport = CGRect(origin: .zero, size: viewportSize)
+        let intersection = viewport.intersection(canvasFrame)
+        guard !intersection.isNull, intersection.width > 0, intersection.height > 0 else { return true }
+        let overlapArea = intersection.width * intersection.height
+        let canvasArea = max(1, canvasFrame.width * canvasFrame.height)
+        return overlapArea < min(48 * 48, canvasArea * 0.04)
+    }
+}
+
+private struct EditorCanvasFramePreference: PreferenceKey {
+    static var defaultValue = CGRect.zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
+}
+
+struct EditorZoomAnchor: Equatable {
+    let viewportPoint: CGPoint
+    let documentPoint: CGPoint
+    let zoom: CGFloat
+    var correctedFrameOrigin: CGPoint?
+}
+
+extension EditorViewportMath {
+    static func pendingAnchor(
+        replacing pending: EditorZoomAnchor?,
+        viewportPoint: CGPoint,
+        measuredCanvasOrigin: CGPoint,
+        currentZoom: CGFloat,
+        nextZoom: CGFloat
+    ) -> EditorZoomAnchor {
+        let effectiveOrigin: CGPoint
+        if let pending, abs(pending.zoom - currentZoom) < 0.0001 {
+            effectiveOrigin = CGPoint(
+                x: pending.viewportPoint.x - pending.documentPoint.x * currentZoom,
+                y: pending.viewportPoint.y - pending.documentPoint.y * currentZoom
+            )
+        } else {
+            effectiveOrigin = measuredCanvasOrigin
+        }
+        return EditorZoomAnchor(
+            viewportPoint: viewportPoint,
+            documentPoint: documentPoint(
+                anchor: viewportPoint,
+                canvasOrigin: effectiveOrigin,
+                zoom: currentZoom
+            ),
+            zoom: nextZoom,
+            correctedFrameOrigin: nil
+        )
+    }
+
+    static func resolvePendingAnchor(
+        _ anchor: EditorZoomAnchor, canvasOrigin: CGPoint
+    ) -> (correction: CGSize, pending: EditorZoomAnchor?) {
+        let correction = anchorCorrection(
+            anchor: anchor.viewportPoint,
+            canvasOrigin: canvasOrigin,
+            documentPoint: anchor.documentPoint,
+            zoom: anchor.zoom
+        )
+        if abs(correction.width) <= 0.01, abs(correction.height) <= 0.01 {
+            return (.zero, nil)
+        }
+        if anchor.correctedFrameOrigin == canvasOrigin {
+            return (.zero, anchor)
+        }
+        var pending = anchor
+        pending.correctedFrameOrigin = canvasOrigin
+        return (correction, pending)
+    }
+}
+
+func routeEditorViewportEvent(
+    _ event: NSEvent,
+    handler: ((NSEvent) -> NSEvent?)?
+) -> NSEvent? {
+    guard let handler else { return event }
+    return handler(event)
+}
+
 private enum ImageEditorTool: String, CaseIterable, Identifiable {
     case select = "Select"
     case crop = "Crop"
@@ -31,6 +152,126 @@ private enum ImageEditorTool: String, CaseIterable, Identifiable {
 
 private enum ImageResizeCorner: CaseIterable, Equatable {
     case northWest, northEast, southEast, southWest
+}
+
+private final class EditorViewportMonitorView: NSView {
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+private struct EditorViewportEvents: NSViewRepresentable {
+    var zoomBy: (CGFloat, CGPoint) -> Void
+    var zoomActual: () -> Void
+    var panBegan: () -> Void
+    var panChanged: (CGSize) -> Void
+    var panEnded: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = EditorViewportMonitorView()
+        context.coordinator.view = view
+        context.coordinator.install()
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.parent = self
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.remove()
+    }
+
+    final class Coordinator {
+        var parent: EditorViewportEvents
+        weak var view: NSView?
+        private var monitor: Any?
+        private var panStart: CGPoint?
+        private var magnifyAnchor: CGPoint?
+
+        init(_ parent: EditorViewportEvents) { self.parent = parent }
+
+        func install() {
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [
+                .scrollWheel, .magnify, .keyDown,
+                .leftMouseDown, .leftMouseDragged, .leftMouseUp,
+                .otherMouseDown, .otherMouseDragged, .otherMouseUp,
+            ]) { [weak self] event in
+                guard let self else { return event }
+                return routeEditorViewportEvent(event, handler: self.handle)
+            }
+        }
+
+        func remove() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+        }
+
+        private func handle(_ event: NSEvent) -> NSEvent? {
+            guard let view, event.window === view.window else { return event }
+            let location = view.convert(event.locationInWindow, from: nil)
+            switch event.type {
+            case .scrollWheel:
+                guard view.bounds.contains(location),
+                      event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control),
+                      event.scrollingDeltaY != 0 else { return event }
+                if magnifyAnchor != nil { return nil }
+                parent.zoomBy(
+                    EditorViewportMath.wheelZoomFactor(
+                        scrollingDeltaY: event.scrollingDeltaY,
+                        precise: event.hasPreciseScrollingDeltas
+                    ),
+                    location
+                )
+                return nil
+            case .magnify:
+                if event.phase.contains(.began), view.bounds.contains(location) {
+                    magnifyAnchor = location
+                }
+                guard let anchor = magnifyAnchor ?? (view.bounds.contains(location) ? location : nil) else {
+                    return event
+                }
+                magnifyAnchor = anchor
+                if event.magnification.isFinite, event.magnification != 0 {
+                    parent.zoomBy(max(0.01, 1 + event.magnification), anchor)
+                }
+                if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
+                    magnifyAnchor = nil
+                }
+                return nil
+            case .keyDown:
+                guard event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control),
+                      !(view.window?.firstResponder is NSTextView) else { return event }
+                switch event.charactersIgnoringModifiers {
+                case "+", "=": parent.zoomBy(1.25, CGPoint(x: view.bounds.midX, y: view.bounds.midY))
+                case "-": parent.zoomBy(0.8, CGPoint(x: view.bounds.midX, y: view.bounds.midY))
+                case "0": parent.zoomActual()
+                default: return event
+                }
+                return nil
+            case .leftMouseDown, .otherMouseDown:
+                let modifierPan = event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control)
+                guard view.bounds.contains(location), event.buttonNumber == 2 || (event.buttonNumber == 0 && modifierPan) else {
+                    return event
+                }
+                panStart = location
+                parent.panBegan()
+                return nil
+            case .leftMouseDragged, .otherMouseDragged:
+                guard let start = panStart else { return event }
+                parent.panChanged(CGSize(width: location.x - start.x, height: location.y - start.y))
+                return nil
+            case .leftMouseUp, .otherMouseUp:
+                guard panStart != nil else { return event }
+                panStart = nil
+                parent.panEnded()
+                return nil
+            default:
+                return event
+            }
+        }
+    }
 }
 
 struct ImageEditorView: View {
@@ -73,6 +314,11 @@ private struct ImageEditorSurface: View {
     @State private var zoom: CGFloat = 1
     @State private var zoomMode = "fit"
     @State private var viewportSize: CGSize = .zero
+    @State private var viewPan = CGSize.zero
+    @State private var panGestureOrigin = CGSize.zero
+    @State private var canvasViewportFrame = CGRect.zero
+    @State private var pendingZoomAnchor: EditorZoomAnchor?
+    @State private var canvasOffscreen = false
     @State private var selectedShape: EditorShape = .rectangle
     @State private var shapeFlyoutOpen = false
     @State private var backgroundFlyoutOpen = false
@@ -119,13 +365,18 @@ private struct ImageEditorSurface: View {
         model: EditorModel,
         initialTool: ImageEditorTool = .select,
         shapeFlyoutOpen: Bool = false,
-        initialAlignmentGuides: [EditorAlignmentGuide] = []
+        initialAlignmentGuides: [EditorAlignmentGuide] = [],
+        initialZoom: CGFloat? = nil,
+        initialViewPan: CGSize = .zero
     ) {
         self.artifact = artifact
         self.model = model
         _tool = State(initialValue: initialTool)
         _shapeFlyoutOpen = State(initialValue: shapeFlyoutOpen)
         _alignmentGuides = State(initialValue: initialAlignmentGuides)
+        _zoom = State(initialValue: initialZoom ?? 1)
+        _zoomMode = State(initialValue: initialZoom == nil ? "fit" : "custom")
+        _viewPan = State(initialValue: initialViewPan)
         let sourceExtension = artifact.url.pathExtension.lowercased()
         let sourceFormat = sourceExtension == "jpg" ? "jpeg" : sourceExtension
         let canReplaceSource = ["png", "jpeg", "webp"].contains(sourceFormat)
@@ -225,17 +476,23 @@ private struct ImageEditorSurface: View {
             Button { model.redo() } label: { Image(systemName: "arrow.uturn.forward") }
                 .buttonStyle(CaptureButtonStyle()).disabled(!model.canRedo).help("Redo")
             HStack(spacing: 6) {
-                Button { zoomMode = "custom"; zoom = max(0.05, zoom - 0.1) } label: { Image(systemName: "minus") }
-                    .buttonStyle(CaptureButtonStyle()).help("Zoom out")
+                Button { zoomMode = "fit"; applyZoomMode("fit") } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
+                    .buttonStyle(CaptureButtonStyle(primary: zoomMode == "fit")).help("Fit canvas")
+                Button { zoomBy(0.8) } label: { Image(systemName: "minus") }
+                    .buttonStyle(CaptureButtonStyle()).help("Zoom out").disabled(zoom <= EditorViewportMath.minimumZoom)
                 CaptureSlider(
-                    value: Binding(get: { Double(zoom) }, set: { zoom = CGFloat($0); zoomMode = "custom" }),
-                    range: 0.05...4
+                    value: Binding(
+                        get: { EditorViewportMath.sliderPosition(for: zoom) },
+                        set: { setManualZoom(EditorViewportMath.zoom(forSliderPosition: $0)) }
+                    ),
+                    range: 0...1
                 ).frame(width: 90)
-                Button { zoomMode = "custom"; zoom = min(4, zoom + 0.1) } label: { Image(systemName: "plus") }
-                    .buttonStyle(CaptureButtonStyle()).help("Zoom in")
+                Button { zoomBy(1.25) } label: { Image(systemName: "plus") }
+                    .buttonStyle(CaptureButtonStyle()).help("Zoom in").disabled(zoom >= EditorViewportMath.maximumZoom)
                 CaptureChoice(title: "Zoom mode", selection: $zoomMode, options: [
                     CaptureOption(label: "Fit", value: "fit"),
                     CaptureOption(label: "100%", value: "actual"),
+                    CaptureOption(label: "\(Int((zoom * 100).rounded()))%", value: "custom"),
                 ]).frame(width: 92)
                 .onChange(of: zoomMode) { applyZoomMode($0) }
             }
@@ -399,11 +656,44 @@ private struct ImageEditorSurface: View {
                 .contentShape(Rectangle())
                 .gesture(canvasGesture)
                 .shadow(color: .black.opacity(0.22), radius: 18, y: 8)
+                .background(GeometryReader { canvas in
+                    Color.clear.preference(
+                        key: EditorCanvasFramePreference.self,
+                        value: canvas.frame(in: .named("image-editor-viewport"))
+                    )
+                })
+                .offset(viewPan)
                 .padding(32)
                 .frame(minWidth: geometry.size.width, minHeight: geometry.size.height)
             }
             .onAppear { updateViewport(geometry.size) }
             .onChange(of: geometry.size) { updateViewport($0) }
+            .coordinateSpace(name: "image-editor-viewport")
+            .onPreferenceChange(EditorCanvasFramePreference.self, perform: updateCanvasFrame)
+            .overlay {
+                ZStack(alignment: .top) {
+                    EditorViewportEvents(
+                        zoomBy: { factor, point in zoomBy(factor, anchor: point) },
+                        zoomActual: { setManualZoom(1) },
+                        panBegan: { panGestureOrigin = viewPan },
+                        panChanged: { delta in
+                            viewPan = CGSize(
+                                width: panGestureOrigin.width + delta.width,
+                                height: panGestureOrigin.height + delta.height
+                            )
+                        },
+                        panEnded: {}
+                    )
+                    if canvasOffscreen {
+                        Button("Recenter") {
+                            pendingZoomAnchor = nil
+                            viewPan = .zero
+                        }
+                        .buttonStyle(CaptureButtonStyle())
+                        .padding(.top, NativeTheme.metric("s-4"))
+                    }
+                }
+            }
         }
         .background(NativeTheme.field(colorScheme))
     }
@@ -1117,16 +1407,67 @@ private struct ImageEditorSurface: View {
     private func applyZoomMode(_ mode: String) {
         switch mode {
         case "fit":
+            pendingZoomAnchor = nil
+            viewPan = .zero
             guard viewportSize.width > 64, viewportSize.height > 64 else { return }
             zoom = min(
                 1,
-                max(0.05, min(
+                max(EditorViewportMath.minimumZoom, min(
                     (viewportSize.width - 64) / CGFloat(model.document.width),
                     (viewportSize.height - 64) / CGFloat(model.document.height)
                 ))
             )
-        case "actual": zoom = 1
+        case "actual": setManualZoom(1)
         default: break
+        }
+    }
+
+    private func zoomBy(_ factor: CGFloat, anchor: CGPoint? = nil) {
+        guard factor.isFinite, factor > 0 else { return }
+        setManualZoom(zoom * factor, anchor: anchor)
+    }
+
+    private func setManualZoom(_ requested: CGFloat, anchor: CGPoint? = nil) {
+        guard requested.isFinite else { return }
+        let next = EditorViewportMath.clampedZoom(requested)
+        let viewportPoint = anchor ?? CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2)
+        if canvasViewportFrame.width > 0, canvasViewportFrame.height > 0, zoom > 0 {
+            pendingZoomAnchor = EditorViewportMath.pendingAnchor(
+                replacing: pendingZoomAnchor,
+                viewportPoint: viewportPoint,
+                measuredCanvasOrigin: canvasViewportFrame.origin,
+                currentZoom: zoom,
+                nextZoom: next
+            )
+        }
+        zoomMode = "custom"
+        zoom = next
+    }
+
+    private func updateCanvasFrame(_ frame: CGRect) {
+        canvasViewportFrame = frame
+        canvasOffscreen = EditorViewportMath.isMostlyOffscreen(
+            viewportSize: viewportSize,
+            canvasFrame: frame
+        )
+        guard let anchor = pendingZoomAnchor,
+              abs(anchor.zoom - zoom) < 0.0001,
+              EditorViewportMath.frame(
+                frame,
+                matches: CGSize(
+                    width: CGFloat(model.document.width),
+                    height: CGFloat(model.document.height)
+                ),
+                zoom: zoom
+              ) else { return }
+        let resolution = EditorViewportMath.resolvePendingAnchor(anchor, canvasOrigin: frame.origin)
+        let correction = resolution.correction
+        pendingZoomAnchor = resolution.pending
+        if abs(correction.width) > 0.01 || abs(correction.height) > 0.01 {
+            viewPan = CGSize(
+                width: viewPan.width + correction.width,
+                height: viewPan.height + correction.height
+            )
         }
     }
 
@@ -1461,6 +1802,13 @@ func imageEditorReferenceView(artifact: Artifact, state: String) -> AnyView {
                     EditorAlignmentGuide(axis: .vertical, position: 480),
                     EditorAlignmentGuide(axis: .horizontal, position: 270),
                 ]
+            ))
+        case "viewport":
+            model.addShape(.ellipse, at: CGPoint(x: 620, y: 260))
+            return AnyView(ImageEditorSurface(
+                artifact: artifact, model: model,
+                initialZoom: 1.65,
+                initialViewPan: CGSize(width: -170, height: 48)
             ))
         case "erase":
             return AnyView(ImageEditorSurface(artifact: artifact, model: model, initialTool: .erase))

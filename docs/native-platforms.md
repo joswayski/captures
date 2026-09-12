@@ -88,16 +88,17 @@ These are implemented experiments, not drop-in replacements. In particular:
   crop, and microphone/countdown parity remain incomplete. Recording segment
   assembly still blocks during stop. Hosted D3D fixture captures do not establish
   physical DPI, capture, clipboard, drag, or cross-process click-through behavior.
-  [The accepted Windows run](https://github.com/joswayski/captures/actions/runs/34723107948)
-  passed MSVC build, 45 tests, strict clippy, and 36 light/dark captures with
+  [The accepted Windows run](https://github.com/joswayski/captures/actions/runs/34725163823)
+  passed MSVC build, 58 tests, strict clippy, and 38 light/dark captures with
   hardware drivers and verified full desktop bounds. The imported-image renders
   contain real rotated translucent raster layers. Preferences and feedback
   layouts were inspected. The new increment fixes image-property values that
   overlapped stepper buttons and adds an HWND-message input fixture for canvas
-  editing and shape drawing. Its 55 portable tests and host strict Clippy pass;
-  MSVC tests and the new interaction renders await CI. The parent orb lacks
-  MinGW GCC for its independent GNU cross-check. Static fixtures do not verify
-  picker or physical text input.
+  editing and shape drawing. Both inspected input renders show canvas width 777
+  and an asymmetric star; image-property values no longer overlap the buttons,
+  and export shows a real 72 KB estimate. Its 55 portable tests and host strict
+  Clippy pass. The parent orb lacks MinGW GCC for its independent GNU cross-check.
+  Synthetic HWND messages do not verify picker, physical input, IME or accessibility.
   Inspected recording
   fixtures show decoded paused frames, not playback timing or hardware video decode.
 - **macOS:** Swift builds, 19 XCTest tests, normal layouts, and independent real
@@ -119,6 +120,10 @@ These are implemented experiments, not drop-in replacements. In particular:
   source documents. Native CI passed the isolation regression; inspected renders
   show exactly two layers in overflow/snap states with no inherited shapes or
   restored-draft banner, plus the expected expansion action and both guides.
+  The next viewport slice adds 5–800% logarithmic zoom, pointer-anchored modified
+  wheel/pinch zoom, modifier/middle-button pan and Recenter. Regressions cover
+  event consumption and anchor retention across rapid zooms and delayed layout;
+  native tests and its 165% panned reference await CI. Physical input remains open.
 
 ## Feature parity acceptance
 

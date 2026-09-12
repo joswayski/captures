@@ -4,6 +4,177 @@ import XCTest
 
 @MainActor
 final class EditorModelTests: XCTestCase {
+    func testViewportEventRoutingConsumesHandledEventAndPreservesUnhandledEvent() throws {
+        let event = try XCTUnwrap(NSEvent.otherEvent(
+            with: .applicationDefined,
+            location: CGPoint(x: 31, y: 47),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            subtype: 0,
+            data1: 0,
+            data2: 0
+        ))
+
+        XCTAssertNil(routeEditorViewportEvent(event) { _ in nil })
+        XCTAssertTrue(routeEditorViewportEvent(event) { $0 } === event)
+        XCTAssertTrue(routeEditorViewportEvent(event, handler: nil) === event)
+    }
+
+    func testViewportZoomKeepsAsymmetricDocumentPointUnderPointerAfterRelayout() {
+        let anchor = CGPoint(x: 317, y: 229)
+        let documentPoint = EditorViewportMath.documentPoint(
+            anchor: anchor,
+            canvasOrigin: CGPoint(x: 83, y: 41),
+            zoom: 0.65
+        )
+        let relaidOutOrigin = CGPoint(x: -127, y: 76)
+        let correction = EditorViewportMath.anchorCorrection(
+            anchor: anchor,
+            canvasOrigin: relaidOutOrigin,
+            documentPoint: documentPoint,
+            zoom: 1.7
+        )
+
+        XCTAssertEqual(
+            relaidOutOrigin.x + correction.width + documentPoint.x * 1.7,
+            anchor.x,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            relaidOutOrigin.y + correction.height + documentPoint.y * 1.7,
+            anchor.y,
+            accuracy: 0.0001
+        )
+    }
+
+    func testViewportComposesTwoAnchorZoomsBeforeLayoutUpdates() {
+        let first = EditorViewportMath.pendingAnchor(
+            replacing: nil,
+            viewportPoint: CGPoint(x: 100, y: 100),
+            measuredCanvasOrigin: .zero,
+            currentZoom: 1,
+            nextZoom: 2
+        )
+        let sameAnchor = EditorViewportMath.pendingAnchor(
+            replacing: first,
+            viewportPoint: CGPoint(x: 100, y: 100),
+            measuredCanvasOrigin: .zero,
+            currentZoom: 2,
+            nextZoom: 4
+        )
+        XCTAssertEqual(sameAnchor.documentPoint.x, 100, accuracy: 0.0001)
+        XCTAssertEqual(sameAnchor.documentPoint.y, 100, accuracy: 0.0001)
+
+        let movedAnchor = EditorViewportMath.pendingAnchor(
+            replacing: first,
+            viewportPoint: CGPoint(x: 160, y: 130),
+            measuredCanvasOrigin: .zero,
+            currentZoom: 2,
+            nextZoom: 4
+        )
+        XCTAssertEqual(movedAnchor.documentPoint.x, 130, accuracy: 0.0001)
+        XCTAssertEqual(movedAnchor.documentPoint.y, 115, accuracy: 0.0001)
+
+        let relaidOutOrigin = CGPoint(x: -370, y: -281)
+        let correction = EditorViewportMath.anchorCorrection(
+            anchor: movedAnchor.viewportPoint,
+            canvasOrigin: relaidOutOrigin,
+            documentPoint: movedAnchor.documentPoint,
+            zoom: movedAnchor.zoom
+        )
+        XCTAssertEqual(
+            relaidOutOrigin.x + correction.width + movedAnchor.documentPoint.x * movedAnchor.zoom,
+            movedAnchor.viewportPoint.x,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            relaidOutOrigin.y + correction.height + movedAnchor.documentPoint.y * movedAnchor.zoom,
+            movedAnchor.viewportPoint.y,
+            accuracy: 0.0001
+        )
+        XCTAssertFalse(EditorViewportMath.frame(
+            CGRect(x: -100, y: -100, width: 800, height: 600),
+            matches: CGSize(width: 400, height: 300),
+            zoom: movedAnchor.zoom
+        ), "An intermediate 2× layout must not resolve the pending 4× anchor")
+        XCTAssertTrue(EditorViewportMath.frame(
+            CGRect(x: -370, y: -281, width: 1_600, height: 1_200),
+            matches: CGSize(width: 400, height: 300),
+            zoom: movedAnchor.zoom
+        ))
+    }
+
+    func testViewportRetainsVirtualAnchorBetweenPanCorrectionAndGeometryConfirmation() throws {
+        let zoomTwo = EditorViewportMath.pendingAnchor(
+            replacing: nil,
+            viewportPoint: CGPoint(x: 100, y: 100),
+            measuredCanvasOrigin: .zero,
+            currentZoom: 1,
+            nextZoom: 2
+        )
+        let firstLayout = EditorViewportMath.resolvePendingAnchor(zoomTwo, canvasOrigin: .zero)
+        XCTAssertEqual(firstLayout.correction.width, -100, accuracy: 0.0001)
+        XCTAssertEqual(firstLayout.correction.height, -100, accuracy: 0.0001)
+        let retained = try XCTUnwrap(firstLayout.pending)
+
+        let zoomFourBeforeCorrectedLayout = EditorViewportMath.pendingAnchor(
+            replacing: retained,
+            viewportPoint: CGPoint(x: 100, y: 100),
+            measuredCanvasOrigin: .zero,
+            currentZoom: 2,
+            nextZoom: 4
+        )
+        XCTAssertEqual(zoomFourBeforeCorrectedLayout.documentPoint.x, 100, accuracy: 0.0001)
+        XCTAssertEqual(zoomFourBeforeCorrectedLayout.documentPoint.y, 100, accuracy: 0.0001)
+
+        let duplicateOldFrame = EditorViewportMath.resolvePendingAnchor(retained, canvasOrigin: .zero)
+        XCTAssertEqual(duplicateOldFrame.correction, .zero, "Do not apply the same pan correction twice")
+        XCTAssertNotNil(duplicateOldFrame.pending)
+        let confirmed = EditorViewportMath.resolvePendingAnchor(retained, canvasOrigin: CGPoint(x: -100, y: -100))
+        XCTAssertEqual(confirmed.correction, .zero)
+        XCTAssertNil(confirmed.pending, "Only corrected geometry clears the virtual anchor")
+    }
+
+    func testViewportZoomBoundsAndOppositeWheelDeltas() {
+        XCTAssertEqual(EditorViewportMath.clampedZoom(0.001), 0.05)
+        XCTAssertEqual(EditorViewportMath.clampedZoom(12), 8)
+        let zoomIn = EditorViewportMath.wheelZoomFactor(scrollingDeltaY: 73, precise: true)
+        let zoomOut = EditorViewportMath.wheelZoomFactor(scrollingDeltaY: -73, precise: true)
+        XCTAssertGreaterThan(zoomIn, 1)
+        XCTAssertEqual(zoomIn * zoomOut, 1, accuracy: 0.0001)
+        XCTAssertEqual(
+            EditorViewportMath.wheelZoomFactor(scrollingDeltaY: 1000, precise: true),
+            EditorViewportMath.wheelZoomFactor(scrollingDeltaY: 240, precise: true),
+            accuracy: 0.0001
+        )
+        let asymmetricZoom: CGFloat = 1.75
+        XCTAssertEqual(
+            EditorViewportMath.zoom(forSliderPosition: EditorViewportMath.sliderPosition(for: asymmetricZoom)),
+            asymmetricZoom,
+            accuracy: 0.0001
+        )
+        XCTAssertGreaterThan(EditorViewportMath.sliderPosition(for: 1), 0.45)
+        XCTAssertLessThan(EditorViewportMath.sliderPosition(for: 1), 0.7)
+    }
+
+    func testViewportRecenterThresholdDistinguishesAreaFromThinSliver() {
+        let viewport = CGSize(width: 800, height: 600)
+        XCTAssertFalse(EditorViewportMath.isMostlyOffscreen(
+            viewportSize: viewport,
+            canvasFrame: CGRect(x: -317, y: 71, width: 400, height: 300)
+        ))
+        XCTAssertTrue(EditorViewportMath.isMostlyOffscreen(
+            viewportSize: viewport,
+            canvasFrame: CGRect(x: 789, y: 541, width: 400, height: 300)
+        ))
+        XCTAssertTrue(EditorViewportMath.isMostlyOffscreen(
+            viewportSize: viewport,
+            canvasFrame: CGRect(x: 901, y: -200, width: 400, height: 300)
+        ))
+    }
+
     func testNewAnnotationsUseToolDefaults() {
         let model = EditorModel(
             document: EditorDocument(width: 400, height: 300, layers: []),

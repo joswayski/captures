@@ -150,6 +150,7 @@ enum RenderReferences {
                     "previews-collapsed", "previews-collapsed-fanned", "previews-expanded",
                     "image-editor", "image-editor-shapes", "image-editor-properties",
                     "image-editor-overflow", "image-editor-snap-guides",
+                    "image-editor-viewport-pan-zoom",
                     "image-editor-erase", "image-editor-wand",
                 ].contains(fixture.name),
                    !hasSharedFixtureFeature(bitmap) {
