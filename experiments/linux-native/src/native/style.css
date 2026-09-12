@@ -65,7 +65,7 @@ scrolledwindow, viewport { background-color: transparent; }
 .notice-message { margin-top: var(--s-3); color: var(--text-muted); line-height: 1.45; }
 .notice-actions { margin-top: var(--s-6); border-spacing: var(--s-3); }
 .notice-actions button.destructive { background-color: var(--danger-surface); border-color: var(--danger-border); color: var(--danger-text); }
-.notice-actions button.destructive:hover { background-color: var(--danger-surface-hover); }
+.notice-actions button.destructive:hover { background-color: var(--surface-active); }
 .glass { background-color: var(--glass-strong); color: var(--glass-text); border-radius: var(--r-xl); }
 .capture-menu { padding: var(--s-6); }
 .glass label { color: var(--glass-text); }

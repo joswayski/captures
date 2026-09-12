@@ -10,7 +10,7 @@ use gtk::{gdk, glib, prelude::*};
 pub mod prelude {
     pub use super::{
         BoxCompat, ButtonCompat, DrawingAreaCompat, FrameCompat, LegacyEvents, OverlayCompat,
-        ResponseCompat, RevealerCompat, ScrolledWindowCompat, WidgetCompat, WindowCompat,
+        RevealerCompat, ScrolledWindowCompat, WidgetCompat, WindowCompat,
     };
 }
 
@@ -273,25 +273,6 @@ pub trait RevealerCompat {
 impl RevealerCompat for gtk::Revealer {
     fn add(&self, child: &impl IsA<gtk::Widget>) {
         self.set_child(Some(child));
-    }
-}
-
-pub trait ResponseCompat {
-    fn run(&self) -> gtk::ResponseType;
-}
-impl<T: IsA<gtk::Dialog> + IsA<gtk::Window>> ResponseCompat for T {
-    fn run(&self) -> gtk::ResponseType {
-        let response = std::rc::Rc::new(std::cell::Cell::new(gtk::ResponseType::None));
-        let main = glib::MainLoop::new(None, false);
-        let main_for_response = main.clone();
-        let response_for_signal = response.clone();
-        self.connect_response(move |_, value| {
-            response_for_signal.set(value);
-            main_for_response.quit();
-        });
-        self.present();
-        main.run();
-        response.get()
     }
 }
 

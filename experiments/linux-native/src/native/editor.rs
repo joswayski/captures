@@ -1415,25 +1415,32 @@ fn text_dialog(
     at: Point,
     refresh_cb: &Refresh,
 ) {
-    let dialog = gtk::Dialog::with_buttons(
-        Some("Add text"),
-        Some(parent),
-        gtk::DialogFlags::MODAL,
-        &[
-            ("Cancel", gtk::ResponseType::Cancel),
-            ("Add", gtk::ResponseType::Accept),
-        ],
-    );
+    let (dialog, content, actions) = ui::panel(parent, "Add text");
     let entry = gtk::Entry::new();
     entry.set_placeholder_text(Some("Type your text"));
     entry.set_activates_default(true);
-    dialog.set_default_response(gtk::ResponseType::Accept);
-    dialog.content_area().add(&entry);
-    dialog.show_all();
-    if dialog.run() == gtk::ResponseType::Accept && !entry.text().trim().is_empty() {
+    content.append(&entry);
+    let cancel = ui::button("Cancel");
+    let add = ui::button("Add");
+    add.style_context().add_class("primary");
+    actions.append(&cancel);
+    actions.append(&add);
+    let dialog_for_cancel = dialog.clone();
+    cancel.connect_clicked(move |_| dialog_for_cancel.close());
+    let (dialog_for_add, area, state, refresh_cb, entry_for_add) = (
+        dialog.clone(),
+        area.clone(),
+        state.clone(),
+        refresh_cb.clone(),
+        entry.clone(),
+    );
+    add.connect_clicked(move |_| {
+        if entry_for_add.text().trim().is_empty() {
+            return;
+        }
         let mut state = state.borrow_mut();
         checkpoint(&mut state);
-        let text = entry.text().to_string();
+        let text = entry_for_add.text().to_string();
         let frame = Rect {
             x: at.x,
             y: at.y,
@@ -1446,9 +1453,14 @@ fn text_dialog(
         state.selected = Some(index);
         state.tool = Tool::Select;
         changed(&mut state);
-    }
-    dialog.close();
-    refresh(refresh_cb, area);
+        drop(state);
+        refresh(&refresh_cb, &area);
+        dialog_for_add.close();
+    });
+    let add_for_entry = add.clone();
+    entry.connect_activate(move |_| add_for_entry.clicked());
+    dialog.present();
+    entry.grab_focus();
 }
 
 fn preview_layer(kind: LayerKind, frame: Rect, color: Color, stroke: f64, fill: bool) -> Layer {
@@ -2224,12 +2236,7 @@ fn compression_comparison(
         Ok(image) => image.to_rgba8(),
         Err(error) => return ui::error(parent, &error.to_string()),
     };
-    let dialog = gtk::Dialog::with_buttons(
-        Some("Compression comparison"),
-        Some(parent),
-        gtk::DialogFlags::MODAL,
-        &[("Close", gtk::ResponseType::Close)],
-    );
+    let (dialog, content, actions) = ui::panel(parent, "Compression comparison");
     dialog.set_default_size(860, 500);
     let root = gtk::Box::new(gtk::Orientation::Vertical, 8);
     let images = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -2270,10 +2277,13 @@ fn compression_comparison(
         false,
         0,
     );
-    dialog.content_area().add(&root);
-    dialog.show_all();
-    dialog.run();
-    dialog.close();
+    content.append(&root);
+    let close = ui::button("Close");
+    close.style_context().add_class("primary");
+    actions.append(&close);
+    let dialog_for_close = dialog.clone();
+    close.connect_clicked(move |_| dialog_for_close.close());
+    dialog.present();
 }
 
 fn save_named(

@@ -892,17 +892,8 @@ fn countdown(seconds: u8, done: Rc<dyn Fn()>, cancelled: Rc<dyn Fn()>) {
 }
 
 fn new_canvas(parent: &gtk::Window, directory: PathBuf, saved: Rc<dyn Fn(PathBuf)>) {
-    let dialog = gtk::Dialog::with_buttons(
-        Some("New canvas"),
-        Some(parent),
-        gtk::DialogFlags::MODAL,
-        &[
-            ("Cancel", gtk::ResponseType::Cancel),
-            ("Create", gtk::ResponseType::Accept),
-        ],
-    );
+    let (dialog, content, actions) = ui::panel(parent, "New canvas");
     let grid = gtk::Grid::new();
-    grid.set_border_width(24);
     grid.set_row_spacing(12);
     grid.set_column_spacing(16);
     let width = gtk::SpinButton::with_range(1., 8192., 1.);
@@ -953,9 +944,18 @@ fn new_canvas(parent: &gtk::Window, directory: PathBuf, saved: Rc<dyn Fn(PathBuf
         grid.attach(&ui::label(name, ""), 0, row as i32, 1, 1);
         grid.attach(widget, 1, row as i32, 1, 1);
     }
-    dialog.content_area().add(&grid);
-    dialog.show_all();
-    if dialog.run() == gtk::ResponseType::Accept {
+    content.append(&grid);
+    let cancel = ui::button("Cancel");
+    let create = ui::button("Create");
+    create.style_context().add_class("primary");
+    actions.append(&cancel);
+    actions.append(&create);
+    let dialog_for_cancel = dialog.clone();
+    cancel.connect_clicked(move |_| dialog_for_cancel.close());
+    let (dialog_for_create, parent, directory, saved) =
+        (dialog.clone(), parent.clone(), directory, saved);
+    create.connect_clicked(move |_| {
+        dialog_for_create.close();
         parent.hide();
         let c = color.rgba();
         let image = image::RgbaImage::from_pixel(
@@ -968,7 +968,7 @@ fn new_canvas(parent: &gtk::Window, directory: PathBuf, saved: Rc<dyn Fn(PathBuf
                 if transparent.is_active() { 0 } else { 255 },
             ]),
         );
-        editor::open(image, directory, saved);
-    }
-    dialog.close();
+        editor::open(image, directory.clone(), saved.clone());
+    });
+    dialog.present();
 }

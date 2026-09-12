@@ -53,7 +53,10 @@ final class AppStore: NSObject, ObservableObject, NSWindowDelegate {
     }
 
     func report(_ error: Error) {
-        CaptureDialogController.shared.report(error)
+        let message = error.localizedDescription
+        DispatchQueue.main.async {
+            CaptureDialogController.shared.report(NativeFailure(message))
+        }
     }
 
     func addArtifact(_ artifact: Artifact) {

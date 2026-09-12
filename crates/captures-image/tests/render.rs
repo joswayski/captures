@@ -184,6 +184,29 @@ fn freehand_dots_segments_and_arrowheads_are_not_bounding_boxes() {
 }
 
 #[test]
+fn explicit_font_renders_asymmetric_glyphs_with_alpha_and_rotation() {
+    let mut text = layer(Shape::Text {
+        origin: point(10.0, 5.0),
+        text: "L".into(),
+        font_size: 20.0,
+        font_data: Arc::from(include_bytes!("test-font.ttf").as_slice()),
+    });
+    text.color = [50, 150, 250, 128];
+    let rendered = render(&document(vec![text.clone()])).unwrap();
+    // The test font is a 600×800 L at 1000 units/em: a 3px vertical
+    // stem and 3px bottom foot at this size. These expectations come from
+    // the fixture outline, not fontdue metrics or the renderer's bounds.
+    assert_eq!(rendered.get_pixel(11, 8)[3], 128);
+    assert_eq!(rendered.get_pixel(20, 19)[3], 128);
+    assert_eq!(rendered.get_pixel(20, 8)[3], 0);
+    assert!((i16::from(rendered.get_pixel(11, 8)[2]) - 250).abs() <= 1);
+    text.rotation_degrees = 90.0;
+    let rotated = render(&document(vec![text])).unwrap();
+    assert_eq!(rotated.get_pixel(20, 8)[3], 128);
+    assert_eq!(rotated.get_pixel(20, 17)[3], 0);
+}
+
+#[test]
 fn invalid_geometry_crop_and_font_fail_without_mutating_source() {
     for crop in [
         PixelRect {

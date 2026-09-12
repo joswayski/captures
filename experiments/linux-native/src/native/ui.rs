@@ -539,7 +539,21 @@ mod theme_tests {
         assert_eq!(resolve("var(--surface-raised)", &dark), "#16161b");
         assert_eq!(resolve("var(--text)", &light), "#131318");
         assert_ne!(dark["theme-accent"], light["theme-accent"]);
-        assert!(!resolve(include_str!("style.css"), &light).contains("var(--"));
         assert_eq!(dark["glass-text"], light["glass-text"]);
+    }
+
+    #[test]
+    fn every_gtk_stylesheet_token_resolves_in_both_appearances() {
+        let stylesheet = include_str!("style.css");
+        for (appearance, tokens) in [
+            ("light", theme_tokens(false, "mustard", "", "")),
+            ("dark", theme_tokens(true, "mustard", "", "")),
+        ] {
+            let resolved = resolve(stylesheet, &tokens);
+            assert!(
+                !resolved.contains("var(--"),
+                "{appearance} GTK stylesheet contains an unresolved token"
+            );
+        }
     }
 }
