@@ -1,9 +1,12 @@
 use captures_windows_native::{
     editor::Tool,
-    geometry::{Rect, contain, cover, screenshot_editor_canvas},
+    geometry::{
+        Rect, contain, cover, editor_layer_visibility_button, editor_shape_flyout_cell,
+        recording_editor_timeline_track, screenshot_editor_canvas,
+    },
     history::Artifact,
     settings::Settings,
-    state::{AppState, Surface},
+    state::{AppState, Surface, can_replace_editor_source},
     theme::{Color, Palette},
 };
 use image::RgbaImage;
@@ -240,8 +243,8 @@ impl Renderer {
                 p,
                 "Region screenshot",
                 "Drag to select exactly what you need",
-                "R",
-            );
+                "select",
+            )?;
             self.card(
                 Rect {
                     x: 16.0,
@@ -252,8 +255,8 @@ impl Renderer {
                 p,
                 "Window screenshot",
                 "Point at an app window",
-                "W",
-            );
+                "window",
+            )?;
             self.card(
                 Rect {
                     x: 16.0,
@@ -264,8 +267,8 @@ impl Renderer {
                 p,
                 "Display screenshot",
                 "Capture the active display",
-                "D",
-            );
+                "display",
+            )?;
             self.card(
                 Rect {
                     x: 16.0,
@@ -276,8 +279,8 @@ impl Renderer {
                 p,
                 "Record",
                 "Video, GIF, system audio and microphone",
-                "●",
-            );
+                "video",
+            )?;
             self.button(
                 Rect {
                     x: 16.0,
@@ -473,41 +476,94 @@ impl Renderer {
 
             let document = state.editor.as_ref();
             let dimensions = document.map_or_else(
-                || "Canvas".to_owned(),
+                || "W   —       ×       H   —".to_owned(),
                 |document| {
                     format!(
-                        "Canvas    W  {}    ×    H  {}",
+                        "W   {}       ×       H   {}",
                         document.crop.width.round() as u32,
                         document.crop.height.round() as u32
                     )
                 },
             );
-            self.panel(
+            self.rounded_panel(
                 Rect {
-                    x: 72.0,
+                    x: 16.0,
                     y: 9.0,
-                    width: 246.0,
+                    width: 410.0,
                     height: 34.0,
                 },
                 p.field,
+                8.0,
+            )?;
+            self.text(
+                "Canvas",
+                Rect {
+                    x: 26.0,
+                    y: 13.0,
+                    width: 52.0,
+                    height: 26.0,
+                },
+                p.muted,
+                &self.body,
             );
             self.text(
                 &dimensions,
                 Rect {
                     x: 78.0,
                     y: 13.0,
-                    width: 234.0,
+                    width: 148.0,
                     height: 26.0,
                 },
                 p.text,
                 &self.body,
             );
-            self.text(
-                "Background  Original",
+            self.divider(
+                Vector2 { X: 232.0, Y: 18.0 },
+                Vector2 { X: 232.0, Y: 34.0 },
+                p.border,
+            )?;
+            self.editor_icon(
+                "crop",
                 Rect {
-                    x: 330.0,
+                    x: 244.0,
+                    y: 18.0,
+                    width: 14.0,
+                    height: 14.0,
+                },
+                p.border,
+            )?;
+            self.text(
+                "Trim edges",
+                Rect {
+                    x: 262.0,
                     y: 13.0,
-                    width: 150.0,
+                    width: 74.0,
+                    height: 26.0,
+                },
+                p.border,
+                &self.body,
+            );
+            self.divider(
+                Vector2 { X: 340.0, Y: 18.0 },
+                Vector2 { X: 340.0, Y: 34.0 },
+                p.border,
+            )?;
+            self.rounded_panel(
+                Rect {
+                    x: 352.0,
+                    y: 19.0,
+                    width: 14.0,
+                    height: 14.0,
+                },
+                Color(255, 255, 255, 255),
+                3.0,
+            )?;
+            self.text(
+                "Background",
+                Rect {
+                    x: 370.0,
+                    y: 13.0,
+                    width: 48.0,
                     height: 26.0,
                 },
                 p.muted,
@@ -522,26 +578,109 @@ impl Renderer {
                 };
                 self.editor_icon(icon, rect.inset(8.0), p.muted)?;
             }
-            self.text(
-                "Fit view   −   100%   +",
+            self.rounded_panel(
                 Rect {
-                    x: w - 410.0,
-                    y: 13.0,
+                    x: w - 414.0,
+                    y: 9.0,
                     width: 190.0,
+                    height: 34.0,
+                },
+                p.field,
+                8.0,
+            )?;
+            self.editor_icon(
+                "fit",
+                Rect {
+                    x: w - 400.0,
+                    y: 19.0,
+                    width: 14.0,
+                    height: 14.0,
+                },
+                p.muted,
+            )?;
+            self.editor_icon(
+                "minus",
+                Rect {
+                    x: w - 372.0,
+                    y: 20.0,
+                    width: 12.0,
+                    height: 12.0,
+                },
+                p.muted,
+            )?;
+            self.divider(
+                Vector2 {
+                    X: w - 348.0,
+                    Y: 26.0,
+                },
+                Vector2 {
+                    X: w - 292.0,
+                    Y: 26.0,
+                },
+                p.muted,
+            )?;
+            let zoom_knob = self.brush(p.muted)?;
+            self.target.FillEllipse(
+                &windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE {
+                    point: Vector2 {
+                        X: w - 320.0,
+                        Y: 26.0,
+                    },
+                    radiusX: 3.5,
+                    radiusY: 3.5,
+                },
+                &zoom_knob,
+            );
+            self.editor_icon(
+                "plus",
+                Rect {
+                    x: w - 280.0,
+                    y: 20.0,
+                    width: 12.0,
+                    height: 12.0,
+                },
+                p.muted,
+            )?;
+            self.text(
+                "Fit",
+                Rect {
+                    x: w - 258.0,
+                    y: 13.0,
+                    width: 30.0,
                     height: 26.0,
                 },
                 p.muted,
                 &self.body,
             );
-            self.text(
-                "Add images unavailable",
+            self.rounded_panel(
                 Rect {
                     x: w - 214.0,
-                    y: 13.0,
+                    y: 9.0,
                     width: 194.0,
+                    height: 34.0,
+                },
+                p.field,
+                7.0,
+            )?;
+            self.editor_icon(
+                "image",
+                Rect {
+                    x: w - 196.0,
+                    y: 18.0,
+                    width: 16.0,
+                    height: 16.0,
+                },
+                p.border,
+            )?;
+            self.text(
+                "Add images · unavailable",
+                Rect {
+                    x: w - 174.0,
+                    y: 13.0,
+                    width: 142.0,
                     height: 26.0,
                 },
-                p.muted,
+                p.border,
                 &self.body,
             );
 
@@ -635,8 +774,9 @@ impl Renderer {
                 (Tool::Select, "select"),
                 (Tool::Crop, "crop"),
                 (Tool::Text, "text"),
+                (Tool::Rectangle, "shapes"),
+                (Tool::Arrow, "arrow"),
                 (Tool::Pen, "pen"),
-                (Tool::Arrow, "shapes"),
             ]
             .iter()
             .enumerate()
@@ -649,50 +789,46 @@ impl Renderer {
                 };
                 let grouped = matches!(
                     state.editor_tool,
-                    Tool::Arrow
-                        | Tool::Line
+                    Tool::Line
                         | Tool::Rectangle
                         | Tool::Ellipse
                         | Tool::Triangle
                         | Tool::Diamond
                         | Tool::Star
                 );
-                if state.editor_tool == *tool || (*tool == Tool::Arrow && grouped) {
-                    self.panel(rect, p.field);
-                    let active = self.brush(p.accent)?;
-                    self.target.FillRectangle(
-                        &D2D_RECT_F {
-                            left: rect.x,
-                            top: rect.y,
-                            right: rect.x + 3.0,
-                            bottom: rect.y + rect.height,
-                        },
-                        &active,
-                    );
+                if state.editor_tool == *tool || (*tool == Tool::Rectangle && grouped) {
+                    self.rounded_panel(rect, p.accent, 7.0)?;
                 }
-                self.editor_icon(icon, rect.inset(10.0), p.text)?;
+                self.editor_icon(
+                    icon,
+                    rect.inset(10.0),
+                    if state.editor_tool == *tool || (*tool == Tool::Rectangle && grouped) {
+                        contrast_ink(p.accent)
+                    } else {
+                        p.text
+                    },
+                )?;
             }
             if state.editor_shapes_open {
                 let flyout = Rect {
                     x: 60.0,
-                    y: 246.0,
-                    width: 214.0,
-                    height: 244.0,
+                    y: 204.0,
+                    width: 292.0,
+                    height: 146.0,
                 };
-                self.panel(flyout, p.raised);
+                self.rounded_panel(flyout, p.raised, 10.0)?;
                 self.text(
                     "Shapes",
                     Rect {
                         x: 72.0,
-                        y: 256.0,
-                        width: 190.0,
+                        y: 212.0,
+                        width: 268.0,
                         height: 24.0,
                     },
                     p.text,
                     &self.strong,
                 );
                 for (index, (name, label)) in [
-                    ("arrow", "Arrow"),
                     ("line", "Line"),
                     ("rectangle", "Rectangle"),
                     ("ellipse", "Ellipse"),
@@ -703,15 +839,8 @@ impl Renderer {
                 .iter()
                 .enumerate()
                 {
-                    let row = index / 2;
-                    let column = index % 2;
-                    let rect = Rect {
-                        x: 70.0 + column as f32 * 98.0,
-                        y: 288.0 + row as f32 * 47.0,
-                        width: 94.0,
-                        height: 40.0,
-                    };
-                    self.panel(rect, p.field);
+                    let rect = editor_shape_flyout_cell(index).expect("six shape cells");
+                    self.rounded_panel(rect, p.field, 6.0)?;
                     self.editor_icon(
                         name,
                         Rect {
@@ -727,7 +856,7 @@ impl Renderer {
                         Rect {
                             x: rect.x + 30.0,
                             y: rect.y + 9.0,
-                            width: 60.0,
+                            width: 56.0,
                             height: 22.0,
                         },
                         p.text,
@@ -737,19 +866,57 @@ impl Renderer {
             }
 
             self.text(
-                &format!(
-                    "Layers   {}",
-                    document.map_or(1, |value| value.layers.len() + 1)
-                ),
+                "Layers",
                 Rect {
                     x: sidebar_x + 20.0,
                     y: 68.0,
-                    width: 280.0,
+                    width: 64.0,
                     height: 28.0,
                 },
                 p.text,
                 &self.strong,
             );
+            self.rounded_panel(
+                Rect {
+                    x: sidebar_x + 86.0,
+                    y: 72.0,
+                    width: 22.0,
+                    height: 20.0,
+                },
+                p.field,
+                10.0,
+            )?;
+            self.text(
+                &document
+                    .map_or(1, |value| value.layers.len() + 1)
+                    .to_string(),
+                Rect {
+                    x: sidebar_x + 86.0,
+                    y: 70.0,
+                    width: 22.0,
+                    height: 22.0,
+                },
+                p.muted,
+                &self.body,
+            );
+            self.editor_icon(
+                "plus",
+                Rect {
+                    x: sidebar_x + 276.0,
+                    y: 75.0,
+                    width: 14.0,
+                    height: 14.0,
+                },
+                p.border,
+            )?;
+            self.divider(
+                Vector2 {
+                    X: sidebar_x,
+                    Y: 100.0,
+                },
+                Vector2 { X: w, Y: 100.0 },
+                p.border,
+            )?;
             let mut layer_y = 104.0;
             if let Some(document) = document {
                 for layer in document.layers.iter().rev().take(3) {
@@ -784,14 +951,10 @@ impl Renderer {
                         p.text,
                         &self.body,
                     );
+                    let eye = editor_layer_visibility_button(sidebar_x, layer_y);
                     self.editor_icon(
                         if layer.visible { "eye" } else { "eye-off" },
-                        Rect {
-                            x: sidebar_x + 264.0,
-                            y: layer_y + 14.0,
-                            width: 20.0,
-                            height: 20.0,
-                        },
+                        eye.inset(4.0),
                         p.muted,
                     )?;
                     layer_y += 52.0;
@@ -806,174 +969,144 @@ impl Renderer {
                 },
                 p.field,
             );
-            self.text(
-                "Original screenshot\nImage · locked background",
+            self.editor_icon(
+                "image",
                 Rect {
                     x: sidebar_x + 28.0,
+                    y: layer_y + 14.0,
+                    width: 20.0,
+                    height: 20.0,
+                },
+                p.muted,
+            )?;
+            self.text(
+                "Original screenshot\nLocked background",
+                Rect {
+                    x: sidebar_x + 58.0,
                     y: layer_y + 6.0,
-                    width: 244.0,
+                    width: 144.0,
                     height: 36.0,
                 },
                 p.muted,
                 &self.body,
             );
+            self.editor_icon(
+                "lock",
+                Rect {
+                    x: sidebar_x + 268.0,
+                    y: layer_y + 16.0,
+                    width: 16.0,
+                    height: 16.0,
+                },
+                p.muted,
+            )?;
             let properties_y = (layer_y + 72.0).min(footer_y - 154.0);
             let selected_layer = state.selected_layer.and_then(|id| {
                 document.and_then(|document| document.layers.iter().find(|layer| layer.id == id))
             });
-            let property_color = selected_layer.map_or(state.editor_color, |layer| layer.color);
-            let property_stroke = selected_layer.map_or(state.editor_stroke, |layer| layer.stroke);
-            let property_fill = selected_layer.map_or(state.editor_fill, |layer| layer.fill);
-            let property_color_hex = format!(
-                "#{:02x}{:02x}{:02x}",
-                property_color[0], property_color[1], property_color[2]
-            );
-            self.text(
-                if state.selected_layer.is_some() {
-                    "Properties · selected layer"
-                } else {
-                    "Annotation properties"
-                },
-                Rect {
-                    x: sidebar_x + 20.0,
-                    y: properties_y,
-                    width: 280.0,
-                    height: 24.0,
-                },
-                p.text,
-                &self.strong,
-            );
-            self.text(
-                "Stroke color",
-                Rect {
-                    x: sidebar_x + 20.0,
-                    y: properties_y + 34.0,
-                    width: 92.0,
-                    height: 28.0,
-                },
-                p.muted,
-                &self.body,
-            );
-            self.button(
-                Rect {
-                    x: sidebar_x + 116.0,
-                    y: properties_y + 31.0,
-                    width: 132.0,
-                    height: 32.0,
-                },
-                p.field,
-                p.text,
-                if state.editor_editing_color {
-                    &state.editor_color_hex
-                } else {
-                    &property_color_hex
-                },
-            );
-            let swatch = self.brush(Color(
-                property_color[0],
-                property_color[1],
-                property_color[2],
-                property_color[3],
-            ))?;
-            self.target.FillEllipse(
-                &windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE {
-                    point: Vector2 {
-                        X: sidebar_x + 276.0,
-                        Y: properties_y + 47.0,
+            if selected_layer.is_some() || state.editor_tool != Tool::Select {
+                self.divider(
+                    Vector2 {
+                        X: sidebar_x,
+                        Y: properties_y - 12.0,
                     },
-                    radiusX: 13.0,
-                    radiusY: 13.0,
-                },
-                &swatch,
-            );
-            self.text(
-                "Stroke width",
-                Rect {
-                    x: sidebar_x + 20.0,
-                    y: properties_y + 74.0,
-                    width: 100.0,
-                    height: 28.0,
-                },
-                p.muted,
-                &self.body,
-            );
-            self.button(
-                Rect {
-                    x: sidebar_x + 184.0,
-                    y: properties_y + 70.0,
-                    width: 52.0,
-                    height: 32.0,
-                },
-                p.field,
-                p.text,
-                "−",
-            );
-            self.text(
-                &format!("{property_stroke:.0} px"),
-                Rect {
-                    x: sidebar_x + 120.0,
-                    y: properties_y + 74.0,
-                    width: 64.0,
-                    height: 28.0,
-                },
-                p.text,
-                &self.body,
-            );
-            self.button(
-                Rect {
-                    x: sidebar_x + 240.0,
-                    y: properties_y + 70.0,
-                    width: 52.0,
-                    height: 32.0,
-                },
-                p.field,
-                p.text,
-                "+",
-            );
-            self.text(
-                if selected_layer.is_none_or(|layer| layer.supports_fill()) {
-                    "Fill shape"
-                } else {
-                    "Fill unavailable"
-                },
-                Rect {
-                    x: sidebar_x + 20.0,
-                    y: properties_y + 114.0,
-                    width: 150.0,
-                    height: 28.0,
-                },
-                p.muted,
-                &self.body,
-            );
-            if selected_layer.is_none_or(|layer| layer.supports_fill()) {
-                self.toggle(
-                    Rect {
-                        x: sidebar_x + 248.0,
-                        y: properties_y + 118.0,
-                        width: 36.0,
-                        height: 20.0,
+                    Vector2 {
+                        X: w,
+                        Y: properties_y - 12.0,
                     },
-                    p,
-                    property_fill.is_some(),
+                    p.border,
                 )?;
-            }
-            self.text(
-                "Rotation",
-                Rect {
-                    x: sidebar_x + 20.0,
-                    y: properties_y + 154.0,
-                    width: 90.0,
-                    height: 28.0,
-                },
-                p.muted,
-                &self.body,
-            );
-            if let Some(layer) = selected_layer {
+                let property_color = selected_layer.map_or(state.editor_color, |layer| layer.color);
+                let property_stroke =
+                    selected_layer.map_or(state.editor_stroke, |layer| layer.stroke);
+                let property_fill = selected_layer.map_or(state.editor_fill, |layer| layer.fill);
+                let property_color_hex = format!(
+                    "#{:02x}{:02x}{:02x}",
+                    property_color[0], property_color[1], property_color[2]
+                );
                 self.text(
-                    &format!("{:.0}°", layer.rotation_degrees),
+                    selected_layer
+                        .map(|layer| shape_label(&layer.shape))
+                        .unwrap_or_else(|| tool_label(state.editor_tool)),
+                    Rect {
+                        x: sidebar_x + 20.0,
+                        y: properties_y,
+                        width: 280.0,
+                        height: 24.0,
+                    },
+                    p.text,
+                    &self.strong,
+                );
+                self.text(
+                    "Stroke color",
+                    Rect {
+                        x: sidebar_x + 20.0,
+                        y: properties_y + 34.0,
+                        width: 92.0,
+                        height: 28.0,
+                    },
+                    p.muted,
+                    &self.body,
+                );
+                self.button(
+                    Rect {
+                        x: sidebar_x + 116.0,
+                        y: properties_y + 31.0,
+                        width: 132.0,
+                        height: 32.0,
+                    },
+                    p.field,
+                    p.text,
+                    if state.editor_editing_color {
+                        &state.editor_color_hex
+                    } else {
+                        &property_color_hex
+                    },
+                );
+                let swatch = self.brush(Color(
+                    property_color[0],
+                    property_color[1],
+                    property_color[2],
+                    property_color[3],
+                ))?;
+                self.target.FillEllipse(
+                    &windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE {
+                        point: Vector2 {
+                            X: sidebar_x + 276.0,
+                            Y: properties_y + 47.0,
+                        },
+                        radiusX: 13.0,
+                        radiusY: 13.0,
+                    },
+                    &swatch,
+                );
+                self.text(
+                    "Stroke width",
+                    Rect {
+                        x: sidebar_x + 20.0,
+                        y: properties_y + 74.0,
+                        width: 100.0,
+                        height: 28.0,
+                    },
+                    p.muted,
+                    &self.body,
+                );
+                self.button(
+                    Rect {
+                        x: sidebar_x + 184.0,
+                        y: properties_y + 70.0,
+                        width: 52.0,
+                        height: 32.0,
+                    },
+                    p.field,
+                    p.text,
+                    "−",
+                );
+                self.text(
+                    &format!("{property_stroke:.0} px"),
                     Rect {
                         x: sidebar_x + 120.0,
-                        y: properties_y + 154.0,
+                        y: properties_y + 74.0,
                         width: 64.0,
                         height: 28.0,
                     },
@@ -982,38 +1115,101 @@ impl Renderer {
                 );
                 self.button(
                     Rect {
-                        x: sidebar_x + 184.0,
-                        y: properties_y + 150.0,
-                        width: 52.0,
-                        height: 32.0,
-                    },
-                    p.field,
-                    p.text,
-                    "−15°",
-                );
-                self.button(
-                    Rect {
                         x: sidebar_x + 240.0,
-                        y: properties_y + 150.0,
+                        y: properties_y + 70.0,
                         width: 52.0,
                         height: 32.0,
                     },
                     p.field,
                     p.text,
-                    "+15°",
+                    "+",
                 );
-            } else {
                 self.text(
-                    "Select a layer to rotate",
+                    if selected_layer.is_none_or(|layer| layer.supports_fill()) {
+                        "Fill shape"
+                    } else {
+                        "Fill unavailable"
+                    },
                     Rect {
-                        x: sidebar_x + 120.0,
-                        y: properties_y + 154.0,
-                        width: 172.0,
+                        x: sidebar_x + 20.0,
+                        y: properties_y + 114.0,
+                        width: 150.0,
                         height: 28.0,
                     },
                     p.muted,
                     &self.body,
                 );
+                if selected_layer.is_none_or(|layer| layer.supports_fill()) {
+                    self.toggle(
+                        Rect {
+                            x: sidebar_x + 248.0,
+                            y: properties_y + 118.0,
+                            width: 36.0,
+                            height: 20.0,
+                        },
+                        p,
+                        property_fill.is_some(),
+                        false,
+                    )?;
+                }
+                self.text(
+                    "Rotation",
+                    Rect {
+                        x: sidebar_x + 20.0,
+                        y: properties_y + 154.0,
+                        width: 90.0,
+                        height: 28.0,
+                    },
+                    p.muted,
+                    &self.body,
+                );
+                if let Some(layer) = selected_layer {
+                    self.text(
+                        &format!("{:.0}°", layer.rotation_degrees),
+                        Rect {
+                            x: sidebar_x + 120.0,
+                            y: properties_y + 154.0,
+                            width: 64.0,
+                            height: 28.0,
+                        },
+                        p.text,
+                        &self.body,
+                    );
+                    self.button(
+                        Rect {
+                            x: sidebar_x + 184.0,
+                            y: properties_y + 150.0,
+                            width: 52.0,
+                            height: 32.0,
+                        },
+                        p.field,
+                        p.text,
+                        "−15°",
+                    );
+                    self.button(
+                        Rect {
+                            x: sidebar_x + 240.0,
+                            y: properties_y + 150.0,
+                            width: 52.0,
+                            height: 32.0,
+                        },
+                        p.field,
+                        p.text,
+                        "+15°",
+                    );
+                } else {
+                    self.text(
+                        "Select a layer to rotate",
+                        Rect {
+                            x: sidebar_x + 120.0,
+                            y: properties_y + 154.0,
+                            width: 172.0,
+                            height: 28.0,
+                        },
+                        p.muted,
+                        &self.body,
+                    );
+                }
             }
 
             if state.editor_export_settings_open {
@@ -1051,18 +1247,38 @@ impl Renderer {
                 },
                 p.field,
                 p.text,
-                if state.editor_export_settings_open {
-                    "Export settings  ▴\nOriginal · Preserve"
-                } else {
-                    "Export settings  ▾\nOriginal · Preserve"
-                },
+                &format!(
+                    "Export settings\n{} · Original · Preserve",
+                    state.editor_format.to_uppercase()
+                ),
             );
+            self.editor_icon(
+                "chevron-down",
+                Rect {
+                    x: 176.0,
+                    y: footer_y + 39.0,
+                    width: 12.0,
+                    height: 12.0,
+                },
+                p.muted,
+            )?;
             self.text(
                 "Filename",
                 Rect {
                     x: 216.0,
                     y: footer_y + 8.0,
                     width: 270.0,
+                    height: 18.0,
+                },
+                p.muted,
+                &self.body,
+            );
+            self.text(
+                "Saving to Captures folder",
+                Rect {
+                    x: 302.0,
+                    y: footer_y + 8.0,
+                    width: 184.0,
                     height: 18.0,
                 },
                 p.muted,
@@ -1099,7 +1315,22 @@ impl Renderer {
                 },
                 p.field,
                 p.text,
-                "Copy image",
+                "     Copy image",
+            );
+            self.editor_icon(
+                "copy",
+                Rect {
+                    x: w - 478.0,
+                    y: footer_y + 42.0,
+                    width: 16.0,
+                    height: 16.0,
+                },
+                p.text,
+            )?;
+            let can_replace = can_replace_editor_source(
+                state.editor_source.as_deref(),
+                &state.editor_format,
+                &state.editor_filename,
             );
             self.toggle(
                 Rect {
@@ -1110,6 +1341,7 @@ impl Renderer {
                 },
                 p,
                 state.editor_save_as_new,
+                !can_replace,
             )?;
             self.text(
                 "Save as new file",
@@ -1131,8 +1363,18 @@ impl Renderer {
                 },
                 p.accent,
                 contrast_ink(p.accent),
-                "Save",
+                "     Save",
             );
+            self.editor_icon(
+                "save",
+                Rect {
+                    x: w - 142.0,
+                    y: footer_y + 41.0,
+                    width: 17.0,
+                    height: 17.0,
+                },
+                contrast_ink(p.accent),
+            )?;
             Ok(())
         }
     }
@@ -1175,8 +1417,8 @@ impl Renderer {
                     p,
                     a,
                     b,
-                    "○",
-                );
+                    ["select", "window", "display"][i],
+                )?;
                 if selected
                     == [
                         captures_capture::CaptureMode::Region,
@@ -1213,37 +1455,69 @@ impl Renderer {
                 p.muted,
                 &self.body,
             );
-            for (index, (label, enabled)) in [
-                ("Cursor", settings.recording.show_cursor),
-                ("Clicks", settings.recording.highlight_clicks),
-                ("Keys", settings.recording.show_keystrokes),
-                ("Audio", settings.recording.capture_system_audio),
+            for (index, (label, icon, enabled)) in [
+                ("Cursor", "select", settings.recording.show_cursor),
+                ("Clicks", "clicks", settings.recording.highlight_clicks),
+                ("Keys", "keys", settings.recording.show_keystrokes),
+                ("Audio", "audio", settings.recording.capture_system_audio),
             ]
             .iter()
             .enumerate()
             {
-                let x = 28.0 + index as f32 * 104.0;
+                let x = 4.0 + index as f32 * 104.0;
+                self.rounded_panel(
+                    Rect {
+                        x,
+                        y: 326.0,
+                        width: 98.0,
+                        height: 44.0,
+                    },
+                    p.field,
+                    7.0,
+                )?;
+                self.editor_icon(
+                    icon,
+                    Rect {
+                        x: x + 9.0,
+                        y: 334.0,
+                        width: 14.0,
+                        height: 14.0,
+                    },
+                    p.muted,
+                )?;
                 self.text(
                     label,
                     Rect {
-                        x,
-                        y: 334.0,
-                        width: 60.0,
-                        height: 22.0,
+                        x: x + 26.0,
+                        y: 330.0,
+                        width: 62.0,
+                        height: 20.0,
                     },
                     p.text,
                     &self.body,
                 );
                 self.toggle(
                     Rect {
-                        x: x + 62.0,
-                        y: 337.0,
-                        width: 32.0,
-                        height: 16.0,
+                        x: x + 10.0,
+                        y: 350.0,
+                        width: 30.0,
+                        height: 18.0,
                     },
                     p,
                     *enabled,
+                    false,
                 )?;
+                self.text(
+                    if *enabled { "On" } else { "Off" },
+                    Rect {
+                        x: x + 44.0,
+                        y: 347.0,
+                        width: 44.0,
+                        height: 22.0,
+                    },
+                    p.muted,
+                    &self.body,
+                );
             }
             self.button(
                 Rect {
@@ -1375,7 +1649,7 @@ impl Renderer {
         unsafe {
             let editor = state.recording_editor.as_ref();
             self.text(
-                "Recording editor",
+                "Edit recording",
                 Rect {
                     x: 24.0,
                     y: 18.0,
@@ -1385,48 +1659,160 @@ impl Renderer {
                 p.text,
                 &self.title,
             );
-            self.button(
-                Rect {
-                    x: w - 112.0,
-                    y: 16.0,
-                    width: 88.0,
-                    height: 36.0,
-                },
-                p.accent,
-                Color(23, 24, 27, 255),
-                "Export",
-            );
-            self.panel(
+            self.rounded_panel(
                 Rect {
                     x: 24.0,
-                    y: 74.0,
+                    y: 66.0,
                     width: w - 280.0,
-                    height: h - 220.0,
+                    height: h - 286.0,
                 },
-                Color(11, 11, 14, 255),
+                p.raised,
+                10.0,
+            )?;
+            self.text(
+                "Preview",
+                Rect {
+                    x: 42.0,
+                    y: 74.0,
+                    width: 80.0,
+                    height: 32.0,
+                },
+                p.muted,
+                &self.strong,
+            );
+            self.rounded_panel(
+                Rect {
+                    x: w - 414.0,
+                    y: 75.0,
+                    width: 142.0,
+                    height: 28.0,
+                },
+                p.canvas,
+                7.0,
+            )?;
+            self.text(
+                "Fit · unavailable",
+                Rect {
+                    x: w - 408.0,
+                    y: 76.0,
+                    width: 130.0,
+                    height: 24.0,
+                },
+                p.muted,
+                &self.body,
             );
             self.panel(
                 Rect {
-                    x: w - 236.0,
-                    y: 74.0,
-                    width: 212.0,
-                    height: h - 220.0,
+                    x: 32.0,
+                    y: 108.0,
+                    width: w - 296.0,
+                    height: h - 336.0,
                 },
-                p.raised,
+                Color(11, 11, 14, 255),
             );
             if let Some(preview) = &state.recording_preview {
                 self.bitmap_contain(
                     preview,
                     Rect {
-                        x: 82.0,
-                        y: 126.0,
-                        width: w - 342.0,
-                        height: h - 286.0,
+                        x: 40.0,
+                        y: 116.0,
+                        width: w - 312.0,
+                        height: h - 352.0,
                     },
                 )?;
             }
-            self.text("Crop & size\nOriginal resolution\n\nAudio\nPreserved on export\nAudio playback unavailable\n\nFormat",Rect{x:w-216.0,y:94.0,width:172.0,height:200.0},p.muted,&self.body);
-            self.button(
+            self.rounded_panel(
+                Rect {
+                    x: w - 236.0,
+                    y: 66.0,
+                    width: 212.0,
+                    height: h - 286.0,
+                },
+                p.raised,
+                10.0,
+            )?;
+            self.text(
+                "Crop & size",
+                Rect {
+                    x: w - 216.0,
+                    y: 80.0,
+                    width: 172.0,
+                    height: 24.0,
+                },
+                p.text,
+                &self.strong,
+            );
+            self.text(
+                "Original resolution\nCrop controls unavailable",
+                Rect {
+                    x: w - 216.0,
+                    y: 106.0,
+                    width: 172.0,
+                    height: 44.0,
+                },
+                p.muted,
+                &self.body,
+            );
+            self.divider(
+                Vector2 {
+                    X: w - 216.0,
+                    Y: 160.0,
+                },
+                Vector2 {
+                    X: w - 44.0,
+                    Y: 160.0,
+                },
+                p.border,
+            )?;
+            self.text(
+                "Audio",
+                Rect {
+                    x: w - 216.0,
+                    y: 172.0,
+                    width: 172.0,
+                    height: 24.0,
+                },
+                p.text,
+                &self.strong,
+            );
+            self.text(
+                if editor.is_some_and(|editor| editor.has_audio) {
+                    "Preserved on export\nPreview audio unavailable"
+                } else {
+                    "No recorded audio"
+                },
+                Rect {
+                    x: w - 216.0,
+                    y: 198.0,
+                    width: 172.0,
+                    height: 42.0,
+                },
+                p.muted,
+                &self.body,
+            );
+            self.divider(
+                Vector2 {
+                    X: w - 216.0,
+                    Y: 248.0,
+                },
+                Vector2 {
+                    X: w - 44.0,
+                    Y: 248.0,
+                },
+                p.border,
+            )?;
+            self.text(
+                "Save quality",
+                Rect {
+                    x: w - 216.0,
+                    y: 258.0,
+                    width: 172.0,
+                    height: 24.0,
+                },
+                p.text,
+                &self.strong,
+            );
+            self.rounded_panel(
                 Rect {
                     x: w - 216.0,
                     y: 286.0,
@@ -1434,7 +1820,9 @@ impl Renderer {
                     height: 34.0,
                 },
                 p.field,
-                p.text,
+                7.0,
+            )?;
+            self.text(
                 match editor.map(|editor| editor.quality) {
                     Some(captures_media::QualityPreset::Preserve) | None => "Preserve quality  ▾",
                     Some(captures_media::QualityPreset::Highest) => "Highest quality   ▾",
@@ -1443,6 +1831,14 @@ impl Renderer {
                     Some(captures_media::QualityPreset::Small) => "Small file        ▾",
                     Some(captures_media::QualityPreset::Tiny) => "Tiny file         ▾",
                 },
+                Rect {
+                    x: w - 210.0,
+                    y: 290.0,
+                    width: 160.0,
+                    height: 26.0,
+                },
+                p.text,
+                &self.body,
             );
             self.text(
                 &editor
@@ -1460,27 +1856,6 @@ impl Renderer {
                 p.muted,
                 &self.body,
             );
-            self.text(
-                "Save as new file",
-                Rect {
-                    x: w - 216.0,
-                    y: 386.0,
-                    width: 126.0,
-                    height: 24.0,
-                },
-                p.text,
-                &self.body,
-            );
-            self.toggle(
-                Rect {
-                    x: w - 78.0,
-                    y: 390.0,
-                    width: 34.0,
-                    height: 18.0,
-                },
-                p,
-                editor.is_none_or(|editor| editor.save_as_new),
-            )?;
             if editor.is_some_and(|editor| editor.quality_menu_open) {
                 self.panel(
                     Rect {
@@ -1508,36 +1883,208 @@ impl Renderer {
                     );
                 }
             }
-            self.panel(
+            let timeline_y = h - 196.0;
+            self.rounded_panel(
                 Rect {
                     x: 24.0,
-                    y: h - 124.0,
+                    y: timeline_y,
                     width: w - 48.0,
-                    height: 84.0,
+                    height: 96.0,
                 },
                 p.raised,
-            );
+                10.0,
+            )?;
             self.text(
                 &editor.map_or_else(
-                    || "▶  00:00   ├━━━━━━━━━━━━━━━━━━━━┤   End".to_owned(),
+                    || "00:00 – End".to_owned(),
                     |editor| {
                         format!(
-                            "{}  {}   ├━━━━━━━━━━━━━━━━━━━━┤   {}",
-                            if editor.playing { "Ⅱ" } else { "▶" },
-                            format_time(editor.position_ms),
-                            format_time(editor.duration_ms),
+                            "{} – {}                         {} selected",
+                            format_time(editor.trim_start_ms),
+                            format_time(editor.trim_end_ms),
+                            format_time(editor.trim_end_ms.saturating_sub(editor.trim_start_ms))
                         )
                     },
                 ),
                 Rect {
                     x: 44.0,
-                    y: h - 94.0,
+                    y: timeline_y + 8.0,
                     width: w - 88.0,
+                    height: 22.0,
+                },
+                p.muted,
+                &self.body,
+            );
+            let play_rect = Rect {
+                x: 40.0,
+                y: timeline_y + 42.0,
+                width: 32.0,
+                height: 32.0,
+            };
+            self.rounded_panel(play_rect, p.field, 16.0)?;
+            self.editor_icon(
+                if editor.is_some_and(|editor| editor.playing) {
+                    "pause"
+                } else {
+                    "play"
+                },
+                play_rect.inset(10.0),
+                p.text,
+            )?;
+            let track = recording_editor_timeline_track(w, h);
+            self.rounded_panel(track, p.field, 6.0)?;
+            if let Some(preview) = &state.recording_preview {
+                for index in 0..8 {
+                    self.bitmap_contain(
+                        preview,
+                        Rect {
+                            x: track.x + 4.0 + index as f32 * (track.width - 8.0) / 8.0,
+                            y: track.y + 4.0,
+                            width: (track.width - 8.0) / 8.0,
+                            height: track.height - 8.0,
+                        },
+                    )?;
+                }
+            }
+            if let Some(editor) = editor {
+                let duration = editor.duration_ms.max(1) as f32;
+                let start_x = track.x + editor.trim_start_ms as f32 / duration * track.width;
+                let end_x = track.x + editor.trim_end_ms as f32 / duration * track.width;
+                let playhead_x = track.x + editor.position_ms as f32 / duration * track.width;
+                let excluded = self.brush(Color(p.canvas.0, p.canvas.1, p.canvas.2, 190))?;
+                self.target.FillRectangle(
+                    &D2D_RECT_F {
+                        left: track.x,
+                        top: track.y,
+                        right: start_x,
+                        bottom: track.y + track.height,
+                    },
+                    &excluded,
+                );
+                self.target.FillRectangle(
+                    &D2D_RECT_F {
+                        left: end_x,
+                        top: track.y,
+                        right: track.x + track.width,
+                        bottom: track.y + track.height,
+                    },
+                    &excluded,
+                );
+                let trim = self.brush(p.accent)?;
+                for x in [start_x, end_x] {
+                    self.target.FillRoundedRectangle(
+                        &windows::Win32::Graphics::Direct2D::D2D1_ROUNDED_RECT {
+                            rect: D2D_RECT_F {
+                                left: x - 5.0,
+                                top: track.y - 3.0,
+                                right: x + 5.0,
+                                bottom: track.y + track.height + 3.0,
+                            },
+                            radiusX: 3.0,
+                            radiusY: 3.0,
+                        },
+                        &trim,
+                    );
+                }
+                self.divider(
+                    Vector2 {
+                        X: playhead_x,
+                        Y: track.y - 2.0,
+                    },
+                    Vector2 {
+                        X: playhead_x,
+                        Y: track.y + track.height + 2.0,
+                    },
+                    p.signal,
+                )?;
+            }
+            let footer_y = h - 88.0;
+            self.panel(
+                Rect {
+                    x: 0.0,
+                    y: footer_y,
+                    width: w,
+                    height: 88.0,
+                },
+                p.raised,
+            );
+            self.divider(
+                Vector2 {
+                    X: 0.0,
+                    Y: footer_y,
+                },
+                Vector2 { X: w, Y: footer_y },
+                p.border,
+            )?;
+            self.text(
+                "Filename",
+                Rect {
+                    x: 24.0,
+                    y: footer_y + 8.0,
+                    width: 250.0,
+                    height: 18.0,
+                },
+                p.muted,
+                &self.body,
+            );
+            let filename = editor
+                .and_then(|editor| editor.source.file_stem())
+                .and_then(|value| value.to_str())
+                .unwrap_or("Recording");
+            self.button(
+                Rect {
+                    x: 24.0,
+                    y: footer_y + 30.0,
+                    width: 280.0,
+                    height: 40.0,
+                },
+                p.field,
+                p.text,
+                &format!("{filename}                                      .mp4"),
+            );
+            self.toggle(
+                Rect {
+                    x: w - 374.0,
+                    y: footer_y + 41.0,
+                    width: 30.0,
+                    height: 18.0,
+                },
+                p,
+                editor.is_none_or(|editor| editor.save_as_new),
+                false,
+            )?;
+            self.text(
+                "Save as new file",
+                Rect {
+                    x: w - 338.0,
+                    y: footer_y + 36.0,
+                    width: 134.0,
                     height: 28.0,
                 },
                 p.text,
                 &self.body,
             );
+            self.button(
+                Rect {
+                    x: w - 178.0,
+                    y: footer_y + 27.0,
+                    width: 154.0,
+                    height: 44.0,
+                },
+                p.accent,
+                contrast_ink(p.accent),
+                "     Export",
+            );
+            self.editor_icon(
+                "save",
+                Rect {
+                    x: w - 150.0,
+                    y: footer_y + 41.0,
+                    width: 16.0,
+                    height: 16.0,
+                },
+                contrast_ink(p.accent),
+            )?;
             Ok(())
         }
     }
@@ -1572,17 +2119,46 @@ impl Renderer {
                     },
                     p.glass,
                 );
-                self.text(
-                    "Edit        Copy        Drag        Delete",
-                    Rect {
-                        x: 12.0,
-                        y: y + 169.0,
-                        width: w - 24.0,
-                        height: 24.0,
-                    },
-                    Color(246, 246, 248, 220),
-                    &self.strong,
-                );
+                for (action, (icon, label)) in [
+                    ("pen", "Edit"),
+                    ("copy", "Copy"),
+                    ("select", "Drag"),
+                    ("trash", "Delete"),
+                ]
+                .iter()
+                .enumerate()
+                {
+                    let action_x = 4.0 + action as f32 * (w - 8.0) / 4.0;
+                    self.editor_icon(
+                        icon,
+                        Rect {
+                            x: action_x + 5.0,
+                            y: y + 173.0,
+                            width: 14.0,
+                            height: 14.0,
+                        },
+                        if *label == "Delete" {
+                            p.signal
+                        } else {
+                            Color(246, 246, 248, 220)
+                        },
+                    )?;
+                    self.text(
+                        label,
+                        Rect {
+                            x: action_x + 20.0,
+                            y: y + 169.0,
+                            width: (w - 8.0) / 4.0 - 22.0,
+                            height: 24.0,
+                        },
+                        if *label == "Delete" {
+                            p.signal
+                        } else {
+                            Color(246, 246, 248, 220)
+                        },
+                        &self.strong,
+                    );
+                }
             }
             Ok(())
         }
@@ -1677,8 +2253,24 @@ impl Renderer {
                         } else {
                             p.text
                         },
-                        label,
+                        &format!("   {label}"),
                     );
+                    self.editor_icon(
+                        ["pen", "undo", "trash"][button],
+                        Rect {
+                            x: x + button as f32 * 57.0 + 5.0,
+                            y: 225.0,
+                            width: 12.0,
+                            height: 12.0,
+                        },
+                        if !enabled {
+                            p.muted
+                        } else if *label == "Delete" {
+                            p.signal
+                        } else {
+                            p.text
+                        },
+                    )?;
                 }
             }
             self.text(
@@ -1717,16 +2309,37 @@ impl Renderer {
                 p.text,
                 &self.title,
             );
+            self.rounded_panel(
+                Rect {
+                    x: 12.0,
+                    y: 72.0,
+                    width: 160.0,
+                    height: 38.0,
+                },
+                p.field,
+                7.0,
+            )?;
             self.text(
-                "General\n\nCapture\n\nRecording\n\nShortcuts\n\nAppearance",
+                "General",
                 Rect {
                     x: 22.0,
-                    y: 82.0,
+                    y: 76.0,
+                    width: 140.0,
+                    height: 28.0,
+                },
+                p.text,
+                &self.strong,
+            );
+            self.text(
+                "Capture\n\nRecording\n\nShortcuts\n\nAppearance\n\nAdditional pages unavailable",
+                Rect {
+                    x: 22.0,
+                    y: 126.0,
                     width: 142.0,
                     height: 260.0,
                 },
                 p.muted,
-                &self.strong,
+                &self.body,
             );
             self.text(
                 "Preferences",
@@ -1744,22 +2357,40 @@ impl Renderer {
                     "Start Captures at login",
                     Some(settings.launch_at_login),
                     "",
+                    "Open Captures when you sign in.",
                 ),
                 (
                     "Copy captures automatically",
                     Some(settings.auto_copy_to_clipboard),
                     "",
+                    "Copy new captures without replacing controls.",
                 ),
-                ("Show mini previews", Some(settings.show_mini_previews), ""),
+                (
+                    "Show mini previews",
+                    Some(settings.show_mini_previews),
+                    "",
+                    "Keep quick actions near the screen edge.",
+                ),
                 (
                     "Freeze screen while selecting",
                     Some(settings.freeze_screen),
                     "",
+                    "Hold menus, hover states, and motion still.",
                 ),
-                ("Appearance", None, settings.appearance.as_str()),
-                ("Color theme", None, settings.theme.as_str()),
+                (
+                    "Appearance",
+                    None,
+                    settings.appearance.as_str(),
+                    "Follow Windows or choose a fixed appearance.",
+                ),
+                (
+                    "Color theme",
+                    None,
+                    settings.theme.as_str(),
+                    "Accent for capture actions and selection.",
+                ),
             ];
-            for (i, (label, toggle, value)) in rows.iter().enumerate() {
+            for (i, (label, toggle, value, description)) in rows.iter().enumerate() {
                 let y = 88.0 + i as f32 * 64.0;
                 self.text(
                     label,
@@ -1772,6 +2403,17 @@ impl Renderer {
                     p.text,
                     &self.strong,
                 );
+                self.text(
+                    description,
+                    Rect {
+                        x: 216.0,
+                        y: y + 24.0,
+                        width: w - 390.0,
+                        height: 22.0,
+                    },
+                    p.muted,
+                    &self.body,
+                );
                 if let Some(enabled) = toggle {
                     self.toggle(
                         Rect {
@@ -1782,9 +2424,10 @@ impl Renderer {
                         },
                         p,
                         *enabled,
+                        false,
                     )?;
                 } else {
-                    self.button(
+                    self.rounded_panel(
                         Rect {
                             x: w - 152.0,
                             y: y - 4.0,
@@ -1792,9 +2435,32 @@ impl Renderer {
                             height: 32.0,
                         },
                         p.field,
-                        p.text,
+                        7.0,
+                    )?;
+                    self.text(
                         value,
+                        Rect {
+                            x: w - 146.0,
+                            y,
+                            width: 108.0,
+                            height: 24.0,
+                        },
+                        p.text,
+                        &self.body,
                     );
+                }
+                if i < rows.len() - 1 {
+                    self.divider(
+                        Vector2 {
+                            X: 216.0,
+                            Y: y + 54.0,
+                        },
+                        Vector2 {
+                            X: w - 32.0,
+                            Y: y + 54.0,
+                        },
+                        p.border,
+                    )?;
                 }
             }
             Ok(())
@@ -1880,10 +2546,17 @@ impl Renderer {
         }
     }
 
-    unsafe fn card(&self, rect: Rect, p: Palette, title: &str, description: &str, icon: &str) {
+    unsafe fn card(
+        &self,
+        rect: Rect,
+        p: Palette,
+        title: &str,
+        description: &str,
+        icon: &str,
+    ) -> Result<()> {
         unsafe {
             self.panel(rect, p.raised);
-            self.button(
+            self.rounded_panel(
                 Rect {
                     x: rect.x + 12.0,
                     y: rect.y + 12.0,
@@ -1891,9 +2564,18 @@ impl Renderer {
                     height: 40.0,
                 },
                 Color(p.accent.0, p.accent.1, p.accent.2, 42),
-                p.accent,
+                8.0,
+            )?;
+            self.editor_icon(
                 icon,
-            );
+                Rect {
+                    x: rect.x + 23.0,
+                    y: rect.y + 23.0,
+                    width: 18.0,
+                    height: 18.0,
+                },
+                p.accent,
+            )?;
             self.text(
                 title,
                 Rect {
@@ -1915,13 +2597,35 @@ impl Renderer {
                 },
                 p.muted,
                 &self.body,
-            )
+            );
+            Ok(())
         }
     }
     unsafe fn panel(&self, rect: Rect, fill: Color) {
         unsafe {
             let brush = self.brush(fill).expect("brush");
             self.target.FillRectangle(&to_d2d(rect), &brush)
+        }
+    }
+    unsafe fn rounded_panel(&self, rect: Rect, fill: Color, radius: f32) -> Result<()> {
+        unsafe {
+            let brush = self.brush(fill)?;
+            self.target.FillRoundedRectangle(
+                &windows::Win32::Graphics::Direct2D::D2D1_ROUNDED_RECT {
+                    rect: to_d2d(rect),
+                    radiusX: radius,
+                    radiusY: radius,
+                },
+                &brush,
+            );
+            Ok(())
+        }
+    }
+    unsafe fn divider(&self, from: Vector2, to: Vector2, color: Color) -> Result<()> {
+        unsafe {
+            let brush = self.brush(color)?;
+            self.target.DrawLine(from, to, &brush, 1.0, None);
+            Ok(())
         }
     }
     unsafe fn button(&self, rect: Rect, fill: Color, ink: Color, label: &str) {
@@ -1949,34 +2653,56 @@ impl Renderer {
         unsafe { self.target.CreateSolidColorBrush(&color(value), None) }
     }
 
-    unsafe fn toggle(&self, rect: Rect, p: Palette, enabled: bool) -> Result<()> {
+    unsafe fn toggle(&self, rect: Rect, p: Palette, checked: bool, disabled: bool) -> Result<()> {
         unsafe {
-            let track = self.brush(if enabled { p.accent } else { p.border })?;
+            let rect = Rect {
+                x: rect.x,
+                y: rect.y,
+                width: 30.0,
+                height: 18.0,
+            };
+            let track_color = if disabled {
+                Color(p.border.0, p.border.1, p.border.2, 90)
+            } else if checked {
+                p.accent
+            } else {
+                p.field
+            };
+            let track = self.brush(track_color)?;
             self.target.FillRoundedRectangle(
                 &windows::Win32::Graphics::Direct2D::D2D1_ROUNDED_RECT {
                     rect: to_d2d(rect),
-                    radiusX: rect.height / 2.0,
-                    radiusY: rect.height / 2.0,
+                    radiusX: 9.0,
+                    radiusY: 9.0,
                 },
                 &track,
             );
-            let knob = self.brush(if enabled {
-                Color(23, 24, 27, 255)
+            let outline = self.brush(if checked { track_color } else { p.border })?;
+            self.target.DrawRoundedRectangle(
+                &windows::Win32::Graphics::Direct2D::D2D1_ROUNDED_RECT {
+                    rect: to_d2d(rect),
+                    radiusX: 9.0,
+                    radiusY: 9.0,
+                },
+                &outline,
+                1.0,
+                None,
+            );
+            let knob = self.brush(if disabled {
+                Color(p.muted.0, p.muted.1, p.muted.2, 100)
+            } else if checked {
+                contrast_ink(p.accent)
             } else {
                 p.muted
             })?;
             self.target.FillEllipse(
                 &windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE {
                     point: Vector2 {
-                        X: if enabled {
-                            rect.x + rect.width - rect.height / 2.0
-                        } else {
-                            rect.x + rect.height / 2.0
-                        },
-                        Y: rect.y + rect.height / 2.0,
+                        X: if checked { rect.x + 21.0 } else { rect.x + 9.0 },
+                        Y: rect.y + 9.0,
                     },
-                    radiusX: rect.height / 2.0 - 2.0,
-                    radiusY: rect.height / 2.0 - 2.0,
+                    radiusX: 6.0,
+                    radiusY: 6.0,
                 },
                 &knob,
             );
@@ -2123,6 +2849,221 @@ impl Renderer {
                     line(from, cy, to + if reverse { 4.0 } else { -4.0 }, cy);
                     line(to, cy, to + if reverse { 5.0 } else { -5.0 }, top + 4.0);
                     line(to, cy, to + if reverse { 5.0 } else { -5.0 }, bottom - 4.0);
+                }
+                "minus" => line(left + 2.0, cy, right - 2.0, cy),
+                "plus" => {
+                    line(left + 2.0, cy, right - 2.0, cy);
+                    line(cx, top + 2.0, cx, bottom - 2.0);
+                }
+                "chevron-down" => {
+                    line(left + 2.0, cy - 3.0, cx, cy + 2.0);
+                    line(cx, cy + 2.0, right - 2.0, cy - 3.0);
+                }
+                "fit" => {
+                    for (a, b) in [
+                        ((left, top + 5.0), (left, top)),
+                        ((left, top), (left + 5.0, top)),
+                        ((right - 5.0, top), (right, top)),
+                        ((right, top), (right, top + 5.0)),
+                        ((right, bottom - 5.0), (right, bottom)),
+                        ((right, bottom), (right - 5.0, bottom)),
+                        ((left + 5.0, bottom), (left, bottom)),
+                        ((left, bottom), (left, bottom - 5.0)),
+                    ] {
+                        line(a.0, a.1, b.0, b.1);
+                    }
+                }
+                "image" => {
+                    self.target
+                        .DrawRectangle(&to_d2d(rect.inset(1.0)), &brush, 1.8, None);
+                    self.target.FillEllipse(
+                        &windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE {
+                            point: Vector2 {
+                                X: left + rect.width * 0.7,
+                                Y: top + rect.height * 0.3,
+                            },
+                            radiusX: 2.0,
+                            radiusY: 2.0,
+                        },
+                        &brush,
+                    );
+                    line(left + 2.0, bottom - 3.0, cx - 1.0, cy);
+                    line(cx - 1.0, cy, right - 2.0, bottom - 3.0);
+                }
+                "copy" => {
+                    self.target.DrawRectangle(
+                        &D2D_RECT_F {
+                            left: left + 1.0,
+                            top: top + 1.0,
+                            right: right - 4.0,
+                            bottom: bottom - 4.0,
+                        },
+                        &brush,
+                        1.8,
+                        None,
+                    );
+                    self.target.DrawRectangle(
+                        &D2D_RECT_F {
+                            left: left + 5.0,
+                            top: top + 5.0,
+                            right: right - 1.0,
+                            bottom: bottom - 1.0,
+                        },
+                        &brush,
+                        1.8,
+                        None,
+                    );
+                }
+                "save" => {
+                    self.target
+                        .DrawRectangle(&to_d2d(rect.inset(1.0)), &brush, 1.8, None);
+                    self.target.DrawRectangle(
+                        &D2D_RECT_F {
+                            left: left + 4.0,
+                            top: top + 2.0,
+                            right: right - 4.0,
+                            bottom: cy,
+                        },
+                        &brush,
+                        1.5,
+                        None,
+                    );
+                    line(left + 4.0, bottom - 4.0, right - 4.0, bottom - 4.0);
+                }
+                "lock" => {
+                    self.target.DrawRectangle(
+                        &D2D_RECT_F {
+                            left: left + 3.0,
+                            top: cy,
+                            right: right - 3.0,
+                            bottom: bottom - 1.0,
+                        },
+                        &brush,
+                        1.8,
+                        None,
+                    );
+                    line(left + 5.0, cy, left + 5.0, top + 5.0);
+                    line(left + 5.0, top + 5.0, right - 5.0, top + 5.0);
+                    line(right - 5.0, top + 5.0, right - 5.0, cy);
+                }
+                "more" => {
+                    for offset in [-5.0, 0.0, 5.0] {
+                        self.target.FillEllipse(
+                            &windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE {
+                                point: Vector2 {
+                                    X: cx,
+                                    Y: cy + offset,
+                                },
+                                radiusX: 1.5,
+                                radiusY: 1.5,
+                            },
+                            &brush,
+                        );
+                    }
+                }
+                "play" => polygon(&[
+                    (left + 3.0, top + 1.0),
+                    (right - 1.0, cy),
+                    (left + 3.0, bottom - 1.0),
+                ]),
+                "pause" => {
+                    line(left + 4.0, top + 1.0, left + 4.0, bottom - 1.0);
+                    line(right - 4.0, top + 1.0, right - 4.0, bottom - 1.0);
+                }
+                "window" => {
+                    self.target
+                        .DrawRectangle(&to_d2d(rect.inset(1.0)), &brush, 1.8, None);
+                    line(left + 1.0, top + 5.0, right - 1.0, top + 5.0);
+                }
+                "display" => {
+                    self.target.DrawRectangle(
+                        &D2D_RECT_F {
+                            left: left + 1.0,
+                            top: top + 1.0,
+                            right: right - 1.0,
+                            bottom: bottom - 4.0,
+                        },
+                        &brush,
+                        1.8,
+                        None,
+                    );
+                    line(cx, bottom - 4.0, cx, bottom - 1.0);
+                    line(cx - 4.0, bottom - 1.0, cx + 4.0, bottom - 1.0);
+                }
+                "video" => {
+                    self.target.DrawRectangle(
+                        &D2D_RECT_F {
+                            left,
+                            top: top + 3.0,
+                            right: right - 5.0,
+                            bottom: bottom - 3.0,
+                        },
+                        &brush,
+                        1.8,
+                        None,
+                    );
+                    polygon(&[
+                        (right - 5.0, cy - 3.0),
+                        (right, cy - 6.0),
+                        (right, cy + 6.0),
+                        (right - 5.0, cy + 3.0),
+                    ]);
+                }
+                "clicks" => {
+                    for radius in [3.0, 7.0] {
+                        self.target.DrawEllipse(
+                            &windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE {
+                                point: Vector2 { X: cx, Y: cy },
+                                radiusX: radius,
+                                radiusY: radius,
+                            },
+                            &brush,
+                            1.5,
+                            None,
+                        );
+                    }
+                }
+                "keys" => {
+                    self.target.DrawRoundedRectangle(
+                        &windows::Win32::Graphics::Direct2D::D2D1_ROUNDED_RECT {
+                            rect: to_d2d(rect.inset(1.0)),
+                            radiusX: 2.0,
+                            radiusY: 2.0,
+                        },
+                        &brush,
+                        1.8,
+                        None,
+                    );
+                    for offset in [4.0, 8.0, 12.0] {
+                        line(left + offset, cy, left + offset + 2.0, cy);
+                    }
+                }
+                "audio" => {
+                    polygon(&[
+                        (left + 1.0, cy - 3.0),
+                        (left + 5.0, cy - 3.0),
+                        (cx, top + 2.0),
+                        (cx, bottom - 2.0),
+                        (left + 5.0, cy + 3.0),
+                        (left + 1.0, cy + 3.0),
+                    ]);
+                    line(cx + 3.0, cy - 4.0, right - 1.0, cy);
+                    line(right - 1.0, cy, cx + 3.0, cy + 4.0);
+                }
+                "trash" => {
+                    self.target.DrawRectangle(
+                        &D2D_RECT_F {
+                            left: left + 4.0,
+                            top: top + 6.0,
+                            right: right - 4.0,
+                            bottom: bottom - 1.0,
+                        },
+                        &brush,
+                        1.7,
+                        None,
+                    );
+                    line(left + 2.0, top + 4.0, right - 2.0, top + 4.0);
+                    line(cx - 3.0, top + 1.0, cx + 3.0, top + 1.0);
                 }
                 _ => line(left, top, right, bottom),
             }
@@ -2489,6 +3430,22 @@ fn shape_icon(shape: &captures_windows_native::editor::Shape) -> &'static str {
         Shape::Ellipse(_) => "ellipse",
         Shape::Polygon(_) => "shapes",
         Shape::Text { .. } => "text",
+    }
+}
+
+fn tool_label(tool: Tool) -> &'static str {
+    match tool {
+        Tool::Select => "Select",
+        Tool::Crop => "Crop",
+        Tool::Text => "Text",
+        Tool::Pen => "Freehand",
+        Tool::Arrow => "Arrow",
+        Tool::Line => "Line",
+        Tool::Rectangle => "Rectangle",
+        Tool::Ellipse => "Ellipse",
+        Tool::Triangle => "Triangle",
+        Tool::Diamond => "Diamond",
+        Tool::Star => "Star",
     }
 }
 

@@ -53,16 +53,17 @@ No automatic profile migration is part of these comparison runs.
 
 These are implemented experiments, not drop-in replacements. In particular:
 
-- **Linux:** the full X11 interaction suite is not green. The corrected GTK4
+- **Linux:** the full screenshot-editor X11 fixture now passes, including
+  space-pan followed by drawing, inline rename, selected-color undo, layer-menu
+  duplication, compression/maximum-size controls, exact undo, reverse crop,
+  PNG/JPEG export, draft recovery, and source replacement. The corrected GTK4
   event adapter maps surface coordinates through the native/widget transforms
-  and preserves press/motion/release propagation. Focused real pointer tests
-  verify source-coordinate arrows at fit and scrolled 100% zoom and exact
-  inline rename; editable fields retain their keyboard input. Export quality
-  controls now reveal their children correctly in GTK4, and all three modes
-  were inspected. The longer editor fixture still fails: its horizontal
-  space-pan assertion does not observe horizontal movement, and a separate
-  attempt failed to reach maximum-size controls after layer operations.
-  Neither failure is waived as a passing check. Recording replacement uses a synced stage
+  and preserves press/motion/release propagation. A single key controller now
+  pairs Space press/release so pan does not remain active; editable fields
+  retain their keyboard input. The screenshot-editor result is not a pass for
+  the entire capture/recording interaction suite: the capture fixture still
+  stops at a mini-preview hover/Close lookup after verifying free/Shift-square/
+  released selection and a saved capture. Recording replacement uses a synced stage
   and explicit confirmation; cancellation preserves the original. Physical
   multi-monitor, hardware GPU, and Wayland behavior remain unverified.
 - **Windows:** editable canvas/background/zoom, image layers, and several layer
@@ -81,6 +82,25 @@ These are implemented experiments, not drop-in replacements. In particular:
   holes; the video frame contains only Captures' custom controls. These checks
   do not establish performance or full interaction parity. Capture permissions, microphone/audio,
   session recovery, and physical multi-display behavior still need native use.
+
+## Control parity pass
+
+The native editors now follow the shipping control hierarchy more closely:
+one Trim action, compact switches, icon-labelled primary actions, and
+filename/format/export footers. Linux layer actions live in per-layer menus,
+and its default inspector is empty. Windows has a separate Arrow tool and a
+three-column Shapes menu with shared render/hit-test geometry. macOS uses
+checkboxes for checkbox settings rather than oversized switches, with explicit
+on/off/disabled control references. Recording timelines use one trim track with
+two handles rather than duplicate decorative edges.
+
+The Linux screenshot editor's default, selected-layer, menu-open, and
+export-open states were rendered and inspected under software X11. Updated
+Windows/macOS native fixtures still require their corresponding CI runs; older
+accepted runs above do not validate these newer layouts. Missing Windows image
+layers, eraser, editable canvas controls, and non-General preference pages remain
+explicitly unavailable. This pass does not establish full feature parity or
+change the measured revision below.
 
 ## Matched measurements
 

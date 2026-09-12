@@ -41,8 +41,12 @@ combobox arrow { min-width: var(--s-3); min-height: var(--s-3); color: var(--tex
 checkbutton check { min-width: var(--s-5); min-height: var(--s-5); background-image: none; background-color: var(--surface-field); border: 1px solid var(--control-border); border-radius: var(--r-xs); box-shadow: none; }
 checkbutton check:checked, switch:checked { background-color: var(--theme-accent); border-color: transparent; color: var(--theme-accent-ink); }
 switch { min-width: var(--h-sm); min-height: var(--s-6); padding: 0; border: 1px solid var(--border-strong); border-radius: var(--r-pill); background-image: none; background-color: var(--surface-field); color: transparent; box-shadow: none; }
-switch slider { min-width: var(--s-5); min-height: var(--s-5); margin: var(--s-1); border: 0; border-radius: var(--r-pill); background-image: none; background-color: var(--text-subtle); box-shadow: var(--shadow-xs); }
-switch:checked slider { background-color: var(--theme-accent-ink); }
+/* GTK allocates the thumb half the track. Asymmetric margins keep the same
+   12px circular thumb and 12px travel as Tauri's 30×18 switch. */
+switch image { -gtk-icon-size: var(--s-1); -gtk-icon-source: none; min-width: var(--s-1); min-height: var(--s-1); opacity: 0; }
+switch slider { min-width: var(--s-5); min-height: var(--s-5); margin: var(--s-1) 0 var(--s-1) var(--s-1); border: 0; border-radius: var(--r-pill); background-image: none; background-color: var(--text-subtle); box-shadow: var(--shadow-xs); }
+switch:checked slider { margin-left: 0; margin-right: var(--s-1); background-color: var(--theme-accent-ink); }
+switch:disabled { opacity: 0.5; }
 scale { padding: var(--s-4); }
 scale trough { min-height: var(--s-2); border: 0; border-radius: var(--r-pill); background-image: none; background-color: var(--n-6); box-shadow: none; }
 scale highlight { min-height: var(--s-2); border: 0; border-radius: var(--r-pill); background-image: none; background-color: var(--theme-accent); }

@@ -159,7 +159,9 @@ are not silently presented as engine features.
   unattainable `max_bytes` returns an error rather than resizing or
   misrepresenting success.
 - `{"op":"media_probe","path":"..."}` returns
-  `{"duration_ms":u64,"width":u32,"height":u32}`.
+  `{"duration_ms":u64,"width":u32,"height":u32,"has_system_audio":bool,
+  "has_microphone_audio":bool}`. The first audio stream is exposed as system
+  audio and a second stream as microphone audio, matching Captures recordings.
 - `{"op":"media_export","path":"...","output":"...","format":"mp4|gif|webm",
   "start_ms":u64,"end_ms":u64,"crop"?:{"x":u32,"y":u32,"width":u32,"height":u32},
   "width"?:u32,"fps"?:1..30,"quality"?:"preserve|highest|high|standard|small|tiny",

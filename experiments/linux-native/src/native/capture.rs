@@ -344,11 +344,18 @@ fn overlay(
     targets.style_context().add_class("capture-segmented");
     let status = ui::label("", "capture-selector-note");
     status.set_halign(gtk::Align::Center);
-    let accept = ui::button(if initial_kind == 0 {
-        "Capture"
-    } else {
-        "Record"
-    });
+    let accept = ui::icon_text_button(
+        if initial_kind == 0 {
+            "Capture"
+        } else {
+            "Record"
+        },
+        if initial_kind == 0 {
+            "capture"
+        } else {
+            "record-dot"
+        },
+    );
     accept.style_context().add_class("primary");
     accept.style_context().add_class("capture-primary");
     ui::named(
@@ -359,19 +366,6 @@ fn overlay(
             "Start recording"
         },
     );
-    let action_icon = ui::icon(
-        if initial_kind == 0 {
-            "capture"
-        } else {
-            "record-dot"
-        },
-        16,
-    );
-    if initial_kind != 0 {
-        action_icon.style_context().add_class("capture-record-dot");
-    }
-    accept.set_image(Some(&action_icon));
-    accept.set_always_show_image(true);
     accept.set_no_show_all(settings.borrow().auto_start_on_selection);
     let cancel = ui::icon_button("Cancel · Esc", "window-close-symbolic");
     cancel.style_context().add_class("capture-close");
@@ -379,27 +373,8 @@ fn overlay(
     let modes = gtk::Box::new(gtk::Orientation::Horizontal, 2);
     modes.style_context().add_class("capture-segmented");
     ui::named(&modes, "Capture type");
-    let screenshot = gtk::ToggleButton::with_label("Screenshot");
-    screenshot.set_image(Some(&ui::icon("capture", 16)));
-    screenshot.set_always_show_image(true);
-    let record = gtk::ToggleButton::with_label("Record");
-    let dot = gtk::DrawingArea::new();
-    dot.set_size_request(9, 9);
-    dot.set_valign(gtk::Align::Center);
-    dot.connect_draw(|_, cr| {
-        let c = ui::color("signal");
-        cr.set_source_rgba(
-            f64::from(c.red()),
-            f64::from(c.green()),
-            f64::from(c.blue()),
-            1.,
-        );
-        cr.arc(4.5, 4.5, 4.5, 0., std::f64::consts::TAU);
-        let _ = cr.fill();
-        glib::Propagation::Stop
-    });
-    record.set_image(Some(&dot));
-    record.set_always_show_image(true);
+    let screenshot = icon_text_toggle("Screenshot", "capture");
+    let record = icon_text_toggle("Record", "record-dot");
     record.set_sensitive(!screenshot_only);
     screenshot.set_active(initial_kind == 0);
     record.set_active(initial_kind != 0);
@@ -636,16 +611,14 @@ fn overlay(
         (CaptureMode::Window, "Window"),
         (CaptureMode::Display, "Full screen"),
     ] {
-        let button = gtk::ToggleButton::with_label(name);
-        button.set_image(Some(&ui::icon(
+        let button = icon_text_toggle(
+            name,
             match value {
                 CaptureMode::Region => "region",
                 CaptureMode::Window => "window",
                 CaptureMode::Display => "display",
             },
-            16,
-        )));
-        button.set_always_show_image(true);
+        );
         button.set_active(value == initial_mode);
         {
             let (
@@ -739,7 +712,15 @@ fn overlay(
             }
             kind.set(if is_recording { initial_kind.max(1) } else { 0 });
             other.set_active(false);
-            accept.set_label(if is_recording { "Record" } else { "Capture" });
+            set_icon_text_button(
+                &accept,
+                if is_recording { "Record" } else { "Capture" },
+                if is_recording {
+                    "record-dot"
+                } else {
+                    "capture"
+                },
+            );
             ui::named(
                 &accept,
                 if is_recording {
@@ -748,21 +729,8 @@ fn overlay(
                     "Capture"
                 },
             );
-            let action_icon = ui::icon(
-                if is_recording {
-                    "record-dot"
-                } else {
-                    "capture"
-                },
-                16,
-            );
-            if is_recording {
-                action_icon.style_context().add_class("capture-record-dot");
-            }
-            action_icon.show();
-            accept.set_image(Some(&action_icon));
             options.set_visible(is_recording);
-            status.set_text(&selector_note(
+            status.set_markup(&selector_note(
                 is_recording,
                 settings.borrow().auto_start_on_selection,
             ));
@@ -1229,11 +1197,13 @@ fn overlay(
     });
     {
         let (accept, buttons) = (accept.clone(), buttons.clone());
-        let shift_drag = shift_drag.clone();
-        window.connect_key_press_event(move |window, event| {
-            match event.keyval() {
-                gdk::Key::Shift_L | gdk::Key::Shift_R => shift_drag(true),
-                gdk::Key::Escape => window.close(),
+        let keys = gtk::EventControllerKey::new();
+        let key_window = window.clone();
+        let pressed_shift_drag = shift_drag.clone();
+        keys.connect_key_pressed(move |_, key, _, _| {
+            match key {
+                gdk::Key::Shift_L | gdk::Key::Shift_R => pressed_shift_drag(true),
+                gdk::Key::Escape => key_window.close(),
                 gdk::Key::Return => {
                     if accept.is_sensitive() {
                         accept.clicked();
@@ -1246,13 +1216,13 @@ fn overlay(
             }
             glib::Propagation::Stop
         });
+        keys.connect_key_released(move |_, key, _, _| {
+            if matches!(key, gdk::Key::Shift_L | gdk::Key::Shift_R) {
+                shift_drag(false);
+            }
+        });
+        window.add_controller(keys);
     }
-    window.connect_key_release_event(move |_, event| {
-        if matches!(event.keyval(), gdk::Key::Shift_L | gdk::Key::Shift_R) {
-            shift_drag(false);
-        }
-        glib::Propagation::Proceed
-    });
     // The selector owns cancellation until it hands off a confirmed selection.
     let cancel_on_close = cancelled;
     window.connect_close_request(move |_| {
@@ -1279,7 +1249,7 @@ fn overlay(
     options.set_visible(initial_kind != 0);
     guidance.set_visible(initial_mode != CaptureMode::Display);
     identity.set_visible(initial_mode == CaptureMode::Display);
-    status.set_text(&selector_note(
+    status.set_markup(&selector_note(
         initial_kind != 0,
         settings.borrow().auto_start_on_selection,
     ));
@@ -1332,10 +1302,27 @@ fn option_field(name: &str, width: i32, control: &impl IsA<gtk::Widget>) -> gtk:
     field
 }
 
+fn icon_text_toggle(label: &str, icon: &str) -> gtk::ToggleButton {
+    let button = gtk::ToggleButton::new();
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    content.append(&ui::icon(icon, 16));
+    content.append(&gtk::Label::new(Some(label)));
+    button.set_child(Some(&content));
+    ui::named(&button, label);
+    button
+}
+
+fn set_icon_text_button(button: &gtk::Button, label: &str, icon: &str) {
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    content.set_halign(gtk::Align::Center);
+    content.append(&ui::icon(icon, 14));
+    content.append(&gtk::Label::new(Some(label)));
+    button.set_child(Some(&content));
+}
+
 fn option_switch(name: &str, active: bool) -> (gtk::Switch, gtk::Box) {
-    let control = gtk::Switch::new();
+    let control = ui::switch();
     control.set_active(active);
-    control.set_valign(gtk::Align::Center);
     ui::named(&control, name);
     let label = ui::label(if active { "On" } else { "Off" }, "muted");
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -1348,12 +1335,14 @@ fn option_switch(name: &str, active: bool) -> (gtk::Switch, gtk::Box) {
 }
 
 fn selector_note(recording: bool, auto: bool) -> String {
+    let highlight = ui::token("accent");
     format!(
-        "{} · {}",
+        "These controls <span foreground=\"{highlight}\" weight=\"600\">{}</span> show in {} · {}",
+        if recording { "will" } else { "won’t" },
         if recording {
-            "Controls may appear in recordings"
+            "recordings"
         } else {
-            "Controls are hidden from screenshots"
+            "screenshots"
         },
         if auto {
             "Auto-capture is on. Selecting a target starts immediately."

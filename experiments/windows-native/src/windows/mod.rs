@@ -11,8 +11,9 @@ use captures_recording_xcap::XcapRecordingSegment;
 use captures_windows_native::{
     editor::{FreehandGesture, Layer, resize_from_corner},
     geometry::{
-        Point, Rect, SelectionDrag, contain, rounded_contains, screenshot_editor_canvas,
-        update_selection,
+        Point, Rect, SelectionDrag, contain, editor_layer_visibility_button,
+        editor_shape_flyout_index, recording_editor_timeline_track, rounded_contains,
+        screenshot_editor_canvas, update_selection,
     },
     history::{Artifact, History, move_to_trash, restore_from_trash, safe_delete},
     settings::{Settings, data_dir, profile_id},
@@ -1057,26 +1058,27 @@ impl App {
                 document.redo();
                 self.state.selected_layer = None;
             }
-        } else if p.x < 56.0 && (64.0..304.0).contains(&p.y) {
+        } else if p.x < 56.0 && (64.0..352.0).contains(&p.y) {
             let index = ((p.y - 64.0) / 48.0).floor() as usize;
-            if index == 4 {
+            if index == 3 {
                 self.state.editor_shapes_open = !self.state.editor_shapes_open;
                 if !matches!(
                     self.state.editor_tool,
-                    captures_windows_native::editor::Tool::Arrow
-                        | captures_windows_native::editor::Tool::Line
+                    captures_windows_native::editor::Tool::Line
                         | captures_windows_native::editor::Tool::Rectangle
                         | captures_windows_native::editor::Tool::Ellipse
                         | captures_windows_native::editor::Tool::Triangle
                         | captures_windows_native::editor::Tool::Diamond
                         | captures_windows_native::editor::Tool::Star
                 ) {
-                    self.state.editor_tool = captures_windows_native::editor::Tool::Arrow;
+                    self.state.editor_tool = captures_windows_native::editor::Tool::Rectangle;
                 }
             } else if let Some(tool) = [
                 captures_windows_native::editor::Tool::Select,
                 captures_windows_native::editor::Tool::Crop,
                 captures_windows_native::editor::Tool::Text,
+                captures_windows_native::editor::Tool::Rectangle,
+                captures_windows_native::editor::Tool::Arrow,
                 captures_windows_native::editor::Tool::Pen,
             ]
             .get(index)
@@ -1085,13 +1087,9 @@ impl App {
                 self.state.editor_shapes_open = false;
             }
         } else if self.state.editor_shapes_open
-            && (70.0..266.0).contains(&p.x)
-            && (288.0..476.0).contains(&p.y)
+            && let Some(index) = editor_shape_flyout_index(p)
         {
-            let column = ((p.x - 70.0) / 98.0).floor() as usize;
-            let row = ((p.y - 288.0) / 47.0).floor() as usize;
             if let Some(tool) = [
-                captures_windows_native::editor::Tool::Arrow,
                 captures_windows_native::editor::Tool::Line,
                 captures_windows_native::editor::Tool::Rectangle,
                 captures_windows_native::editor::Tool::Ellipse,
@@ -1099,7 +1097,7 @@ impl App {
                 captures_windows_native::editor::Tool::Diamond,
                 captures_windows_native::editor::Tool::Star,
             ]
-            .get(row * 2 + column)
+            .get(index)
             {
                 self.state.editor_tool = *tool;
                 self.state.editor_shapes_open = false;
@@ -1124,7 +1122,8 @@ impl App {
             {
                 self.state.editor_color_hex = format_color(layer.color);
             }
-            if p.x > sidebar_x + 244.0
+            let row_y = 104.0 + index as f32 * 52.0;
+            if editor_layer_visibility_button(sidebar_x, row_y).contains(p)
                 && let Some(document) = self.state.editor.as_mut()
             {
                 document.toggle_visibility(id);
@@ -1499,7 +1498,7 @@ impl App {
         };
         let mut rebuild_comparison = false;
         let mut playback_changed = false;
-        if point.y < 58.0 && point.x > width - 120.0 {
+        if point.y > height - 88.0 && point.x > width - 190.0 {
             self.export_recording_editor();
             return;
         }
@@ -1522,11 +1521,12 @@ impl App {
             }
         } else if point.x > width - 236.0 && (280.0..330.0).contains(&point.y) {
             editor.quality_menu_open = !editor.quality_menu_open;
-        } else if point.x > width - 100.0 && (376.0..422.0).contains(&point.y) {
+        } else if point.y > height - 88.0 && (width - 390.0..width - 190.0).contains(&point.x) {
             editor.save_as_new = !editor.save_as_new;
-        } else if (height - 120.0..height - 52.0).contains(&point.y) {
-            let track_start = 104.0;
-            let track_width = (width - 164.0).max(1.0);
+        } else if (height - 196.0..height - 100.0).contains(&point.y) {
+            let track = recording_editor_timeline_track(width, height);
+            let track_start = track.x;
+            let track_width = track.width;
             let ratio = ((point.x - track_start) / track_width).clamp(0.0, 1.0);
             let at = (ratio * editor.duration_ms as f32).round() as u64;
             let start_x =
@@ -1537,7 +1537,7 @@ impl App {
                 editor.set_trim_start(at);
             } else if (point.x - end_x).abs() < 16.0 {
                 editor.set_trim_end(at);
-            } else if point.x < 88.0 {
+            } else if point.x < 80.0 {
                 editor.toggle_playback(Instant::now());
                 playback_changed = true;
             } else {
@@ -2862,6 +2862,25 @@ fn prepare_fixture(
         "editor-export" => {
             state.edit_image(image);
             state.editor_export_settings_open = true;
+        }
+        "editor-properties" => {
+            state.edit_image(image);
+            if let Some(document) = state.editor.as_mut() {
+                let id = document.add(
+                    captures_windows_native::editor::Shape::Rectangle(Rect {
+                        x: 170.0,
+                        y: 120.0,
+                        width: 390.0,
+                        height: 220.0,
+                    }),
+                    [37, 99, 235, 255],
+                    7.0,
+                );
+                document.set_layer_fill(id, Some([37, 99, 235, 72]));
+                document.set_layer_rotation(id, 13.0);
+                state.selected_layer = Some(id);
+                state.editor_tool = captures_windows_native::editor::Tool::Select;
+            }
         }
         "editor-line" => {
             state.edit_image(image);

@@ -44,6 +44,7 @@ pub fn body(name: &str) -> Option<&'static str> {
             r#"<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>"#
         }
         "restart" | "view-refresh-symbolic" => r#"<path d="M4 11a8 8 0 1 1 2 5.3M4 5v6h6"/>"#,
+        "restore" => r#"<path d="M4 12a8 8 0 1 0 2.3-5.7L4 8M4 4v4h4"/>"#,
         "history" | "document-open-recent-symbolic" => {
             r#"<path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2"/>"#
         }
@@ -101,6 +102,24 @@ pub fn body(name: &str) -> Option<&'static str> {
         "more" | "view-more-symbolic" => {
             r#"<circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/>"#
         }
+        "duplicate" => {
+            r#"<rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3M13.5 11v5M11 13.5h5"/>"#
+        }
+        "bring-front" => {
+            r#"<rect x="5" y="12" width="10" height="8" rx="1.2" opacity=".55"/><rect x="9" y="4" width="10" height="8" rx="1.2"/>"#
+        }
+        "send-back" => {
+            r#"<rect x="9" y="4" width="10" height="8" rx="1.2" opacity=".55"/><rect x="5" y="12" width="10" height="8" rx="1.2"/>"#
+        }
+        "merge-down" => r#"<path d="M7 4h10v4H7zM12 9v5m-3-2 3 3 3-3M5 17h14v3H5z"/>"#,
+        "merge-visible" => {
+            r#"<path d="M7 3h10v3H7zM7 8h10v3H7zM12 12v3m-3-1.5 3 3 3-3M5 18h14v3H5z"/>"#
+        }
+        "flatten" => r#"<path d="M6 4h12v2.5H6zM6 8.5h12v2.5H6zM6 13h12v2.5H6zM4 18h16v2.5H4z"/>"#,
+        "rotate-left" => r#"<path d="M4 10a8 8 0 1 1 .8 7M4 4v6h6"/>"#,
+        "rotate-right" => r#"<path d="M20 10a8 8 0 1 0-.8 7M20 4v6h-6"/>"#,
+        "flip-horizontal" => r#"<path d="M12 3v18M9 5 4 12l5 7ZM15 5l5 7-5 7Z"/>"#,
+        "flip-vertical" => r#"<path d="M3 12h18M5 9l7-5 7 5ZM5 15l7 5 7-5Z"/>"#,
         _ => return None,
     })
 }

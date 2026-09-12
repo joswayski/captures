@@ -79,6 +79,7 @@ private struct ImageEditorSurface: View {
     @State private var widthText = ""
     @State private var heightText = ""
     @State private var strokeWidth: CGFloat = 6
+    @State private var defaultOpacity: CGFloat = 1
     @State private var brushSize: CGFloat = 32
     @State private var wandTolerance: CGFloat = 0.12
     @State private var fillShapes = false
@@ -194,8 +195,9 @@ private struct ImageEditorSurface: View {
                 TextField("H", text: $heightText).frame(width: 58).textFieldStyle(.roundedBorder)
                     .onSubmit(applyCanvasSize)
                 Divider().frame(height: 22)
-                Button("Trim edges") { perform { try model.trimTransparentEdges() } }
-                    .buttonStyle(CaptureButtonStyle())
+                Button { perform { try model.trimTransparentEdges() } } label: {
+                    Label("Trim edges", systemImage: "arrow.down.right.and.arrow.up.left")
+                }.buttonStyle(CaptureButtonStyle())
                 CaptureChoice(title: "Background color", selection: backgroundSelection, options: [
                     CaptureOption(label: "Transparent", value: "transparent"),
                     CaptureOption(label: "White", value: "white"),
@@ -222,7 +224,7 @@ private struct ImageEditorSurface: View {
                 ]).frame(width: 92)
                 .onChange(of: zoomMode) { applyZoomMode($0) }
             }
-            Button("Add images") { chooseImage() }
+            Button { chooseImage() } label: { Label("Add images", systemImage: "photo.on.rectangle.angled") }
                 .buttonStyle(CaptureButtonStyle()).keyboardShortcut("i", modifiers: [.command])
         }
         .padding(.horizontal, NativeTheme.metric("s-5")).frame(minHeight: 52)
@@ -249,7 +251,12 @@ private struct ImageEditorSurface: View {
     }
 
     private func toolButton(_ item: ImageEditorTool) -> some View {
-        Button { tool = item; shapeFlyoutOpen = false; backgroundFlyoutOpen = false } label: {
+        Button {
+            tool = item
+            if item != .select { model.selectedLayerID = nil }
+            shapeFlyoutOpen = false
+            backgroundFlyoutOpen = false
+        } label: {
             Image(systemName: item.symbol).frame(width: 28, height: 28)
         }
         .buttonStyle(CaptureButtonStyle(primary: tool == item))
@@ -259,6 +266,7 @@ private struct ImageEditorSurface: View {
     private var backgroundTool: some View {
         Button {
             if ![.wand, .erase, .restore].contains(tool) { tool = .wand }
+            model.selectedLayerID = nil
             shapeFlyoutOpen = false
             backgroundFlyoutOpen.toggle()
         } label: {
@@ -319,6 +327,7 @@ private struct ImageEditorSurface: View {
     private var shapeTool: some View {
         Button {
             tool = .shape
+            model.selectedLayerID = nil
             backgroundFlyoutOpen = false
             shapeFlyoutOpen.toggle()
         } label: {
@@ -483,10 +492,21 @@ private struct ImageEditorSurface: View {
                     cropStart = nil
                 case .text:
                     model.addText("Text", at: point)
-                case .shape: model.addShape(selectedShape, at: point)
-                case .arrow: model.addShape(.arrow, at: point)
+                case .shape:
+                    model.addShape(
+                        selectedShape, at: point, color: defaultEditorColor,
+                        lineWidth: strokeWidth, fill: fillShapes, opacity: defaultOpacity
+                    )
+                case .arrow:
+                    model.addShape(
+                        .arrow, at: point, color: defaultEditorColor,
+                        lineWidth: strokeWidth, opacity: defaultOpacity
+                    )
                 case .pen:
-                    model.addStroke(draftPoints)
+                    model.addStroke(
+                        draftPoints, color: defaultEditorColor,
+                        lineWidth: strokeWidth, opacity: defaultOpacity
+                    )
                     draftPoints.removeAll()
                 case .wand:
                     perform { try model.removeBackgroundColor(at: point, tolerance: wandTolerance) }
@@ -585,6 +605,25 @@ private struct ImageEditorSurface: View {
                 }
                 if case .image = layer.content { EmptyView() }
                 else { layerColorControls(layer) }
+                if case .shape = layer.content {
+                    HStack {
+                        Text("Stroke width")
+                        CaptureSlider(value: Binding(
+                            get: { Double(layer.lineWidth) },
+                            set: { value in model.updateSelected { $0.lineWidth = CGFloat(value) } }
+                        ), range: 2...40)
+                        Text("\(Int(layer.lineWidth.rounded())) px").monospacedDigit().frame(width: 46)
+                    }
+                } else if case .freehand = layer.content {
+                    HStack {
+                        Text("Stroke width")
+                        CaptureSlider(value: Binding(
+                            get: { Double(layer.lineWidth) },
+                            set: { value in model.updateSelected { $0.lineWidth = CGFloat(value) } }
+                        ), range: 2...40)
+                        Text("\(Int(layer.lineWidth.rounded())) px").monospacedDigit().frame(width: 46)
+                    }
+                }
                 HStack {
                     Text("Opacity")
                     CaptureSlider(value: Binding(
@@ -601,12 +640,12 @@ private struct ImageEditorSurface: View {
                     ), range: -180...180)
                 }
                 if case .shape = layer.content {
-                    CaptureToggleRow(title: "Fill shape", isOn: Binding(
+                    CaptureCheckboxRow(title: "Filled shape", isOn: Binding(
                         get: { layer.fill != nil },
                         set: { enabled in model.updateSelected { $0.fill = enabled ? $0.color : nil } }
                     ))
                 }
-                CaptureToggleRow(title: "Shadow", isOn: Binding(
+                CaptureCheckboxRow(title: "Shadow", isOn: Binding(
                     get: { layer.shadow != nil },
                     set: { enabled in model.updateSelected { $0.shadow = enabled ? EditorShadow() : nil } }
                 ))
@@ -662,12 +701,70 @@ private struct ImageEditorSurface: View {
             Button("Apply crop") {
                 if let cropRect { model.crop(to: cropRect); self.cropRect = nil; tool = .select }
             }.buttonStyle(CaptureButtonStyle(primary: true)).disabled(cropRect == nil).padding(.top, 12)
-        } else {
-            SectionTitle("Properties", subtitle: "Select a layer to edit it")
-            VStack(alignment: .leading, spacing: 10) {
-                Button("Rotate left") { model.rotateCanvas(clockwise: false) }.buttonStyle(CaptureButtonStyle())
-                Button("Rotate right") { model.rotateCanvas(clockwise: true) }.buttonStyle(CaptureButtonStyle())
+        } else if [.shape, .arrow, .pen].contains(tool) {
+            SectionTitle(tool == .pen ? "Freehand" : tool.rawValue)
+            VStack(alignment: .leading, spacing: 12) {
+                defaultColorControls
+                HStack {
+                    Text("Size")
+                    CaptureSlider(
+                        value: Binding(get: { Double(strokeWidth) }, set: { strokeWidth = CGFloat($0) }),
+                        range: 2...40
+                    )
+                    Text("\(Int(strokeWidth.rounded())) px").monospacedDigit().frame(width: 46)
+                }
+                HStack {
+                    Text("Opacity")
+                    CaptureSlider(
+                        value: Binding(get: { Double(defaultOpacity) }, set: { defaultOpacity = CGFloat($0) }),
+                        range: 0...1
+                    )
+                    Text("\(Int((defaultOpacity * 100).rounded()))%").monospacedDigit().frame(width: 42)
+                }
+                if tool == .shape, ![.line, .arrow].contains(selectedShape) {
+                    CaptureCheckboxRow(title: "Filled shape", isOn: $fillShapes)
+                }
+                Text("These settings apply to the next annotation.")
+                    .font(.caption).foregroundStyle(NativeTheme.muted(colorScheme))
             }.padding(.top, 12)
+        } else if tool == .select {
+            EmptyView()
+        } else {
+            SectionTitle(tool.rawValue)
+            Text("Choose a tool or select a layer to edit its properties.")
+                .font(.caption).foregroundStyle(NativeTheme.muted(colorScheme)).padding(.top, 12)
+        }
+    }
+
+    private var defaultColorControls: some View {
+        let swatches: [EditorColor] = [
+            .signal,
+            EditorColor(red: 1, green: 0.79, blue: 0.16),
+            EditorColor(red: 0.24, green: 0.48, blue: 0.95),
+            EditorColor(red: 0.21, green: 0.78, blue: 0.55),
+            .white,
+            EditorColor(red: 0.05, green: 0.05, blue: 0.06),
+        ]
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Color").font(.headline)
+            HStack(spacing: 7) {
+                ForEach(swatches, id: \.self) { color in
+                    Button {
+                        editorHex = color.hex
+                    } label: {
+                        Circle().fill(Color(nsColor: color.nsColor))
+                            .frame(width: 24, height: 24)
+                            .overlay(Circle().stroke(Color.primary, lineWidth: defaultEditorColor == color ? 3 : 0))
+                            .overlay(Circle().stroke(Color.white.opacity(0.5), lineWidth: 1).padding(2))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(color.hex)
+                    .accessibilityAddTraits(defaultEditorColor == color ? .isSelected : [])
+                }
+                TextField("#RRGGBB", text: $editorHex)
+                    .textFieldStyle(.roundedBorder).frame(width: 88)
+                    .onSubmit(commitEditorHex)
+            }
         }
     }
 
@@ -770,19 +867,19 @@ private struct ImageEditorSurface: View {
                 .frame(width: 280)
                 Spacer()
                 if !notice.isEmpty { Text(notice).font(.callout).foregroundStyle(NativeTheme.muted(colorScheme)) }
-                Button("Copy image") { copyImage() }.buttonStyle(CaptureButtonStyle())
+                Button { copyImage() } label: { Label("Copy image", systemImage: "doc.on.doc") }
+                    .buttonStyle(CaptureButtonStyle())
                 Text(makeCopy ? "Save creates a new file." : "Save overwrites the original after confirmation.")
                     .font(.caption).foregroundStyle(NativeTheme.muted(colorScheme))
                     .frame(maxWidth: 185, alignment: .leading)
                 HStack(spacing: 8) {
-                    CaptureToggle(title: "Save as new file", isOn: $makeCopy)
+                    CaptureToggle(title: "Save as new file", isOn: $makeCopy, compact: true)
                     Text("Save as new file")
                 }
                 .disabled(formatRequiresCopy || exporting)
-                Button(exporting ? "Saving…" : "Save") {
-                    if makeCopy || formatRequiresCopy { exportAsNewFile() }
-                    else { saveSource() }
-                }
+                Button {
+                    if makeCopy || formatRequiresCopy { exportAsNewFile() } else { saveSource() }
+                } label: { Label(exporting ? "Saving…" : "Save", systemImage: "square.and.arrow.down") }
                 .buttonStyle(CaptureButtonStyle(primary: true))
                 .disabled(exporting)
             }
@@ -945,8 +1042,14 @@ private struct ImageEditorSurface: View {
             return
         }
         let converted = EditorColor(NSColor(css: value))
-        model.updateSelected { $0.color = converted }
+        if model.selectedLayerIndex != nil { model.updateSelected { $0.color = converted } }
         editorHex = converted.hex
+    }
+
+    private var defaultEditorColor: EditorColor {
+        let value = editorHex.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.range(of: "^#[0-9a-fA-F]{6}$", options: .regularExpression) != nil else { return .signal }
+        return EditorColor(NSColor(css: value))
     }
 
     private func applyCanvasSize() {
@@ -1228,6 +1331,7 @@ func imageEditorReferenceView(artifact: Artifact, state: String) -> AnyView {
         let model = try EditorModel(artifact: artifact)
         switch state {
         case "shapes":
+            model.selectedLayerID = nil
             return AnyView(ImageEditorSurface(
                 artifact: artifact, model: model, initialTool: .shape, shapeFlyoutOpen: true
             ))

@@ -52,6 +52,8 @@ func nativeReferenceFixtures(
                                makeView: { AnyView(HistoryView()) }),
         NativeReferenceFixture(name: "delete-confirmation", size: CGSize(width: 430, height: 210), scheme: .dark,
                                makeView: dialogReferenceView),
+        NativeReferenceFixture(name: "control-states", size: CGSize(width: 520, height: 300), scheme: .dark,
+                               makeView: { AnyView(ControlStatesReferenceView()) }),
     ]
     if includeAnimationCapture {
         // One deleting card and no intact cards underneath: a missing Core
@@ -69,4 +71,32 @@ func nativeReferenceFixtures(
         ))
     }
     return fixtures
+}
+
+private struct ControlStatesReferenceView: View {
+    @State private var switchOn = true
+    @State private var switchOff = false
+    @State private var checked = true
+    @State private var unchecked = false
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: NativeTheme.metric("s-6")) {
+            SectionTitle("On, off & unavailable", subtitle: "Captures-owned controls")
+            Group {
+                CaptureToggleRow(title: "Show cursor", isOn: $switchOn)
+                CaptureToggleRow(title: "Show clicks", isOn: $switchOff)
+                CaptureToggleRow(title: "Show clicks (cursor off)", isOn: $switchOff).disabled(true)
+                Divider()
+                CaptureCheckboxRow(title: "Crop recording", isOn: $checked)
+                CaptureCheckboxRow(title: "Lock aspect ratio", isOn: $unchecked)
+                CaptureCheckboxRow(title: "Lock aspect ratio (crop off)", isOn: $unchecked).disabled(true)
+            }
+            .frame(maxWidth: 360)
+        }
+        .padding(NativeTheme.metric("s-8"))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .foregroundStyle(NativeTheme.text(scheme))
+        .background(NativeTheme.canvas(scheme))
+    }
 }

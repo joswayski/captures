@@ -646,6 +646,8 @@ impl Engine {
             "duration_ms": probe.metadata.duration_ms.unwrap_or(0),
             "width": probe.metadata.width,
             "height": probe.metadata.height,
+            "has_system_audio": probe.audio_stream_count >= 1,
+            "has_microphone_audio": probe.audio_stream_count >= 2,
         }))
     }
 

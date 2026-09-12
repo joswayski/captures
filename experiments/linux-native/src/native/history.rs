@@ -83,6 +83,21 @@ fn remove_entry(entries: &mut Vec<Entry>, path: &Path) {
     entries.retain(|entry| entry.path != path);
 }
 
+fn set_icon_text_button_label(button: &gtk::Button, text: &str) {
+    if let Some(label) = button
+        .child()
+        .and_then(|child| child.downcast::<gtk::Box>().ok())
+        .and_then(|content| {
+            content
+                .children()
+                .into_iter()
+                .find_map(|child| child.downcast::<gtk::Label>().ok())
+        })
+    {
+        label.set_text(text);
+    }
+}
+
 fn update_filter_labels(filters: &[gtk::ToggleButton], counts: &[usize; 4]) {
     for (index, label) in ["All", "Screenshots", "Video", "GIF"]
         .into_iter()
@@ -153,7 +168,7 @@ pub fn open_with_restore(
     description.set_wrap(true);
     heading.pack_start(&description, false, false, 0);
     header.pack_start(&heading, true, true, 0);
-    let clear_button = ui::button("Delete all");
+    let clear_button = ui::icon_text_button("Delete all", "trash");
     clear_button
         .style_context()
         .add_class("native-history-clear");
@@ -332,7 +347,7 @@ pub fn open_with_restore(
         actions.set_margin_start(12);
         actions.set_margin_end(12);
         actions.set_margin_bottom(12);
-        let button = ui::button("Edit");
+        let button = ui::icon_text_button("Edit", "edit");
         button.style_context().add_class("primary");
         button.set_size_request(111, -1);
         ui::named(&button, &format!("Edit {name}"));
@@ -341,7 +356,7 @@ pub fn open_with_restore(
         button.connect_clicked(move |_| action(path.clone()));
         actions.pack_start(&button, true, true, 0);
         if !["mp4", "webm"].contains(&ext.as_str()) {
-            let button = ui::button("Restore");
+            let button = ui::icon_text_button("Restore", "restore");
             button.set_size_request(111, -1);
             ui::named(&button, &format!("Restore {name}"));
             let action = restore.clone();
@@ -349,7 +364,7 @@ pub fn open_with_restore(
             button.connect_clicked(move |_| action(path.clone()));
             actions.pack_start(&button, true, true, 0);
         } else {
-            let folder = ui::button("Show in Folder");
+            let folder = ui::icon_text_button("Show in Folder", "folder");
             folder.set_size_request(111, -1);
             ui::named(&folder, &format!("Show {name} in Folder"));
             let entry_path = entry.path.clone();
@@ -460,7 +475,7 @@ pub fn open_with_restore(
             }
             if !*confirming.borrow() {
                 *confirming.borrow_mut() = true;
-                button.set_label("Delete all forever");
+                set_icon_text_button_label(button, "Delete all forever");
                 button.style_context().add_class("confirm");
                 ui::named(button, "Confirm delete all captures");
                 return;

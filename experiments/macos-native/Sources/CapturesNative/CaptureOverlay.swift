@@ -89,6 +89,13 @@ private enum OverlayKind: String, CaseIterable, Identifiable, Hashable {
         case .gif: return "GIF"
         }
     }
+    var symbol: String {
+        switch self {
+        case .image: return "camera"
+        case .video: return "video"
+        case .gif: return "sparkles.rectangle.stack"
+        }
+    }
 }
 
 private enum OverlayTarget: String, CaseIterable, Identifiable, Hashable {
@@ -1092,7 +1099,7 @@ private struct CaptureToolbar: View {
 
                 CaptureSegments(
                     selection: $model.kind,
-                    options: OverlayKind.allCases.map { CaptureOption(label: $0.label, value: $0) },
+                    options: OverlayKind.allCases.map { CaptureOption(label: $0.label, value: $0, symbol: $0.symbol) },
                     glass: true
                 )
                 .frame(width: 220)
@@ -1102,7 +1109,7 @@ private struct CaptureToolbar: View {
 
                 CaptureSegments(
                     selection: $model.target,
-                    options: OverlayTarget.allCases.map { CaptureOption(label: $0.label, value: $0) },
+                    options: OverlayTarget.allCases.map { CaptureOption(label: $0.label, value: $0, symbol: $0.symbol) },
                     glass: true
                 )
                 .frame(width: 260)
@@ -1203,7 +1210,6 @@ private struct CaptureToolbar: View {
         HStack(spacing: 5) {
             Text(title)
             CaptureToggle(title: title, isOn: value)
-                .scaleEffect(0.72)
                 .frame(width: 31, height: 20)
             Text(value.wrappedValue ? "On" : "Off")
                 .foregroundColor(value.wrappedValue ? NativeTheme.glassText : NativeTheme.glassMuted)

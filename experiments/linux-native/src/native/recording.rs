@@ -116,7 +116,7 @@ pub fn start_with_actions(
     let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
     content.set_border_width(6);
     let privacy = ui::label("", "recording-inclusion-warning");
-    let highlight = ui::color("accent");
+    let highlight = ui::token("accent");
     privacy.set_markup(&format!(
         "These controls <span foreground=\"{}\" weight=\"600\">will show</span> in recordings · Use Hide controls to keep them out",
         highlight

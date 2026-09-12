@@ -679,8 +679,8 @@ pub fn content_bounds(doc: &Document) -> Option<Rect> {
             }
         })
 }
-pub fn trim_to_content(doc: &mut Document, padding: f64) {
-    let Some(r) = content_bounds(doc) else { return };
+pub fn trim_bounds(doc: &Document, padding: f64) -> Option<Rect> {
+    let r = content_bounds(doc)?;
     let padding = padding.max(0.).round();
     let x = r.x.floor() - padding;
     let y = r.y.floor() - padding;
@@ -689,13 +689,25 @@ pub fn trim_to_content(doc: &mut Document, padding: f64) {
     let width = (right - x).max(1.) as u32;
     let height = (bottom - y).max(1.) as u32;
     if x == 0. && y == 0. && width == doc.width && height == doc.height {
-        return;
+        return None;
     }
-    doc.width = width;
-    doc.height = height;
+    Some(Rect {
+        x,
+        y,
+        w: f64::from(width),
+        h: f64::from(height),
+    })
+}
+
+pub fn trim_to_content(doc: &mut Document, padding: f64) {
+    let Some(bounds) = trim_bounds(doc, padding) else {
+        return;
+    };
+    doc.width = bounds.w as u32;
+    doc.height = bounds.h as u32;
     for layer in &mut doc.layers {
-        layer.frame.x -= x;
-        layer.frame.y -= y;
+        layer.frame.x -= bounds.x;
+        layer.frame.y -= bounds.y;
     }
 }
 pub fn expand_to_content(doc: &mut Document, padding: f64) {
@@ -1171,6 +1183,37 @@ mod tests {
             assert!(output.get_pixel(20, 20).0[3] > 200);
             assert_eq!(output.get_pixel(6, 6).0[3], 0);
         }
+    }
+
+    #[test]
+    fn trim_availability_matches_visible_content_and_rounding() {
+        let mut document = Document::transparent(100, 80);
+        assert!(trim_bounds(&document, 0.).is_none());
+        let index = document.add(
+            LayerKind::Rectangle,
+            Rect {
+                x: 0.2,
+                y: 0.3,
+                w: 99.6,
+                h: 79.4,
+            },
+            Color::default(),
+            1.,
+        );
+        assert!(trim_bounds(&document, 0.).is_none());
+        document.layers[index].frame.x = 1.2;
+        document.layers[index].frame.w = 98.6;
+        assert_eq!(
+            trim_bounds(&document, 0.),
+            Some(Rect {
+                x: 1.,
+                y: 0.,
+                w: 99.,
+                h: 80.
+            })
+        );
+        document.layers[index].visible = false;
+        assert!(trim_bounds(&document, 0.).is_none());
     }
 
     #[test]

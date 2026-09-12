@@ -563,8 +563,8 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     loop_toggle
         .style_context()
         .add_class("recording-loop-toggle");
-    let fit = gtk::CheckButton::with_label("Fit");
-    let actual = gtk::CheckButton::with_label("100%");
+    let fit = gtk::ToggleButton::with_label("Fit");
+    let actual = gtk::ToggleButton::with_label("100%");
     actual.set_group(Some(&fit));
     fit.set_active(true);
     fit.style_context().add_class("preview-size-button");
@@ -1109,28 +1109,41 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     format.append(Some("webm"), ".webm — unavailable");
     format.set_active_id(Some(source_format(&path).unwrap_or("mp4")));
     accessible_name(&format, "Format");
-    let quality = gtk::ComboBoxText::new();
+    let quality_mode = gtk::ComboBoxText::new();
     for (id, name) in [
         ("preserve", "Preserve quality"),
-        ("highest", "Compress · Highest"),
-        ("high", "Compress · High"),
-        ("standard", "Compress · Balanced"),
-        ("small", "Compress · Smaller"),
-        ("tiny", "Compress · Tiny"),
+        ("compress", "Compress"),
+        ("maximum", "Maximum file size"),
+    ] {
+        quality_mode.append(Some(id), name);
+    }
+    quality_mode.set_active_id(Some("preserve"));
+    accessible_name(&quality_mode, "Save quality");
+    let quality = gtk::ComboBoxText::new();
+    for (id, name) in [
+        ("highest", "Highest"),
+        ("high", "High"),
+        ("standard", "Balanced"),
+        ("small", "Smaller"),
+        ("tiny", "Tiny"),
     ] {
         quality.append(Some(id), name);
     }
-    quality.set_active_id(Some("preserve"));
-    accessible_name(&quality, "Save quality");
-    quality_card.pack_start(&labeled("Save quality", &quality), false, false, 0);
-    let maximum_enabled = gtk::CheckButton::with_label("Maximum file size");
+    // No preset selected means Preserve; it is a mode, not a compression preset.
+    quality.set_active(None);
+    accessible_name(&quality, "Compression quality");
+    quality_card.pack_start(&labeled("Quality mode", &quality_mode), false, false, 0);
+    let quality_field = labeled("Quality", &quality);
+    quality_card.pack_start(&quality_field, false, false, 0);
+    let maximum_enabled = gtk::CheckButton::new();
     let maximum_mb = spin(0.1, 10_000.0, 0.5, "Maximum file size in MB");
     maximum_mb.set_value(10.0);
-    quality_card.pack_start(&maximum_enabled, false, false, 0);
-    quality_card.pack_start(&labeled("Size limit (MB)", &maximum_mb), false, false, 0);
+    let maximum_field = labeled("Maximum file size (MB)", &maximum_mb);
+    quality_card.pack_start(&maximum_field, false, false, 0);
     let gif_fps = spin(1.0, 30.0, 1.0, "GIF frames per second");
     gif_fps.set_value(15.0);
-    quality_card.pack_start(&labeled("GIF frame rate", &gif_fps), false, false, 0);
+    let gif_field = labeled("GIF frame rate", &gif_fps);
+    quality_card.pack_start(&gif_field, false, false, 0);
     let estimate = ui::label("Estimated saved size —", "muted");
     quality_card.pack_start(&estimate, false, false, 0);
     let compare = ui::button("Compare before / after");
@@ -1201,7 +1214,7 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     filename_row.pack_start(&format, false, false, 0);
     filename_box.pack_start(&destination_row, false, false, 0);
     filename_box.pack_start(&filename_row, false, false, 0);
-    let make_copy = gtk::Switch::new();
+    let make_copy = ui::switch();
     make_copy.set_active(true);
     make_copy.set_sensitive(true);
     accessible_name(&make_copy, "Save as new file");
@@ -1211,9 +1224,7 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     make_copy_row.append(&gtk::Label::new(Some("Save as new file")));
     let status = ui::label("Preparing editor…", "muted");
     let cancel = ui::button("Cancel export");
-    let export = ui::button("Save");
-    export.set_image(Some(&ui::icon("save", 16)));
-    export.set_always_show_image(true);
+    let export = ui::icon_text_button("Save", "save");
     export.style_context().add_class("primary");
     cancel.set_sensitive(false);
     cancel.set_opacity(0.0);
@@ -1230,7 +1241,9 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     comparison_handle.hide();
     crop_grid.set_sensitive(false);
     maximum_mb.set_sensitive(false);
-    gif_fps.set_sensitive(false);
+    quality_field.hide();
+    maximum_field.hide();
+    gif_field.set_visible(format.active_id().as_deref() == Some("gif"));
 
     let scratch = match create_private_work_directory(&std::env::temp_dir(), "recording-editor") {
         Ok(path) => path,
@@ -1918,9 +1931,28 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
         let field = maximum_mb.clone();
         move |toggle| field.set_sensitive(toggle.is_active())
     });
-    format.connect_changed({
-        let gif_fps = gif_fps.clone();
+    quality_mode.connect_changed({
         let quality = quality.clone();
+        let quality_field = quality_field.clone();
+        let maximum_field = maximum_field.clone();
+        let maximum_enabled = maximum_enabled.clone();
+        move |mode| {
+            let mode = mode.active_id().unwrap_or_default();
+            let compressed = mode.as_str() == "compress";
+            let maximum = mode.as_str() == "maximum";
+            if compressed && quality.active_id().is_none() {
+                quality.set_active_id(Some("highest"));
+            } else if !compressed {
+                quality.set_active(None);
+            }
+            maximum_enabled.set_active(maximum);
+            quality_field.set_visible(compressed);
+            maximum_field.set_visible(maximum);
+        }
+    });
+    format.connect_changed({
+        let gif_field = gif_field.clone();
+        let quality_mode = quality_mode.clone();
         let window = window.clone();
         move |format| {
             let id = format.active_id().unwrap_or_default();
@@ -1929,9 +1961,11 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
                 format.set_active_id(Some("mp4"));
                 return;
             }
-            gif_fps.set_sensitive(id.as_str() == "gif");
-            if id.as_str() == "gif" && quality.active_id().as_deref() == Some("preserve") {
-                quality.set_active_id(Some("highest"));
+            gif_field.set_visible(id.as_str() == "gif");
+            if id.as_str() == "gif"
+                && quality_mode.active_id().as_deref() == Some("preserve")
+            {
+                quality_mode.set_active_id(Some("compress"));
             }
         }
     });
@@ -2087,7 +2121,7 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
         &duration_ms,
         &closed,
     );
-    for control in [&format, &quality, &resolution] {
+    for control in [&format, &quality_mode, &quality, &resolution] {
         let compare = compare.clone();
         control.connect_changed(move |_| compare.clicked());
     }
@@ -2595,8 +2629,23 @@ fn connect_compare(
         duration.clone(),
         closed.clone(),
     );
+    let generation = Rc::new(Cell::new(0_u64));
     button.clone().connect_clicked(move |_| {
+        let request_generation = generation.get().wrapping_add(1);
+        generation.set(request_generation);
         let (mut edit, spec, extension) = values.spec();
+        if spec.quality == QualityPreset::Preserve && spec.max_size_bytes.is_none() {
+            comparison.set_no_show_all(true);
+            comparison.hide();
+            comparison_handle.set_no_show_all(true);
+            comparison_handle.hide();
+            comparison_images.borrow_mut().take();
+            play.set_valign(gtk::Align::Center);
+            play.set_margin_bottom(0);
+            button.set_sensitive(true);
+            status.set_text("Ready to save.");
+            return;
+        }
         let at = (position.value() as u64).clamp(
             edit.trim_start_ms,
             edit.trim_end_ms.unwrap_or(duration.get()).saturating_sub(1),
@@ -2604,10 +2653,12 @@ fn connect_compare(
         let sample_start = at.saturating_sub(500).max(edit.trim_start_ms);
         edit.trim_start_ms = sample_start;
         edit.trim_end_ms = Some((sample_start + 1_000).min(values.trim_end.get()));
-        let before_path = scratch.join("compare-before.png");
-        let before_sample_path = scratch.join(format!("compare-before-sample.{extension}"));
-        let sample_path = scratch.join(format!("compare-sample.{extension}"));
-        let after_path = scratch.join("compare-after.png");
+        let before_path = scratch.join(format!("compare-before-{request_generation}.png"));
+        let before_sample_path = scratch.join(format!(
+            "compare-before-sample-{request_generation}.{extension}"
+        ));
+        let sample_path = scratch.join(format!("compare-sample-{request_generation}.{extension}"));
+        let after_path = scratch.join(format!("compare-after-{request_generation}.png"));
         button.set_sensitive(false);
         comparison.set_no_show_all(false);
         status.set_text("Building compression comparison…");
@@ -2630,6 +2681,7 @@ fn connect_compare(
             status.clone(),
             closed.clone(),
         );
+        let completed_generation = generation.clone();
         let path = path.clone();
         let duration = duration.clone();
         ui::job(
@@ -2641,39 +2693,50 @@ fn connect_compare(
                     max_size_bytes: None,
                     ..spec.clone()
                 };
-                media
-                    .export(
-                        &path,
-                        &before_sample_path,
-                        &edit,
-                        &before_spec,
-                        &token,
-                        |_| {},
-                    )
-                    .map_err(|e| e.to_string())?;
-                let outcome = media
-                    .export(&path, &sample_path, &edit, &spec, &token, |_| {})
-                    .map_err(|e| e.to_string())?;
-                media
-                    .extract_frame(&before_sample_path, at - sample_start, &before_path, &token)
-                    .map_err(|e| e.to_string())?;
-                media
-                    .extract_frame(&sample_path, at - sample_start, &after_path, &token)
-                    .map_err(|e| e.to_string())?;
+                let result = (|| {
+                    media
+                        .export(
+                            &path,
+                            &before_sample_path,
+                            &edit,
+                            &before_spec,
+                            &token,
+                            |_| {},
+                        )
+                        .map_err(|e| e.to_string())?;
+                    let outcome = media
+                        .export(&path, &sample_path, &edit, &spec, &token, |_| {})
+                        .map_err(|e| e.to_string())?;
+                    media
+                        .extract_frame(&before_sample_path, at - sample_start, &before_path, &token)
+                        .map_err(|e| e.to_string())?;
+                    media
+                        .extract_frame(&sample_path, at - sample_start, &after_path, &token)
+                        .map_err(|e| e.to_string())?;
+                    Ok((
+                        before_path.clone(),
+                        after_path.clone(),
+                        outcome.size_bytes,
+                        edit.trim_end_ms.unwrap_or(sample_start) - sample_start,
+                    ))
+                })();
                 let _ = fs::remove_file(before_sample_path);
                 let _ = fs::remove_file(sample_path);
-                Ok((
-                    before_path,
-                    after_path,
-                    outcome.size_bytes,
-                    edit.trim_end_ms.unwrap_or(sample_start) - sample_start,
-                ))
+                if result.is_err() {
+                    let _ = fs::remove_file(before_path);
+                    let _ = fs::remove_file(after_path);
+                }
+                result
             },
             move |result| {
-                button.set_sensitive(true);
-                if closed.get() {
+                if closed.get() || completed_generation.get() != request_generation {
+                    if let Ok((before_path, after_path, _, _)) = result {
+                        let _ = fs::remove_file(before_path);
+                        let _ = fs::remove_file(after_path);
+                    }
                     return;
                 }
+                button.set_sensitive(true);
                 match result {
                     Ok((before_path, after_path, bytes, sample_ms)) => {
                         // Playback can dismiss stills while encoding is pending.

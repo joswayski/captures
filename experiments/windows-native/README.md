@@ -43,6 +43,11 @@ footer. Filename edits, format changes, Save as new file, layer selection/visibi
 are functional. Replacing a source is allowed only while its sanitized filename and supported format
 remain unchanged; staged bytes are flushed and synced before replacement. Canvas
 dimension/background/zoom controls are currently read-only and Add images is explicitly unavailable.
+The current native chrome uses the shipping editor's icon-led tool rail, separate Arrow tool,
+three-column shape flyout, empty default inspector, locked-background layer row, grouped canvas/zoom
+header, and filename/export footer. Switches share the shipping 30-by-18 geometry and have distinct
+on, off, and disabled states. Light and dark runtime fixtures cover default, shapes, export,
+selected-properties, and selected-line editor states.
 Selected annotations can be moved, resized, and rotated, and their color, stroke, and supported fill
 state can be edited with undo/redo.
 The recording editor probes real media, decodes playback frames, seeks, trims, chooses quality,
@@ -53,10 +58,16 @@ D2D presentation; it is **not** hardware-accelerated video presentation. Leaving
 superseding frame/comparison/export work cancel active workers, while request generations prevent
 stale results from changing the current editor. The shared probe API is asynchronous here but does
 not yet expose child-process cancellation. Playback audio and split/video-crop controls remain
-unavailable and are labeled as such. Opening the editor and changing its custom quality dropdown
-automatically encode a one-second sample and show a real split-frame before/after comparison plus an
-extrapolated size estimate. Any performance measurement must include FFmpeg child-process CPU and
-memory.
+unavailable and are labeled as such. The native recording editor uses one thumbnail track, two trim
+handles, and one playhead; it does not draw a second decorative trim control. Opening the editor and
+changing its custom quality dropdown automatically encode a one-second sample and show a real
+split-frame before/after comparison plus an extrapolated size estimate. Any performance measurement
+must include FFmpeg child-process CPU and memory.
+
+The eraser tool, additional image layers, editable canvas size/background/zoom, recording crop/split
+and preview audio, and the non-General preference pages are not implemented. Their controls are
+omitted or explicitly marked unavailable rather than presented as working. Windows DirectComposition
+fixtures are required to assess final pixel-level parity; they cannot be rendered in the Linux orb.
 
 Preview input uses a combined rounded Win32 window region, with `HTTRANSPARENT` only supplemental;
 cross-process click-through still requires runtime verification on Windows hardware.

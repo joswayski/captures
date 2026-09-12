@@ -279,21 +279,34 @@ final class EditorModel: ObservableObject {
         selectedLayerID = layer.id
     }
 
-    func addShape(_ shape: EditorShape, at point: CGPoint? = nil) {
+    func addShape(
+        _ shape: EditorShape, at point: CGPoint? = nil,
+        color: EditorColor = .signal, lineWidth: CGFloat = 6,
+        fill: Bool = false, opacity: CGFloat = 1
+    ) {
         let size: CGSize = shape == .line || shape == .arrow ? CGSize(width: 220, height: 90) : CGSize(width: 180, height: 140)
         let layer = EditorLayer(
             name: shape.rawValue.capitalized, content: .shape(shape),
-            frame: EditorRect(x: point?.x ?? 64, y: point?.y ?? 64, width: size.width, height: size.height)
+            frame: EditorRect(x: point?.x ?? 64, y: point?.y ?? 64, width: size.width, height: size.height),
+            opacity: opacity, color: color,
+            fill: fill && shape != .line && shape != .arrow ? color : nil,
+            lineWidth: lineWidth
         )
         mutate { $0.layers.append(layer) }
         selectedLayerID = layer.id
     }
 
-    func addStroke(_ points: [CGPoint]) {
+    func addStroke(
+        _ points: [CGPoint], color: EditorColor = .signal,
+        lineWidth: CGFloat = 6, opacity: CGFloat = 1
+    ) {
         guard points.count > 1 else { return }
         let bounds = points.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }.insetBy(dx: -8, dy: -8)
         let local = points.map { EditorPoint(x: $0.x - bounds.minX, y: $0.y - bounds.minY) }
-        let layer = EditorLayer(name: "Freehand", content: .freehand(local), frame: EditorRect(bounds))
+        let layer = EditorLayer(
+            name: "Freehand", content: .freehand(local), frame: EditorRect(bounds),
+            opacity: opacity, color: color, lineWidth: lineWidth
+        )
         mutate { $0.layers.append(layer) }
         selectedLayerID = layer.id
     }

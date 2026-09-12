@@ -159,6 +159,37 @@ pub fn screenshot_editor_canvas(width: f32, height: f32) -> Rect {
     }
 }
 
+pub fn editor_shape_flyout_cell(index: usize) -> Option<Rect> {
+    (index < 6).then_some(Rect {
+        x: 68.0 + (index % 3) as f32 * 92.0,
+        y: 244.0 + (index / 3) as f32 * 47.0,
+        width: 88.0,
+        height: 40.0,
+    })
+}
+
+pub fn editor_shape_flyout_index(point: Point) -> Option<usize> {
+    (0..6).find(|index| editor_shape_flyout_cell(*index).is_some_and(|cell| cell.contains(point)))
+}
+
+pub fn editor_layer_visibility_button(sidebar_x: f32, row_y: f32) -> Rect {
+    Rect {
+        x: sidebar_x + 260.0,
+        y: row_y + 10.0,
+        width: 28.0,
+        height: 28.0,
+    }
+}
+
+pub fn recording_editor_timeline_track(width: f32, height: f32) -> Rect {
+    Rect {
+        x: 88.0,
+        y: height - 160.0,
+        width: (width - 128.0).max(1.0),
+        height: 48.0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,6 +300,62 @@ mod tests {
                 y: 76.0,
                 width: 676.0,
                 height: 532.0,
+            }
+        );
+    }
+
+    #[test]
+    fn shape_flyout_maps_every_three_column_cell_and_rejects_gutters() {
+        for (index, (x, y)) in [
+            (112.0, 264.0),
+            (204.0, 264.0),
+            (296.0, 264.0),
+            (112.0, 311.0),
+            (204.0, 311.0),
+            (296.0, 311.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(editor_shape_flyout_index(Point { x, y }), Some(index));
+        }
+        assert_eq!(editor_shape_flyout_cell(6), None);
+        assert_eq!(
+            editor_shape_flyout_index(Point { x: 158.0, y: 264.0 }),
+            None
+        );
+        assert_eq!(
+            editor_shape_flyout_index(Point { x: 112.0, y: 287.0 }),
+            None
+        );
+    }
+
+    #[test]
+    fn layer_visibility_hit_target_is_limited_to_the_eye() {
+        let eye = editor_layer_visibility_button(780.0, 104.0);
+        assert!(eye.contains(Point {
+            x: 1_054.0,
+            y: 128.0
+        }));
+        assert!(!eye.contains(Point {
+            x: 1_030.0,
+            y: 128.0
+        }));
+        assert!(!eye.contains(Point {
+            x: 1_074.0,
+            y: 150.0
+        }));
+    }
+
+    #[test]
+    fn recording_timeline_uses_one_track_between_play_and_right_inset() {
+        assert_eq!(
+            recording_editor_timeline_track(1_037.0, 683.0),
+            Rect {
+                x: 88.0,
+                y: 523.0,
+                width: 909.0,
+                height: 48.0,
             }
         );
     }

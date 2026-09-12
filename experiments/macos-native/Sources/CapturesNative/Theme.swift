@@ -126,6 +126,7 @@ struct SectionTitle: View {
 struct CaptureOption<Value: Hashable>: Identifiable {
     let label: String
     let value: Value
+    var symbol: String? = nil
     var id: Value { value }
 }
 
@@ -140,7 +141,10 @@ struct CaptureSegments<Value: Hashable>: View {
                 Button {
                     selection = option.value
                 } label: {
-                    Text(option.label)
+                    HStack(spacing: NativeTheme.metric("s-2")) {
+                        if let symbol = option.symbol { Image(systemName: symbol) }
+                        Text(option.label)
+                    }
                         .font(.system(size: NativeTheme.metric("text-sm"), weight: .medium))
                         .frame(maxWidth: .infinity)
                         .frame(height: NativeTheme.metric("h-xs"))
@@ -165,23 +169,74 @@ struct CaptureSegments<Value: Hashable>: View {
 struct CaptureToggle: View {
     let title: String
     @Binding var isOn: Bool
+    var compact = false
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         Button { isOn.toggle() } label: {
             Capsule()
-                .fill(isOn ? NativeTheme.accent : Color.primary.opacity(0.16))
-                .frame(width: 42, height: 24)
+                .fill(isOn ? NativeTheme.accent : NativeTheme.color("surface-field", scheme))
+                .frame(width: compact ? 28 : 30, height: compact ? 16 : 18)
+                .overlay(Capsule().stroke(isOn ? Color.clear : NativeTheme.color("border-strong", scheme)))
                 .overlay(alignment: isOn ? .trailing : .leading) {
-                    Circle().fill(isOn ? Color.black.opacity(0.82) : Color.white)
-                        .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
+                    Circle().fill(isOn ? Color.black.opacity(0.82) : NativeTheme.color("text-subtle", scheme))
+                        .frame(width: compact ? 10 : 12, height: compact ? 10 : 12)
+                        .shadow(color: .black.opacity(0.18), radius: 1, y: 1)
                         .padding(3)
                 }
         }
         .buttonStyle(.plain)
+        .opacity(enabled ? 1 : 0.5)
         .accessibilityLabel(title)
         .accessibilityValue(isOn ? "On" : "Off")
         .accessibilityAddTraits(.isButton)
         .animation(NativeTheme.standard, value: isOn)
+    }
+}
+
+struct CaptureCheckbox: View {
+    let title: String
+    @Binding var isOn: Bool
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Button { isOn.toggle() } label: {
+            RoundedRectangle(cornerRadius: NativeTheme.metric("r-xs"))
+                .fill(isOn ? NativeTheme.accent : NativeTheme.field(scheme))
+                .frame(width: 15, height: 15)
+                .overlay(RoundedRectangle(cornerRadius: NativeTheme.metric("r-xs"))
+                    .stroke(isOn ? NativeTheme.accent : NativeTheme.color("border-strong", scheme)))
+                .overlay {
+                    if isOn {
+                        Path { path in
+                            path.move(to: CGPoint(x: 3.5, y: 7.5))
+                            path.addLine(to: CGPoint(x: 6.5, y: 10.5))
+                            path.addLine(to: CGPoint(x: 12, y: 4.5))
+                        }
+                        .stroke(Color.black.opacity(0.82), style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .opacity(enabled ? 1 : 0.38)
+        .accessibilityLabel(title)
+        .accessibilityValue(isOn ? "Checked" : "Unchecked")
+    }
+}
+
+struct CaptureCheckboxRow: View {
+    let title: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack(spacing: NativeTheme.metric("s-4")) {
+            CaptureCheckbox(title: title, isOn: $isOn)
+            Text(title)
+            Spacer(minLength: 0)
+        }
+        .frame(minHeight: 28)
     }
 }
 

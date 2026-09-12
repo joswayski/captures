@@ -221,8 +221,7 @@ fn switch_row(
     initial: bool,
     changed: impl Fn(bool) + 'static,
 ) -> gtk::Box {
-    let toggle = gtk::Switch::new();
-    toggle.set_valign(gtk::Align::Center);
+    let toggle = ui::switch();
     toggle.set_active(initial);
     toggle.connect_state_set(move |_, value| {
         changed(value);
@@ -551,8 +550,8 @@ pub fn open(
     );
     capture.pack_start(
         &switch_row(
-            "Copy captures to clipboard",
-            "Preserve existing clipboard contents when off.",
+            "Automatically copy captures to the clipboard",
+            "Turn this off to preserve existing text or other clipboard contents.",
             initial.auto_copy_to_clipboard,
             staged(&draft, &committed, &apply, &status, |s, v| {
                 s.auto_copy_to_clipboard = v
@@ -564,8 +563,8 @@ pub fn open(
     );
     capture.pack_start(
         &switch_row(
-            "Start on target selection",
-            "Immediately capture after choosing a region, window, or display.",
+            "Start capture as soon as a target is selected",
+            "Drawing a region, choosing a window, or clicking Full screen immediately starts the capture.",
             initial.auto_start_on_selection,
             staged(&draft, &committed, &apply, &status, |s, v| {
                 s.auto_start_on_selection = v
@@ -577,8 +576,8 @@ pub fn open(
     );
     capture.pack_start(
         &switch_row(
-            "Show mini previews",
-            "Keep the quick-access preview stack visible.",
+            "Show mini previews after screenshots",
+            "Turn this off to keep the quick-access preview stack hidden.",
             initial.show_mini_previews,
             staged(&draft, &committed, &apply, &status, |s, v| {
                 s.show_mini_previews = v
@@ -612,8 +611,8 @@ pub fn open(
     );
     capture.pack_start(
         &switch_row(
-            "Include mini previews in captures",
-            "When off, previews stay out of screenshots and recordings.",
+            "Show mini previews in screenshots and recordings",
+            "Turn this off to keep previews out of screenshots and recordings.",
             initial.include_mini_previews_in_captures,
             staged(&draft, &committed, &apply, &status, |s, v| {
                 s.include_mini_previews_in_captures = v
@@ -806,7 +805,7 @@ pub fn open(
     );
     capture.pack_start(
         &switch_row(
-            "Show cursor",
+            "Show cursor in screenshots",
             "Include the pointer in still captures.",
             initial.show_cursor_in_screenshots,
             staged(&draft, &committed, &apply, &status, |s, v| {
@@ -996,31 +995,31 @@ pub fn open(
             0u8,
         ),
         (
-            "Export audio in mono",
+            "Export recording audio in mono",
             "Combine recording audio into one channel.",
             initial.recording.mono_audio,
             1,
         ),
         (
-            "Show cursor",
+            "Show cursor in recordings",
             "Include the pointer in recordings.",
             initial.recording.show_cursor,
             2,
         ),
         (
-            "Highlight clicks",
+            "Show clicks in recordings",
             "Show click feedback in recordings.",
             initial.recording.highlight_clicks,
             3,
         ),
         (
-            "Show keystrokes",
+            "Show keystrokes in recordings",
             "Display typed key feedback in recordings.",
             initial.recording.show_keystrokes,
             4,
         ),
         (
-            "Open editor after recording",
+            "Open the editor after recording",
             "Open the editor when a recording finishes.",
             initial.recording.open_editor_after_recording,
             5,

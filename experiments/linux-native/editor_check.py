@@ -8,6 +8,7 @@ layout with its persistent layer/properties sidebar.
 import argparse
 import json
 import os
+import re
 from contextlib import contextmanager
 from pathlib import Path
 import tempfile
@@ -47,6 +48,11 @@ def main():
         # pointer-driven canvas and inline-edit assertions.
         cmd('xdotool', 'mousemove', 0, 0)
         capture(args.artifacts, 'editor-default-1280x800', editor)
+        trims = [node for node in walk(find(editor, 'frame'))
+                 if node.name == 'Trim edges' and node.getRoleName() == 'push button']
+        assert len(trims) == 1, 'The editor must have only one Trim action'
+        copy_switch = screen_bounds(find('Save as new file', frame=editor), editor)
+        assert copy_switch.width <= 30 and copy_switch.height <= 18, copy_switch
         # Scoped editor CSS must not override the shared primary hover treatment.
         # Exercise pointer hover without exporting, and check a text-free pixel.
         save = wait(lambda: find('Save', frame=editor))
@@ -135,6 +141,32 @@ def main():
         cmd('xdotool', 'mousemove', area.x + 405, area.y + 135, 'click', 1)
         capture(args.artifacts, 'editor-selected-layer', editor)
 
+        # Selected-layer style edits must affect the document, not just the
+        # drawing defaults. Undo restores the original color in one action.
+        def triangle():
+            return next(layer for draft in (output.parent / 'editor-drafts').glob('*.json')
+                        for layer in json.loads(draft.read_text())['layers']
+                        if layer['name'] == 'Triangle')
+        original_color = triangle()['color']
+        color = wait(lambda: find('Stroke color hex value', role='text', frame=editor))
+        color.queryEditableText().setTextContents('#2563EB')
+        color_bounds = screen_bounds(color, editor)
+        cmd('xdotool', 'mousemove', color_bounds.x + 35, color_bounds.y + 12,
+            'click', 1, 'key', 'Return')
+        wait(lambda: triangle()['color'] == [37 / 255, 99 / 255, 235 / 255, 1])
+        click('Undo', editor)
+        assert triangle()['color'] == original_color
+        cmd('xdotool', 'mousemove', area.x + 405, area.y + 135, 'click', 1)
+        click('Layer settings for Triangle', editor, pointer=True)
+        wait(lambda: find('Duplicate', role='push button', frame=editor))
+        capture(args.artifacts, 'editor-layer-menu', editor)
+        click('Duplicate', editor)
+        wait(lambda: any('Triangle copy' in draft.read_text()
+                         for draft in (output.parent / 'editor-drafts').glob('*.json')))
+        click('Undo', editor)
+        assert not any('Triangle copy' in draft.read_text()
+                       for draft in (output.parent / 'editor-drafts').glob('*.json'))
+
         click('Export settings', editor, pointer=True)
         time.sleep(.4)
         assert find('Compression comparison slider', 'slider', editor)
@@ -219,7 +251,11 @@ def main():
             cmd('import', '-window', 'root', shot)
             pixel = cmd('convert', shot, '-format',
                         f'%[pixel:p{{{area.x + 8},{area.y + 8}}}]', 'info:')
-            assert '247' in pixel or 'f7' in pixel.lower(), (
+            channels = re.fullmatch(r'srgb\((\d+),(\d+),(\d+)\)', pixel)
+            # Compare every channel to the light document surface (#f7f7f5),
+            # allowing one 8-bit level for Cairo/compositor quantization.
+            assert channels and all(abs(int(actual) - expected) <= 1
+                                    for actual, expected in zip(channels.groups(), (247, 247, 245))), (
                 'Transparent canvas should use the shipping light document surface for display', pixel
             )
             click('Save as new file', editor)

@@ -298,6 +298,51 @@ fn section(title: &str) -> gtk::Box {
     b.pack_start(&l, false, false, 0);
     b
 }
+
+fn color_field(label: &str, value: Color, changed: impl Fn(Color) + 'static) -> gtk::Box {
+    let field = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    field.append(&ui::label(label, "property-label"));
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let swatch = gtk::DrawingArea::new();
+    swatch.set_size_request(28, 28);
+    swatch.set_valign(gtk::Align::Center);
+    swatch.add_css_class("editor-color-swatch");
+    let color = Rc::new(Cell::new(value));
+    let drawn_color = color.clone();
+    swatch.set_draw_func(move |_, context, _, _| {
+        let value = drawn_color.get();
+        context.set_source_rgba(value.0, value.1, value.2, value.3);
+        let _ = context.paint();
+    });
+    let hex = gtk::Entry::new();
+    hex.set_width_chars(8);
+    hex.set_max_length(7);
+    hex.set_text(&color_hex(value));
+    hex.set_tooltip_text(Some("Hex color; press Enter to apply"));
+    ui::named(&hex, &format!("{label} hex value"));
+    let commit = Rc::new(move |entry: &gtk::Entry| {
+        if let Some(value) = parse_hex_color(&entry.text()) {
+            if value != color.get() {
+                color.set(value);
+                changed(value);
+            }
+            entry.remove_css_class("error");
+        } else {
+            entry.add_css_class("error");
+        }
+    });
+    let paint = swatch.clone();
+    hex.connect_activate(move |entry| {
+        commit(entry);
+        paint.queue_draw();
+    });
+    row.append(&swatch);
+    hex.set_hexpand(true);
+    row.append(&hex);
+    field.append(&row);
+    field
+}
+
 fn clear(container: &gtk::Box) {
     for child in container.children() {
         container.remove(&child);
@@ -369,7 +414,7 @@ fn open_impl(
     let header = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     header.style_context().add_class("editor-header");
     let area = gtk::DrawingArea::new();
-    area.set_can_focus(true);
+    area.set_focusable(true);
     area.set_halign(gtk::Align::Center);
     area.set_valign(gtk::Align::Center);
     area.set_tooltip_text(Some("Screenshot editing canvas"));
@@ -403,8 +448,7 @@ fn open_impl(
     let toolbar_split = gtk::Separator::new(gtk::Orientation::Vertical);
     toolbar_split.style_context().add_class("toolbar-split");
     canvas_toolbar.pack_start(&toolbar_split, false, false, 4);
-    let trim = icon_button("Trim edges", "trim");
-    trim.set_label("Trim edges");
+    let trim = ui::icon_text_button("Trim edges", "trim");
     trim.style_context().add_class("canvas-tool");
     canvas_toolbar.pack_start(&trim, false, false, 0);
     let background_button = gtk::MenuButton::new();
@@ -417,6 +461,7 @@ fn open_impl(
     let background_button_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let background_swatch = gtk::DrawingArea::new();
     background_swatch.set_size_request(14, 14);
+    background_swatch.set_valign(gtk::Align::Center);
     background_swatch
         .style_context()
         .add_class("canvas-background-swatch");
@@ -453,7 +498,7 @@ fn open_impl(
         .style_context()
         .add_class("canvas-background-panel");
     let background_toggle_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    let background_toggle = gtk::Switch::new();
+    let background_toggle = ui::switch();
     background_toggle.set_active(state.borrow().doc.background.is_some());
     ui::named(&background_toggle, "Solid background");
     background_toggle_row.append(&background_toggle);
@@ -509,8 +554,7 @@ fn open_impl(
         zoom_group.pack_start(&widget, false, false, 0);
     }
     header.pack_start(&zoom_group, false, false, 0);
-    let add_images = icon_button("Add images", "image");
-    add_images.set_label("Add images");
+    let add_images = ui::icon_text_button("Add images", "image");
     add_images.style_context().add_class("add-images");
     add_images.set_valign(gtk::Align::Center);
     header.pack_start(&add_images, false, false, 0);
@@ -526,7 +570,7 @@ fn open_impl(
     let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     body.set_hexpand(true);
     body.set_halign(gtk::Align::Fill);
-    body.set_size_request(1280, -1);
+    body.set_size_request(860, -1);
     let rail = gtk::Box::new(gtk::Orientation::Vertical, 2);
     rail.set_size_request(40, -1);
     rail.style_context().add_class("tool-rail");
@@ -638,8 +682,17 @@ fn open_impl(
     scroll.set_min_content_width(320);
     scroll.set_min_content_height(200);
     scroll.add(&area);
+    let canvas = gtk::Overlay::new();
+    canvas.set_child(Some(&scroll));
+    let expand = ui::button("Expand canvas");
+    ui::named(&expand, "Expand canvas");
+    expand.set_halign(gtk::Align::Center);
+    expand.set_valign(gtk::Align::End);
+    expand.set_margin_bottom(12);
+    expand.set_visible(false);
+    canvas.add_overlay(&expand);
     body.pack_start(&rail, false, false, 0);
-    body.pack_start(&scroll, true, true, 0);
+    body.pack_start(&canvas, true, true, 0);
     let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let sidebar_shell = gtk::ScrolledWindow::new();
     sidebar_shell.set_size_request(320, -1);
@@ -666,11 +719,10 @@ fn open_impl(
     let layer_scroll = gtk::ScrolledWindow::new();
     layer_scroll.set_halign(gtk::Align::Fill);
     layer_scroll.set_hexpand(true);
-    layer_scroll.set_min_content_height(188);
     layer_scroll.set_max_content_height(260);
-    layer_scroll.set_propagate_natural_height(false);
+    layer_scroll.set_propagate_natural_height(true);
     layer_scroll.add(&layers);
-    sidebar.pack_start(&layer_scroll, true, true, 0);
+    sidebar.pack_start(&layer_scroll, false, false, 0);
     let properties_scroll = gtk::ScrolledWindow::new();
     properties_scroll.set_min_content_height(180);
     properties_scroll.set_propagate_natural_height(false);
@@ -784,6 +836,8 @@ fn open_impl(
     glib::timeout_add_local(std::time::Duration::from_millis(150), {
         let state = state.clone();
         let area = area.clone();
+        let undo = undo_b.clone();
+        let redo = redo_b.clone();
         let format = format.clone();
         let quality_mode = quality_mode.clone();
         let quality = quality.clone();
@@ -795,6 +849,9 @@ fn open_impl(
                 if state.closed {
                     return glib::ControlFlow::Break;
                 }
+                // Property controls edit in place without rebuilding the sidebar.
+                undo.set_sensitive(!state.undo.is_empty());
+                redo.set_sensitive(!state.redo.is_empty());
                 if !state.comparison_open || !state.comparison_dirty {
                     return glib::ControlFlow::Continue;
                 }
@@ -868,8 +925,7 @@ fn open_impl(
     let filename = field_label("Filename", &filename_row);
     filename.set_size_request(240, -1);
     save_row.pack_start(&filename, false, false, 0);
-    let copy = icon_button("Copy image", "copy");
-    copy.set_label("Copy image");
+    let copy = ui::icon_text_button("Copy image", "copy");
     copy.style_context().add_class("secondary-action");
     copy.set_valign(gtk::Align::End);
     save_row.pack_start(&copy, false, false, 0);
@@ -893,7 +949,7 @@ fn open_impl(
     status.pack_start(&status_notice, false, false, 0);
     status.pack_start(&save_hint, false, false, 0);
     save_row.pack_start(&status, true, true, 0);
-    let make_copy = gtk::Switch::new();
+    let make_copy = ui::switch();
     make_copy.set_active(state.borrow().source.is_none());
     make_copy.set_sensitive(state.borrow().source.is_some());
     ui::named(&make_copy, "Save as new file");
@@ -903,8 +959,7 @@ fn open_impl(
     make_copy_row.append(&make_copy);
     make_copy_row.append(&gtk::Label::new(Some("Save as new file")));
     save_row.pack_start(&make_copy_row, false, false, 0);
-    let save = icon_button("Save", "save");
-    save.set_label("Save");
+    let save = ui::icon_text_button("Save", "save");
     save.style_context().add_class("primary");
     save.set_valign(gtk::Align::End);
     save_row.pack_start(&save, false, false, 0);
@@ -1160,6 +1215,37 @@ fn open_impl(
         &area,
         &refresh_cb,
     );
+    {
+        let refresh_sidebar = refresh_cb.borrow_mut().take().expect("sidebar refresh");
+        let state = state.clone();
+        let expand = expand.clone();
+        *refresh_cb.borrow_mut() = Some(Box::new(move || {
+            refresh_sidebar();
+            let state = state.borrow();
+            undo_b.set_sensitive(!state.undo.is_empty());
+            redo_b.set_sensitive(!state.redo.is_empty());
+            trim.set_sensitive(trim_bounds(&state.doc, 0.).is_some());
+            expand.set_visible(content_bounds(&state.doc).is_some_and(|bounds| {
+                bounds.x < 0.
+                    || bounds.y < 0.
+                    || bounds.x + bounds.w > f64::from(state.doc.width)
+                    || bounds.y + bounds.h > f64::from(state.doc.height)
+            }));
+        }));
+    }
+    {
+        let state = state.clone();
+        let area = area.clone();
+        let refresh_cb = refresh_cb.clone();
+        expand.connect_clicked(move |_| {
+            let mut state = state.borrow_mut();
+            checkpoint(&mut state);
+            expand_to_content(&mut state.doc, 0.);
+            changed(&mut state);
+            drop(state);
+            refresh(&refresh_cb, &area);
+        });
+    }
     setup_output(
         &save,
         &make_copy,
@@ -1252,6 +1338,11 @@ fn install_editor_css() {
 .editor-window .layers-heading .layer-count { min-width: 19px; min-height: 19px; padding: 0 5px; border-radius: 10px; background: @captures_sunken; color: @captures_text_muted; font-family: monospace; font-size: 10px; }
 .editor-window .layers-heading button { min-width: 30px; min-height: 30px; padding: 0; border: 0; border-radius: 7px; background: transparent; }
 .editor-window .properties-scroll { border-top: 1px solid @captures_border; }
+.editor-window .properties-title { margin: 16px 20px 0; font-size: 14px; font-weight: 600; }
+.editor-layer-menu { padding: 8px; min-width: 220px; }
+.editor-layer-menu .section-title { margin: 4px 8px 8px; }
+.editor-layer-menu button { min-height: 30px; padding: 4px 8px; border: 0; background: transparent; box-shadow: none; }
+.editor-layer-menu button:hover { background: alpha(@captures_text,.08); }
 .editor-window .editor-sidebar .section-title { margin: 14px 20px 4px; font-size: 11px; font-weight: 600; opacity: .72; }
 .editor-window .editor-property-section .section-title { margin-left: 0; margin-right: 0; }
 .editor-window .editor-sidebar .muted { color: @captures_text_muted; font-size: 12px; }
@@ -1280,7 +1371,9 @@ fn install_editor_css() {
 .editor-window .filename-row combobox button { min-height: 34px; border: 0; border-left: 1px solid @captures_border; border-radius: 0; background: transparent; }
 .editor-window .secondary-action { min-width: 84px; min-height: 36px; padding: 0 12px; border: 1px solid @captures_border; border-radius: 7px; background: @captures_surface; }
 .editor-window .make-copy { min-height: 36px; font-size: 11px; color: @captures_text_muted; }
-.editor-window .make-copy switch { min-width: 28px; min-height: 16px; }
+.editor-window .make-copy switch { min-width: 26px; min-height: 14px; }
+.editor-window .make-copy switch slider { min-width: 10px; min-height: 10px; margin: 2px 1px 2px 2px; }
+.editor-window .make-copy switch:checked slider { margin-left: 1px; margin-right: 2px; }
 .editor-window .editor-footer button.primary { min-width: 82px; min-height: 36px; padding: 0 12px; border: 0; border-radius: 7px; color: @captures_accent_ink; background: @captures_accent; font-weight: 600; }
 .editor-window .editor-footer button.primary:hover { background: @captures_accent_hover; }
 .editor-window .secondary-action, .editor-window .editor-header .add-images { color: @captures_text; }
@@ -1923,6 +2016,12 @@ fn setup_sidebar(
             row.pack_start(&layer_copy, true, true, 0);
             row.pack_start(&eye, false, false, 0);
             row.pack_start(&lock, false, false, 0);
+            let more = gtk::MenuButton::new();
+            more.set_child(Some(&ui::icon("more", 16)));
+            more.set_valign(gtk::Align::Center);
+            ui::named(&more, &format!("Layer settings for {}", l.name));
+            more.set_popover(Some(&layer_popover(index, &s, &a, &r)));
+            row.pack_start(&more, false, false, 0);
             {
                 let s = s.clone();
                 let a = a.clone();
@@ -2081,50 +2180,11 @@ fn setup_sidebar(
                 | Tool::Pen
                 | Tool::Text
         ) {
-            let style = section("STYLE");
-            style.pack_start(&gtk::Label::new(Some("Color")), false, false, 0);
-            let color_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            let swatch = gtk::DrawingArea::new();
-            swatch.set_size_request(28, 28);
-            swatch.style_context().add_class("editor-color-swatch");
-            let swatch_color = Rc::new(Cell::new(state.color));
-            let drawn_color = swatch_color.clone();
-            swatch.connect_draw(move |area, context| {
-                let value = drawn_color.get();
-                context.set_source_rgba(value.0, value.1, value.2, value.3);
-                context.rectangle(
-                    0.0,
-                    0.0,
-                    f64::from(area.allocated_width()),
-                    f64::from(area.allocated_height()),
-                );
-                let _ = context.fill();
-                glib::Propagation::Proceed
-            });
-            let hex = gtk::Entry::new();
-            hex.set_width_chars(8);
-            hex.set_max_length(7);
-            hex.set_text(&format!(
-                "#{:02x}{:02x}{:02x}",
-                (state.color.0 * 255.).round() as u8,
-                (state.color.1 * 255.).round() as u8,
-                (state.color.2 * 255.).round() as u8,
-            ));
-            ui::named(&hex, "Drawing color hex value");
-            let (s2, a2, swatch2, swatch_color2) =
-                (s.clone(), a.clone(), swatch.clone(), swatch_color.clone());
-            hex.connect_changed(move |entry| {
-                if let Ok(value) = gdk::RGBA::parse(entry.text().as_str()) {
-                    let value = color(value);
-                    s2.borrow_mut().color = value;
-                    swatch_color2.set(value);
-                    swatch2.queue_draw();
-                    a2.queue_draw();
-                }
-            });
-            color_row.pack_start(&swatch, false, false, 0);
-            color_row.pack_start(&hex, true, true, 0);
-            style.pack_start(&color_row, false, false, 0);
+            let style = section(active_name.split(" (").next().unwrap_or(active_name));
+            let s2 = s.clone();
+            style.append(&color_field("Drawing color", state.color, move |value| {
+                s2.borrow_mut().color = value;
+            }));
             style.pack_start(&gtk::Label::new(Some("Stroke width")), false, false, 0);
             let width = gtk::Scale::with_range(gtk::Orientation::Horizontal, 1., 40., 1.);
             width.set_value(state.stroke);
@@ -2145,61 +2205,132 @@ fn setup_sidebar(
             ps.pack_start(&style, false, false, 0);
         } else if let Some(i) = state.selected.filter(|i| *i < state.doc.layers.len()) {
             let l = &state.doc.layers[i];
-            let transform = section("TRANSFORM");
-            let grid = gtk::Grid::new();
-            grid.set_row_spacing(5);
-            grid.set_column_spacing(5);
-            grid.set_column_homogeneous(true);
-            for (n, v, col, row) in [
-                ("X", l.frame.x, 0, 0),
-                ("Y", l.frame.y, 1, 0),
-                ("W", l.frame.w, 0, 1),
-                ("H", l.frame.h, 1, 1),
-                ("Rotation", l.rotation.to_degrees(), 0, 2),
-            ] {
-                let spin = gtk::SpinButton::with_range(
-                    if n == "Rotation" { -360. } else { -16384. },
-                    16384.,
-                    1.,
-                );
-                spin.set_width_chars(5);
-                spin.set_size_request(76, -1);
-                spin.set_value(v);
-                spin.set_sensitive(!l.locked);
-                spin.set_tooltip_text(Some(&format!("Layer {n}")));
-                let label = gtk::Label::new(Some(n));
-                label.set_halign(gtk::Align::Start);
-                let field = gtk::Box::new(gtk::Orientation::Vertical, 3);
-                field.pack_start(&label, false, false, 0);
-                field.pack_start(&spin, false, false, 0);
-                grid.attach(&field, col, row, if n == "Rotation" { 2 } else { 1 }, 1);
-                let s = s.clone();
-                let a = a.clone();
-                let r = r.clone();
-                spin.connect_value_changed(move |w| {
-                    let mut s = s.borrow_mut();
-                    if s.doc.layers.get(i).is_none() {
-                        return;
-                    }
-                    match n {
-                        "X" => s.doc.layers[i].frame.x = w.value(),
-                        "Y" => s.doc.layers[i].frame.y = w.value(),
-                        "W" => s.doc.layers[i].frame.w = w.value().max(1.),
-                        "H" => s.doc.layers[i].frame.h = w.value().max(1.),
-                        _ => s.doc.layers[i].rotation = w.value().to_radians(),
-                    }
-                    changed(&mut s);
-                    drop(s);
-                    refresh(&r, &a)
-                });
+            let heading = ui::label(&l.name, "properties-title");
+            ps.append(&heading);
+            if matches!(l.kind, LayerKind::Image { .. }) {
+                let transform = section("TRANSFORM");
+                let grid = gtk::Grid::new();
+                grid.set_row_spacing(5);
+                grid.set_column_spacing(5);
+                grid.set_column_homogeneous(true);
+                for (n, v, col, row) in [
+                    ("X", l.frame.x, 0, 0),
+                    ("Y", l.frame.y, 1, 0),
+                    ("W", l.frame.w, 0, 1),
+                    ("H", l.frame.h, 1, 1),
+                    ("Rotation", l.rotation.to_degrees(), 0, 2),
+                ] {
+                    let spin = gtk::SpinButton::with_range(
+                        if n == "Rotation" { -360. } else { -16384. },
+                        16384.,
+                        1.,
+                    );
+                    spin.set_width_chars(5);
+                    spin.set_size_request(76, -1);
+                    spin.set_value(v);
+                    spin.set_sensitive(!l.locked);
+                    spin.set_tooltip_text(Some(&format!("Layer {n}")));
+                    let label = gtk::Label::new(Some(n));
+                    label.set_halign(gtk::Align::Start);
+                    let field = gtk::Box::new(gtk::Orientation::Vertical, 3);
+                    field.pack_start(&label, false, false, 0);
+                    field.pack_start(&spin, false, false, 0);
+                    grid.attach(&field, col, row, if n == "Rotation" { 2 } else { 1 }, 1);
+                    let s = s.clone();
+                    let a = a.clone();
+                    let r = r.clone();
+                    spin.connect_value_changed(move |w| {
+                        let mut s = s.borrow_mut();
+                        if s.doc.layers.get(i).is_none() {
+                            return;
+                        }
+                        checkpoint(&mut s);
+                        match n {
+                            "X" => s.doc.layers[i].frame.x = w.value(),
+                            "Y" => s.doc.layers[i].frame.y = w.value(),
+                            "W" => s.doc.layers[i].frame.w = w.value().max(1.),
+                            "H" => s.doc.layers[i].frame.h = w.value().max(1.),
+                            _ => s.doc.layers[i].rotation = w.value().to_radians(),
+                        }
+                        changed(&mut s);
+                        drop(s);
+                        refresh(&r, &a)
+                    });
+                }
+                transform.pack_start(&grid, false, false, 0);
+                ps.pack_start(&transform, false, false, 0);
             }
-            transform.pack_start(&grid, false, false, 0);
-            ps.pack_start(&transform, false, false, 0);
             let appearance = section("APPEARANCE");
+            if !matches!(l.kind, LayerKind::Image { .. }) {
+                let s2 = s.clone();
+                let a2 = a.clone();
+                appearance.append(&color_field("Stroke color", l.color, move |value| {
+                    let mut state = s2.borrow_mut();
+                    checkpoint(&mut state);
+                    state.doc.layers[i].color = value;
+                    changed(&mut state);
+                    a2.queue_draw();
+                }));
+                let width = gtk::Scale::with_range(gtk::Orientation::Horizontal, 1., 40., 1.);
+                width.set_value(l.stroke);
+                ui::named(&width, "Stroke width");
+                appearance.append(&ui::label("Stroke width", "property-label"));
+                appearance.append(&width);
+                let s2 = s.clone();
+                let a2 = a.clone();
+                width.connect_value_changed(move |control| {
+                    let mut state = s2.borrow_mut();
+                    checkpoint(&mut state);
+                    state.doc.layers[i].stroke = control.value();
+                    changed(&mut state);
+                    a2.queue_draw();
+                });
+                if matches!(
+                    l.kind,
+                    LayerKind::Rectangle
+                        | LayerKind::Ellipse
+                        | LayerKind::Triangle
+                        | LayerKind::Diamond
+                        | LayerKind::Star
+                ) {
+                    let fill = gtk::CheckButton::with_label("Fill");
+                    fill.set_active(l.fill.is_some());
+                    appearance.append(&fill);
+                    let s2 = s.clone();
+                    let a2 = a.clone();
+                    let r2 = r.clone();
+                    fill.connect_toggled(move |control| {
+                        let mut state = s2.borrow_mut();
+                        checkpoint(&mut state);
+                        let color = state.doc.layers[i].color;
+                        state.doc.layers[i].fill = control
+                            .is_active()
+                            .then_some(Color(color.0, color.1, color.2, 0.33));
+                        changed(&mut state);
+                        drop(state);
+                        refresh(&r2, &a2);
+                    });
+                    if let Some(fill) = l.fill {
+                        let s2 = s.clone();
+                        let a2 = a.clone();
+                        appearance.append(&color_field("Fill color", fill, move |value| {
+                            let mut state = s2.borrow_mut();
+                            checkpoint(&mut state);
+                            state.doc.layers[i].fill =
+                                Some(Color(value.0, value.1, value.2, fill.3));
+                            changed(&mut state);
+                            a2.queue_draw();
+                        }));
+                    }
+                }
+            }
+            appearance.append(&ui::label("Opacity", "property-label"));
             let opacity = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0., 100., 1.);
             opacity.set_value(l.opacity * 100.);
             opacity.set_tooltip_text(Some("Layer opacity"));
+            ui::named(&opacity, "Layer opacity");
             appearance.pack_start(&opacity, false, false, 0);
+            appearance.append(&ui::label("Blend mode", "property-label"));
             let blend = gtk::ComboBoxText::new();
             for b in Blend::ALL {
                 blend.append_text(b.label())
@@ -2212,155 +2343,158 @@ fn setup_sidebar(
             let s1 = s.clone();
             let a1 = a.clone();
             opacity.connect_value_changed(move |w| {
-                if let Some(l) = s1.borrow_mut().doc.layers.get_mut(i) {
-                    l.opacity = w.value() / 100.;
-                    a1.queue_draw()
-                }
+                let mut state = s1.borrow_mut();
+                checkpoint(&mut state);
+                state.doc.layers[i].opacity = w.value() / 100.;
+                changed(&mut state);
+                a1.queue_draw();
             });
             let s1 = s.clone();
             let a1 = a.clone();
             blend.connect_changed(move |w| {
-                if let Some(l) = s1.borrow_mut().doc.layers.get_mut(i) {
-                    l.blend = Blend::ALL[w.active().unwrap_or(0) as usize];
-                    a1.queue_draw()
-                }
+                let mut state = s1.borrow_mut();
+                checkpoint(&mut state);
+                state.doc.layers[i].blend = Blend::ALL[w.active().unwrap_or(0) as usize];
+                changed(&mut state);
+                a1.queue_draw();
             });
             ps.pack_start(&appearance, false, false, 0);
-            if matches!(l.kind, LayerKind::Image { .. }) {
-                let image_ops = section("IMAGE");
-                for (text, op) in [
-                    ("↶ Rotate", 0),
-                    ("↷ Rotate", 1),
-                    ("⇆ Flip", 2),
-                    ("⇅ Flip", 3),
-                ] {
-                    let b = button(text, text);
-                    let s = s.clone();
-                    let a = a.clone();
-                    let r = r.clone();
-                    b.connect_clicked(move |_| {
-                        let mut s = s.borrow_mut();
-                        checkpoint(&mut s);
-                        if op < 2 {
-                            transform_image(&mut s.doc.layers[i], op == 1)
-                        } else {
-                            flip_image(&mut s.doc.layers[i], op == 2)
-                        }
-                        changed(&mut s);
-                        drop(s);
-                        refresh(&r, &a)
-                    });
-                    image_ops.pack_start(&b, false, false, 0)
-                }
-                ps.pack_start(&image_ops, false, false, 0)
-            }
-            let actions = section("LAYER ACTIONS");
-            for (text, op) in [
-                ("Bring to front", 5),
-                ("Send to back", 6),
-                ("Duplicate", 0),
-                ("Merge down", 1),
-                ("Merge visible", 2),
-                ("Flatten image", 3),
-                ("Delete", 4),
-            ] {
-                let b = button(text, text);
-                if (op == 1 && i == 0)
-                    || (op == 2 && state.doc.layers.iter().filter(|l| l.visible).count() < 2)
-                    || (op == 4 && l.locked)
-                {
-                    b.set_sensitive(false)
-                }
-                let s = s.clone();
-                let a = a.clone();
-                let r = r.clone();
-                b.connect_clicked(move |_| {
-                    let mut s = s.borrow_mut();
-                    checkpoint(&mut s);
-                    match op {
-                        0 => s.selected = s.doc.duplicate(i),
-                        1 => {
-                            if i > 0 {
-                                s.selected =
-                                    merge_indices(&mut s.doc, &[i - 1, i], "Merged layer").ok()
-                            }
-                        }
-                        2 => {
-                            let ids: Vec<_> = s
-                                .doc
-                                .layers
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, l)| l.visible)
-                                .map(|(i, _)| i)
-                                .collect();
-                            s.selected = merge_indices(&mut s.doc, &ids, "Merged visible").ok()
-                        }
-                        3 => {
-                            let ids: Vec<_> = (0..s.doc.layers.len()).collect();
-                            if let Ok(i) = merge_indices(&mut s.doc, &ids, "Background") {
-                                s.doc.layers[i].locked = true;
-                                s.selected = Some(i)
-                            }
-                        }
-                        4 => {
-                            if i < s.doc.layers.len() && !s.doc.layers[i].locked {
-                                s.doc.layers.remove(i);
-                                s.selected = None
-                            }
-                        }
-                        5 if i + 1 < s.doc.layers.len() => {
-                            let target = s.doc.layers.len() - 1;
-                            s.doc.reorder(i, target);
-                            s.selected = Some(target)
-                        }
-                        6 if i > 0 => s.selected = s.doc.reorder(i, 0),
-                        _ => {}
-                    }
-                    changed(&mut s);
-                    drop(s);
-                    refresh(&r, &a)
-                });
-                actions.pack_start(&b, false, false, 0)
-            }
-            ps.pack_start(&actions, false, false, 0);
-        } else {
-            let canvas = section("CANVAS");
-            canvas.pack_start(
-                &ui::label(
-                    &format!("{} × {} px", state.doc.width, state.doc.height),
-                    "muted",
-                ),
-                false,
-                false,
-                0,
-            );
-            for (text, trim) in [("Trim edges", true), ("Expand to content", false)] {
-                let action = button(text, text);
-                let s = s.clone();
-                let a = a.clone();
-                let r = r.clone();
-                action.connect_clicked(move |_| {
-                    let mut state = s.borrow_mut();
-                    checkpoint(&mut state);
-                    if trim {
-                        trim_to_content(&mut state.doc, 0.);
-                    } else {
-                        expand_to_content(&mut state.doc, 0.);
-                    }
-                    changed(&mut state);
-                    drop(state);
-                    refresh(&r, &a)
-                });
-                canvas.pack_start(&action, false, false, 0);
-            }
-            ps.pack_start(&canvas, false, false, 0)
         }
         drop(state);
         ls.show_all();
         ps.show_all();
         a.queue_draw();
     }));
+}
+
+fn layer_popover(
+    index: usize,
+    state: &Rc<RefCell<State>>,
+    area: &gtk::DrawingArea,
+    refresh_cb: &Refresh,
+) -> gtk::Popover {
+    let popover = gtk::Popover::new();
+    let actions = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    actions.add_css_class("editor-layer-menu");
+    let current = state.borrow();
+    let layer = &current.doc.layers[index];
+    actions.append(&ui::label(&layer.name, "section-title"));
+    if matches!(layer.kind, LayerKind::Image { .. }) {
+        let transforms = gtk::Grid::new();
+        transforms.set_column_homogeneous(true);
+        for (operation, (label, icon)) in [
+            ("Rotate left", "rotate-left"),
+            ("Rotate right", "rotate-right"),
+            ("Flip horizontal", "flip-horizontal"),
+            ("Flip vertical", "flip-vertical"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let button = ui::icon_text_button(label, icon);
+            button.set_sensitive(!layer.locked);
+            let state = state.clone();
+            let area = area.clone();
+            let refresh_cb = refresh_cb.clone();
+            let popup = popover.clone();
+            button.connect_clicked(move |_| {
+                popup.popdown();
+                let mut state = state.borrow_mut();
+                checkpoint(&mut state);
+                if operation < 2 {
+                    transform_image(&mut state.doc.layers[index], operation == 1);
+                } else {
+                    flip_image(&mut state.doc.layers[index], operation == 2);
+                }
+                changed(&mut state);
+                drop(state);
+                refresh(&refresh_cb, &area);
+            });
+            transforms.attach(&button, operation as i32 % 2, operation as i32 / 2, 1, 1);
+        }
+        actions.append(&transforms);
+    }
+    for (label, icon, operation) in [
+        ("Bring to front", "bring-front", 5),
+        ("Send to back", "send-back", 6),
+        ("Duplicate", "duplicate", 0),
+        ("Merge down", "merge-down", 1),
+        ("Merge visible", "merge-visible", 2),
+        ("Flatten image", "flatten", 3),
+        ("Delete", "trash", 4),
+    ] {
+        let button = ui::icon_text_button(label, icon);
+        if let Some(content) = button.child() {
+            content.set_halign(gtk::Align::Start);
+        }
+        if operation == 4 {
+            button.add_css_class("destructive");
+        }
+        button.set_sensitive(
+            !((operation == 1 && index == 0)
+                || (operation == 2
+                    && current
+                        .doc
+                        .layers
+                        .iter()
+                        .filter(|layer| layer.visible)
+                        .count()
+                        < 2)
+                || (operation == 4 && layer.locked)
+                || (operation == 5 && (layer.locked || index + 1 == current.doc.layers.len()))
+                || (operation == 6 && (layer.locked || index == 0))),
+        );
+        let state = state.clone();
+        let area = area.clone();
+        let refresh_cb = refresh_cb.clone();
+        let popup = popover.clone();
+        button.connect_clicked(move |_| {
+            popup.popdown();
+            let mut state = state.borrow_mut();
+            checkpoint(&mut state);
+            match operation {
+                0 => state.selected = state.doc.duplicate(index),
+                1 => {
+                    state.selected =
+                        merge_indices(&mut state.doc, &[index - 1, index], "Merged layer").ok()
+                }
+                2 => {
+                    let indices = state
+                        .doc
+                        .layers
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, layer)| layer.visible)
+                        .map(|(index, _)| index)
+                        .collect::<Vec<_>>();
+                    state.selected = merge_indices(&mut state.doc, &indices, "Merged visible").ok();
+                }
+                3 => {
+                    let indices = (0..state.doc.layers.len()).collect::<Vec<_>>();
+                    if let Ok(index) = merge_indices(&mut state.doc, &indices, "Background") {
+                        state.doc.layers[index].locked = true;
+                        state.selected = Some(index);
+                    }
+                }
+                4 => {
+                    state.doc.layers.remove(index);
+                    state.selected = None;
+                }
+                5 => {
+                    let target = state.doc.layers.len() - 1;
+                    state.selected = state.doc.reorder(index, target);
+                }
+                6 => state.selected = state.doc.reorder(index, 0),
+                _ => unreachable!(),
+            }
+            changed(&mut state);
+            drop(state);
+            refresh(&refresh_cb, &area);
+        });
+        actions.append(&button);
+    }
+    popover.set_child(Some(&actions));
+    popover
 }
 
 fn editor_has_editable_focus(window: &gtk::Window) -> bool {
@@ -2385,18 +2519,15 @@ fn setup_keys(
     refresh_cb: &Refresh,
     zoom: &gtk::Scale,
 ) {
+    // GTK pairs releases with presses on the same key controller. A separate
+    // release controller misses a consumed Space press, leaving pan latched.
+    let keys = gtk::EventControllerKey::new();
     {
         let s = state.clone();
-        let key_window = window.clone();
-        window.connect_key_release_event(move |_, e| {
-            if editor_has_editable_focus(&key_window) {
-                return glib::Propagation::Proceed;
-            }
-            if e.keyval() == gdk::Key::space {
+        keys.connect_key_released(move |_, key, _, _| {
+            if key == gdk::Key::space {
                 s.borrow_mut().space_down = false;
-                return glib::Propagation::Stop;
             }
-            glib::Propagation::Proceed
         });
     }
     let s = state.clone();
@@ -2404,16 +2535,16 @@ fn setup_keys(
     let r = refresh_cb.clone();
     let z = zoom.clone();
     let key_window = window.clone();
-    window.connect_key_press_event(move |_, e| {
+    keys.connect_key_pressed(move |_, key, _, modifiers| {
         if editor_has_editable_focus(&key_window) {
             return glib::Propagation::Proceed;
         }
         if matches!(
-            e.keyval(),
+            key,
             gdk::Key::plus | gdk::Key::equal | gdk::Key::minus | gdk::Key::_0
-        ) && e.state().contains(gdk::ModifierType::CONTROL_MASK)
+        ) && modifiers.contains(gdk::ModifierType::CONTROL_MASK)
         {
-            z.set_value(match e.keyval() {
+            z.set_value(match key {
                 gdk::Key::minus => z.value() / 1.25,
                 gdk::Key::_0 => 100.,
                 _ => z.value() * 1.25,
@@ -2421,13 +2552,13 @@ fn setup_keys(
             return glib::Propagation::Stop;
         }
         let mut s = s.borrow_mut();
-        let ctrl = e.state().contains(gdk::ModifierType::CONTROL_MASK);
-        if e.keyval() == gdk::Key::space {
+        let ctrl = modifiers.contains(gdk::ModifierType::CONTROL_MASK);
+        if key == gdk::Key::space {
             s.space_down = true;
             return glib::Propagation::Stop;
         }
         if ctrl
-            && e.keyval() == gdk::Key::c
+            && key == gdk::Key::c
             && let Some(layer) = s
                 .selected
                 .and_then(|index| s.doc.layers.get(index))
@@ -2437,7 +2568,7 @@ fn setup_keys(
             return glib::Propagation::Stop;
         }
         if ctrl
-            && e.keyval() == gdk::Key::v
+            && key == gdk::Key::v
             && let Some((layer, count)) = s.layer_clipboard.clone()
         {
             checkpoint(&mut s);
@@ -2453,7 +2584,7 @@ fn setup_keys(
             return glib::Propagation::Stop;
         }
         if ctrl
-            && e.keyval() == gdk::Key::d
+            && key == gdk::Key::d
             && let Some(index) = s.selected
         {
             checkpoint(&mut s);
@@ -2463,16 +2594,16 @@ fn setup_keys(
             refresh(&r, &a);
             return glib::Propagation::Stop;
         }
-        if ctrl && (e.keyval() == gdk::Key::z || e.keyval() == gdk::Key::y) {
+        if ctrl && (key == gdk::Key::z || key == gdk::Key::y) {
             undo(
                 &mut s,
-                e.keyval() == gdk::Key::y || e.state().contains(gdk::ModifierType::SHIFT_MASK),
+                key == gdk::Key::y || modifiers.contains(gdk::ModifierType::SHIFT_MASK),
             );
             drop(s);
             refresh(&r, &a);
             return glib::Propagation::Stop;
         }
-        match e.keyval() {
+        match key {
             gdk::Key::v => s.tool = Tool::Select,
             gdk::Key::c => s.tool = Tool::Crop,
             gdk::Key::t => s.tool = Tool::Text,
@@ -2495,6 +2626,7 @@ fn setup_keys(
         refresh(&r, &a);
         glib::Propagation::Stop
     });
+    window.add_controller(keys);
 }
 
 #[derive(Clone, Copy)]

@@ -65,6 +65,14 @@ pub fn button(text: &str) -> gtk::Button {
     gtk::Button::with_label(text)
 }
 
+/// Keep the track at its CSS size instead of stretching with its settings row.
+pub fn switch() -> gtk::Switch {
+    let toggle = gtk::Switch::new();
+    toggle.set_halign(gtk::Align::Center);
+    toggle.set_valign(gtk::Align::Center);
+    toggle
+}
+
 pub fn label(text: &str, class: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.set_xalign(0.0);
@@ -470,7 +478,7 @@ pub fn install_theme_custom(dark: bool, theme: &str, accent: &str, signal: &str)
 pub fn icon(name: &str, size: i32) -> gtk::DrawingArea {
     let area = gtk::DrawingArea::new();
     // Like GtkImage, an icon must let its host button receive pointer events.
-    area.set_has_window(false);
+    area.set_can_target(false);
     area.set_size_request(size, size);
     area.set_halign(gtk::Align::Center);
     area.set_valign(gtk::Align::Center);
@@ -509,6 +517,18 @@ pub fn icon_button(label: &str, name: &str) -> gtk::Button {
     button.set_always_show_image(true);
     button.set_tooltip_text(Some(label));
     button.style_context().add_class("icon-button");
+    named(&button, label);
+    button
+}
+
+/// GTK4 buttons have one child: set_label/set_image would replace each other.
+pub fn icon_text_button(label: &str, name: &str) -> gtk::Button {
+    let button = gtk::Button::new();
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    content.set_halign(gtk::Align::Center);
+    content.append(&icon(name, 14));
+    content.append(&gtk::Label::new(Some(label)));
+    button.set_child(Some(&content));
     named(&button, label);
     button
 }

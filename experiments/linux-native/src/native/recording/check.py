@@ -362,8 +362,12 @@ def main():
             set_value("Output height", 200)
             quality = wait(lambda: find("Save quality", "combo box", "Edit recording — Captures"))
             quality.queryAction().doAction(0)
+            command("xdotool", "key", "Home", "Down", "Return")
+            preset = wait(lambda: find("Compression quality", "combo box", "Edit recording — Captures"))
+            preset.queryAction().doAction(0)
             command("xdotool", "key", "End", "Return")
-            click("Compare compression before and after", "Edit recording — Captures")
+            # Changing quality automatically produces the current comparison;
+            # do not invoke the hidden implementation trigger via AT-SPI.
             wait(lambda: find_prefix("Comparison ready", "Edit recording — Captures"))
             scrollbars = find_all("scroll bar", "Edit recording — Captures")
             vertical = max(scrollbars, key=lambda node: node.queryValue().maximumValue)

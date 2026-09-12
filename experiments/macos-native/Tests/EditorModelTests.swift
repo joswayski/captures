@@ -4,6 +4,35 @@ import XCTest
 
 @MainActor
 final class EditorModelTests: XCTestCase {
+    func testNewAnnotationsUseToolDefaults() {
+        let model = EditorModel(
+            document: EditorDocument(width: 400, height: 300, layers: []),
+            sourceURL: URL(fileURLWithPath: "/tmp/source.png")
+        )
+        let color = EditorColor(red: 0.24, green: 0.48, blue: 0.95)
+
+        model.addShape(.rectangle, color: color, lineWidth: 11, fill: true, opacity: 0.65)
+        let shape = model.document.layers[0]
+        XCTAssertEqual(shape.color, color)
+        XCTAssertEqual(shape.fill, color)
+        XCTAssertEqual(shape.lineWidth, 11)
+        XCTAssertEqual(shape.opacity, 0.65)
+
+        model.addShape(.arrow, color: color, lineWidth: 9, fill: true, opacity: 0.8)
+        let arrow = model.document.layers[1]
+        XCTAssertNil(arrow.fill, "Open shapes never use the closed-shape fill default")
+        XCTAssertEqual(arrow.lineWidth, 9)
+
+        model.addStroke(
+            [CGPoint(x: 10, y: 12), CGPoint(x: 40, y: 42)],
+            color: color, lineWidth: 7, opacity: 0.45
+        )
+        let stroke = model.document.layers[2]
+        XCTAssertEqual(stroke.color, color)
+        XCTAssertEqual(stroke.lineWidth, 7)
+        XCTAssertEqual(stroke.opacity, 0.45)
+    }
+
     func testCropTranslatesLayersAndSupportsUndo() {
         let source = EditorLayer(
             name: "Source",

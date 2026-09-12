@@ -81,7 +81,7 @@ enum RenderReferences {
                             // Process startup made the short dust sequence reach
                             // its nearly-empty tail before `screencapture` sampled
                             // it. Read this window directly from WindowServer at
-                            // the scheduled 0.66 s presentation phase instead.
+                            // the scheduled approximately 0.42 s presentation phase instead.
                             guard let captured = CGWindowListCreateImage(
                                 .null, .optionIncludingWindow,
                                 CGWindowID(window.windowNumber), [.boundsIgnoreFraming]
