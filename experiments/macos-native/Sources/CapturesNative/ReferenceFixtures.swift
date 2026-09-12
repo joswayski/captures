@@ -31,6 +31,14 @@ func nativeReferenceFixtures(
                                makeView: { AnyView(OnboardingView()) }),
         NativeReferenceFixture(name: "feedback", size: CGSize(width: 720, height: 700), scheme: .light,
                                makeView: { AnyView(FeedbackView()) }),
+        NativeReferenceFixture(name: "crash-consent", size: CGSize(width: 720, height: 620), scheme: .light,
+                               makeView: {
+                                   AnyView(CrashDiagnosticsView(preview: [
+                                       "unclean_exit": true,
+                                       "has_exception_evidence": true,
+                                       "rust_panic": "Captures stopped in editor_worker at src/editor.rs:184. Personal paths and values were redacted locally.",
+                                   ]))
+                               }),
         NativeReferenceFixture(name: "preferences-light", size: CGSize(width: 980, height: 720), scheme: .light,
                                makeView: { AnyView(PreferencesView()) }),
         NativeReferenceFixture(name: "preferences-dark", size: CGSize(width: 980, height: 720), scheme: .dark,
@@ -55,6 +63,10 @@ func nativeReferenceFixtures(
                                makeView: { imageEditorReferenceView(artifact: imageArtifacts[0], state: "shapes") }),
         NativeReferenceFixture(name: "image-editor-properties", size: CGSize(width: 1280, height: 760), scheme: .dark,
                                makeView: { imageEditorReferenceView(artifact: imageArtifacts[0], state: "properties") }),
+        NativeReferenceFixture(name: "image-editor-overflow", size: CGSize(width: 1280, height: 760), scheme: .dark,
+                               makeView: { imageEditorReferenceView(artifact: imageArtifacts[0], state: "overflow") }),
+        NativeReferenceFixture(name: "image-editor-snap-guides", size: CGSize(width: 1280, height: 760), scheme: .dark,
+                               makeView: { imageEditorReferenceView(artifact: imageArtifacts[0], state: "snap-guides") }),
         NativeReferenceFixture(name: "image-editor-erase", size: CGSize(width: 1280, height: 760), scheme: .dark,
                                makeView: { imageEditorReferenceView(artifact: imageArtifacts[0], state: "erase") }),
         NativeReferenceFixture(name: "image-editor-wand", size: CGSize(width: 1280, height: 760), scheme: .dark,

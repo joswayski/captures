@@ -23,10 +23,13 @@ enum CapturesNative {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, ApplicationRestarting {
     private var statusItem: NSStatusItem?
     private var deferredLaunch: DispatchWorkItem?
     private var restartBundleURL: URL?
+    private var restartWaiter: Process?
+    private var crashDiagnosticsStarted = false
+    private var terminationInProgress = false
     private let routeNotification = Notification.Name("es.captur.native-experiment.route")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -42,6 +45,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(receiveRoute(_:)),
                                                             name: routeNotification, object: Bundle.main.bundleIdentifier)
+        Backend.shared.call("crash_start", ["profile_root": AppStore.dataDirectory.path]) { result in
+            self.crashDiagnosticsStarted = (try? result.get()) != nil
+            if case .failure(let error) = result { AppStore.shared.report(error) }
+            self.finishStartup(arguments: arguments)
+        }
+    }
+
+    private func finishStartup(arguments: [String]) {
         AppStore.shared.start()
         installMenus()
         if arguments.isEmpty {
@@ -56,6 +67,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Backend.shared.call("recover_list") { result in
             if case .success(let value) = result,
                let drafts = value["drafts"] as? [Any], !drafts.isEmpty { AppStore.shared.showHistory() }
+        }
+        guard crashDiagnosticsStarted,
+              let executableURL = Bundle.main.executableURL else { return }
+        Backend.shared.call("crash_preview", [
+            "reports": ownCrashReportCandidates(executableName: executableURL.lastPathComponent),
+            "executable_name": executableURL.lastPathComponent,
+            "bundle_id": (Bundle.main.bundleIdentifier as Any?) ?? NSNull(),
+            "executable_path": executableURL.path,
+        ]) { result in
+            if case let .success(preview) = result,
+               preview["unclean_exit"] as? Bool == true {
+                AppStore.shared.showCrashDiagnostics(preview)
+            }
         }
     }
 
@@ -73,6 +97,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !terminationInProgress else { return .terminateLater }
+        terminationInProgress = true
         CaptureController.shared.cancel()
         Backend.shared.call("record_status") { result in
             guard case .success(let status) = result else {
@@ -133,14 +159,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func finishTermination(_ sender: NSApplication, allowed: Bool) {
         guard allowed else {
-            restartBundleURL = nil
-            sender.reply(toApplicationShouldTerminate: false)
+            cancelTermination(sender)
             return
         }
-        guard let bundleURL = restartBundleURL else {
-            sender.reply(toApplicationShouldTerminate: true)
+        do {
+            try prepareRestartWaiter()
+        } catch {
+            AppStore.shared.report(error)
+            cancelTermination(sender)
             return
         }
+        guard crashDiagnosticsStarted else {
+            completeTermination(sender)
+            return
+        }
+        Backend.shared.call("crash_mark_clean") { result in
+            switch result {
+            case .success:
+                self.crashDiagnosticsStarted = false
+                self.completeTermination(sender)
+            case .failure(let error):
+                AppStore.shared.report(error)
+                // mark_clean may have removed the current marker before a
+                // later filesystem operation failed. Restore this same live
+                // session before cancelling; crash_start would incorrectly
+                // rotate it into prior-session evidence and reinstall hooks.
+                Backend.shared.call("crash_resume") { resumeResult in
+                    if case .failure(let resumeError) = resumeResult {
+                        AppStore.shared.report(resumeError)
+                    }
+                    self.cancelTermination(sender)
+                }
+            }
+        }
+    }
+
+    private func completeTermination(_ sender: NSApplication) {
+        restartBundleURL = nil
+        restartWaiter = nil
+        sender.reply(toApplicationShouldTerminate: true)
+    }
+
+    private func prepareRestartWaiter() throws {
+        guard let bundleURL = restartBundleURL, restartWaiter == nil else { return }
         let waiter = Process()
         waiter.executableURL = URL(fileURLWithPath: "/bin/sh")
         waiter.arguments = [
@@ -148,14 +209,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "while kill -0 \"$1\" 2>/dev/null; do sleep 0.05; done; exec /usr/bin/open -n \"$2\"",
             "captures-restart", String(ProcessInfo.processInfo.processIdentifier), bundleURL.path,
         ]
-        do {
-            try waiter.run()
-            restartBundleURL = nil
-            sender.reply(toApplicationShouldTerminate: true)
-        } catch {
-            restartBundleURL = nil
-            AppStore.shared.report(error)
-            sender.reply(toApplicationShouldTerminate: false)
+        try waiter.run()
+        restartWaiter = waiter
+    }
+
+    private func cancelTermination(_ sender: NSApplication) {
+        if restartWaiter?.isRunning == true { restartWaiter?.terminate() }
+        restartWaiter = nil
+        restartBundleURL = nil
+        terminationInProgress = false
+        sender.reply(toApplicationShouldTerminate: false)
+    }
+
+    private func ownCrashReportCandidates(executableName: String) -> [[String: Any]] {
+        let directory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/DiagnosticReports", isDirectory: true)
+        let keys: Set<URLResourceKey> = [.contentModificationDateKey, .isRegularFileKey, .isSymbolicLinkKey]
+        let urls = (try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+        )) ?? []
+        return urls.compactMap { url -> (URL, Date)? in
+            guard ["ips", "crash"].contains(url.pathExtension.lowercased()),
+                  url.deletingPathExtension().lastPathComponent.hasPrefix("\(executableName)-"),
+                  let values = try? url.resourceValues(forKeys: keys),
+                  values.isRegularFile == true, values.isSymbolicLink != true,
+                  let modified = values.contentModificationDate else { return nil }
+            return (url, modified)
+        }
+        .sorted { $0.1 > $1.1 }
+        .prefix(8)
+        .map { url, modified in
+            return ["path": url.path, "modified_ms": Int64(modified.timeIntervalSince1970 * 1_000)]
         }
     }
 

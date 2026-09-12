@@ -32,6 +32,25 @@ pub struct FeedbackSubmitRequest {
     pub context: FeedbackContext,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CrashStartRequest {
+    pub profile_root: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CrashPreviewRequest {
+    pub reports: Vec<CrashReportCandidate>,
+    pub executable_name: String,
+    pub bundle_id: Option<String>,
+    pub executable_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CrashReportCandidate {
+    pub path: PathBuf,
+    pub modified_ms: u64,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ScreenshotTarget {

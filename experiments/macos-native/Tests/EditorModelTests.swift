@@ -92,6 +92,99 @@ final class EditorModelTests: XCTestCase {
         XCTAssertFalse(model.canUndo)
     }
 
+    func testTranslatedLayerSnapsNearestEdgesAndReportsGuides() {
+        let moving = EditorLayer(
+            name: "Moving", content: .shape(.rectangle),
+            frame: EditorRect(x: 10, y: 30, width: 10, height: 10)
+        )
+        let peer = EditorLayer(
+            name: "Peer", content: .shape(.rectangle),
+            frame: EditorRect(x: 80, y: 60, width: 20, height: 20)
+        )
+        let model = EditorModel(
+            document: EditorDocument(width: 200, height: 120, layers: [moving, peer]),
+            sourceURL: URL(fileURLWithPath: "/tmp/snap.png")
+        )
+
+        let snapped = model.snapTranslatedFrame(
+            EditorRect(x: 67, y: 33, width: 10, height: 10),
+            layerID: moving.id, threshold: 4
+        )
+
+        XCTAssertEqual(snapped.frame, EditorRect(x: 70, y: 33, width: 10, height: 10))
+        XCTAssertEqual(snapped.guides, [EditorAlignmentGuide(axis: .vertical, position: 80)])
+    }
+
+    func testCanvasExpansionShiftsAllLayersAndFitsAsymmetricOverflow() throws {
+        let anchor = EditorLayer(
+            name: "Anchor", content: .shape(.rectangle),
+            frame: EditorRect(x: 20, y: 15, width: 10, height: 10)
+        )
+        let overflow = EditorLayer(
+            name: "Overflow", content: .shape(.rectangle),
+            frame: EditorRect(x: -7.2, y: 85, width: 120.6, height: 24.4)
+        )
+        let model = EditorModel(
+            document: EditorDocument(width: 100, height: 100, layers: [anchor, overflow]),
+            sourceURL: URL(fileURLWithPath: "/tmp/expand.png")
+        )
+
+        XCTAssertEqual(
+            model.canvasExpansion(for: overflow.id),
+            CGRect(x: -8, y: 0, width: 122, height: 110)
+        )
+        try model.expandCanvasToFit(layerID: overflow.id)
+
+        XCTAssertEqual(model.document.width, 122)
+        XCTAssertEqual(model.document.height, 110)
+        XCTAssertEqual(model.document.layers[0].frame, EditorRect(x: 28, y: 15, width: 10, height: 10))
+        let expandedOverflow = model.document.layers[1].frame
+        XCTAssertEqual(expandedOverflow.x, 0.8, accuracy: 0.0001)
+        XCTAssertEqual(expandedOverflow.y, 85)
+        XCTAssertEqual(expandedOverflow.width, 120.6)
+        XCTAssertEqual(expandedOverflow.height, 24.4)
+        XCTAssertNil(model.canvasExpansion(for: overflow.id))
+        model.undo()
+        XCTAssertEqual(model.document.layers, [anchor, overflow])
+    }
+
+    func testCanvasExpansionAcceptsExactLimitButRejectsEitherOversizedDimensionAtomically() throws {
+        let atLimit = EditorLayer(
+            name: "At limit", content: .shape(.rectangle),
+            frame: EditorRect(x: -0.5, y: -0.5, width: 10, height: 10)
+        )
+        let accepted = EditorModel(
+            document: EditorDocument(width: 16_383, height: 16_383, layers: [atLimit]),
+            sourceURL: URL(fileURLWithPath: "/tmp/expand-limit.png")
+        )
+
+        try accepted.expandCanvasToFit(layerID: atLimit.id)
+
+        XCTAssertEqual(accepted.document.width, 16_384)
+        XCTAssertEqual(accepted.document.height, 16_384)
+        XCTAssertEqual(accepted.document.layers[0].frame.x, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(accepted.document.layers[0].frame.y, 0.5, accuracy: 0.0001)
+
+        for (width, height, frame) in [
+            (16_384, 100, EditorRect(x: -0.5, y: 10, width: 10, height: 10)),
+            (100, 16_384, EditorRect(x: 10, y: -0.5, width: 10, height: 10)),
+        ] {
+            let overflow = EditorLayer(name: "Overflow", content: .shape(.rectangle), frame: frame)
+            let rejected = EditorModel(
+                document: EditorDocument(width: width, height: height, layers: [overflow]),
+                sourceURL: URL(fileURLWithPath: "/tmp/expand-over-limit.png")
+            )
+            let original = rejected.document
+
+            XCTAssertThrowsError(try rejected.expandCanvasToFit(layerID: overflow.id)) { error in
+                XCTAssertEqual(error as? EditorError, EditorError.canvasTooLarge)
+            }
+            XCTAssertEqual(rejected.document, original)
+            XCTAssertFalse(rejected.canUndo)
+            XCTAssertFalse(rejected.dirty)
+        }
+    }
+
     func testRotateClockwisePreservesLocalFrameAndTransformsWorldBounds() {
         let layer = EditorLayer(
             name: "Layer", content: .shape(.ellipse),

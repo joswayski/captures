@@ -118,6 +118,16 @@ final class AppStore: NSObject, ObservableObject, NSWindowDelegate {
     func showHistory() { show("history", title: "Capture History", size: NSSize(width: 980, height: 720), view: HistoryView()) }
     func showFeedback() { show("feedback", title: "Send feedback", size: NSSize(width: 720, height: 700), view: FeedbackView()) }
     func showOnboarding() { show("onboarding", title: "Captures", size: NSSize(width: 760, height: 620), view: OnboardingView()) }
+    func showCrashDiagnostics(_ preview: [String: Any]) {
+        show(
+            "crash-diagnostics", title: "Captures closed unexpectedly",
+            size: NSSize(width: 680, height: 600), view: CrashDiagnosticsView(preview: preview)
+        )
+    }
+
+    func closeCrashDiagnostics() {
+        windows["crash-diagnostics"]?.close()
+    }
 
     func requireOnboarding() -> Bool {
         guard !onboardingCompleted else { return false }

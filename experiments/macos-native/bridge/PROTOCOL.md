@@ -5,8 +5,9 @@ The bridge is a standalone Rust `staticlib` with no Tauri dependency. Include
 `captures_native_request`, copy the returned UTF-8 JSON, and release it exactly
 once with `captures_native_free`. Calls are synchronous. Recording lifecycle,
 capture discovery, and screenshots execute on one bridge-owned background
-thread. Stateless `image_encode`, `media_probe`, `media_estimate`, `media_export`, and
-`recover_list` work, plus `microphone_permission`, executes on the calling thread
+thread. Stateless `image_encode`, `media_probe`, `media_estimate`, `media_export`,
+`recover_list`, feedback, crash diagnostics, and `microphone_permission` work
+execute on the calling thread
 so long media jobs or permission prompts cannot block recording safety ticks.
 Recovery assembly/discard executes on the caller
 under a bridge-wide reservation after the recording worker confirms it is idle.
@@ -79,12 +80,31 @@ Artifact values are `{"path":string,"width":number,"height":number,"kind":
 - `{"op":"session_status"}` returns `{"available":bool}` from the recording
   worker. It is the cheap pre-overlay check and does not enumerate targets or
   request permission.
-- `{"op":"feedback_submit","draft":{"category":"bug|idea|other","message":"...",
+- `{"op":"feedback_submit","draft":{"category":"bug|idea|other|crash","message":"...",
   "contact"?:string},"context":{"app_version":"...","os":"macos",
   "os_version":"...","arch":"..."}}` returns `{}`. The shared feedback
   client validates and trims fields, allows only HTTPS (or loopback HTTP for
   tests), does not follow redirects, times out, bounds responses, and applies a
   one-minute cooldown only after success. No captures, files, or logs are sent.
+- `{"op":"crash_start","profile_root":"..."}` starts the profile-scoped local
+  crash session after single-instance ownership is established. It installs the
+  shared redacting Rust panic hook but performs no network request or OS report scan.
+- `{"op":"crash_preview","reports":[{"path":"...","modified_ms":0}],
+  "executable_name":"Captures Native","bundle_id"?:string,"executable_path"?:string}`
+  returns retained prior-session evidence as `unclean_exit`,
+  `has_exception_evidence`, optional `rust_panic`, optional `os_report`, and
+  `previous_session_started_ms`. Swift supplies only regular `.ips`/`.crash`
+  candidates from its own DiagnosticReports directory whose filename matches the
+  exact native executable prefix. The shared collector bounds, parses, checks exact
+  executable/bundle/path identity, and locally redacts any accepted summary.
+- `{"op":"crash_dismiss"}` removes retained prior-session evidence only.
+  `{"op":"crash_mark_clean"}` clears only the current session marker/evidence and
+  is called after recording-safe normal quit, restart, or OS termination approval.
+  If a later exit step is cancelled, `{"op":"crash_resume"}` restores that same
+  live-session marker without rotating prior evidence or reinstalling panic hooks.
+  Neither operation sends data. The consent UI sends only the displayed redacted
+  summary through an explicit `feedback_submit` with category `crash`; it never
+  attaches a capture, raw panic, or raw OS report.
 - `{"op":"screenshot","target":TARGET,"cursor":false,"output_dir":"..."}`
   returns an image artifact. `TARGET` is `display`, `region`, `window`, or the
   `frozen_region` target below. A generated `Capture-*.png` is created without

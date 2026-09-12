@@ -81,11 +81,12 @@ These are implemented experiments, not drop-in replacements. In particular:
   crop, and microphone/countdown parity remain incomplete. Recording segment
   assembly still blocks during stop. Hosted D3D fixture captures do not establish
   physical DPI, capture, clipboard, drag, or cross-process click-through behavior.
-  [The accepted Windows run](https://github.com/joswayski/captures/actions/runs/34721633995)
-  passed MSVC build, 40 tests, strict clippy, and 28 light/dark captures with
+  [The accepted Windows run](https://github.com/joswayski/captures/actions/runs/34723107948)
+  passed MSVC build, 45 tests, strict clippy, and 36 light/dark captures with
   hardware drivers and verified full desktop bounds. The imported-image renders
-  contain real rotated translucent raster layers. Subsequent lock/opacity,
-  Preferences, image-inspector and feedback changes still require native CI.
+  contain real rotated translucent raster layers. Preferences and feedback
+  layouts were inspected; image-property values overlap their stepper buttons
+  and need correction. Static fixtures do not verify picker or text input.
   Inspected recording
   fixtures show decoded paused frames, not playback timing or hardware video decode.
 - **macOS:** Swift builds, 11 XCTest tests, normal layouts, and independent real
@@ -94,9 +95,15 @@ These are implemented experiments, not drop-in replacements. In particular:
   holes; the video frame contains only Captures' custom controls. These checks
   do not establish performance or full interaction parity. Capture permissions, microphone/audio,
   session recovery, and physical multi-display behavior still need native use.
-  The next slice adds first-run permission setup, explicit feedback, soft
-  interpolated erase/restore, contiguous/global wand, and a successful-estimate
-  reference. New AppKit pixel tests and these surfaces require native CI.
+  Subsequent slices add first-run permission setup, explicit feedback, soft
+  interpolated erase/restore, contiguous/global wand, snapping/guides, atomic
+  bounded canvas expansion, and local crash review with explicit Send/Dismiss.
+  Restart prepares its helper before clearing the session marker and restores
+  tracking if cleanup fails. Bridge tests reject duplicate crash startup before
+  it mutates session files. New AppKit tests and these surfaces require native
+  CI. The latest app compiled and signed, but the separate test build exposed an
+  onboarding dependency on the excluded app entry point; a shared restart
+  protocol now removes that dependency, pending native verification.
 
 ## Feature parity acceptance
 
@@ -127,8 +134,9 @@ requests. The optional local crash module retains profile-isolated unclean-sessi
 and redacted panic evidence, and summarizes caller-supplied OS reports only after
 native executable identity/timestamp checks. Tests cover a real subprocess panic,
 retention across clean relaunch, path redaction, modern macOS IPS, UTF-16 Windows
-WER and Linux Apport. Platform shutdown integration and review/Send/Dismiss UI
-are required before enabling it; an unclean marker alone is not a proven crash.
+WER and Linux Apport. macOS now integrates shutdown tracking and review/Send/
+Dismiss UI, pending native lifecycle and rendering verification; other platform
+integrations remain ongoing. An unclean marker alone is not a proven crash.
 Native installer/Open With registration,
 signed updater/channel, and production-profile migration are separate rollout
 gates, not satisfied by local command-line routing. Never install a Tauri update

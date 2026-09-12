@@ -32,6 +32,16 @@ struct EditorRect: Codable, Equatable, Hashable {
     var cgRect: CGRect { CGRect(x: x, y: y, width: width, height: height) }
 }
 
+enum EditorAlignmentAxis: Equatable {
+    case horizontal
+    case vertical
+}
+
+struct EditorAlignmentGuide: Equatable {
+    var axis: EditorAlignmentAxis
+    var position: CGFloat
+}
+
 struct EditorColor: Codable, Equatable, Hashable {
     var red: CGFloat
     var green: CGFloat
@@ -197,6 +207,7 @@ enum EditorError: LocalizedError, Equatable {
     case cannotRender
     case unsupportedFormat(String)
     case existingFile
+    case canvasTooLarge
 
     var errorDescription: String? {
         switch self {
@@ -204,6 +215,7 @@ enum EditorError: LocalizedError, Equatable {
         case .cannotRender: return "The edited image could not be rendered."
         case let .unsupportedFormat(format): return "The native editor cannot export \(format)."
         case .existingFile: return "A file already exists at that location."
+        case .canvasTooLarge: return "The canvas cannot exceed 16,384 × 16,384 pixels."
         }
     }
 }
@@ -353,6 +365,78 @@ final class EditorModel: ObservableObject {
         }
     }
 
+    func snapTranslatedFrame(
+        _ proposed: EditorRect, layerID: UUID, threshold: CGFloat
+    ) -> (frame: EditorRect, guides: [EditorAlignmentGuide]) {
+        guard threshold > 0,
+              let moving = document.layers.first(where: { $0.id == layerID }) else {
+            return (proposed, [])
+        }
+        var vertical = [CGFloat(0), CGFloat(document.width)]
+        var horizontal = [CGFloat(0), CGFloat(document.height)]
+        for layer in document.layers where layer.id != layerID && layer.visible {
+            let bounds = worldBounds(of: layer.frame.cgRect, rotation: layer.rotation)
+            vertical.append(contentsOf: [bounds.minX, bounds.maxX])
+            horizontal.append(contentsOf: [bounds.minY, bounds.maxY])
+        }
+        let proposedBounds = worldBounds(of: proposed.cgRect, rotation: moving.rotation)
+        let xHit = closestAlignment(
+            candidates: [proposedBounds.minX, proposedBounds.maxX],
+            lines: vertical, threshold: threshold
+        )
+        let yHit = closestAlignment(
+            candidates: [proposedBounds.minY, proposedBounds.maxY],
+            lines: horizontal, threshold: threshold
+        )
+        let frame = EditorRect(
+            x: proposed.x + (xHit?.delta ?? 0),
+            y: proposed.y + (yHit?.delta ?? 0),
+            width: proposed.width,
+            height: proposed.height
+        )
+        var guides: [EditorAlignmentGuide] = []
+        if let xHit { guides.append(EditorAlignmentGuide(axis: .vertical, position: xHit.line)) }
+        if let yHit { guides.append(EditorAlignmentGuide(axis: .horizontal, position: yHit.line)) }
+        return (frame, guides)
+    }
+
+    private func closestAlignment(
+        candidates: [CGFloat], lines: [CGFloat], threshold: CGFloat
+    ) -> (delta: CGFloat, line: CGFloat)? {
+        var best: (delta: CGFloat, line: CGFloat)?
+        var bestDistance = threshold + 0.0001
+        for candidate in candidates {
+            for line in lines {
+                let delta = line - candidate
+                let distance = abs(delta)
+                if distance < bestDistance {
+                    bestDistance = distance
+                    best = (delta, line)
+                }
+            }
+        }
+        return best
+    }
+
+    private func worldBounds(of frame: CGRect, rotation: CGFloat) -> CGRect {
+        guard rotation != 0 else { return frame }
+        let center = CGPoint(x: frame.midX, y: frame.midY)
+        let cosine = cos(rotation)
+        let sine = sin(rotation)
+        return [
+            CGPoint(x: frame.minX, y: frame.minY), CGPoint(x: frame.maxX, y: frame.minY),
+            CGPoint(x: frame.maxX, y: frame.maxY), CGPoint(x: frame.minX, y: frame.maxY),
+        ].reduce(into: CGRect.null) { bounds, point in
+            let dx = point.x - center.x
+            let dy = point.y - center.y
+            let rotated = CGPoint(
+                x: center.x + dx * cosine - dy * sine,
+                y: center.y + dx * sine + dy * cosine
+            )
+            bounds = bounds.union(CGRect(origin: rotated, size: .zero))
+        }
+    }
+
     func updateSelected(_ body: (inout EditorLayer) -> Void) {
         guard let index = selectedLayerIndex, !document.layers[index].locked else { return }
         mutate { body(&$0.layers[index]) }
@@ -411,6 +495,42 @@ final class EditorModel: ObservableObject {
         mutate {
             $0.width = min(max(width, 1), 16_384)
             $0.height = min(max(height, 1), 16_384)
+        }
+    }
+
+    func canvasExpansion(for layerID: UUID, padding: CGFloat = 0) -> CGRect? {
+        guard let layer = document.layers.first(where: { $0.id == layerID }) else { return nil }
+        let bounds = worldBounds(of: layer.frame.cgRect, rotation: layer.rotation)
+        let shiftX = max(0, ceil(-bounds.minX))
+        let shiftY = max(0, ceil(-bounds.minY))
+        let width = max(
+            CGFloat(document.width) + shiftX,
+            ceil(bounds.maxX + shiftX + max(0, padding))
+        )
+        let height = max(
+            CGFloat(document.height) + shiftY,
+            ceil(bounds.maxY + shiftY + max(0, padding))
+        )
+        guard shiftX > 0 || shiftY > 0
+                || width > CGFloat(document.width) || height > CGFloat(document.height) else { return nil }
+        return CGRect(x: -shiftX, y: -shiftY, width: width, height: height)
+    }
+
+    func expandCanvasToFit(layerID: UUID, padding: CGFloat = 0) throws {
+        guard let expansion = canvasExpansion(for: layerID, padding: padding) else { return }
+        guard expansion.width.isFinite, expansion.height.isFinite,
+              expansion.width <= 16_384, expansion.height <= 16_384 else {
+            throw EditorError.canvasTooLarge
+        }
+        let shiftX = -expansion.minX
+        let shiftY = -expansion.minY
+        mutate {
+            $0.width = max(1, Int(expansion.width))
+            $0.height = max(1, Int(expansion.height))
+            for index in $0.layers.indices {
+                $0.layers[index].frame.x += shiftX
+                $0.layers[index].frame.y += shiftY
+            }
         }
     }
 

@@ -16,13 +16,15 @@ This ledger distinguishes implemented behavior from native-runtime and rollout g
 - Image editor: persisted drafts, crop/resize/trim, text/arrow/line/shape/image
   layers, ordering/visibility/locking, opacity/fill/color, layer shadows, blur,
   free rotation with 15-degree snap, contiguous/global color wand with tolerance,
+  live layer movement with edge snap guides, explicit canvas overflow expansion,
   interpolated hard/soft erase and restore brushes, PNG/JPEG/WebP export and
   transparency-preserving PNG/WebP output.
 - App surfaces: persisted preferences with runtime consumers, history restore/edit/
   trash, mini-preview stacks and disintegration, custom confirmations/popovers/
   toggles, global shortcut registration failures, duplicate shortcut rejection,
   installed Open With declarations and URL import, first-run permission onboarding,
-  and explicit user-initiated feedback on a separate worker lane.
+  explicit user-initiated feedback on a separate worker lane, and profile-scoped
+  local crash evidence with redacted preview and explicit Send/Dismiss consent.
 
 ## Implemented; native CI or hardware evidence still required
 
@@ -30,22 +32,22 @@ This ledger distinguishes implemented behavior from native-runtime and rollout g
 - Open With cold-launch deferral (avoids flashing setup/Preferences before an editor).
 - Feedback SwiftUI interaction and its bridge call. Shared transport is loopback-tested;
   CI must never submit a production fixture.
+- Crash marker lifecycle, exact-identity macOS report selection, redacted consent UI,
+  and clean normal quit/restart behavior. The shared collector is subprocess-tested,
+  but Swift/AppKit lifecycle behavior still requires native CI and physical-Mac checks.
 - Exact 12-cell filmstrip layout and live estimate pending/exact/approximate states.
 - Main runtime focus, nonactivation, click-through, capture exclusion and multi-DPI
   behavior. Static references are layout evidence only; video/dust require compositor capture.
 
 ## Confirmed gaps
 
-- Image editing: alignment snap guides, command/middle-button pan with pointer-anchored
-  zoom, canvas expansion, blend/merge/flatten, and the remaining richer text/default
-  annotation properties.
+- Image editing: command/middle-button pan with pointer-anchored zoom, blend/merge/
+  flatten, and the remaining richer text/default annotation properties.
 - Recording responsiveness: stale estimate results are generation-guarded, but queued
   and running estimates/exports are not cancelled or coalesced. They can still delay Save
   on the serial media queue; this needs an owned cancel protocol matching shipping.
 - Repeated screenshot-hotkey behavior while capture UI is visible is not yet equivalent
   to shipping's intentional recapture/switch-target state machine.
-- A redacted crash collector and explicit crash-report consent are not implemented.
-  Raw panic text must never be submitted as feedback.
 - The post-launch tray pill is not yet implemented. Update checking/notices/install are
   intentionally unavailable because no signed native update channel exists.
 

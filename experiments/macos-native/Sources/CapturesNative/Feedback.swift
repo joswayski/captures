@@ -181,3 +181,110 @@ struct FeedbackView: View {
         HStack { Text(title).foregroundStyle(NativeTheme.muted(scheme)); Spacer(); Text(value).monospacedDigit() }
     }
 }
+
+@MainActor
+private final class CrashDiagnosticsModel: ObservableObject {
+    @Published var status = ""
+    @Published var busy = false
+    @Published var submitted = false
+
+    let summary: String
+    let hasExceptionEvidence: Bool
+
+    init(preview: [String: Any]) {
+        hasExceptionEvidence = preview["has_exception_evidence"] as? Bool ?? false
+        let panicSummary = preview["rust_panic"] as? String
+        let osSummary = preview["os_report"] as? String
+        let evidence = [panicSummary, osSummary].compactMap { $0 }.filter { !$0.isEmpty }
+        summary = evidence.isEmpty
+            ? "The previous Captures session did not close cleanly. No panic or matching macOS exception report was found."
+            : evidence.joined(separator: "\n\n")
+    }
+
+    func send() {
+        guard !busy, !submitted else { return }
+        busy = true
+        status = ""
+        Backend.shared.call("feedback_submit", [
+            "draft": ["category": "crash", "message": summary, "contact": NSNull()],
+            "context": FeedbackModel.context,
+        ]) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                self.submitted = true
+                self.dismiss(sent: true)
+            case .failure(let error):
+                self.busy = false
+                self.status = error.localizedDescription
+            }
+        }
+    }
+
+    func dismiss(sent: Bool = false) {
+        guard !busy || sent else { return }
+        busy = true
+        Backend.shared.call("crash_dismiss") { [weak self] result in
+            guard let self else { return }
+            self.busy = false
+            switch result {
+            case .success:
+                AppStore.shared.closeCrashDiagnostics()
+            case .failure(let error):
+                self.status = sent
+                    ? "Feedback was sent, but retained evidence could not be dismissed: \(error.localizedDescription)"
+                    : error.localizedDescription
+            }
+        }
+    }
+}
+
+struct CrashDiagnosticsView: View {
+    @StateObject private var model: CrashDiagnosticsModel
+    @Environment(\.colorScheme) private var scheme
+
+    init(preview: [String: Any]) {
+        _model = StateObject(wrappedValue: CrashDiagnosticsModel(preview: preview))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: NativeTheme.metric("s-6")) {
+            Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+                .font(.system(size: 24, weight: .semibold))
+                .frame(width: 48, height: 48)
+                .foregroundStyle(Color.black)
+                .background(NativeTheme.accent, in: RoundedRectangle(cornerRadius: NativeTheme.metric("r-lg")))
+            VStack(alignment: .leading, spacing: NativeTheme.metric("s-2")) {
+                Text("CAPTURES").font(.caption.weight(.bold)).tracking(1.2)
+                    .foregroundStyle(NativeTheme.muted(scheme))
+                Text(model.hasExceptionEvidence ? "Captures closed unexpectedly" : "Captures did not close cleanly")
+                    .font(.system(size: NativeTheme.metric("text-2xl"), weight: .bold))
+                Text("Review the local, redacted summary below. Nothing is sent unless you choose Send report; captures and raw diagnostic files are never attached.")
+                    .foregroundStyle(NativeTheme.muted(scheme)).fixedSize(horizontal: false, vertical: true)
+            }
+            ScrollView {
+                Text(model.summary)
+                    .font(.system(.callout, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(NativeTheme.metric("s-5"))
+            }
+            .background(NativeTheme.field(scheme), in: RoundedRectangle(cornerRadius: NativeTheme.metric("r-md")))
+            .overlay(RoundedRectangle(cornerRadius: NativeTheme.metric("r-md")).stroke(NativeTheme.border(scheme)))
+            if !model.status.isEmpty {
+                Text(model.status).font(.callout).foregroundStyle(NativeTheme.signal)
+            }
+            HStack {
+                Button("Dismiss") { model.dismiss() }
+                    .buttonStyle(CaptureButtonStyle()).disabled(model.busy)
+                Spacer()
+                Button(model.busy && !model.submitted ? "Sending…" : "Send report") { model.send() }
+                    .buttonStyle(CaptureButtonStyle(primary: true))
+                    .disabled(model.busy || model.submitted)
+            }
+        }
+        .padding(NativeTheme.metric("s-8"))
+        .foregroundStyle(NativeTheme.text(scheme))
+        .background(NativeTheme.canvas(scheme))
+    }
+}

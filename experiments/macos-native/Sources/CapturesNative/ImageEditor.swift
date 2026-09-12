@@ -92,6 +92,7 @@ private struct ImageEditorSurface: View {
     @State private var cropRect: CGRect?
     @State private var dragOrigin: CGPoint?
     @State private var dragLayerFrame: EditorRect?
+    @State private var alignmentGuides: [EditorAlignmentGuide] = []
     @State private var resizeLayerFrame: EditorRect?
     @State private var rotatingLayer = false
     @State private var exportFormat: String
@@ -117,12 +118,14 @@ private struct ImageEditorSurface: View {
         artifact: Artifact,
         model: EditorModel,
         initialTool: ImageEditorTool = .select,
-        shapeFlyoutOpen: Bool = false
+        shapeFlyoutOpen: Bool = false,
+        initialAlignmentGuides: [EditorAlignmentGuide] = []
     ) {
         self.artifact = artifact
         self.model = model
         _tool = State(initialValue: initialTool)
         _shapeFlyoutOpen = State(initialValue: shapeFlyoutOpen)
+        _alignmentGuides = State(initialValue: initialAlignmentGuides)
         let sourceExtension = artifact.url.pathExtension.lowercased()
         let sourceFormat = sourceExtension == "jpg" ? "jpeg" : sourceExtension
         let canReplaceSource = ["png", "jpeg", "webp"].contains(sourceFormat)
@@ -203,6 +206,13 @@ private struct ImageEditorSurface: View {
                 Button { perform { try model.trimTransparentEdges() } } label: {
                     Label("Trim edges", systemImage: "arrow.down.right.and.arrow.up.left")
                 }.buttonStyle(CaptureButtonStyle())
+                if let layerID = model.selectedLayerID,
+                   model.canvasExpansion(for: layerID) != nil {
+                    Button { perform { try model.expandCanvasToFit(layerID: layerID) } } label: {
+                        Label("Expand canvas", systemImage: "arrow.up.left.and.arrow.down.right")
+                    }
+                    .buttonStyle(CaptureButtonStyle(primary: true))
+                }
                 CaptureChoice(title: "Background color", selection: backgroundSelection, options: [
                     CaptureOption(label: "Transparent", value: "transparent"),
                     CaptureOption(label: "White", value: "white"),
@@ -378,6 +388,7 @@ private struct ImageEditorSurface: View {
                 ZStack {
                     checkerboard
                     renderedCanvas
+                    alignmentGuideOverlay
                     selectionOverlay
                     cropOverlay
                     if !draftPoints.isEmpty { freehandPreview }
@@ -433,6 +444,23 @@ private struct ImageEditorSurface: View {
         }
     }
 
+    private var alignmentGuideOverlay: some View {
+        ZStack {
+            ForEach(Array(alignmentGuides.enumerated()), id: \.offset) { _, guide in
+                if guide.axis == .vertical {
+                    Rectangle().fill(NativeTheme.accent)
+                        .frame(width: 1, height: CGFloat(model.document.height) * zoom)
+                        .position(x: guide.position * zoom, y: CGFloat(model.document.height) * zoom / 2)
+                } else {
+                    Rectangle().fill(NativeTheme.accent)
+                        .frame(width: CGFloat(model.document.width) * zoom, height: 1)
+                        .position(x: CGFloat(model.document.width) * zoom / 2, y: guide.position * zoom)
+                }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
     @ViewBuilder private var cropOverlay: some View {
         if tool == .crop, let cropRect {
             Rectangle()
@@ -470,7 +498,24 @@ private struct ImageEditorSurface: View {
                     if dragOrigin == nil {
                         selectLayer(at: start)
                         dragOrigin = start
-                        if let index = model.selectedLayerIndex { dragLayerFrame = model.document.layers[index].frame }
+                        if let index = model.selectedLayerIndex {
+                            dragLayerFrame = model.document.layers[index].frame
+                            if !model.document.layers[index].locked { model.beginInteractiveEdit() }
+                        }
+                    }
+                    if let origin = dragOrigin, let initial = dragLayerFrame,
+                       let index = model.selectedLayerIndex, !model.document.layers[index].locked {
+                        let delta = CGSize(width: point.x - origin.x, height: point.y - origin.y)
+                        let proposed = EditorRect(
+                            x: initial.x + delta.width, y: initial.y + delta.height,
+                            width: initial.width, height: initial.height
+                        )
+                        let snapped = model.snapTranslatedFrame(
+                            proposed, layerID: model.document.layers[index].id,
+                            threshold: 10 / max(0.01, zoom)
+                        )
+                        alignmentGuides = snapped.guides
+                        model.updateSelectedLive { $0.frame = snapped.frame }
                     }
                 case .crop:
                     cropStart = cropStart ?? start
@@ -502,11 +547,8 @@ private struct ImageEditorSurface: View {
                 let start = CGPoint(x: value.startLocation.x / zoom, y: value.startLocation.y / zoom)
                 switch tool {
                 case .select:
-                    if let origin = dragOrigin, let initial = dragLayerFrame, let index = model.selectedLayerIndex,
-                       !model.document.layers[index].locked {
-                        let delta = CGSize(width: point.x - origin.x, height: point.y - origin.y)
-                        model.updateSelected { $0.frame = EditorRect(x: initial.x + delta.width, y: initial.y + delta.height, width: initial.width, height: initial.height) }
-                    }
+                    model.endInteractiveEdit()
+                    alignmentGuides = []
                 case .crop:
                     cropRect = boundedRect(from: cropStart ?? start, to: point)
                     cropStart = nil
@@ -1396,6 +1438,18 @@ func imageEditorReferenceView(artifact: Artifact, state: String) -> AnyView {
         case "properties":
             model.addShape(.rectangle, at: CGPoint(x: 320, y: 220))
             return AnyView(ImageEditorSurface(artifact: artifact, model: model))
+        case "overflow":
+            model.addShape(.rectangle, at: CGPoint(x: 900, y: 210))
+            return AnyView(ImageEditorSurface(artifact: artifact, model: model))
+        case "snap-guides":
+            model.addShape(.rectangle, at: CGPoint(x: 390, y: 200))
+            return AnyView(ImageEditorSurface(
+                artifact: artifact, model: model,
+                initialAlignmentGuides: [
+                    EditorAlignmentGuide(axis: .vertical, position: 480),
+                    EditorAlignmentGuide(axis: .horizontal, position: 270),
+                ]
+            ))
         case "erase":
             return AnyView(ImageEditorSurface(artifact: artifact, model: model, initialTool: .erase))
         case "wand":

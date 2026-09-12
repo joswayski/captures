@@ -2,6 +2,11 @@ import AppKit
 import SwiftUI
 
 @MainActor
+protocol ApplicationRestarting: AnyObject {
+    func requestRestart()
+}
+
+@MainActor
 final class OnboardingModel: ObservableObject {
     @Published var screenGranted = false
     @Published var microphoneStatus = "unknown"
@@ -183,7 +188,7 @@ struct OnboardingView: View {
     }
 
     private func restart() {
-        guard let delegate = NSApp.delegate as? AppDelegate else {
+        guard let delegate = NSApp.delegate as? ApplicationRestarting else {
             model.error = "Couldn’t restart Captures. Quit and reopen it to finish granting access."
             return
         }
