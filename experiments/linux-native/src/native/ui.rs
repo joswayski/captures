@@ -425,7 +425,7 @@ pub fn token(name: &str) -> String {
 }
 
 pub fn color(name: &str) -> gdk::RGBA {
-    gdk::RGBA::parse(&token(name)).unwrap_or(gdk::RGBA::BLACK)
+    gdk::RGBA::parse(token(name)).unwrap_or(gdk::RGBA::BLACK)
 }
 
 pub fn install_theme_custom(dark: bool, theme: &str, accent: &str, signal: &str) {
@@ -480,8 +480,9 @@ pub fn icon(name: &str, size: i32) -> gtk::DrawingArea {
         let color = area.style_context().color();
         let scale = area.scale_factor();
         let mut cache = cache.borrow_mut();
-        if cache.as_ref().is_none_or(|(c, s, _)| *c != color || *s != scale) {
-            if let Some(body) = icons::body(&name) {
+        if cache.as_ref().is_none_or(|(c, s, _)| *c != color || *s != scale)
+            && let Some(body) = icons::body(&name)
+        {
                 let color_css = format!("rgb({},{},{})", (f64::from(color.red()) * 255.).round(), (f64::from(color.green()) * 255.).round(), (f64::from(color.blue()) * 255.).round());
                 let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{pixels}" height="{pixels}" viewBox="0 0 24 24" fill="none" stroke="{color_css}" color="{color_css}" opacity="{alpha}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">{body}</svg>"#, pixels=size*scale, alpha=f64::from(color.alpha()));
                 let loader = gtk::gdk_pixbuf::PixbufLoader::with_type("svg").expect("GTK SVG loader");
@@ -489,7 +490,6 @@ pub fn icon(name: &str, size: i32) -> gtk::DrawingArea {
                     && let Some(pixbuf) = loader.pixbuf() {
                     *cache = Some((color, scale, pixbuf));
                 }
-            }
         }
         if let Some((_, _, pixbuf)) = cache.as_ref() {
             let _ = cr.save();

@@ -178,7 +178,7 @@ The expanded app's automated checks use a disposable X11 desktop, compositor,
 AT-SPI, and a test-only ScreenSaver DBus authority; the app itself still executes
 the real fail-closed session checks. Never run that fixture in your personal DBus
 session. `openbox`, `xcompmgr`, `python3-dbus`, `python3-gi`, `python3-pyatspi`,
-`xdotool`, `xvfb`, and `xauth` are included in orb setup; ImageMagick and FFmpeg are
+`xdotool`, `x11-utils`, `xvfb`, and `xauth` are included in orb setup; ImageMagick and FFmpeg are
 also required. Use `/usr/bin/python3` so it finds Debian's GI/AT-SPI modules.
 The lab extracts the neutral SVG from the React harness's `sampleCapture` and
 renders it through GdkPixbuf's SVG loader. Keep `apps/desktop/ui/src/dev/previewBackend.ts`
@@ -187,7 +187,7 @@ controls is used as the test image.
 
 ```sh
 # In an orb, keep the isolated desktop supervised:
-amp orb service start captures-native-lab --command 'dbus-run-session -- xvfb-run -a -s "-screen 0 1280x800x24" /usr/bin/python3 experiments/native-ui/native_desktop.py /tmp/captures-native-lab'
+amp orb service start captures-native-lab --command 'dbus-run-session -- xvfb-run -a -s "-screen 0 1600x1000x24" /usr/bin/python3 experiments/native-ui/native_desktop.py /tmp/captures-native-lab'
 /usr/bin/python3 experiments/native-ui/native_check.py \
   --lab /tmp/captures-native-lab --artifacts .amp/in/artifacts/linux-native-parity
 

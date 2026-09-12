@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod async_state;
 pub mod editor;
 #[path = "../../native-ui/src/native/editor/encoder.rs"]
 pub mod encoder;

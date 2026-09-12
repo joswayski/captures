@@ -178,23 +178,39 @@ enum RenderReferences {
     }
 
     private static func hasSharedFixtureFeature(_ bitmap: NSBitmapImageRep) -> Bool {
-        // The shared source fixture contains a large pale-warm moon. Requiring
-        // that signature prevents editor chrome alone from passing when the
-        // intended image or AVPlayer presentation layer is absent.
+        // The AVPlayer compositor presents the source darker than its decoded
+        // RGB values (the fixture moon is about 247/230/184 before presentation
+        // and 129/123/101 in the CI window capture). Match its relative warm
+        // chroma rather than the source luminance, and independently require a
+        // substantial population from the blue scene. Neutral editor chrome,
+        // the yellow accent, and an empty/black player cannot satisfy both.
+        let minimumX = bitmap.pixelsWide * 15 / 100
+        let maximumX = bitmap.pixelsWide * 85 / 100
+        // Keep this vertical crop symmetric because NSBitmapImageRep and image
+        // inspection tools need not expose the same row origin.
+        let minimumY = bitmap.pixelsHigh * 10 / 100
+        let maximumY = bitmap.pixelsHigh * 90 / 100
         var warmPixels = 0
-        for y in stride(from: 0, to: bitmap.pixelsHigh, by: 2) {
-            for x in stride(from: 0, to: bitmap.pixelsWide, by: 2) {
+        var bluePixels = 0
+        for y in stride(from: minimumY, to: maximumY, by: 2) {
+            for x in stride(from: minimumX, to: maximumX, by: 2) {
                 guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                if color.redComponent > 0.72,
-                   color.greenComponent > 0.62,
-                   color.blueComponent > 0.45,
-                   color.redComponent - color.greenComponent < 0.16,
-                   color.greenComponent - color.blueComponent > 0.08 {
+                if color.alphaComponent > 0.08,
+                   color.redComponent > 0.42,
+                   color.greenComponent > 0.38,
+                   color.blueComponent > 0.30,
+                   color.redComponent - color.greenComponent < 0.09,
+                   color.greenComponent - color.blueComponent > 0.045 {
                     warmPixels += 1
-                    if warmPixels >= 80 { return true }
+                }
+                if color.alphaComponent > 0.08,
+                   color.blueComponent > 0.18,
+                   color.blueComponent - color.redComponent > 0.05,
+                   color.blueComponent - color.greenComponent > 0.015 {
+                    bluePixels += 1
                 }
             }
         }
-        return false
+        return warmPixels >= 80 && bluePixels >= 500
     }
 }

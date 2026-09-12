@@ -50,6 +50,8 @@ pub struct RecordingUi {
 pub struct RecordingEditorState {
     pub source: PathBuf,
     pub duration_ms: u64,
+    pub width: u32,
+    pub height: u32,
     pub position_ms: u64,
     pub trim_start_ms: u64,
     pub trim_end_ms: u64,
@@ -63,13 +65,21 @@ pub struct RecordingEditorState {
 }
 
 impl RecordingEditorState {
-    pub fn new(source: PathBuf, duration_ms: u64, has_audio: bool) -> Result<Self, &'static str> {
-        if duration_ms == 0 {
+    pub fn new(
+        source: PathBuf,
+        duration_ms: u64,
+        width: u32,
+        height: u32,
+        has_audio: bool,
+    ) -> Result<Self, &'static str> {
+        if duration_ms == 0 || width == 0 || height == 0 {
             return Err("recording duration is unavailable");
         }
         Ok(Self {
             source,
             duration_ms,
+            width,
+            height,
             position_ms: 0,
             trim_start_ms: 0,
             trim_end_ms: duration_ms,
@@ -102,6 +112,9 @@ impl RecordingEditorState {
     }
 
     pub fn toggle_playback(&mut self, now: Instant) {
+        if !self.playing && self.position_ms >= self.trim_end_ms {
+            self.position_ms = self.trim_start_ms;
+        }
         self.playing = !self.playing;
         self.clock = self.playing.then_some((now, self.position_ms));
     }
@@ -352,7 +365,8 @@ mod tests {
 
     #[test]
     fn recording_editor_trim_and_seek_remain_inside_asymmetric_range() {
-        let mut editor = RecordingEditorState::new("source.mp4".into(), 9_123, true).unwrap();
+        let mut editor =
+            RecordingEditorState::new("source.mp4".into(), 9_123, 1280, 720, true).unwrap();
         editor.set_trim_start(2_345);
         editor.set_trim_end(7_654);
         editor.seek(100);

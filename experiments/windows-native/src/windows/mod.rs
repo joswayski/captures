@@ -1,23 +1,23 @@
+mod media_worker;
 mod renderer;
 
 use captures_capture::{CaptureMode, DisplayDescriptor, XcapBackend};
-use captures_media::{
-    AudioEdit, CancelToken, EditSpec, ExportFormat, ExportSpec, MediaToolchain, QualityPreset,
-    extrapolate_sampled_size,
-};
+use captures_media::{AudioEdit, EditSpec, ExportFormat, ExportSpec, QualityPreset};
 use captures_recording::{
     AudioOptions, GifOptions, RecordingKind, RecordingOptions, RecordingSegmentInfo,
     RecordingState, RecordingTarget,
 };
 use captures_recording_xcap::XcapRecordingSegment;
 use captures_windows_native::{
-    geometry::{Point, Rect, SelectionDrag, rounded_contains, update_selection},
+    editor::FreehandGesture,
+    geometry::{Point, Rect, SelectionDrag, contain, rounded_contains, update_selection},
     history::{Artifact, History, move_to_trash, restore_from_trash, safe_delete},
     settings::{Settings, data_dir, profile_id},
     state::{AppState, RecordingEditorState, RecordingUi, Surface},
     theme::{palette, theme_colors},
 };
 use image::RgbaImage;
+use media_worker::{ComparisonSpec, Event as MediaEvent, ExportJob, MediaWorker, PlaybackSpec};
 use renderer::{Frame, Renderer};
 use std::os::windows::ffi::OsStrExt;
 use std::{
@@ -121,6 +121,7 @@ struct App {
     recording: Option<RecordingSession>,
     recording_mode: CaptureMode,
     editor_drag: Option<Point>,
+    editor_freehand: Option<FreehandGesture>,
     editor_text_origin: Option<Point>,
     editor_text: String,
     next_session_check: Instant,
@@ -131,8 +132,12 @@ struct App {
     instance_mutex: HANDLE,
     delete_return: Surface,
     start_hidden: bool,
-    last_video_frame_ms: u64,
     fixture_mode: bool,
+    media: MediaWorker,
+    media_epoch: u64,
+    frame_request: u64,
+    comparison_request: u64,
+    export_request: u64,
 }
 
 pub fn run() -> Result<(), String> {
@@ -205,6 +210,7 @@ pub fn run() -> Result<(), String> {
             recording: None,
             recording_mode: CaptureMode::Region,
             editor_drag: None,
+            editor_freehand: None,
             editor_text_origin: None,
             editor_text: String::new(),
             next_session_check: Instant::now(),
@@ -215,8 +221,12 @@ pub fn run() -> Result<(), String> {
             instance_mutex,
             delete_return: Surface::Menu,
             start_hidden: std::env::args().any(|argument| argument == "--background"),
-            last_video_frame_ms: u64::MAX,
             fixture_mode: requested_view.is_some(),
+            media: MediaWorker::new(),
+            media_epoch: 0,
+            frame_request: 0,
+            comparison_request: 0,
+            export_request: 0,
         });
         let raw = Box::into_raw(app);
         let _hwnd = CreateWindowExW(
@@ -378,6 +388,7 @@ unsafe extern "system" fn wndproc(
                 let had_previews = !app.state.previews.is_empty();
                 app.state.tick(now);
                 app.tick_recording_editor(now);
+                app.process_media_events();
                 if had_previews
                     && app.state.previews.is_empty()
                     && app.state.surface == Surface::Preview
@@ -398,6 +409,8 @@ unsafe extern "system" fn wndproc(
                 LRESULT(0)
             }
             WM_CLOSE => {
+                app.media.cancel_jobs();
+                app.media_epoch = app.media_epoch.wrapping_add(1);
                 let _ = ShowWindow(hwnd, SW_HIDE);
                 LRESULT(0)
             }
@@ -448,7 +461,7 @@ impl App {
                     .as_ref()
                     .and_then(|recording| recording.source.clone())
             {
-                self.open_recording_editor(source)?;
+                self.open_recording_editor(source);
             }
             let (surface, width, height) = match self.state.surface {
                 Surface::ScreenshotEditor => (Surface::ScreenshotEditor, 1100, 720),
@@ -507,6 +520,14 @@ impl App {
         no_activate: bool,
     ) {
         unsafe {
+            if self.state.surface == Surface::RecordingEditor && surface != Surface::RecordingEditor
+            {
+                self.media.cancel_jobs();
+                self.media_epoch = self.media_epoch.wrapping_add(1);
+                if let Some(editor) = self.state.recording_editor.as_mut() {
+                    editor.playing = false;
+                }
+            }
             self.state.surface = surface;
             let mut extended = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) as u32;
             if matches!(surface, Surface::Preview | Surface::RecordingHud) {
@@ -731,6 +752,14 @@ impl App {
 
     unsafe fn pointer_move(&mut self, p: Point) {
         unsafe {
+            if self.state.surface == Surface::ScreenshotEditor
+                && let Some(source) = self.editor_source_point(p)
+                && let Some(gesture) = self.editor_freehand.as_mut()
+            {
+                gesture.sample(source);
+                let _ = InvalidateRect(Some(self.hwnd), None, false);
+                return;
+            }
             let hovered_window = self.state.hit_window(p);
             if let Some(overlay) = &mut self.state.overlay {
                 match overlay.mode {
@@ -834,12 +863,8 @@ impl App {
                         Err(error) => self.set_error(error.to_string()),
                     }
                 } else {
-                    match self.open_recording_editor(artifact.path) {
-                        Ok(()) => unsafe {
-                            self.show_surface(Surface::RecordingEditor, 1000, 680, false)
-                        },
-                        Err(error) => self.set_error(error),
-                    }
+                    self.open_recording_editor(artifact.path);
+                    unsafe { self.show_surface(Surface::RecordingEditor, 1000, 680, false) };
                 }
             }
             Some(1) if artifact.is_trashed() => {
@@ -954,6 +979,8 @@ impl App {
                     "Type annotation text and press Enter".into(),
                     Instant::now(),
                 ));
+            } else if self.state.editor_tool == captures_windows_native::editor::Tool::Pen {
+                self.editor_freehand = Some(FreehandGesture::begin(source));
             } else {
                 self.editor_drag = Some(source);
             }
@@ -961,6 +988,22 @@ impl App {
     }
 
     unsafe fn editor_pointer_up(&mut self, p: Point) {
+        if let Some(gesture) = self.editor_freehand.take() {
+            let Some(end) = self.editor_source_point(p) else {
+                return;
+            };
+            if let Some(document) = self.state.editor.as_mut() {
+                self.state.selected_layer = Some(document.add(
+                    captures_windows_native::editor::Shape::Stroke(gesture.finish(end)),
+                    self.state.editor_color,
+                    3.0,
+                ));
+            }
+            unsafe {
+                let _ = InvalidateRect(Some(self.hwnd), None, false);
+            }
+            return;
+        }
         let Some(start) = self.editor_drag.take() else {
             return;
         };
@@ -986,9 +1029,6 @@ impl App {
             }
             captures_windows_native::editor::Tool::Ellipse => {
                 captures_windows_native::editor::Shape::Ellipse(Rect::from_points(start, end))
-            }
-            captures_windows_native::editor::Tool::Pen => {
-                captures_windows_native::editor::Shape::Stroke(vec![start, end])
             }
             captures_windows_native::editor::Tool::Triangle => {
                 captures_windows_native::editor::Shape::Polygon(polygon_points(
@@ -1035,12 +1075,18 @@ impl App {
         let document = self.state.editor.as_ref()?;
         let width = self.width as f32 * 96.0 / self.dpi;
         let height = self.height as f32 * 96.0 / self.dpi;
-        let viewport = Rect {
-            x: 76.0,
-            y: 80.0,
-            width: width - 300.0,
-            height: height - 130.0,
-        };
+        let viewport = contain(
+            (
+                document.crop.width.max(1.0).round() as u32,
+                document.crop.height.max(1.0).round() as u32,
+            ),
+            Rect {
+                x: 76.0,
+                y: 80.0,
+                width: width - 300.0,
+                height: height - 130.0,
+            },
+        );
         if !viewport.contains(point) {
             return None;
         }
@@ -1057,6 +1103,7 @@ impl App {
             return;
         };
         let mut rebuild_comparison = false;
+        let mut playback_changed = false;
         if point.y < 58.0 && point.x > width - 120.0 {
             self.export_recording_editor();
             return;
@@ -1097,15 +1144,14 @@ impl App {
                 editor.set_trim_end(at);
             } else if point.x < 88.0 {
                 editor.toggle_playback(Instant::now());
+                playback_changed = true;
             } else {
                 editor.seek(at);
-                self.last_video_frame_ms = u64::MAX;
+                playback_changed = true;
             }
         }
-        if self.last_video_frame_ms == u64::MAX
-            && let Err(error) = self.refresh_recording_frame()
-        {
-            self.set_error(error);
+        if playback_changed {
+            self.restart_playback_worker();
         }
         if rebuild_comparison && let Err(error) = self.build_compression_comparison() {
             self.set_error(error);
@@ -1115,178 +1161,289 @@ impl App {
         }
     }
 
-    fn open_recording_editor(&mut self, source: PathBuf) -> Result<(), String> {
-        let tools = MediaToolchain::from_command_names();
-        tools.verify().map_err(|error| error.to_string())?;
-        let probe = tools.probe(&source).map_err(|error| error.to_string())?;
-        let duration_ms = probe.metadata.duration_ms.unwrap_or(0);
-        self.state.recording_editor = Some(
-            RecordingEditorState::new(source, duration_ms, probe.has_audio)
-                .map_err(str::to_owned)?,
-        );
-        self.last_video_frame_ms = u64::MAX;
-        self.refresh_recording_frame()?;
-        self.build_compression_comparison()?;
-        Ok(())
+    fn open_recording_editor(&mut self, source: PathBuf) {
+        self.media.cancel_jobs();
+        self.media_epoch = self.media_epoch.wrapping_add(1);
+        self.frame_request = 0;
+        self.comparison_request = 0;
+        self.export_request = 0;
+        self.state.recording_editor = None;
+        self.state.recording_preview = None;
+        self.state.status = Some(("Opening recording…".into(), Instant::now()));
+        self.media.probe(self.media_epoch, source);
     }
 
     fn tick_recording_editor(&mut self, now: Instant) {
-        let should_refresh =
-            self.state
-                .recording_editor
-                .as_mut()
-                .is_some_and(|editor| editor.tick(now))
-                && self.state.recording_editor.as_ref().is_some_and(|editor| {
-                    editor.position_ms.abs_diff(self.last_video_frame_ms) >= 100
-                });
-        if should_refresh {
-            if let Err(error) = self.refresh_recording_frame() {
-                self.set_error(error);
-                if let Some(editor) = self.state.recording_editor.as_mut() {
-                    editor.playing = false;
-                }
-            }
+        let changed = self
+            .state
+            .recording_editor
+            .as_mut()
+            .is_some_and(|editor| editor.tick(now));
+        if changed {
             unsafe {
                 let _ = InvalidateRect(Some(self.hwnd), None, false);
             }
         }
     }
 
-    fn refresh_recording_frame(&mut self) -> Result<(), String> {
-        let editor = self
-            .state
-            .recording_editor
-            .as_ref()
-            .ok_or("recording editor is unavailable")?;
-        let at_ms = editor.position_ms.min(editor.duration_ms.saturating_sub(1));
-        let output = data_dir().join(format!("playback-frame-{}.png", uuid::Uuid::new_v4()));
-        let result = MediaToolchain::from_command_names()
-            .extract_frame(&editor.source, at_ms, &output, &CancelToken::default())
-            .map_err(|error| error.to_string())
-            .and_then(|()| image::open(&output).map_err(|error| error.to_string()));
-        let _ = fs::remove_file(&output);
-        self.state.recording_preview = Some(result?.to_rgba8());
-        self.last_video_frame_ms = at_ms;
-        Ok(())
+    fn restart_playback_worker(&mut self) {
+        let Some(editor) = self.state.recording_editor.as_ref() else {
+            return;
+        };
+        self.frame_request = self.frame_request.wrapping_add(1);
+        if editor.playing {
+            self.media.play(PlaybackSpec {
+                epoch: self.media_epoch,
+                request: self.frame_request,
+                source: editor.source.clone(),
+                start_ms: editor.position_ms,
+                end_ms: editor.trim_end_ms,
+                width: editor.width,
+                height: editor.height,
+            });
+        } else {
+            self.media.cancel_playback();
+            self.media.still(
+                self.media_epoch,
+                self.frame_request,
+                editor.source.clone(),
+                editor.position_ms.min(editor.duration_ms.saturating_sub(1)),
+            );
+        }
+    }
+
+    fn process_media_events(&mut self) {
+        while let Some(event) = self.media.try_recv() {
+            match event {
+                MediaEvent::Probe {
+                    epoch,
+                    source,
+                    result,
+                } if epoch == self.media_epoch => match result {
+                    Ok(probe) => {
+                        let result = RecordingEditorState::new(
+                            source,
+                            probe.metadata.duration_ms.unwrap_or(0),
+                            probe.metadata.width,
+                            probe.metadata.height,
+                            probe.has_audio,
+                        );
+                        match result {
+                            Ok(editor) => {
+                                self.state.recording_editor = Some(editor);
+                                self.state.status = None;
+                                self.restart_playback_worker();
+                            }
+                            Err(error) => self.set_error(error),
+                        }
+                    }
+                    Err(error) => self.set_error(error),
+                },
+                MediaEvent::Frame {
+                    epoch,
+                    request,
+                    result,
+                } if captures_windows_native::async_state::accepts(
+                    self.media_epoch,
+                    self.frame_request,
+                    epoch,
+                    request,
+                ) =>
+                {
+                    match result {
+                        Ok(image) => {
+                            self.state.recording_preview = Some(image);
+                            if self.comparison_request == 0 {
+                                let _ = self.build_compression_comparison();
+                            }
+                            unsafe {
+                                let _ = InvalidateRect(Some(self.hwnd), None, false);
+                            }
+                        }
+                        Err(error) => self.set_error(error),
+                    }
+                }
+                MediaEvent::Comparison {
+                    epoch,
+                    request,
+                    result,
+                } if epoch == self.media_epoch && request == self.comparison_request => {
+                    match result {
+                        Ok((image, estimated)) => {
+                            self.state.recording_preview = Some(image);
+                            if let Some(editor) = self.state.recording_editor.as_mut() {
+                                editor.comparison_estimated_bytes = Some(estimated);
+                            }
+                            self.state.status = None;
+                        }
+                        Err(error) if error.contains("cancelled") => {}
+                        Err(error) => self.set_error(error),
+                    }
+                    unsafe {
+                        let _ = InvalidateRect(Some(self.hwnd), None, false);
+                    }
+                }
+                MediaEvent::Export {
+                    epoch,
+                    request,
+                    source,
+                    destination,
+                    save_as_new,
+                    result,
+                } if epoch == self.media_epoch && request == self.export_request => {
+                    self.finish_editor_export(source, destination, save_as_new, result);
+                }
+                MediaEvent::Export { destination, .. } => {
+                    let _ = fs::remove_file(destination);
+                }
+                _ => {}
+            }
+        }
     }
 
     fn export_recording_editor(&mut self) {
+        self.media.cancel_playback();
+        if let Some(editor) = self.state.recording_editor.as_mut() {
+            editor.playing = false;
+        }
         let Some(editor) = self.state.recording_editor.clone() else {
             return;
         };
-        editor_export(self, &editor);
-    }
-
-    fn build_compression_comparison(&mut self) -> Result<(), String> {
-        let editor = self
-            .state
-            .recording_editor
-            .clone()
-            .ok_or("recording editor is unavailable")?;
-        let sample_start = editor
-            .position_ms
-            .saturating_sub(500)
-            .max(editor.trim_start_ms);
-        let sample_end = (sample_start + 1_000).min(editor.trim_end_ms);
-        let sample_duration = sample_end.saturating_sub(sample_start);
-        if sample_duration == 0 {
-            return Err("compression comparison range is empty".into());
-        }
-        let extension = if editor
+        let extension = editor
             .source
             .extension()
             .and_then(|value| value.to_str())
-            .is_some_and(|value| value.eq_ignore_ascii_case("gif"))
-        {
-            "gif"
+            .unwrap_or("mp4")
+            .to_ascii_lowercase();
+        let format = if extension == "gif" {
+            ExportFormat::Gif
         } else {
-            "mp4"
+            ExportFormat::Mp4
         };
-        let sample = data_dir().join(format!("compare-{}.{}", uuid::Uuid::new_v4(), extension));
-        let after_path = data_dir().join(format!("compare-after-{}.png", uuid::Uuid::new_v4()));
-        let tools = MediaToolchain::from_command_names();
-        let result: Result<(RgbaImage, u64), String> = (|| {
-            let edit = EditSpec {
-                trim_start_ms: sample_start,
-                trim_end_ms: Some(sample_end),
+        let destination = unique_path(
+            &self.settings.output_directory,
+            if editor.save_as_new {
+                "Recording edit"
+            } else {
+                ".Captures replacement"
+            },
+            &extension,
+        );
+        self.export_request = self.export_request.wrapping_add(1);
+        self.state.status = Some(("Exporting recording…".into(), Instant::now()));
+        self.media.export(ExportJob {
+            epoch: self.media_epoch,
+            request: self.export_request,
+            source: editor.source,
+            destination,
+            save_as_new: editor.save_as_new,
+            edit: EditSpec {
+                trim_start_ms: editor.trim_start_ms,
+                trim_end_ms: Some(editor.trim_end_ms),
                 audio: AudioEdit {
                     source_has_system_audio: editor.has_audio,
                     ..Default::default()
                 },
                 ..Default::default()
-            };
-            let format = if extension == "gif" {
-                ExportFormat::Gif
-            } else {
-                ExportFormat::Mp4
-            };
-            let outcome = tools
-                .export(
-                    &editor.source,
-                    &sample,
-                    &edit,
-                    &ExportSpec {
-                        format,
-                        quality: editor.quality,
-                        max_size_bytes: None,
-                        frames_per_second: Some(if format == ExportFormat::Gif {
-                            self.settings.recording.gif_fps
-                        } else {
-                            self.settings.recording.video_fps
-                        }),
-                        gif_max_colors: (format == ExportFormat::Gif)
-                            .then_some(self.settings.recording.gif_max_colors),
-                    },
-                    &CancelToken::default(),
-                    |_| {},
-                )
-                .map_err(|error| error.to_string())?;
-            tools
-                .extract_frame(
-                    &sample,
-                    editor.position_ms.saturating_sub(sample_start),
-                    &after_path,
-                    &CancelToken::default(),
-                )
-                .map_err(|error| error.to_string())?;
-            let before = self
-                .state
-                .recording_preview
-                .as_ref()
-                .ok_or("original comparison frame is unavailable")?;
-            let mut after = image::open(&after_path)
-                .map_err(|error| error.to_string())?
-                .to_rgba8();
-            if after.dimensions() != before.dimensions() {
-                after = image::imageops::resize(
-                    &after,
-                    before.width(),
-                    before.height(),
-                    image::imageops::FilterType::Triangle,
-                );
-            }
-            let mut comparison = before.clone();
-            let split = comparison.width() / 2;
-            for y in 0..comparison.height() {
-                for x in split..comparison.width() {
-                    comparison.put_pixel(x, y, *after.get_pixel(x, y));
-                }
-            }
-            let estimated = extrapolate_sampled_size(
-                outcome.size_bytes,
-                sample_duration,
-                editor.trim_end_ms.saturating_sub(editor.trim_start_ms),
-            );
-            Ok((comparison, estimated))
-        })();
-        let _ = fs::remove_file(sample);
-        let _ = fs::remove_file(after_path);
-        let (comparison, estimated) = result?;
-        self.state.recording_preview = Some(comparison);
+            },
+            export: ExportSpec {
+                format,
+                quality: editor.quality,
+                max_size_bytes: None,
+                frames_per_second: Some(if format == ExportFormat::Gif {
+                    self.settings.recording.gif_fps
+                } else {
+                    self.settings.recording.video_fps
+                }),
+                gif_max_colors: (format == ExportFormat::Gif)
+                    .then_some(self.settings.recording.gif_max_colors),
+            },
+        });
+    }
+
+    fn build_compression_comparison(&mut self) -> Result<(), String> {
+        self.media.cancel_playback();
         if let Some(editor) = self.state.recording_editor.as_mut() {
-            editor.comparison_estimated_bytes = Some(estimated);
+            editor.playing = false;
         }
+        let editor = self
+            .state
+            .recording_editor
+            .clone()
+            .ok_or("recording editor is unavailable")?;
+        let before = self
+            .state
+            .recording_preview
+            .clone()
+            .ok_or("original comparison frame is unavailable")?;
+        if let Some(editor) = self.state.recording_editor.as_mut() {
+            editor.comparison_estimated_bytes = None;
+        }
+        self.comparison_request = self.comparison_request.wrapping_add(1);
+        self.state.status = Some(("Building compression comparison…".into(), Instant::now()));
+        let gif = editor
+            .source
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("gif"));
+        self.media.compare(ComparisonSpec {
+            epoch: self.media_epoch,
+            request: self.comparison_request,
+            source: editor.source,
+            before,
+            position_ms: editor.position_ms,
+            trim_start_ms: editor.trim_start_ms,
+            trim_end_ms: editor.trim_end_ms,
+            quality: editor.quality,
+            has_audio: editor.has_audio,
+            frames_per_second: if gif {
+                self.settings.recording.gif_fps
+            } else {
+                self.settings.recording.video_fps
+            },
+            gif_max_colors: self.settings.recording.gif_max_colors,
+        });
         Ok(())
+    }
+
+    fn finish_editor_export(
+        &mut self,
+        source: PathBuf,
+        destination: PathBuf,
+        save_as_new: bool,
+        result: Result<captures_media::ExportOutcome, String>,
+    ) {
+        let result = result.and_then(|outcome| {
+            if save_as_new {
+                let editor = self
+                    .state
+                    .recording_editor
+                    .as_ref()
+                    .ok_or("recording editor closed during export")?;
+                self.history.add(Artifact::from_path(
+                    outcome.path,
+                    editor.width,
+                    editor.height,
+                ))?;
+                Ok("Exported as a new recording".to_owned())
+            } else {
+                replace_file_safely(&destination, &source)?;
+                Ok("Updated the original recording".to_owned())
+            }
+        });
+        match result {
+            Ok(message) => self.state.status = Some((message, Instant::now())),
+            Err(error) if error.contains("cancelled") => {
+                let _ = fs::remove_file(destination);
+            }
+            Err(error) => {
+                let _ = fs::remove_file(destination);
+                self.set_error(error);
+            }
+        }
+        unsafe {
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
+        }
     }
     unsafe fn key(&mut self, key: u32) {
         unsafe {
@@ -1334,6 +1491,13 @@ impl App {
                     if let Some(preview) = self.state.previews.first_mut() {
                         preview.dismissing = Some(Instant::now());
                     }
+                } else if self.state.surface == Surface::RecordingEditor {
+                    self.media.cancel_jobs();
+                    self.media_epoch = self.media_epoch.wrapping_add(1);
+                    if let Some(editor) = self.state.recording_editor.as_mut() {
+                        editor.playing = false;
+                    }
+                    let _ = ShowWindow(self.hwnd, SW_HIDE);
                 } else {
                     let _ = ShowWindow(self.hwnd, SW_HIDE);
                 }
@@ -1809,16 +1973,9 @@ impl App {
                     );
                     let _ = self.history.add(artifact.clone());
                     if self.settings.recording.open_editor_after_recording {
-                        match self.open_recording_editor(artifact.path) {
-                            Ok(()) => {
-                                self.state.surface = Surface::RecordingEditor;
-                                self.show_surface(Surface::RecordingEditor, 1000, 680, false)
-                            }
-                            Err(error) => {
-                                self.set_error(error);
-                                self.show_surface(Surface::Menu, 420, 430, false)
-                            }
-                        }
+                        self.open_recording_editor(artifact.path);
+                        self.state.surface = Surface::RecordingEditor;
+                        self.show_surface(Surface::RecordingEditor, 1000, 680, false)
                     } else {
                         self.show_surface(Surface::Menu, 420, 430, false)
                     }
@@ -2072,86 +2229,6 @@ fn set_autostart(enabled: bool) -> Result<(), String> {
         } else {
             Err(format!("cannot update autostart: OS error {}", status.0))
         }
-    }
-}
-
-fn editor_export(app: &mut App, editor: &RecordingEditorState) {
-    let extension = editor
-        .source
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("mp4")
-        .to_ascii_lowercase();
-    let format = if extension == "gif" {
-        ExportFormat::Gif
-    } else {
-        ExportFormat::Mp4
-    };
-    let edit = EditSpec {
-        trim_start_ms: editor.trim_start_ms,
-        trim_end_ms: Some(editor.trim_end_ms),
-        audio: AudioEdit {
-            source_has_system_audio: editor.has_audio,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let spec = ExportSpec {
-        format,
-        quality: editor.quality,
-        max_size_bytes: None,
-        frames_per_second: Some(if format == ExportFormat::Gif {
-            app.settings.recording.gif_fps
-        } else {
-            app.settings.recording.video_fps
-        }),
-        gif_max_colors: (format == ExportFormat::Gif)
-            .then_some(app.settings.recording.gif_max_colors),
-    };
-    let destination = unique_path(
-        &app.settings.output_directory,
-        if editor.save_as_new {
-            "Recording edit"
-        } else {
-            ".Captures replacement"
-        },
-        &extension,
-    );
-    let result = MediaToolchain::from_command_names()
-        .export(
-            &editor.source,
-            &destination,
-            &edit,
-            &spec,
-            &CancelToken::default(),
-            |_| {},
-        )
-        .map_err(|error| error.to_string())
-        .and_then(|outcome| {
-            if editor.save_as_new {
-                let probe = MediaToolchain::from_command_names()
-                    .probe(&outcome.path)
-                    .map_err(|error| error.to_string())?;
-                app.history.add(Artifact::from_path(
-                    outcome.path,
-                    probe.metadata.width,
-                    probe.metadata.height,
-                ))?;
-                Ok("Exported as a new recording".to_owned())
-            } else {
-                replace_file_safely(&destination, &editor.source)?;
-                Ok("Updated the original recording".to_owned())
-            }
-        });
-    match result {
-        Ok(message) => app.state.status = Some((message, Instant::now())),
-        Err(error) => {
-            let _ = fs::remove_file(destination);
-            app.set_error(error);
-        }
-    }
-    unsafe {
-        let _ = InvalidateRect(Some(app.hwnd), None, false);
     }
 }
 

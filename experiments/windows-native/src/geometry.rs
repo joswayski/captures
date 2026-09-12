@@ -137,6 +137,19 @@ pub fn cover(source: (u32, u32), destination: Rect) -> Rect {
     }
 }
 
+pub fn contain(source: (u32, u32), destination: Rect) -> Rect {
+    let scale = (destination.width / source.0.max(1) as f32)
+        .min(destination.height / source.1.max(1) as f32);
+    let width = source.0 as f32 * scale;
+    let height = source.1 as f32 * scale;
+    Rect {
+        x: destination.x + (destination.width - width) / 2.0,
+        y: destination.y + (destination.height - height) / 2.0,
+        width,
+        height,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,6 +226,27 @@ mod tests {
                 y: 20.0,
                 width: 200.0,
                 height: 100.0
+            }
+        );
+    }
+
+    #[test]
+    fn contain_letterboxes_wide_image_without_distortion() {
+        assert_eq!(
+            contain(
+                (400, 200),
+                Rect {
+                    x: 10.0,
+                    y: 20.0,
+                    width: 100.0,
+                    height: 100.0,
+                }
+            ),
+            Rect {
+                x: 10.0,
+                y: 45.0,
+                width: 100.0,
+                height: 50.0,
             }
         );
     }

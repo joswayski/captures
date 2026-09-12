@@ -1,9 +1,11 @@
 # Captures Windows native experiment
 
 This standalone crate presents Captures with Win32 windows and custom Direct2D/DirectWrite chrome.
-It initializes a hardware D3D11 device and DirectComposition visual tree for every app instance; no
-webview, GTK, stock menu, or stock confirmation dialog is used. It reuses the repository capture,
-session, recording, and media crates. Data is isolated under
+It initializes a D3D11 device and DirectComposition visual tree for every app instance, preferring
+the hardware driver and falling back to WARP when hardware creation is unavailable. The selected
+driver is written to `render-driver.txt` in the profile data directory. No webview, GTK, stock menu,
+or stock confirmation dialog is used. It reuses the repository capture, session, recording, and
+media crates. Data is isolated under
 `%LOCALAPPDATA%\Captures Windows Native Experiment` (override with
 `CAPTURES_WINDOWS_NATIVE_DATA`).
 
@@ -35,13 +37,17 @@ Rust backends. The screenshot editor supports source-coordinate shapes, selectio
 delete, Segoe UI text entry, editable hex color, rectangle/ellipse/triangle/diamond/star shapes,
 raster export, and copy; moving/resizing/rotating selected shapes and richer fill controls remain.
 The recording editor probes real media, decodes playback frames, seeks, trims, chooses quality,
-exports through `captures-media`, and can either preserve the source or safely replace it. Its first
-correctness path launches FFmpeg for CPU-decoded PNG frames and presents those frames through D2D;
-it is **not** hardware-accelerated video presentation. Playback audio, non-blocking export,
-and split/crop controls remain unavailable and are labeled as such. Opening the editor and changing
-its custom quality dropdown automatically encode a one-second sample and show a real split-frame
-before/after comparison plus an extrapolated size estimate. Any performance measurement must include
-FFmpeg child-process CPU and memory.
+exports through `captures-media`, and can either preserve the source or safely replace it. Probe,
+paused-frame extraction, compression comparison, and export run outside the Win32 message thread.
+Playback uses one long-lived FFmpeg child per play/seek interval to CPU-decode raw RGBA frames for
+D2D presentation; it is **not** hardware-accelerated video presentation. Leaving the editor and
+superseding frame/comparison/export work cancel active workers, while request generations prevent
+stale results from changing the current editor. The shared probe API is asynchronous here but does
+not yet expose child-process cancellation. Playback audio and split/video-crop controls remain
+unavailable and are labeled as such. Opening the editor and changing its custom quality dropdown
+automatically encode a one-second sample and show a real split-frame before/after comparison plus an
+extrapolated size estimate. Any performance measurement must include FFmpeg child-process CPU and
+memory.
 
 Preview input uses a combined rounded Win32 window region, with `HTTRANSPARENT` only supplemental;
 cross-process click-through still requires runtime verification on Windows hardware.

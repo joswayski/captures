@@ -16,7 +16,7 @@ import subprocess
 import tempfile
 import time
 
-from benchmark import process_tree, resources, stop
+from process_metrics import process_tree, resources, stop
 
 
 def main():

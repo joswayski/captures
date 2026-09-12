@@ -11,7 +11,7 @@ import time
 
 import pyatspi
 
-from benchmark import stop
+from process_metrics import stop
 from native_check import click, cmd, find, wait
 
 

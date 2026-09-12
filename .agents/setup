@@ -41,6 +41,7 @@ packages=(
   python3-dbus
   python3-gi
   python3-pyatspi
+  x11-utils
   xauth
   xcompmgr
   xdotool

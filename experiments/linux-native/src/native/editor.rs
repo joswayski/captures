@@ -19,6 +19,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     rc::Rc,
+    time::{Duration, Instant},
 };
 
 #[derive(Clone, Copy, PartialEq)]
@@ -86,6 +87,13 @@ struct State {
     tool: Tool,
     gesture: Option<Gesture>,
     preview: Option<Layer>,
+    comparison: Option<RgbaImage>,
+    comparison_split: f64,
+    comparison_generation: u64,
+    comparison_dirty: bool,
+    comparison_requested_at: Option<Instant>,
+    comparison_open: bool,
+    closed: bool,
     zoom: f64,
     color: Color,
     stroke: f64,
@@ -162,9 +170,37 @@ fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 fn changed(s: &mut State) {
     s.dirty = true;
+    if s.comparison_open {
+        request_comparison(s);
+    }
     if let Err(e) = write_draft(s) {
         eprintln!("Editor draft: {e}")
     }
+}
+
+fn request_comparison(state: &mut State) {
+    state.comparison_generation = state.comparison_generation.wrapping_add(1);
+    state.comparison_dirty = state.comparison_open;
+    state.comparison_requested_at = state.comparison_open.then(Instant::now);
+    state.comparison = None;
+}
+
+fn comparison_debounce_elapsed(state: &State, now: Instant) -> bool {
+    state.comparison_requested_at.is_none_or(|requested| {
+        now.saturating_duration_since(requested) >= Duration::from_millis(150)
+    })
+}
+
+fn apply_comparison_result(
+    state: &mut State,
+    generation: u64,
+    result: Result<RgbaImage, String>,
+) -> bool {
+    if state.closed || !state.comparison_open || state.comparison_generation != generation {
+        return false;
+    }
+    state.comparison = result.ok();
+    true
 }
 fn checkpoint(s: &mut State) {
     s.undo.push(s.doc.clone());
@@ -200,6 +236,38 @@ fn color(c: gdk::RGBA) -> Color {
         f64::from(c.blue()),
         f64::from(c.alpha()),
     )
+}
+
+fn color_hex(color: Color) -> String {
+    format!(
+        "#{:02X}{:02X}{:02X}",
+        (color.0.clamp(0., 1.) * 255.).round() as u8,
+        (color.1.clamp(0., 1.) * 255.).round() as u8,
+        (color.2.clamp(0., 1.) * 255.).round() as u8,
+    )
+}
+
+fn parse_hex_color(value: &str) -> Option<Color> {
+    let value = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    if value.len() != 6 {
+        return None;
+    }
+    let value = u32::from_str_radix(value, 16).ok()?;
+    Some(Color(
+        f64::from((value >> 16) as u8) / 255.,
+        f64::from((value >> 8) as u8) / 255.,
+        f64::from(value as u8) / 255.,
+        1.,
+    ))
+}
+
+fn fit_zoom(scroll: &gtk::ScrolledWindow, state: &State) -> f64 {
+    let allocation = scroll.allocation();
+    // Matches .canvas-viewport's 32px padding on every edge.
+    ((f64::from(allocation.width()) - 64.) / f64::from(state.doc.width))
+        .min((f64::from(allocation.height()) - 64.) / f64::from(state.doc.height))
+        .clamp(0.05, 8.)
+        * 100.
 }
 fn button(text: &str, tip: &str) -> gtk::Button {
     let b = ui::button(text);
@@ -267,6 +335,13 @@ fn open_impl(
         tool: Tool::Select,
         gesture: None,
         preview: None,
+        comparison: None,
+        comparison_split: 0.5,
+        comparison_generation: 0,
+        comparison_dirty: false,
+        comparison_requested_at: None,
+        comparison_open: false,
+        closed: false,
         zoom: 1.,
         color: color(ui::color("signal")),
         stroke: 4.,
@@ -298,6 +373,7 @@ fn open_impl(
     area.set_halign(gtk::Align::Center);
     area.set_valign(gtk::Align::Center);
     area.set_tooltip_text(Some("Screenshot editing canvas"));
+    ui::named(&area, "Screenshot editing canvas");
     let layers = gtk::Box::new(gtk::Orientation::Vertical, 4);
     layers.set_halign(gtk::Align::Fill);
     layers.set_hexpand(true);
@@ -331,6 +407,74 @@ fn open_impl(
     trim.set_label("Trim edges");
     trim.style_context().add_class("canvas-tool");
     canvas_toolbar.pack_start(&trim, false, false, 0);
+    let background_button = gtk::MenuButton::new();
+    background_button.set_tooltip_text(Some("Canvas background color"));
+    background_button.style_context().add_class("canvas-tool");
+    background_button
+        .style_context()
+        .add_class("canvas-background");
+    ui::named(&background_button, "Background color");
+    let background_button_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let background_swatch = gtk::DrawingArea::new();
+    background_swatch.set_size_request(14, 14);
+    background_swatch
+        .style_context()
+        .add_class("canvas-background-swatch");
+    background_swatch.set_draw_func({
+        let state = state.clone();
+        move |_, context, width, height| {
+            if let Some(background) = state.borrow().doc.background {
+                context.set_source_rgb(background.0, background.1, background.2);
+                let _ = context.paint();
+            } else {
+                for y in 0..2 {
+                    for x in 0..2 {
+                        let value = if (x + y) % 2 == 0 { 0.82 } else { 0.68 };
+                        context.set_source_rgb(value, value, value);
+                        context.rectangle(
+                            f64::from(x * width / 2),
+                            f64::from(y * height / 2),
+                            f64::from(width / 2),
+                            f64::from(height / 2),
+                        );
+                        let _ = context.fill();
+                    }
+                }
+            }
+        }
+    });
+    background_button_content.append(&background_swatch);
+    background_button_content.append(&gtk::Label::new(Some("Background color")));
+    background_button_content.append(&ui::icon("chevron-down", 12));
+    background_button.set_child(Some(&background_button_content));
+    let background_popover = gtk::Popover::new();
+    let background_panel = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    background_panel
+        .style_context()
+        .add_class("canvas-background-panel");
+    let background_toggle_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let background_toggle = gtk::Switch::new();
+    background_toggle.set_active(state.borrow().doc.background.is_some());
+    ui::named(&background_toggle, "Solid background");
+    background_toggle_row.append(&background_toggle);
+    background_toggle_row.append(&gtk::Label::new(Some("Solid background")));
+    background_panel.append(&background_toggle_row);
+    let background_hex = gtk::Entry::new();
+    background_hex.set_width_chars(8);
+    background_hex.set_max_length(7);
+    background_hex.set_text(
+        &state
+            .borrow()
+            .doc
+            .background
+            .map(color_hex)
+            .unwrap_or_else(|| "#F7F7F5".into()),
+    );
+    ui::named(&background_hex, "Canvas background hex value");
+    background_panel.append(&background_hex);
+    background_popover.set_child(Some(&background_panel));
+    background_button.set_popover(Some(&background_popover));
+    canvas_toolbar.pack_start(&background_button, false, false, 0);
     header.pack_start(&canvas_toolbar, false, false, 0);
 
     let header_spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -588,7 +732,6 @@ fn open_impl(
     maximum_unit.set_active(Some(1));
     maximum_unit.set_tooltip_text(Some("Maximum file size unit"));
     maximum_unit.set_visible(false);
-    let compare = button("Compare", "Preview compression before exporting");
     let export_settings = gtk::Box::new(gtk::Orientation::Horizontal, 16);
     export_settings.style_context().add_class("export-settings");
     let output_size = gtk::ComboBoxText::new();
@@ -605,10 +748,86 @@ fn open_impl(
     let maximum_field = field_label("Maximum file size", &maximum);
     maximum_field.set_visible(false);
     export_settings.pack_start(&maximum_field, false, false, 0);
+    let comparison = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0., 100., 1.);
+    comparison.set_value(50.);
+    comparison.set_draw_value(false);
+    comparison.set_size_request(150, -1);
+    comparison.set_tooltip_text(Some("Before on the left, compressed preview on the right"));
+    ui::named(&comparison, "Compression comparison slider");
+    let comparison_column = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    comparison_column.append(&comparison);
+    let comparison_labels = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    comparison_labels.append(&ui::label("Before", "muted"));
+    let comparison_spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    comparison_spacer.set_hexpand(true);
+    comparison_labels.append(&comparison_spacer);
+    comparison_labels.append(&ui::label("After", "muted"));
+    comparison_column.append(&comparison_labels);
+    export_settings.pack_start(
+        &field_label("Compression preview", &comparison_column),
+        true,
+        true,
+        0,
+    );
     let settings_revealer = gtk::Revealer::new();
     settings_revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
     settings_revealer.add(&export_settings);
     footer.pack_start(&settings_revealer, false, false, 0);
+    let update_comparison: Rc<dyn Fn()> = {
+        let state = state.clone();
+        let area = area.clone();
+        Rc::new(move || {
+            request_comparison(&mut state.borrow_mut());
+            area.queue_draw();
+        })
+    };
+    glib::timeout_add_local(std::time::Duration::from_millis(150), {
+        let state = state.clone();
+        let area = area.clone();
+        let format = format.clone();
+        let quality_mode = quality_mode.clone();
+        let quality = quality.clone();
+        let maximum_size = maximum_size.clone();
+        let maximum_unit = maximum_unit.clone();
+        move || {
+            let (generation, document) = {
+                let mut state = state.borrow_mut();
+                if state.closed {
+                    return glib::ControlFlow::Break;
+                }
+                if !state.comparison_open || !state.comparison_dirty {
+                    return glib::ControlFlow::Continue;
+                }
+                if !comparison_debounce_elapsed(&state, Instant::now()) {
+                    return glib::ControlFlow::Continue;
+                }
+                state.comparison_dirty = false;
+                state.comparison_requested_at = None;
+                (state.comparison_generation, state.doc.clone())
+            };
+            let format = format
+                .active_text()
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "PNG".into());
+            let quality = selected_quality(&quality_mode, &quality, &maximum_size, &maximum_unit);
+            let state = state.clone();
+            let area = area.clone();
+            ui::job(
+                move || {
+                    let bytes = encode_output(&document, &format, quality)?;
+                    image::load_from_memory(&bytes)
+                        .map(|image| image.to_rgba8())
+                        .map_err(|error| error.to_string())
+                },
+                move |result| {
+                    if apply_comparison_result(&mut state.borrow_mut(), generation, result) {
+                        area.queue_draw();
+                    }
+                },
+            );
+            glib::ControlFlow::Continue
+        }
+    });
 
     let save_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     save_row.style_context().add_class("editor-save-row");
@@ -674,12 +893,16 @@ fn open_impl(
     status.pack_start(&status_notice, false, false, 0);
     status.pack_start(&save_hint, false, false, 0);
     save_row.pack_start(&status, true, true, 0);
-    let make_copy = gtk::CheckButton::with_label("Save as new file");
+    let make_copy = gtk::Switch::new();
     make_copy.set_active(state.borrow().source.is_none());
     make_copy.set_sensitive(state.borrow().source.is_some());
-    make_copy.style_context().add_class("make-copy");
-    make_copy.set_valign(gtk::Align::End);
-    save_row.pack_start(&make_copy, false, false, 0);
+    ui::named(&make_copy, "Save as new file");
+    let make_copy_row = gtk::Box::new(gtk::Orientation::Horizontal, 7);
+    make_copy_row.style_context().add_class("make-copy");
+    make_copy_row.set_valign(gtk::Align::End);
+    make_copy_row.append(&make_copy);
+    make_copy_row.append(&gtk::Label::new(Some("Save as new file")));
+    save_row.pack_start(&make_copy_row, false, false, 0);
     let save = icon_button("Save", "save");
     save.set_label("Save");
     save.style_context().add_class("primary");
@@ -699,6 +922,50 @@ fn open_impl(
     }
     {
         let s = state.clone();
+        let area = area.clone();
+        let swatch = background_swatch.clone();
+        let refresh_cb = refresh_cb.clone();
+        let hex = background_hex.clone();
+        background_toggle.connect_active_notify(move |toggle| {
+            let mut state = s.borrow_mut();
+            checkpoint(&mut state);
+            state.doc.background = if toggle.is_active() {
+                parse_hex_color(&hex.text()).or(Some(Color(0.969, 0.969, 0.961, 1.)))
+            } else {
+                None
+            };
+            changed(&mut state);
+            drop(state);
+            swatch.queue_draw();
+            refresh(&refresh_cb, &area);
+        });
+    }
+    {
+        let s = state.clone();
+        let area = area.clone();
+        let swatch = background_swatch.clone();
+        let refresh_cb = refresh_cb.clone();
+        let toggle = background_toggle.clone();
+        background_hex.connect_activate(move |entry| {
+            let Some(value) = parse_hex_color(&entry.text()) else {
+                entry.style_context().add_class("error");
+                return;
+            };
+            entry.style_context().remove_class("error");
+            if !toggle.is_active() {
+                toggle.set_active(true);
+            } else {
+                let mut state = s.borrow_mut();
+                checkpoint(&mut state);
+                state.doc.background = Some(value);
+                changed(&mut state);
+            }
+            swatch.queue_draw();
+            refresh(&refresh_cb, &area);
+        });
+    }
+    {
+        let s = state.clone();
         let a = area.clone();
         let r = refresh_cb.clone();
         redo_b.connect_clicked(move |_| {
@@ -706,10 +973,20 @@ fn open_impl(
             refresh(&r, &a)
         });
     }
+    let fit_mode = Rc::new(Cell::new(true));
+    let updating_fit = Rc::new(Cell::new(false));
     {
         let s = state.clone();
         let a = area.clone();
         let zl = zoom_label.clone();
+        let fit_mode = fit_mode.clone();
+        let updating_fit = updating_fit.clone();
+        zoom.connect_change_value(move |_, _, _| {
+            if !updating_fit.get() {
+                fit_mode.set(false);
+            }
+            glib::Propagation::Proceed
+        });
         zoom.connect_value_changed(move |z| {
             s.borrow_mut().zoom = z.value() / 100.;
             zl.set_text(&format!("{:.0}%", z.value()));
@@ -718,30 +995,64 @@ fn open_impl(
     }
     for (b, factor) in [(zoom_out.clone(), 0.8), (zoom_in.clone(), 1.25)] {
         let z = zoom.clone();
-        b.connect_clicked(move |_| z.set_value((z.value() * factor).clamp(5., 800.)));
+        let fit_mode = fit_mode.clone();
+        b.connect_clicked(move |_| {
+            fit_mode.set(false);
+            z.set_value((z.value() * factor).clamp(5., 800.));
+        });
     }
     {
         let z = zoom.clone();
         let s = state.clone();
         let scroll = scroll.clone();
+        let fit_mode = fit_mode.clone();
+        let updating_fit = updating_fit.clone();
         fit.connect_clicked(move |_| {
-            let value = {
-                let state = s.borrow();
-                let alloc = scroll.allocation();
-                ((alloc.width() as f64 - 48.) / state.doc.width as f64)
-                    .min((alloc.height() as f64 - 48.) / state.doc.height as f64)
-                    .clamp(0.05, 8.)
-                    * 100.
-            };
-            z.set_value(value)
+            fit_mode.set(true);
+            updating_fit.set(true);
+            let value = fit_zoom(&scroll, &s.borrow());
+            z.set_value(value);
+            updating_fit.set(false);
         });
     }
+    scroll.connect_size_allocate({
+        let zoom = zoom.clone();
+        let state = state.clone();
+        let fit_mode = fit_mode.clone();
+        let updating_fit = updating_fit.clone();
+        move |scroll, _| {
+            if fit_mode.get() {
+                updating_fit.set(true);
+                let value = fit_zoom(scroll, &state.borrow());
+                zoom.set_value(value);
+                updating_fit.set(false);
+            }
+        }
+    });
     {
         let q = quality_field.clone();
         let maximum = maximum_field.clone();
+        let update = update_comparison.clone();
         quality_mode.connect_changed(move |m| {
             q.set_visible(m.active() == Some(1));
             maximum.set_visible(m.active() == Some(2));
+            update();
+        });
+    }
+    for control in [&format, &quality, &maximum_unit] {
+        let update = update_comparison.clone();
+        control.connect_changed(move |_| update());
+    }
+    {
+        let update = update_comparison.clone();
+        maximum_size.connect_value_changed(move |_| update());
+    }
+    {
+        let state = state.clone();
+        let area = area.clone();
+        comparison.connect_value_changed(move |slider| {
+            state.borrow_mut().comparison_split = slider.value() / 100.;
+            area.queue_draw();
         });
     }
     for (dimension, width) in [(canvas_width, true), (canvas_height, false)] {
@@ -768,23 +1079,6 @@ fn open_impl(
             changed(&mut state);
             drop(state);
             refresh(&r, &a);
-        });
-    }
-    {
-        let s = state.clone();
-        let w = window.clone();
-        let fmt = format.clone();
-        let qm = quality_mode.clone();
-        let q = quality.clone();
-        let maximum_size = maximum_size.clone();
-        let maximum_unit = maximum_unit.clone();
-        compare.connect_clicked(move |_| {
-            let format = fmt
-                .active_text()
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "PNG".into());
-            let quality = selected_quality(&qm, &q, &maximum_size, &maximum_unit);
-            compression_comparison(&w, &s.borrow().doc, &format, quality);
         });
     }
     for add_image in [add_image, add_images] {
@@ -823,12 +1117,21 @@ fn open_impl(
     }
     {
         let revealer = settings_revealer.clone();
-        let compare = compare.clone();
+        let state = state.clone();
+        let area = area.clone();
+        let update = update_comparison.clone();
         disclosure.connect_clicked(move |_| {
             let opening = !revealer.reveals_child();
             revealer.set_reveal_child(opening);
             if opening {
-                compare.clicked();
+                state.borrow_mut().comparison_open = true;
+                update();
+            } else {
+                let mut state = state.borrow_mut();
+                state.comparison_open = false;
+                request_comparison(&mut state);
+                state.comparison_dirty = false;
+                area.queue_draw();
             }
         });
     }
@@ -874,8 +1177,12 @@ fn open_impl(
     {
         let s = state.clone();
         window.connect_close_request(move |_| {
-            if s.borrow().dirty {
-                let _ = write_draft(&s.borrow());
+            let mut state = s.borrow_mut();
+            state.closed = true;
+            request_comparison(&mut state);
+            state.comparison_dirty = false;
+            if state.dirty {
+                let _ = write_draft(&state);
             }
             glib::Propagation::Proceed
         });
@@ -920,6 +1227,11 @@ fn install_editor_css() {
 .editor-window .canvas-toolbar spinbutton button { min-width: 14px; min-height: 13px; padding: 0; }
 .editor-window .canvas-toolbar .toolbar-split { min-height: 16px; margin: 6px 3px; }
 .editor-window .canvas-toolbar .canvas-tool { min-width: 0; min-height: 26px; padding: 0 8px; font-size: 12px; }
+.editor-window .canvas-toolbar .canvas-background { margin-left: 2px; }
+.editor-window .canvas-background-swatch { border: 1px solid @captures_border_strong; border-radius: 3px; background: #f7f7f5; }
+.editor-window .canvas-background-panel { min-width: 220px; padding: 12px; }
+.editor-window .canvas-background-panel entry { min-height: 32px; font-family: monospace; }
+.editor-window .canvas-background-panel entry.error { border-color: @captures_signal; }
 .editor-window .zoom-group { min-height: 34px; border: 1px solid @captures_border; border-radius: 9px; background: @captures_sunken; }
 .editor-window .zoom-group button { min-width: 30px; min-height: 32px; border-radius: 0; border-right: 1px solid @captures_border; }
 .editor-window .zoom-group scale { min-width: 76px; padding: 0 8px; }
@@ -966,8 +1278,9 @@ fn install_editor_css() {
 .editor-window .filename-row { min-height: 34px; border: 1px solid @captures_border; border-radius: 7px; background: @captures_surface; }
 .editor-window .filename-row entry { min-height: 34px; padding: 0 10px; border: 0; background: transparent; }
 .editor-window .filename-row combobox button { min-height: 34px; border: 0; border-left: 1px solid @captures_border; border-radius: 0; background: transparent; }
-.editor-window .secondary-action { min-width: 84px; min-height: 34px; padding: 0 12px; border: 1px solid @captures_border; border-radius: 7px; background: @captures_surface; }
+.editor-window .secondary-action { min-width: 84px; min-height: 36px; padding: 0 12px; border: 1px solid @captures_border; border-radius: 7px; background: @captures_surface; }
 .editor-window .make-copy { min-height: 36px; font-size: 11px; color: @captures_text_muted; }
+.editor-window .make-copy switch { min-width: 28px; min-height: 16px; }
 .editor-window .editor-footer button.primary { min-width: 82px; min-height: 36px; padding: 0 12px; border: 0; border-radius: 7px; color: @captures_accent_ink; background: @captures_accent; font-weight: 600; }
 .editor-window .editor-footer button.primary:hover { background: @captures_accent_hover; }
 .editor-window .secondary-action, .editor-window .editor-header .add-images { color: @captures_text; }
@@ -1029,39 +1342,40 @@ fn setup_canvas(
                 (s.doc.width as f64 * s.zoom) as i32,
                 (s.doc.height as f64 * s.zoom) as i32,
             );
-            let background = ui::color("surface-sunken");
-            c.set_source_rgba(
-                f64::from(background.red()),
-                f64::from(background.green()),
-                f64::from(background.blue()),
-                1.,
-            );
+            let background = s.doc.background.unwrap_or(Color(0.969, 0.969, 0.961, 1.));
+            c.set_source_rgba(background.0, background.1, background.2, 1.);
             let _ = c.paint();
             c.scale(s.zoom, s.zoom);
             c.rectangle(0., 0., s.doc.width as f64, s.doc.height as f64);
             c.clip();
-            let tile = 12.;
-            for y in (0..s.doc.height).step_by(tile as usize) {
-                for x in (0..s.doc.width).step_by(tile as usize) {
-                    let v = if (x / tile as u32 + y / tile as u32).is_multiple_of(2) {
-                        0.82
-                    } else {
-                        0.68
-                    };
-                    c.set_source_rgb(v, v, v);
-                    c.rectangle(x as f64, y as f64, tile, tile);
-                    let _ = c.fill();
-                }
-            }
-            // The export renderer clears to transparency first. On-screen we
-            // keep the checkerboard underneath transparent and erased pixels.
+            // A transparent document uses the shipping editor's light document
+            // surface for display only. Export paint still clears to alpha.
             for layer in &s.doc.layers {
                 let _ = draw_layer(c, layer);
             }
             if let Some(p) = &s.preview {
                 let _ = draw_layer(c, p);
             }
+            if let Some(after) = &s.comparison {
+                let divider = s.doc.width as f64 * s.comparison_split;
+                let _ = c.save();
+                c.rectangle(
+                    divider,
+                    0.,
+                    s.doc.width as f64 - divider,
+                    s.doc.height as f64,
+                );
+                c.clip();
+                source_image(c, after, 0., 0., s.doc.width as f64, s.doc.height as f64);
+                let _ = c.restore();
+                c.set_source_rgba(1., 1., 1., 0.96);
+                c.set_line_width(2. / s.zoom);
+                c.move_to(divider, 0.);
+                c.line_to(divider, s.doc.height as f64);
+                let _ = c.stroke();
+            }
             if s.tool == Tool::Select
+                && s.comparison.is_none()
                 && let Some(l) = s
                     .selected
                     .and_then(|i| s.doc.layers.get(i))
@@ -2218,74 +2532,6 @@ fn encode_output(doc: &Document, format: &str, quality: ExportQuality) -> Result
     }
 }
 
-fn compression_comparison(
-    parent: &gtk::Window,
-    doc: &Document,
-    format: &str,
-    quality: ExportQuality,
-) {
-    let before = match render(doc) {
-        Ok(image) => image,
-        Err(error) => return ui::error(parent, &error),
-    };
-    let bytes = match encode_output(doc, format, quality) {
-        Ok(bytes) => bytes,
-        Err(error) => return ui::error(parent, &error),
-    };
-    let after = match image::load_from_memory(&bytes) {
-        Ok(image) => image.to_rgba8(),
-        Err(error) => return ui::error(parent, &error.to_string()),
-    };
-    let (dialog, content, actions) = ui::panel(parent, "Compression comparison");
-    dialog.set_default_size(860, 500);
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    let images = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    for (title, image) in [("Before", before), ("After", after)] {
-        let column = gtk::Box::new(gtk::Orientation::Vertical, 5);
-        column.pack_start(&ui::label(title, "title"), false, false, 0);
-        let pixbuf = ui::pixbuf(&image);
-        let scale = (390. / image.width() as f64)
-            .min(390. / image.height() as f64)
-            .min(1.);
-        let preview = pixbuf
-            .scale_simple(
-                (image.width() as f64 * scale).max(1.) as i32,
-                (image.height() as f64 * scale).max(1.) as i32,
-                gtk::gdk_pixbuf::InterpType::Bilinear,
-            )
-            .unwrap_or(pixbuf);
-        column.pack_start(&gtk::Image::from_pixbuf(Some(&preview)), true, true, 0);
-        images.pack_start(&column, true, true, 0);
-    }
-    root.pack_start(&images, true, true, 0);
-    let quality_description = match quality {
-        ExportQuality::Preserve => "preserve quality".into(),
-        ExportQuality::Compress(quality) => format!("{quality}% quality"),
-        ExportQuality::Maximum(maximum) => {
-            format!("maximum {} KB", maximum.div_ceil(1024))
-        }
-    };
-    root.pack_start(
-        &ui::label(
-            &format!(
-                "{format} at {quality_description} • estimated export {} KB",
-                bytes.len().div_ceil(1024)
-            ),
-            "muted",
-        ),
-        false,
-        false,
-        0,
-    );
-    content.append(&root);
-    let close = ui::button("Close");
-    close.style_context().add_class("primary");
-    actions.append(&close);
-    let dialog_for_close = dialog.clone();
-    close.connect_clicked(move |_| dialog_for_close.close());
-    dialog.present();
-}
-
 fn save_named(
     directory: &Path,
     requested: &str,
@@ -2327,7 +2573,7 @@ fn save_named(
 #[allow(clippy::too_many_arguments)]
 fn setup_output(
     save: &gtk::Button,
-    make_copy: &gtk::CheckButton,
+    make_copy: &gtk::Switch,
     format: &gtk::ComboBoxText,
     quality_mode: &gtk::ComboBoxText,
     quality: &gtk::ComboBoxText,
@@ -2456,6 +2702,13 @@ mod tests {
             tool: Tool::Select,
             gesture: None,
             preview: None,
+            comparison: None,
+            comparison_split: 0.5,
+            comparison_generation: 0,
+            comparison_dirty: false,
+            comparison_requested_at: None,
+            comparison_open: false,
+            closed: false,
             zoom: 1.,
             color: Color::default(),
             stroke: 4.,
@@ -2486,6 +2739,41 @@ mod tests {
         assert_eq!(state.doc.layers.len(), 1);
         assert_eq!(state.doc.layers[0].id, 1);
         assert_eq!(state.redo.len(), 1);
+
+        state.comparison_open = true;
+        request_comparison(&mut state);
+        let requested = state.comparison_requested_at.unwrap();
+        assert!(!comparison_debounce_elapsed(
+            &state,
+            requested + Duration::from_millis(149)
+        ));
+        assert!(comparison_debounce_elapsed(
+            &state,
+            requested + Duration::from_millis(150)
+        ));
+        let stale = state.comparison_generation;
+        request_comparison(&mut state);
+        let current = state.comparison_generation;
+        let preview = RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 4]));
+        assert!(!apply_comparison_result(
+            &mut state,
+            stale,
+            Ok(preview.clone())
+        ));
+        assert!(state.comparison.is_none());
+        assert!(apply_comparison_result(&mut state, current, Ok(preview)));
+        assert!(state.comparison.is_some());
+
+        changed(&mut state);
+        assert!(state.comparison.is_none());
+        assert!(state.comparison_dirty);
+        let current = state.comparison_generation;
+        state.closed = true;
+        assert!(!apply_comparison_result(
+            &mut state,
+            current,
+            Ok(RgbaImage::new(1, 1))
+        ));
     }
 
     #[test]

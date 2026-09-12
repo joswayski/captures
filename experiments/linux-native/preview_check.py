@@ -314,6 +314,8 @@ def check_delete_animation(binary, images, artifacts, profile):
         else:
             raise AssertionError("FFmpeg did not encode a first frame")
         pointer_click(delete)
+        wait(lambda: find("Delete", role="push button", frame=None))
+        screenshot(artifacts / "after-preview-delete-confirmation.png")
         pointer_click(wait(lambda: find("Delete", role="push button", frame=None)))
         time.sleep(0.38)
         screenshot(artifacts / "after-preview-delete-dust.png")

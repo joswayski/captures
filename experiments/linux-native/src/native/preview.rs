@@ -538,7 +538,7 @@ impl Preview {
                         .and_then(|seat| seat.pointer())
                         .map(|device| device.surface_at_position())
                 {
-                    preview.update_card_hover(x as f64, y as f64);
+                    preview.update_card_hover(x, y);
                 }
                 glib::ControlFlow::Continue
             });
@@ -561,8 +561,11 @@ impl Preview {
                 .pile_hit
                 .clone()
                 .connect_enter_notify_event(move |_, _| {
-                    this.0.state.borrow_mut().hovering = true;
-                    this.animate();
+                    if let Ok(mut state) = this.0.state.try_borrow_mut() {
+                        state.hovering = true;
+                        drop(state);
+                        this.animate();
+                    }
                     glib::Propagation::Proceed
                 });
         }
@@ -572,8 +575,11 @@ impl Preview {
                 .pile_hit
                 .clone()
                 .connect_leave_notify_event(move |_, _| {
-                    this.0.state.borrow_mut().hovering = false;
-                    this.animate();
+                    if let Ok(mut state) = this.0.state.try_borrow_mut() {
+                        state.hovering = false;
+                        drop(state);
+                        this.animate();
+                    }
                     glib::Propagation::Proceed
                 });
         }

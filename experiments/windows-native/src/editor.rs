@@ -33,6 +33,33 @@ pub enum Shape {
     },
 }
 
+pub struct FreehandGesture {
+    points: Vec<Point>,
+}
+
+impl FreehandGesture {
+    pub fn begin(point: Point) -> Self {
+        Self {
+            points: vec![point],
+        }
+    }
+
+    pub fn sample(&mut self, point: Point) {
+        let distinct = self
+            .points
+            .last()
+            .is_none_or(|last| (last.x - point.x).powi(2) + (last.y - point.y).powi(2) >= 0.25);
+        if distinct {
+            self.points.push(point);
+        }
+    }
+
+    pub fn finish(mut self, point: Point) -> Vec<Point> {
+        self.sample(point);
+        self.points
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Layer {
     pub id: u64,
@@ -351,5 +378,17 @@ mod tests {
             document.hit_test(Point { x: 10.0, y: 20.0 }, 2.0),
             Some(visible)
         );
+    }
+
+    #[test]
+    fn freehand_keeps_intermediate_samples_and_drops_pointer_noise() {
+        let mut gesture = FreehandGesture::begin(Point { x: 1.0, y: 2.0 });
+        gesture.sample(Point { x: 1.1, y: 2.1 });
+        gesture.sample(Point { x: 8.0, y: 3.0 });
+        gesture.sample(Point { x: 13.0, y: 9.0 });
+        let points = gesture.finish(Point { x: 20.0, y: 7.0 });
+        assert_eq!(points.len(), 4);
+        assert_eq!(points[1], Point { x: 8.0, y: 3.0 });
+        assert_eq!(points[2], Point { x: 13.0, y: 9.0 });
     }
 }

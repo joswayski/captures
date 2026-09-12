@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import statistics
 import subprocess
 import sys
@@ -28,9 +29,14 @@ def visible(title, pid):
 
 
 def capture_window(window, screenshot, expected):
-    geometry=dict(line.split('=', 1) for line in subprocess.check_output(
-        ['xdotool','getwindowgeometry','--shell',window],text=True).splitlines())
-    actual=tuple(int(geometry[key]) for key in ('WIDTH','HEIGHT'))
+    # xdotool can double-count a reparented client's frame offset. xwininfo's
+    # absolute coordinates identify the actual compositor pixels to capture.
+    info=subprocess.check_output(['xwininfo','-id',window],text=True,
+                                 env=dict(os.environ,LC_ALL='C'))
+    geometry={key:int(re.search(rf'^\s*{label}:\s*(-?\d+)',info,re.MULTILINE).group(1))
+              for key,label in [('X','Absolute upper-left X'),('Y','Absolute upper-left Y'),
+                                ('WIDTH','Width'),('HEIGHT','Height')]}
+    actual=tuple(geometry[key] for key in ('WIDTH','HEIGHT'))
     if actual != expected:
         raise RuntimeError(f'Window viewport is {actual}, expected {expected}')
     # GPU surfaces may not appear in the client's backing pixmap. Read the
@@ -42,7 +48,7 @@ def capture_window(window, screenshot, expected):
         raise RuntimeError('The compositor capture is not a PNG')
     dimensions=tuple(int.from_bytes(header[offset:offset+4], 'big') for offset in (16, 20))
     if dimensions != expected:
-        raise RuntimeError(f'Compositor capture is {dimensions}, expected {expected}')
+        raise RuntimeError(f'Compositor capture is {dimensions}, expected {expected}; client geometry: {geometry}')
     if int(subprocess.check_output(['identify','-format','%k',str(screenshot)],text=True)) <= 1:
         raise RuntimeError('The captured window is a blank, single-color surface')
 
@@ -95,10 +101,10 @@ def trial(binary, implementation, state, lab, artifacts, settle, idle, appearanc
                 # Mapping timing ends above, before this common resize.
                 subprocess.run(['xdotool', 'windowsize', '--sync', window,
                                 *map(str, WINDOW_SIZES[state])], check=True)
-                # Use exact client-area captures, as editor_check.py does.
-                # Otherwise Openbox's border clips a 1280px client by one pixel.
-                subprocess.run(['xdotool', 'set_window', '--overrideredirect', '1', window], check=True)
-                subprocess.run(['xdotool', 'windowmove', window, '0', '0'], check=True)
+                # Keep the WM in control: changing override_redirect on an
+                # already-managed window races Openbox's subsequent placement.
+                # The lab must fit the client plus its window decorations.
+                subprocess.run(['xdotool', 'windowmove', '--sync', window, '0', '0'], check=True)
                 time.sleep(settle)
                 memory=resources(process.pid)
                 before=process_tree(process.pid)

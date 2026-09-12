@@ -20,15 +20,17 @@ class ComparisonTests(unittest.TestCase):
             target = Path(directory) / 'capture.png'
             target.write_bytes(b'\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR'
                                + (123).to_bytes(4, 'big') + (77).to_bytes(4, 'big'))
-            with patch.object(comparison.subprocess, 'check_output', side_effect=['X=12\nY=9\nWIDTH=123\nHEIGHT=77\n', '2']), \
+            geometry = 'Absolute upper-left X: 12\nAbsolute upper-left Y: 9\nRelative upper-left X: 1\nRelative upper-left Y: 20\nWidth: 123\nHeight: 77\n'
+            with patch.object(comparison.subprocess, 'check_output', side_effect=[geometry, '2']) as output, \
                  patch.object(comparison.subprocess, 'run') as run:
                 comparison.capture_window('401', target, (123, 77))
+            self.assertEqual(output.call_args_list[0].args[0], ['xwininfo', '-id', '401'])
             self.assertEqual(run.call_args.args[0], [
                 'import', '-window', 'root', '-crop', '123x77+12+9', str(target),
             ])
 
     def test_clamped_window_size_is_not_reported_as_matched(self):
-        with patch.object(comparison.subprocess, 'check_output', return_value='X=0\nY=0\nWIDTH=125\nHEIGHT=77\n'), \
+        with patch.object(comparison.subprocess, 'check_output', return_value='Absolute upper-left X: 0\nAbsolute upper-left Y: 0\nWidth: 125\nHeight: 77\n'), \
              patch.object(comparison.subprocess, 'run') as run:
             with self.assertRaisesRegex(RuntimeError, 'Window viewport'):
                 comparison.capture_window('401', Path('unused.png'), (123, 77))
@@ -39,7 +41,7 @@ class ComparisonTests(unittest.TestCase):
             target = Path(directory) / 'capture.png'
             target.write_bytes(b'\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR'
                                + (100).to_bytes(4, 'big') + (77).to_bytes(4, 'big'))
-            with patch.object(comparison.subprocess, 'check_output', return_value='X=12\nY=9\nWIDTH=123\nHEIGHT=77\n'), \
+            with patch.object(comparison.subprocess, 'check_output', return_value='Absolute upper-left X: 12\nAbsolute upper-left Y: 9\nWidth: 123\nHeight: 77\n'), \
                  patch.object(comparison.subprocess, 'run'), \
                  self.assertRaisesRegex(RuntimeError, 'Compositor capture'):
                 comparison.capture_window('401', target, (123, 77))
@@ -49,7 +51,7 @@ class ComparisonTests(unittest.TestCase):
             target = Path(directory) / 'capture.png'
             target.write_bytes(b'\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR'
                                + (123).to_bytes(4, 'big') + (77).to_bytes(4, 'big'))
-            with patch.object(comparison.subprocess, 'check_output', side_effect=['X=0\nY=0\nWIDTH=123\nHEIGHT=77\n', '1']), \
+            with patch.object(comparison.subprocess, 'check_output', side_effect=['Absolute upper-left X: 0\nAbsolute upper-left Y: 0\nWidth: 123\nHeight: 77\n', '1']), \
                  patch.object(comparison.subprocess, 'run'), \
                  self.assertRaisesRegex(RuntimeError, 'blank'):
                 comparison.capture_window('401', target, (123, 77))

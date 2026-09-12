@@ -1,5 +1,5 @@
 use captures_windows_native::{
-    geometry::{Rect, cover},
+    geometry::{Rect, contain, cover},
     history::Artifact,
     settings::Settings,
     state::{AppState, Surface},
@@ -456,7 +456,7 @@ impl Renderer {
             if let Some(document) = state.editor.as_ref()
                 && let Ok(image) = document.render()
             {
-                self.bitmap(
+                self.bitmap_contain(
                     &image,
                     Rect {
                         x: 76.0,
@@ -807,7 +807,7 @@ impl Renderer {
                 p.raised,
             );
             if let Some(preview) = &state.recording_preview {
-                self.bitmap(
+                self.bitmap_contain(
                     preview,
                     Rect {
                         x: 82.0,
@@ -817,7 +817,7 @@ impl Renderer {
                     },
                 )?;
             }
-            self.text("Crop & size\nOriginal resolution\n\nAudio\nPreserved on export\nPlayback unavailable\n\nFormat",Rect{x:w-216.0,y:94.0,width:172.0,height:200.0},p.muted,&self.body);
+            self.text("Crop & size\nOriginal resolution\n\nAudio\nPreserved on export\nAudio playback unavailable\n\nFormat",Rect{x:w-216.0,y:94.0,width:172.0,height:200.0},p.muted,&self.body);
             self.button(
                 Rect {
                     x: w - 216.0,
@@ -1546,6 +1546,24 @@ impl Renderer {
             self.target.DrawBitmap(
                 self.image.as_ref().unwrap(),
                 Some(&to_d2d(fitted)),
+                1.0,
+                D2D1_INTERPOLATION_MODE_LINEAR,
+                None,
+                None,
+            );
+            Ok(())
+        }
+    }
+
+    unsafe fn bitmap_contain(&mut self, image: &RgbaImage, destination: Rect) -> Result<()> {
+        unsafe {
+            self.ensure_bitmap(image)?;
+            self.target.DrawBitmap(
+                self.image.as_ref().unwrap(),
+                Some(&to_d2d(contain(
+                    (image.width(), image.height()),
+                    destination,
+                ))),
                 1.0,
                 D2D1_INTERPOLATION_MODE_LINEAR,
                 None,

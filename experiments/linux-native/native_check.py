@@ -11,7 +11,7 @@ import sys
 import tempfile
 import time
 
-from benchmark import stop
+from process_metrics import stop
 
 
 def cmd(*args):
@@ -29,6 +29,7 @@ def walk(node):
 
 def find(name=None, role=None, frame=None):
     import pyatspi
+    hidden_matches = []
     for app in pyatspi.Registry.getDesktop(0):
         if app.name != 'captures-linux-native':
             continue
@@ -37,12 +38,29 @@ def find(name=None, role=None, frame=None):
             for node in walk(root):
                 try:
                     if ((name is None or node.name == name) and
-                            (role is None or node.getRoleName() == role) and
-                            node.getState().contains(pyatspi.STATE_SHOWING)):
-                        return node
+                            (role is None or node.getRoleName() == role)):
+                        if node.getState().contains(pyatspi.STATE_SHOWING):
+                            return node
+                        hidden_matches.append(node)
                 except Exception:
                     pass
-    return None
+    # GTK4/AT-SPI can temporarily clear SHOWING for an otherwise mapped X11
+    # subtree after a compositor screenshot. A unique match is still safe to
+    # operate; hidden popover controls with duplicate names remain ambiguous.
+    if len(hidden_matches) == 1:
+        return hidden_matches[0]
+    controls = [node for node in hidden_matches
+                if node.getRoleName() not in ('label', 'filler', 'panel')]
+    if len(controls) == 1:
+        return controls[0]
+    actionable = []
+    for node in hidden_matches:
+        try:
+            if node.queryAction().nActions:
+                actionable.append(node)
+        except Exception:
+            pass
+    return actionable[0] if len(actionable) == 1 else None
 
 
 def wait(predicate, timeout=20):
@@ -69,11 +87,14 @@ def click(name, frame=None, pointer=False):
 
 
 def choose(current, index, frame=None):
+    import pyatspi
     node = wait(lambda: find(current, 'combo box', frame))
     title=frame or 'Captures — Linux native'
     window=cmd('xdotool','search','--onlyvisible','--name',title).splitlines()[-1]
     cmd('xdotool','windowactivate','--sync',window)
-    node.queryAction().doAction(0)
+    bounds = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+    cmd('xdotool', 'mousemove', bounds.x + bounds.width // 2,
+        bounds.y + bounds.height // 2, 'click', 1)
     time.sleep(.1)
     cmd('xdotool', 'key', 'Home', *(['Down'] * index), 'Return')
     time.sleep(.15)

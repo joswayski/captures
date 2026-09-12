@@ -119,7 +119,7 @@ pub fn start_with_actions(
     let highlight = ui::color("accent");
     privacy.set_markup(&format!(
         "These controls <span foreground=\"{}\" weight=\"600\">will show</span> in recordings · Use Hide controls to keep them out",
-        highlight.to_string()
+        highlight
     ));
     privacy.set_xalign(0.5);
     privacy.set_justify(gtk::Justification::Center);

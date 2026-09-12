@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 
-from benchmark import process_tree, resources, stop
+from process_metrics import process_tree, resources, stop
 
 
 WINDOW_SIZES = {'preferences': (980, 720), 'image-editor': (1280, 760), 'video-editor': (1280, 760)}

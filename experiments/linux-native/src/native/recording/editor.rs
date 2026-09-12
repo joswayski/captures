@@ -1067,6 +1067,7 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     quality_card.pack_start(&estimate, false, false, 0);
     let compare = ui::button("Compare before / after");
     accessible_name(&compare, "Compare compression before and after");
+    compare.set_visible(false);
     quality_card.pack_start(&compare, false, false, 0);
     options.attach(&quality_card, 1, 0, 1, 1);
 
@@ -1130,12 +1131,16 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     filename_row.pack_start(&format, false, false, 0);
     filename_box.pack_start(&destination_row, false, false, 0);
     filename_box.pack_start(&filename_row, false, false, 0);
-    let make_copy = gtk::CheckButton::with_label("Save as new file");
+    let make_copy = gtk::Switch::new();
     make_copy.set_active(true);
     make_copy.set_sensitive(false);
+    accessible_name(&make_copy, "Save as new file");
     make_copy.set_tooltip_text(Some(
         "The Linux experiment always preserves the source recording",
     ));
+    let make_copy_row = gtk::Box::new(gtk::Orientation::Horizontal, 7);
+    make_copy_row.append(&make_copy);
+    make_copy_row.append(&gtk::Label::new(Some("Save as new file")));
     let status = ui::label("Preparing editor…", "muted");
     let cancel = ui::button("Cancel export");
     let export = ui::button("Save");
@@ -1145,7 +1150,7 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     cancel.set_sensitive(false);
     cancel.set_opacity(0.0);
     footer.pack_start(&filename_box, true, true, 0);
-    footer.pack_start(&make_copy, false, false, 8);
+    footer.pack_start(&make_copy_row, false, false, 8);
     footer.pack_start(&status, true, true, 0);
     footer.pack_start(&cancel, false, false, 0);
     footer.pack_start(&export, false, false, 0);
@@ -1960,6 +1965,18 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
         &duration_ms,
         &closed,
     );
+    for control in [&format, &quality, &resolution] {
+        let compare = compare.clone();
+        control.connect_changed(move |_| compare.clicked());
+    }
+    for control in [&out_w, &out_h, &maximum_mb] {
+        let compare = compare.clone();
+        control.connect_value_changed(move |_| compare.clicked());
+    }
+    {
+        let compare = compare.clone();
+        maximum_enabled.connect_toggled(move |_| compare.clicked());
+    }
     connect_export(
         &export,
         &cancel,

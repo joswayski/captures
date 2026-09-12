@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import time
 
-from benchmark import stop
+from process_metrics import stop
 from native_check import cmd, walk, find, wait, click, drag, capture, choose
 
 

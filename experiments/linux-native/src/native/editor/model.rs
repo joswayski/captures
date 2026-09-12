@@ -114,6 +114,8 @@ pub struct Layer {
 pub struct Document {
     pub width: u32,
     pub height: u32,
+    #[serde(default)]
+    pub background: Option<Color>,
     pub layers: Vec<Layer>,
     pub next_id: u64,
 }
@@ -138,6 +140,10 @@ impl Document {
         Self {
             width: w,
             height: h,
+            // Opening an image must not silently flatten its transparent pixels.
+            // The editor uses a light document surface for presentation; only an
+            // explicit Background color selection becomes part of the export.
+            background: None,
             next_id: 2,
             layers: vec![Layer {
                 id: 1,
@@ -168,6 +174,7 @@ impl Document {
         Self {
             width,
             height,
+            background: None,
             layers: vec![],
             next_id: 1,
         }
@@ -397,7 +404,8 @@ pub fn draw_layer(ctx: &cairo::Context, l: &Layer) -> Result<(), String> {
 }
 pub fn paint(ctx: &cairo::Context, doc: &Document) -> Result<(), String> {
     ctx.set_operator(cairo::Operator::Source);
-    ctx.set_source_rgba(0., 0., 0., 0.);
+    let background = doc.background.unwrap_or(Color(0., 0., 0., 0.));
+    ctx.set_source_rgba(background.0, background.1, background.2, background.3);
     let _ = ctx.paint();
     ctx.set_operator(cairo::Operator::Over);
     for l in &doc.layers {
@@ -856,6 +864,23 @@ pub fn layer_bounds(l: &Layer) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imported_alpha_is_preserved_until_background_is_explicitly_enabled() {
+        let image = RgbaImage::from_fn(2, 1, |x, _| {
+            if x == 0 {
+                image::Rgba([200, 100, 50, 0])
+            } else {
+                image::Rgba([20, 40, 60, 255])
+            }
+        });
+        let mut document = Document::new(image);
+        assert_eq!(document.background, None);
+        assert_eq!(render(&document).unwrap().get_pixel(0, 0).0[3], 0);
+
+        document.background = Some(Color(1., 1., 1., 1.));
+        assert_eq!(render(&document).unwrap().get_pixel(0, 0).0, [255; 4]);
+    }
 
     fn thumbnail_pixel(doc: &Document, layer: &Layer, x: usize, y: usize) -> u32 {
         let mut surface = render_layer_thumbnail(doc, layer, 38, 30).unwrap();
