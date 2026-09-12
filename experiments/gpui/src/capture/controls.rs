@@ -12,6 +12,69 @@ pub(super) enum Picker {
 }
 
 impl Selector {
+    fn recording_switch(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        enabled: bool,
+        available: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let p = ui::theme(cx);
+        div()
+            .id(id)
+            .flex()
+            .flex_col()
+            .justify_end()
+            .gap(ui::metric("--s-3"))
+            .opacity(if available { 1. } else { 0.45 })
+            .when(available, |row| row.cursor_pointer())
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .text_size(ui::metric("--text-xs"))
+                    .text_color(p.glass_text().opacity(0.64))
+                    .child(label),
+            )
+            .child(
+                div()
+                    .h(ui::metric("--h-lg"))
+                    .flex()
+                    .items_center()
+                    .gap(ui::metric("--s-3"))
+                    .child(
+                        div()
+                            .w(px(34.))
+                            .h(px(20.))
+                            .p(px(3.))
+                            .rounded(px(10.))
+                            .bg(if enabled && available {
+                                p.accent
+                            } else {
+                                p.glass_text().opacity(0.14)
+                            })
+                            .child(
+                                div()
+                                    .size(px(14.))
+                                    .rounded(px(7.))
+                                    .bg(p.glass_text())
+                                    .when(enabled && available, |knob| knob.ml(px(14.))),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(ui::metric("--text-xs"))
+                            .child(if !available {
+                                "Unavailable"
+                            } else if enabled {
+                                "On"
+                            } else {
+                                "Off"
+                            }),
+                    ),
+            )
+    }
+
     fn choices(&self, picker: Picker) -> (usize, Vec<String>) {
         let s = &self.settings.recording;
         match picker {
@@ -163,10 +226,14 @@ impl Selector {
     pub(super) fn recording_controls(&self, cx: &mut Context<Self>) -> Div {
         let p = ui::theme(cx);
         let s = &self.settings.recording;
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        let pointer_controls = captures_recording_xcap::pointer_features_available();
+        #[cfg(target_os = "macos")]
+        let pointer_controls = true;
         let field = |label: &'static str, control: AnyElement| {
             div()
                 .flex()
-                .items_center()
+                .flex_col()
                 .gap(ui::metric("--s-3"))
                 .child(
                     div()
@@ -178,9 +245,9 @@ impl Selector {
         };
         div()
             .flex()
-            .flex_wrap()
-            .items_center()
-            .gap(ui::metric("--s-5"))
+            .items_end()
+            .justify_between()
+            .gap(ui::metric("--s-4"))
             .px(ui::metric("--s-6"))
             .pb(ui::metric("--s-5"))
             .child(field(
@@ -196,61 +263,48 @@ impl Selector {
                 self.picker(Picker::Resolution, cx).into_any_element(),
             ))
             .child(
-                self.glass_button(
+                self.recording_switch(
                     "record-cursor",
-                    format!("Show cursor: {}", if s.show_cursor { "On" } else { "Off" }),
+                    "Show cursor",
                     s.show_cursor,
+                    pointer_controls,
                     cx,
                 )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.settings.recording.show_cursor = !this.settings.recording.show_cursor;
-                    cx.notify();
-                })),
+                .when(pointer_controls, |switch| {
+                    switch.on_click(cx.listener(|this, _, _, cx| {
+                        this.settings.recording.show_cursor = !this.settings.recording.show_cursor;
+                        if !this.settings.recording.show_cursor {
+                            this.settings.recording.highlight_clicks = false;
+                        }
+                        cx.notify();
+                    }))
+                }),
             )
             .child(
-                self.glass_button(
+                self.recording_switch(
                     "record-clicks",
-                    format!(
-                        "Show clicks: {}",
-                        if s.highlight_clicks { "On" } else { "Off" }
-                    ),
+                    "Show clicks",
                     s.highlight_clicks,
+                    pointer_controls,
                     cx,
                 )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.settings.recording.highlight_clicks =
-                        !this.settings.recording.highlight_clicks;
-                    cx.notify();
-                })),
+                .when(pointer_controls, |switch| {
+                    switch.on_click(cx.listener(|this, _, _, cx| {
+                        this.settings.recording.highlight_clicks =
+                            !this.settings.recording.highlight_clicks;
+                        if this.settings.recording.highlight_clicks {
+                            this.settings.recording.show_cursor = true;
+                        }
+                        cx.notify();
+                    }))
+                }),
             )
             .child(
-                self.glass_button(
-                    "record-keys",
-                    format!(
-                        "Show keys: {}",
-                        if s.show_keystrokes { "On" } else { "Off" }
-                    ),
-                    s.show_keystrokes,
-                    cx,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.settings.recording.show_keystrokes =
-                        !this.settings.recording.show_keystrokes;
-                    cx.notify();
-                })),
-            )
-            .child(field(
-                "Microphone",
-                self.picker(Picker::Microphone, cx).into_any_element(),
-            ))
-            .child(
-                self.glass_button(
+                self.recording_switch(
                     "record-audio",
-                    format!(
-                        "System audio: {}",
-                        if s.capture_system_audio { "On" } else { "Off" }
-                    ),
+                    "Desktop audio",
                     s.capture_system_audio,
+                    true,
                     cx,
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -259,5 +313,9 @@ impl Selector {
                     cx.notify();
                 })),
             )
+            .child(field(
+                "Microphone",
+                self.picker(Picker::Microphone, cx).into_any_element(),
+            ))
     }
 }

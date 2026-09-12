@@ -22,7 +22,7 @@ use super::{
     RecordingSegment, editor,
     model::{HudPhase, PendingAction, format_time},
 };
-use crate::ui::{metric, theme};
+use crate::ui::{icon, metric, theme};
 
 static SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -97,6 +97,7 @@ pub(super) struct RecordingHud {
     hidden: bool,
     error: Option<String>,
     warning: Option<String>,
+    hovered_action: Option<&'static str>,
     window: Option<AnyWindowHandle>,
     guide_windows: Vec<AnyWindowHandle>,
     quit_after_terminal: bool,
@@ -134,6 +135,7 @@ impl RecordingHud {
             hidden: false,
             error: None,
             warning: None,
+            hovered_action: None,
             window: None,
             guide_windows,
             quit_after_terminal: false,
@@ -754,8 +756,8 @@ impl RecordingHud {
     fn action_button(
         &self,
         id: &'static str,
-        glyph: &'static str,
-        _label: &'static str,
+        icon_name: &'static str,
+        label: &'static str,
         enabled: bool,
         cx: &mut Context<Self>,
         action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
@@ -763,6 +765,7 @@ impl RecordingHud {
         let colors = theme(cx);
         div()
             .id(id)
+            .relative()
             .size(px(36.))
             .flex()
             .items_center()
@@ -772,13 +775,35 @@ impl RecordingHud {
             .cursor_pointer()
             .text_color(colors.glass_text())
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                this.hovered_action = hovered.then_some(id);
+                cx.notify();
+            }))
             .when(enabled, |button| {
                 button
                     .hover(|style| style.bg(rgba(0xffffff1f)))
                     .on_click(cx.listener(move |this, _, window, cx| action(this, window, cx)))
             })
             .when(!enabled, |button| button.opacity(0.35))
-            .child(glyph)
+            .child(
+                icon(icon_name)
+                    .size(px(18.))
+                    .text_color(colors.glass_text()),
+            )
+            .when(self.hovered_action == Some(id), |button| {
+                button.child(
+                    div()
+                        .absolute()
+                        .bottom(px(42.))
+                        .px(metric("--s-3"))
+                        .py(metric("--s-2"))
+                        .rounded(metric("--r-sm"))
+                        .bg(colors.glass())
+                        .text_size(metric("--text-sm"))
+                        .whitespace_nowrap()
+                        .child(label),
+                )
+            })
     }
 }
 
@@ -854,7 +879,7 @@ impl Render for RecordingHud {
             )
             .child(self.action_button(
                 "recording-stop",
-                "■",
+                "stop",
                 "Stop and save",
                 controls,
                 cx,
@@ -863,9 +888,9 @@ impl Render for RecordingHud {
             .child(self.action_button(
                 "recording-pause",
                 if matches!(self.phase, HudPhase::Paused) {
-                    "▶"
+                    "play"
                 } else {
-                    "Ⅱ"
+                    "pause"
                 },
                 if matches!(self.phase, HudPhase::Paused) {
                     "Resume recording"
@@ -885,7 +910,7 @@ impl Render for RecordingHud {
             ))
             .child(self.action_button(
                 "recording-restart",
-                "↻",
+                "restart",
                 "Restart recording",
                 self.phase.controllable(),
                 cx,
@@ -893,28 +918,18 @@ impl Render for RecordingHud {
             ))
             .child(self.action_button(
                 "recording-screenshot",
-                "⌗",
+                "screenshot",
                 "Take a region screenshot",
                 controls,
                 cx,
                 |this, _, cx| this.pause(PendingAction::Screenshot { resume_after: true }, cx),
             ))
-            .when(self.options.audio.microphone_device_id.is_some(), |row| {
-                row.child(
-                    div()
-                        .w(px(30.))
-                        .h(px(4.))
-                        .rounded_full()
-                        .bg(rgba(0xffffff2e))
-                        .child(div().h_full().w(px(2.)).rounded_full().bg(colors.accent)),
-                )
-            })
             .child(self.action_button(
                 "recording-microphone",
                 if self.options.audio.microphone_muted {
-                    "M̶"
+                    "microphone-muted"
                 } else {
-                    "M"
+                    "microphone"
                 },
                 "Mute or unmute microphone",
                 controls && self.options.audio.microphone_device_id.is_some(),
@@ -923,7 +938,7 @@ impl Render for RecordingHud {
             ))
             .child(self.action_button(
                 "recording-discard",
-                "⌫",
+                "trash",
                 "Delete recording",
                 !matches!(self.phase, HudPhase::Finalizing | HudPhase::Discarding),
                 cx,
@@ -931,7 +946,7 @@ impl Render for RecordingHud {
             ))
             .child(self.action_button(
                 "recording-hide",
-                "—",
+                "hide",
                 "Hide controls",
                 !matches!(self.phase, HudPhase::Discarding),
                 cx,

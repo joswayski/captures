@@ -98,7 +98,86 @@ not inferred from the GPUI element tree.
   portals, multiple monitors, scaling, GNOME/KDE compositors and physical Linux
   desktop lock transitions need testing. Source image opening decodes asynchronously.
 
-## Release resource comparison
+## Current control parity pass
+
+Editor actions no longer include shortcut suffixes; shortcuts remain available.
+Save as new file is a switch, and the primary Save action now respects format,
+quality and output dimensions. Changing the source format forces a new-file
+prompt instead of writing mismatched bytes into the original extension. Closed
+shapes expose a Fill switch; lines/arrows do not. The color picker has one hex
+field (Enter applies it) and selected swatches, without a second Apply-hex control
+or a drawing-color status message. Export settings have more padding, the same
+Tiny–Highest quality presets as Tauri, and an automatic draggable before/after
+comparison while compression settings are open. Stale preview jobs are rejected
+after edits, preset changes, or closing the panel.
+
+The capture menu uses cursor/click/desktop-audio switches, aligned fields, and a
+centered inclusion note with **will/won’t** emphasized. Linux truthfully says
+**will** because compositor-level exclusion is unavailable. The inert Show keys
+button was removed; the shared recorder does not implement keystroke overlays.
+HUD actions use the shared SVG icons, with hover descriptions. History Edit and
+Restore use aligned icon/text buttons; removal uses a trash icon and confirmation.
+
+Native checks exercised hex entry (`#42747043`), quality selection, automatic
+comparison refresh after a document edit, the new-file switch, and Ctrl+S into a
+disposable PNG (decoded as 960×540). The switch alone did not modify the source.
+The native new-file picker was not exercised. Capture menu variants, actual
+recording HUD, and History were rendered and inspected. Properties scroll inside
+the sidebar; lower color controls may require scrolling at smaller viewports.
+
+![Quality presets and automatic comparison](images/gpui/editor-controls-quality.png)
+![Compact recording settings and centered inclusion note](images/gpui/capture-controls.png)
+![Actual recording with SVG HUD controls](images/gpui/hud-controls.png)
+![Aligned History actions and trash controls](images/gpui/history-controls.png)
+
+## Updated resource comparison
+
+September 12, 2026: the updated GPUI release versus the unchanged production
+Tauri binary from the baseline below. Same two-vCPU Mesa 25 llvmpipe/X11 lab,
+fresh profiles, five alternating trials per frontend, five seconds settling and
+two seconds CPU sampling. Each row measures the entire application process tree.
+PSS apportions shared pages, unlike summed RSS, which can count them repeatedly.
+
+| State | Tauri PSS, MiB | GPUI PSS, MiB | Tauri CPU, % one core | GPUI CPU, % one core |
+| --- | ---: | ---: | ---: | ---: |
+| Preferences | 595.1 | 160.8 | 20.0 | 1.5 |
+| Screenshot editor | 693.4 | 169.7 | 45.0 | 2.0 |
+| Screenshot selector | 737.0 | 214.9 | 0.5 | 2.0 |
+| Recording selector | 749.4 | 215.2 | 0.0 | 2.0 |
+| Three collapsed previews | 914.6 | 222.1 | 5.0 | 2.0 |
+| Three expanded previews | 880.2 | 221.5 | 5.5 | 2.0 |
+| Active region recording | 1004.7 | 257.9 | 133.5 | 120.0 |
+
+All values are medians. Recording CPU is **active capture**, not idle; 100% means
+one fully occupied core. Recording waits for the durable `recording` state before
+the common settling interval; both inspected HUDs read 0:07. The overlay rows
+retain the initial Preferences window in both applications. Preview rows follow
+three real 730×450 captures, verified by independent history entries. These are
+application-state costs, not the incremental cost of a single menu.
+
+Initial collapsed-stack samples were rejected: immediate synthetic clicks could
+pass through Tauri before native pointer polling enabled hit testing. All five
+pairs were rerun with hover/animation waits, and all ten trial screenshots were
+inspected as collapsed piles. The window retains transparent space, so frame
+height alone cannot establish collapse. Raw results include this provenance.
+
+GPUI uses substantially less memory here, but does not win every metric. Idle
+selectors use more CPU. Median screenshot-selector mapping took 462 ms for GPUI
+versus 235 ms for Tauri; recording-selector mapping took 381 versus 301 ms.
+Preferences mapped in 643 versus 1193 ms, and the image editor in 649 versus
+1302 ms. **Mapping is not first useful paint.** Preview/HUD setup includes
+deliberate automation waits, so its timing is not a startup comparison.
+
+No physical-GPU, macOS, Windows, Wayland, energy, sustained playback, long-recording
+or export-throughput claims follow from this run. Tauri's H.264 preview returned
+`NotSupportedError` after Play despite a decoded timeline and installed GStreamer
+plugins; comparing that error state to GPUI's working decoder would be invalid.
+History also lacks a verified symmetric production entry path in this fixture.
+Those workloads remain unmeasured, rather than extrapolated from the editor.
+
+[Updated samples, ranges, binary hashes and environment](../experiments/gpui/results/linux-controls.json).
+
+## Historical release resource comparison
 
 Measured on September 11, 2026 in a two-vCPU Linux orb using Mesa 25.0.7
 llvmpipe, Xvfb (1600×1000), Openbox and xcompmgr. Both applications were release
@@ -162,11 +241,12 @@ polling effects, not steady-state drag FPS or physical display latency. The
 trials ran first, then GPUI; unlike the resource trials, these were not interleaved.
 Ten trials do not establish a reliable tail-latency distribution.
 
-## Rendered comparison and interaction evidence
+## Earlier layout and workflow evidence
 
-The updated editor uses the shipping layout's left SVG tool rail, centered
+The earlier layout pass introduced the shipping layout's left SVG tool rail, centered
 fit canvas, right Layers/contextual-properties panel, and grouped export controls.
-The following release renders were inspected after the platform/parity changes.
+The following renders document that pass; the current control screenshots above
+supersede its button labels, export controls, and HUD glyphs.
 Pointer checks exercised the six-shape flyout, numeric Apply/Escape, export and
 format menus, appearance switching, and resizing to 980×650 with properties
 scrolling. The footer uses a shared 36px control height and bottom alignment.
@@ -175,8 +255,8 @@ cycling; stroke width uses a 2–40px slider. Native checks verified exact swatc
 color, drag values, Home/End, arrow adjustment without nudging a layer, and one
 undo per drag. Undo returns focus to the editor when its controls disappear.
 
-![Updated light editor with shape flyout](images/gpui/editor-parity-light.png)
-![Updated dark editor at 980×650](images/gpui/editor-parity-dark-small.png)
+![Earlier light editor with shape flyout](images/gpui/editor-parity-light.png)
+![Earlier dark editor at 980×650](images/gpui/editor-parity-dark-small.png)
 
 The expanded-preview Clear all / Show less row now fits its allocated width,
 and its native input region follows the right-aligned controls. Show less was
@@ -215,9 +295,15 @@ and interaction checks above establish only the behaviors they actually ran.
   GIT_CONFIG_VALUE_0=false`); the initial run could not sign their fixture commits.
 - Root `cargo fmt --all -- --check`, `cargo test --workspace` and strict workspace
   Clippy: passed; 366 Rust tests passed, one ignored.
-- GPUI locked tests: 87 passed, including the live X11 Shape/clipboard suite;
+- GPUI locked tests: 88 passed;
   formatting, strict all-target Clippy and release build passed.
-- Python measurement-helper tests: six passed.
+- Python helper tests: twelve passed (ten benchmark, two latency).
+- The first current `npm run check` with disposable Git signing disabled hit two
+  asynchronous CaptureOverlay test failures (828 passed). The complete rerun
+  passed all 830 tests and the production web build; no Tauri source was changed.
+- Updated `.agents/setup` ran twice successfully; warm setup completed without
+  reinstalling system packages. GStreamer parsing/decoding packages are installed
+  for media checks, but the Tauri H.264 preview still failed in this fixture.
 - Platform helper policy, shell syntax and workflow formatting checks passed.
   Full native macOS/Windows builds and runtime checks were unavailable in the
   Linux orb; isolated exact-dependency adapter type checks do not substitute

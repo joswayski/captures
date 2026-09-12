@@ -344,7 +344,11 @@ painting. `LIBGL_ALWAYS_SOFTWARE=1` gives both comparators the same software Mes
 stack. Successful compilation or a mapped window alone is not visual validation.
 
 Build the real Tauri comparator with production frontend assets, then collect
-matched Preferences and image-editor screenshots plus whole-process-tree metrics:
+Preferences, image-editor, screenshot/recording selector, collapsed/expanded
+three-preview stacks, and active recording HUD screenshots plus whole-process-tree
+metrics. The latter states enter through real capture shortcuts and buttons,
+retaining the initial Preferences window in both process trees. Use only the
+1600×1000 disposable lab: this includes actual region recording.
 
 ```sh
 npm run build --workspace @captures/desktop
@@ -359,7 +363,14 @@ python3 experiments/gpui/benchmark.py --lab /tmp/captures-gpui-lab \
 
 Use `--inspect --appearance light` for an additional visual-only pass. Inspect
 the actual screenshots before accepting any measurements. Stop builds and other
-workloads before timing. `latency.py` additionally samples XTest drag motion to
+workloads before timing. An optional `--video-fixture /absolute/file.mp4` adds
+the paused video editor, but first verify playback in both apps; a loaded timeline
+does not establish that the video player works. The current orb's Tauri WebKit
+player reported `NotSupportedError`, so no video-editor comparison is published.
+History and export timing are not measured. Preview/HUD setup time includes
+deliberate waits and is not startup latency; HUD CPU measures active recording,
+not idle. The harness waits for the durable recording state before settling.
+`latency.py` additionally samples XTest drag motion to
 observed compositor pixels (`--lab`, `--binary`, `--implementation tauri|gpui`,
 `--output FILE`, optional `--artifacts DIR`). It records failed trials rather
 than counting them as fast frames. This is software-X11 observation latency,

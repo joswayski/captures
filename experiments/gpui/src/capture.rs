@@ -480,13 +480,14 @@ impl Selector {
                 .text_color(ui::Theme { dark: false, ..p }.text())
                 .on_click(cx.listener(|this, _, window, cx| this.accept(window, cx))),
         );
-        let hint = if self.settings.auto_start_on_selection {
-            "Capture starts after selection"
-        } else {
-            "Controls will show after selection"
-        };
+        let (visibility, emphasized) =
+            if cfg!(target_os = "linux") || self.settings.include_recording_controls_in_captures {
+                ("These controls ", "will")
+            } else {
+                ("These controls ", "won’t")
+            };
         let panel_height =
-            90. + if kind != 0 { 112. } else { 0. } + if self.options { 140. } else { 0. };
+            90. + if kind != 0 { 90. } else { 0. } + if self.options { 140. } else { 0. };
         let top_y = self
             .panel_origin
             .y
@@ -514,14 +515,19 @@ impl Selector {
             .when(kind != 0, |panel| panel.child(self.recording_controls(cx)))
             .child(
                 div()
+                    .relative()
+                    .w_full()
                     .flex()
                     .items_center()
+                    .justify_center()
                     .px(ui::metric("--s-6"))
                     .pb(ui::metric("--s-4"))
                     .text_size(ui::metric("--text-xs"))
                     .text_color(p.glass_text().opacity(0.64))
                     .child(
-                        self.glass_button("options", hint, self.options, cx)
+                        self.glass_button("options", "Options", self.options, cx)
+                            .absolute()
+                            .left(ui::metric("--s-6"))
                             .h(ui::metric("--h-xs"))
                             .px_0()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -529,8 +535,13 @@ impl Selector {
                                 cx.notify();
                             })),
                     )
-                    .child(div().flex_1())
-                    .child("Enter ↵"),
+                    .child(visibility)
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child(emphasized))
+                    .child(if kind == 0 {
+                        " show in screenshots"
+                    } else {
+                        " show in recordings"
+                    }),
             );
         if self.options {
             let mut choices = div()

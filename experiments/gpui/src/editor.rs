@@ -112,6 +112,15 @@ enum ExportFormat {
 }
 
 impl ExportFormat {
+    fn for_path(path: &Path) -> Option<Self> {
+        match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+            "png" => Some(Self::Png),
+            "jpg" | "jpeg" => Some(Self::Jpeg),
+            "webp" => Some(Self::Webp),
+            _ => None,
+        }
+    }
+
     fn extension(self) -> &'static str {
         match self {
             Self::Png => "png",
@@ -126,6 +135,25 @@ enum QualityMode {
     Preserve,
     Compress,
     Maximum,
+}
+
+const QUALITY_PRESETS: [(u8, &str); 5] = [
+    (55, "Tiny"),
+    (70, "Smaller"),
+    (85, "Balanced"),
+    (92, "High"),
+    (98, "Highest"),
+];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ComparisonRequest {
+    generation: u64,
+    format: ExportFormat,
+    mode: QualityMode,
+    quality: u8,
+    maximum: u64,
+    width: u32,
+    height: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -231,6 +259,11 @@ struct ScreenshotEditor {
     export_open: bool,
     shape_menu_open: bool,
     format_menu_open: bool,
+    quality_menu_open: bool,
+    quality_mode_menu_open: bool,
+    make_copy: bool,
+    comparison_request: Option<ComparisonRequest>,
+    comparison_status: SharedString,
     comparison: Option<(Arc<Image>, usize, usize)>,
     comparison_split: f32,
     comparison_dragging: bool,
@@ -270,7 +303,7 @@ fn draft_path(source: Option<&Path>, image: &RgbaImage) -> PathBuf {
 
 fn parse_hex_color(value: &str) -> Option<Color> {
     let value = value.trim().strip_prefix('#').unwrap_or(value.trim());
-    if !matches!(value.len(), 6 | 8) {
+    if !matches!(value.len(), 6 | 8) || !value.is_ascii() {
         return None;
     }
     let channel = |offset| u8::from_str_radix(&value[offset..offset + 2], 16).ok();
@@ -434,6 +467,7 @@ fn encode_scaled(
     result.map_err(anyhow::Error::msg)
 }
 
+#[cfg(test)]
 fn encode(
     doc: &Document,
     format: ExportFormat,
@@ -475,6 +509,10 @@ impl ScreenshotEditor {
             .and_then(|stem| stem.to_str())
             .unwrap_or("Capture-edited")
             .to_string();
+        let format = source
+            .as_deref()
+            .and_then(ExportFormat::for_path)
+            .unwrap_or(ExportFormat::Png);
         output_name.update(cx, |input, cx| input.set(suggested_name, cx));
         Ok(Self {
             doc,
@@ -512,7 +550,7 @@ impl ScreenshotEditor {
             } else {
                 "Ready".into()
             },
-            format: ExportFormat::Png,
+            format,
             quality_mode: QualityMode::Preserve,
             quality: 92,
             maximum_bytes: 10 * 1024 * 1024,
@@ -523,6 +561,11 @@ impl ScreenshotEditor {
             export_open: false,
             shape_menu_open: false,
             format_menu_open: false,
+            quality_menu_open: false,
+            quality_mode_menu_open: false,
+            make_copy: false,
+            comparison_request: None,
+            comparison_status: "".into(),
             comparison: None,
             comparison_split: 0.5,
             comparison_dragging: false,
@@ -690,7 +733,6 @@ impl ScreenshotEditor {
             self.changed();
             self.rerender(cx);
         } else {
-            self.comparison = None;
             self.status = "Output size updated".into();
         }
         self.focus.focus(window);
@@ -720,7 +762,6 @@ impl ScreenshotEditor {
             self.rerender(cx);
         } else {
             self.color = color;
-            self.status = "Drawing color updated".into();
         }
         self.focus.focus(window);
         cx.notify();
@@ -778,7 +819,6 @@ impl ScreenshotEditor {
             self.rerender(cx);
         } else {
             self.color = color;
-            self.status = "Drawing color updated".into();
         }
         cx.notify();
     }
@@ -1435,10 +1475,6 @@ impl ScreenshotEditor {
         .detach();
     }
 
-    fn prompt_export(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.export_to_new_path(cx);
-    }
-
     fn export_to_new_path(&mut self, cx: &mut Context<Self>) {
         let directory = self
             .source
@@ -1503,24 +1539,23 @@ impl ScreenshotEditor {
     }
 
     fn save_primary(&mut self, cx: &mut Context<Self>) {
+        if self.make_copy || self.format_requires_copy() {
+            return self.export_to_new_path(cx);
+        }
         let Some(path) = self.source.clone() else {
             return self.export_to_new_path(cx);
         };
         let doc = self.doc.clone();
-        let format = match path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref()
-        {
-            Some("jpg" | "jpeg") => ExportFormat::Jpeg,
-            Some("webp") => ExportFormat::Webp,
-            _ => ExportFormat::Png,
-        };
+        let format = self.format;
+        let mode = self.quality_mode;
+        let quality = self.quality;
+        let maximum = self.maximum_bytes;
+        let width = self.output_width;
+        let height = self.output_height;
         let executor = cx.background_executor().clone();
         let output_path = path.clone();
         let task = executor.spawn(async move {
-            encode(&doc, format, QualityMode::Preserve, 100, u64::MAX)
+            encode_scaled(&doc, format, mode, quality, maximum, width, height)
                 .and_then(|bytes| atomic_write(&output_path, &bytes))
         });
         cx.spawn(async move |this, cx| {
@@ -1541,49 +1576,75 @@ impl ScreenshotEditor {
         .detach();
     }
 
-    fn compare(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let doc = self.doc.clone();
-        let format = self.format;
-        let mode = self.quality_mode;
-        let quality = self.quality;
-        let maximum = self.maximum_bytes;
-        let output_width = self.output_width;
-        let output_height = self.output_height;
-        self.status = "Rendering compression comparison…".into();
-        cx.notify();
-        let task = cx.background_executor().spawn(async move {
-            let before = encode_scaled(
-                &doc,
-                format,
-                QualityMode::Preserve,
-                100,
-                u64::MAX,
-                output_width,
-                output_height,
-            )?;
-            let bytes = encode_scaled(
-                &doc,
-                format,
-                mode,
-                quality,
-                maximum,
-                output_width,
-                output_height,
-            )?;
-            let image_format = match format {
-                ExportFormat::Png => ImageFormat::Png,
-                ExportFormat::Jpeg => ImageFormat::Jpeg,
-                ExportFormat::Webp => ImageFormat::Webp,
-            };
-            Ok::<_, anyhow::Error>((
-                Arc::new(Image::from_bytes(image_format, bytes.clone())),
-                bytes.len(),
-                before.len(),
-            ))
-        });
+    fn format_requires_copy(&self) -> bool {
+        self.source.as_deref().and_then(ExportFormat::for_path) != Some(self.format)
+    }
+
+    fn refresh_comparison(&mut self, cx: &mut Context<Self>) {
+        let request = (self.export_open && self.quality_mode != QualityMode::Preserve).then_some(
+            ComparisonRequest {
+                generation: self.render_generation,
+                format: self.format,
+                mode: self.quality_mode,
+                quality: self.quality,
+                maximum: self.maximum_bytes,
+                width: self.output_width,
+                height: self.output_height,
+            },
+        );
+        if request == self.comparison_request {
+            return;
+        }
+        self.comparison_request = request;
+        self.comparison = None;
+        self.comparison_status = "".into();
+        let Some(request) = request else { return };
+        self.comparison_status = "Preparing preview…".into();
         cx.spawn(async move |this, cx| {
-            let result = task.await;
+            // Coalesce slider/resize changes before expensive encoding, and reject
+            // stale completions after edits, preset changes, or closing the panel.
+            gpui::Timer::after(Duration::from_millis(150)).await;
+            let Ok(Some(doc)) = this.update(cx, |this, _| {
+                (this.comparison_request == Some(request)).then(|| this.doc.clone())
+            }) else {
+                return;
+            };
+            let result = cx
+                .background_spawn(async move {
+                    let before = encode_scaled(
+                        &doc,
+                        ExportFormat::Png,
+                        QualityMode::Preserve,
+                        100,
+                        u64::MAX,
+                        request.width,
+                        request.height,
+                    )?;
+                    let bytes = encode_scaled(
+                        &doc,
+                        request.format,
+                        request.mode,
+                        request.quality,
+                        request.maximum,
+                        request.width,
+                        request.height,
+                    )?;
+                    let image_format = match request.format {
+                        ExportFormat::Png => ImageFormat::Png,
+                        ExportFormat::Jpeg => ImageFormat::Jpeg,
+                        ExportFormat::Webp => ImageFormat::Webp,
+                    };
+                    Ok::<_, anyhow::Error>((
+                        Arc::new(Image::from_bytes(image_format, bytes.clone())),
+                        bytes.len(),
+                        before.len(),
+                    ))
+                })
+                .await;
             this.update(cx, |this, cx| {
+                if this.comparison_request != Some(request) {
+                    return;
+                }
                 match result {
                     Ok(value) => {
                         let savings = if value.2 == 0 {
@@ -1591,15 +1652,17 @@ impl ScreenshotEditor {
                         } else {
                             (100_f64 * (1. - value.1 as f64 / value.2 as f64)).round() as i32
                         };
-                        this.status = format!(
-                            "Before: {} KB  •  After: {} KB  •  {savings:+}%",
+                        this.comparison_status = format!(
+                            "Before: {} KB  ·  After: {} KB  ·  {}% {}",
                             value.2.div_ceil(1024),
-                            value.1.div_ceil(1024)
+                            value.1.div_ceil(1024),
+                            savings.abs(),
+                            if savings >= 0 { "smaller" } else { "larger" },
                         )
                         .into();
                         this.comparison = Some(value);
                     }
-                    Err(e) => this.status = format!("Comparison failed: {e}").into(),
+                    Err(e) => this.comparison_status = format!("Preview failed: {e}").into(),
                 };
                 cx.notify();
             })
@@ -1658,6 +1721,45 @@ impl ScreenshotEditor {
         t: Theme,
     ) -> gpui::Stateful<Div> {
         button(id, label, t).h(metric("--h-sm")).px(metric("--s-4"))
+    }
+
+    fn toggle(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        checked: bool,
+        t: Theme,
+    ) -> gpui::Stateful<Div> {
+        div()
+            .id(id)
+            .h(metric("--h-lg"))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(metric("--s-3"))
+            .cursor_pointer()
+            .text_size(metric("--text-sm"))
+            .child(
+                div()
+                    .w(px(32.))
+                    .h(px(18.))
+                    .p(px(2.))
+                    .rounded_full()
+                    .bg(if checked {
+                        t.accent
+                    } else {
+                        t.color("--control-hover")
+                    })
+                    .flex()
+                    .items_center()
+                    .when(checked, |track| track.justify_end())
+                    .child(div().size(px(14.)).rounded_full().bg(if checked {
+                        t.accent_ink
+                    } else {
+                        t.muted()
+                    })),
+            )
+            .child(label)
     }
 
     fn icon_button(
@@ -2035,27 +2137,16 @@ impl ScreenshotEditor {
             .when(self.color_picker_open, |picker| {
                 picker
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(metric("--s-4"))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .rounded(metric("--r-sm"))
-                                    .border_1()
-                                    .border_color(t.border())
-                                    .bg(t.canvas())
-                                    .child(self.color_input.clone()),
-                            )
-                            .child(
-                                self.compact_button("apply-hex-color", "Apply hex", t)
-                                    .h(metric("--h-lg"))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.apply_color(window, cx)
-                                    })),
-                            ),
+                        div().flex().items_center().gap(metric("--s-4")).child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .rounded(metric("--r-sm"))
+                                .border_1()
+                                .border_color(t.border())
+                                .bg(t.canvas())
+                                .child(self.color_input.clone()),
+                        ),
                     )
                     .child(
                         self.render_color_picker(t, cx).with_animation(
@@ -2078,12 +2169,6 @@ impl ScreenshotEditor {
             l: 0.5,
             a: 1.,
         };
-        let chosen = hsv_color(
-            self.picker_hue,
-            self.picker_saturation,
-            self.picker_value,
-            self.picker_alpha,
-        );
         let chosen_hsla = Hsla {
             h: self.picker_hue,
             s: self.picker_saturation,
@@ -2272,7 +2357,6 @@ impl ScreenshotEditor {
                         }
                     })),
             )
-            .child(format!("Selected {}", color_hex(chosen)))
     }
 
     fn canvas_view(&self, t: Theme, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2888,6 +2972,34 @@ impl ScreenshotEditor {
                 ))
                 .child(self.color_control(t, cx))
                 .child(self.stroke_control(t, cx))
+                .when(
+                    matches!(
+                        layer.kind,
+                        LayerKind::Rectangle
+                            | LayerKind::Ellipse
+                            | LayerKind::Triangle
+                            | LayerKind::Diamond
+                            | LayerKind::Star
+                    ),
+                    |properties| {
+                        properties.child(
+                            self.toggle("layer-fill", "Fill", layer.fill.is_some(), t)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.checkpoint();
+                                    let layer = &mut this.doc.layers[index];
+                                    layer.fill = layer.fill.is_none().then_some(Color(
+                                        layer.color.0,
+                                        layer.color.1,
+                                        layer.color.2,
+                                        layer.color.3 * 0.28,
+                                    ));
+                                    this.changed();
+                                    this.rerender(cx);
+                                    cx.notify();
+                                })),
+                        )
+                    },
+                )
                 .child(
                     div()
                         .flex()
@@ -3412,20 +3524,23 @@ impl ScreenshotEditor {
             properties = properties
                 .child(self.color_control(t, cx))
                 .child(self.stroke_control(t, cx))
-                .child(
-                    self.compact_button(
-                        "fill",
-                        if self.fill_shapes {
-                            "✓ Filled shapes"
-                        } else {
-                            "Filled shapes"
-                        },
-                        t,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.fill_shapes = !this.fill_shapes;
-                        cx.notify();
-                    })),
+                .when(
+                    matches!(
+                        self.tool,
+                        Tool::Rectangle
+                            | Tool::Ellipse
+                            | Tool::Triangle
+                            | Tool::Diamond
+                            | Tool::Star
+                    ),
+                    |properties| {
+                        properties.child(self.toggle("fill", "Fill", self.fill_shapes, t).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.fill_shapes = !this.fill_shapes;
+                                cx.notify();
+                            }),
+                        ))
+                    },
                 );
         }
         div()
@@ -3582,11 +3697,107 @@ impl ScreenshotEditor {
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.format = format;
                                         this.format_menu_open = false;
-                                        this.comparison = None;
                                         cx.notify();
                                     }))
                             }),
                         ),
+                ))
+            })
+    }
+
+    fn quality_control(&self, presets: bool, t: Theme, cx: &mut Context<Self>) -> Div {
+        let modes = [
+            (QualityMode::Preserve, "Preserve quality"),
+            (QualityMode::Compress, "Compress"),
+            (QualityMode::Maximum, "Maximum file size"),
+        ];
+        let (id, heading, open, selected, choices) = if presets {
+            (
+                "quality-preset",
+                "Quality",
+                self.quality_menu_open,
+                QUALITY_PRESETS
+                    .iter()
+                    .position(|(value, _)| *value == self.quality)
+                    .unwrap_or(3),
+                QUALITY_PRESETS
+                    .iter()
+                    .map(|(_, label)| *label)
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            (
+                "quality-mode",
+                "Save quality",
+                self.quality_mode_menu_open,
+                modes
+                    .iter()
+                    .position(|(value, _)| *value == self.quality_mode)
+                    .unwrap_or(0),
+                modes.iter().map(|(_, label)| *label).collect::<Vec<_>>(),
+            )
+        };
+        div()
+            .relative()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap(metric("--s-2"))
+            .child(
+                div()
+                    .text_size(metric("--text-xs"))
+                    .text_color(t.muted())
+                    .child(heading),
+            )
+            .child(
+                self.compact_button(id, choices[selected], t)
+                    .h(metric("--h-lg"))
+                    .child(icon("chevron-down").size(px(12.)).text_color(t.muted()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.quality_menu_open = presets && !this.quality_menu_open;
+                        this.quality_mode_menu_open = !presets && !this.quality_mode_menu_open;
+                        this.format_menu_open = false;
+                        cx.notify();
+                    })),
+            )
+            .when(open, |control| {
+                control.child(gpui::deferred(
+                    div()
+                        .absolute()
+                        .bottom(metric("--h-lg") + metric("--s-2"))
+                        .left_0()
+                        .w(px(210.))
+                        .p(metric("--s-2"))
+                        .flex()
+                        .flex_col()
+                        .gap(metric("--s-1"))
+                        .occlude()
+                        .rounded(metric("--r-lg"))
+                        .border_1()
+                        .border_color(t.border())
+                        .bg(t.color("--surface-overlay"))
+                        .shadow_lg()
+                        .children(choices.into_iter().enumerate().map(|(index, label)| {
+                            self.compact_button((id, index), label, t)
+                                .h(metric("--h-lg"))
+                                .justify_start()
+                                .when(index == selected, |choice| {
+                                    choice.bg(Hsla {
+                                        a: 0.16,
+                                        ..t.accent
+                                    })
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if presets {
+                                        this.quality = QUALITY_PRESETS[index].0;
+                                    } else {
+                                        this.quality_mode = modes[index].0;
+                                    }
+                                    this.quality_menu_open = false;
+                                    this.quality_mode_menu_open = false;
+                                    cx.notify();
+                                }))
+                        })),
                 ))
             })
     }
@@ -3599,7 +3810,7 @@ impl ScreenshotEditor {
                 .flex_wrap()
                 .items_center()
                 .gap(metric("--s-4"))
-                .p(metric("--s-4"))
+                .p(metric("--s-6"))
                 .bg(t.color("--surface-sunken"))
                 .rounded(metric("--r-md"))
                 .child(
@@ -3639,7 +3850,6 @@ impl ScreenshotEditor {
                             (f64::from(this.doc.width) * this.output_scale).round() as u32;
                         this.output_height =
                             (f64::from(this.doc.height) * this.output_scale).round() as u32;
-                        this.comparison = None;
                         cx.notify();
                     })),
                 )
@@ -3681,42 +3891,10 @@ impl ScreenshotEditor {
                         cx.notify();
                     })),
                 )
-                .child(
-                    self.compact_button(
-                        "quality-mode",
-                        match self.quality_mode {
-                            QualityMode::Preserve => "Preserve quality",
-                            QualityMode::Compress => "Compress",
-                            QualityMode::Maximum => "Maximum file size",
-                        },
-                        t,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.quality_mode = match this.quality_mode {
-                            QualityMode::Preserve => QualityMode::Compress,
-                            QualityMode::Compress => QualityMode::Maximum,
-                            QualityMode::Maximum => QualityMode::Preserve,
-                        };
-                        cx.notify();
-                    })),
-                )
-                .child(format!("Quality {}%", self.quality))
-                .child(
-                    self.compact_button("quality-less", "−", t)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.quality = this.quality.saturating_sub(5).max(5);
-                            this.comparison = None;
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    self.compact_button("quality-more", "+", t)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.quality = this.quality.saturating_add(5).min(100);
-                            this.comparison = None;
-                            cx.notify();
-                        })),
-                )
+                .child(self.quality_control(false, t, cx))
+                .when(self.quality_mode == QualityMode::Compress, |settings| {
+                    settings.child(self.quality_control(true, t, cx))
+                })
                 .when(self.quality_mode == QualityMode::Maximum, |settings| {
                     settings
                         .child(format!("Limit {} KB", self.maximum_bytes.div_ceil(1024)))
@@ -3730,30 +3908,16 @@ impl ScreenshotEditor {
                                         1_048_577..=2_097_152 => 5 * 1024 * 1024,
                                         _ => 256 * 1024,
                                     };
-                                    this.comparison = None;
                                     cx.notify();
                                 })),
                         )
                 })
-                .child(
-                    self.compact_button(
-                        "compare",
-                        if self.comparison.is_some() {
-                            "Refresh comparison"
-                        } else {
-                            "Compare"
-                        },
-                        t,
-                    )
-                    .on_click(cx.listener(Self::compare)),
-                )
-                .when(self.comparison.is_some(), |settings| {
+                .when(self.quality_mode != QualityMode::Preserve, |settings| {
                     settings.child(
-                        self.compact_button("hide-comparison", "Hide preview", t)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.comparison = None;
-                                cx.notify();
-                            })),
+                        div()
+                            .text_size(metric("--text-xs"))
+                            .text_color(t.muted())
+                            .child(self.comparison_status.clone()),
                     )
                 });
         }
@@ -3779,7 +3943,7 @@ impl ScreenshotEditor {
                             .id("export-settings")
                             .w(px(210.))
                             .min_w(px(178.))
-                            .h(metric("--h-lg"))
+                            .h(px(48.))
                             .px(metric("--s-4"))
                             .flex()
                             .flex_col()
@@ -3812,6 +3976,8 @@ impl ScreenshotEditor {
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.export_open = !this.export_open;
                                 this.format_menu_open = false;
+                                this.quality_menu_open = false;
+                                this.quality_mode_menu_open = false;
                                 cx.notify();
                             })),
                     )
@@ -3859,31 +4025,25 @@ impl ScreenshotEditor {
                             .text_color(t.muted())
                             .child(self.status.clone()),
                     )
-                    .child(
-                        self.compact_button("save-new", "Save as new file", t)
-                            .h(metric("--h-lg"))
-                            .px(metric("--s-5"))
-                            .flex_none()
-                            .on_click(cx.listener(Self::prompt_export)),
-                    )
-                    .child(
-                        button(
-                            "save-source",
-                            if cfg!(target_os = "macos") {
-                                "Save  ⌘S"
-                            } else {
-                                "Save  Ctrl+S"
-                            },
-                            t,
+                    .when(!self.format_requires_copy(), |row| {
+                        row.child(
+                            self.toggle("save-new", "Save as new file", self.make_copy, t)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.make_copy = !this.make_copy;
+                                    cx.notify();
+                                })),
                         )
-                        .h(metric("--h-lg"))
-                        .flex_none()
-                        .min_w(px(106.))
-                        .bg(t.accent)
-                        .border_color(t.accent)
-                        .text_color(t.accent_ink)
-                        .child(icon("save").size(px(14.)).text_color(t.accent_ink))
-                        .on_click(cx.listener(Self::save_source)),
+                    })
+                    .child(
+                        button("save-source", "Save", t)
+                            .h(metric("--h-lg"))
+                            .flex_none()
+                            .min_w(px(106.))
+                            .bg(t.accent)
+                            .border_color(t.accent)
+                            .text_color(t.accent_ink)
+                            .child(icon("save").size(px(14.)).text_color(t.accent_ink))
+                            .on_click(cx.listener(Self::save_source)),
                     ),
             )
     }
@@ -3995,10 +4155,11 @@ impl Render for ScreenshotEditor {
                 .p(metric("--s-8"))
                 .child(self.status.clone());
         }
+        self.refresh_comparison(cx);
         if self.zoom_fit {
             let viewport = window.viewport_size();
             let available_width = (f64::from(f32::from(viewport.width)) - 56. - 320. - 64.).max(1.);
-            let footer_height = if self.export_open { 154. } else { 68. };
+            let footer_height = if self.export_open { 190. } else { 76. };
             let available_height =
                 (f64::from(f32::from(viewport.height)) - 52. - footer_height - 64.).max(1.);
             self.zoom = (available_width / f64::from(self.doc.width))
@@ -4101,7 +4262,15 @@ impl Render for ScreenshotEditor {
             .on_action(cx.listener(|this, _: &NudgeRightLarge, _, cx| this.nudge(10., 0., cx)))
             .on_action(cx.listener(|this, _: &NudgeUpLarge, _, cx| this.nudge(0., -10., cx)))
             .on_action(cx.listener(|this, _: &NudgeDownLarge, _, cx| this.nudge(0., 10., cx)))
-            .on_action(cx.listener(|this, _: &CommitText, window, cx| this.commit_text(window, cx)))
+            .on_action(cx.listener(|this, _: &CommitText, window, cx| {
+                if this.color_input.read(cx).is_focused(window) {
+                    this.apply_color(window, cx);
+                } else if this.numeric_input.read(cx).is_focused(window) {
+                    this.apply_numeric(window, cx);
+                } else {
+                    this.commit_text(window, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &CancelText, window, cx| this.cancel_text(window, cx)))
             .on_action(cx.listener(|this, _: &SaveSource, _, cx| this.save_primary(cx)))
             .child(
@@ -4611,6 +4780,29 @@ mod tests {
         assert_eq!(parse_hex_color("10203080").unwrap().3, 128. / 255.);
         assert_eq!(parse_hex_color("#fff"), None);
         assert_eq!(parse_hex_color("not-a-color"), None);
+        assert_eq!(parse_hex_color("aéabc"), None);
+    }
+
+    #[test]
+    fn source_format_recognizes_jpeg_aliases_but_requires_copy_for_unknown_formats() {
+        assert_eq!(
+            ExportFormat::for_path(Path::new("photo.JPEG")),
+            Some(ExportFormat::Jpeg)
+        );
+        assert_eq!(
+            ExportFormat::for_path(Path::new("photo.jpg")),
+            Some(ExportFormat::Jpeg)
+        );
+        assert_eq!(
+            ExportFormat::for_path(Path::new("photo.webp")),
+            Some(ExportFormat::Webp)
+        );
+        assert_eq!(
+            ExportFormat::for_path(Path::new("photo.png")),
+            Some(ExportFormat::Png)
+        );
+        assert_eq!(ExportFormat::for_path(Path::new("photo.gif")), None);
+        assert_eq!(ExportFormat::for_path(Path::new("photo")), None);
     }
 
     #[test]

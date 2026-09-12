@@ -15,6 +15,9 @@ packages=(
   build-essential
   curl
   file
+  # WebKit's MP4 player needs both H.264 parsing and decoding for matched media tests.
+  gstreamer1.0-libav
+  gstreamer1.0-plugins-bad
   libayatana-appindicator3-dev
   libasound2-dev
   libclang-dev

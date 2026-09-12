@@ -44,6 +44,50 @@ class BenchmarkHelpersTest(unittest.TestCase):
         self.assertEqual(benchmark.command(binary, "gpui", "image", fixture, "light"),
                          ["/opt/captures", "--appearance", "light", "--open", "/tmp/fixture.png"])
 
+    def test_selection_commands_use_real_shortcut_entry_not_gpui_test_cli(self):
+        binary = Path("/opt/captures")
+        fixture = Path("/tmp/fixture.png")
+        for state in ("screenshot-selection", "recording-selection"):
+            self.assertEqual(benchmark.command(binary, "tauri", state, fixture, "dark"),
+                             ["/opt/captures"])
+            self.assertEqual(benchmark.command(binary, "gpui", state, fixture, "dark"),
+                             ["/opt/captures", "--appearance", "dark", "--preferences"])
+
+    def test_video_uses_each_production_media_open_contract(self):
+        binary = Path("/opt/captures")
+        fixture = Path("/tmp/fixture.mp4")
+        self.assertEqual(benchmark.command(binary, "tauri", "video-editor", fixture, "dark"),
+                         ["/opt/captures", "/tmp/fixture.mp4"])
+        self.assertEqual(benchmark.command(binary, "gpui", "video-editor", fixture, "dark"),
+                         ["/opt/captures", "--appearance", "dark", "--open", "/tmp/fixture.mp4"])
+
+    def test_selection_shortcuts_are_discriminating(self):
+        from unittest.mock import patch
+        with patch.object(benchmark.subprocess, "run") as run:
+            benchmark.enter_state("screenshot-selection")
+            run.assert_called_once_with(
+                ["xdotool", "keydown", "Print", "sleep", ".1", "keyup", "Print"], check=True)
+        with patch.object(benchmark.subprocess, "run") as run:
+            benchmark.enter_state("recording-selection")
+            run.assert_called_once_with(
+                ["xdotool", "keydown", "ctrl+shift+alt+r", "sleep", ".1", "keyup", "ctrl+shift+alt+r"], check=True)
+
+    def test_preview_matching_rejects_same_title_fullscreen_selector(self):
+        from unittest.mock import patch, Mock
+        with patch.object(benchmark.subprocess, "run", return_value=Mock(returncode=0, stdout="11\n22\n")), \
+             patch.object(benchmark.subprocess, "check_output", side_effect=["WIDTH=1600\n", "WIDTH=340\n"]):
+            self.assertEqual(benchmark.find_window("^Captures$", 123, maximum_width=400), "11")
+
+    def test_additional_surface_titles_are_distinct(self):
+        self.assertEqual(benchmark.TITLES[("tauri", "history")], "^Capture History$")
+        self.assertEqual(benchmark.TITLES[("gpui", "history")], "^Captures GPUI Capture History$")
+        self.assertEqual(benchmark.TITLES[("tauri", "recording-hud")], "^Captures Recording Controls$")
+        self.assertEqual(benchmark.TITLES[("gpui", "recording-hud")], "^Captures GPUI Recording controls$")
+
+    def test_overlay_states_keep_native_dimensions(self):
+        for state in ("previews-collapsed", "previews-expanded", "recording-hud"):
+            self.assertNotIn(state, benchmark.WINDOW_SIZES)
+
     def test_png_dimensions_validates_signature_and_asymmetric_size(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "shot.png"

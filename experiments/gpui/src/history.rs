@@ -5,7 +5,7 @@
 //! saved source is never deleted.
 use crate::{
     settings::{atomic_write, data_dir},
-    ui::{Theme, button, metric, root, theme},
+    ui::{Theme, button, icon, metric, root, theme},
 };
 use gpui::{
     App, AppContext, Bounds, Context, Entity, IntoElement, ObjectFit, Render, RetainAllImageCache,
@@ -473,6 +473,31 @@ impl History {
             .child(div().text_color(colors.muted()).child(count.to_string()))
             .on_click(cx.listener(move |this, _, window, cx| this.set_filter(filter, window, cx)))
     }
+    fn card_button(
+        id: impl Into<gpui::ElementId>,
+        label: &'static str,
+        icon_name: &'static str,
+        colors: Theme,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(id)
+            .h(metric("--h-md"))
+            .px(metric("--s-5"))
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(metric("--s-3"))
+            .rounded(metric("--r-sm"))
+            .border_1()
+            .border_color(colors.border())
+            .bg(colors.raised())
+            .text_color(colors.text())
+            .text_size(metric("--text-sm"))
+            .cursor_pointer()
+            .hover(move |style| style.bg(colors.color("--surface-hover")))
+            .child(icon(icon_name).size(px(15.)).text_color(colors.text()))
+            .child(label)
+    }
     fn card(&self, entry: &Entry, colors: Theme, cx: &mut Context<Self>) -> gpui::Div {
         let id = entry.id.clone();
         let action_path = if entry.library_path.is_file() {
@@ -546,20 +571,35 @@ impl History {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child("×")
+                    .child(icon("trash").size(px(15.)).text_color(colors.glass_text()))
+                    .when(confirming, |button| {
+                        button.child(
+                            div()
+                                .absolute()
+                                .right(px(36.))
+                                .px(metric("--s-3"))
+                                .py(metric("--s-2"))
+                                .rounded(metric("--r-sm"))
+                                .bg(colors.glass())
+                                .text_size(metric("--text-sm"))
+                                .whitespace_nowrap()
+                                .child("Click again to delete forever"),
+                        )
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| this.remove(id.clone(), cx))),
             );
         let actions = div()
             .flex()
             .gap(metric("--s-3"))
             .child(
-                button(
+                Self::card_button(
                     SharedString::from(format!("open-{}", entry.id)),
                     if entry.kind == Kind::Screenshot {
                         "Edit"
                     } else {
                         "Open"
                     },
+                    "edit",
                     colors,
                 )
                 .on_click(move |_, _, cx| {
@@ -570,9 +610,10 @@ impl History {
             )
             .when(entry.kind == Kind::Screenshot, |container| {
                 container.child(
-                    button(
+                    Self::card_button(
                         SharedString::from(format!("restore-{}", entry.id)),
                         "Restore",
+                        "restart",
                         colors,
                     )
                     .on_click(move |_, _, cx| {
