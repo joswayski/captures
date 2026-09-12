@@ -53,13 +53,10 @@ final class AppStore: NSObject, ObservableObject, NSWindowDelegate {
     }
 
     func report(_ error: Error) {
-        let alert = NSAlert()
-        alert.messageText = "Captures Native Experiment"
-        alert.informativeText = error.localizedDescription
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "OK")
-        if let window = NSApp.keyWindow { alert.beginSheetModal(for: window) }
-        else { alert.runModal() }
+        let message = error.localizedDescription
+        DispatchQueue.main.async {
+            CaptureDialogController.shared.report(NativeFailure(message))
+        }
     }
 
     func addArtifact(_ artifact: Artifact) {

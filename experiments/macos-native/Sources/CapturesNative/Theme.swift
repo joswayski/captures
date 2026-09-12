@@ -37,6 +37,7 @@ enum NativeTheme {
     static var glassMuted: Color { color("glass-text-muted") }
     static var accent: Color { Color(css: AppStore.shared.settings.accentHex) }
     static var signal: Color { Color(css: AppStore.shared.settings.signalHex) }
+    static var saved: Color { color("positive") }
     static var motion: Animation { .timingCurve(0.16, 1, 0.3, 1, duration: duration("dur-4")) }
     static var standard: Animation { .timingCurve(0.2, 0.8, 0.2, 1, duration: duration("dur-2")) }
     static func duration(_ name: String) -> Double {
@@ -118,6 +119,183 @@ struct SectionTitle: View {
                 .foregroundColor(NativeTheme.color("text-subtle", scheme))
                 .frame(maxWidth: NativeTheme.settingsCopyWidth, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true) }
+        }
+    }
+}
+
+struct CaptureOption<Value: Hashable>: Identifiable {
+    let label: String
+    let value: Value
+    var id: Value { value }
+}
+
+struct CaptureSegments<Value: Hashable>: View {
+    @Binding var selection: Value
+    let options: [CaptureOption<Value>]
+    var glass = false
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(options) { option in
+                Button {
+                    selection = option.value
+                } label: {
+                    Text(option.label)
+                        .font(.system(size: NativeTheme.metric("text-sm"), weight: .medium))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: NativeTheme.metric("h-xs"))
+                        .foregroundColor(glass ? NativeTheme.glassText : nil)
+                        .background(selection == option.value
+                                    ? (glass ? NativeTheme.glassRaised : NativeTheme.accent.opacity(0.18))
+                                    : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: NativeTheme.metric("r-sm")))
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selection == option.value ? .isSelected : [])
+            }
+        }
+        .padding(3)
+        .background(glass ? NativeTheme.glass : Color.primary.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: NativeTheme.metric("r-md")))
+        .overlay(RoundedRectangle(cornerRadius: NativeTheme.metric("r-md"))
+            .stroke(glass ? NativeTheme.color("glass-border") : Color.primary.opacity(0.1)))
+    }
+}
+
+struct CaptureToggle: View {
+    let title: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Button { isOn.toggle() } label: {
+            Capsule()
+                .fill(isOn ? NativeTheme.accent : Color.primary.opacity(0.16))
+                .frame(width: 42, height: 24)
+                .overlay(alignment: isOn ? .trailing : .leading) {
+                    Circle().fill(isOn ? Color.black.opacity(0.82) : Color.white)
+                        .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
+                        .padding(3)
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(isOn ? "On" : "Off")
+        .accessibilityAddTraits(.isButton)
+        .animation(NativeTheme.standard, value: isOn)
+    }
+}
+
+struct CaptureToggleRow: View {
+    let title: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack {
+            Text(title)
+            Spacer(minLength: NativeTheme.metric("s-3"))
+            CaptureToggle(title: title, isOn: $isOn)
+        }
+    }
+}
+
+struct CaptureChoice<Value: Hashable>: View {
+    let title: String
+    @Binding var selection: Value
+    let options: [CaptureOption<Value>]
+    var glass = false
+    var opensAbove = false
+    @State private var open = false
+    @Environment(\.colorScheme) private var scheme
+
+    private var selectedLabel: String {
+        options.first(where: { $0.value == selection })?.label ?? "Choose"
+    }
+
+    private var optionPanelHeight: CGFloat {
+        CGFloat(options.count) * NativeTheme.metric("h-md")
+            + CGFloat(max(0, options.count - 1)) * 3
+            + NativeTheme.metric("s-3") * 2
+    }
+
+    var body: some View {
+        Button { open.toggle() } label: {
+            HStack(spacing: NativeTheme.metric("s-3")) {
+                Text(selectedLabel).lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(glass ? NativeTheme.glassMuted : NativeTheme.muted(scheme))
+                    .rotationEffect(open ? .degrees(180) : .zero)
+            }
+        }
+        .buttonStyle(CaptureButtonStyle(glass: glass))
+        .accessibilityLabel(title)
+        .overlay(alignment: .topLeading) {
+            if open {
+                VStack(spacing: 3) {
+                    ForEach(options) { option in
+                        Button {
+                            selection = option.value
+                            open = false
+                        } label: {
+                            HStack {
+                                Text(option.label)
+                                Spacer()
+                                if option.value == selection { Image(systemName: "checkmark") }
+                            }
+                            .padding(.horizontal, NativeTheme.metric("s-4"))
+                            .frame(minWidth: 190, minHeight: NativeTheme.metric("h-md"))
+                            .background(option.value == selection ? NativeTheme.accent.opacity(0.16) : .clear)
+                            .clipShape(RoundedRectangle(cornerRadius: NativeTheme.metric("r-md")))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(NativeTheme.metric("s-3"))
+                .foregroundColor(glass ? NativeTheme.glassText : NativeTheme.text(scheme))
+                .background(glass ? NativeTheme.glassRaised : NativeTheme.raised(scheme),
+                            in: RoundedRectangle(cornerRadius: NativeTheme.metric("r-lg")))
+                .overlay(RoundedRectangle(cornerRadius: NativeTheme.metric("r-lg"))
+                    .stroke(glass ? NativeTheme.color("glass-border") : NativeTheme.border(scheme)))
+                .shadow(color: .black.opacity(scheme == .dark ? 0.42 : 0.16), radius: 18, y: 8)
+                .offset(y: opensAbove
+                        ? -(optionPanelHeight + NativeTheme.metric("s-2"))
+                        : NativeTheme.metric("h-md") + NativeTheme.metric("s-2"))
+                .zIndex(100)
+            }
+        }
+        .zIndex(open ? 100 : 0)
+        .onExitCommand { open = false }
+    }
+}
+
+struct CaptureSlider: View {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    var tint = NativeTheme.accent
+
+    var body: some View {
+        GeometryReader { geometry in
+            let progress = CGFloat((value - range.lowerBound) / max(.ulpOfOne, range.upperBound - range.lowerBound))
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.primary.opacity(0.14)).frame(height: 5)
+                Capsule().fill(tint).frame(width: max(5, geometry.size.width * progress), height: 5)
+                Circle().fill(Color.white).shadow(color: .black.opacity(0.24), radius: 2, y: 1)
+                    .frame(width: 15, height: 15)
+                    .offset(x: max(0, min(geometry.size.width - 15, geometry.size.width * progress - 7.5)))
+            }
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
+                let unit = min(1, max(0, drag.location.x / max(1, geometry.size.width)))
+                value = range.lowerBound + Double(unit) * (range.upperBound - range.lowerBound)
+            })
+        }
+        .frame(height: 20)
+        .accessibilityElement()
+        .accessibilityValue("\(Int(value.rounded()))")
+        .accessibilityAdjustableAction { direction in
+            let step = (range.upperBound - range.lowerBound) / 20
+            value = min(range.upperBound, max(range.lowerBound, value + (direction == .increment ? step : -step)))
         }
     }
 }

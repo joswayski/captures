@@ -116,8 +116,11 @@ are mode `0700` and are never returned by `recover_list`.
   lifecycle worker or silently omits an unauthorized microphone.
 - `record_pause`, `record_resume`, `record_restart`, `record_status`,
   `record_stop`, and `record_discard` take only `op`.
+  `record_restart` discards the current take and prepares a fresh draft in
+  `selecting`; the frontend runs its visible cancellable countdown and calls
+  `record_resume` at zero. Cancelling that countdown calls `record_discard`.
 - `record_mute`: `{"op":"record_mute","muted":true}`.
-- Status is `{"state":"idle|recording|paused|finalizing|failed",
+- Status is `{"state":"idle|selecting|recording|paused|finalizing|failed",
   "elapsed_ms":u64,"microphone_level":number,"microphone_muted":bool,
   "warning"?:string}`. With no session, `record_status` succeeds with idle,
   zero elapsed/level, and `microphone_muted:false`. Elapsed time excludes pauses.
@@ -160,12 +163,13 @@ are not silently presented as engine features.
 - `{"op":"media_export","path":"...","output":"...","format":"mp4|gif|webm",
   "start_ms":u64,"end_ms":u64,"crop"?:{"x":u32,"y":u32,"width":u32,"height":u32},
   "width"?:u32,"fps"?:1..30,"quality"?:"preserve|highest|high|standard|small|tiny",
-  "system_volume"?:number,"microphone_volume"?:number,"mono"?:bool}` returns a
+  "max_bytes"?:u64,"system_volume"?:number,"microphone_volume"?:number,"mono"?:bool}` returns a
   video/GIF artifact. Times are milliseconds with `start_ms < end_ms` inside the
   source. Crop is in source pixels. Width is rounded down to an even value and
   height is derived from the cropped aspect ratio and made even. Volumes are
   finite multipliers from 0 through 2 and default to 1. `fps` is accepted only
-  for GIF and defaults to the media toolchain choice.
+  for GIF and defaults to the media toolchain choice. `max_bytes`, when present,
+  must be greater than zero and applies the media toolchain's hard size budget.
 
 `media_export.output` may be a private temporary path for before/after
 comparison. The bridge treats it exactly like any other caller-owned output,

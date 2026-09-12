@@ -45,6 +45,15 @@ struct EditorColor: Codable, Equatable, Hashable {
         NSColor(srgbRed: red, green: green, blue: blue, alpha: alpha)
     }
 
+    var hex: String {
+        String(
+            format: "#%02X%02X%02X",
+            Int((min(1, max(0, red)) * 255).rounded()),
+            Int((min(1, max(0, green)) * 255).rounded()),
+            Int((min(1, max(0, blue)) * 255).rounded())
+        )
+    }
+
     init(red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat = 1) {
         self.red = red
         self.green = green
@@ -59,6 +68,13 @@ struct EditorColor: Codable, Equatable, Hashable {
         blue = converted.blueComponent
         alpha = converted.alphaComponent
     }
+}
+
+struct EditorShadow: Codable, Equatable, Hashable {
+    var radius: CGFloat = 8
+    var offsetX: CGFloat = 0
+    var offsetY: CGFloat = 4
+    var opacity: CGFloat = 0.45
 }
 
 enum EditorShape: String, Codable, CaseIterable {
@@ -123,12 +139,13 @@ struct EditorLayer: Identifiable, Codable, Equatable {
     var color: EditorColor = .signal
     var fill: EditorColor?
     var lineWidth: CGFloat = 6
+    var shadow: EditorShadow?
 
     init(
         id: UUID = UUID(), name: String, content: EditorLayerContent, frame: EditorRect,
         rotation: CGFloat = 0, visible: Bool = true, locked: Bool = false,
         opacity: CGFloat = 1, color: EditorColor = .signal, fill: EditorColor? = nil,
-        lineWidth: CGFloat = 6
+        lineWidth: CGFloat = 6, shadow: EditorShadow? = nil
     ) {
         self.id = id
         self.name = name
@@ -141,6 +158,7 @@ struct EditorLayer: Identifiable, Codable, Equatable {
         self.color = color
         self.fill = fill
         self.lineWidth = lineWidth
+        self.shadow = shadow
     }
 }
 
@@ -148,6 +166,7 @@ struct EditorDocument: Codable, Equatable {
     var width: Int
     var height: Int
     var layers: [EditorLayer]
+    var background: EditorColor?
 
     init(imageData: Data) throws {
         guard let image = NSImage(data: imageData), image.size.width > 0, image.size.height > 0 else {
@@ -156,6 +175,7 @@ struct EditorDocument: Codable, Equatable {
         let pixels = image.pixelSize
         width = pixels.width
         height = pixels.height
+        background = nil
         layers = [EditorLayer(
             name: "Original screenshot",
             content: .image(imageData, original: imageData),
@@ -164,10 +184,11 @@ struct EditorDocument: Codable, Equatable {
         )]
     }
 
-    init(width: Int, height: Int, layers: [EditorLayer] = []) {
+    init(width: Int, height: Int, layers: [EditorLayer] = [], background: EditorColor? = nil) {
         self.width = max(1, width)
         self.height = max(1, height)
         self.layers = layers
+        self.background = background
     }
 }
 
@@ -472,6 +493,63 @@ final class EditorModel: ObservableObject {
         updateSelected { $0.content = .image(png, original: originalData) }
     }
 
+    func removeBackgroundColor(at documentPoint: CGPoint, tolerance: CGFloat = 0.12) throws {
+        guard let index = selectedLayerIndex else { return }
+        let layer = document.layers[index]
+        guard !layer.locked else { return }
+        let frame = layer.frame.cgRect
+        let center = CGPoint(x: frame.midX, y: frame.midY)
+        let dx = documentPoint.x - center.x
+        let dy = documentPoint.y - center.y
+        let cosine = cos(-layer.rotation)
+        let sine = sin(-layer.rotation)
+        let local = CGPoint(x: center.x + dx * cosine - dy * sine,
+                            y: center.y + dx * sine + dy * cosine)
+        guard frame.contains(local), case let .image(data, original) = layer.content,
+              let image = NSImage(data: data),
+              let source = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+        let width = source.width
+        let height = source.height
+        guard let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
+        ), let pixels = context.data?.assumingMemoryBound(to: UInt8.self) else { throw EditorError.cannotRender }
+        context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let seedX = min(width - 1, max(0, Int((local.x - frame.minX) / frame.width * CGFloat(width))))
+        let seedY = min(height - 1, max(0, Int((local.y - frame.minY) / frame.height * CGFloat(height))))
+        let seedOffset = (seedY * width + seedX) * 4
+        let seed = (pixels[seedOffset], pixels[seedOffset + 1], pixels[seedOffset + 2], pixels[seedOffset + 3])
+        let limit = max(1, Int(tolerance * 255))
+        var visited = [Bool](repeating: false, count: width * height)
+        var pending = [(seedX, seedY)]
+        visited[seedY * width + seedX] = true
+        while let (x, y) = pending.popLast() {
+            let pixelIndex = y * width + x
+            let offset = pixelIndex * 4
+            let distance = max(
+                abs(Int(pixels[offset]) - Int(seed.0)),
+                abs(Int(pixels[offset + 1]) - Int(seed.1)),
+                abs(Int(pixels[offset + 2]) - Int(seed.2)),
+                abs(Int(pixels[offset + 3]) - Int(seed.3))
+            )
+            guard distance <= limit else { continue }
+            pixels[offset] = 0; pixels[offset + 1] = 0; pixels[offset + 2] = 0; pixels[offset + 3] = 0
+            for (nextX, nextY) in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]
+                where nextX >= 0 && nextX < width && nextY >= 0 && nextY < height {
+                let next = nextY * width + nextX
+                if !visited[next] {
+                    visited[next] = true
+                    pending.append((nextX, nextY))
+                }
+            }
+        }
+        guard let edited = context.makeImage(),
+              let png = NSBitmapImageRep(cgImage: edited).representation(using: .png, properties: [:])
+        else { throw EditorError.cannotRender }
+        updateSelected { $0.content = .image(png, original: original) }
+    }
+
     func renderedImage() throws -> NSImage {
         guard document.width > 0, document.height > 0 else { throw EditorError.cannotRender }
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
@@ -485,7 +563,7 @@ final class EditorModel: ObservableObject {
                 bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
               ) else { throw EditorError.cannotRender }
         context.setBlendMode(.copy)
-        context.setFillColor(NSColor.clear.cgColor)
+        context.setFillColor((document.background?.nsColor ?? .clear).cgColor)
         context.fill(CGRect(x: 0, y: 0, width: CGFloat(document.width), height: CGFloat(document.height)))
         context.setBlendMode(.normal)
         context.translateBy(x: 0, y: CGFloat(document.height))
@@ -558,6 +636,13 @@ final class EditorModel: ObservableObject {
         context.translateBy(x: frame.midX, y: frame.midY)
         context.rotate(by: layer.rotation)
         context.translateBy(x: -frame.midX, y: -frame.midY)
+        if let shadow = layer.shadow {
+            context.setShadow(
+                offset: CGSize(width: shadow.offsetX, height: shadow.offsetY),
+                blur: shadow.radius,
+                color: NSColor.black.withAlphaComponent(shadow.opacity).cgColor
+            )
+        }
         switch layer.content {
         case let .image(data, _):
             NSImage(data: data)?.draw(

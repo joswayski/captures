@@ -176,6 +176,62 @@ final class EditorModelTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: source), original)
     }
 
+    func testBackgroundWandRemovesOnlyConnectedMatchingColorAndSupportsUndo() throws {
+        let source = try splitPNG()
+        let layer = EditorLayer(
+            name: "Background", content: .image(source, original: source),
+            frame: EditorRect(x: 0, y: 0, width: 4, height: 2)
+        )
+        let model = EditorModel(
+            document: EditorDocument(width: 4, height: 2, layers: [layer]),
+            sourceURL: URL(fileURLWithPath: "/tmp/wand.png")
+        )
+        model.selectedLayerID = layer.id
+
+        try model.removeBackgroundColor(at: CGPoint(x: 0.5, y: 0.5), tolerance: 0.01)
+
+        guard case let .image(edited, _) = model.document.layers[0].content else {
+            return XCTFail("Expected edited image layer")
+        }
+        let image = try decodePNG(edited)
+        XCTAssertEqual(try pixel(image, x: 0, y: 0), [0, 0, 0, 0])
+        XCTAssertEqual(try pixel(image, x: 3, y: 0), [0, 0, 255, 255])
+        model.undo()
+        XCTAssertEqual(model.document.layers[0], layer)
+    }
+
+    func testLayerShadowRendersOutsideShapeBounds() throws {
+        let layer = EditorLayer(
+            name: "Shadowed", content: .shape(.rectangle),
+            frame: EditorRect(x: 4, y: 4, width: 5, height: 5),
+            fill: .white,
+            shadow: EditorShadow(radius: 0, offsetX: 4, offsetY: 0, opacity: 1)
+        )
+        let model = EditorModel(
+            document: EditorDocument(width: 16, height: 16, layers: [layer]),
+            sourceURL: URL(fileURLWithPath: "/tmp/shadow.png")
+        )
+        let image = try XCTUnwrap(model.renderedImage().cgImage(forProposedRect: nil, context: nil, hints: nil))
+        XCTAssertGreaterThan(try pixel(image, x: 11, y: 6)[3], 0)
+    }
+
+    func testLegacyDraftWithoutBackgroundOrShadowStillDecodes() throws {
+        let document = EditorDocument(width: 8, height: 6, layers: [
+            EditorLayer(name: "Shape", content: .shape(.ellipse), frame: EditorRect(x: 1, y: 1, width: 4, height: 3)),
+        ])
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(document)) as? [String: Any])
+        json.removeValue(forKey: "background")
+        var layers = try XCTUnwrap(json["layers"] as? [[String: Any]])
+        layers[0].removeValue(forKey: "shadow")
+        json["layers"] = layers
+
+        let decoded = try JSONDecoder().decode(EditorDocument.self, from: JSONSerialization.data(withJSONObject: json))
+
+        XCTAssertNil(decoded.background)
+        XCTAssertNil(decoded.layers[0].shadow)
+        XCTAssertEqual(decoded.width, 8)
+    }
+
     func testExportRefusesExistingFileWithoutChangingIt() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -246,6 +302,20 @@ final class EditorModelTests: XCTestCase {
     private func decodePNG(_ data: Data) throws -> CGImage {
         let source = try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil))
         return try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+    }
+
+    private func splitPNG() throws -> Data {
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: 4, height: 2, bitsPerComponent: 8, bytesPerRow: 16,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.setFillColor(NSColor.yellow.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: 3, height: 2))
+        context.setFillColor(NSColor.blue.cgColor)
+        context.fill(CGRect(x: 3, y: 0, width: 1, height: 2))
+        let image = try XCTUnwrap(context.makeImage())
+        return try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
     }
 
     /// Honor the decoded profile, then inspect literal sRGB RGBA8 bytes without

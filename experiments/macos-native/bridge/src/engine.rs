@@ -553,7 +553,10 @@ impl Engine {
         session.segments.clear();
         session.lifecycle.restart();
         session.warning = None;
-        session.begin_segment()?;
+        // Restart is a two-phase operation. The frontend owns the visible,
+        // cancellable countdown and calls record_resume only after it reaches
+        // zero. Keeping the engine in Selecting prevents frames from being
+        // recorded behind that countdown.
         Ok(session.status())
     }
 
@@ -687,6 +690,9 @@ impl Engine {
         if request.fps.is_some_and(|fps| !(1..=30).contains(&fps)) {
             return Err("GIF export fps must be between 1 and 30".to_owned());
         }
+        if request.max_bytes == Some(0) {
+            return Err("media export max_bytes must be greater than zero".to_owned());
+        }
         if request.output.exists() {
             return Err(format!(
                 "export destination already exists: {}",
@@ -729,7 +735,7 @@ impl Engine {
         let spec = ExportSpec {
             format: request.format,
             quality: request.quality,
-            max_size_bytes: None,
+            max_size_bytes: request.max_bytes,
             frames_per_second: request.fps,
             gif_max_colors: None,
         };
@@ -1274,6 +1280,26 @@ mod tests {
     }
 
     #[test]
+    fn media_export_rejects_a_zero_size_budget_before_running_the_toolchain() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.mp4");
+        std::fs::write(&source, b"not media").unwrap();
+        let request = serde_json::json!({
+            "op": "media_export",
+            "path": source,
+            "output": directory.path().join("output.mp4"),
+            "format": "mp4",
+            "start_ms": 0,
+            "end_ms": 1,
+            "max_bytes": 0
+        });
+        let error = super::dispatch_direct(&request.to_string())
+            .expect("media export is stateless")
+            .unwrap_err();
+        assert_eq!(error, "media export max_bytes must be greater than zero");
+    }
+
+    #[test]
     fn recovery_reservation_excludes_concurrent_recovery() {
         let flag = AtomicBool::new(false);
         let first = Reservation::acquire(&flag).unwrap();
@@ -1323,6 +1349,8 @@ mod tests {
         lifecycle.restart();
         assert_eq!(lifecycle.elapsed_ms(), 0);
         assert_eq!(lifecycle.state, RecordingState::Selecting);
+        lifecycle.begin().unwrap();
+        assert_eq!(lifecycle.state, RecordingState::Recording);
     }
 
     #[test]

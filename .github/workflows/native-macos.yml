@@ -3,18 +3,22 @@ name: Native macOS experiment
 on:
   pull_request:
     paths:
-      - 'experiments/macos-native/**'
-      - 'crates/captures-capture/**'
-      - 'crates/captures-recording/**'
-      - 'crates/captures-recording-macos/**'
-      - 'crates/captures-media/**'
-      - 'crates/captures-session/**'
-      - 'shared/design.css'
-      - 'shared/themes.css'
-      - '.github/workflows/native-macos.yml'
+      - "experiments/macos-native/**"
+      - "crates/captures-capture/**"
+      - "crates/captures-recording/**"
+      - "crates/captures-recording-macos/**"
+      - "crates/captures-media/**"
+      - "crates/captures-session/**"
+      - "shared/design.css"
+      - "shared/themes.css"
+      - ".github/workflows/native-macos.yml"
 
 permissions:
   contents: read
+
+concurrency:
+  group: native-macos-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   native:
@@ -26,6 +30,11 @@ jobs:
         with:
           toolchain: 1.94.0
           components: rustfmt, clippy
+          cache-workspaces: experiments/macos-native/bridge -> ../build/rust
+      - name: Install test-only media tools
+        run: |
+          command -v ffmpeg >/dev/null || brew install ffmpeg
+          command -v ffprobe >/dev/null
       - run: bash experiments/macos-native/check.sh
       - name: Archive the ad-hoc signed local-test app
         run: ditto -c -k --sequesterRsrc --keepParent 'experiments/macos-native/build/Captures Native Experiment.app' experiments/macos-native/build/Captures-Native-Experiment.zip
@@ -34,13 +43,25 @@ jobs:
           name: captures-native-macos-experiment
           path: experiments/macos-native/build/Captures-Native-Experiment.zip
           if-no-files-found: error
-      - name: Render native Preferences references
-        timeout-minutes: 2
+      - name: Render native surface references
+        timeout-minutes: 10
         env:
           CAPTURES_NATIVE_DATA: ${{ runner.temp }}/captures-native-render-profile
-        run: experiments/macos-native/build/render-references experiments/macos-native/build/references
+        run: bash experiments/macos-native/render.sh experiments/macos-native/build/references
       - uses: actions/upload-artifact@v4
         with:
           name: captures-native-macos-references
           path: experiments/macos-native/build/references/*.png
           if-no-files-found: error
+      - name: Verify presented video and disintegration
+        timeout-minutes: 10
+        env:
+          CAPTURES_NATIVE_CAPTURE_ANIMATION: "1"
+        run: bash experiments/macos-native/render.sh experiments/macos-native/build/compositor-references
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: captures-native-macos-compositor-references
+          path: experiments/macos-native/build/compositor-references/*-compositor.png
+          if-no-files-found: warn
+          retention-days: 7

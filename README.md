@@ -110,6 +110,12 @@ not implemented yet.
 | Linux X11 | Supported; hide recording controls manually when needed |
 | Linux Wayland | Experimental; no window targeting, cursor capture, or click highlights. Mini previews cannot poll the pointer, so the stack stays interactive and may cover apps underneath |
 
+These statuses describe the downloadable Tauri Preview. Separate native frontends
+are in development using GTK4 on Linux, Win32/DirectComposition on Windows, and
+Swift/AppKit on macOS. They retain Captures' custom design and shared Rust engines
+as their target; they are not yet replacement releases. See the
+[native migration and verification notes](docs/native-platforms.md).
+
 ## Shortcuts
 
 Defaults follow each platform’s built-in screenshot keys. Captures-only actions keep extra shortcuts.
