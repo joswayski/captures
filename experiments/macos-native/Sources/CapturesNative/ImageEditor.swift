@@ -6,8 +6,7 @@ private enum ImageEditorTool: String, CaseIterable, Identifiable {
     case select = "Select"
     case crop = "Crop"
     case text = "Text"
-    case rectangle = "Rectangle"
-    case ellipse = "Ellipse"
+    case shape = "Shape"
     case arrow = "Arrow"
     case pen = "Freehand"
     case erase = "Erase"
@@ -20,8 +19,7 @@ private enum ImageEditorTool: String, CaseIterable, Identifiable {
         case .select: return "arrow.up.left.and.arrow.down.right"
         case .crop: return "crop"
         case .text: return "textformat"
-        case .rectangle: return "rectangle"
-        case .ellipse: return "circle"
+        case .shape: return "square.on.circle"
         case .arrow: return "arrow.up.right"
         case .pen: return "pencil.tip"
         case .erase: return "eraser"
@@ -73,6 +71,11 @@ private struct ImageEditorSurface: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var tool: ImageEditorTool = .select
     @State private var zoom: CGFloat = 1
+    @State private var zoomMode = "fit"
+    @State private var viewportSize: CGSize = .zero
+    @State private var selectedShape: EditorShape = .rectangle
+    @State private var shapeFlyoutOpen = false
+    @State private var backgroundFlyoutOpen = false
     @State private var widthText = ""
     @State private var heightText = ""
     @State private var strokeWidth: CGFloat = 6
@@ -86,8 +89,8 @@ private struct ImageEditorSurface: View {
     @State private var dragLayerFrame: EditorRect?
     @State private var resizeLayerFrame: EditorRect?
     @State private var rotatingLayer = false
-    @State private var exportFormat = "png"
-    @State private var quality = 0.92
+    @State private var exportFormat: String
+    @State private var quality = "92"
     @State private var exportQualityMode = "preserve"
     @State private var maximumSizeMB = 10.0
     @State private var exporting = false
@@ -101,10 +104,33 @@ private struct ImageEditorSurface: View {
     @State private var exportSettingsOpen = false
     @State private var notice = ""
     @State private var editorHex = EditorColor.signal.hex
+    @State private var makeCopy: Bool
+    @State private var exportDirectory: URL
+    @State private var exportFilename: String
+
+    init(
+        artifact: Artifact,
+        model: EditorModel,
+        initialTool: ImageEditorTool = .select,
+        shapeFlyoutOpen: Bool = false
+    ) {
+        self.artifact = artifact
+        self.model = model
+        _tool = State(initialValue: initialTool)
+        _shapeFlyoutOpen = State(initialValue: shapeFlyoutOpen)
+        let sourceExtension = artifact.url.pathExtension.lowercased()
+        let sourceFormat = sourceExtension == "jpg" ? "jpeg" : sourceExtension
+        let canReplaceSource = ["png", "jpeg", "webp"].contains(sourceFormat)
+        _exportFormat = State(initialValue: canReplaceSource ? sourceFormat : "png")
+        _makeCopy = State(initialValue: !canReplaceSource)
+        _exportDirectory = State(initialValue: artifact.url.deletingLastPathComponent())
+        _exportFilename = State(initialValue: artifact.url.deletingPathExtension().lastPathComponent)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             header
+                .zIndex(20)
             if model.restoredDraft {
                 HStack {
                     Text("Unsaved editing draft restored — export, save, or keep editing.")
@@ -118,10 +144,12 @@ private struct ImageEditorSurface: View {
             }
             HStack(spacing: 0) {
                 toolRail
+                    .zIndex(20)
                 canvasViewport
                 inspector
             }
             exportFooter
+                .zIndex(20)
         }
         .background(NativeTheme.canvas(colorScheme))
         .foregroundStyle(NativeTheme.text(colorScheme))
@@ -129,14 +157,25 @@ private struct ImageEditorSurface: View {
         .onAppear {
             syncDimensions()
             syncEditorColor()
-            let preferred = store.settings.screenshotFormat.lowercased() == "jpg" ? "jpeg" : store.settings.screenshotFormat.lowercased()
-            if ["png", "jpeg", "webp"].contains(preferred) { exportFormat = preferred }
         }
         .onChange(of: model.document.width) { _ in syncDimensions() }
         .onChange(of: model.document.height) { _ in syncDimensions() }
+        .onChange(of: model.document) { _ in scheduleComparison() }
         .onChange(of: model.selectedLayerID) { _ in syncEditorColor() }
         .onChange(of: exportSettingsOpen) { if $0 { scheduleComparison() } else { dismissComparison() } }
-        .onChange(of: exportFormat) { _ in scheduleComparison() }
+        .onChange(of: exportFormat) { _ in
+            if formatRequiresCopy { makeCopy = true }
+            scheduleComparison()
+        }
+        .onChange(of: exportFilename) { value in
+            if value != model.sourceURL.deletingPathExtension().lastPathComponent { makeCopy = true }
+        }
+        .onChange(of: makeCopy) { enabled in
+            if !enabled {
+                exportDirectory = model.sourceURL.deletingLastPathComponent()
+                exportFilename = model.sourceURL.deletingPathExtension().lastPathComponent
+            }
+        }
         .onChange(of: exportQualityMode) { _ in scheduleComparison() }
         .onChange(of: quality) { _ in scheduleComparison() }
         .onChange(of: maximumSizeMB) { _ in scheduleComparison() }
@@ -146,32 +185,22 @@ private struct ImageEditorSurface: View {
     }
 
     private var header: some View {
-        HStack(spacing: NativeTheme.metric("s-4")) {
-            HStack(spacing: 6) {
+        HStack(spacing: 10) {
+            HStack(spacing: 5) {
                 Text("Canvas").font(.caption).foregroundStyle(NativeTheme.muted(colorScheme))
-                TextField("W", text: $widthText).frame(width: 64).textFieldStyle(.roundedBorder)
+                TextField("W", text: $widthText).frame(width: 58).textFieldStyle(.roundedBorder)
+                    .onSubmit(applyCanvasSize)
                 Text("×")
-                TextField("H", text: $heightText).frame(width: 64).textFieldStyle(.roundedBorder)
-                Button("Resize") { applyCanvasSize() }.buttonStyle(CaptureButtonStyle())
+                TextField("H", text: $heightText).frame(width: 58).textFieldStyle(.roundedBorder)
+                    .onSubmit(applyCanvasSize)
+                Divider().frame(height: 22)
                 Button("Trim edges") { perform { try model.trimTransparentEdges() } }
                     .buttonStyle(CaptureButtonStyle())
-                CaptureSegments(selection: Binding(
-                    get: {
-                        if model.document.background == .white { return "white" }
-                        if model.document.background == EditorColor(red: 0, green: 0, blue: 0) { return "black" }
-                        return "transparent"
-                    },
-                    set: { value in
-                        model.mutate {
-                            $0.background = value == "white" ? .white
-                                : value == "black" ? EditorColor(red: 0, green: 0, blue: 0) : nil
-                        }
-                    }
-                ), options: [
-                    CaptureOption(label: "Clear", value: "transparent"),
+                CaptureChoice(title: "Background color", selection: backgroundSelection, options: [
+                    CaptureOption(label: "Transparent", value: "transparent"),
                     CaptureOption(label: "White", value: "white"),
                     CaptureOption(label: "Black", value: "black"),
-                ]).frame(width: 180).help("Canvas background")
+                ]).frame(width: 145)
             }
             Spacer()
             Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward") }
@@ -179,16 +208,19 @@ private struct ImageEditorSurface: View {
             Button { model.redo() } label: { Image(systemName: "arrow.uturn.forward") }
                 .buttonStyle(CaptureButtonStyle()).disabled(!model.canRedo).help("Redo")
             HStack(spacing: 6) {
-                Button("Fit") { zoom = 1 }.buttonStyle(CaptureButtonStyle())
-                Button { zoom = max(0.05, zoom - 0.1) } label: { Image(systemName: "minus") }
+                Button { zoomMode = "custom"; zoom = max(0.05, zoom - 0.1) } label: { Image(systemName: "minus") }
                     .buttonStyle(CaptureButtonStyle()).help("Zoom out")
                 CaptureSlider(
-                    value: Binding(get: { Double(zoom) }, set: { zoom = CGFloat($0) }),
+                    value: Binding(get: { Double(zoom) }, set: { zoom = CGFloat($0); zoomMode = "custom" }),
                     range: 0.05...4
                 ).frame(width: 90)
-                Button { zoom = min(4, zoom + 0.1) } label: { Image(systemName: "plus") }
+                Button { zoomMode = "custom"; zoom = min(4, zoom + 0.1) } label: { Image(systemName: "plus") }
                     .buttonStyle(CaptureButtonStyle()).help("Zoom in")
-                Text("\(Int(zoom * 100))%").font(.system(.caption, design: .monospaced)).frame(width: 46)
+                CaptureChoice(title: "Zoom mode", selection: $zoomMode, options: [
+                    CaptureOption(label: "Fit", value: "fit"),
+                    CaptureOption(label: "100%", value: "actual"),
+                ]).frame(width: 92)
+                .onChange(of: zoomMode) { applyZoomMode($0) }
             }
             Button("Add images") { chooseImage() }
                 .buttonStyle(CaptureButtonStyle()).keyboardShortcut("i", modifiers: [.command])
@@ -201,17 +233,128 @@ private struct ImageEditorSurface: View {
     private var toolRail: some View {
         VStack(spacing: 4) {
             ForEach(ImageEditorTool.allCases) { item in
-                Button { tool = item } label: {
-                    Image(systemName: item.symbol).frame(width: 28, height: 28)
+                if item == .shape {
+                    shapeTool
+                } else if item == .erase {
+                    backgroundTool
+                } else if item != .restore && item != .wand {
+                    toolButton(item)
                 }
-                .buttonStyle(CaptureButtonStyle(primary: tool == item))
-                .help(item.rawValue)
             }
             Spacer()
         }
         .padding(NativeTheme.metric("s-3")).frame(minWidth: 56, maxWidth: 56, maxHeight: .infinity)
         .background(NativeTheme.raised(colorScheme))
         .overlay(alignment: .trailing) { Divider() }
+    }
+
+    private func toolButton(_ item: ImageEditorTool) -> some View {
+        Button { tool = item; shapeFlyoutOpen = false; backgroundFlyoutOpen = false } label: {
+            Image(systemName: item.symbol).frame(width: 28, height: 28)
+        }
+        .buttonStyle(CaptureButtonStyle(primary: tool == item))
+        .help(item.rawValue)
+    }
+
+    private var backgroundTool: some View {
+        Button {
+            if ![.wand, .erase, .restore].contains(tool) { tool = .wand }
+            shapeFlyoutOpen = false
+            backgroundFlyoutOpen.toggle()
+        } label: {
+            Image(systemName: tool == .restore ? "paintbrush" : tool == .wand ? "wand.and.stars" : "eraser")
+                .frame(width: 28, height: 28)
+                .overlay(alignment: .bottomTrailing) {
+                    Image(systemName: "chevron.right").font(.system(size: 7, weight: .bold))
+                }
+        }
+        .buttonStyle(CaptureButtonStyle(primary: [.wand, .erase, .restore].contains(tool)))
+        .help("Remove background")
+        .overlay(alignment: .leading) {
+            if backgroundFlyoutOpen {
+                HStack(spacing: 5) {
+                    ForEach([ImageEditorTool.wand, .erase, .restore]) { item in
+                        toolButton(item)
+                    }
+                }
+                .padding(6)
+                .background(NativeTheme.raised(colorScheme), in: RoundedRectangle(cornerRadius: NativeTheme.metric("r-lg")))
+                .overlay(RoundedRectangle(cornerRadius: NativeTheme.metric("r-lg")).stroke(NativeTheme.border(colorScheme)))
+                .shadow(color: .black.opacity(0.32), radius: 14, y: 5)
+                .offset(x: 52)
+                .zIndex(100)
+            }
+        }
+        .zIndex(backgroundFlyoutOpen ? 100 : 0)
+    }
+
+    private var backgroundSelection: Binding<String> {
+        Binding(
+            get: {
+                if model.document.background == .white { return "white" }
+                if model.document.background == EditorColor(red: 0, green: 0, blue: 0) { return "black" }
+                return "transparent"
+            },
+            set: { value in
+                model.mutate {
+                    $0.background = value == "white" ? .white
+                        : value == "black" ? EditorColor(red: 0, green: 0, blue: 0) : nil
+                }
+            }
+        )
+    }
+
+    private func shapeSymbol(_ shape: EditorShape) -> String {
+        switch shape {
+        case .rectangle: return "rectangle"
+        case .ellipse: return "circle"
+        case .line: return "line.diagonal"
+        case .triangle: return "triangle"
+        case .diamond: return "diamond"
+        case .star: return "star"
+        case .arrow: return "arrow.up.right"
+        }
+    }
+
+    private var shapeTool: some View {
+        Button {
+            tool = .shape
+            backgroundFlyoutOpen = false
+            shapeFlyoutOpen.toggle()
+        } label: {
+            Image(systemName: shapeSymbol(selectedShape))
+                .frame(width: 28, height: 28)
+                .overlay(alignment: .bottomTrailing) {
+                    Image(systemName: "chevron.right").font(.system(size: 7, weight: .bold))
+                }
+        }
+        .buttonStyle(CaptureButtonStyle(primary: tool == .shape))
+        .help("Shapes")
+        .overlay(alignment: .leading) {
+            if shapeFlyoutOpen {
+                HStack(spacing: 5) {
+                    ForEach(EditorShape.allCases.filter { $0 != .arrow }, id: \.self) { shape in
+                        Button {
+                            selectedShape = shape
+                            tool = .shape
+                            shapeFlyoutOpen = false
+                        } label: {
+                            Image(systemName: shapeSymbol(shape))
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(CaptureButtonStyle(primary: selectedShape == shape))
+                        .help(shape.rawValue.capitalized)
+                    }
+                }
+                .padding(6)
+                .background(NativeTheme.raised(colorScheme), in: RoundedRectangle(cornerRadius: NativeTheme.metric("r-lg")))
+                .overlay(RoundedRectangle(cornerRadius: NativeTheme.metric("r-lg")).stroke(NativeTheme.border(colorScheme)))
+                .shadow(color: .black.opacity(0.32), radius: 14, y: 5)
+                .offset(x: 52)
+                .zIndex(100)
+            }
+        }
+        .zIndex(shapeFlyoutOpen ? 100 : 0)
     }
 
     private var canvasViewport: some View {
@@ -230,9 +373,11 @@ private struct ImageEditorSurface: View {
                 .contentShape(Rectangle())
                 .gesture(canvasGesture)
                 .shadow(color: .black.opacity(0.22), radius: 18, y: 8)
-                .padding(50)
+                .padding(32)
                 .frame(minWidth: geometry.size.width, minHeight: geometry.size.height)
             }
+            .onAppear { updateViewport(geometry.size) }
+            .onChange(of: geometry.size) { updateViewport($0) }
         }
         .background(NativeTheme.field(colorScheme))
     }
@@ -338,8 +483,7 @@ private struct ImageEditorSurface: View {
                     cropStart = nil
                 case .text:
                     model.addText("Text", at: point)
-                case .rectangle: model.addShape(.rectangle, at: point)
-                case .ellipse: model.addShape(.ellipse, at: point)
+                case .shape: model.addShape(selectedShape, at: point)
                 case .arrow: model.addShape(.arrow, at: point)
                 case .pen:
                     model.addStroke(draftPoints)
@@ -473,6 +617,19 @@ private struct ImageEditorSurface: View {
                             get: { Double(shadow.radius) },
                             set: { value in model.updateSelected { $0.shadow?.radius = CGFloat(value) } }
                         ), range: 0...40)
+                        Text("\(Int(shadow.radius.rounded())) px").monospacedDigit().frame(width: 46)
+                    }
+                    HStack {
+                        Text("Opacity")
+                        CaptureSlider(value: Binding(
+                            get: { Double(shadow.opacity) },
+                            set: { value in model.updateSelected { $0.shadow?.opacity = CGFloat(value) } }
+                        ), range: 0...1)
+                        Text("\(Int((shadow.opacity * 100).rounded()))%").monospacedDigit().frame(width: 42)
+                    }
+                    HStack(spacing: 12) {
+                        shadowOffsetField("X offset", value: shadow.offsetX, keyPath: \EditorShadow.offsetX)
+                        shadowOffsetField("Y offset", value: shadow.offsetY, keyPath: \EditorShadow.offsetY)
                     }
                 }
                 if case .image = layer.content, tool == .erase || tool == .restore {
@@ -514,6 +671,25 @@ private struct ImageEditorSurface: View {
         }
     }
 
+    private func shadowOffsetField(
+        _ title: String,
+        value: CGFloat,
+        keyPath: WritableKeyPath<EditorShadow, CGFloat>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption).foregroundStyle(NativeTheme.muted(colorScheme))
+            TextField(title, value: Binding(
+                get: { Double(value) },
+                set: { next in
+                    model.updateSelected {
+                        $0.shadow?[keyPath: keyPath] = min(100, max(-100, CGFloat(next.rounded())))
+                    }
+                }
+            ), format: .number.precision(.fractionLength(0)))
+            .textFieldStyle(.roundedBorder)
+        }
+    }
+
     private var exportFooter: some View {
         VStack(spacing: 10) {
             if exportSettingsOpen {
@@ -529,14 +705,20 @@ private struct ImageEditorSurface: View {
                         CaptureOption(label: "Maximum", value: "maximum"),
                     ]).frame(width: 220)
                     if exportQualityMode == "compress" {
-                        HStack { Text("Quality"); CaptureSlider(value: $quality, range: 0.55...1).frame(width: 160); Text("\(Int(quality * 100))%") }
+                        CaptureChoice(title: "Compression quality", selection: $quality, options: [
+                            CaptureOption(label: "Tiny", value: "55"),
+                            CaptureOption(label: "Smaller", value: "70"),
+                            CaptureOption(label: "Balanced", value: "85"),
+                            CaptureOption(label: "High", value: "92"),
+                            CaptureOption(label: "Highest", value: "98"),
+                        ], opensAbove: true).frame(width: 170)
                     }
                     if exportQualityMode == "maximum" {
                         HStack { Text("Maximum"); TextField("MB", value: $maximumSizeMB, format: .number).frame(width: 70); Text("MB") }
                     }
                     if exportFormat == "png", exportQualityMode != "preserve" {
                         Text(exportQualityMode == "compress"
-                             ? "PNG remains lossless; quality does not currently change its pixels."
+                             ? "PNG uses tighter lossless packing in this native build."
                              : "PNG is not resized to meet a limit; export fails if the lossless file is too large.")
                             .font(.caption)
                             .foregroundStyle(NativeTheme.muted(colorScheme))
@@ -569,20 +751,55 @@ private struct ImageEditorSurface: View {
                             .font(.caption.monospaced()).foregroundStyle(NativeTheme.muted(colorScheme))
                     }
                 }.buttonStyle(CaptureButtonStyle())
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Filename").font(.caption).foregroundStyle(NativeTheme.muted(colorScheme))
+                    HStack(spacing: 6) {
+                        Text("Saving to \(exportDirectory.path)")
+                            .font(.caption).foregroundStyle(NativeTheme.muted(colorScheme)).lineLimit(1)
+                        Button("Change…", action: chooseExportDirectory).buttonStyle(.plain)
+                    }
+                    HStack(spacing: 5) {
+                        TextField("Filename", text: $exportFilename).textFieldStyle(.roundedBorder)
+                        CaptureChoice(title: "File format", selection: $exportFormat, options: [
+                            CaptureOption(label: ".png", value: "png"),
+                            CaptureOption(label: ".jpg", value: "jpeg"),
+                            CaptureOption(label: ".webp", value: "webp"),
+                        ], opensAbove: true).frame(width: 82)
+                    }
+                }
+                .frame(width: 280)
                 Spacer()
                 if !notice.isEmpty { Text(notice).font(.callout).foregroundStyle(NativeTheme.muted(colorScheme)) }
                 Button("Copy image") { copyImage() }.buttonStyle(CaptureButtonStyle())
-                Button(exporting ? "Exporting…" : "Export…") { exportAsNewFile() }
-                    .buttonStyle(CaptureButtonStyle()).disabled(exporting)
-                Button("Save") { saveSource() }.buttonStyle(CaptureButtonStyle(primary: true))
-                    .help("Explicitly replace the source image with the edited image")
+                Text(makeCopy ? "Save creates a new file." : "Save overwrites the original after confirmation.")
+                    .font(.caption).foregroundStyle(NativeTheme.muted(colorScheme))
+                    .frame(maxWidth: 185, alignment: .leading)
+                HStack(spacing: 8) {
+                    CaptureToggle(title: "Save as new file", isOn: $makeCopy)
+                    Text("Save as new file")
+                }
+                .disabled(formatRequiresCopy || exporting)
+                Button(exporting ? "Saving…" : "Save") {
+                    if makeCopy || formatRequiresCopy { exportAsNewFile() }
+                    else { saveSource() }
+                }
+                .buttonStyle(CaptureButtonStyle(primary: true))
+                .disabled(exporting)
             }
         }
         .padding(NativeTheme.metric("s-4")).background(NativeTheme.raised(colorScheme)).overlay(alignment: .top) { Divider() }
     }
 
     private func selectLayer(at point: CGPoint) {
-        model.selectedLayerID = model.document.layers.reversed().first(where: { $0.visible && $0.frame.cgRect.contains(point) })?.id
+        model.selectedLayerID = model.document.layers.reversed().first(where: {
+            $0.visible && layerContains($0, point: point)
+        })?.id
+    }
+
+    private func layerContains(_ layer: EditorLayer, point: CGPoint) -> Bool {
+        let frame = layer.frame.cgRect
+        let center = CGPoint(x: frame.midX, y: frame.midY)
+        return frame.contains(rotatedPoint(point, around: center, radians: -layer.rotation))
     }
 
     private func selectionResizeHandle(_ corner: ImageResizeCorner, frame: CGRect, rotation: CGFloat) -> some View {
@@ -604,15 +821,43 @@ private struct ImageEditorSurface: View {
                 guard let initial = resizeLayerFrame else { return }
                 let dx = value.translation.width / zoom
                 let dy = value.translation.height / zoom
-                var left = initial.x
-                var top = initial.y
-                var right = initial.x + initial.width
-                var bottom = initial.y + initial.height
-                if corner == .northWest || corner == .southWest { left = min(right - 4, left + dx) }
-                if corner == .northEast || corner == .southEast { right = max(left + 4, right + dx) }
-                if corner == .northWest || corner == .northEast { top = min(bottom - 4, top + dy) }
-                if corner == .southWest || corner == .southEast { bottom = max(top + 4, bottom + dy) }
-                model.updateSelectedLive { $0.frame = EditorRect(x: left, y: top, width: right - left, height: bottom - top) }
+                let cosine = cos(rotation)
+                let sine = sin(rotation)
+                let localDelta = CGSize(
+                    width: dx * cosine + dy * sine,
+                    height: -dx * sine + dy * cosine
+                )
+                let initialRect = initial.cgRect
+                let initialCenter = CGPoint(x: initialRect.midX, y: initialRect.midY)
+                var dragged = point
+                dragged.x += localDelta.width
+                dragged.y += localDelta.height
+                let opposite = CGPoint(
+                    x: corner == .northWest || corner == .southWest ? initialRect.maxX : initialRect.minX,
+                    y: corner == .northWest || corner == .northEast ? initialRect.maxY : initialRect.minY
+                )
+                if corner == .northWest || corner == .southWest {
+                    dragged.x = min(opposite.x - 4, dragged.x)
+                } else {
+                    dragged.x = max(opposite.x + 4, dragged.x)
+                }
+                if corner == .northWest || corner == .northEast {
+                    dragged.y = min(opposite.y - 4, dragged.y)
+                } else {
+                    dragged.y = max(opposite.y + 4, dragged.y)
+                }
+                let localCenter = CGPoint(x: (dragged.x + opposite.x) / 2, y: (dragged.y + opposite.y) / 2)
+                let worldCenter = rotatedPoint(localCenter, around: initialCenter, radians: rotation)
+                let width = abs(dragged.x - opposite.x)
+                let height = abs(dragged.y - opposite.y)
+                model.updateSelectedLive {
+                    $0.frame = EditorRect(
+                        x: worldCenter.x - width / 2,
+                        y: worldCenter.y - height / 2,
+                        width: width,
+                        height: height
+                    )
+                }
             }.onEnded { _ in resizeLayerFrame = nil; model.endInteractiveEdit() })
             .help("Resize layer")
     }
@@ -664,6 +909,28 @@ private struct ImageEditorSurface: View {
     private func syncDimensions() {
         widthText = String(model.document.width)
         heightText = String(model.document.height)
+        if zoomMode == "fit" { applyZoomMode("fit") }
+    }
+
+    private func updateViewport(_ size: CGSize) {
+        viewportSize = size
+        if zoomMode == "fit" { applyZoomMode("fit") }
+    }
+
+    private func applyZoomMode(_ mode: String) {
+        switch mode {
+        case "fit":
+            guard viewportSize.width > 64, viewportSize.height > 64 else { return }
+            zoom = min(
+                1,
+                max(0.05, min(
+                    (viewportSize.width - 64) / CGFloat(model.document.width),
+                    (viewportSize.height - 64) / CGFloat(model.document.height)
+                ))
+            )
+        case "actual": zoom = 1
+        default: break
+        }
     }
 
     private func syncEditorColor() {
@@ -695,6 +962,20 @@ private struct ImageEditorSurface: View {
         for url in panel.urls { perform { try model.importImage(from: url) } }
     }
 
+    private func chooseExportDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = exportDirectory
+        guard panel.runModal() == .OK, let directory = panel.url else { return }
+        exportDirectory = directory
+        if directory.standardizedFileURL != model.sourceURL.deletingLastPathComponent().standardizedFileURL {
+            makeCopy = true
+        }
+    }
+
     private func copyImage() {
         perform {
             let image = try model.renderedImage()
@@ -704,10 +985,17 @@ private struct ImageEditorSurface: View {
         }
     }
 
+    private var sourceFormat: String {
+        let value = model.sourceURL.pathExtension.lowercased()
+        return value == "jpg" ? "jpeg" : value
+    }
+
+    private var formatRequiresCopy: Bool { sourceFormat != exportFormat }
+
     private func saveSource() {
         CaptureDialogController.shared.present(
             title: "Replace the original screenshot?",
-            message: "This is the only action that overwrites the source file. Export creates a separate file.",
+            message: "This replaces the source image. Turn on Save as new file to keep the original untouched.",
             action: "Replace Original",
             destructive: true,
             onConfirm: replaceSource
@@ -757,10 +1045,12 @@ private struct ImageEditorSurface: View {
     }
 
     private func exportAsNewFile() {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "\(artifact.url.deletingPathExtension().lastPathComponent) edited.\(exportFormat)"
-        panel.canCreateDirectories = true
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let name = exportFilename.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !name.contains("/"), name != ".", name != ".." else {
+            showExportError("Enter a filename without folders or path separators.")
+            return
+        }
+        let url = exportDirectory.appendingPathComponent(name).appendingPathExtension(exportFormat == "jpeg" ? "jpg" : exportFormat)
         guard !sameFile(url, model.sourceURL) else {
             showExportError("Export cannot replace the source image. Use Save when you explicitly want to replace the original.")
             return
@@ -822,7 +1112,10 @@ private struct ImageEditorSurface: View {
                 } else {
                     ZStack { Color.black.opacity(0.3); ProgressView("Encoding comparison…") }
                 }
-                Button(action: dismissComparison) { Image(systemName: "xmark") }
+                Button {
+                    comparisonExpanded = false
+                    dismissComparison()
+                } label: { Image(systemName: "xmark") }
                     .buttonStyle(CaptureButtonStyle(glass: true))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing).padding(10)
             }
@@ -890,7 +1183,7 @@ private struct ImageEditorSurface: View {
 
     private func imageEncodeFields(input: URL, output: URL, format: String? = nil) -> [String: Any] {
         var fields: [String: Any] = ["path": input.path, "output": output.path, "format": format ?? exportFormat]
-        if exportQualityMode == "compress" { fields["quality"] = Int((quality * 100).rounded()) }
+        if exportQualityMode == "compress" { fields["quality"] = Int(quality) ?? 92 }
         if exportQualityMode == "maximum" { fields["max_bytes"] = max(10_000, Int((maximumSizeMB * 1_000_000).rounded())) }
         return fields
     }
@@ -926,5 +1219,25 @@ private struct ImageEditorSurface: View {
 
     private func perform(_ work: () throws -> Void) {
         do { try work() } catch { store.report(error); notice = error.localizedDescription }
+    }
+}
+
+@MainActor
+func imageEditorReferenceView(artifact: Artifact, state: String) -> AnyView {
+    do {
+        let model = try EditorModel(artifact: artifact)
+        switch state {
+        case "shapes":
+            return AnyView(ImageEditorSurface(
+                artifact: artifact, model: model, initialTool: .shape, shapeFlyoutOpen: true
+            ))
+        case "properties":
+            model.addShape(.rectangle, at: CGPoint(x: 320, y: 220))
+            return AnyView(ImageEditorSurface(artifact: artifact, model: model))
+        default:
+            return AnyView(ImageEditorSurface(artifact: artifact, model: model))
+        }
+    } catch {
+        return AnyView(Text("Reference editor failed to load: \(error.localizedDescription)"))
     }
 }

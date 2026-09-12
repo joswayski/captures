@@ -1,6 +1,6 @@
 use captures_windows_native::{
     geometry::{Rect, cover},
-    history::{Artifact, ArtifactKind},
+    history::Artifact,
     settings::Settings,
     state::{AppState, Surface},
     theme::{Color, Palette},
@@ -21,7 +21,10 @@ use windows::{
                 D2D1_INTERPOLATION_MODE_LINEAR, D2D1CreateFactory, ID2D1Bitmap1,
                 ID2D1DeviceContext, ID2D1Factory1, ID2D1SolidColorBrush,
             },
-            Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_11_0},
+            Direct3D::{
+                D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP,
+                D3D_FEATURE_LEVEL_11_0,
+            },
             Direct3D11::{
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice,
                 ID3D11Device,
@@ -66,24 +69,26 @@ pub struct Renderer {
     title: IDWriteTextFormat,
     image_key: Option<(usize, u32, u32)>,
     image: Option<ID2D1Bitmap1>,
+    driver_name: &'static str,
+}
+
+pub struct Frame<'a> {
+    pub state: &'a AppState,
+    pub settings: &'a Settings,
+    pub history: &'a [Artifact],
+    pub recording_mode: captures_capture::CaptureMode,
+    pub palette: Palette,
+    pub width: f32,
+    pub height: f32,
 }
 
 impl Renderer {
     pub fn new(hwnd: HWND, width: u32, height: u32, dpi: f32) -> Result<Self> {
         unsafe {
-            let mut d3d = None;
-            D3D11CreateDevice(
-                None::<&IDXGIAdapter>,
-                D3D_DRIVER_TYPE_HARDWARE,
-                HMODULE::default(),
-                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                Some(&[D3D_FEATURE_LEVEL_11_0]),
-                D3D11_SDK_VERSION,
-                Some(&mut d3d),
-                None,
-                None,
-            )?;
-            let d3d: ID3D11Device = d3d.expect("D3D11 succeeded without a device");
+            let (d3d, driver_name) = match create_d3d_device(D3D_DRIVER_TYPE_HARDWARE) {
+                Ok(device) => (device, "hardware"),
+                Err(_) => (create_d3d_device(D3D_DRIVER_TYPE_WARP)?, "warp"),
+            };
             let dxgi: IDXGIDevice = d3d.cast()?;
             let adapter = dxgi.GetAdapter()?;
             let factory: IDXGIFactory2 = adapter.GetParent()?;
@@ -134,8 +139,13 @@ impl Renderer {
                 title,
                 image_key: None,
                 image: None,
+                driver_name,
             })
         }
+    }
+
+    pub fn driver_name(&self) -> &'static str {
+        self.driver_name
     }
 
     pub fn resize(&mut self, width: u32, height: u32, dpi: f32) -> Result<()> {
@@ -159,17 +169,17 @@ impl Renderer {
         }
     }
 
-    pub fn draw(
-        &mut self,
-        state: &AppState,
-        settings: &Settings,
-        history: &[Artifact],
-        recording_mode: captures_capture::CaptureMode,
-        palette: Palette,
-        width: f32,
-        height: f32,
-    ) -> Result<()> {
+    pub fn draw(&mut self, frame: Frame<'_>) -> Result<()> {
         unsafe {
+            let Frame {
+                state,
+                settings,
+                history,
+                recording_mode,
+                palette,
+                width,
+                height,
+            } = frame;
             self.target.BeginDraw();
             self.target.Clear(Some(&color(match state.surface {
                 Surface::Preview => Color(0, 0, 0, 0),
@@ -187,7 +197,7 @@ impl Renderer {
                 Surface::RecordingEditor => self.recording_editor(state, palette, width, height)?,
                 Surface::Preview => self.preview(state, palette, width, height)?,
                 Surface::History => self.history(history, palette, width, height)?,
-                Surface::Preferences => self.preferences(palette, width, height)?,
+                Surface::Preferences => self.preferences(settings, palette, width, height)?,
                 Surface::DeleteConfirmation => self.confirmation(state, palette, width, height)?,
             }
             self.target.EndDraw(None, None)?;
@@ -400,7 +410,7 @@ impl Renderer {
                 p.raised,
             );
             self.text(
-                "Select   Crop   Text   Pen   Arrow   Line   Rectangle   Ellipse",
+                "Select  Crop  Text  Pen  Arrow  Line  Rect  Ellipse  Triangle  Diamond  Star",
                 Rect {
                     x: 20.0,
                     y: 14.0,
@@ -443,18 +453,18 @@ impl Renderer {
                 Color(23, 24, 27, 255),
                 "Done",
             );
-            if let Some(document) = state.editor.as_ref() {
-                if let Ok(image) = document.render() {
-                    self.bitmap(
-                        &image,
-                        Rect {
-                            x: 76.0,
-                            y: 80.0,
-                            width: w - 300.0,
-                            height: h - 130.0,
-                        },
-                    )?;
-                }
+            if let Some(document) = state.editor.as_ref()
+                && let Ok(image) = document.render()
+            {
+                self.bitmap(
+                    &image,
+                    Rect {
+                        x: 76.0,
+                        y: 80.0,
+                        width: w - 300.0,
+                        height: h - 130.0,
+                    },
+                )?;
             }
             self.panel(
                 Rect {
@@ -496,9 +506,14 @@ impl Renderer {
                 },
                 p.field,
                 p.text,
-                "#ef4650",
+                &state.editor_color_hex,
             );
-            let swatch = self.brush(Color(239, 70, 80, 255))?;
+            let swatch = self.brush(Color(
+                state.editor_color[0],
+                state.editor_color[1],
+                state.editor_color[2],
+                state.editor_color[3],
+            ))?;
             self.target.FillEllipse(
                 &windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE {
                     point: Vector2 {
@@ -729,7 +744,7 @@ impl Renderer {
                     "",
                 );
                 self.hud_icon(
-                    *icon,
+                    icon,
                     rect,
                     if i == 0 {
                         p.signal
@@ -750,6 +765,7 @@ impl Renderer {
         h: f32,
     ) -> Result<()> {
         unsafe {
+            let editor = state.recording_editor.as_ref();
             self.text(
                 "Recording editor",
                 Rect {
@@ -801,7 +817,7 @@ impl Renderer {
                     },
                 )?;
             }
-            self.text("Crop & size\nOriginal resolution\n\nAudio\nSystem  100%\nMicrophone  100%\n\nFormat",Rect{x:w-216.0,y:94.0,width:172.0,height:200.0},p.muted,&self.body);
+            self.text("Crop & size\nOriginal resolution\n\nAudio\nPreserved on export\nPlayback unavailable\n\nFormat",Rect{x:w-216.0,y:94.0,width:172.0,height:200.0},p.muted,&self.body);
             self.button(
                 Rect {
                     x: w - 216.0,
@@ -811,10 +827,22 @@ impl Renderer {
                 },
                 p.field,
                 p.text,
-                "Highest quality   ▾",
+                match editor.map(|editor| editor.quality) {
+                    Some(captures_media::QualityPreset::Preserve) | None => "Preserve quality  ▾",
+                    Some(captures_media::QualityPreset::Highest) => "Highest quality   ▾",
+                    Some(captures_media::QualityPreset::High) => "High quality      ▾",
+                    Some(captures_media::QualityPreset::Standard) => "Standard quality  ▾",
+                    Some(captures_media::QualityPreset::Small) => "Small file        ▾",
+                    Some(captures_media::QualityPreset::Tiny) => "Tiny file         ▾",
+                },
             );
             self.text(
-                "Compression comparison unavailable",
+                &editor
+                    .and_then(|editor| editor.comparison_estimated_bytes)
+                    .map_or_else(
+                        || "Building compression comparison…".to_owned(),
+                        |bytes| format!("Before  |  After     Estimated {}", format_bytes(bytes)),
+                    ),
                 Rect {
                     x: w - 216.0,
                     y: 330.0,
@@ -843,8 +871,35 @@ impl Renderer {
                     height: 18.0,
                 },
                 p,
-                true,
+                editor.is_none_or(|editor| editor.save_as_new),
             )?;
+            if editor.is_some_and(|editor| editor.quality_menu_open) {
+                self.panel(
+                    Rect {
+                        x: w - 216.0,
+                        y: 320.0,
+                        width: 172.0,
+                        height: 180.0,
+                    },
+                    p.field,
+                );
+                for (index, label) in ["Preserve", "Highest", "High", "Standard", "Small", "Tiny"]
+                    .iter()
+                    .enumerate()
+                {
+                    self.text(
+                        label,
+                        Rect {
+                            x: w - 202.0,
+                            y: 324.0 + index as f32 * 30.0,
+                            width: 144.0,
+                            height: 24.0,
+                        },
+                        p.text,
+                        &self.body,
+                    );
+                }
+            }
             self.panel(
                 Rect {
                     x: 24.0,
@@ -855,7 +910,17 @@ impl Renderer {
                 p.raised,
             );
             self.text(
-                "00:00   ├━━━━━━━━━━━━━━━━━━━━━━━━━━━━┤   End",
+                &editor.map_or_else(
+                    || "▶  00:00   ├━━━━━━━━━━━━━━━━━━━━┤   End".to_owned(),
+                    |editor| {
+                        format!(
+                            "{}  {}   ├━━━━━━━━━━━━━━━━━━━━┤   {}",
+                            if editor.playing { "Ⅱ" } else { "▶" },
+                            format_time(editor.position_ms),
+                            format_time(editor.duration_ms),
+                        )
+                    },
+                ),
                 Rect {
                     x: 44.0,
                     y: h - 94.0,
@@ -900,7 +965,7 @@ impl Renderer {
                     p.glass,
                 );
                 self.text(
-                    "Edit        Copy        Saved       Delete",
+                    "Edit        Copy        Drag        Delete",
                     Rect {
                         x: 12.0,
                         y: y + 169.0,
@@ -985,7 +1050,7 @@ impl Renderer {
                 let x = 36.0 + i as f32 * 210.0;
                 for (button, label) in ["Edit", "Restore", "Delete"].iter().enumerate() {
                     let enabled = match button {
-                        0 => !artifact.is_trashed() && artifact.kind == ArtifactKind::Image,
+                        0 => !artifact.is_trashed(),
                         1 => artifact.is_trashed(),
                         _ => true,
                     };
@@ -1022,7 +1087,7 @@ impl Renderer {
             Ok(())
         }
     }
-    unsafe fn preferences(&self, p: Palette, w: f32, h: f32) -> Result<()> {
+    unsafe fn preferences(&self, settings: &Settings, p: Palette, w: f32, h: f32) -> Result<()> {
         unsafe {
             self.panel(
                 Rect {
@@ -1067,17 +1132,29 @@ impl Renderer {
                 &self.title,
             );
             let rows = [
-                ("Start Captures at login", "Off"),
-                ("Copy captures automatically", "On"),
-                ("Show mini previews", "On"),
-                ("Freeze screen while selecting", "On"),
-                ("Appearance", "System"),
-                ("Color theme", "Mustard"),
+                (
+                    "Start Captures at login",
+                    Some(settings.launch_at_login),
+                    "",
+                ),
+                (
+                    "Copy captures automatically",
+                    Some(settings.auto_copy_to_clipboard),
+                    "",
+                ),
+                ("Show mini previews", Some(settings.show_mini_previews), ""),
+                (
+                    "Freeze screen while selecting",
+                    Some(settings.freeze_screen),
+                    "",
+                ),
+                ("Appearance", None, settings.appearance.as_str()),
+                ("Color theme", None, settings.theme.as_str()),
             ];
-            for (i, (a, b)) in rows.iter().enumerate() {
+            for (i, (label, toggle, value)) in rows.iter().enumerate() {
                 let y = 88.0 + i as f32 * 64.0;
                 self.text(
-                    a,
+                    label,
                     Rect {
                         x: 216.0,
                         y,
@@ -1087,17 +1164,30 @@ impl Renderer {
                     p.text,
                     &self.strong,
                 );
-                self.button(
-                    Rect {
-                        x: w - 152.0,
-                        y: y - 4.0,
-                        width: 120.0,
-                        height: 32.0,
-                    },
-                    p.field,
-                    p.muted,
-                    b,
-                );
+                if let Some(enabled) = toggle {
+                    self.toggle(
+                        Rect {
+                            x: w - 76.0,
+                            y: y + 2.0,
+                            width: 36.0,
+                            height: 18.0,
+                        },
+                        p,
+                        *enabled,
+                    )?;
+                } else {
+                    self.button(
+                        Rect {
+                            x: w - 152.0,
+                            y: y - 4.0,
+                            width: 120.0,
+                            height: 32.0,
+                        },
+                        p.field,
+                        p.text,
+                        value,
+                    );
+                }
             }
             Ok(())
         }
@@ -1568,6 +1658,39 @@ impl Renderer {
             );
             Ok(())
         }
+    }
+}
+
+unsafe fn create_d3d_device(driver: D3D_DRIVER_TYPE) -> Result<ID3D11Device> {
+    unsafe {
+        let mut device = None;
+        D3D11CreateDevice(
+            None::<&IDXGIAdapter>,
+            driver,
+            HMODULE::default(),
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            Some(&[D3D_FEATURE_LEVEL_11_0]),
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            None,
+            None,
+        )?;
+        device.ok_or_else(|| {
+            windows::core::Error::from_hresult(windows::core::HRESULT(0x80004005_u32 as i32))
+        })
+    }
+}
+
+fn format_time(milliseconds: u64) -> String {
+    let seconds = milliseconds / 1_000;
+    format!("{:02}:{:02}", seconds / 60, seconds % 60)
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1_000_000 {
+        format!("{:.1} MB", bytes as f64 / 1_000_000.0)
+    } else {
+        format!("{} KB", bytes.div_ceil(1_000))
     }
 }
 

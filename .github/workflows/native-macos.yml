@@ -16,6 +16,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: native-macos-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   native:
     name: Compile and test native macOS (not a Preview)
@@ -48,3 +52,15 @@ jobs:
           name: captures-native-macos-references
           path: experiments/macos-native/build/references/*.png
           if-no-files-found: error
+      - name: Verify presented video and disintegration
+        timeout-minutes: 10
+        env:
+          CAPTURES_NATIVE_CAPTURE_ANIMATION: "1"
+        run: bash experiments/macos-native/render.sh experiments/macos-native/build/compositor-references
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: captures-native-macos-compositor-references
+          path: experiments/macos-native/build/compositor-references/*-compositor.png
+          if-no-files-found: warn
+          retention-days: 7

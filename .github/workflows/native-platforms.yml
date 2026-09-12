@@ -8,6 +8,7 @@ on:
       - "experiments/native-ui/benchmark.py"
       - "experiments/native-ui/native_comparison.py"
       - "experiments/native-ui/test_native_comparison.py"
+      - "experiments/native-ui/src/native/editor/encoder.rs"
       - "crates/captures-capture/**"
       - "crates/captures-image/**"
       - "crates/captures-recording/**"
@@ -16,10 +17,16 @@ on:
       - "crates/captures-session/**"
       - "shared/design.css"
       - "shared/themes.css"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/native-platforms.yml"
 
 permissions:
   contents: read
+
+concurrency:
+  group: native-platforms-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   linux:
@@ -76,4 +83,42 @@ jobs:
       - run: cargo fmt --manifest-path experiments/windows-native/Cargo.toml -- --check
       - run: cargo test --locked --manifest-path experiments/windows-native/Cargo.toml
       - run: cargo clippy --locked --manifest-path experiments/windows-native/Cargo.toml --all-targets -- -D warnings
-      - run: cargo build --locked --release --manifest-path experiments/windows-native/Cargo.toml
+      - run: cargo build --locked --release --target x86_64-pc-windows-msvc --manifest-path experiments/windows-native/Cargo.toml
+      - name: Prepare non-private native reference fixtures
+        shell: pwsh
+        run: |
+          $tools = Join-Path $env:RUNNER_TEMP captures-native-render-tools
+          npm install --prefix $tools --no-save --package-lock=false --ignore-scripts '@resvg/resvg-js@2.6.2'
+          if ($LASTEXITCODE -ne 0) { throw 'Test-only SVG renderer installation failed' }
+          $render = @'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const { Resvg } = require(path.join(process.env.RUNNER_TEMP, 'captures-native-render-tools/node_modules/@resvg/resvg-js'));
+          const source = fs.readFileSync('apps/desktop/ui/src/dev/previewBackend.ts', 'utf8');
+          const match = source.match(/function sampleCapture\(.*?const svg = `(.+?)`;/s);
+          if (!match) throw new Error('Shared sampleCapture fixture changed');
+          const svg = match[1].replaceAll('${width}', '960').replaceAll('${height}', '540');
+          const png = new Resvg(svg).render().asPng();
+          if (png.readUInt32BE(16) !== 960 || png.readUInt32BE(20) !== 540) throw new Error('Wrong fixture dimensions');
+          const output = path.join(process.env.RUNNER_TEMP, 'captures-native-fixtures');
+          fs.mkdirSync(output, { recursive: true });
+          fs.writeFileSync(path.join(output, 'fixture.png'), png);
+          '@
+          $render | node
+          if ($LASTEXITCODE -ne 0) { throw 'Shared SVG fixture rendering failed' }
+          $fixtures = Join-Path $env:RUNNER_TEMP captures-native-fixtures
+          ffmpeg -v error -y -loop 1 -framerate 30 -i "$fixtures/fixture.png" -t 3 -c:v libx264 -pix_fmt yuv420p "$fixtures/fixture.mp4"
+          if ($LASTEXITCODE -ne 0) { throw 'Video fixture encoding failed' }
+      - name: Render native Windows layout references
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $fixtures = Join-Path $env:RUNNER_TEMP captures-native-fixtures
+          ./experiments/windows-native/scripts/render-fixtures.ps1 -ImagePath "$fixtures/fixture.png" -VideoPath "$fixtures/fixture.mp4"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: captures-native-windows-references
+          path: experiments/windows-native/runtime-screenshots/
+          if-no-files-found: warn
+          retention-days: 7

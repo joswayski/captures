@@ -101,16 +101,22 @@ private struct HistoryCard: View {
                     }
                 } else {
                     HStack(spacing: NativeTheme.metric("s-2")) {
-                        Button { store.open(artifact) } label: { Label("Edit", systemImage: "pencil") }
+                        Button { store.open(artifact) } label: {
+                            Label("Edit", systemImage: "pencil").frame(maxWidth: .infinity)
+                        }
                             .buttonStyle(CaptureButtonStyle(primary: true))
                             .frame(maxWidth: .infinity)
                         Button {
                             if !store.previews.contains(where: { $0.path == artifact.path }) { store.previews.insert(artifact, at: 0) }
                             PreviewController.shared.refresh()
-                        } label: { Label("Restore", systemImage: "rectangle.stack") }
+                        } label: {
+                            Label("Restore", systemImage: "rectangle.stack").frame(maxWidth: .infinity)
+                        }
                             .buttonStyle(CaptureButtonStyle())
                             .frame(maxWidth: .infinity)
-                        Button { removing = true } label: { Label("Delete", systemImage: "trash") }
+                        Button { removing = true } label: {
+                            Label("Delete", systemImage: "trash").frame(maxWidth: .infinity)
+                        }
                             .buttonStyle(CaptureButtonStyle(destructive: true))
                             .frame(maxWidth: .infinity)
                     }

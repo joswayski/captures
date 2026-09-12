@@ -81,6 +81,8 @@ impl Bounds {
 #[derive(Clone, Debug)]
 pub enum Shape {
     Freehand(Vec<Point>),
+    /// A closed contour, including concave shapes such as stars. Uses nonzero winding.
+    Polygon(Vec<Point>),
     Line {
         start: Point,
         end: Point,
@@ -190,6 +192,7 @@ impl Layer {
         let point_ok = |p: &Point| p.x.is_finite() && p.y.is_finite();
         let valid_shape = match &self.shape {
             Shape::Freehand(points) => points.iter().all(point_ok),
+            Shape::Polygon(points) => points.len() >= 3 && points.iter().all(point_ok),
             Shape::Line { start, end } | Shape::Arrow { start, end } => {
                 point_ok(start) && point_ok(end)
             }
@@ -226,7 +229,9 @@ impl Layer {
     fn geometry_bounds(&self) -> Result<Option<Bounds>, String> {
         self.validate()?;
         Ok(match &self.shape {
-            Shape::Freehand(points) => Bounds::from_points(points.iter().copied()),
+            Shape::Freehand(points) | Shape::Polygon(points) => {
+                Bounds::from_points(points.iter().copied())
+            }
             Shape::Line { start, end } => Bounds::from_points([*start, *end]),
             Shape::Arrow { start, end } => {
                 let [a, b] = arrow_head(*start, *end, self.stroke_width);
@@ -308,6 +313,22 @@ impl Layer {
             Shape::Freehand(points) => {
                 points.windows(2).any(|p| near(p[0], p[1]))
                     || (points.len() == 1 && near(points[0], points[0]))
+            }
+            Shape::Polygon(points) => {
+                let mut winding = 0;
+                for (&a, &b) in points.iter().zip(points.iter().cycle().skip(1)) {
+                    if near(a, b) {
+                        return true;
+                    }
+                    let side = (b.x - a.x) * (point.y - a.y) - (point.x - a.x) * (b.y - a.y);
+                    if a.y <= point.y && b.y > point.y && side > 0.0 {
+                        winding += 1;
+                    }
+                    if a.y > point.y && b.y <= point.y && side < 0.0 {
+                        winding -= 1;
+                    }
+                }
+                self.fill.is_some() && winding != 0
             }
             Shape::Line { start, end } => near(*start, *end),
             Shape::Arrow { start, end } => {
@@ -401,7 +422,7 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
     let mut path = PathBuilder::new();
     let mut closed = false;
     match &layer.shape {
-        Shape::Freehand(points) => {
+        Shape::Freehand(points) | Shape::Polygon(points) => {
             if points.len() == 1 {
                 if layer.stroke_width > 0.0 {
                     path.push_circle(points[0].x, points[0].y, layer.stroke_width / 2.0);
@@ -420,6 +441,10 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
             path.move_to(points[0].x, points[0].y);
             for point in &points[1..] {
                 path.line_to(point.x, point.y);
+            }
+            if matches!(layer.shape, Shape::Polygon(_)) {
+                path.close();
+                closed = true;
             }
         }
         Shape::Line { start, end } | Shape::Arrow { start, end } => {

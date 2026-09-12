@@ -1,6 +1,10 @@
 mod renderer;
 
 use captures_capture::{CaptureMode, DisplayDescriptor, XcapBackend};
+use captures_media::{
+    AudioEdit, CancelToken, EditSpec, ExportFormat, ExportSpec, MediaToolchain, QualityPreset,
+    extrapolate_sampled_size,
+};
 use captures_recording::{
     AudioOptions, GifOptions, RecordingKind, RecordingOptions, RecordingSegmentInfo,
     RecordingState, RecordingTarget,
@@ -9,12 +13,13 @@ use captures_recording_xcap::XcapRecordingSegment;
 use captures_windows_native::{
     geometry::{Point, Rect, SelectionDrag, rounded_contains, update_selection},
     history::{Artifact, History, move_to_trash, restore_from_trash, safe_delete},
-    settings::{Settings, data_dir},
-    state::{AppState, RecordingUi, Surface},
+    settings::{Settings, data_dir, profile_id},
+    state::{AppState, RecordingEditorState, RecordingUi, Surface},
     theme::{palette, theme_colors},
 };
 use image::RgbaImage;
-use renderer::Renderer;
+use renderer::{Frame, Renderer};
+use std::os::windows::ffi::OsStrExt;
 use std::{
     fs::{self, OpenOptions},
     io::BufWriter,
@@ -24,16 +29,31 @@ use std::{
 use windows::{
     Win32::{
         Foundation::{
-            CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, POINT,
-            RECT, WPARAM,
+            CloseHandle, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS,
+            ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, GetLastError, HANDLE, HWND,
+            LPARAM, LRESULT, POINT, RECT, WPARAM,
         },
-        Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT, ScreenToClient},
+        Graphics::Gdi::{
+            BeginPaint, CombineRgn, CreateRoundRectRgn, DeleteObject, EndPaint, HGDIOBJ,
+            InvalidateRect, PAINTSTRUCT, RGN_OR, ScreenToClient, SetWindowRgn,
+        },
         System::{
-            Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize},
+            Com::{
+                COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize,
+                IDataObject,
+            },
             DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
             LibraryLoader::GetModuleHandleW,
             Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock},
-            Ole::{OleInitialize, OleUninitialize},
+            Ole::{
+                DROPEFFECT, DROPEFFECT_COPY, DoDragDrop, IDropSource, IDropSource_Impl,
+                OleInitialize, OleUninitialize,
+            },
+            Registry::{
+                HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
+                RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegSetValueExW,
+            },
+            SystemServices::{MK_LBUTTON, MK_RBUTTON, MODIFIERKEYS_FLAGS},
             Threading::CreateMutexW,
         },
         UI::{
@@ -42,17 +62,19 @@ use windows::{
                 SetProcessDpiAwarenessContext,
             },
             Input::KeyboardAndMouse::{
-                HOT_KEY_MODIFIERS, MOD_CONTROL, MOD_SHIFT, RegisterHotKey, ReleaseCapture,
-                SetCapture, UnregisterHotKey, VK_ESCAPE, VK_RETURN,
+                GetKeyState, HOT_KEY_MODIFIERS, MOD_CONTROL, MOD_SHIFT, RegisterHotKey,
+                ReleaseCapture, SetCapture, UnregisterHotKey, VK_CONTROL, VK_DELETE, VK_ESCAPE,
+                VK_RETURN,
             },
             Shell::{
+                Common::ITEMIDLIST, ILClone, ILCreateFromPathW, ILFindLastID, ILRemoveLastID,
                 NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
-                Shell_NotifyIconW,
+                SHCreateDataObject, Shell_NotifyIconW,
             },
             WindowsAndMessaging::*,
         },
     },
-    core::{PCWSTR, w},
+    core::{BOOL, HRESULT, HSTRING, PCWSTR, implement, w},
 };
 
 const CLASS: PCWSTR = w!("CapturesWindowsNativeWindow");
@@ -71,6 +93,25 @@ struct RecordingSession {
     directory: PathBuf,
 }
 
+#[implement(IDropSource)]
+struct FileDropSource;
+
+impl IDropSource_Impl for FileDropSource_Impl {
+    fn QueryContinueDrag(&self, escape: BOOL, keys: MODIFIERKEYS_FLAGS) -> HRESULT {
+        if escape.as_bool() {
+            DRAGDROP_S_CANCEL
+        } else if keys.0 & (MK_LBUTTON.0 | MK_RBUTTON.0) == 0 {
+            DRAGDROP_S_DROP
+        } else {
+            HRESULT(0)
+        }
+    }
+
+    fn GiveFeedback(&self, _effect: DROPEFFECT) -> HRESULT {
+        DRAGDROP_S_USEDEFAULTCURSORS
+    }
+}
+
 struct App {
     hwnd: HWND,
     renderer: Option<Renderer>,
@@ -80,6 +121,8 @@ struct App {
     recording: Option<RecordingSession>,
     recording_mode: CaptureMode,
     editor_drag: Option<Point>,
+    editor_text_origin: Option<Point>,
+    editor_text: String,
     next_session_check: Instant,
     width: u32,
     height: u32,
@@ -87,16 +130,20 @@ struct App {
     tray: NOTIFYICONDATAW,
     instance_mutex: HANDLE,
     delete_return: Surface,
+    start_hidden: bool,
+    last_video_frame_ms: u64,
+    fixture_mode: bool,
 }
 
 pub fn run() -> Result<(), String> {
     unsafe {
-        let instance_mutex =
-            CreateMutexW(None, false, w!("Local\\CapturesWindowsNativeExperiment"))
-                .map_err(win_error)?;
+        let id = profile_id(&data_dir());
+        let mutex_name = HSTRING::from(format!("Local\\CapturesWindowsNativeExperiment-{id}"));
+        let window_title = HSTRING::from(format!("Captures [{id}]"));
+        let instance_mutex = CreateMutexW(None, false, &mutex_name).map_err(win_error)?;
         if GetLastError() == ERROR_ALREADY_EXISTS {
             for _ in 0..100 {
-                if let Ok(existing) = FindWindowW(CLASS, PCWSTR::null()) {
+                if let Ok(existing) = FindWindowW(CLASS, &window_title) {
                     PostMessageW(Some(existing), WM_ACTIVATE_INSTANCE, WPARAM(0), LPARAM(0))
                         .map_err(win_error)?;
                     CloseHandle(instance_mutex).map_err(win_error)?;
@@ -158,6 +205,8 @@ pub fn run() -> Result<(), String> {
             recording: None,
             recording_mode: CaptureMode::Region,
             editor_drag: None,
+            editor_text_origin: None,
+            editor_text: String::new(),
             next_session_check: Instant::now(),
             width: 420,
             height: 430,
@@ -165,13 +214,16 @@ pub fn run() -> Result<(), String> {
             tray: NOTIFYICONDATAW::default(),
             instance_mutex,
             delete_return: Surface::Menu,
+            start_hidden: std::env::args().any(|argument| argument == "--background"),
+            last_video_frame_ms: u64::MAX,
+            fixture_mode: requested_view.is_some(),
         });
         let raw = Box::into_raw(app);
         let _hwnd = CreateWindowExW(
             WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP,
             CLASS,
-            w!("Captures"),
-            WS_POPUP | WS_VISIBLE,
+            &window_title,
+            WS_POPUP,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             420,
@@ -254,11 +306,11 @@ unsafe extern "system" fn wndproc(
             WM_SIZE => {
                 app.width = loword(lparam.0) as u32;
                 app.height = hiword(lparam.0) as u32;
-                if let Some(renderer) = &mut app.renderer {
-                    if let Err(error) = renderer.resize(app.width, app.height, app.dpi) {
-                        app.set_error(error.to_string());
-                    }
-                };
+                if let Some(renderer) = &mut app.renderer
+                    && let Err(error) = renderer.resize(app.width, app.height, app.dpi)
+                {
+                    app.set_error(error.to_string());
+                }
                 LRESULT(0)
             }
             WM_DPICHANGED => {
@@ -291,6 +343,10 @@ unsafe extern "system" fn wndproc(
                 app.key(wparam.0 as u32);
                 LRESULT(0)
             }
+            WM_CHAR => {
+                app.character(char::from_u32(wparam.0 as u32));
+                LRESULT(0)
+            }
             WM_HOTKEY => {
                 let mode = if wparam.0 as i32 == HOTKEY_DISPLAY {
                     CaptureMode::Display
@@ -321,6 +377,7 @@ unsafe extern "system" fn wndproc(
                 }
                 let had_previews = !app.state.previews.is_empty();
                 app.state.tick(now);
+                app.tick_recording_editor(now);
                 if had_previews
                     && app.state.previews.is_empty()
                     && app.state.surface == Surface::Preview
@@ -369,6 +426,10 @@ impl App {
             self.renderer = Some(
                 Renderer::new(self.hwnd, self.width, self.height, self.dpi).map_err(win_error)?,
             );
+            if let Some(renderer) = &self.renderer {
+                let _ = fs::create_dir_all(data_dir());
+                let _ = fs::write(data_dir().join("render-driver.txt"), renderer.driver_name());
+            }
             SetTimer(Some(self.hwnd), TIMER_ANIMATION, 16, None);
             RegisterHotKey(
                 Some(self.hwnd),
@@ -380,6 +441,15 @@ impl App {
             RegisterHotKey(Some(self.hwnd), HOTKEY_DISPLAY, HOT_KEY_MODIFIERS(0), 0x2c)
                 .map_err(win_error)?;
             self.add_tray()?;
+            if self.state.surface == Surface::RecordingEditor
+                && let Some(source) = self
+                    .state
+                    .recording
+                    .as_ref()
+                    .and_then(|recording| recording.source.clone())
+            {
+                self.open_recording_editor(source)?;
+            }
             let (surface, width, height) = match self.state.surface {
                 Surface::ScreenshotEditor => (Surface::ScreenshotEditor, 1100, 720),
                 Surface::RecordingSelector => (Surface::RecordingSelector, 460, 450),
@@ -391,7 +461,11 @@ impl App {
                 Surface::DeleteConfirmation => (Surface::DeleteConfirmation, 480, 300),
                 _ => (Surface::Menu, 420, 430),
             };
-            self.show_surface(surface, width, height, surface == Surface::Preview);
+            if self.start_hidden {
+                let _ = ShowWindow(self.hwnd, SW_HIDE);
+            } else {
+                self.show_surface(surface, width, height, surface == Surface::Preview);
+            }
             Ok(())
         }
     }
@@ -413,15 +487,15 @@ impl App {
         );
         let light = self.settings.appearance == "light";
         if let Some(renderer) = &mut self.renderer {
-            let _ = renderer.draw(
-                &self.state,
-                &self.settings,
-                self.history.entries(),
-                self.recording_mode,
-                palette(light, accent, signal),
-                self.width as f32 * 96.0 / self.dpi,
-                self.height as f32 * 96.0 / self.dpi,
-            );
+            let _ = renderer.draw(Frame {
+                state: &self.state,
+                settings: &self.settings,
+                history: self.history.entries(),
+                recording_mode: self.recording_mode,
+                palette: palette(light, accent, signal),
+                width: self.width as f32 * 96.0 / self.dpi,
+                height: self.height as f32 * 96.0 / self.dpi,
+            });
         }
     }
 
@@ -462,12 +536,18 @@ impl App {
                 scale(height, self.dpi),
                 flags | SWP_NOMOVE,
             );
-            let excluded = match surface {
-                Surface::Overlay => true,
-                Surface::Preview => !self.settings.include_mini_previews_in_captures,
-                Surface::RecordingHud => !self.settings.include_recording_controls_in_captures,
-                _ => false,
-            };
+            if surface == Surface::Preview {
+                self.update_preview_region();
+            } else {
+                let _ = SetWindowRgn(self.hwnd, None, true);
+            }
+            let excluded = !self.fixture_mode
+                && match surface {
+                    Surface::Overlay => true,
+                    Surface::Preview => !self.settings.include_mini_previews_in_captures,
+                    Surface::RecordingHud => !self.settings.include_recording_controls_in_captures,
+                    _ => false,
+                };
             let _ = SetWindowDisplayAffinity(
                 self.hwnd,
                 if excluded {
@@ -547,20 +627,20 @@ impl App {
                     _ => {}
                 },
                 Surface::Overlay => {
-                    if let Some(overlay) = &mut self.state.overlay {
-                        if overlay.mode == CaptureMode::Region {
-                            overlay.drag = Some(
-                                if let Some(rect) = overlay.selection.filter(|r| r.contains(p)) {
-                                    SelectionDrag::Move {
-                                        original: rect,
-                                        anchor: p,
-                                    }
-                                } else {
-                                    SelectionDrag::Create { anchor: p }
-                                },
-                            );
-                            SetCapture(self.hwnd);
-                        }
+                    if let Some(overlay) = &mut self.state.overlay
+                        && overlay.mode == CaptureMode::Region
+                    {
+                        overlay.drag = Some(
+                            if let Some(rect) = overlay.selection.filter(|r| r.contains(p)) {
+                                SelectionDrag::Move {
+                                    original: rect,
+                                    anchor: p,
+                                }
+                            } else {
+                                SelectionDrag::Create { anchor: p }
+                            },
+                        );
+                        SetCapture(self.hwnd);
                     }
                 }
                 Surface::RecordingSelector => {
@@ -606,17 +686,27 @@ impl App {
                                 self.show_surface(Surface::ScreenshotEditor, 1100, 720, false)
                             }
                         } else if p.x < 170.0 {
-                            if let Some(preview) = self.state.previews.first() {
-                                if let Err(error) = copy_image(self.hwnd, &preview.image) {
-                                    self.set_error(error);
-                                }
+                            if let Some(preview) = self.state.previews.first()
+                                && let Err(error) = copy_image(self.hwnd, &preview.image)
+                            {
+                                self.set_error(error);
                             }
-                        } else if p.x > 250.0 {
-                            if let Some(preview) = self.state.previews.first() {
-                                self.state.pending_delete = Some(preview.artifact.clone());
-                                self.delete_return = Surface::Preview;
-                                self.show_surface(Surface::DeleteConfirmation, 480, 300, false)
+                        } else if p.x < 250.0 {
+                            if let Some(path) = self
+                                .state
+                                .previews
+                                .first()
+                                .map(|preview| preview.artifact.path.clone())
+                                && let Err(error) = drag_file(&path)
+                            {
+                                self.set_error(error);
                             }
+                        } else if p.x > 250.0
+                            && let Some(preview) = self.state.previews.first()
+                        {
+                            self.state.pending_delete = Some(preview.artifact.clone());
+                            self.delete_return = Surface::Preview;
+                            self.show_surface(Surface::DeleteConfirmation, 480, 300, false)
                         }
                     }
                 }
@@ -634,7 +724,7 @@ impl App {
                 Surface::Preferences => self.preferences_click(p),
                 Surface::History => self.history_click(p),
                 Surface::ScreenshotEditor => self.editor_pointer_down(p),
-                _ => {}
+                Surface::RecordingEditor => self.recording_editor_click(p),
             }
         }
     }
@@ -683,7 +773,14 @@ impl App {
             return;
         }
         match ((p.y - 84.0) / 64.0).floor() as i32 {
-            0 => self.settings.launch_at_login = !self.settings.launch_at_login,
+            0 => {
+                let enabled = !self.settings.launch_at_login;
+                if let Err(error) = set_autostart(enabled) {
+                    self.set_error(error);
+                    return;
+                }
+                self.settings.launch_at_login = enabled;
+            }
             1 => self.settings.auto_copy_to_clipboard = !self.settings.auto_copy_to_clipboard,
             2 => self.settings.show_mini_previews = !self.settings.show_mini_previews,
             3 => self.settings.freeze_screen = !self.settings.freeze_screen,
@@ -725,16 +822,24 @@ impl App {
         let button = ((218.0..246.0).contains(&p.y) && local_x >= 0.0)
             .then(|| (local_x / 57.0).floor() as usize);
         match button {
-            Some(0)
-                if !artifact.is_trashed()
-                    && artifact.kind == captures_windows_native::history::ArtifactKind::Image =>
-            {
-                match image::open(&artifact.path) {
-                    Ok(image) => {
-                        self.state.edit_image(image.to_rgba8());
-                        unsafe { self.show_surface(Surface::ScreenshotEditor, 1100, 720, false) };
+            Some(0) if !artifact.is_trashed() => {
+                if artifact.kind == captures_windows_native::history::ArtifactKind::Image {
+                    match image::open(&artifact.path) {
+                        Ok(image) => {
+                            self.state.edit_image(image.to_rgba8());
+                            unsafe {
+                                self.show_surface(Surface::ScreenshotEditor, 1100, 720, false)
+                            };
+                        }
+                        Err(error) => self.set_error(error.to_string()),
                     }
-                    Err(error) => self.set_error(error.to_string()),
+                } else {
+                    match self.open_recording_editor(artifact.path) {
+                        Ok(()) => unsafe {
+                            self.show_surface(Surface::RecordingEditor, 1000, 680, false)
+                        },
+                        Err(error) => self.set_error(error),
+                    }
                 }
             }
             Some(1) if artifact.is_trashed() => {
@@ -759,6 +864,11 @@ impl App {
                 self.state.pending_delete = Some(artifact);
                 self.delete_return = Surface::History;
                 unsafe { self.show_surface(Surface::DeleteConfirmation, 480, 300, false) };
+            }
+            None if !artifact.is_trashed() => {
+                if let Err(error) = drag_file(&artifact.path) {
+                    self.set_error(error);
+                }
             }
             _ => {}
         }
@@ -804,7 +914,7 @@ impl App {
                 }
                 return;
             }
-            let index = (p.x / 76.0).floor() as usize;
+            let index = (p.x / 70.0).floor() as usize;
             self.state.editor_tool = [
                 captures_windows_native::editor::Tool::Select,
                 captures_windows_native::editor::Tool::Crop,
@@ -814,12 +924,39 @@ impl App {
                 captures_windows_native::editor::Tool::Line,
                 captures_windows_native::editor::Tool::Rectangle,
                 captures_windows_native::editor::Tool::Ellipse,
+                captures_windows_native::editor::Tool::Triangle,
+                captures_windows_native::editor::Tool::Diamond,
+                captures_windows_native::editor::Tool::Star,
             ]
             .get(index)
             .copied()
             .unwrap_or(captures_windows_native::editor::Tool::Select);
-        } else if p.x > 76.0 && p.x < width - 208.0 && p.y > 80.0 {
-            self.editor_drag = Some(p);
+        } else if p.x > width - 190.0 && p.x < width - 78.0 && (228.0..262.0).contains(&p.y) {
+            self.state.editor_editing_color = true;
+            self.state.status = Some((
+                "Type a #RRGGBB color and press Enter".into(),
+                Instant::now(),
+            ));
+        } else if let Some(source) = self.editor_source_point(p) {
+            if self.state.editor_tool == captures_windows_native::editor::Tool::Select {
+                self.state.selected_layer = self
+                    .state
+                    .editor
+                    .as_ref()
+                    .and_then(|document| document.hit_test(source, 6.0));
+                unsafe {
+                    let _ = InvalidateRect(Some(self.hwnd), None, false);
+                }
+            } else if self.state.editor_tool == captures_windows_native::editor::Tool::Text {
+                self.editor_text_origin = Some(source);
+                self.editor_text.clear();
+                self.state.status = Some((
+                    "Type annotation text and press Enter".into(),
+                    Instant::now(),
+                ));
+            } else {
+                self.editor_drag = Some(source);
+            }
         }
     }
 
@@ -827,33 +964,370 @@ impl App {
         let Some(start) = self.editor_drag.take() else {
             return;
         };
+        let Some(end) = self.editor_source_point(p) else {
+            return;
+        };
         let Some(document) = &mut self.state.editor else {
             return;
         };
+        if self.state.editor_tool == captures_windows_native::editor::Tool::Crop {
+            document.set_crop(Rect::from_points(start, end));
+            unsafe {
+                let _ = InvalidateRect(Some(self.hwnd), None, false);
+            }
+            return;
+        }
         let shape = match self.state.editor_tool {
             captures_windows_native::editor::Tool::Arrow => {
-                captures_windows_native::editor::Shape::Arrow(start, p)
+                captures_windows_native::editor::Shape::Arrow(start, end)
             }
             captures_windows_native::editor::Tool::Line => {
-                captures_windows_native::editor::Shape::Line(start, p)
+                captures_windows_native::editor::Shape::Line(start, end)
             }
             captures_windows_native::editor::Tool::Ellipse => {
-                captures_windows_native::editor::Shape::Ellipse(Rect::from_points(start, p))
+                captures_windows_native::editor::Shape::Ellipse(Rect::from_points(start, end))
             }
             captures_windows_native::editor::Tool::Pen => {
-                captures_windows_native::editor::Shape::Stroke(vec![start, p])
+                captures_windows_native::editor::Shape::Stroke(vec![start, end])
             }
-            _ => captures_windows_native::editor::Shape::Rectangle(Rect::from_points(start, p)),
+            captures_windows_native::editor::Tool::Triangle => {
+                captures_windows_native::editor::Shape::Polygon(polygon_points(
+                    Rect::from_points(start, end),
+                    3,
+                    -90.0,
+                ))
+            }
+            captures_windows_native::editor::Tool::Diamond => {
+                captures_windows_native::editor::Shape::Polygon(polygon_points(
+                    Rect::from_points(start, end),
+                    4,
+                    -90.0,
+                ))
+            }
+            captures_windows_native::editor::Tool::Star => {
+                let bounds = Rect::from_points(start, end);
+                let center = Point {
+                    x: bounds.x + bounds.width / 2.0,
+                    y: bounds.y + bounds.height / 2.0,
+                };
+                captures_windows_native::editor::Shape::Polygon(
+                    (0..10)
+                        .map(|index| {
+                            let angle = (-90.0 + index as f32 * 36.0).to_radians();
+                            let scale = if index % 2 == 0 { 1.0 } else { 0.42 };
+                            Point {
+                                x: center.x + angle.cos() * bounds.width / 2.0 * scale,
+                                y: center.y + angle.sin() * bounds.height / 2.0 * scale,
+                            }
+                        })
+                        .collect(),
+                )
+            }
+            _ => captures_windows_native::editor::Shape::Rectangle(Rect::from_points(start, end)),
         };
-        document.add(shape, [239, 70, 80, 255], 3.0);
+        self.state.selected_layer = Some(document.add(shape, self.state.editor_color, 3.0));
         unsafe {
             let _ = InvalidateRect(Some(self.hwnd), None, false);
         }
     }
+
+    fn editor_source_point(&self, point: Point) -> Option<Point> {
+        let document = self.state.editor.as_ref()?;
+        let width = self.width as f32 * 96.0 / self.dpi;
+        let height = self.height as f32 * 96.0 / self.dpi;
+        let viewport = Rect {
+            x: 76.0,
+            y: 80.0,
+            width: width - 300.0,
+            height: height - 130.0,
+        };
+        if !viewport.contains(point) {
+            return None;
+        }
+        Some(Point {
+            x: document.crop.x + (point.x - viewport.x) / viewport.width * document.crop.width,
+            y: document.crop.y + (point.y - viewport.y) / viewport.height * document.crop.height,
+        })
+    }
+
+    unsafe fn recording_editor_click(&mut self, point: Point) {
+        let width = self.width as f32 * 96.0 / self.dpi;
+        let height = self.height as f32 * 96.0 / self.dpi;
+        let Some(editor) = self.state.recording_editor.as_mut() else {
+            return;
+        };
+        let mut rebuild_comparison = false;
+        if point.y < 58.0 && point.x > width - 120.0 {
+            self.export_recording_editor();
+            return;
+        }
+        if editor.quality_menu_open && point.x > width - 236.0 && (320.0..500.0).contains(&point.y)
+        {
+            let index = ((point.y - 320.0) / 30.0).floor() as usize;
+            if let Some(quality) = [
+                QualityPreset::Preserve,
+                QualityPreset::Highest,
+                QualityPreset::High,
+                QualityPreset::Standard,
+                QualityPreset::Small,
+                QualityPreset::Tiny,
+            ]
+            .get(index)
+            {
+                editor.quality = *quality;
+                editor.quality_menu_open = false;
+                rebuild_comparison = true;
+            }
+        } else if point.x > width - 236.0 && (280.0..330.0).contains(&point.y) {
+            editor.quality_menu_open = !editor.quality_menu_open;
+        } else if point.x > width - 100.0 && (376.0..422.0).contains(&point.y) {
+            editor.save_as_new = !editor.save_as_new;
+        } else if (height - 120.0..height - 52.0).contains(&point.y) {
+            let track_start = 104.0;
+            let track_width = (width - 164.0).max(1.0);
+            let ratio = ((point.x - track_start) / track_width).clamp(0.0, 1.0);
+            let at = (ratio * editor.duration_ms as f32).round() as u64;
+            let start_x =
+                track_start + editor.trim_start_ms as f32 / editor.duration_ms as f32 * track_width;
+            let end_x =
+                track_start + editor.trim_end_ms as f32 / editor.duration_ms as f32 * track_width;
+            if (point.x - start_x).abs() < 16.0 {
+                editor.set_trim_start(at);
+            } else if (point.x - end_x).abs() < 16.0 {
+                editor.set_trim_end(at);
+            } else if point.x < 88.0 {
+                editor.toggle_playback(Instant::now());
+            } else {
+                editor.seek(at);
+                self.last_video_frame_ms = u64::MAX;
+            }
+        }
+        if self.last_video_frame_ms == u64::MAX
+            && let Err(error) = self.refresh_recording_frame()
+        {
+            self.set_error(error);
+        }
+        if rebuild_comparison && let Err(error) = self.build_compression_comparison() {
+            self.set_error(error);
+        }
+        unsafe {
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
+        }
+    }
+
+    fn open_recording_editor(&mut self, source: PathBuf) -> Result<(), String> {
+        let tools = MediaToolchain::from_command_names();
+        tools.verify().map_err(|error| error.to_string())?;
+        let probe = tools.probe(&source).map_err(|error| error.to_string())?;
+        let duration_ms = probe.metadata.duration_ms.unwrap_or(0);
+        self.state.recording_editor = Some(
+            RecordingEditorState::new(source, duration_ms, probe.has_audio)
+                .map_err(str::to_owned)?,
+        );
+        self.last_video_frame_ms = u64::MAX;
+        self.refresh_recording_frame()?;
+        self.build_compression_comparison()?;
+        Ok(())
+    }
+
+    fn tick_recording_editor(&mut self, now: Instant) {
+        let should_refresh =
+            self.state
+                .recording_editor
+                .as_mut()
+                .is_some_and(|editor| editor.tick(now))
+                && self.state.recording_editor.as_ref().is_some_and(|editor| {
+                    editor.position_ms.abs_diff(self.last_video_frame_ms) >= 100
+                });
+        if should_refresh {
+            if let Err(error) = self.refresh_recording_frame() {
+                self.set_error(error);
+                if let Some(editor) = self.state.recording_editor.as_mut() {
+                    editor.playing = false;
+                }
+            }
+            unsafe {
+                let _ = InvalidateRect(Some(self.hwnd), None, false);
+            }
+        }
+    }
+
+    fn refresh_recording_frame(&mut self) -> Result<(), String> {
+        let editor = self
+            .state
+            .recording_editor
+            .as_ref()
+            .ok_or("recording editor is unavailable")?;
+        let at_ms = editor.position_ms.min(editor.duration_ms.saturating_sub(1));
+        let output = data_dir().join(format!("playback-frame-{}.png", uuid::Uuid::new_v4()));
+        let result = MediaToolchain::from_command_names()
+            .extract_frame(&editor.source, at_ms, &output, &CancelToken::default())
+            .map_err(|error| error.to_string())
+            .and_then(|()| image::open(&output).map_err(|error| error.to_string()));
+        let _ = fs::remove_file(&output);
+        self.state.recording_preview = Some(result?.to_rgba8());
+        self.last_video_frame_ms = at_ms;
+        Ok(())
+    }
+
+    fn export_recording_editor(&mut self) {
+        let Some(editor) = self.state.recording_editor.clone() else {
+            return;
+        };
+        editor_export(self, &editor);
+    }
+
+    fn build_compression_comparison(&mut self) -> Result<(), String> {
+        let editor = self
+            .state
+            .recording_editor
+            .clone()
+            .ok_or("recording editor is unavailable")?;
+        let sample_start = editor
+            .position_ms
+            .saturating_sub(500)
+            .max(editor.trim_start_ms);
+        let sample_end = (sample_start + 1_000).min(editor.trim_end_ms);
+        let sample_duration = sample_end.saturating_sub(sample_start);
+        if sample_duration == 0 {
+            return Err("compression comparison range is empty".into());
+        }
+        let extension = if editor
+            .source
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("gif"))
+        {
+            "gif"
+        } else {
+            "mp4"
+        };
+        let sample = data_dir().join(format!("compare-{}.{}", uuid::Uuid::new_v4(), extension));
+        let after_path = data_dir().join(format!("compare-after-{}.png", uuid::Uuid::new_v4()));
+        let tools = MediaToolchain::from_command_names();
+        let result: Result<(RgbaImage, u64), String> = (|| {
+            let edit = EditSpec {
+                trim_start_ms: sample_start,
+                trim_end_ms: Some(sample_end),
+                audio: AudioEdit {
+                    source_has_system_audio: editor.has_audio,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let format = if extension == "gif" {
+                ExportFormat::Gif
+            } else {
+                ExportFormat::Mp4
+            };
+            let outcome = tools
+                .export(
+                    &editor.source,
+                    &sample,
+                    &edit,
+                    &ExportSpec {
+                        format,
+                        quality: editor.quality,
+                        max_size_bytes: None,
+                        frames_per_second: Some(if format == ExportFormat::Gif {
+                            self.settings.recording.gif_fps
+                        } else {
+                            self.settings.recording.video_fps
+                        }),
+                        gif_max_colors: (format == ExportFormat::Gif)
+                            .then_some(self.settings.recording.gif_max_colors),
+                    },
+                    &CancelToken::default(),
+                    |_| {},
+                )
+                .map_err(|error| error.to_string())?;
+            tools
+                .extract_frame(
+                    &sample,
+                    editor.position_ms.saturating_sub(sample_start),
+                    &after_path,
+                    &CancelToken::default(),
+                )
+                .map_err(|error| error.to_string())?;
+            let before = self
+                .state
+                .recording_preview
+                .as_ref()
+                .ok_or("original comparison frame is unavailable")?;
+            let mut after = image::open(&after_path)
+                .map_err(|error| error.to_string())?
+                .to_rgba8();
+            if after.dimensions() != before.dimensions() {
+                after = image::imageops::resize(
+                    &after,
+                    before.width(),
+                    before.height(),
+                    image::imageops::FilterType::Triangle,
+                );
+            }
+            let mut comparison = before.clone();
+            let split = comparison.width() / 2;
+            for y in 0..comparison.height() {
+                for x in split..comparison.width() {
+                    comparison.put_pixel(x, y, *after.get_pixel(x, y));
+                }
+            }
+            let estimated = extrapolate_sampled_size(
+                outcome.size_bytes,
+                sample_duration,
+                editor.trim_end_ms.saturating_sub(editor.trim_start_ms),
+            );
+            Ok((comparison, estimated))
+        })();
+        let _ = fs::remove_file(sample);
+        let _ = fs::remove_file(after_path);
+        let (comparison, estimated) = result?;
+        self.state.recording_preview = Some(comparison);
+        if let Some(editor) = self.state.recording_editor.as_mut() {
+            editor.comparison_estimated_bytes = Some(estimated);
+        }
+        Ok(())
+    }
     unsafe fn key(&mut self, key: u32) {
         unsafe {
-            if key == VK_ESCAPE.0 as u32 {
-                if self.state.surface == Surface::Overlay {
+            let editor = self.state.surface == Surface::ScreenshotEditor;
+            let control = GetKeyState(VK_CONTROL.0 as i32) < 0;
+            if editor && key == VK_RETURN.0 as u32 && self.editor_text_origin.is_some() {
+                self.commit_editor_text();
+            } else if editor && key == VK_RETURN.0 as u32 && self.state.editor_editing_color {
+                match parse_hex_color(&self.state.editor_color_hex) {
+                    Some(color) => {
+                        self.state.editor_color = color;
+                        self.state.editor_editing_color = false;
+                    }
+                    None => self.set_error("Color must be exactly #RRGGBB"),
+                }
+                let _ = InvalidateRect(Some(self.hwnd), None, false);
+            } else if editor && key == VK_DELETE.0 as u32 {
+                if let Some(id) = self.state.selected_layer.take()
+                    && let Some(document) = self.state.editor.as_mut()
+                {
+                    document.delete(id);
+                    let _ = InvalidateRect(Some(self.hwnd), None, false);
+                }
+            } else if editor && control && key == 0x5a {
+                if let Some(document) = self.state.editor.as_mut() {
+                    document.undo();
+                    self.state.selected_layer = None;
+                    let _ = InvalidateRect(Some(self.hwnd), None, false);
+                }
+            } else if editor && control && key == 0x59 {
+                if let Some(document) = self.state.editor.as_mut() {
+                    document.redo();
+                    self.state.selected_layer = None;
+                    let _ = InvalidateRect(Some(self.hwnd), None, false);
+                }
+            } else if key == VK_ESCAPE.0 as u32 {
+                if self.editor_text_origin.take().is_some() || self.state.editor_editing_color {
+                    self.editor_text.clear();
+                    self.state.editor_editing_color = false;
+                    let _ = InvalidateRect(Some(self.hwnd), None, false);
+                } else if self.state.surface == Surface::Overlay {
                     self.state.cancel_overlay();
                     self.show_surface(Surface::Menu, 420, 430, false)
                 } else if self.state.surface == Surface::Preview {
@@ -873,6 +1347,83 @@ impl App {
                     _ => {}
                 }
             }
+        }
+    }
+
+    fn character(&mut self, character: Option<char>) {
+        let Some(character) = character else {
+            return;
+        };
+        if self.state.surface != Surface::ScreenshotEditor {
+            return;
+        }
+        if self.state.editor_editing_color {
+            match character {
+                '\u{8}' => {
+                    self.state.editor_color_hex.pop();
+                }
+                '#' | '0'..='9' | 'a'..='f' | 'A'..='F'
+                    if self.state.editor_color_hex.len() < 7 =>
+                {
+                    self.state
+                        .editor_color_hex
+                        .push(character.to_ascii_lowercase());
+                }
+                _ => {}
+            }
+        } else if self.editor_text_origin.is_some() {
+            match character {
+                '\u{8}' => {
+                    self.editor_text.pop();
+                }
+                '\r' | '\n' => {}
+                value if !value.is_control() && self.editor_text.chars().count() < 240 => {
+                    self.editor_text.push(value)
+                }
+                _ => {}
+            }
+            self.state.status = Some((format!("Text: {}", self.editor_text), Instant::now()));
+        }
+        unsafe {
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
+        }
+    }
+
+    fn commit_editor_text(&mut self) {
+        let Some(origin) = self.editor_text_origin.take() else {
+            return;
+        };
+        if self.editor_text.trim().is_empty() {
+            return;
+        }
+        let font = std::env::var_os("WINDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
+            .join("Fonts")
+            .join("segoeui.ttf");
+        let bytes = match fs::read(&font) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.set_error(format!(
+                    "Could not load Segoe UI for text annotation: {error}"
+                ));
+                return;
+            }
+        };
+        if let Some(document) = self.state.editor.as_mut() {
+            self.state.selected_layer = Some(document.add(
+                captures_windows_native::editor::Shape::Text {
+                    origin,
+                    value: std::mem::take(&mut self.editor_text),
+                    font_size: 32.0,
+                    font_data: bytes.into(),
+                },
+                self.state.editor_color,
+                1.0,
+            ));
+        }
+        unsafe {
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
         }
     }
 
@@ -1002,6 +1553,7 @@ impl App {
                 scale(logical_height, self.dpi),
                 SWP_SHOWWINDOW | SWP_NOACTIVATE,
             );
+            self.update_preview_region();
             let _ = SetWindowDisplayAffinity(
                 self.hwnd,
                 if self.settings.include_mini_previews_in_captures {
@@ -1029,6 +1581,42 @@ impl App {
                 14.0,
             )
         })
+    }
+
+    unsafe fn update_preview_region(&self) {
+        unsafe {
+            let count = self.state.previews.len().clamp(1, 5);
+            let diameter = scale(28, self.dpi);
+            let combined = CreateRoundRectRgn(
+                0,
+                0,
+                scale(340, self.dpi) + 1,
+                scale(200, self.dpi) + 1,
+                diameter,
+                diameter,
+            );
+            if combined.is_invalid() {
+                return;
+            }
+            for index in 1..count {
+                let y = scale(index as i32 * 28, self.dpi);
+                let card = CreateRoundRectRgn(
+                    0,
+                    y,
+                    scale(340, self.dpi) + 1,
+                    y + scale(200, self.dpi) + 1,
+                    diameter,
+                    diameter,
+                );
+                if !card.is_invalid() {
+                    let _ = CombineRgn(Some(combined), Some(combined), Some(card), RGN_OR);
+                    let _ = DeleteObject(HGDIOBJ(card.0));
+                }
+            }
+            if SetWindowRgn(self.hwnd, Some(combined), true) == 0 {
+                let _ = DeleteObject(HGDIOBJ(combined.0));
+            }
+        }
     }
 
     unsafe fn start_recording(&mut self, target: RecordingTarget, display: DisplayDescriptor) {
@@ -1219,10 +1807,18 @@ impl App {
                         info.map_or(0, |i| i.width),
                         info.map_or(0, |i| i.height),
                     );
-                    let _ = self.history.add(artifact);
+                    let _ = self.history.add(artifact.clone());
                     if self.settings.recording.open_editor_after_recording {
-                        self.state.surface = Surface::RecordingEditor;
-                        self.show_surface(Surface::RecordingEditor, 1000, 680, false)
+                        match self.open_recording_editor(artifact.path) {
+                            Ok(()) => {
+                                self.state.surface = Surface::RecordingEditor;
+                                self.show_surface(Surface::RecordingEditor, 1000, 680, false)
+                            }
+                            Err(error) => {
+                                self.set_error(error);
+                                self.show_surface(Surface::Menu, 420, 430, false)
+                            }
+                        }
                     } else {
                         self.show_surface(Surface::Menu, 420, 430, false)
                     }
@@ -1384,6 +1980,45 @@ fn copy_image(hwnd: HWND, image: &RgbaImage) -> Result<(), String> {
         result.map(|_| ())
     }
 }
+fn drag_file(path: &Path) -> Result<(), String> {
+    unsafe {
+        let absolute = path.canonicalize().map_err(|error| error.to_string())?;
+        let wide = absolute
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+        let absolute_pidl = ILCreateFromPathW(PCWSTR(wide.as_ptr()));
+        if absolute_pidl.is_null() {
+            return Err(last_error("create file drag item"));
+        }
+        let parent_pidl = ILClone(absolute_pidl);
+        if parent_pidl.is_null() {
+            CoTaskMemFree(Some(absolute_pidl.cast()));
+            return Err(last_error("clone file drag parent"));
+        }
+        let child = ILFindLastID(absolute_pidl);
+        if child.is_null() || !ILRemoveLastID(Some(parent_pidl)).as_bool() {
+            CoTaskMemFree(Some(parent_pidl.cast()));
+            CoTaskMemFree(Some(absolute_pidl.cast()));
+            return Err("cannot split file drag shell path".into());
+        }
+        let children = [child as *const ITEMIDLIST];
+        let data: windows::core::Result<IDataObject> =
+            SHCreateDataObject(Some(parent_pidl), Some(&children), None::<&IDataObject>);
+        CoTaskMemFree(Some(parent_pidl.cast()));
+        CoTaskMemFree(Some(absolute_pidl.cast()));
+        let data = data.map_err(win_error)?;
+        let source: IDropSource = FileDropSource.into();
+        let mut effect = DROPEFFECT::default();
+        let result = DoDragDrop(&data, &source, DROPEFFECT_COPY, &mut effect);
+        if result == DRAGDROP_S_DROP || result == DRAGDROP_S_CANCEL {
+            Ok(())
+        } else {
+            result.ok().map_err(win_error)
+        }
+    }
+}
 fn unique_path(root: &Path, prefix: &str, extension: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1401,6 +2036,175 @@ fn unique_path(root: &Path, prefix: &str, extension: &str) -> PathBuf {
         }
     }
     root.join(format!("{prefix}-{}.{}", uuid::Uuid::new_v4(), extension))
+}
+fn set_autostart(enabled: bool) -> Result<(), String> {
+    unsafe {
+        let mut key = HKEY::default();
+        let status = RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run"),
+            None,
+            PCWSTR::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_SET_VALUE,
+            None,
+            &mut key,
+            None,
+        );
+        if status != ERROR_SUCCESS {
+            return Err(format!(
+                "cannot open autostart registry key: OS error {}",
+                status.0
+            ));
+        }
+        let status = if enabled {
+            let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+            let command = format!("\"{}\" --background\0", executable.display());
+            let wide = command.encode_utf16().collect::<Vec<_>>();
+            let bytes = std::slice::from_raw_parts(wide.as_ptr().cast::<u8>(), wide.len() * 2);
+            RegSetValueExW(key, w!("CapturesWindowsNative"), None, REG_SZ, Some(bytes))
+        } else {
+            RegDeleteValueW(key, w!("CapturesWindowsNative"))
+        };
+        let _ = RegCloseKey(key);
+        if status == ERROR_SUCCESS || (!enabled && status == ERROR_FILE_NOT_FOUND) {
+            Ok(())
+        } else {
+            Err(format!("cannot update autostart: OS error {}", status.0))
+        }
+    }
+}
+
+fn editor_export(app: &mut App, editor: &RecordingEditorState) {
+    let extension = editor
+        .source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("mp4")
+        .to_ascii_lowercase();
+    let format = if extension == "gif" {
+        ExportFormat::Gif
+    } else {
+        ExportFormat::Mp4
+    };
+    let edit = EditSpec {
+        trim_start_ms: editor.trim_start_ms,
+        trim_end_ms: Some(editor.trim_end_ms),
+        audio: AudioEdit {
+            source_has_system_audio: editor.has_audio,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let spec = ExportSpec {
+        format,
+        quality: editor.quality,
+        max_size_bytes: None,
+        frames_per_second: Some(if format == ExportFormat::Gif {
+            app.settings.recording.gif_fps
+        } else {
+            app.settings.recording.video_fps
+        }),
+        gif_max_colors: (format == ExportFormat::Gif)
+            .then_some(app.settings.recording.gif_max_colors),
+    };
+    let destination = unique_path(
+        &app.settings.output_directory,
+        if editor.save_as_new {
+            "Recording edit"
+        } else {
+            ".Captures replacement"
+        },
+        &extension,
+    );
+    let result = MediaToolchain::from_command_names()
+        .export(
+            &editor.source,
+            &destination,
+            &edit,
+            &spec,
+            &CancelToken::default(),
+            |_| {},
+        )
+        .map_err(|error| error.to_string())
+        .and_then(|outcome| {
+            if editor.save_as_new {
+                let probe = MediaToolchain::from_command_names()
+                    .probe(&outcome.path)
+                    .map_err(|error| error.to_string())?;
+                app.history.add(Artifact::from_path(
+                    outcome.path,
+                    probe.metadata.width,
+                    probe.metadata.height,
+                ))?;
+                Ok("Exported as a new recording".to_owned())
+            } else {
+                replace_file_safely(&destination, &editor.source)?;
+                Ok("Updated the original recording".to_owned())
+            }
+        });
+    match result {
+        Ok(message) => app.state.status = Some((message, Instant::now())),
+        Err(error) => {
+            let _ = fs::remove_file(destination);
+            app.set_error(error);
+        }
+    }
+    unsafe {
+        let _ = InvalidateRect(Some(app.hwnd), None, false);
+    }
+}
+
+fn replace_file_safely(replacement: &Path, original: &Path) -> Result<(), String> {
+    let backup = original.with_file_name(format!(
+        ".{}.captures-backup-{}",
+        original
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("recording"),
+        uuid::Uuid::new_v4()
+    ));
+    fs::rename(original, &backup).map_err(|error| error.to_string())?;
+    if let Err(error) = fs::rename(replacement, original) {
+        let rollback = fs::rename(&backup, original);
+        return Err(match rollback {
+            Ok(()) => format!("could not replace recording: {error}"),
+            Err(rollback) => format!(
+                "could not replace recording ({error}) or restore backup {} ({rollback})",
+                backup.display()
+            ),
+        });
+    }
+    let _ = fs::remove_file(backup);
+    Ok(())
+}
+
+fn polygon_points(bounds: Rect, sides: usize, rotation_degrees: f32) -> Vec<Point> {
+    let center = Point {
+        x: bounds.x + bounds.width / 2.0,
+        y: bounds.y + bounds.height / 2.0,
+    };
+    (0..sides)
+        .map(|index| {
+            let angle = (rotation_degrees + index as f32 * 360.0 / sides as f32).to_radians();
+            Point {
+                x: center.x + angle.cos() * bounds.width / 2.0,
+                y: center.y + angle.sin() * bounds.height / 2.0,
+            }
+        })
+        .collect()
+}
+
+fn parse_hex_color(value: &str) -> Option<[u8; 4]> {
+    if value.len() != 7 || !value.starts_with('#') {
+        return None;
+    }
+    Some([
+        u8::from_str_radix(&value[1..3], 16).ok()?,
+        u8::from_str_radix(&value[3..5], 16).ok()?,
+        u8::from_str_radix(&value[5..7], 16).ok()?,
+        255,
+    ])
 }
 fn work_area() -> RECT {
     unsafe {

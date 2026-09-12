@@ -12,6 +12,9 @@ pub enum Tool {
     Line,
     Rectangle,
     Ellipse,
+    Triangle,
+    Diamond,
+    Star,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -21,6 +24,7 @@ pub enum Shape {
     Line(Point, Point),
     Rectangle(Rect),
     Ellipse(Rect),
+    Polygon(Vec<Point>),
     Text {
         origin: Point,
         value: String,
@@ -45,9 +49,15 @@ pub struct Document {
     original: Arc<RgbaImage>,
     pub crop: Rect,
     pub layers: Vec<Layer>,
-    undo: Vec<Vec<Layer>>,
-    redo: Vec<Vec<Layer>>,
+    undo: Vec<Snapshot>,
+    redo: Vec<Snapshot>,
     next_id: u64,
+}
+
+#[derive(Clone)]
+struct Snapshot {
+    crop: Rect,
+    layers: Vec<Layer>,
 }
 
 impl Document {
@@ -93,12 +103,33 @@ impl Document {
         true
     }
 
+    pub fn set_crop(&mut self, crop: Rect) -> bool {
+        let right = (crop.x + crop.width).min(self.original.width() as f32);
+        let bottom = (crop.y + crop.height).min(self.original.height() as f32);
+        let crop = Rect {
+            x: crop
+                .x
+                .clamp(0.0, self.original.width().saturating_sub(1) as f32),
+            y: crop
+                .y
+                .clamp(0.0, self.original.height().saturating_sub(1) as f32),
+            width: (right - crop.x.max(0.0)).max(1.0),
+            height: (bottom - crop.y.max(0.0)).max(1.0),
+        };
+        if crop == self.crop {
+            return false;
+        }
+        self.checkpoint();
+        self.crop = crop;
+        true
+    }
+
     pub fn undo(&mut self) -> bool {
         let Some(previous) = self.undo.pop() else {
             return false;
         };
-        self.redo
-            .push(std::mem::replace(&mut self.layers, previous));
+        self.redo.push(self.snapshot());
+        self.restore(previous);
         true
     }
 
@@ -106,14 +137,29 @@ impl Document {
         let Some(next) = self.redo.pop() else {
             return false;
         };
-        self.undo.push(std::mem::replace(&mut self.layers, next));
+        self.undo.push(self.snapshot());
+        self.restore(next);
         true
     }
 
     fn checkpoint(&mut self) {
-        self.undo.push(self.layers.clone());
-        self.undo.truncate(64);
+        self.undo.push(self.snapshot());
+        if self.undo.len() > 64 {
+            self.undo.remove(0);
+        }
         self.redo.clear();
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            crop: self.crop,
+            layers: self.layers.clone(),
+        }
+    }
+
+    fn restore(&mut self, snapshot: Snapshot) {
+        self.crop = snapshot.crop;
+        self.layers = snapshot.layers;
     }
 
     pub fn render(&self) -> Result<RgbaImage, String> {
@@ -135,12 +181,16 @@ impl Document {
     }
 
     pub fn hit_test(&self, point: Point, tolerance: f32) -> Option<u64> {
-        self.layers.iter().rev().find_map(|layer| {
-            let raster = to_raster_layer(layer);
-            raster
-                .hit_test(to_raster_point(point), tolerance)
-                .then_some(layer.id)
-        })
+        self.layers
+            .iter()
+            .rev()
+            .filter(|layer| layer.visible)
+            .find_map(|layer| {
+                let raster = to_raster_layer(layer);
+                raster
+                    .hit_test(to_raster_point(point), tolerance)
+                    .then_some(layer.id)
+            })
     }
 }
 
@@ -173,6 +223,9 @@ fn to_raster_layer(layer: &Layer) -> captures_image::Layer {
             width: rect.width,
             height: rect.height,
         },
+        Shape::Polygon(points) => {
+            captures_image::Shape::Polygon(points.iter().copied().map(to_raster_point).collect())
+        }
         Shape::Text {
             origin,
             value,
@@ -232,12 +285,71 @@ mod tests {
     #[test]
     fn crop_render_has_exact_requested_dimensions() {
         let mut document = Document::new(RgbaImage::new(100, 80));
-        document.crop = Rect {
+        assert!(document.set_crop(Rect {
             x: 10.0,
             y: 20.0,
             width: 33.0,
             height: 17.0,
-        };
+        }));
         assert_eq!(document.render().unwrap().dimensions(), (33, 17));
+        assert!(document.undo());
+        assert_eq!(document.render().unwrap().dimensions(), (100, 80));
+        assert!(document.redo());
+        assert_eq!(document.render().unwrap().dimensions(), (33, 17));
+    }
+
+    #[test]
+    fn undo_capacity_keeps_the_newest_checkpoint() {
+        let mut document = Document::new(RgbaImage::new(100, 100));
+        for x in 0..70 {
+            document.add(
+                Shape::Rectangle(Rect {
+                    x: x as f32,
+                    y: 1.0,
+                    width: 2.0,
+                    height: 3.0,
+                }),
+                [255, 0, 0, 255],
+                1.0,
+            );
+        }
+        assert!(document.undo());
+        assert_eq!(document.layers.len(), 69);
+        for _ in 1..64 {
+            assert!(document.undo());
+        }
+        assert_eq!(document.layers.len(), 6);
+        assert!(!document.undo());
+    }
+
+    #[test]
+    fn hidden_top_layer_does_not_intercept_hit_testing() {
+        let mut document = Document::new(RgbaImage::new(100, 100));
+        let visible = document.add(
+            Shape::Rectangle(Rect {
+                x: 10.0,
+                y: 10.0,
+                width: 30.0,
+                height: 30.0,
+            }),
+            [255, 0, 0, 255],
+            4.0,
+        );
+        let hidden = document.add(
+            Shape::Rectangle(Rect {
+                x: 10.0,
+                y: 10.0,
+                width: 30.0,
+                height: 30.0,
+            }),
+            [0, 255, 0, 255],
+            4.0,
+        );
+        document.layers.last_mut().unwrap().visible = false;
+        assert_ne!(visible, hidden);
+        assert_eq!(
+            document.hit_test(Point { x: 10.0, y: 20.0 }, 2.0),
+            Some(visible)
+        );
     }
 }

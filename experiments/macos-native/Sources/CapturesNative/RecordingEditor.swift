@@ -344,6 +344,17 @@ struct RecordingEditorView: View {
         .onChange(of: quality) { _ in scheduleComparison() }
         .onChange(of: maximumSizeMB) { _ in scheduleComparison() }
         .onChange(of: outputSize) { _ in scheduleComparison() }
+        .onChange(of: customWidth) { _ in scheduleComparison() }
+        .onChange(of: gifFPS) { _ in scheduleComparison() }
+        .onChange(of: model.trimStartMS) { _ in scheduleComparison() }
+        .onChange(of: model.trimEndMS) { _ in scheduleComparison() }
+        .onChange(of: model.cropEnabled) { _ in scheduleComparison() }
+        .onChange(of: model.crop) { _ in scheduleComparison() }
+        .onChange(of: systemVolume) { _ in scheduleComparison() }
+        .onChange(of: microphoneVolume) { _ in scheduleComparison() }
+        .onChange(of: muteSystem) { _ in scheduleComparison() }
+        .onChange(of: muteMicrophone) { _ in scheduleComparison() }
+        .onChange(of: mono) { _ in scheduleComparison() }
         .onChange(of: outputFormat) { _ in
             if formatRequiresCopy { makeCopy = true }
             scheduleComparison()
@@ -472,7 +483,10 @@ struct RecordingEditorView: View {
                         .font(.caption.weight(.semibold)).foregroundStyle(NativeTheme.glassText)
                         .padding(12).frame(maxHeight: .infinity, alignment: .bottom)
                     }
-                    Button { model.dismissComparison() } label: { Image(systemName: "xmark") }
+                    Button {
+                        comparisonExpanded = false
+                        model.dismissComparison()
+                    } label: { Image(systemName: "xmark") }
                         .buttonStyle(CaptureButtonStyle(glass: true))
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                         .padding(12)

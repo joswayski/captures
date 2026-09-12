@@ -441,6 +441,7 @@ private final class CaptureOverlayModel: ObservableObject {
     @Published var showClicks = false
     @Published var showKeystrokes = false
     @Published var desktopAudio: Bool
+    @Published var regionAspect = "free"
 
     let displays: [OverlayDisplay]
     let windows: [OverlayWindow]
@@ -526,7 +527,7 @@ private final class CaptureOverlayModel: ObservableObject {
         guard let drag else { return }
         switch drag {
         case .create(let origin):
-            selection = boundedRect(from: origin, to: point, square: shift)
+            selection = boundedRect(from: origin, to: point, aspect: shift ? 1 : selectedRegionAspect)
         case .move(let origin, let initial):
             var next = initial.offsetBy(dx: point.x - origin.x, dy: point.y - origin.y)
             next.origin.x = min(max(0, next.minX), max(0, screenSize.width - next.width))
@@ -537,8 +538,9 @@ private final class CaptureOverlayModel: ObservableObject {
                 x: corner.x == 0 ? initial.maxX : initial.minX,
                 y: corner.y == 0 ? initial.maxY : initial.minY
             )
-            var next = boundedRect(from: opposite, to: point, square: shift)
-            if next.width < 16 || next.height < 16 {
+            let aspect = shift ? CGFloat(1) : selectedRegionAspect
+            var next = boundedRect(from: opposite, to: point, aspect: aspect, minimum: aspect == nil ? 0 : 16)
+            if aspect == nil, next.width < 16 || next.height < 16 {
                 next.size.width = max(16, next.width)
                 next.size.height = max(16, next.height)
             }
@@ -554,22 +556,42 @@ private final class CaptureOverlayModel: ObservableObject {
         if created, self.selection != nil, AppStore.shared.settings.autoStart { capture() }
     }
 
-    func selectRegionPreset(_ ratio: CGFloat?) {
+    func selectRegionAspect(_ value: String) {
         guard target == .region else { return }
-        if ratio == nil {
-            selection = CGRect(origin: .zero, size: screenSize)
-            return
+        regionAspect = value
+        guard let ratio = selectedRegionAspect, let current = selection,
+              current.width > 0, current.height > 0 else { return }
+        let width: CGFloat
+        let height: CGFloat
+        if current.width / current.height > ratio {
+            height = current.height
+            width = height * ratio
+        } else {
+            width = current.width
+            height = width / ratio
         }
-        let inset = CGSize(width: screenSize.width * 0.12, height: screenSize.height * 0.14)
-        let available = CGSize(width: screenSize.width - inset.width * 2, height: screenSize.height - inset.height * 2)
-        let width = min(available.width, available.height * ratio!)
-        let height = width / ratio!
-        selection = CGRect(
-            x: (screenSize.width - width) / 2,
-            y: (screenSize.height - height) / 2,
-            width: width,
-            height: height
-        ).integral
+        var adjustedWidth = width
+        var adjustedHeight = height
+        if adjustedWidth < 16 || adjustedHeight < 16 {
+            if ratio >= 1 {
+                adjustedWidth = max(16, adjustedWidth)
+                adjustedHeight = adjustedWidth / ratio
+            } else {
+                adjustedHeight = max(16, adjustedHeight)
+                adjustedWidth = adjustedHeight * ratio
+            }
+        }
+        if adjustedWidth > screenSize.width {
+            adjustedWidth = screenSize.width
+            adjustedHeight = adjustedWidth / ratio
+        }
+        if adjustedHeight > screenSize.height {
+            adjustedHeight = screenSize.height
+            adjustedWidth = adjustedHeight * ratio
+        }
+        let x = min(max(0, current.midX - adjustedWidth / 2), screenSize.width - adjustedWidth)
+        let y = min(max(0, current.midY - adjustedHeight / 2), screenSize.height - adjustedHeight)
+        selection = CGRect(x: x, y: y, width: adjustedWidth, height: adjustedHeight)
     }
 
     func startSafetyMonitoring() {
@@ -779,16 +801,55 @@ private final class CaptureOverlayModel: ObservableObject {
         }
     }
 
-    private func boundedRect(from start: CGPoint, to end: CGPoint, square: Bool) -> CGRect {
+    private var selectedRegionAspect: CGFloat? {
+        let pieces = regionAspect.split(separator: ":").compactMap { Double($0) }
+        guard pieces.count == 2, pieces[0] > 0, pieces[1] > 0 else { return nil }
+        return CGFloat(pieces[0] / pieces[1])
+    }
+
+    private func boundedRect(
+        from start: CGPoint, to end: CGPoint, aspect: CGFloat?, minimum: CGFloat = 0
+    ) -> CGRect {
         var dx = end.x - start.x
         var dy = end.y - start.y
-        if square {
-            let side = min(max(abs(dx), abs(dy)), min(
-                dx >= 0 ? screenSize.width - start.x : start.x,
-                dy >= 0 ? screenSize.height - start.y : start.y
-            ))
-            dx = side * (dx < 0 ? -1 : 1)
-            dy = side * (dy < 0 ? -1 : 1)
+        if let aspect {
+            var width = abs(dx)
+            var height = abs(dy)
+            if height == 0 || width / height > aspect { height = width / aspect }
+            else { width = height * aspect }
+            let roomX = dx >= 0 ? screenSize.width - start.x : start.x
+            let roomY = dy >= 0 ? screenSize.height - start.y : start.y
+            if width > roomX { width = roomX; height = width / aspect }
+            if height > roomY { height = roomY; width = height * aspect }
+            let minimum = max(1, minimum)
+            if minimum > 1,
+               (width < minimum || height < minimum),
+               roomX >= minimum, roomY >= minimum / aspect,
+               roomY >= minimum, roomX >= minimum * aspect {
+                if aspect >= 1 {
+                    width = max(minimum, min(width, roomX))
+                    height = width / aspect
+                    if height < minimum || height > roomY {
+                        height = max(minimum, min(height, roomY))
+                        width = height * aspect
+                    }
+                } else {
+                    height = max(minimum, min(height, roomY))
+                    width = height * aspect
+                    if width < minimum || width > roomX {
+                        width = max(minimum, min(width, roomX))
+                        height = width / aspect
+                    }
+                }
+            }
+            width = max(0, min(width, roomX))
+            height = width / aspect
+            if height > roomY {
+                height = max(0, roomY)
+                width = height * aspect
+            }
+            dx = width * (dx < 0 ? -1 : 1)
+            dy = height * (dy < 0 ? -1 : 1)
         }
         let rect = CGRect(
             x: min(start.x, start.x + dx),
@@ -1051,7 +1112,8 @@ private struct CaptureToolbar: View {
                     CaptureChoice(
                         title: "Display",
                         selection: $model.display,
-                        options: model.displays.map { CaptureOption(label: $0.name, value: $0) }
+                        options: model.displays.map { CaptureOption(label: $0.name, value: $0) },
+                        glass: true
                     )
                     .frame(width: 180)
                     .onChange(of: model.display) { display in
@@ -1093,11 +1155,17 @@ private struct CaptureToolbar: View {
 
     private var regionPresets: some View {
         HStack(spacing: 8) {
-            Text("Region").foregroundColor(NativeTheme.glassMuted)
-            Button("Full screen") { model.selectRegionPreset(nil) }
-            Button("16:9") { model.selectRegionPreset(16 / 9) }
-            Button("4:3") { model.selectRegionPreset(4 / 3) }
-            Button("1:1") { model.selectRegionPreset(1) }
+            Text("Aspect").foregroundColor(NativeTheme.glassMuted)
+            CaptureChoice(title: "Region aspect ratio", selection: $model.regionAspect, options: [
+                CaptureOption(label: "Free", value: "free"),
+                CaptureOption(label: "1 : 1", value: "1:1"),
+                CaptureOption(label: "4 : 3", value: "4:3"),
+                CaptureOption(label: "3 : 2", value: "3:2"),
+                CaptureOption(label: "16 : 9", value: "16:9"),
+                CaptureOption(label: "9 : 16", value: "9:16"),
+            ], glass: true)
+            .frame(width: 150)
+            .onChange(of: model.regionAspect) { model.selectRegionAspect($0) }
         }
         .font(.system(size: 11, weight: .medium))
         .buttonStyle(.plain)

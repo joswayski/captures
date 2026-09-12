@@ -202,6 +202,7 @@ struct CaptureChoice<Value: Hashable>: View {
     let title: String
     @Binding var selection: Value
     let options: [CaptureOption<Value>]
+    var glass = false
     var opensAbove = false
     @State private var open = false
     @Environment(\.colorScheme) private var scheme
@@ -223,11 +224,11 @@ struct CaptureChoice<Value: Hashable>: View {
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(NativeTheme.muted(scheme))
+                    .foregroundColor(glass ? NativeTheme.glassMuted : NativeTheme.muted(scheme))
                     .rotationEffect(open ? .degrees(180) : .zero)
             }
         }
-        .buttonStyle(CaptureButtonStyle())
+        .buttonStyle(CaptureButtonStyle(glass: glass))
         .accessibilityLabel(title)
         .overlay(alignment: .topLeading) {
             if open {
@@ -251,9 +252,11 @@ struct CaptureChoice<Value: Hashable>: View {
                     }
                 }
                 .padding(NativeTheme.metric("s-3"))
-                .foregroundColor(NativeTheme.text(scheme))
-                .background(NativeTheme.raised(scheme), in: RoundedRectangle(cornerRadius: NativeTheme.metric("r-lg")))
-                .overlay(RoundedRectangle(cornerRadius: NativeTheme.metric("r-lg")).stroke(NativeTheme.border(scheme)))
+                .foregroundColor(glass ? NativeTheme.glassText : NativeTheme.text(scheme))
+                .background(glass ? NativeTheme.glassRaised : NativeTheme.raised(scheme),
+                            in: RoundedRectangle(cornerRadius: NativeTheme.metric("r-lg")))
+                .overlay(RoundedRectangle(cornerRadius: NativeTheme.metric("r-lg"))
+                    .stroke(glass ? NativeTheme.color("glass-border") : NativeTheme.border(scheme)))
                 .shadow(color: .black.opacity(scheme == .dark ? 0.42 : 0.16), radius: 18, y: 8)
                 .offset(y: opensAbove
                         ? -(optionPanelHeight + NativeTheme.metric("s-2"))

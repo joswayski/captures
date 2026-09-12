@@ -1280,6 +1280,26 @@ mod tests {
     }
 
     #[test]
+    fn media_export_rejects_a_zero_size_budget_before_running_the_toolchain() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.mp4");
+        std::fs::write(&source, b"not media").unwrap();
+        let request = serde_json::json!({
+            "op": "media_export",
+            "path": source,
+            "output": directory.path().join("output.mp4"),
+            "format": "mp4",
+            "start_ms": 0,
+            "end_ms": 1,
+            "max_bytes": 0
+        });
+        let error = super::dispatch_direct(&request.to_string())
+            .expect("media export is stateless")
+            .unwrap_err();
+        assert_eq!(error, "media export max_bytes must be greater than zero");
+    }
+
+    #[test]
     fn recovery_reservation_excludes_concurrent_recovery() {
         let flag = AtomicBool::new(false);
         let first = Reservation::acquire(&flag).unwrap();

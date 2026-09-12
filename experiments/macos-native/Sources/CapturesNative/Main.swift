@@ -149,7 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                      ("Copy", "copy:", "c"), ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")] {
             edit.addItem(NSMenuItem(title: title, action: Selector(action), keyEquivalent: key))
         }
-        let redo = NSMenuItem(title: "Redo", action: Selector("redo:"), keyEquivalent: "z")
+        let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
         redo.keyEquivalentModifierMask = [.command, .shift]; edit.insertItem(redo, at: 1)
         editItem.submenu = edit; main.addItem(editItem)
         NSApp.mainMenu = main

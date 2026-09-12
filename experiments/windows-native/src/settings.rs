@@ -103,6 +103,15 @@ pub fn data_dir() -> PathBuf {
         })
 }
 
+pub fn profile_id(path: &Path) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in path.to_string_lossy().to_lowercase().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
 impl Settings {
     pub fn load() -> Result<Self, String> {
         let path = data_dir().join("settings.json");
@@ -208,5 +217,17 @@ mod tests {
             ..Settings::default()
         };
         assert!(settings.validate().unwrap_err().contains("#RRGGBB"));
+    }
+
+    #[test]
+    fn profile_id_is_case_insensitive_but_path_specific() {
+        assert_eq!(
+            profile_id(Path::new("C:/Users/Jose/Captures")),
+            profile_id(Path::new("c:/users/jose/captures"))
+        );
+        assert_ne!(
+            profile_id(Path::new("C:/one")),
+            profile_id(Path::new("C:/two"))
+        );
     }
 }

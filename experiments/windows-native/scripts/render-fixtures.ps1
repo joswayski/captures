@@ -1,6 +1,6 @@
 param(
-  [string]$ImagePath,
-  [string]$VideoPath
+  [Parameter(Mandatory=$true)][string]$ImagePath,
+  [Parameter(Mandatory=$true)][string]$VideoPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,8 +10,6 @@ $out = Join-Path $root "experiments/windows-native/runtime-screenshots"
 if (!(Test-Path $exe)) { & "$PSScriptRoot/build.ps1" }
 if (!(Test-Path $exe)) { throw "Windows executable was not produced at $exe" }
 
-if (!$ImagePath) { $ImagePath = Join-Path $root "apps/desktop/src-tauri/icons/icon.png" }
-if (!$VideoPath) { $VideoPath = Join-Path $root "docs/images/native-ui/tauri-dust.webm" }
 if (!(Test-Path $ImagePath)) { throw "Shared image fixture does not exist: $ImagePath" }
 if (!(Test-Path $VideoPath)) { throw "Shared video fixture does not exist: $VideoPath" }
 $ImagePath = (Resolve-Path $ImagePath).Path
@@ -20,6 +18,8 @@ $VideoPath = (Resolve-Path $VideoPath).Path
 $profile = Join-Path ([IO.Path]::GetTempPath()) ("captures-windows-fixtures-" + [guid]::NewGuid())
 $videoFrame = Join-Path $profile "video-frame.png"
 New-Item -ItemType Directory -Force $out, $profile | Out-Null
+$driverLog = Join-Path $out "render-drivers.txt"
+Set-Content $driverLog "appearance,view,d3d_driver"
 
 ffmpeg -v error -y -ss 0.2 -i $VideoPath -frames:v 1 $videoFrame
 if ($LASTEXITCODE -ne 0 -or !(Test-Path $videoFrame)) {
@@ -71,16 +71,24 @@ function Assert-NonBlank([Drawing.Bitmap]$bitmap, [string]$view) {
 
 function Save-View([string]$appearance, [string]$view) {
   $source = if ($view -eq "recording-editor") { $videoFrame } else { $ImagePath }
-  $arguments = @("--view", $view, "--appearance", $appearance, "--fixture-image", $source, "--fixture-video", $VideoPath)
+  Remove-Item (Join-Path $profile "render-driver.txt") -Force -ErrorAction SilentlyContinue
+  # Start-Process flattens ArgumentList, so explicitly quote paths that may contain spaces.
+  $arguments = @("--view", $view, "--appearance", $appearance, "--fixture-image", ('"{0}"' -f $source), "--fixture-video", ('"{0}"' -f $VideoPath))
   $process = Start-Process $exe -ArgumentList $arguments -PassThru
   try {
     $handle = [IntPtr]::Zero
-    for ($attempt = 0; $attempt -lt 80 -and $handle -eq [IntPtr]::Zero; $attempt++) {
+    for ($attempt = 0; $attempt -lt 300 -and $handle -eq [IntPtr]::Zero; $attempt++) {
       if ($process.HasExited) { throw "$view exited before creating a window (exit $($process.ExitCode))" }
       Start-Sleep -Milliseconds 100
       $handle = [CapturesFixtureNative]::FindWindowForProcess([uint32]$process.Id)
     }
     if ($handle -eq [IntPtr]::Zero) { throw "PID $($process.Id) did not create the Captures window for $view" }
+    $driverFile = Join-Path $profile "render-driver.txt"
+    if (!(Test-Path $driverFile)) { throw "$view did not report its D3D driver" }
+    $driver = (Get-Content $driverFile -Raw).Trim()
+    if ($driver -notin @("hardware", "warp")) { throw "$view reported unknown D3D driver '$driver'" }
+    Add-Content $driverLog "$appearance,$view,$driver"
+    Write-Host "$appearance-$view D3D driver: $driver"
     Start-Sleep -Milliseconds 350
     $rect = New-Object CapturesFixtureNative+RECT
     if (![CapturesFixtureNative]::GetWindowRect($handle, [ref]$rect)) { throw "GetWindowRect failed for $view" }

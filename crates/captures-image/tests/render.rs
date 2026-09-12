@@ -207,6 +207,37 @@ fn explicit_font_renders_asymmetric_glyphs_with_alpha_and_rotation() {
 }
 
 #[test]
+fn concave_polygons_close_the_outline_and_fill_only_their_interior() {
+    let points = vec![
+        point(10.0, 10.0),
+        point(50.0, 10.0),
+        point(50.0, 20.0),
+        point(20.0, 20.0),
+        point(20.0, 45.0),
+        point(10.0, 45.0),
+    ];
+    let mut shape = layer(Shape::Polygon(points.clone()));
+    assert!(shape.hit_test(point(10.5, 30.0), 0.0)); // Last-to-first closing edge.
+    assert!(!shape.hit_test(point(15.0, 30.0), 0.0));
+    shape.fill = Some([0, 200, 90, 255]);
+    assert!(shape.hit_test(point(15.0, 30.0), 0.0));
+    assert!(!shape.hit_test(point(40.0, 30.0), 0.0)); // Inside bounds, outside the L.
+    let rendered = render(&document(vec![shape.clone()])).unwrap();
+    assert_eq!(rendered.get_pixel(15, 30).0, [0, 200, 90, 255]);
+    assert_eq!(rendered.get_pixel(40, 30)[3], 0);
+    shape.shape = Shape::Polygon(points.into_iter().rev().collect());
+    assert!(shape.hit_test(point(15.0, 30.0), 0.0));
+    assert!(!shape.hit_test(point(40.0, 30.0), 0.0));
+    assert_eq!(render(&document(vec![shape])).unwrap(), rendered);
+    assert!(
+        render(&document(vec![layer(Shape::Polygon(vec![point(
+            1.0, 1.0
+        )]))]))
+        .is_err()
+    );
+}
+
+#[test]
 fn invalid_geometry_crop_and_font_fail_without_mutating_source() {
     for crop in [
         PixelRect {
