@@ -21,6 +21,7 @@ packages=(
   libdbus-1-dev
   libegl-dev
   libgbm-dev
+  libgtk-4-dev
   libpipewire-0.3-dev
   libspa-0.2-dev
   librsvg2-dev
@@ -35,6 +36,7 @@ packages=(
   postgresql
   wget
   # Isolated X11 desktop and input automation for native UI experiments.
+  gir1.2-gtk-4.0
   openbox
   python3-dbus
   python3-gi

@@ -3,7 +3,7 @@ import AVFoundation
 import AVKit
 import SwiftUI
 
-private struct RecordingProbe {
+private struct RecordingProbe: Equatable {
     var width: Int
     var height: Int
     var durationMS: Double
@@ -134,11 +134,12 @@ private final class RecordingEditorModel: ObservableObject {
 
     func export(
         to url: URL, format: String, width: Int?, quality: String,
-        systemVolume: Double, microphoneVolume: Double, mono: Bool, gifFPS: Int
+        maxBytes: Int?, systemVolume: Double, microphoneVolume: Double, mono: Bool, gifFPS: Int,
+        replacing source: URL? = nil
     ) {
         constrainCrop()
         let fields = exportFields(
-            output: url, format: format, width: width, quality: quality,
+            output: url, format: format, width: width, quality: quality, maxBytes: maxBytes,
             systemVolume: systemVolume, microphoneVolume: microphoneVolume, mono: mono, gifFPS: gifFPS,
             trimStartMS: trimStartMS, trimEndMS: trimEndMS, cropEnabled: cropEnabled, crop: crop
         )
@@ -151,13 +152,20 @@ private final class RecordingEditorModel: ObservableObject {
             case let .success(response):
                 do {
                     let output = try Artifact(response: response)
-                    AppStore.shared.addArtifact(output)
-                    self.status = "Saved \(output.url.lastPathComponent)"
+                    if let source {
+                        _ = try FileManager.default.replaceItemAt(source, withItemAt: output.url)
+                        self.status = "Saved \(source.lastPathComponent)"
+                    } else {
+                        AppStore.shared.addArtifact(output)
+                        self.status = "Saved \(output.url.lastPathComponent)"
+                    }
                 } catch {
+                    if source != nil { try? FileManager.default.removeItem(at: url) }
                     self.status = error.localizedDescription
                     AppStore.shared.report(error)
                 }
             case let .failure(error):
+                if source != nil { try? FileManager.default.removeItem(at: url) }
                 self.status = error.localizedDescription
                 AppStore.shared.report(error)
             }
@@ -166,7 +174,7 @@ private final class RecordingEditorModel: ObservableObject {
 
     func prepareComparison(
         format: String, width: Int?, quality: String,
-        systemVolume: Double, microphoneVolume: Double, mono: Bool, gifFPS: Int
+        maxBytes: Int?, systemVolume: Double, microphoneVolume: Double, mono: Bool, gifFPS: Int
     ) {
         guard !comparisonPending else { return }
         player.pause()
@@ -197,7 +205,7 @@ private final class RecordingEditorModel: ObservableObject {
             comparisonError = ""
             comparisonPending = true
             let fields = exportFields(
-                output: output, format: format, width: width, quality: quality,
+                output: output, format: format, width: width, quality: quality, maxBytes: maxBytes,
                 systemVolume: systemVolume, microphoneVolume: microphoneVolume, mono: mono, gifFPS: gifFPS,
                 trimStartMS: trimStartSnapshot, trimEndMS: trimEndSnapshot,
                 cropEnabled: cropEnabledSnapshot, crop: cropSnapshot
@@ -236,7 +244,7 @@ private final class RecordingEditorModel: ObservableObject {
 
     private func exportFields(
         output: URL, format: String, width: Int?, quality: String,
-        systemVolume: Double, microphoneVolume: Double, mono: Bool, gifFPS: Int,
+        maxBytes: Int?, systemVolume: Double, microphoneVolume: Double, mono: Bool, gifFPS: Int,
         trimStartMS: Double, trimEndMS: Double, cropEnabled: Bool, crop: RecordingCrop
     ) -> [String: Any] {
         var fields: [String: Any] = [
@@ -249,6 +257,7 @@ private final class RecordingEditorModel: ObservableObject {
             fields["crop"] = ["x": Int(crop.x), "y": Int(crop.y), "width": Int(crop.width), "height": Int(crop.height)]
         }
         if let width { fields["width"] = width }
+        if let maxBytes { fields["max_bytes"] = maxBytes }
         if format == "gif" { fields["fps"] = gifFPS }
         return fields
     }
@@ -284,7 +293,12 @@ struct RecordingEditorView: View {
     @State private var outputFormat = "mp4"
     @State private var outputSize = "original"
     @State private var customWidth = 1920
-    @State private var quality = "preserve"
+    @State private var qualityMode = "preserve"
+    @State private var quality = "standard"
+    @State private var maximumSizeMB = 10.0
+    @State private var makeCopy = true
+    @State private var comparisonExpanded = true
+    @State private var comparisonWork: DispatchWorkItem?
     @State private var gifFPS = 15
     @State private var comparisonSplit: CGFloat = 0.5
     @State private var systemVolume = 1.0
@@ -325,6 +339,16 @@ struct RecordingEditorView: View {
         .background(NativeTheme.canvas(colorScheme))
         .foregroundStyle(NativeTheme.text(colorScheme))
         .onChange(of: loop) { value in model.loopEnabled = value }
+        .onChange(of: model.probe) { _ in scheduleComparison() }
+        .onChange(of: qualityMode) { _ in scheduleComparison() }
+        .onChange(of: quality) { _ in scheduleComparison() }
+        .onChange(of: maximumSizeMB) { _ in scheduleComparison() }
+        .onChange(of: outputSize) { _ in scheduleComparison() }
+        .onChange(of: outputFormat) { _ in
+            if formatRequiresCopy { makeCopy = true }
+            scheduleComparison()
+        }
+        .onDisappear { comparisonWork?.cancel(); model.dismissComparison() }
         .animation(NativeTheme.motion, value: model.cropEnabled)
         .animation(NativeTheme.standard, value: outputFormat)
     }
@@ -334,10 +358,12 @@ struct RecordingEditorView: View {
             HStack {
                 SectionTitle("Preview")
                 Spacer()
-                Toggle("Loop preview", isOn: $loop).toggleStyle(.button)
-                Picker("Preview size", selection: $previewActualSize) {
-                    Text("Fit").tag(false); Text("100%").tag(true)
-                }.pickerStyle(.segmented).frame(width: 140)
+                Button(loop ? "Looping" : "Loop preview") { loop.toggle() }
+                    .buttonStyle(CaptureButtonStyle(primary: loop))
+                CaptureSegments(selection: $previewActualSize, options: [
+                    CaptureOption(label: "Fit", value: false),
+                    CaptureOption(label: "100%", value: true),
+                ]).frame(width: 140)
             }
             .padding(.horizontal, NativeTheme.metric("s-5")).frame(height: 46)
             Divider()
@@ -500,7 +526,7 @@ struct RecordingEditorView: View {
     private var cropCard: some View {
         editorCard {
             SectionTitle("Crop & size")
-            Toggle("Crop recording", isOn: $model.cropEnabled)
+            CaptureToggleRow(title: "Crop recording", isOn: $model.cropEnabled)
             if let probe = model.probe {
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: NativeTheme.metric("s-3")) {
                     numberField("X", value: cropBinding(\.x), range: 0...Double(probe.width))
@@ -509,15 +535,22 @@ struct RecordingEditorView: View {
                     numberField("Height", value: cropBinding(\.height), range: 2...Double(probe.height))
                 }.disabled(!model.cropEnabled)
             }
-            Toggle("Lock aspect ratio", isOn: $aspectLocked).disabled(!model.cropEnabled)
-            Picker("Output resolution", selection: $outputSize) {
-                Text("Original").tag("original")
-                Text("1080p maximum").tag("1080")
-                Text("720p maximum").tag("720")
-                Text("Custom width").tag("custom")
-            }
+            CaptureToggleRow(title: "Lock aspect ratio", isOn: $aspectLocked).disabled(!model.cropEnabled)
+            CaptureChoice(title: "Output resolution", selection: $outputSize, options: [
+                CaptureOption(label: "Original", value: "original"),
+                CaptureOption(label: "1080p maximum", value: "1080"),
+                CaptureOption(label: "720p maximum", value: "720"),
+                CaptureOption(label: "Custom width", value: "custom"),
+            ])
             if outputSize == "custom" {
-                Stepper("Width: \(customWidth) px", value: $customWidth, in: 2...16_384, step: 2)
+                HStack {
+                    Text("Width: \(customWidth) px").monospacedDigit()
+                    Spacer()
+                    Button { customWidth = max(2, customWidth - 2) } label: { Image(systemName: "minus") }
+                        .buttonStyle(CaptureButtonStyle())
+                    Button { customWidth = min(16_384, customWidth + 2) } label: { Image(systemName: "plus") }
+                        .buttonStyle(CaptureButtonStyle())
+                }
             }
         }
     }
@@ -525,31 +558,50 @@ struct RecordingEditorView: View {
     private var qualityCard: some View {
         editorCard {
             SectionTitle("Save quality")
-            Picker("Format", selection: $outputFormat) {
-                Text("MP4").tag("mp4")
-                Text("GIF").tag("gif")
-                Text("WebM — unavailable").tag("webm").disabled(true)
-            }
-            Picker("Quality", selection: $quality) {
-                Text("Preserve quality").tag("preserve")
-                Text("Compress · Highest").tag("highest")
-                Text("Compress · High").tag("high")
-                Text("Compress · Balanced").tag("standard")
-                Text("Compress · Smaller").tag("small")
-                Text("Compress · Tiny").tag("tiny")
-            }
-            if outputFormat == "gif" {
-                Picker("Frame rate", selection: $gifFPS) {
-                    ForEach([8, 10, 12, 15, 20, 24, 30], id: \.self) { Text("\($0) FPS").tag($0) }
+            CaptureSegments(selection: $outputFormat, options: [
+                CaptureOption(label: "MP4", value: "mp4"),
+                CaptureOption(label: "GIF", value: "gif"),
+            ])
+            CaptureChoice(title: "Quality mode", selection: $qualityMode, options: [
+                CaptureOption(label: "Preserve quality", value: "preserve"),
+                CaptureOption(label: "Compress", value: "compress"),
+                CaptureOption(label: "Maximum file size", value: "maximum"),
+            ])
+            if qualityMode == "compress" {
+                CaptureChoice(title: "Compression quality", selection: $quality, options: [
+                    CaptureOption(label: "Highest", value: "highest"),
+                    CaptureOption(label: "High", value: "high"),
+                    CaptureOption(label: "Balanced", value: "standard"),
+                    CaptureOption(label: "Smaller", value: "small"),
+                    CaptureOption(label: "Tiny", value: "tiny"),
+                ])
+            } else if qualityMode == "maximum" {
+                HStack {
+                    Text("Maximum file size")
+                    TextField("MB", value: $maximumSizeMB, format: .number.precision(.fractionLength(1)))
+                        .textFieldStyle(.roundedBorder).frame(width: 72)
+                    Text("MB")
                 }
             }
-            Button(model.comparisonPending ? "Encoding comparison…" : "Compare before / after") {
-                model.prepareComparison(
-                    format: outputFormat, width: outputWidth(), quality: quality,
-                    systemVolume: effectiveSystemVolume, microphoneVolume: effectiveMicrophoneVolume,
-                    mono: mono, gifFPS: gifFPS
-                )
-            }.buttonStyle(CaptureButtonStyle()).disabled(model.comparisonPending)
+            if outputFormat == "gif" {
+                CaptureChoice(title: "Frame rate", selection: $gifFPS,
+                              options: [8, 10, 12, 15, 20, 24, 30].map { CaptureOption(label: "\($0) FPS", value: $0) })
+            }
+            if qualityMode != "preserve" {
+                Button {
+                    comparisonExpanded.toggle()
+                    if comparisonExpanded { scheduleComparison() } else { model.dismissComparison() }
+                } label: {
+                    HStack {
+                        Image(systemName: "chevron.right").rotationEffect(comparisonExpanded ? .degrees(90) : .zero)
+                        Text("Compression comparison")
+                        Spacer()
+                        Text(model.comparisonPending ? "Encoding…" : "Updates automatically")
+                            .foregroundColor(NativeTheme.muted(colorScheme))
+                    }
+                }
+                .buttonStyle(CaptureButtonStyle())
+            }
             if !model.comparisonError.isEmpty {
                 Text(model.comparisonError).font(.caption).foregroundStyle(NativeTheme.signal)
             }
@@ -562,16 +614,16 @@ struct RecordingEditorView: View {
             HStack(spacing: NativeTheme.metric("s-8")) {
                 VStack(alignment: .leading) {
                     HStack { Text("System audio"); Spacer(); Text("\(Int(effectiveSystemVolume * 100))%") }
-                    Slider(value: $systemVolume, in: 0...2).disabled(muteSystem)
-                    Toggle("Mute system audio", isOn: $muteSystem)
+                    CaptureSlider(value: $systemVolume, range: 0...2).disabled(muteSystem)
+                    CaptureToggleRow(title: "Mute system audio", isOn: $muteSystem)
                 }
                 VStack(alignment: .leading) {
                     HStack { Text("Microphone"); Spacer(); Text("\(Int(effectiveMicrophoneVolume * 100))%") }
-                    Slider(value: $microphoneVolume, in: 0...2).disabled(muteMicrophone)
-                    Toggle("Mute microphone", isOn: $muteMicrophone)
+                    CaptureSlider(value: $microphoneVolume, range: 0...2).disabled(muteMicrophone)
+                    CaptureToggleRow(title: "Mute microphone", isOn: $muteMicrophone)
                 }
             }
-            Toggle("Mix output to mono", isOn: $mono)
+            CaptureToggleRow(title: "Mix output to mono", isOn: $mono)
         }
     }
 
@@ -579,12 +631,18 @@ struct RecordingEditorView: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Save edited recording").font(.callout.weight(.medium))
-                Text("The source recording is always preserved.").font(.caption).foregroundStyle(NativeTheme.muted(colorScheme))
+                Text(makeCopy ? "The source recording will be preserved." : "This will replace the source after encoding succeeds.")
+                    .font(.caption).foregroundStyle(NativeTheme.muted(colorScheme))
             }
             Spacer()
             Text(model.status).font(.callout).foregroundStyle(NativeTheme.muted(colorScheme)).lineLimit(1)
+            HStack(spacing: 8) {
+                CaptureToggle(title: "Save as new file", isOn: $makeCopy)
+                Text("Save as new file")
+            }
+            .disabled(formatRequiresCopy || model.exporting)
             Button("Open source") { store.open(artifact) }.buttonStyle(CaptureButtonStyle())
-            Button(model.exporting ? "Exporting…" : "Save…") { chooseExport() }
+            Button(model.exporting ? "Exporting…" : makeCopy ? "Save…" : "Save") { chooseExport() }
                 .buttonStyle(CaptureButtonStyle(primary: true)).disabled(model.exporting || model.probe == nil)
         }
         .padding(NativeTheme.metric("s-5")).background(NativeTheme.raised(colorScheme)).overlay(alignment: .top) { Divider() }
@@ -593,8 +651,7 @@ struct RecordingEditorView: View {
     private func editorCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: NativeTheme.metric("s-4"), content: content)
             .padding(NativeTheme.metric("s-6")).frame(maxWidth: .infinity, alignment: .leading)
-            .background(NativeTheme.raised(colorScheme))
-            .clipShape(RoundedRectangle(cornerRadius: NativeTheme.metric("r-lg")))
+            .background(NativeTheme.raised(colorScheme), in: RoundedRectangle(cornerRadius: NativeTheme.metric("r-lg")))
             .overlay(RoundedRectangle(cornerRadius: NativeTheme.metric("r-lg")).stroke(NativeTheme.border(colorScheme)))
     }
 
@@ -715,6 +772,14 @@ struct RecordingEditorView: View {
 
     private var effectiveSystemVolume: Double { muteSystem ? 0 : systemVolume }
     private var effectiveMicrophoneVolume: Double { muteMicrophone ? 0 : microphoneVolume }
+    private var effectiveQuality: String { qualityMode == "preserve" ? "preserve" : quality }
+    private var maximumBytes: Int? {
+        qualityMode == "maximum" ? max(100_000, Int((maximumSizeMB * 1_000_000).rounded())) : nil
+    }
+    private var sourceFormat: String {
+        artifact.url.pathExtension.lowercased()
+    }
+    private var formatRequiresCopy: Bool { sourceFormat != outputFormat }
 
     private func time(_ milliseconds: Double) -> String {
         let seconds = max(0, milliseconds) / 1_000
@@ -734,6 +799,17 @@ struct RecordingEditorView: View {
     }
 
     private func chooseExport() {
+        if !makeCopy, !formatRequiresCopy {
+            let staged = artifact.url.deletingLastPathComponent()
+                .appendingPathComponent(".captures-edit-\(UUID().uuidString).\(outputFormat)")
+            model.export(
+                to: staged, format: outputFormat, width: outputWidth(), quality: effectiveQuality,
+                maxBytes: maximumBytes, systemVolume: effectiveSystemVolume,
+                microphoneVolume: effectiveMicrophoneVolume, mono: mono, gifFPS: gifFPS,
+                replacing: artifact.url
+            )
+            return
+        }
         let panel = NSSavePanel()
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = "\(artifact.url.deletingPathExtension().lastPathComponent) edited.\(outputFormat)"
@@ -747,10 +823,28 @@ struct RecordingEditorView: View {
             return
         }
         model.export(
-            to: url, format: outputFormat, width: outputWidth(), quality: quality,
-            systemVolume: effectiveSystemVolume, microphoneVolume: effectiveMicrophoneVolume,
+            to: url, format: outputFormat, width: outputWidth(), quality: effectiveQuality,
+            maxBytes: maximumBytes, systemVolume: effectiveSystemVolume, microphoneVolume: effectiveMicrophoneVolume,
             mono: mono, gifFPS: gifFPS
         )
+    }
+
+    private func scheduleComparison() {
+        comparisonWork?.cancel()
+        guard comparisonExpanded, qualityMode != "preserve", model.probe != nil else {
+            model.dismissComparison()
+            return
+        }
+        let work = DispatchWorkItem {
+            model.dismissComparison()
+            model.prepareComparison(
+                format: outputFormat, width: outputWidth(), quality: effectiveQuality,
+                maxBytes: maximumBytes, systemVolume: effectiveSystemVolume,
+                microphoneVolume: effectiveMicrophoneVolume, mono: mono, gifFPS: gifFPS
+            )
+        }
+        comparisonWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
     }
 
     private func sameFile(_ lhs: URL, _ rhs: URL) -> Bool {
@@ -758,10 +852,13 @@ struct RecordingEditorView: View {
     }
 
     private func showExportError(_ message: String) {
-        let alert = NSAlert()
-        alert.messageText = "Choose another export location"
-        alert.informativeText = message
-        alert.runModal()
         model.status = message
+        CaptureDialogController.shared.present(
+            title: "Choose another export location",
+            message: message,
+            action: "OK",
+            cancel: nil,
+            onConfirm: {}
+        )
     }
 }

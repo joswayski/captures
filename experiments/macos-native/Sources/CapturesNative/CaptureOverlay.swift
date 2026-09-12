@@ -76,7 +76,7 @@ private struct FrozenFrame {
     }
 }
 
-private enum OverlayKind: String, CaseIterable, Identifiable {
+private enum OverlayKind: String, CaseIterable, Identifiable, Hashable {
     case image
     case video
     case gif
@@ -91,7 +91,7 @@ private enum OverlayKind: String, CaseIterable, Identifiable {
     }
 }
 
-private enum OverlayTarget: String, CaseIterable, Identifiable {
+private enum OverlayTarget: String, CaseIterable, Identifiable, Hashable {
     case region
     case window
     case display
@@ -373,6 +373,32 @@ final class CaptureController {
         }
     }
 
+    fileprivate func showRecordingRegion(for model: CaptureOverlayModel) {
+        guard let panel else { return }
+        let local: CGRect
+        switch model.target {
+        case .region:
+            guard let selection = model.selection else { return }
+            local = selection
+        case .window:
+            guard let id = model.selectedWindowID,
+                  let window = model.localWindows.first(where: { $0.id == id }) else { return }
+            local = model.localRect(for: window)
+        case .display:
+            local = CGRect(origin: .zero, size: model.screenSize)
+        }
+        // SwiftUI overlay coordinates are top-left based. AppKit screen frames
+        // are bottom-left based and expressed in points, so conversion happens
+        // in the presenting panel instead of applying the display's pixel scale.
+        let screenRect = NSRect(
+            x: panel.frame.minX + local.minX,
+            y: panel.frame.maxY - local.maxY,
+            width: local.width,
+            height: local.height
+        )
+        RecordingRegionController.shared.show(screenRect)
+    }
+
     private func screen(for display: OverlayDisplay) -> NSScreen? {
         if let numericID = UInt32(display.id), let exact = NSScreen.screens.first(where: {
             ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == numericID
@@ -411,6 +437,10 @@ private final class CaptureOverlayModel: ObservableObject {
     @Published var busy = false
     @Published var error = ""
     @Published var frozenFrame: FrozenFrame?
+    @Published var showCursor: Bool
+    @Published var showClicks = false
+    @Published var showKeystrokes = false
+    @Published var desktopAudio: Bool
 
     let displays: [OverlayDisplay]
     let windows: [OverlayWindow]
@@ -437,6 +467,8 @@ private final class CaptureOverlayModel: ObservableObject {
         self.target = target
         self.screenSize = screenSize
         self.frozenFrame = frozenFrame
+        showCursor = AppStore.shared.settings.showCursor
+        desktopAudio = AppStore.shared.settings.systemAudio
     }
 
     var localWindows: [OverlayWindow] {
@@ -522,6 +554,24 @@ private final class CaptureOverlayModel: ObservableObject {
         if created, self.selection != nil, AppStore.shared.settings.autoStart { capture() }
     }
 
+    func selectRegionPreset(_ ratio: CGFloat?) {
+        guard target == .region else { return }
+        if ratio == nil {
+            selection = CGRect(origin: .zero, size: screenSize)
+            return
+        }
+        let inset = CGSize(width: screenSize.width * 0.12, height: screenSize.height * 0.14)
+        let available = CGSize(width: screenSize.width - inset.width * 2, height: screenSize.height - inset.height * 2)
+        let width = min(available.width, available.height * ratio!)
+        let height = width / ratio!
+        selection = CGRect(
+            x: (screenSize.width - width) / 2,
+            y: (screenSize.height - height) / 2,
+            width: width,
+            height: height
+        ).integral
+    }
+
     func startSafetyMonitoring() {
         stopSafetyMonitoring()
         let generation = UUID()
@@ -605,7 +655,7 @@ private final class CaptureOverlayModel: ObservableObject {
             CaptureController.shared.finish(discardFreeze: freezeID == nil)
             Backend.shared.call("screenshot", [
                 "target": targetPayload,
-                "cursor": freezeID == nil && settings.showCursor,
+                "cursor": freezeID == nil && showCursor,
                 "output_dir": settings.outputDirectory,
             ]) { result in
                 self.finishArtifact(result)
@@ -614,6 +664,7 @@ private final class CaptureOverlayModel: ObservableObject {
             return
         }
 
+        CaptureController.shared.showRecordingRegion(for: self)
         CaptureController.shared.finish()
 
         let isGIF = kind == .gif
@@ -627,11 +678,11 @@ private final class CaptureOverlayModel: ObservableObject {
             "max_resolution": settings.maxResolution,
             // The native overlay owns the cancellable countdown.
             "countdown_seconds": 0,
-            "show_cursor": settings.showCursor,
-            "highlight_clicks": false,
-            "show_keystrokes": false,
+            "show_cursor": showCursor,
+            "highlight_clicks": showClicks,
+            "show_keystrokes": showKeystrokes,
             "audio": [
-                "capture_system_audio": isGIF ? false : settings.systemAudio,
+                "capture_system_audio": isGIF ? false : desktopAudio,
                 "microphone_device_id": microphoneID,
                 "mono_output": false,
                 "system_volume_percent": 100,
@@ -653,6 +704,7 @@ private final class CaptureOverlayModel: ObservableObject {
             case .success:
                 RecordingHUDController.shared.show()
             case .failure(let error):
+                RecordingRegionController.shared.hide()
                 AppStore.shared.report(error)
             }
         }
@@ -977,28 +1029,30 @@ private struct CaptureToolbar: View {
                 .buttonStyle(CaptureButtonStyle(glass: true))
                 .help("Cancel · Esc")
 
-                Picker("Capture type", selection: $model.kind) {
-                    ForEach(OverlayKind.allCases) { kind in Text(kind.label).tag(kind) }
-                }
-                .pickerStyle(.segmented)
+                CaptureSegments(
+                    selection: $model.kind,
+                    options: OverlayKind.allCases.map { CaptureOption(label: $0.label, value: $0) },
+                    glass: true
+                )
                 .frame(width: 220)
                 .onChange(of: model.kind) { _ in CaptureController.shared.kindChanged(for: model) }
 
                 Divider().frame(height: 24)
 
-                Picker("Target", selection: $model.target) {
-                    ForEach(OverlayTarget.allCases) { target in
-                        Label(target.label, systemImage: target.symbol).tag(target)
-                    }
-                }
-                .pickerStyle(.segmented)
+                CaptureSegments(
+                    selection: $model.target,
+                    options: OverlayTarget.allCases.map { CaptureOption(label: $0.label, value: $0) },
+                    glass: true
+                )
                 .frame(width: 260)
                 .onChange(of: model.target) { _ in CaptureController.shared.targetChanged(for: model) }
 
                 if model.displays.count > 1 {
-                    Picker("Display", selection: $model.display) {
-                        ForEach(model.displays) { display in Text(display.name).tag(display) }
-                    }
+                    CaptureChoice(
+                        title: "Display",
+                        selection: $model.display,
+                        options: model.displays.map { CaptureOption(label: $0.name, value: $0) }
+                    )
                     .frame(width: 180)
                     .onChange(of: model.display) { display in
                         CaptureController.shared.selectDisplay(display)
@@ -1013,6 +1067,11 @@ private struct CaptureToolbar: View {
             }
             .padding(10)
 
+            if model.target == .region {
+                regionPresets
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, model.kind == .image ? 10 : 4)
+            }
             if model.kind != .image {
                 recordingOptions
                     .padding(.horizontal, 12)
@@ -1032,21 +1091,66 @@ private struct CaptureToolbar: View {
         .shadow(color: .black.opacity(0.34), radius: 18, y: 8)
     }
 
+    private var regionPresets: some View {
+        HStack(spacing: 8) {
+            Text("Region").foregroundColor(NativeTheme.glassMuted)
+            Button("Full screen") { model.selectRegionPreset(nil) }
+            Button("16:9") { model.selectRegionPreset(16 / 9) }
+            Button("4:3") { model.selectRegionPreset(4 / 3) }
+            Button("1:1") { model.selectRegionPreset(1) }
+        }
+        .font(.system(size: 11, weight: .medium))
+        .buttonStyle(.plain)
+        .foregroundColor(NativeTheme.accent)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private var recordingOptions: some View {
-        HStack(spacing: 14) {
-            Label("\(model.kind == .gif ? AppStore.shared.settings.gifFPS : AppStore.shared.settings.videoFPS) FPS", systemImage: "speedometer")
-            Label(AppStore.shared.settings.maxResolution == "original" ? "Original" : AppStore.shared.settings.maxResolution.dropFirst().uppercased(), systemImage: "rectangle.expand.vertical")
-            Label(AppStore.shared.settings.showCursor ? "Cursor on" : "Cursor off", systemImage: "cursorarrow")
-            if model.kind == .video {
-                Label(AppStore.shared.settings.systemAudio ? "System audio" : "No system audio", systemImage: "speaker.wave.2")
-                Label(AppStore.shared.settings.microphoneID.isEmpty ? "Mic off" : "Microphone", systemImage: AppStore.shared.settings.microphoneMuted ? "mic.slash" : "mic")
+        VStack(spacing: 8) {
+            HStack(spacing: 14) {
+                Label("\(model.kind == .gif ? AppStore.shared.settings.gifFPS : AppStore.shared.settings.videoFPS) FPS", systemImage: "speedometer")
+                Label(AppStore.shared.settings.maxResolution == "original" ? "Original" : AppStore.shared.settings.maxResolution.dropFirst().uppercased(), systemImage: "rectangle.expand.vertical")
+                recordingToggle("Cursor", value: $model.showCursor)
+                recordingToggle("Clicks", value: $model.showClicks)
+                    .disabled(!model.showCursor)
+                recordingToggle("Keys", value: $model.showKeystrokes)
+                if model.kind == .video {
+                    recordingToggle("Audio", value: $model.desktopAudio)
+                    Label(AppStore.shared.settings.microphoneID.isEmpty ? "Mic off" : "Microphone", systemImage: AppStore.shared.settings.microphoneMuted ? "mic.slash" : "mic")
+                }
+                Button("Preferences") { AppStore.shared.showPreferences() }
+                    .buttonStyle(.plain)
+                    .foregroundColor(NativeTheme.accent)
             }
-            Button("Preferences") { AppStore.shared.showPreferences() }
-                .buttonStyle(.plain)
-                .foregroundColor(NativeTheme.accent)
+            visibilityNote
         }
         .font(.system(size: 11, weight: .medium))
         .foregroundColor(NativeTheme.glassMuted)
+        .onChange(of: model.showCursor) { enabled in
+            if !enabled { model.showClicks = false }
+        }
+    }
+
+    private func recordingToggle(_ title: String, value: Binding<Bool>) -> some View {
+        HStack(spacing: 5) {
+            Text(title)
+            CaptureToggle(title: title, isOn: value)
+                .scaleEffect(0.72)
+                .frame(width: 31, height: 20)
+            Text(value.wrappedValue ? "On" : "Off")
+                .foregroundColor(value.wrappedValue ? NativeTheme.glassText : NativeTheme.glassMuted)
+        }
+    }
+
+    private var visibilityNote: some View {
+        HStack(spacing: 3) {
+            Text("These controls")
+            Text(AppStore.shared.settings.excludeControls ? "won’t" : "will")
+                .fontWeight(.bold)
+                .foregroundColor(AppStore.shared.settings.excludeControls ? NativeTheme.saved : NativeTheme.accent)
+            Text("show in \(model.kind == .image ? "screenshots" : "recordings")")
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 }
 
@@ -1079,13 +1183,13 @@ final class RecordingHUDController {
     private init() {
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(forName: NSWorkspace.sessionDidResignActiveNotification, object: nil, queue: .main) { _ in
-            RecordingHUDController.shared.hide()
+            RecordingHUDController.shared.sessionUnavailable()
         }
         DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("com.apple.screenIsLocked"),
             object: nil,
             queue: .main
-        ) { _ in RecordingHUDController.shared.hide() }
+        ) { _ in RecordingHUDController.shared.sessionUnavailable() }
     }
 
     func show() {
@@ -1104,12 +1208,19 @@ final class RecordingHUDController {
         DispatchQueue.main.async { self.panel?.orderOut(nil) }
     }
 
+    fileprivate func sessionUnavailable() {
+        if model?.restartCountdown != nil { model?.cancelRestart() }
+        panel?.orderOut(nil)
+    }
+
     fileprivate func close() {
+        model?.shutdown()
         model?.stopPolling()
         panel?.orderOut(nil)
         panel?.contentView = nil
         panel = nil
         model = nil
+        RecordingRegionController.shared.hide()
     }
 
     private func makePanel(model: RecordingHUDModel) -> NSPanel {
@@ -1137,6 +1248,45 @@ final class RecordingHUDController {
     }
 }
 
+private final class RecordingRegionController {
+    static let shared = RecordingRegionController()
+    private var panel: NSPanel?
+
+    func show(_ rect: NSRect) {
+        hide()
+        guard rect.width >= 2, rect.height >= 2 else { return }
+        let panel = NSPanel(
+            contentRect: rect.insetBy(dx: -2, dy: -2),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.hidesOnDeactivate = false
+        panel.ignoresMouseEvents = true
+        panel.sharingType = AppStore.shared.settings.excludeControls ? .none : .readOnly
+        panel.contentView = NSHostingView(rootView:
+            Rectangle()
+                .stroke(NativeTheme.signal, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
+                .shadow(color: .black.opacity(0.55), radius: 1)
+                .padding(2)
+                .preferredColorScheme(.dark)
+        )
+        self.panel = panel
+        panel.orderFrontRegardless()
+    }
+
+    func hide() {
+        panel?.orderOut(nil)
+        panel?.contentView = nil
+        panel = nil
+    }
+}
+
 private final class RecordingHUDModel: ObservableObject {
     @Published var state = "recording"
     @Published var elapsedMilliseconds = 0
@@ -1144,8 +1294,10 @@ private final class RecordingHUDModel: ObservableObject {
     @Published var microphoneMuted = false
     @Published var warning = ""
     @Published var busy = false
+    @Published var restartCountdown: Int?
     private var timer: Timer?
     private var statusInFlight = false
+    private var restartWork: DispatchWorkItem?
 
     var canControl: Bool { !busy && (state == "recording" || state == "paused") }
     var isPaused: Bool { state == "paused" }
@@ -1177,6 +1329,12 @@ private final class RecordingHUDModel: ObservableObject {
     func stopPolling() {
         timer?.invalidate()
         timer = nil
+    }
+
+    func shutdown() {
+        restartWork?.cancel()
+        restartWork = nil
+        restartCountdown = nil
     }
 
     func togglePause() { action(isPaused ? "record_resume" : "record_pause") }
@@ -1215,7 +1373,22 @@ private final class RecordingHUDModel: ObservableObject {
             title: "Restart recording?",
             message: "The current recording will be discarded and a new countdown will begin.",
             action: "Restart"
-        ) { self.action("record_restart") }
+        ) { self.prepareRestart() }
+    }
+
+    func cancelRestart() {
+        guard restartCountdown != nil else { return }
+        restartWork?.cancel()
+        restartWork = nil
+        restartCountdown = nil
+        busy = true
+        Backend.shared.call("record_discard") { result in
+            self.busy = false
+            switch result {
+            case .success: RecordingHUDController.shared.close()
+            case .failure(let error): self.fail(error)
+            }
+        }
     }
 
     func discard() {
@@ -1237,7 +1410,7 @@ private final class RecordingHUDModel: ObservableObject {
     }
 
     private func refresh() {
-        guard !statusInFlight else { return }
+        guard !statusInFlight, restartCountdown == nil else { return }
         statusInFlight = true
         Backend.shared.call("record_status") { result in
             self.statusInFlight = false
@@ -1268,20 +1441,72 @@ private final class RecordingHUDModel: ObservableObject {
         }
     }
 
+    private func prepareRestart() {
+        guard !busy else { return }
+        busy = true
+        stopPolling()
+        Backend.shared.call("record_restart") { result in
+            self.busy = false
+            switch result {
+            case .failure(let error):
+                self.startPolling()
+                self.fail(error)
+            case .success:
+                let seconds = AppStore.shared.settings.recordingCountdown
+                if seconds > 0 { self.startRestartCountdown(seconds) }
+                else { self.finishRestartCountdown() }
+            }
+        }
+    }
+
+    private func startRestartCountdown(_ seconds: Int) {
+        state = "countdown"
+        restartCountdown = seconds
+        scheduleRestartTick()
+    }
+
+    private func scheduleRestartTick() {
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let remaining = self.restartCountdown else { return }
+            if remaining <= 1 { self.finishRestartCountdown() }
+            else {
+                self.restartCountdown = remaining - 1
+                self.scheduleRestartTick()
+            }
+        }
+        restartWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+    }
+
+    private func finishRestartCountdown() {
+        restartWork?.cancel()
+        restartWork = nil
+        restartCountdown = nil
+        busy = true
+        Backend.shared.call("record_resume") { result in
+            self.busy = false
+            switch result {
+            case .success:
+                self.state = "recording"
+                self.startPolling()
+            case .failure(let error): self.fail(error)
+            }
+        }
+    }
+
     private func fail(_ error: Error) {
         warning = error.localizedDescription
         AppStore.shared.report(error)
     }
 
     private func confirm(title: String, message: String, action: String, destructive: Bool = false, perform: @escaping () -> Void) {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: action)
-        alert.addButton(withTitle: "Cancel")
-        if destructive { alert.buttons.first?.hasDestructiveAction = true }
-        if alert.runModal() == .alertFirstButtonReturn { perform() }
+        CaptureDialogController.shared.present(
+            title: title,
+            message: message,
+            action: action,
+            destructive: destructive,
+            onConfirm: perform
+        )
     }
 }
 
@@ -1290,10 +1515,55 @@ private struct RecordingHUDView: View {
 
     var body: some View {
         VStack(spacing: 2) {
-            Text(AppStore.shared.settings.excludeControls ? "Controls are hidden from the recording" : "These controls may appear in the recording")
-                .font(.system(size: 9, weight: .medium))
-                .foregroundColor(NativeTheme.glassMuted.opacity(0.72))
-            HStack(spacing: 6) {
+            HStack(spacing: 3) {
+                Text("These controls")
+                Text(AppStore.shared.settings.excludeControls ? "won’t" : "will")
+                    .fontWeight(.bold)
+                    .foregroundColor(AppStore.shared.settings.excludeControls ? NativeTheme.saved : NativeTheme.accent)
+                Text("show in recordings")
+            }
+            .font(.system(size: 9, weight: .medium))
+            .foregroundColor(NativeTheme.glassMuted.opacity(0.82))
+            .frame(maxWidth: .infinity, alignment: .center)
+            if let countdown = model.restartCountdown {
+                HStack(spacing: 14) {
+                    Text("\(countdown)")
+                        .font(.system(size: 30, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundColor(NativeTheme.accent)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Restarting recording").font(.system(size: 13, weight: .semibold))
+                        Text("The previous take was discarded.")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(NativeTheme.glassMuted)
+                    }
+                    Spacer()
+                    Button("Cancel", action: model.cancelRestart)
+                        .buttonStyle(CaptureButtonStyle(glass: true))
+                }
+                .frame(height: 48)
+            } else {
+                controls
+            }
+            if !model.warning.isEmpty {
+                Text(model.warning).lineLimit(1).font(.system(size: 9)).foregroundColor(NativeTheme.signal)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .frame(width: 418)
+        .frame(minHeight: 70)
+        .foregroundColor(NativeTheme.glassText)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
+        .background(NativeTheme.glass.opacity(0.76), in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.14)))
+        .shadow(color: .black.opacity(0.32), radius: 14, y: 6)
+        .padding(6)
+        .preferredColorScheme(.dark)
+    }
+
+    private var controls: some View {
+        HStack(spacing: 6) {
                 HStack(spacing: 9) {
                     Circle()
                         .fill(model.isPaused ? NativeTheme.accent : NativeTheme.signal)
@@ -1324,22 +1594,7 @@ private struct RecordingHUDView: View {
                 HUDButton(symbol: model.microphoneMuted ? "mic.slash" : "mic", help: model.microphoneMuted ? "Unmute" : "Mute", tint: model.microphoneMuted ? NativeTheme.accent : nil, disabled: !model.canControl || AppStore.shared.settings.microphoneID.isEmpty, action: model.toggleMute)
                 HUDButton(symbol: "trash", help: "Delete recording", tint: NativeTheme.signal, disabled: model.busy || model.state == "finalizing", action: model.discard)
                 HUDButton(symbol: "eye.slash", help: "Hide controls", disabled: model.busy, action: RecordingHUDController.shared.hide)
-            }
-            if !model.warning.isEmpty {
-                Text(model.warning).lineLimit(1).font(.system(size: 9)).foregroundColor(NativeTheme.signal)
-            }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .frame(width: 418)
-        .frame(minHeight: 70)
-        .foregroundColor(NativeTheme.glassText)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
-        .background(NativeTheme.glass.opacity(0.76), in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.14)))
-        .shadow(color: .black.opacity(0.32), radius: 14, y: 6)
-        .padding(6)
-        .preferredColorScheme(.dark)
     }
 }
 
@@ -1369,4 +1624,41 @@ private extension View {
             if inside { cursor.push() } else { NSCursor.pop() }
         }
     }
+}
+
+@MainActor
+func captureReferenceView(recording: Bool, windowTarget: Bool = false) -> AnyView {
+    let size = CGSize(width: 1120, height: 700)
+    let display = OverlayDisplay([
+        "id": "1", "name": "Studio Display", "x": 0, "y": 0,
+        "width": size.width, "height": size.height, "scale_factor": 2, "is_primary": true,
+    ])!
+    let windows = [
+        OverlayWindow(["id": "editor", "title": "Screenshot Editor", "app_name": "Captures",
+                       "x": 120, "y": 90, "width": 720, "height": 480, "display_id": "1", "z_order": 1])!,
+    ]
+    let model = CaptureOverlayModel(
+        display: display,
+        displays: [display],
+        windows: windows,
+        kind: recording ? .video : .image,
+        target: windowTarget ? .window : .region,
+        screenSize: size,
+        frozenFrame: nil
+    )
+    if windowTarget { model.selectedWindowID = "editor" }
+    else { model.selection = CGRect(x: 210, y: 130, width: 680, height: 390) }
+    return AnyView(CaptureOverlayView(model: model).frame(width: size.width, height: size.height))
+}
+
+@MainActor
+func recordingHUDReferenceView(countdown: Bool) -> AnyView {
+    let model = RecordingHUDModel()
+    model.elapsedMilliseconds = 83_000
+    model.microphoneLevel = 0.68
+    if countdown {
+        model.state = "countdown"
+        model.restartCountdown = 3
+    }
+    return AnyView(RecordingHUDView(model: model).frame(width: 430, height: 102))
 }

@@ -62,24 +62,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 sender.reply(toApplicationShouldTerminate: false); return
             }
             let state = status["state"] as? String ?? "idle"
-            guard ["recording", "paused", "failed"].contains(state) else {
+            guard ["recording", "paused", "failed", "selecting"].contains(state) else {
                 sender.reply(toApplicationShouldTerminate: true); return
             }
-            let alert = NSAlert()
-            alert.messageText = "Finish the recording before quitting?"
-            alert.informativeText = "Save the recording, cancel quitting, or explicitly discard it. Unsaved image edits remain in private drafts."
-            alert.addButton(withTitle: "Save and Quit")
-            alert.addButton(withTitle: "Cancel")
-            alert.addButton(withTitle: "Discard and Quit")
-            let response = alert.runModal()
-            if response == .alertSecondButtonReturn { sender.reply(toApplicationShouldTerminate: false); return }
-            Backend.shared.call(response == .alertFirstButtonReturn ? "record_stop" : "record_discard") { result in
-                do {
-                    let value = try result.get()
-                    if response == .alertFirstButtonReturn { AppStore.shared.addArtifact(try Artifact(response: value)) }
-                    sender.reply(toApplicationShouldTerminate: true)
-                } catch { AppStore.shared.report(error); sender.reply(toApplicationShouldTerminate: false) }
+            let discardAndQuit = {
+                Backend.shared.call("record_discard") { result in
+                    if case .success = result { sender.reply(toApplicationShouldTerminate: true) }
+                    else {
+                        if case .failure(let error) = result { AppStore.shared.report(error) }
+                        sender.reply(toApplicationShouldTerminate: false)
+                    }
+                }
             }
+            if state == "selecting" {
+                CaptureDialogController.shared.present(
+                    title: "Discard the restarting recording?",
+                    message: "The previous take is already gone. Quit will discard the empty restart draft.",
+                    action: "Discard and Quit",
+                    destructive: true,
+                    onConfirm: discardAndQuit,
+                    onCancel: { sender.reply(toApplicationShouldTerminate: false) }
+                )
+                return
+            }
+            CaptureDialogController.shared.present(
+                title: "Finish the recording before quitting?",
+                message: "Save the recording, cancel quitting, or discard the current take from the recording controls.",
+                action: "Save and Quit",
+                alternate: "Discard and Quit",
+                onConfirm: {
+                    Backend.shared.call("record_stop") { result in
+                        do {
+                            AppStore.shared.addArtifact(try Artifact(response: result.get()))
+                            sender.reply(toApplicationShouldTerminate: true)
+                        } catch {
+                            AppStore.shared.report(error)
+                            sender.reply(toApplicationShouldTerminate: false)
+                        }
+                    }
+                },
+                onAlternate: discardAndQuit,
+                onCancel: { sender.reply(toApplicationShouldTerminate: false) }
+            )
         }
         return .terminateLater
     }

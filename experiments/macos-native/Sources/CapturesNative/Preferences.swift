@@ -141,9 +141,9 @@ struct PreferencesView: View {
                     }
                 }
                 if store.settings.theme == "custom" {
-                    HStack {
-                        ColorPicker("Accent", selection: customColor(\.accentHex), supportsOpacity: false)
-                        ColorPicker("Recording / destructive", selection: customColor(\.signalHex), supportsOpacity: false)
+                    HStack(spacing: NativeTheme.metric("s-5")) {
+                        colorField("Accent", key: \.accentHex)
+                        colorField("Recording / destructive", key: \.signalHex)
                     }
                 }
             }
@@ -167,18 +167,21 @@ struct PreferencesView: View {
             Divider()
             toggle("Show mini previews", "Keep recent captures in a floating stack.", $store.settings.showPreviews)
             setting("Mini preview corner") {
-                Picker("Mini preview corner", selection: $store.settings.previewPlacement) {
-                    Text("Bottom left").tag("bottom-left"); Text("Bottom right").tag("bottom-right")
-                    Text("Top left").tag("top-left"); Text("Top right").tag("top-right")
-                }.labelsHidden().frame(width: 170)
+                CaptureChoice(title: "Mini preview corner", selection: $store.settings.previewPlacement, options: [
+                    CaptureOption(label: "Bottom left", value: "bottom-left"),
+                    CaptureOption(label: "Bottom right", value: "bottom-right"),
+                    CaptureOption(label: "Top left", value: "top-left"),
+                    CaptureOption(label: "Top right", value: "top-right"),
+                ]).frame(width: 170)
             }
             toggle("Freeze screen", "Keep a still desktop while selecting a screenshot region.", $store.settings.freezeScreen)
             toggle("Include cursor", "Show the pointer in screenshots.", $store.settings.showCursor)
             setting("Screenshot countdown") { seconds($store.settings.screenshotCountdown) }
             setting("Default screenshot format", "The captured original stays PNG until you save or export from the editor.") {
-                Picker("Screenshot format", selection: $store.settings.screenshotFormat) {
-                    Text("PNG").tag("png"); Text("JPEG").tag("jpeg"); Text("WebP").tag("webp")
-                }.labelsHidden().frame(width: 140)
+                CaptureSegments(selection: $store.settings.screenshotFormat, options: [
+                    CaptureOption(label: "PNG", value: "png"), CaptureOption(label: "JPEG", value: "jpeg"),
+                    CaptureOption(label: "WebP", value: "webp"),
+                ]).frame(width: 180)
             }
         }
     }
@@ -200,23 +203,25 @@ struct PreferencesView: View {
         card {
             SectionTitle("Recording")
             setting("Frame rate") {
-                Picker("Frame rate", selection: $store.settings.videoFPS) {
-                    ForEach([15, 30, 60], id: \.self) { Text("\($0) fps").tag($0) }
-                }.labelsHidden().frame(width: 140)
+                CaptureSegments(selection: $store.settings.videoFPS,
+                                options: [15, 30, 60].map { CaptureOption(label: "\($0)", value: $0) })
+                    .frame(width: 140)
             }
             setting("Maximum resolution") {
-                Picker("Maximum resolution", selection: $store.settings.maxResolution) {
-                    Text("Original").tag("original"); Text("1080p").tag("p1080"); Text("720p").tag("p720")
-                }.labelsHidden().frame(width: 140)
+                CaptureChoice(title: "Maximum resolution", selection: $store.settings.maxResolution, options: [
+                    CaptureOption(label: "Original", value: "original"),
+                    CaptureOption(label: "1080p", value: "p1080"),
+                    CaptureOption(label: "720p", value: "p720"),
+                ]).frame(width: 150)
             }
             setting("Recording countdown") { seconds($store.settings.recordingCountdown) }
             toggle("Desktop audio", "Include sound playing on this Mac.", $store.settings.systemAudio)
             setting("Microphone") {
                 HStack {
-                    Picker("Microphone", selection: $store.settings.microphoneID) {
-                        Text("None").tag("")
-                        ForEach(devices, id: \.["id"]) { device in Text(device["name"] ?? "Microphone").tag(device["id"] ?? "") }
-                    }.labelsHidden().frame(width: 160)
+                    CaptureChoice(title: "Microphone", selection: $store.settings.microphoneID,
+                                  options: [CaptureOption(label: "None", value: "")] + devices.map {
+                                    CaptureOption(label: $0["name"] ?? "Microphone", value: $0["id"] ?? "")
+                                  }).frame(width: 180)
                     Button("Refresh") { loadDevices() }.buttonStyle(CaptureButtonStyle())
                 }
             }
@@ -243,17 +248,19 @@ struct PreferencesView: View {
         card {
             SectionTitle("GIF export")
             setting("Frame rate") {
-                Stepper("\(store.settings.gifFPS) fps", value: $store.settings.gifFPS, in: 1...30).frame(width: 170)
+                CaptureChoice(title: "GIF frame rate", selection: $store.settings.gifFPS,
+                              options: [8, 10, 12, 15, 20, 24, 30].map { CaptureOption(label: "\($0) fps", value: $0) })
+                    .frame(width: 150)
             }
             setting("Maximum width") {
-                Picker("GIF width", selection: $store.settings.gifWidth) {
-                    ForEach([320, 480, 640, 800, 1280], id: \.self) { Text("\($0) px").tag($0) }
-                }.labelsHidden().frame(width: 140)
+                CaptureChoice(title: "GIF width", selection: $store.settings.gifWidth,
+                              options: [320, 480, 640, 800, 1280].map { CaptureOption(label: "\($0) px", value: $0) })
+                    .frame(width: 140)
             }
             setting("Palette colors") {
-                Picker("GIF colors", selection: $store.settings.gifColors) {
-                    ForEach([64, 128, 256], id: \.self) { Text("\($0)").tag($0) }
-                }.labelsHidden().frame(width: 140)
+                CaptureSegments(selection: $store.settings.gifColors,
+                                options: [64, 128, 256].map { CaptureOption(label: "\($0)", value: $0) })
+                    .frame(width: 140)
             }
             Text("GIF captures have no audio.").foregroundColor(NativeTheme.muted(scheme))
         }
@@ -273,13 +280,13 @@ struct PreferencesView: View {
                 }.buttonStyle(CaptureButtonStyle())
             }
             setting("Launch at login", "Uses macOS Login Items. Register the built app from a stable location.") {
-                Toggle("Launch at login", isOn: Binding(get: { loginEnabled }, set: { enabled in
+                CaptureToggle(title: "Launch at login", isOn: Binding(get: { loginEnabled }, set: { enabled in
                     do {
                         if enabled { try SMAppService.mainApp.register() }
                         else { try SMAppService.mainApp.unregister() }
                         loginEnabled = SMAppService.mainApp.status == .enabled
                     } catch { store.report(error) }
-                })).labelsHidden().toggleStyle(.switch)
+                }))
             }
             Button("Open experiment data folder") { NSWorkspace.shared.open(AppStore.dataDirectory) }.buttonStyle(CaptureButtonStyle())
         }
@@ -303,19 +310,33 @@ struct PreferencesView: View {
         panel.canCreateDirectories = true
         if panel.runModal() == .OK, let url = panel.url { store.settings.outputDirectory = url.path }
     }
-    private func customColor(_ key: WritableKeyPath<NativeSettings, String>) -> Binding<Color> {
-        Binding(get: { Color(css: store.settings[keyPath: key]) }, set: { color in
-            guard let rgb = NSColor(color).usingColorSpace(.sRGB) else { return }
-            store.settings[keyPath: key] = String(format: "#%02x%02x%02x", Int(rgb.redComponent * 255), Int(rgb.greenComponent * 255), Int(rgb.blueComponent * 255))
-        })
+    private func colorField(_ title: String, key: WritableKeyPath<NativeSettings, String>) -> some View {
+        HStack(spacing: NativeTheme.metric("s-3")) {
+            Circle().fill(Color(css: store.settings[keyPath: key])).frame(width: 18, height: 18)
+            Text(title).font(.system(size: NativeTheme.metric("text-sm")))
+            TextField("#RRGGBB", text: Binding(
+                get: { store.settings[keyPath: key] },
+                set: { value in
+                    let candidate = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if candidate.range(of: "^#[0-9a-fA-F]{6}$", options: .regularExpression) != nil {
+                        store.settings[keyPath: key] = candidate.lowercased()
+                    }
+                }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 86)
+        }
     }
     private func seconds(_ binding: Binding<Int>) -> some View {
-        Picker("Countdown", selection: binding) {
-            Text("None").tag(0); ForEach([3, 5, 10], id: \.self) { Text("\($0) seconds").tag($0) }
-        }.labelsHidden().frame(width: 140)
+        CaptureChoice(title: "Countdown", selection: binding, options: [
+            CaptureOption(label: "None", value: 0),
+            CaptureOption(label: "3 seconds", value: 3),
+            CaptureOption(label: "5 seconds", value: 5),
+            CaptureOption(label: "10 seconds", value: 10),
+        ]).frame(width: 150)
     }
     private func toggle(_ title: String, _ description: String, _ binding: Binding<Bool>) -> some View {
-        setting(title, description, copyWidth: nil) { Toggle(title, isOn: binding).labelsHidden().toggleStyle(.switch) }
+        setting(title, description, copyWidth: nil) { CaptureToggle(title: title, isOn: binding) }
     }
 
     private func paletteButton(_ name: String) -> some View {

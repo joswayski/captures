@@ -89,6 +89,7 @@ pub struct MediaExportRequest {
     pub fps: Option<u16>,
     #[serde(default)]
     pub quality: QualityPreset,
+    pub max_bytes: Option<u64>,
     #[serde(default = "one")]
     pub system_volume: f32,
     #[serde(default = "one")]

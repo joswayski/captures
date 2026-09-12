@@ -12,6 +12,7 @@ private enum ImageEditorTool: String, CaseIterable, Identifiable {
     case pen = "Freehand"
     case erase = "Erase"
     case restore = "Restore"
+    case wand = "Background wand"
 
     var id: String { rawValue }
     var symbol: String {
@@ -25,6 +26,7 @@ private enum ImageEditorTool: String, CaseIterable, Identifiable {
         case .pen: return "pencil.tip"
         case .erase: return "eraser"
         case .restore: return "paintbrush"
+        case .wand: return "wand.and.stars"
         }
     }
 }
@@ -75,6 +77,7 @@ private struct ImageEditorSurface: View {
     @State private var heightText = ""
     @State private var strokeWidth: CGFloat = 6
     @State private var brushSize: CGFloat = 32
+    @State private var wandTolerance: CGFloat = 0.12
     @State private var fillShapes = false
     @State private var draftPoints: [CGPoint] = []
     @State private var cropStart: CGPoint?
@@ -82,6 +85,7 @@ private struct ImageEditorSurface: View {
     @State private var dragOrigin: CGPoint?
     @State private var dragLayerFrame: EditorRect?
     @State private var resizeLayerFrame: EditorRect?
+    @State private var rotatingLayer = false
     @State private var exportFormat = "png"
     @State private var quality = 0.92
     @State private var exportQualityMode = "preserve"
@@ -92,8 +96,11 @@ private struct ImageEditorSurface: View {
     @State private var comparisonAfter: NSImage?
     @State private var comparisonSplit: CGFloat = 0.5
     @State private var comparisonGeneration = UUID()
+    @State private var comparisonWork: DispatchWorkItem?
+    @State private var comparisonExpanded = true
     @State private var exportSettingsOpen = false
     @State private var notice = ""
+    @State private var editorHex = EditorColor.signal.hex
 
     var body: some View {
         VStack(spacing: 0) {
@@ -121,13 +128,19 @@ private struct ImageEditorSurface: View {
         .disabled(exporting)
         .onAppear {
             syncDimensions()
+            syncEditorColor()
             let preferred = store.settings.screenshotFormat.lowercased() == "jpg" ? "jpeg" : store.settings.screenshotFormat.lowercased()
             if ["png", "jpeg", "webp"].contains(preferred) { exportFormat = preferred }
         }
         .onChange(of: model.document.width) { _ in syncDimensions() }
         .onChange(of: model.document.height) { _ in syncDimensions() }
-        .onChange(of: exportSettingsOpen) { if !$0 { dismissComparison() } }
-        .onDisappear { dismissComparison() }
+        .onChange(of: model.selectedLayerID) { _ in syncEditorColor() }
+        .onChange(of: exportSettingsOpen) { if $0 { scheduleComparison() } else { dismissComparison() } }
+        .onChange(of: exportFormat) { _ in scheduleComparison() }
+        .onChange(of: exportQualityMode) { _ in scheduleComparison() }
+        .onChange(of: quality) { _ in scheduleComparison() }
+        .onChange(of: maximumSizeMB) { _ in scheduleComparison() }
+        .onDisappear { comparisonWork?.cancel(); dismissComparison() }
         .animation(NativeTheme.motion, value: tool)
         .animation(NativeTheme.standard, value: exportSettingsOpen)
     }
@@ -142,6 +155,23 @@ private struct ImageEditorSurface: View {
                 Button("Resize") { applyCanvasSize() }.buttonStyle(CaptureButtonStyle())
                 Button("Trim edges") { perform { try model.trimTransparentEdges() } }
                     .buttonStyle(CaptureButtonStyle())
+                CaptureSegments(selection: Binding(
+                    get: {
+                        if model.document.background == .white { return "white" }
+                        if model.document.background == EditorColor(red: 0, green: 0, blue: 0) { return "black" }
+                        return "transparent"
+                    },
+                    set: { value in
+                        model.mutate {
+                            $0.background = value == "white" ? .white
+                                : value == "black" ? EditorColor(red: 0, green: 0, blue: 0) : nil
+                        }
+                    }
+                ), options: [
+                    CaptureOption(label: "Clear", value: "transparent"),
+                    CaptureOption(label: "White", value: "white"),
+                    CaptureOption(label: "Black", value: "black"),
+                ]).frame(width: 180).help("Canvas background")
             }
             Spacer()
             Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward") }
@@ -152,7 +182,10 @@ private struct ImageEditorSurface: View {
                 Button("Fit") { zoom = 1 }.buttonStyle(CaptureButtonStyle())
                 Button { zoom = max(0.05, zoom - 0.1) } label: { Image(systemName: "minus") }
                     .buttonStyle(CaptureButtonStyle()).help("Zoom out")
-                Slider(value: $zoom, in: 0.05...4).frame(width: 90)
+                CaptureSlider(
+                    value: Binding(get: { Double(zoom) }, set: { zoom = CGFloat($0) }),
+                    range: 0.05...4
+                ).frame(width: 90)
                 Button { zoom = min(4, zoom + 0.1) } label: { Image(systemName: "plus") }
                     .buttonStyle(CaptureButtonStyle()).help("Zoom in")
                 Text("\(Int(zoom * 100))%").font(.system(.caption, design: .monospaced)).frame(width: 46)
@@ -193,6 +226,7 @@ private struct ImageEditorSurface: View {
                     if comparisonBefore != nil { comparisonOverlay }
                 }
                 .frame(width: CGFloat(model.document.width) * zoom, height: CGFloat(model.document.height) * zoom)
+                .coordinateSpace(name: "image-editor-canvas")
                 .contentShape(Rectangle())
                 .gesture(canvasGesture)
                 .shadow(color: .black.opacity(0.22), radius: 18, y: 8)
@@ -229,10 +263,12 @@ private struct ImageEditorSurface: View {
                     .stroke(NativeTheme.accent, style: StrokeStyle(lineWidth: 2, dash: [5, 4]))
                     .frame(width: frame.width * zoom, height: frame.height * zoom)
                     .position(x: frame.midX * zoom, y: frame.midY * zoom)
+                    .rotationEffect(Angle(radians: Double(model.document.layers[index].rotation)))
                     .allowsHitTesting(false)
                 ForEach(Array(ImageResizeCorner.allCases.enumerated()), id: \.offset) { _, corner in
-                    selectionResizeHandle(corner, frame: frame)
+                    selectionResizeHandle(corner, frame: frame, rotation: model.document.layers[index].rotation)
                 }
+                rotationHandle(frame: frame, rotation: model.document.layers[index].rotation)
             }
         }
     }
@@ -308,6 +344,8 @@ private struct ImageEditorSurface: View {
                 case .pen:
                     model.addStroke(draftPoints)
                     draftPoints.removeAll()
+                case .wand:
+                    perform { try model.removeBackgroundColor(at: point, tolerance: wandTolerance) }
                 case .erase, .restore: break
                 }
                 dragOrigin = nil
@@ -355,7 +393,41 @@ private struct ImageEditorSurface: View {
         .background(model.selectedLayerID == layer.id ? NativeTheme.accent.opacity(0.16) : NativeTheme.field(colorScheme))
         .clipShape(RoundedRectangle(cornerRadius: 7))
         .contentShape(Rectangle())
-        .onTapGesture { model.selectedLayerID = layer.id }
+        .onTapGesture { model.selectedLayerID = layer.id; editorHex = layer.color.hex }
+    }
+
+    private func layerColorControls(_ layer: EditorLayer) -> some View {
+        let swatches: [EditorColor] = [
+            .signal,
+            EditorColor(red: 1, green: 0.79, blue: 0.16),
+            EditorColor(red: 0.24, green: 0.48, blue: 0.95),
+            EditorColor(red: 0.21, green: 0.78, blue: 0.55),
+            .white,
+            EditorColor(red: 0.05, green: 0.05, blue: 0.06),
+        ]
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Color").font(.headline)
+            HStack(spacing: 7) {
+                ForEach(swatches, id: \.self) { color in
+                    Button {
+                        model.updateSelected { $0.color = color }
+                        editorHex = color.hex
+                    } label: {
+                        Circle().fill(Color(nsColor: color.nsColor))
+                            .frame(width: 24, height: 24)
+                            .overlay(Circle().stroke(Color.primary, lineWidth: layer.color == color ? 3 : 0))
+                            .overlay(Circle().stroke(Color.white.opacity(0.5), lineWidth: 1).padding(2))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(color.hex)
+                    .accessibilityAddTraits(layer.color == color ? .isSelected : [])
+                }
+                TextField("#RRGGBB", text: $editorHex)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 88)
+                    .onSubmit(commitEditorHex)
+            }
+        }
     }
 
     @ViewBuilder private var properties: some View {
@@ -367,22 +439,58 @@ private struct ImageEditorSurface: View {
                     TextField("Text", text: Binding(get: { text }, set: { value in model.updateSelected { $0.content = .text(value) } }))
                         .textFieldStyle(.roundedBorder)
                 }
+                if case .image = layer.content { EmptyView() }
+                else { layerColorControls(layer) }
                 HStack {
                     Text("Opacity")
-                    Slider(value: Binding(get: { layer.opacity }, set: { value in model.updateSelected { $0.opacity = value } }), in: 0...1)
+                    CaptureSlider(value: Binding(
+                        get: { Double(layer.opacity) },
+                        set: { value in model.updateSelected { $0.opacity = CGFloat(value) } }
+                    ), range: 0...1)
                     Text("\(Int(layer.opacity * 100))%").monospacedDigit().frame(width: 42)
                 }
                 HStack {
                     Text("Rotation")
-                    Slider(value: Binding(get: { layer.rotation * 180 / .pi }, set: { value in model.updateSelected { $0.rotation = value * .pi / 180 } }), in: -180...180)
+                    CaptureSlider(value: Binding(
+                        get: { Double(layer.rotation * 180 / .pi) },
+                        set: { value in model.updateSelected { $0.rotation = CGFloat(value) * .pi / 180 } }
+                    ), range: -180...180)
                 }
                 if case .shape = layer.content {
-                    Toggle("Fill shape", isOn: Binding(get: { layer.fill != nil }, set: { enabled in model.updateSelected { $0.fill = enabled ? $0.color : nil } }))
+                    CaptureToggleRow(title: "Fill shape", isOn: Binding(
+                        get: { layer.fill != nil },
+                        set: { enabled in model.updateSelected { $0.fill = enabled ? $0.color : nil } }
+                    ))
+                }
+                CaptureToggleRow(title: "Shadow", isOn: Binding(
+                    get: { layer.shadow != nil },
+                    set: { enabled in model.updateSelected { $0.shadow = enabled ? EditorShadow() : nil } }
+                ))
+                if let shadow = layer.shadow {
+                    HStack {
+                        Text("Shadow blur")
+                        CaptureSlider(value: Binding(
+                            get: { Double(shadow.radius) },
+                            set: { value in model.updateSelected { $0.shadow?.radius = CGFloat(value) } }
+                        ), range: 0...40)
+                    }
                 }
                 if case .image = layer.content, tool == .erase || tool == .restore {
                     Text("Background brush").font(.headline)
-                    Slider(value: $brushSize, in: 4...160)
+                    CaptureSlider(
+                        value: Binding(get: { Double(brushSize) }, set: { brushSize = CGFloat($0) }),
+                        range: 4...160
+                    )
                     Text("Drag over the image to \(tool == .restore ? "restore original pixels" : "make pixels transparent").")
+                        .font(.caption).foregroundStyle(NativeTheme.muted(colorScheme))
+                }
+                if case .image = layer.content, tool == .wand {
+                    Text("Color tolerance").font(.headline)
+                    CaptureSlider(
+                        value: Binding(get: { Double(wandTolerance) }, set: { wandTolerance = CGFloat($0) }),
+                        range: 0.01...0.5
+                    )
+                    Text("Click a connected background color to remove it. Undo restores it.")
                         .font(.caption).foregroundStyle(NativeTheme.muted(colorScheme))
                 }
                 HStack {
@@ -410,16 +518,18 @@ private struct ImageEditorSurface: View {
         VStack(spacing: 10) {
             if exportSettingsOpen {
                 HStack(spacing: 18) {
-                    Picker("Format", selection: $exportFormat) {
-                        Text("PNG").tag("png"); Text("JPEG").tag("jpeg"); Text("WebP").tag("webp")
-                    }.frame(width: 180)
-                    Picker("Save quality", selection: $exportQualityMode) {
-                        Text("Preserve quality").tag("preserve")
-                        Text("Compress").tag("compress")
-                        Text("Maximum file size").tag("maximum")
-                    }.frame(width: 220)
+                    CaptureSegments(selection: $exportFormat, options: [
+                        CaptureOption(label: "PNG", value: "png"),
+                        CaptureOption(label: "JPEG", value: "jpeg"),
+                        CaptureOption(label: "WebP", value: "webp"),
+                    ]).frame(width: 180)
+                    CaptureSegments(selection: $exportQualityMode, options: [
+                        CaptureOption(label: "Preserve", value: "preserve"),
+                        CaptureOption(label: "Compress", value: "compress"),
+                        CaptureOption(label: "Maximum", value: "maximum"),
+                    ]).frame(width: 220)
                     if exportQualityMode == "compress" {
-                        HStack { Text("Quality"); Slider(value: $quality, in: 0.55...1).frame(width: 160); Text("\(Int(quality * 100))%") }
+                        HStack { Text("Quality"); CaptureSlider(value: $quality, range: 0.55...1).frame(width: 160); Text("\(Int(quality * 100))%") }
                     }
                     if exportQualityMode == "maximum" {
                         HStack { Text("Maximum"); TextField("MB", value: $maximumSizeMB, format: .number).frame(width: 70); Text("MB") }
@@ -434,8 +544,21 @@ private struct ImageEditorSurface: View {
                             .frame(maxWidth: 260, alignment: .leading)
                     }
                     Spacer()
-                    Button(comparisonPending ? "Encoding…" : "Compare") { prepareComparison() }
-                        .buttonStyle(CaptureButtonStyle()).disabled(comparisonPending)
+                    if exportQualityMode != "preserve" {
+                        Button {
+                            comparisonExpanded.toggle()
+                            if comparisonExpanded { scheduleComparison() } else { dismissComparison() }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "chevron.right")
+                                    .rotationEffect(comparisonExpanded ? .degrees(90) : .zero)
+                                Text("Compression comparison")
+                                Text(comparisonPending ? "Encoding…" : "Updates automatically")
+                                    .foregroundColor(NativeTheme.muted(colorScheme))
+                            }
+                        }
+                        .buttonStyle(CaptureButtonStyle())
+                    }
                 }
             }
             HStack(spacing: 12) {
@@ -462,7 +585,7 @@ private struct ImageEditorSurface: View {
         model.selectedLayerID = model.document.layers.reversed().first(where: { $0.visible && $0.frame.cgRect.contains(point) })?.id
     }
 
-    private func selectionResizeHandle(_ corner: ImageResizeCorner, frame: CGRect) -> some View {
+    private func selectionResizeHandle(_ corner: ImageResizeCorner, frame: CGRect, rotation: CGFloat) -> some View {
         let point: CGPoint
         switch corner {
         case .northWest: point = CGPoint(x: frame.minX, y: frame.minY)
@@ -470,8 +593,9 @@ private struct ImageEditorSurface: View {
         case .southEast: point = CGPoint(x: frame.maxX, y: frame.maxY)
         case .southWest: point = CGPoint(x: frame.minX, y: frame.maxY)
         }
+        let rotated = rotatedPoint(point, around: CGPoint(x: frame.midX, y: frame.midY), radians: rotation)
         return Circle().fill(Color.white).overlay(Circle().stroke(NativeTheme.accent, lineWidth: 2))
-            .frame(width: 12, height: 12).position(x: point.x * zoom, y: point.y * zoom)
+            .frame(width: 12, height: 12).position(x: rotated.x * zoom, y: rotated.y * zoom)
             .gesture(DragGesture(minimumDistance: 0).onChanged { value in
                 if resizeLayerFrame == nil, let index = model.selectedLayerIndex {
                     resizeLayerFrame = model.document.layers[index].frame
@@ -493,6 +617,45 @@ private struct ImageEditorSurface: View {
             .help("Resize layer")
     }
 
+    private func rotationHandle(frame: CGRect, rotation: CGFloat) -> some View {
+        let center = CGPoint(x: frame.midX * zoom, y: frame.midY * zoom)
+        let stemStart = rotatedPoint(CGPoint(x: frame.midX, y: frame.minY), around: CGPoint(x: frame.midX, y: frame.midY), radians: rotation)
+        let handlePoint = rotatedPoint(CGPoint(x: frame.midX, y: frame.minY - 28), around: CGPoint(x: frame.midX, y: frame.midY), radians: rotation)
+        let handle = CGPoint(x: handlePoint.x * zoom, y: handlePoint.y * zoom)
+        return ZStack {
+            Path { path in
+                path.move(to: CGPoint(x: stemStart.x * zoom, y: stemStart.y * zoom))
+                path.addLine(to: handle)
+            }
+                .stroke(NativeTheme.accent, lineWidth: 1)
+                .allowsHitTesting(false)
+            Circle().fill(NativeTheme.raised(colorScheme))
+                .overlay(Circle().stroke(NativeTheme.accent, lineWidth: 2))
+                .frame(width: 15, height: 15)
+                .position(handle)
+                .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("image-editor-canvas"))
+                    .onChanged { value in
+                        if !rotatingLayer { rotatingLayer = true; model.beginInteractiveEdit() }
+                        var radians = atan2(value.location.y - center.y, value.location.x - center.x) + .pi / 2
+                        let snap = CGFloat.pi / 12
+                        let nearest = (radians / snap).rounded() * snap
+                        if abs(radians - nearest) < .pi / 60 { radians = nearest }
+                        model.updateSelectedLive { $0.rotation = radians }
+                    }
+                    .onEnded { _ in rotatingLayer = false; model.endInteractiveEdit() })
+                .help("Rotate layer · snaps every 15°")
+        }
+    }
+
+    private func rotatedPoint(_ point: CGPoint, around center: CGPoint, radians: CGFloat) -> CGPoint {
+        let dx = point.x - center.x
+        let dy = point.y - center.y
+        return CGPoint(
+            x: center.x + dx * cos(radians) - dy * sin(radians),
+            y: center.y + dx * sin(radians) + dy * cos(radians)
+        )
+    }
+
     private func boundedRect(from start: CGPoint, to end: CGPoint) -> CGRect {
         CGRect(x: min(start.x, end.x), y: min(start.y, end.y), width: abs(end.x - start.x), height: abs(end.y - start.y))
             .intersection(CGRect(x: 0, y: 0, width: CGFloat(model.document.width), height: CGFloat(model.document.height)))
@@ -501,6 +664,22 @@ private struct ImageEditorSurface: View {
     private func syncDimensions() {
         widthText = String(model.document.width)
         heightText = String(model.document.height)
+    }
+
+    private func syncEditorColor() {
+        guard let index = model.selectedLayerIndex else { return }
+        editorHex = model.document.layers[index].color.hex
+    }
+
+    private func commitEditorHex() {
+        let value = editorHex.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.range(of: "^#[0-9a-fA-F]{6}$", options: .regularExpression) != nil else {
+            syncEditorColor()
+            return
+        }
+        let converted = EditorColor(NSColor(css: value))
+        model.updateSelected { $0.color = converted }
+        editorHex = converted.hex
     }
 
     private func applyCanvasSize() {
@@ -526,12 +705,16 @@ private struct ImageEditorSurface: View {
     }
 
     private func saveSource() {
-        let alert = NSAlert()
-        alert.messageText = "Replace the original screenshot?"
-        alert.informativeText = "This is the only action that overwrites the source file. Export creates a separate file."
-        alert.addButton(withTitle: "Replace Original")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        CaptureDialogController.shared.present(
+            title: "Replace the original screenshot?",
+            message: "This is the only action that overwrites the source file. Export creates a separate file.",
+            action: "Replace Original",
+            destructive: true,
+            onConfirm: replaceSource
+        )
+    }
+
+    private func replaceSource() {
         let sourceExtension = model.sourceURL.pathExtension.lowercased()
         let sourceFormat = sourceExtension == "jpg" ? "jpeg" : sourceExtension
         guard ["png", "jpeg", "webp"].contains(sourceFormat) else {
@@ -691,6 +874,20 @@ private struct ImageEditorSurface: View {
         comparisonAfter = nil
     }
 
+    private func scheduleComparison() {
+        comparisonWork?.cancel()
+        guard exportSettingsOpen, comparisonExpanded, exportQualityMode != "preserve" else {
+            dismissComparison()
+            return
+        }
+        let work = DispatchWorkItem {
+            dismissComparison()
+            prepareComparison()
+        }
+        comparisonWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+    }
+
     private func imageEncodeFields(input: URL, output: URL, format: String? = nil) -> [String: Any] {
         var fields: [String: Any] = ["path": input.path, "output": output.path, "format": format ?? exportFormat]
         if exportQualityMode == "compress" { fields["quality"] = Int((quality * 100).rounded()) }
@@ -703,11 +900,14 @@ private struct ImageEditorSurface: View {
     }
 
     private func showExportError(_ message: String) {
-        let alert = NSAlert()
-        alert.messageText = "Choose another export location"
-        alert.informativeText = message
-        alert.runModal()
         notice = message
+        CaptureDialogController.shared.present(
+            title: "Choose another export location",
+            message: message,
+            action: "OK",
+            cancel: nil,
+            onConfirm: {}
+        )
     }
 
     private func discardDraft() {
