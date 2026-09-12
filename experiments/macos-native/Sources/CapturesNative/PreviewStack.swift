@@ -306,6 +306,7 @@ private final class PreviewStackModel: ObservableObject {
         beginExit(artifact, kind: .dismiss)
     }
 
+    @MainActor
     func delete(_ artifact: Artifact) {
         CaptureDialogController.shared.present(
             title: "Delete capture?",
@@ -476,7 +477,7 @@ private final class PreviewStackModel: ObservableObject {
         return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
     }
 
-    private static func makeDust(image: NSImage, fromRight: Bool) -> [DustParticle] {
+    fileprivate static func makeDust(image: NSImage, fromRight: Bool) -> [DustParticle] {
         var proposed = NSRect(origin: .zero, size: image.size)
         guard
             let original = image.cgImage(forProposedRect: &proposed, context: nil, hints: nil),
