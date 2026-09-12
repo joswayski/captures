@@ -281,6 +281,133 @@ empty-profile runs, each settled for ten seconds after Preferences becomes
 visible, followed by five seconds of idle CPU sampling. It is not a matched
 workload or a measurement of the packaged Preview, recording, or hidden-tray idle.
 
+## GPUI implementation
+
+The isolated `experiments/gpui` workspace uses published GPUI 0.2.2 and Rust 1.94.
+It is not the Tauri packaging command. The shared UI has Linux/X11, macOS, and
+Windows adapters; Wayland is still gated out. Native macOS/Windows runtime
+verification is pending. See the
+[implementation and parity notes](docs/gpui-implementation.md) before testing.
+The [native build helpers](experiments/gpui/platform/README.md) cover Xcode/Metal,
+Windows MSVC/Cairo/FXC, and test-only package layouts. PR CI runs those native
+builds without publishing a release. The Linux CI smoke check verifies a mapped
+window, not painted pixels; use the workflow checks below for rendered behavior.
+In addition to the Linux build dependencies above, it needs Cairo, XKB/X11, and a
+working Vulkan renderer (`libcairo2-dev`, `libxkbcommon-x11-dev`, `libvulkan1` and
+`mesa-vulkan-drivers` on Debian). Recording/editing need `ffmpeg`, `ffprobe`, and
+`ffplay`. The resolver checks bundled tools next to the executable on Linux and
+Windows, or `Contents/Resources/bin` on macOS, then standard Homebrew locations
+on macOS and PATH. It never changes the process PATH. Linux audio needs a working
+PulseAudio/PipeWire source and native file prompts need a functioning desktop portal.
+
+```sh
+cargo fmt --manifest-path experiments/gpui/Cargo.toml -- --check
+CARGO_BUILD_JOBS=2 cargo test --locked --manifest-path experiments/gpui/Cargo.toml
+CARGO_BUILD_JOBS=2 cargo clippy --locked --manifest-path experiments/gpui/Cargo.toml --all-targets -- -D warnings
+CARGO_BUILD_JOBS=2 cargo build --release --locked --manifest-path experiments/gpui/Cargo.toml
+python3 -m unittest discover -s experiments/gpui -p 'test_*.py'
+
+# Quit other Captures builds first to avoid competing global shortcuts.
+experiments/gpui/target/release/captures-gpui --preferences
+experiments/gpui/target/release/captures-gpui --capture
+experiments/gpui/target/release/captures-gpui --open /absolute/path/to/image.png
+```
+
+Other entry points are `--history`, `--window`, `--display`, `--record`, `--gif`,
+`--canvas`, `--previews FILE...`, and `--background`. Later invocations forward to
+the existing process. Settings/history/drafts use `CAPTURES_GPUI_DATA`, or the
+separate `captures-gpui` directory under the OS-local application-data location
+(XDG on Linux, Application Support on macOS, LocalAppData on Windows). Login
+startup is opt-in: `autostart/captures-gpui.desktop` on Linux,
+`Library/LaunchAgents/io.captures.gpui.plist` on macOS, and the current-user
+`Run/CapturesGpui` registry value on Windows. None modifies the shipping app's profile.
+
+For repeatable native UI checks, reuse the disposable X11/DBus test desktop, not
+a personal desktop. In an Amp orb, start it as a supervised service:
+
+```sh
+amp orb service start captures-gpui-lab --command 'dbus-run-session -- xvfb-run -a -s "-screen 0 1600x1000x24" /usr/bin/python3 experiments/native-ui/native_desktop.py /tmp/captures-gpui-lab'
+python3 experiments/gpui/capture_check.py --lab /tmp/captures-gpui-lab \
+  --binary "$PWD/experiments/gpui/target/release/captures-gpui" \
+  --artifacts "$PWD/.amp/in/artifacts/gpui"
+python3 experiments/gpui/recording_check.py --lab /tmp/captures-gpui-lab \
+  --binary "$PWD/experiments/gpui/target/release/captures-gpui" \
+  --artifacts "$PWD/.amp/in/artifacts/gpui"
+```
+
+Wait for `/tmp/captures-gpui-lab/environment.json` before running checks. Outside
+an orb, run the quoted service command in a separate terminal. The lab needs
+Xvfb, Openbox, xcompmgr, xdotool, ImageMagick, Python GI/DBus, and GTK3 for its
+reference-content window (not for the GPUI frontend). Orb setup installs these
+and Mesa 25 from Debian's official backports: Mesa 22 mapped GPUI windows without
+painting. `LIBGL_ALWAYS_SOFTWARE=1` gives both comparators the same software Mesa
+stack. Successful compilation or a mapped window alone is not visual validation.
+
+Build the real Tauri comparator with production frontend assets, then collect
+Preferences, image-editor, screenshot/recording selector, collapsed/expanded
+three-preview stacks, and active recording HUD screenshots plus whole-process-tree
+metrics. The latter states enter through real capture shortcuts and buttons,
+retaining the initial Preferences window in each process tree. The optional native
+comparator is the full GTK/Cairo app, not the minimal GTK probe. Use only the
+1600×1000 disposable lab: this includes actual region recording.
+
+```sh
+npm run build --workspace @captures/desktop
+CARGO_TARGET_DIR=experiments/gpui/target CARGO_BUILD_JOBS=2 \
+  cargo build --release --locked -p captures-desktop --bin captures --features tauri/custom-protocol
+CARGO_TARGET_DIR="$PWD/experiments/gpui/target" CARGO_BUILD_JOBS=2 \
+  cargo build --release --locked --manifest-path experiments/native-ui/Cargo.toml \
+  --no-default-features --features native --bin captures-linux-native
+python3 experiments/gpui/benchmark.py --lab /tmp/captures-gpui-lab \
+  --tauri "$PWD/experiments/gpui/target/release/captures" \
+  --gpui "$PWD/experiments/gpui/target/release/captures-gpui" \
+  --native "$PWD/experiments/gpui/target/release/captures-linux-native" \
+  --artifacts "$PWD/.amp/in/artifacts/gpui" --runs 5 \
+  > /tmp/gpui-comparison.json
+```
+
+Omit binary flags to measure only the supplied implementations. Trial order
+rotates when more than one is supplied. Native screenshots automatically publish
+saved files, unlike the other apps' private capture copies; preview measurements
+compare settled application states, not capture/save throughput.
+
+Use `--inspect --appearance light` for an additional visual-only pass. Inspect
+the actual screenshots before accepting any measurements. Stop builds and other
+workloads before timing. An optional `--video-fixture /absolute/file.mp4` adds
+the paused video editor, but first verify playback in every supplied app; a loaded timeline
+does not establish that the video player works. The current orb's Tauri WebKit
+player reported `NotSupportedError`, so no video-editor comparison is published.
+History and export timing are not measured. Preview/HUD setup time includes
+deliberate waits and is not startup latency; HUD CPU measures active recording,
+not idle. The harness waits for the durable recording state before settling.
+`latency.py` additionally samples XTest drag motion to
+observed compositor pixels (`--lab`, `--binary`, `--implementation tauri|gpui|native`,
+`--output FILE`, optional `--artifacts DIR`). It records failed trials rather
+than counting them as fast frames. This is software-X11 observation latency,
+not physical display latency, FPS, energy use, or proof of feature parity.
+
+`effects.py` exercises the real preview expansion and confirmed disintegration
+controls on three disposable copies of the image fixture. Use system Python for
+the existing GTK AT-SPI helper. Run visual inspection separately from resources:
+
+```sh
+/usr/bin/python3 experiments/gpui/effects.py --lab /tmp/captures-gpui-lab \
+  --native "$PWD/experiments/gpui/target/release/captures-linux-native" \
+  --gpui "$PWD/experiments/gpui/target/release/captures-gpui" \
+  --implementation native --inspect --artifacts /tmp/native-effects
+```
+
+Omit `--inspect` to collect five resource trials without a recorder. Use
+`--effect expand` to compare both apps, or `--implementation native --effect delete`
+for native disintegration. Inspect clips/contact sheets before accepting results;
+the recorder's 60 fps is not measured application FPS. CPU covers a fixed four-second
+interaction window, including the settled tail, and PSS is sampled every 0.5s.
+The existing animations differ: GTK delete lasts 2.2s, GPUI 2.9s. This is not an
+equal-work renderer benchmark. GPUI's hover-only delete control could not be
+reliably activated in this fixture; its delete measurement intentionally fails
+unless one disposable source is actually removed. No successful GPUI delete
+benchmark is claimed.
+
 ## macOS-native experiment
 
 This is a separate SwiftUI/AppKit application, not the Tauri packaging command

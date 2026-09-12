@@ -15,6 +15,9 @@ packages=(
   build-essential
   curl
   file
+  # WebKit's MP4 player needs both H.264 parsing and decoding for matched media tests.
+  gstreamer1.0-libav
+  gstreamer1.0-plugins-bad
   libayatana-appindicator3-dev
   libasound2-dev
   libclang-dev
@@ -30,6 +33,10 @@ packages=(
   libxcb1-dev
   libxdo-dev
   libxrandr-dev
+  libxkbcommon-x11-dev
+  libvulkan1
+  mesa-vulkan-drivers
+  vulkan-tools
   nasm
   pkg-config
   postgresql
@@ -56,6 +63,33 @@ done
 if ((${#missing_packages[@]} > 0)); then
   sudo apt-get update
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing_packages[@]}"
+fi
+
+step "checking GPUI software Vulkan renderer"
+# Debian 12's Mesa 22 maps Blade/GPUI windows without painting them. The same
+# current Mesa stack must render both GPUI and Tauri in comparative benchmarks.
+mesa_version="$(dpkg-query -W -f='${Version}' mesa-vulkan-drivers)"
+if dpkg --compare-versions "$mesa_version" lt 24; then
+  # shellcheck disable=SC1091
+  source /etc/os-release
+  if [[ "${VERSION_CODENAME:-}" == bookworm ]]; then
+    source_file="$(mktemp)"
+    cat > "$source_file" <<'APT'
+Types: deb
+URIs: http://deb.debian.org/debian
+Suites: bookworm-backports
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+APT
+    sudo install -m 644 "$source_file" /etc/apt/sources.list.d/captures-bookworm-backports.sources
+    rm "$source_file"
+    sudo apt-get update
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      -t bookworm-backports mesa-vulkan-drivers libvulkan1
+  else
+    printf 'GPUI visual checks require Mesa 24+; found %s\n' "$mesa_version" >&2
+    exit 1
+  fi
 fi
 
 step "checking Node.js and npm"
