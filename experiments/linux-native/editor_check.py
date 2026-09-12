@@ -31,6 +31,14 @@ def main():
     args.artifacts.mkdir(parents=True, exist_ok=True)
     editor = 'Captures — Image editor'
 
+    def canvas_bounds():
+        # The canvas tooltip has the same accessible name but role=label and
+        # a tiny text rectangle. Select the DrawingArea, not that popup text.
+        canvas = wait(lambda: find('Screenshot editing canvas', role='filler', frame=editor))
+        rect = canvas.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+        assert rect.width >= 100 and rect.height >= 100, rect
+        return rect
+
     with contextmanager(run)(binary, fixture, ['--open', str(fixture)], args.artifacts) as (_, output):
         wait(lambda: find(editor, 'frame'))
         window = cmd('xdotool', 'search', '--onlyvisible', '--name', editor).splitlines()[-1]
@@ -56,28 +64,20 @@ def main():
                          for state in ['editor-default-1280x800', 'editor-save-hover']]
         assert idle.startswith('srgb') and hovered.startswith('srgb')
         cmd('xdotool', 'mousemove', 0, 0)
-        area = find('Screenshot editing canvas', frame=editor).queryComponent().getExtents(
-            pyatspi.DESKTOP_COORDS
-        )
+        area = canvas_bounds()
         # At 100%, the canvas exceeds the viewport. Space-drag must pan it.
         cmd('xdotool', 'mousemove', area.x + 200, area.y + 150, 'click', 1, 'key', 'ctrl+0')
-        full_size = find('Screenshot editing canvas', frame=editor).queryComponent().getExtents(
-            pyatspi.DESKTOP_COORDS
-        )
+        full_size = canvas_bounds()
         cmd('xdotool', 'keydown', 'space')
         drag(full_size.x + 300, full_size.y + 180, -100, 0)
         cmd('xdotool', 'keyup', 'space')
-        panned = find('Screenshot editing canvas', frame=editor).queryComponent().getExtents(
-            pyatspi.DESKTOP_COORDS
-        )
+        panned = canvas_bounds()
         # GTK4's X11 accessibility bridge reports stale screen coordinates for
         # scrolled DrawingAreas; the real space-drag above still exercises the
         # controller without treating that AT-SPI limitation as app geometry.
         assert panned.width == full_size.width
         click('Fit', editor)
-        area = find('Screenshot editing canvas', frame=editor).queryComponent().getExtents(
-            pyatspi.DESKTOP_COORDS
-        )
+        area = canvas_bounds()
         click('Arrow (A)', editor)
         drag(area.x + 90, area.y + 90, 220, 130)
         rename = find('Rename layer', frame=editor)
@@ -143,9 +143,7 @@ def main():
         click('Redo', editor)
         click('Redo', editor)
         click('Crop (C)', editor)
-        area = find('Screenshot editing canvas', frame=editor).queryComponent().getExtents(
-            pyatspi.DESKTOP_COORDS
-        )
+        area = canvas_bounds()
         # Keep both endpoints in the visible portion of the initial fit-to-window canvas.
         drag(area.x + 330, area.y + 220, -200, -120)
         click('Save', editor)
@@ -168,7 +166,7 @@ def main():
         source.write_bytes(original)
         with contextmanager(run)(binary, source, ['--open', str(source)], args.artifacts) as (_, output):
             wait(lambda: find(editor, 'frame'))
-            area = find('Screenshot editing canvas', frame=editor).queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+            area = canvas_bounds()
             click('Shapes', editor)
             click('Rectangle', editor)
             drag(area.x + 70, area.y + 60, 150, 100)
@@ -189,10 +187,10 @@ def main():
         cmd('convert', '-size', '240x160', 'xc:none', transparent)
         with contextmanager(run)(binary, transparent, ['--open', str(transparent)], args.artifacts) as (_, output):
             wait(lambda: find(editor, 'frame'))
-            area = find('Screenshot editing canvas', frame=editor).queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+            area = canvas_bounds()
             cmd('xdotool', 'mousemove', area.x + 30, area.y + 30, 'click', 1, 'key', 'ctrl+0')
             capture(args.artifacts, 'canvas', editor)
-            area = find('Screenshot editing canvas', frame=editor).queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+            area = canvas_bounds()
             shot = Path(temporary) / 'screen.png'
             cmd('import', '-window', 'root', shot)
             pixel = cmd('convert', shot, '-format',

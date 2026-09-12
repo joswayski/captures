@@ -557,15 +557,32 @@ impl App {
         );
         let light = self.settings.appearance == "light";
         if let Some(renderer) = &mut self.renderer {
-            let _ = renderer.draw(Frame {
-                state: &self.state,
-                settings: &self.settings,
-                history: self.history.entries(),
-                recording_mode: self.recording_mode,
-                palette: palette(light, accent, signal),
-                width: self.width as f32 * 96.0 / self.dpi,
-                height: self.height as f32 * 96.0 / self.dpi,
-            });
+            let rendered = renderer
+                .draw(Frame {
+                    state: &self.state,
+                    settings: &self.settings,
+                    history: self.history.entries(),
+                    recording_mode: self.recording_mode,
+                    palette: palette(light, accent, signal),
+                    width: self.width as f32 * 96.0 / self.dpi,
+                    height: self.height as f32 * 96.0 / self.dpi,
+                })
+                .is_ok();
+            if rendered
+                && self.fixture_mode
+                && self.state.surface == Surface::RecordingEditor
+                && self.state.recording_editor.is_some()
+                && let Some(preview) = &self.state.recording_preview
+            {
+                let _ = fs::write(
+                    data_dir().join("recording-frame-presented.txt"),
+                    format!(
+                        "{}x{} decoded paused frame",
+                        preview.width(),
+                        preview.height()
+                    ),
+                );
+            }
         }
     }
 
@@ -1417,9 +1434,13 @@ impl App {
         let corners = original.selection_corners()?;
         let screen_corners =
             corners.map(|point| self.editor_screen_point(point).unwrap_or_default());
-        if let Some(corner) = screen_corners
-            .iter()
-            .position(|handle| (handle.x - screen.x).hypot(handle.y - screen.y) <= 9.0)
+        if let Some(corner) = original
+            .resize_handles()
+            .into_iter()
+            .find_map(|(handle, point)| {
+                let point = self.editor_screen_point(point)?;
+                ((point.x - screen.x).hypot(point.y - screen.y) <= 9.0).then_some(handle)
+            })
         {
             return Some(EditorTransform::Resize { corner, original });
         }
@@ -1431,12 +1452,25 @@ impl App {
             x: screen_corners.iter().map(|point| point.x).sum::<f32>() / 4.0,
             y: screen_corners.iter().map(|point| point.y).sum::<f32>() / 4.0,
         };
-        let length = (top.x - center_screen.x)
-            .hypot(top.y - center_screen.y)
-            .max(1.0);
+        let mut direction = Point {
+            x: top.x - center_screen.x,
+            y: top.y - center_screen.y,
+        };
+        let mut length = direction.x.hypot(direction.y);
+        if length < 1.0 {
+            let axis = Point {
+                x: screen_corners[2].x - screen_corners[0].x,
+                y: screen_corners[2].y - screen_corners[0].y,
+            };
+            length = axis.x.hypot(axis.y).max(1.0);
+            direction = Point {
+                x: axis.y,
+                y: -axis.x,
+            };
+        }
         let rotation_screen = Point {
-            x: top.x + (top.x - center_screen.x) / length * 28.0,
-            y: top.y + (top.y - center_screen.y) / length * 28.0,
+            x: top.x + direction.x / length * 28.0,
+            y: top.y + direction.y / length * 28.0,
         };
         if (rotation_screen.x - screen.x).hypot(rotation_screen.y - screen.y) <= 10.0 {
             let bounds = original.geometry_bounds()?;
@@ -2828,6 +2862,22 @@ fn prepare_fixture(
         "editor-export" => {
             state.edit_image(image);
             state.editor_export_settings_open = true;
+        }
+        "editor-line" => {
+            state.edit_image(image);
+            if let Some(document) = state.editor.as_mut() {
+                let id = document.add(
+                    captures_windows_native::editor::Shape::Line(
+                        Point { x: 180.0, y: 270.0 },
+                        Point { x: 780.0, y: 270.0 },
+                    ),
+                    [239, 70, 80, 255],
+                    8.0,
+                );
+                document.set_layer_rotation(id, 24.0);
+                state.selected_layer = Some(id);
+                state.editor_tool = captures_windows_native::editor::Tool::Select;
+            }
         }
         "recording-selector" => state.surface = Surface::RecordingSelector,
         "recording-hud" => {

@@ -574,6 +574,11 @@ impl Renderer {
                     Y: viewport.y
                         + (point.y - document.crop.y) / document.crop.height * viewport.height,
                 };
+                let resize_handles = layer
+                    .resize_handles()
+                    .into_iter()
+                    .map(|(_, point)| to_screen(point))
+                    .collect::<Vec<_>>();
                 let corners = corners.map(to_screen);
                 let selection = self.brush(p.accent)?;
                 for index in 0..4 {
@@ -593,14 +598,29 @@ impl Renderer {
                     X: corners.iter().map(|point| point.X).sum::<f32>() / 4.0,
                     Y: corners.iter().map(|point| point.Y).sum::<f32>() / 4.0,
                 };
-                let length = (top.X - center.X).hypot(top.Y - center.Y).max(1.0);
+                let mut direction = Vector2 {
+                    X: top.X - center.X,
+                    Y: top.Y - center.Y,
+                };
+                let mut length = direction.X.hypot(direction.Y);
+                if length < 1.0 {
+                    let axis = Vector2 {
+                        X: corners[2].X - corners[0].X,
+                        Y: corners[2].Y - corners[0].Y,
+                    };
+                    length = axis.X.hypot(axis.Y).max(1.0);
+                    direction = Vector2 {
+                        X: axis.Y,
+                        Y: -axis.X,
+                    };
+                }
                 let rotation = Vector2 {
-                    X: top.X + (top.X - center.X) / length * 28.0,
-                    Y: top.Y + (top.Y - center.Y) / length * 28.0,
+                    X: top.X + direction.X / length * 28.0,
+                    Y: top.Y + direction.Y / length * 28.0,
                 };
                 self.target.DrawLine(top, rotation, &selection, 1.5, None);
                 let handle = self.brush(p.raised)?;
-                for point in corners.into_iter().chain([rotation]) {
+                for point in resize_handles.into_iter().chain([rotation]) {
                     let ellipse = windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE {
                         point,
                         radiusX: 5.0,

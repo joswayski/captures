@@ -123,8 +123,15 @@ def capture(artifacts, name, title):
     ).stdout.strip().splitlines()[-1:] or None)[0]
     time.sleep(0.4)
     x, y, width, height = xwindow_geometry(window)
+    screen_width, screen_height = map(int, command("xdotool", "getdisplaygeometry").split())
+    if not (0 <= x and 0 <= y and width > 0 and height > 0
+            and x + width <= screen_width and y + height <= screen_height):
+        raise AssertionError(f"Client {(x, y, width, height)} exceeds desktop {(screen_width, screen_height)}")
     geometry = f"{width}x{height}{x:+d}{y:+d}"
-    command("import", "-window", "root", "-crop", geometry, "+repage", artifacts / f"{name}.png")
+    output = artifacts / f"{name}.png"
+    command("import", "-window", "root", "-crop", geometry, "+repage", output)
+    actual = command("identify", "-format", "%wx%h", output)
+    assert actual == f"{width}x{height}", f"Clipped client capture: {actual}, expected {width}x{height}"
 
 
 def stop(process):
@@ -330,9 +337,10 @@ def main():
             set_value("Crop width", 100)
             set_value("Crop height", 100)
             overlay = find("Interactive recording crop", frame="Edit recording — Captures").queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
-            scale = min(overlay.width / 1280, overlay.height / 800)
-            ox = overlay.x + (overlay.width - 1280 * scale) / 2
-            oy = overlay.y + (overlay.height - 800 * scale) / 2
+            source_video = next(stream for stream in stream_metadata(source) if stream["codec_type"] == "video")
+            scale = min(overlay.width / source_video["width"], overlay.height / source_video["height"])
+            ox = overlay.x + (overlay.width - source_video["width"] * scale) / 2
+            oy = overlay.y + (overlay.height - source_video["height"] * scale) / 2
             # Start outside the small existing crop; draw reverse-direction.
             drag(round(ox + 960 * scale), round(oy + 560 * scale), round(-800 * scale), round(-480 * scale))
             actual = [find(name, frame="Edit recording — Captures").queryValue().currentValue

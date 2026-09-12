@@ -55,6 +55,7 @@ jobs:
       - run: cargo clippy --locked --manifest-path experiments/linux-native/Cargo.toml --all-targets -- -D warnings
       - run: cargo build --locked --release --manifest-path experiments/linux-native/Cargo.toml
       - run: python3 -m unittest discover -s experiments/native-ui -p 'test_*.py'
+      - run: python3 -m unittest discover -s experiments/linux-native -p 'test_*.py'
 
   windows:
     name: Win32 Windows build and tests (not a Preview)

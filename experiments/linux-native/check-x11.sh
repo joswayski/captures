@@ -12,7 +12,7 @@ trap cleanup EXIT
 mkdir -p "$artifacts"
 
 dbus-run-session -- xvfb-run -a \
-  -s '-screen 0 1280x800x24 +extension GLX +render -noreset' \
+  -s '-screen 0 1600x1000x24 +extension GLX +render -noreset' \
   bash -eu -o pipefail -c '
     root=$1
     lab=$2

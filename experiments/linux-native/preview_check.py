@@ -309,8 +309,9 @@ def check_delete_animation(binary, images, artifacts, profile):
         pointer_click(wait(lambda: find(prefix="Expand ", role="push button")))
         pointer_hover(wait(lambda: find(f"Preview {victim.name}")))
         delete = wait(lambda: find(f"Delete {victim.name}", role="push button"))
+        screen_size = "x".join(command("xdotool", "getdisplaygeometry").split())
         clip = subprocess.Popen(
-            ["ffmpeg", "-v", "error", "-y", "-f", "x11grab", "-video_size", "1280x800",
+            ["ffmpeg", "-v", "error", "-y", "-f", "x11grab", "-video_size", screen_size,
              "-framerate", "30", "-i", os.environ["DISPLAY"], "-t", "4", "-c:v", "libx264",
              "-preset", "ultrafast", "-tune", "zerolatency", "-pix_fmt", "yuv420p",
              "-progress", "pipe:1", "-stats_period", "0.1", str(artifacts / "after-preview-delete-dust.mp4")],

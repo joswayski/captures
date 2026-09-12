@@ -53,9 +53,9 @@ No automatic profile migration is part of these comparison runs.
 
 These are implemented experiments, not drop-in replacements. In particular:
 
-- **Linux:** the full X11 interaction suite is not green: GTK4 accessibility
-  visibility/coordinates can become stale, and pointer-drag/inline-rename failures
-  are being investigated in the GTK4 event adapters. Focused real-window checks
+- **Linux:** the full X11 interaction suite is not green. Canvas lookups now
+  distinguish the DrawingArea from its same-named tooltip, but pointer-drag and
+  inline-rename failures still require GTK4 event-adapter fixes. Focused real-window checks
   do not establish full-suite success. Recording replacement uses a synced stage
   and explicit confirmation; cancellation preserves the original. Physical
   multi-monitor, hardware GPU, and Wayland behavior remain unverified.
@@ -65,9 +65,11 @@ These are implemented experiments, not drop-in replacements. In particular:
   crop, and microphone/countdown parity remain incomplete. Recording segment
   assembly still blocks during stop. Hosted D3D fixture captures do not establish
   physical DPI, capture, clipboard, drag, or cross-process click-through behavior.
-- **macOS:** Swift builds, XCTest, and cached layout renders exercise different
-  guarantees from actual AVPlayer presentation and dust animation. Compositor
-  evidence must pass independently. Capture permissions, microphone/audio,
+- **macOS:** Swift builds, 10 XCTest tests, normal layouts, and independent real
+  video/dust compositor checks passed in [the native CI run](https://github.com/joswayski/captures/actions/runs/34711199486).
+  The inspected dust frame contains displaced source fragments and transparent
+  holes; the video frame contains only Captures' custom controls. These checks
+  do not establish performance or full interaction parity. Capture permissions, microphone/audio,
   session recovery, and physical multi-display behavior still need native use.
 
 ## Matched measurements

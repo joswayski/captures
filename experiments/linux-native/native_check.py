@@ -130,10 +130,16 @@ def capture(artifacts, name, title=None):
         return
     window = wait(visible_window)
     x, y, width, height = xwindow_geometry(window)
+    screen_width, screen_height = map(int, cmd('xdotool', 'getdisplaygeometry').split())
+    if not (0 <= x and 0 <= y and width > 0 and height > 0
+            and x + width <= screen_width and y + height <= screen_height):
+        raise AssertionError(f'Client {(x, y, width, height)} exceeds desktop {(screen_width, screen_height)}')
     geometry = f'{width}x{height}{x:+d}{y:+d}'
     # Capturing the root at xwininfo's client coordinates avoids xdotool's
-    # doubled reparenting offset and proves the whole client is on-screen.
+    # doubled reparenting offset; bounds above require the complete client.
     cmd('import', '-window', 'root', '-crop', geometry, '+repage', output)
+    actual = cmd('identify', '-format', '%wx%h', output)
+    assert actual == f'{width}x{height}', f'Clipped client capture: {actual}, expected {width}x{height}'
 
 
 def run(binary, fixture, args, artifacts):

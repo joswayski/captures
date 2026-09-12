@@ -122,6 +122,36 @@ impl Layer {
         )
     }
 
+    /// Resize handle identifiers and positions. Lines expose only their real
+    /// endpoints; duplicate corners on an axis-degenerate bounds rectangle are
+    /// not meaningful controls.
+    pub fn resize_handles(&self) -> Vec<(usize, Point)> {
+        if let Shape::Line(start, end) = &self.shape {
+            if (end.x - start.x).hypot(end.y - start.y) < 1.0 {
+                return Vec::new();
+            }
+            let center = Point {
+                x: (start.x + end.x) / 2.0,
+                y: (start.y + end.y) / 2.0,
+            };
+            return vec![
+                (4, rotate(*start, center, self.rotation_degrees)),
+                (5, rotate(*end, center, self.rotation_degrees)),
+            ];
+        }
+        let Some(bounds) = self.geometry_bounds() else {
+            return Vec::new();
+        };
+        if bounds.width <= 0.0 || bounds.height <= 0.0 {
+            return Vec::new();
+        }
+        self.selection_corners()
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .collect()
+    }
+
     pub fn translated(&self, delta: Point) -> Self {
         let mut layer = self.clone();
         transform_shape(&mut layer.shape, |point| Point {
@@ -129,25 +159,6 @@ impl Layer {
             y: point.y + delta.y,
         });
         layer
-    }
-
-    pub fn resized_to(&self, target: Rect) -> Option<Self> {
-        let source = self.geometry_bounds()?;
-        if source.width <= 0.0 || source.height <= 0.0 || target.width < 1.0 || target.height < 1.0
-        {
-            return None;
-        }
-        let mut layer = self.clone();
-        let scale_x = target.width / source.width;
-        let scale_y = target.height / source.height;
-        transform_shape(&mut layer.shape, |point| Point {
-            x: target.x + (point.x - source.x) * scale_x,
-            y: target.y + (point.y - source.y) * scale_y,
-        });
-        if let Shape::Text { font_size, .. } = &mut layer.shape {
-            *font_size *= scale_x.abs().min(scale_y.abs());
-        }
-        Some(layer)
     }
 }
 
@@ -189,21 +200,85 @@ fn transform_shape(shape: &mut Shape, transform: impl Fn(Point) -> Point) {
 /// opposite visual corner fixed. The returned geometry stays unrotated and
 /// retains the layer rotation, matching the raster backend's coordinate model.
 pub fn resize_from_corner(layer: &Layer, corner: usize, pointer: Point) -> Option<Layer> {
+    if let Shape::Line(start, end) = &layer.shape {
+        if !matches!(corner, 4 | 5) {
+            return None;
+        }
+        let old_center = Point {
+            x: (start.x + end.x) / 2.0,
+            y: (start.y + end.y) / 2.0,
+        };
+        let start = rotate(*start, old_center, layer.rotation_degrees);
+        let end = rotate(*end, old_center, layer.rotation_degrees);
+        let fixed = if corner == 4 { end } else { start };
+        if (pointer.x - fixed.x).hypot(pointer.y - fixed.y) < 1.0 {
+            return None;
+        }
+        let center = Point {
+            x: (fixed.x + pointer.x) / 2.0,
+            y: (fixed.y + pointer.y) / 2.0,
+        };
+        let dragged = rotate(pointer, center, -layer.rotation_degrees);
+        let fixed = rotate(fixed, center, -layer.rotation_degrees);
+        let mut resized = layer.clone();
+        resized.shape = if corner == 4 {
+            Shape::Line(dragged, fixed)
+        } else {
+            Shape::Line(fixed, dragged)
+        };
+        return Some(resized);
+    }
+
+    let source = layer.geometry_bounds()?;
+    if source.width <= 0.0 || source.height <= 0.0 || corner >= 4 {
+        return None;
+    }
     let corners = layer.selection_corners()?;
     let fixed = corners[(corner + 2) % 4];
-    let local_delta = rotate(pointer, fixed, -layer.rotation_degrees);
-    let width = (local_delta.x - fixed.x).abs().max(1.0);
-    let height = (local_delta.y - fixed.y).abs().max(1.0);
     let center = Point {
         x: (fixed.x + pointer.x) / 2.0,
         y: (fixed.y + pointer.y) / 2.0,
     };
-    layer.resized_to(Rect {
-        x: center.x - width / 2.0,
-        y: center.y - height / 2.0,
-        width,
-        height,
-    })
+    let destination_fixed = rotate(fixed, center, -layer.rotation_degrees);
+    let destination_dragged = rotate(pointer, center, -layer.rotation_degrees);
+    let source_corners = [
+        Point {
+            x: source.x,
+            y: source.y,
+        },
+        Point {
+            x: source.x + source.width,
+            y: source.y,
+        },
+        Point {
+            x: source.x + source.width,
+            y: source.y + source.height,
+        },
+        Point {
+            x: source.x,
+            y: source.y + source.height,
+        },
+    ];
+    let source_fixed = source_corners[(corner + 2) % 4];
+    let source_dragged = source_corners[corner];
+    let source_dx = source_dragged.x - source_fixed.x;
+    let source_dy = source_dragged.y - source_fixed.y;
+    let destination_dx = destination_dragged.x - destination_fixed.x;
+    let destination_dy = destination_dragged.y - destination_fixed.y;
+    if destination_dx.abs() < 1.0 || destination_dy.abs() < 1.0 {
+        return None;
+    }
+    let mut resized = layer.clone();
+    transform_shape(&mut resized.shape, |point| Point {
+        x: destination_fixed.x + (point.x - source_fixed.x) / source_dx * destination_dx,
+        y: destination_fixed.y + (point.y - source_fixed.y) / source_dy * destination_dy,
+    });
+    if let Shape::Text { font_size, .. } = &mut resized.shape {
+        let scale_x = (destination_dx / source_dx).abs();
+        let scale_y = (destination_dy / source_dy).abs();
+        *font_size *= scale_x.min(scale_y);
+    }
+    Some(resized)
 }
 
 #[derive(Clone)]
@@ -632,6 +707,76 @@ mod tests {
         assert_eq!(document.layers[0], original);
         assert!(document.redo());
         assert_eq!(document.layers[0], edited);
+    }
+
+    #[test]
+    fn horizontal_line_resizes_by_endpoint_and_crossing_keeps_anchor() {
+        let layer = Layer {
+            id: 9,
+            shape: Shape::Line(Point { x: 10.0, y: 20.0 }, Point { x: 90.0, y: 20.0 }),
+            color: [1, 2, 3, 255],
+            stroke: 4.0,
+            fill: None,
+            rotation_degrees: 0.0,
+            visible: true,
+        };
+        assert_eq!(
+            layer.resize_handles(),
+            vec![
+                (4, Point { x: 10.0, y: 20.0 }),
+                (5, Point { x: 90.0, y: 20.0 })
+            ]
+        );
+        let resized = resize_from_corner(&layer, 5, Point { x: 122.0, y: 47.0 }).unwrap();
+        assert_eq!(
+            resized.shape,
+            Shape::Line(Point { x: 10.0, y: 20.0 }, Point { x: 122.0, y: 47.0 })
+        );
+        let crossed = resize_from_corner(&layer, 5, Point { x: -31.0, y: 53.0 }).unwrap();
+        assert_eq!(
+            crossed.shape,
+            Shape::Line(Point { x: 10.0, y: 20.0 }, Point { x: -31.0, y: 53.0 })
+        );
+    }
+
+    #[test]
+    fn rotated_rectangle_crossing_keeps_physical_opposite_corner_fixed() {
+        let layer = Layer {
+            id: 4,
+            shape: Shape::Rectangle(Rect {
+                x: 20.0,
+                y: 30.0,
+                width: 80.0,
+                height: 35.0,
+            }),
+            color: [4, 5, 6, 255],
+            stroke: 3.0,
+            fill: Some([7, 8, 9, 128]),
+            rotation_degrees: 31.0,
+            visible: true,
+        };
+        let original = layer.selection_corners().unwrap();
+        let fixed = original[0];
+        let pointer = rotate(
+            Point {
+                x: fixed.x - 27.0,
+                y: fixed.y - 13.0,
+            },
+            fixed,
+            layer.rotation_degrees,
+        );
+        let resized = resize_from_corner(&layer, 2, pointer).unwrap();
+        let corners = resized.selection_corners().unwrap();
+        assert!(
+            corners
+                .iter()
+                .any(|point| { (point.x - fixed.x).hypot(point.y - fixed.y) < 0.001 })
+        );
+        assert!(
+            corners
+                .iter()
+                .any(|point| { (point.x - pointer.x).hypot(point.y - pointer.y) < 0.001 })
+        );
     }
 
     #[test]

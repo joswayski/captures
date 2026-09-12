@@ -205,8 +205,9 @@ def main():
                 click('Capture', 'Captures — Select target')
                 wait(lambda: len(list((profile/'captures').glob('*.png'))) == 3)
                 display_capture = sorted((profile/'captures').glob('*.png'))[-1]
-                assert cmd('identify', '-format', '%wx%h', display_capture) == '1280x800'
-                print('PASS window capture and 1280x800 full-display capture', flush=True)
+                screen_size = 'x'.join(cmd('xdotool', 'getdisplaygeometry').split())
+                assert cmd('identify', '-format', '%wx%h', display_capture) == screen_size
+                print(f'PASS window capture and {screen_size} full-display capture', flush=True)
                 print('PASS background hotkey, cancellation, single-instance routing, saved history', flush=True)
                 log.flush(); log.seek(0)
                 output = log.read()

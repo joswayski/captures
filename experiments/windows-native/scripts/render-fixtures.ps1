@@ -169,8 +169,11 @@ public static class CapturesFixtureNative {
 function Assert-NonBlank([Drawing.Bitmap]$bitmap, [string]$view) {
   if ($bitmap.Width -lt 40 -or $bitmap.Height -lt 40) { throw "$view rendered an implausibly small window" }
   $colors = [Collections.Generic.HashSet[int]]::new()
-  for ($y = 0; $y -lt $bitmap.Height; $y += [Math]::Max(1, [int]($bitmap.Height / 12))) {
-    for ($x = 0; $x -lt $bitmap.Width; $x += [Math]::Max(1, [int]($bitmap.Width / 12))) {
+  # A sparse grid can miss the recording preview and text while landing only
+  # on its three large neutral surfaces. Sample densely enough to distinguish
+  # real route content from a blank compositor frame.
+  for ($y = 0; $y -lt $bitmap.Height; $y += [Math]::Max(1, [int]($bitmap.Height / 40))) {
+    for ($x = 0; $x -lt $bitmap.Width; $x += [Math]::Max(1, [int]($bitmap.Width / 40))) {
       [void]$colors.Add($bitmap.GetPixel($x, $y).ToArgb())
     }
   }
@@ -180,6 +183,8 @@ function Assert-NonBlank([Drawing.Bitmap]$bitmap, [string]$view) {
 function Save-View([string]$appearance, [string]$view) {
   $source = if ($view -eq "recording-editor") { $videoFrame } else { $ImagePath }
   Remove-Item (Join-Path $profile "render-driver.txt") -Force -ErrorAction SilentlyContinue
+  $recordingReadyFile = Join-Path $profile "recording-frame-presented.txt"
+  Remove-Item $recordingReadyFile -Force -ErrorAction SilentlyContinue
   # Start-Process flattens ArgumentList, so explicitly quote paths that may contain spaces.
   $arguments = @("--view", $view, "--appearance", $appearance, "--fixture-image", ('"{0}"' -f $source), "--fixture-video", ('"{0}"' -f $VideoPath))
   $process = Start-Process $exe -ArgumentList $arguments -PassThru
@@ -199,7 +204,20 @@ function Save-View([string]$appearance, [string]$view) {
     Write-Host "$appearance-$view D3D driver: $driver"
     $bounds = [CapturesFixtureNative]::PositionAndValidateWindow($handle)
     Add-Content $boundsLog "$appearance,$view,$bounds"
-    Start-Sleep -Milliseconds 350
+    $recordingReady = $true
+    if ($view -eq "recording-editor") {
+      $recordingReady = $false
+      for ($attempt = 0; $attempt -lt 300 -and !$recordingReady; $attempt++) {
+        if ($process.HasExited) { throw "$view exited while waiting for decoded source content (exit $($process.ExitCode))" }
+        $recordingReady = Test-Path $recordingReadyFile
+        if (!$recordingReady) { Start-Sleep -Milliseconds 100 }
+      }
+      if ($recordingReady) {
+        Write-Host "$appearance-$view decoded paused frame presented; playback timing is not exercised"
+      }
+    } else {
+      Start-Sleep -Milliseconds 350
+    }
     # Revalidate after composition settles; never capture an off-screen partial window.
     [void][CapturesFixtureNative]::PositionAndValidateWindow($handle)
     $rect = New-Object CapturesFixtureNative+RECT
@@ -210,10 +228,15 @@ function Save-View([string]$appearance, [string]$view) {
       # This intentionally throws on hosted Windows sessions without a capturable desktop.
       $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
     } finally { $graphics.Dispose() }
-    Assert-NonBlank $bitmap "$appearance-$view"
     $path = Join-Path $out "$appearance-$view.png"
-    $bitmap.Save($path, [Drawing.Imaging.ImageFormat]::Png)
-    $bitmap.Dispose()
+    try {
+      # Persist diagnostics before assertions so every captured failure remains reviewable.
+      $bitmap.Save($path, [Drawing.Imaging.ImageFormat]::Png)
+      Assert-NonBlank $bitmap "$appearance-$view"
+      if (!$recordingReady) {
+        throw "$appearance-$view did not present a decoded source frame within 30 seconds; saved diagnostic $path"
+      }
+    } finally { $bitmap.Dispose() }
     Write-Host $path
   } finally {
     Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
@@ -229,7 +252,7 @@ try {
   Start-Sleep -Milliseconds 500
   $env:CAPTURES_WINDOWS_NATIVE_DATA = $profile
   foreach ($appearance in @("light", "dark")) {
-    foreach ($view in @("menu", "editor", "editor-shapes", "editor-export", "recording-selector", "recording-hud", "recording-editor", "preview", "history", "preferences", "delete-confirmation")) {
+    foreach ($view in @("menu", "editor", "editor-shapes", "editor-export", "editor-line", "recording-selector", "recording-hud", "recording-editor", "preview", "history", "preferences", "delete-confirmation")) {
       Save-View $appearance $view
     }
   }
