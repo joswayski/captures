@@ -28,6 +28,18 @@ def xwindow_geometry(window):
             values['Width'], values['Height'])
 
 
+def screen_bounds(node, frame):
+    import pyatspi
+    # GTK4's X11 bridge can return window-relative positions even when asked
+    # for DESKTOP_COORDS. Request that space explicitly and map it via X11.
+    rect = node.queryComponent().getExtents(pyatspi.WINDOW_COORDS)
+    window = cmd('xdotool', 'search', '--onlyvisible', '--name', frame).splitlines()[-1]
+    x, y, _, _ = xwindow_geometry(window)
+    rect.x += x
+    rect.y += y
+    return rect
+
+
 def walk(node):
     yield node
     try:
@@ -84,25 +96,27 @@ def wait(predicate, timeout=20):
 
 
 def click(name, frame=None, pointer=False):
-    node = wait(lambda: find(name, frame=frame))
+    node = wait(lambda: find(name, role='push button', frame=frame) or find(name, frame=frame))
     if pointer:
         # Opening a modal dialog from AT-SPI's synchronous DoAction keeps its
         # DBus handler occupied until that dialog closes. Use real X11 input.
-        import pyatspi
-        bounds=node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+        bounds = screen_bounds(node, frame or 'Captures — Linux native')
+        assert bounds.width > 0 and bounds.height > 0, (name, bounds)
         cmd('xdotool','mousemove',bounds.x+bounds.width//2,bounds.y+bounds.height//2,'click',1)
     else:
         assert node.queryAction().doAction(0), name
-    time.sleep(.15)
+    # GTK4's AT-SPI button action queues ::clicked behind its 250 ms activate
+    # timeout; the DBus reply is not completion of the application handler.
+    time.sleep(.15 if pointer else .35)
 
 
 def choose(current, index, frame=None):
-    import pyatspi
     node = wait(lambda: find(current, 'combo box', frame))
     title=frame or 'Captures — Linux native'
     window=cmd('xdotool','search','--onlyvisible','--name',title).splitlines()[-1]
     cmd('xdotool','windowactivate','--sync',window)
-    bounds = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+    bounds = screen_bounds(node, title)
+    assert bounds.width > 0 and bounds.height > 0, (current, bounds)
     cmd('xdotool', 'mousemove', bounds.x + bounds.width // 2,
         bounds.y + bounds.height // 2, 'click', 1)
     time.sleep(.1)

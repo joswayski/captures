@@ -22,8 +22,7 @@ def main():
     os.environ.update(json.loads((args.lab / 'environment.json').read_text()))
 
     # AT-SPI must be imported after the isolated session variables are active.
-    import pyatspi
-    from native_check import capture, choose, click, cmd, drag, find, run, wait
+    from native_check import capture, choose, click, cmd, drag, find, run, screen_bounds, wait, walk, xwindow_geometry
 
     root = Path(__file__).parent.resolve()
     binary = root / 'target/release/captures-linux-native'
@@ -35,7 +34,7 @@ def main():
         # The canvas tooltip has the same accessible name but role=label and
         # a tiny text rectangle. Select the DrawingArea, not that popup text.
         canvas = wait(lambda: find('Screenshot editing canvas', role='filler', frame=editor))
-        rect = canvas.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+        rect = screen_bounds(canvas, editor)
         assert rect.width >= 100 and rect.height >= 100, rect
         return rect
 
@@ -51,18 +50,20 @@ def main():
         # Scoped editor CSS must not override the shared primary hover treatment.
         # Exercise pointer hover without exporting, and check a text-free pixel.
         save = wait(lambda: find('Save', frame=editor))
-        bounds = save.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
-        copy_bounds = find('Copy image', frame=editor).queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
-        filename_bounds = find('Filename', role='text', frame=editor).queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+        bounds = screen_bounds(save, editor)
+        copy_bounds = screen_bounds(find('Copy image', frame=editor), editor)
+        filename_bounds = screen_bounds(find('Filename', role='text', frame=editor), editor)
         assert bounds.height == copy_bounds.height == 36, (bounds, copy_bounds)
         assert abs(bounds.y - copy_bounds.y) <= 1, (bounds, copy_bounds)
         assert abs(bounds.y + bounds.height - filename_bounds.y - filename_bounds.height) <= 1
         cmd('xdotool', 'mousemove', bounds.x + bounds.width // 2, bounds.y + bounds.height // 2)
         capture(args.artifacts, 'editor-save-hover', editor)
-        sample = f'%[pixel:p{{{bounds.x + 10},{bounds.y + 10}}}]'
+        client_x, client_y, _, _ = xwindow_geometry(window)
+        sample = f'%[pixel:p{{{bounds.x - client_x + 10},{bounds.y - client_y + 10}}}]'
         idle, hovered = [cmd('convert', args.artifacts / f'after-{state}.png', '-format', sample, 'info:')
                          for state in ['editor-default-1280x800', 'editor-save-hover']]
         assert idle.startswith('srgb') and hovered.startswith('srgb')
+        assert idle != hovered, (idle, hovered)
         cmd('xdotool', 'mousemove', 0, 0)
         area = canvas_bounds()
         # At 100%, the canvas exceeds the viewport. Space-drag must pan it.
@@ -72,34 +73,56 @@ def main():
         drag(full_size.x + 300, full_size.y + 180, -100, 0)
         cmd('xdotool', 'keyup', 'space')
         panned = canvas_bounds()
-        # GTK4's X11 accessibility bridge reports stale screen coordinates for
-        # scrolled DrawingAreas; the real space-drag above still exercises the
-        # controller without treating that AT-SPI limitation as app geometry.
-        assert panned.width == full_size.width
+        assert panned.x < full_size.x and panned.width == full_size.width, (full_size, panned)
         click('Fit', editor)
         area = canvas_bounds()
         click('Arrow (A)', editor)
         drag(area.x + 90, area.y + 90, 220, 130)
-        rename = find('Rename layer', frame=editor)
-        rename_bounds = rename.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
-        cmd('xdotool', 'mousemove', rename_bounds.x + rename_bounds.width // 2,
-            rename_bounds.y + rename_bounds.height // 2, 'click', 1,
-            'key', 'ctrl+a', 'type', 'Callout arrow', 'key', 'Return')
-        wait(lambda: any(
-            'Callout arrow' in draft.read_text()
+        arrow = wait(lambda: next((layer
             for draft in (output.parent / 'editor-drafts').glob('*.json')
+            for layer in json.loads(draft.read_text())['layers']
+            if 'Arrow' in layer['kind']), None))
+        # Derive source geometry from the displayed fixture allocation, not
+        # from the event adapter. Allow subpixel allocation rounding only.
+        for key, screen_distance in [('x', 90), ('y', 90), ('w', 220), ('h', 130)]:
+            expected = screen_distance * 960 / area.width
+            assert abs(arrow['frame'][key] - expected) < .5, (key, arrow['frame'][key], expected)
+        # Every layer has this label; choose the entry in the Arrow's row,
+        # rather than accidentally renaming the locked background.
+        rename = wait(lambda: next((node for node in walk(find(editor, 'frame'))
+                                   if node.getRoleName() == 'text' and node.name == 'Rename layer'
+                                   and any(child.name == 'Arrow' and child.getRoleName() == 'label'
+                                           for child in node.parent)), None))
+        rename_bounds = screen_bounds(rename, editor)
+        cmd('xdotool', 'mousemove', rename_bounds.x + rename_bounds.width // 2,
+            rename_bounds.y + rename_bounds.height // 2, 'click', 1)
+        cmd('xdotool', 'key', 'ctrl+a')
+        cmd('xdotool', 'type', 'Callout arrow')
+        cmd('xdotool', 'key', 'Return')
+        wait(lambda: any(
+            layer['name'] == 'Callout arrow'
+            for draft in (output.parent / 'editor-drafts').glob('*.json')
+            for layer in json.loads(draft.read_text())['layers']
         ))
 
         click('Remove background (B)', editor)
-        assert find('Color tolerance', frame=editor)
-        assert find('Contiguous only', frame=editor)
+        wait(lambda: find('Color tolerance', role='slider', frame=editor))
+        wait(lambda: find('Contiguous only', role='check box', frame=editor))
         capture(args.artifacts, 'editor-remove-background', editor)
         click('Erase', editor)
-        assert find('Brush softness', frame=editor)
+        wait(lambda: find('Brush softness', role='slider', frame=editor))
 
         click('Shapes', editor)
         click('Triangle', editor)
+        # Let the native popover finish closing before sending canvas input.
+        time.sleep(.3)
+        area = canvas_bounds()
         drag(area.x + 370, area.y + 90, 70, 90)
+        wait(lambda: any(
+            'Triangle' in layer['kind']
+            for draft in (output.parent / 'editor-drafts').glob('*.json')
+            for layer in json.loads(draft.read_text())['layers']
+        ))
         click('Select & move (V)', editor)
         cmd('xdotool', 'mousemove', area.x + 405, area.y + 135, 'click', 1,
             'key', 'ctrl+c', 'key', 'ctrl+v')
@@ -108,23 +131,24 @@ def main():
             for draft in (output.parent / 'editor-drafts').glob('*.json')
         ))
         click('Undo', editor)
-        selected_name = find('Rename layer', frame=editor)
-        selected_bounds = selected_name.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
-        cmd('xdotool', 'mousemove', selected_bounds.x + selected_bounds.width // 2,
-            selected_bounds.y + selected_bounds.height // 2, 'click', 1, 'key', 'Return')
+        area = canvas_bounds()
+        cmd('xdotool', 'mousemove', area.x + 405, area.y + 135, 'click', 1)
         capture(args.artifacts, 'editor-selected-layer', editor)
 
-        click('Export settings', editor)
+        click('Export settings', editor, pointer=True)
         time.sleep(.4)
         assert find('Compression comparison slider', 'slider', editor)
         capture(args.artifacts, 'editor-export-settings', editor)
 
-        choose('Preserve quality', 2, editor)
-        assert find('Maximum file size', 'combo box', editor)
-        assert wait(lambda: find('MB', 'combo box', editor))
+        choose('Save quality', 2, editor)
+        maximum_unit = wait(lambda: find('Maximum file size unit', 'combo box', editor))
+        # GTK4 can clear SHOWING on mapped X11 controls. Require a real
+        # allocation and removal from the tree when the field is hidden.
+        assert screen_bounds(maximum_unit, editor).width > 0
         capture(args.artifacts, 'editor-maximum-size', editor)
-        choose('Maximum file size', 0, editor)
-        click('Export settings', editor)
+        choose('Save quality', 0, editor)
+        assert find('Maximum file size unit', 'combo box', editor) is None
+        click('Export settings', editor, pointer=True)
 
         click('Save as new file', editor)
         click('Save', editor)
@@ -153,7 +177,7 @@ def main():
         cropped_width, cropped_height = map(int, cropped_size.split('x'))
         assert 0 < cropped_width < 960 and 0 < cropped_height < 540
 
-        choose('PNG', 1, editor)
+        choose('Format', 1, editor)
         click('Save', editor)
         jpeg = wait(lambda: next(output.glob('*.jpg'), None))
         assert cmd('identify', '-format', '%m %wx%h', jpeg) == f'JPEG {cropped_size}'

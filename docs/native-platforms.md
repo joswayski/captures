@@ -53,10 +53,16 @@ No automatic profile migration is part of these comparison runs.
 
 These are implemented experiments, not drop-in replacements. In particular:
 
-- **Linux:** the full X11 interaction suite is not green. Canvas lookups now
-  distinguish the DrawingArea from its same-named tooltip, but pointer-drag and
-  inline-rename failures still require GTK4 event-adapter fixes. Focused real-window checks
-  do not establish full-suite success. Recording replacement uses a synced stage
+- **Linux:** the full X11 interaction suite is not green. The corrected GTK4
+  event adapter maps surface coordinates through the native/widget transforms
+  and preserves press/motion/release propagation. Focused real pointer tests
+  verify source-coordinate arrows at fit and scrolled 100% zoom and exact
+  inline rename; editable fields retain their keyboard input. Export quality
+  controls now reveal their children correctly in GTK4, and all three modes
+  were inspected. The longer editor fixture still fails: its horizontal
+  space-pan assertion does not observe horizontal movement, and a separate
+  attempt failed to reach maximum-size controls after layer operations.
+  Neither failure is waived as a passing check. Recording replacement uses a synced stage
   and explicit confirmation; cancellation preserves the original. Physical
   multi-monitor, hardware GPU, and Wayland behavior remain unverified.
 - **Windows:** editable canvas/background/zoom, image layers, and several layer
@@ -65,6 +71,10 @@ These are implemented experiments, not drop-in replacements. In particular:
   crop, and microphone/countdown parity remain incomplete. Recording segment
   assembly still blocks during stop. Hosted D3D fixture captures do not establish
   physical DPI, capture, clipboard, drag, or cross-process click-through behavior.
+  [The accepted Windows run](https://github.com/joswayski/captures/actions/runs/34712355046)
+  passed MSVC build, 35 tests, strict clippy, and all 24 light/dark captures with
+  hardware drivers and verified full desktop bounds. Inspected recording
+  fixtures show decoded paused frames, not playback timing or hardware video decode.
 - **macOS:** Swift builds, 10 XCTest tests, normal layouts, and independent real
   video/dust compositor checks passed in [the native CI run](https://github.com/joswayski/captures/actions/runs/34711199486).
   The inspected dust frame contains displaced source fragments and transparent

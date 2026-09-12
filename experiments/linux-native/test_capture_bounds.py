@@ -1,13 +1,43 @@
 from contextlib import ExitStack
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import native_check
 from src.native.recording import check as recording_check
 
 
 class CaptureBoundsTests(unittest.TestCase):
+    def test_pointer_bounds_map_window_coordinates_through_actual_client_origin(self):
+        node = Mock()
+        node.queryComponent().getExtents.return_value = SimpleNamespace(x=89, y=150, width=838, height=471)
+        with patch.dict('sys.modules', {'pyatspi': SimpleNamespace(WINDOW_COORDS='window')}), \
+             patch.object(native_check, 'cmd', return_value='401'), \
+             patch.object(native_check, 'xwindow_geometry', return_value=(319, 155, 1280, 800)):
+            rect = native_check.screen_bounds(node, 'Editor')
+        node.queryComponent().getExtents.assert_called_once_with('window')
+        self.assertEqual((rect.x, rect.y, rect.width, rect.height), (408, 305, 838, 471))
+
+    def test_pointer_click_prefers_button_over_same_named_label_and_rejects_empty_bounds(self):
+        for width in [158, 0]:
+            with self.subTest(width=width), ExitStack() as stack:
+                button = Mock()
+                lookup = stack.enter_context(patch.object(native_check, 'find', return_value=button))
+                bounds = stack.enter_context(patch.object(native_check, 'screen_bounds', return_value=(
+                    SimpleNamespace(x=344, y=915, width=width, height=27))))
+                command = stack.enter_context(patch.object(native_check, 'cmd'))
+                stack.enter_context(patch.object(native_check.time, 'sleep'))
+                if width:
+                    native_check.click('Export settings', 'Editor', pointer=True)
+                    command.assert_called_once_with('xdotool', 'mousemove', 423, 928, 'click', 1)
+                else:
+                    with self.assertRaises(AssertionError):
+                        native_check.click('Export settings', 'Editor', pointer=True)
+                    command.assert_not_called()
+                lookup.assert_called_once_with('Export settings', role='push button', frame='Editor')
+                bounds.assert_called_once_with(button, 'Editor')
+
     def test_root_crops_require_the_complete_client(self):
         # Include exact right/bottom edges, then one-pixel overflow on each
         # edge. A clipped capture must fail before ImageMagick is invoked.

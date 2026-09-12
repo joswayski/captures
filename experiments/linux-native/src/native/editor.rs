@@ -702,12 +702,14 @@ fn open_impl(
     }
     format.set_active(Some(0));
     format.set_tooltip_text(Some("Format"));
+    ui::named(&format, "Format");
     let quality_mode = gtk::ComboBoxText::new();
     for q in ["Preserve quality", "Compress", "Maximum file size"] {
         quality_mode.append_text(q)
     }
     quality_mode.set_active(Some(0));
     quality_mode.set_tooltip_text(Some("Save quality"));
+    ui::named(&quality_mode, "Save quality");
     let quality = gtk::ComboBoxText::new();
     for (id, label) in [
         ("98", "Highest"),
@@ -719,19 +721,17 @@ fn open_impl(
     }
     quality.set_active_id(Some("92"));
     quality.set_tooltip_text(Some("Compression quality preset"));
-    quality.set_visible(false);
     let maximum_size = gtk::SpinButton::with_range(0.01, 1024., 0.01);
     maximum_size.set_value(10.);
     maximum_size.set_digits(2);
     maximum_size.set_tooltip_text(Some("Maximum export file size"));
-    maximum_size.set_visible(false);
     let maximum_unit = gtk::ComboBoxText::new();
     for unit in ["KB", "MB", "GB"] {
         maximum_unit.append_text(unit)
     }
     maximum_unit.set_active(Some(1));
     maximum_unit.set_tooltip_text(Some("Maximum file size unit"));
-    maximum_unit.set_visible(false);
+    ui::named(&maximum_unit, "Maximum file size unit");
     let export_settings = gtk::Box::new(gtk::Orientation::Horizontal, 16);
     export_settings.style_context().add_class("export-settings");
     let output_size = gtk::ComboBoxText::new();
@@ -1408,13 +1408,13 @@ fn setup_canvas(
             glib::Propagation::Proceed
         });
     }
-    {
+    let pointer_pressed = {
         let s = state.clone();
         let a = area.clone();
         let w = window.clone();
         let r = refresh_cb.clone();
         let scroll = scroll.clone();
-        area.connect_button_press_event(move |_, e| {
+        move |_: &gtk::DrawingArea, e: crate::compat::PointerEvent| {
             let state_ref = s.clone();
             let mut s = s.borrow_mut();
             let (x, y) = e.position();
@@ -1513,13 +1513,13 @@ fn setup_canvas(
             a.grab_focus();
             a.queue_draw();
             glib::Propagation::Stop
-        });
-    }
-    {
+        }
+    };
+    let pointer_moved = {
         let s = state.clone();
         let a = area.clone();
         let scroll = scroll.clone();
-        area.connect_motion_notify_event(move |_, e| {
+        move |_: &gtk::DrawingArea, e: crate::compat::PointerEvent| {
             let mut s = s.borrow_mut();
             let (x, y) = e.position();
             let p = Point {
@@ -1652,13 +1652,13 @@ fn setup_canvas(
             }
             a.queue_draw();
             glib::Propagation::Stop
-        });
-    }
-    {
+        }
+    };
+    let pointer_released = {
         let s = state.clone();
         let a = area.clone();
         let r = refresh_cb.clone();
-        area.connect_button_release_event(move |_, e| {
+        move |_: &gtk::DrawingArea, e: crate::compat::PointerEvent| {
             let mut s = s.borrow_mut();
             let (x, y) = e.position();
             let p = Point {
@@ -1699,8 +1699,9 @@ fn setup_canvas(
             drop(s);
             refresh(&r, &a);
             glib::Propagation::Stop
-        });
-    }
+        }
+    };
+    area.connect_pointer_events(pointer_pressed, pointer_moved, pointer_released);
     {
         let s = state.clone();
         let z_area = area.clone();
@@ -2362,6 +2363,21 @@ fn setup_sidebar(
     }));
 }
 
+fn editor_has_editable_focus(window: &gtk::Window) -> bool {
+    let mut widget = gtk::prelude::RootExt::focus(window);
+    while let Some(current) = widget {
+        if current.is::<gtk::Entry>()
+            || current.is::<gtk::SpinButton>()
+            || current.is::<gtk::Text>()
+            || current.is::<gtk::TextView>()
+        {
+            return true;
+        }
+        widget = current.parent();
+    }
+    false
+}
+
 fn setup_keys(
     window: &gtk::Window,
     state: &Rc<RefCell<State>>,
@@ -2371,7 +2387,11 @@ fn setup_keys(
 ) {
     {
         let s = state.clone();
+        let key_window = window.clone();
         window.connect_key_release_event(move |_, e| {
+            if editor_has_editable_focus(&key_window) {
+                return glib::Propagation::Proceed;
+            }
             if e.keyval() == gdk::Key::space {
                 s.borrow_mut().space_down = false;
                 return glib::Propagation::Stop;
@@ -2385,6 +2405,9 @@ fn setup_keys(
     let z = zoom.clone();
     let key_window = window.clone();
     window.connect_key_press_event(move |_, e| {
+        if editor_has_editable_focus(&key_window) {
+            return glib::Propagation::Proceed;
+        }
         if matches!(
             e.keyval(),
             gdk::Key::plus | gdk::Key::equal | gdk::Key::minus | gdk::Key::_0
@@ -2402,12 +2425,6 @@ fn setup_keys(
         if e.keyval() == gdk::Key::space {
             s.space_down = true;
             return glib::Propagation::Stop;
-        }
-        let editing_field = key_window
-            .focus_child()
-            .is_some_and(|widget| widget.is::<gtk::Entry>() || widget.is::<gtk::SpinButton>());
-        if ctrl && editing_field {
-            return glib::Propagation::Proceed;
         }
         if ctrl
             && e.keyval() == gdk::Key::c

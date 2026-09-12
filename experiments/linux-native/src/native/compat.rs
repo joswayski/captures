@@ -408,6 +408,45 @@ impl KeyEvent {
 }
 
 pub trait LegacyEvents: IsA<gtk::Widget> + Clone + 'static {
+    fn connect_pointer_events<
+        FP: Fn(&Self, PointerEvent) -> glib::Propagation + 'static,
+        FM: Fn(&Self, PointerEvent) -> glib::Propagation + 'static,
+        FR: Fn(&Self, PointerEvent) -> glib::Propagation + 'static,
+    >(
+        &self,
+        pressed: FP,
+        motion: FM,
+        released: FR,
+    ) {
+        let controller = gtk::EventControllerLegacy::new();
+        controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let widget = self.clone();
+        controller.connect_event(move |_, event| {
+            let Some((x, y)) = pointer_position(&widget, event) else {
+                return glib::Propagation::Proceed;
+            };
+            let (root_x, root_y) = root_pointer().unwrap_or((x, y));
+            let pointer = PointerEvent {
+                x,
+                y,
+                root_x,
+                root_y,
+                button: event
+                    .downcast_ref::<gdk::ButtonEvent>()
+                    .map_or(0, gdk::ButtonEvent::button),
+                presses: 1,
+                state: event.modifier_state(),
+            };
+            match event.event_type() {
+                gdk::EventType::ButtonPress => pressed(&widget, pointer),
+                gdk::EventType::MotionNotify => motion(&widget, pointer),
+                gdk::EventType::ButtonRelease => released(&widget, pointer),
+                _ => glib::Propagation::Proceed,
+            }
+        });
+        self.add_controller(controller);
+    }
+
     fn connect_button_press_event<F: Fn(&Self, PointerEvent) -> glib::Propagation + 'static>(
         &self,
         f: F,
@@ -567,6 +606,29 @@ pub trait LegacyEvents: IsA<gtk::Widget> + Clone + 'static {
         });
         self.add_controller(controller);
     }
+}
+
+fn pointer_position(widget: &impl IsA<gtk::Widget>, event: &gdk::Event) -> Option<(f64, f64)> {
+    let (surface_x, surface_y) = event.position()?;
+    let native = widget.native()?;
+    let event_surface = event.surface()?;
+    if native.surface().as_ref() != Some(&event_surface) {
+        return None;
+    }
+
+    // GDK event positions are surface-relative. GtkNative's surface transform
+    // translates that position into the native widget's coordinate space; the
+    // widget transform then accounts for ancestors such as scrolled windows.
+    let (translate_x, translate_y) = native.surface_transform();
+    let native_widget = native.dynamic_cast::<gtk::Widget>().ok()?;
+    let point = native_widget.compute_point(
+        widget,
+        &gtk::graphene::Point::new(
+            (surface_x + translate_x) as f32,
+            (surface_y + translate_y) as f32,
+        ),
+    )?;
+    Some((f64::from(point.x()), f64::from(point.y())))
 }
 
 fn root_pointer() -> Option<(f64, f64)> {
