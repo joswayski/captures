@@ -21,8 +21,10 @@ From the repository root in Developer PowerShell for VS 2022:
 ```
 
 `render-fixtures.ps1` launches real custom-rendered app routes and captures them using the Windows
-desktop. Its PNGs are runtime review artifacts and intentionally ignored by Git. The Linux
-cross-check used during development is:
+desktop. The helper temporarily changes the primary display mode when needed and therefore must run
+only in a disposable test desktop, not an interactive user session. It restores the previous display
+mode and thread DPI context during cleanup. Its PNGs are runtime review artifacts and intentionally
+ignored by Git. The Linux cross-check used during development is:
 
 ```sh
 cargo check --manifest-path experiments/windows-native/Cargo.toml --target x86_64-pc-windows-gnu
@@ -40,8 +42,9 @@ tool rail and shape flyout, fitted canvas, layers/properties sidebar, and filena
 footer. Filename edits, format changes, Save as new file, layer selection/visibility, copy, and Save
 are functional. Replacing a source is allowed only while its sanitized filename and supported format
 remain unchanged; staged bytes are flushed and synced before replacement. Canvas
-dimension/background/zoom controls are currently read-only, Add images is
-explicitly unavailable, and moving/resizing/rotating selected shapes and richer fill controls remain.
+dimension/background/zoom controls are currently read-only and Add images is explicitly unavailable.
+Selected annotations can be moved, resized, and rotated, and their color, stroke, and supported fill
+state can be edited with undo/redo.
 The recording editor probes real media, decodes playback frames, seeks, trims, chooses quality,
 exports through `captures-media`, and can either preserve the source or safely replace it. Probe,
 paused-frame extraction, compression comparison, and export run outside the Win32 message thread.

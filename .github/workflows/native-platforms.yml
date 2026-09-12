@@ -49,6 +49,7 @@ jobs:
         with:
           toolchain: 1.94.0
           components: rustfmt, clippy
+          cache-workspaces: experiments/linux-native -> target
       - run: cargo fmt --manifest-path experiments/linux-native/Cargo.toml -- --check
       - run: cargo test --locked --manifest-path experiments/linux-native/Cargo.toml
       - run: cargo clippy --locked --manifest-path experiments/linux-native/Cargo.toml --all-targets -- -D warnings
@@ -70,6 +71,7 @@ jobs:
         with:
           toolchain: 1.94.0
           components: rustfmt, clippy
+          cache-workspaces: experiments/windows-native -> target
       - name: Install and verify test-only media tools
         shell: pwsh
         run: |

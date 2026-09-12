@@ -9,7 +9,7 @@ use captures_recording::{
 };
 use captures_recording_xcap::XcapRecordingSegment;
 use captures_windows_native::{
-    editor::FreehandGesture,
+    editor::{FreehandGesture, Layer, resize_from_corner},
     geometry::{
         Point, Rect, SelectionDrag, contain, rounded_contains, screenshot_editor_canvas,
         update_selection,
@@ -128,6 +128,7 @@ struct App {
     recording_mode: CaptureMode,
     editor_drag: Option<Point>,
     editor_freehand: Option<FreehandGesture>,
+    editor_transform: Option<EditorTransform>,
     editor_text_origin: Option<Point>,
     editor_text: String,
     next_session_check: Instant,
@@ -144,6 +145,55 @@ struct App {
     frame_request: u64,
     comparison_request: u64,
     export_request: u64,
+}
+
+#[derive(Clone)]
+enum EditorTransform {
+    Move {
+        anchor: Point,
+        original: Layer,
+    },
+    Resize {
+        corner: usize,
+        original: Layer,
+    },
+    Rotate {
+        center: Point,
+        pointer_offset: f32,
+        original: Layer,
+    },
+}
+
+impl EditorTransform {
+    fn original(&self) -> &Layer {
+        match self {
+            Self::Move { original, .. }
+            | Self::Resize { original, .. }
+            | Self::Rotate { original, .. } => original,
+        }
+    }
+
+    fn update(&self, pointer: Point) -> Option<Layer> {
+        match self {
+            Self::Move { anchor, original } => Some(original.translated(Point {
+                x: pointer.x - anchor.x,
+                y: pointer.y - anchor.y,
+            })),
+            Self::Resize { corner, original } => resize_from_corner(original, *corner, pointer),
+            Self::Rotate {
+                center,
+                pointer_offset,
+                original,
+            } => {
+                let mut layer = original.clone();
+                layer.rotation_degrees = (pointer.y - center.y)
+                    .atan2(pointer.x - center.x)
+                    .to_degrees()
+                    - pointer_offset;
+                Some(layer)
+            }
+        }
+    }
 }
 
 pub fn run() -> Result<(), String> {
@@ -217,6 +267,7 @@ pub fn run() -> Result<(), String> {
             recording_mode: CaptureMode::Region,
             editor_drag: None,
             editor_freehand: None,
+            editor_transform: None,
             editor_text_origin: None,
             editor_text: String::new(),
             next_session_check: Instant::now(),
@@ -765,6 +816,16 @@ impl App {
     unsafe fn pointer_move(&mut self, p: Point) {
         unsafe {
             if self.state.surface == Surface::ScreenshotEditor
+                && let Some(source) = self.editor_source_point_unbounded(p)
+                && let Some(transform) = &self.editor_transform
+                && let Some(layer) = transform.update(source)
+                && let Some(document) = self.state.editor.as_mut()
+            {
+                document.preview_layer(layer);
+                let _ = InvalidateRect(Some(self.hwnd), None, false);
+                return;
+            }
+            if self.state.surface == Surface::ScreenshotEditor
                 && let Some(source) = self.editor_source_point(p)
                 && let Some(gesture) = self.editor_freehand.as_mut()
             {
@@ -917,9 +978,9 @@ impl App {
         let height = self.height as f32 * 96.0 / self.dpi;
         let footer_y = height - 92.0;
         let sidebar_x = width - 320.0;
-        let sidebar_layer = (p.x > sidebar_x && (104.0..312.0).contains(&p.y))
+        let sidebar_layer = (p.x > sidebar_x && (104.0..260.0).contains(&p.y))
             .then(|| ((p.y - 104.0) / 52.0).floor() as usize)
-            .filter(|index| *index < 4);
+            .filter(|index| *index < 3);
         if p.y >= footer_y {
             if p.x < 208.0 {
                 self.state.editor_export_settings_open = !self.state.editor_export_settings_open;
@@ -1027,7 +1088,7 @@ impl App {
                 self.state.editor_shapes_open = false;
             }
         } else if p.x > sidebar_x
-            && (104.0..312.0).contains(&p.y)
+            && (104.0..260.0).contains(&p.y)
             && let Some(index) = sidebar_layer
             && let Some(id) = self
                 .state
@@ -1038,25 +1099,106 @@ impl App {
         {
             self.state.selected_layer = Some(id);
             self.state.editor_tool = captures_windows_native::editor::Tool::Select;
+            if let Some(layer) = self
+                .state
+                .editor
+                .as_ref()
+                .and_then(|document| document.layers.iter().find(|layer| layer.id == id))
+            {
+                self.state.editor_color_hex = format_color(layer.color);
+            }
             if p.x > sidebar_x + 244.0
                 && let Some(document) = self.state.editor.as_mut()
             {
                 document.toggle_visibility(id);
             }
-        } else if p.x > sidebar_x + 116.0 && p.x < sidebar_x + 248.0 && {
+        } else if p.x > sidebar_x && {
             let count = self
                 .state
                 .editor
                 .as_ref()
-                .map_or(0, |document| document.layers.len().min(4));
+                .map_or(0, |document| document.layers.len().min(3));
             let properties_y = (176.0 + count as f32 * 52.0).min(footer_y - 154.0);
-            (properties_y + 31.0..properties_y + 63.0).contains(&p.y)
+            (properties_y + 28.0..properties_y + 188.0).contains(&p.y)
         } {
-            self.state.editor_editing_color = true;
-            self.state.status = Some((
-                "Type a #RRGGBB color and press Enter".into(),
-                Instant::now(),
-            ));
+            let count = self
+                .state
+                .editor
+                .as_ref()
+                .map_or(0, |document| document.layers.len().min(3));
+            let properties_y = (176.0 + count as f32 * 52.0).min(footer_y - 154.0);
+            let row = ((p.y - properties_y - 28.0) / 40.0).floor() as usize;
+            let selected = self.state.selected_layer;
+            match row {
+                0 if (sidebar_x + 116.0..sidebar_x + 296.0).contains(&p.x) => {
+                    self.state.editor_editing_color = true;
+                    if let Some(id) = selected
+                        && let Some(layer) = self.state.editor.as_ref().and_then(|document| {
+                            document.layers.iter().find(|layer| layer.id == id)
+                        })
+                    {
+                        self.state.editor_color_hex = format_color(layer.color);
+                    }
+                    self.state.status = Some((
+                        "Type a #RRGGBB color and press Enter".into(),
+                        Instant::now(),
+                    ));
+                }
+                1 => {
+                    let delta = if p.x < sidebar_x + 236.0 { -1.0 } else { 1.0 };
+                    if let Some(id) = selected {
+                        if let Some(document) = self.state.editor.as_mut()
+                            && let Some(stroke) = document
+                                .layers
+                                .iter()
+                                .find(|layer| layer.id == id)
+                                .map(|layer| layer.stroke)
+                        {
+                            document.set_layer_stroke(id, stroke + delta);
+                        }
+                    } else {
+                        self.state.editor_stroke =
+                            (self.state.editor_stroke + delta).clamp(1.0, 48.0);
+                    }
+                }
+                2 => {
+                    if let Some(id) = selected {
+                        if let Some(document) = self.state.editor.as_mut()
+                            && let Some(layer) = document.layers.iter().find(|layer| layer.id == id)
+                            && layer.supports_fill()
+                        {
+                            let fill = layer.fill.is_none().then_some(layer.color);
+                            document.set_layer_fill(id, fill);
+                        }
+                    } else {
+                        self.state.editor_fill = self
+                            .state
+                            .editor_fill
+                            .is_none()
+                            .then_some(self.state.editor_color);
+                    }
+                }
+                3 if selected.is_some() => {
+                    let id = selected.unwrap_or_default();
+                    let delta = if p.x < sidebar_x + 236.0 { -15.0 } else { 15.0 };
+                    if let Some(document) = self.state.editor.as_mut()
+                        && let Some(rotation) = document
+                            .layers
+                            .iter()
+                            .find(|layer| layer.id == id)
+                            .map(|layer| layer.rotation_degrees)
+                    {
+                        document.set_layer_rotation(id, rotation + delta);
+                    }
+                }
+                _ => {}
+            }
+        } else if self.state.editor_tool == captures_windows_native::editor::Tool::Select
+            && let Some(source) = self.editor_source_point_unbounded(p)
+            && let Some(transform) = self.editor_transform_at(p, source)
+        {
+            self.editor_transform = Some(transform);
+            unsafe { SetCapture(self.hwnd) };
         } else if let Some(source) = self.editor_source_point(p) {
             if self.state.editor_tool == captures_windows_native::editor::Tool::Select {
                 self.state.selected_layer = self
@@ -1064,6 +1206,28 @@ impl App {
                     .editor
                     .as_ref()
                     .and_then(|document| document.hit_test(source, 6.0));
+                if let Some(id) = self.state.selected_layer
+                    && let Some(layer) =
+                        self.state.editor.as_ref().and_then(|document| {
+                            document.layers.iter().find(|layer| layer.id == id)
+                        })
+                {
+                    self.state.editor_color_hex = format_color(layer.color);
+                }
+                if let Some(id) = self.state.selected_layer
+                    && let Some(original) = self
+                        .state
+                        .editor
+                        .as_ref()
+                        .and_then(|document| document.layers.iter().find(|layer| layer.id == id))
+                        .cloned()
+                {
+                    self.editor_transform = Some(EditorTransform::Move {
+                        anchor: source,
+                        original,
+                    });
+                    unsafe { SetCapture(self.hwnd) };
+                }
                 unsafe {
                     let _ = InvalidateRect(Some(self.hwnd), None, false);
                 }
@@ -1083,6 +1247,22 @@ impl App {
     }
 
     unsafe fn editor_pointer_up(&mut self, p: Point) {
+        if let Some(transform) = self.editor_transform.take() {
+            if let Some(source) = self.editor_source_point_unbounded(p)
+                && let Some(layer) = transform.update(source)
+                && let Some(document) = self.state.editor.as_mut()
+            {
+                document.preview_layer(layer);
+            }
+            if let Some(document) = self.state.editor.as_mut() {
+                document.commit_layer_preview(transform.original().clone());
+            }
+            unsafe {
+                let _ = ReleaseCapture();
+                let _ = InvalidateRect(Some(self.hwnd), None, false);
+            }
+            return;
+        }
         if let Some(gesture) = self.editor_freehand.take() {
             let Some(end) = self.editor_source_point(p) else {
                 return;
@@ -1091,7 +1271,7 @@ impl App {
                 self.state.selected_layer = Some(document.add(
                     captures_windows_native::editor::Shape::Stroke(gesture.finish(end)),
                     self.state.editor_color,
-                    3.0,
+                    self.state.editor_stroke,
                 ));
             }
             unsafe {
@@ -1160,7 +1340,14 @@ impl App {
             }
             _ => captures_windows_native::editor::Shape::Rectangle(Rect::from_points(start, end)),
         };
-        self.state.selected_layer = Some(document.add(shape, self.state.editor_color, 3.0));
+        let id = document.add(shape, self.state.editor_color, self.state.editor_stroke);
+        if self.state.editor_fill.is_some()
+            && let Some(layer) = document.layers.iter_mut().find(|layer| layer.id == id)
+            && layer.supports_fill()
+        {
+            layer.fill = self.state.editor_fill;
+        }
+        self.state.selected_layer = Some(id);
         unsafe {
             let _ = InvalidateRect(Some(self.hwnd), None, false);
         }
@@ -1180,10 +1367,94 @@ impl App {
         if !viewport.contains(point) {
             return None;
         }
+        self.editor_source_point_unbounded(point)
+    }
+
+    fn editor_source_point_unbounded(&self, point: Point) -> Option<Point> {
+        let document = self.state.editor.as_ref()?;
+        let width = self.width as f32 * 96.0 / self.dpi;
+        let height = self.height as f32 * 96.0 / self.dpi;
+        let viewport = contain(
+            (
+                document.crop.width.max(1.0).round() as u32,
+                document.crop.height.max(1.0).round() as u32,
+            ),
+            screenshot_editor_canvas(width, height),
+        );
         Some(Point {
             x: document.crop.x + (point.x - viewport.x) / viewport.width * document.crop.width,
             y: document.crop.y + (point.y - viewport.y) / viewport.height * document.crop.height,
         })
+    }
+
+    fn editor_screen_point(&self, point: Point) -> Option<Point> {
+        let document = self.state.editor.as_ref()?;
+        let width = self.width as f32 * 96.0 / self.dpi;
+        let height = self.height as f32 * 96.0 / self.dpi;
+        let viewport = contain(
+            (
+                document.crop.width.max(1.0).round() as u32,
+                document.crop.height.max(1.0).round() as u32,
+            ),
+            screenshot_editor_canvas(width, height),
+        );
+        Some(Point {
+            x: viewport.x + (point.x - document.crop.x) / document.crop.width * viewport.width,
+            y: viewport.y + (point.y - document.crop.y) / document.crop.height * viewport.height,
+        })
+    }
+
+    fn editor_transform_at(&self, screen: Point, source: Point) -> Option<EditorTransform> {
+        let id = self.state.selected_layer?;
+        let original = self
+            .state
+            .editor
+            .as_ref()?
+            .layers
+            .iter()
+            .find(|layer| layer.id == id)?
+            .clone();
+        let corners = original.selection_corners()?;
+        let screen_corners =
+            corners.map(|point| self.editor_screen_point(point).unwrap_or_default());
+        if let Some(corner) = screen_corners
+            .iter()
+            .position(|handle| (handle.x - screen.x).hypot(handle.y - screen.y) <= 9.0)
+        {
+            return Some(EditorTransform::Resize { corner, original });
+        }
+        let top = Point {
+            x: (screen_corners[0].x + screen_corners[1].x) / 2.0,
+            y: (screen_corners[0].y + screen_corners[1].y) / 2.0,
+        };
+        let center_screen = Point {
+            x: screen_corners.iter().map(|point| point.x).sum::<f32>() / 4.0,
+            y: screen_corners.iter().map(|point| point.y).sum::<f32>() / 4.0,
+        };
+        let length = (top.x - center_screen.x)
+            .hypot(top.y - center_screen.y)
+            .max(1.0);
+        let rotation_screen = Point {
+            x: top.x + (top.x - center_screen.x) / length * 28.0,
+            y: top.y + (top.y - center_screen.y) / length * 28.0,
+        };
+        if (rotation_screen.x - screen.x).hypot(rotation_screen.y - screen.y) <= 10.0 {
+            let bounds = original.geometry_bounds()?;
+            let center = Point {
+                x: bounds.x + bounds.width / 2.0,
+                y: bounds.y + bounds.height / 2.0,
+            };
+            let pointer_angle = (source.y - center.y)
+                .atan2(source.x - center.x)
+                .to_degrees();
+            let pointer_offset = pointer_angle - original.rotation_degrees;
+            return Some(EditorTransform::Rotate {
+                center,
+                pointer_offset,
+                original,
+            });
+        }
+        None
     }
 
     unsafe fn recording_editor_click(&mut self, point: Point) {
@@ -1554,7 +1825,16 @@ impl App {
             } else if editor && key == VK_RETURN.0 as u32 && self.state.editor_editing_color {
                 match parse_hex_color(&self.state.editor_color_hex) {
                     Some(color) => {
-                        self.state.editor_color = color;
+                        if let Some(id) = self.state.selected_layer {
+                            if let Some(document) = self.state.editor.as_mut() {
+                                document.set_layer_color(id, color);
+                            }
+                        } else {
+                            self.state.editor_color = color;
+                            if self.state.editor_fill.is_some() {
+                                self.state.editor_fill = Some(color);
+                            }
+                        }
                         self.state.editor_editing_color = false;
                     }
                     None => self.set_error("Color must be exactly #RRGGBB"),
@@ -2497,6 +2777,10 @@ fn parse_hex_color(value: &str) -> Option<[u8; 4]> {
         u8::from_str_radix(&value[5..7], 16).ok()?,
         255,
     ])
+}
+
+fn format_color(color: [u8; 4]) -> String {
+    format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2])
 }
 fn work_area() -> RECT {
     unsafe {

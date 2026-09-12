@@ -1054,7 +1054,10 @@ func previewReferenceView(
             image: image,
             exit: deleting && index == 0 ? .delete : nil,
             dust: deleting && index == 0 ? PreviewStackModel.makeDust(image: image, fromRight: false) : [],
-            exitingAt: deleting && index == 0 ? Date().addingTimeInterval(-0.48) : nil
+            // The compositor reference adds a 0.18 s settle before capture.
+            // Start 0.24 s earlier so it samples the wave near its 0.38 s
+            // median particle delay, with both intact and displaced fragments.
+            exitingAt: deleting && index == 0 ? Date().addingTimeInterval(-0.24) : nil
         )
     }
     model.expanded = expanded

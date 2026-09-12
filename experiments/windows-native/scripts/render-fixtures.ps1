@@ -20,6 +20,8 @@ $videoFrame = Join-Path $profile "video-frame.png"
 New-Item -ItemType Directory -Force $out, $profile | Out-Null
 $driverLog = Join-Path $out "render-drivers.txt"
 Set-Content $driverLog "appearance,view,d3d_driver"
+$boundsLog = Join-Path $out "capture-bounds.csv"
+Set-Content $boundsLog "appearance,view,virtual_bounds,monitor_bounds,window_bounds"
 
 ffmpeg -v error -y -ss 0.2 -i $VideoPath -frames:v 1 $videoFrame
 if ($LASTEXITCODE -ne 0 -or !(Test-Path $videoFrame)) {
@@ -38,7 +40,34 @@ public static class CapturesFixtureNative {
   [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr hwnd, StringBuilder name, int length);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+  [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
+  [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
+  [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern bool EnumDisplaySettings(string device, int mode, ref DEVMODE settings);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int ChangeDisplaySettings(ref DEVMODE settings, uint flags);
+  [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
   public struct RECT { public int Left, Top, Right, Bottom; }
+  [StructLayout(LayoutKind.Sequential)]
+  struct MONITORINFO { public int Size; public RECT Monitor; public RECT Work; public uint Flags; }
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+  struct DEVMODE {
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string DeviceName;
+    public ushort SpecVersion, DriverVersion, Size, DriverExtra;
+    public uint Fields;
+    public int PositionX, PositionY;
+    public uint DisplayOrientation, DisplayFixedOutput;
+    public short Color, Duplex, YResolution, TTOption, Collate;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string FormName;
+    public ushort LogPixels;
+    public uint BitsPerPel, PelsWidth, PelsHeight, DisplayFlags, DisplayFrequency;
+    public uint ICMMethod, ICMIntent, MediaType, DitherType, Reserved1, Reserved2;
+    public uint PanningWidth, PanningHeight;
+  }
+  static DEVMODE originalMode;
+  static bool changedMode;
+  static IntPtr previousDpiContext;
+  static bool changedDpiContext;
 
   public static IntPtr FindWindowForProcess(uint expectedPid) {
     IntPtr found = IntPtr.Zero;
@@ -54,6 +83,85 @@ public static class CapturesFixtureNative {
       return true;
     }, IntPtr.Zero);
     return found;
+  }
+
+  public static string EnsureCaptureDisplay(int minimumWidth, int minimumHeight) {
+    originalMode = new DEVMODE();
+    originalMode.Size = (ushort)Marshal.SizeOf(typeof(DEVMODE));
+    if (!EnumDisplaySettings(null, -1, ref originalMode)) throw new InvalidOperationException("EnumDisplaySettings could not read the current mode");
+    if (originalMode.PelsWidth >= minimumWidth && originalMode.PelsHeight >= minimumHeight) {
+      return originalMode.PelsWidth + "x" + originalMode.PelsHeight + " (unchanged)";
+    }
+    DEVMODE best = new DEVMODE();
+    ulong bestArea = ulong.MaxValue;
+    for (int index = 0; ; index++) {
+      DEVMODE candidate = new DEVMODE();
+      candidate.Size = (ushort)Marshal.SizeOf(typeof(DEVMODE));
+      if (!EnumDisplaySettings(null, index, ref candidate)) break;
+      if (candidate.PelsWidth < minimumWidth || candidate.PelsHeight < minimumHeight) continue;
+      ulong area = (ulong)candidate.PelsWidth * candidate.PelsHeight;
+      if (area < bestArea) { best = candidate; bestArea = area; }
+    }
+    if (bestArea == ulong.MaxValue) {
+      return originalMode.PelsWidth + "x" + originalMode.PelsHeight + " (no larger mode exposed)";
+    }
+    // Temporary for this process/session: never update the user's persisted display mode.
+    int result = ChangeDisplaySettings(ref best, 0);
+    if (result != 0) throw new InvalidOperationException("ChangeDisplaySettings failed with code " + result);
+    changedMode = true;
+    return best.PelsWidth + "x" + best.PelsHeight + " (temporary)";
+  }
+
+  public static void EnterPhysicalDpiContext() {
+    // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2. This keeps HWND, monitor,
+    // virtual-screen, and GDI capture coordinates in the same physical space.
+    previousDpiContext = SetThreadDpiAwarenessContext(new IntPtr(-4));
+    if (previousDpiContext == IntPtr.Zero) throw new InvalidOperationException("SetThreadDpiAwarenessContext(PER_MONITOR_AWARE_V2) failed");
+    changedDpiContext = true;
+  }
+
+  public static void RestoreDpiContext() {
+    if (changedDpiContext) SetThreadDpiAwarenessContext(previousDpiContext);
+    changedDpiContext = false;
+  }
+
+  public static void RestoreDisplay() {
+    if (changedMode) ChangeDisplaySettings(ref originalMode, 0);
+    changedMode = false;
+  }
+
+  public static string PositionAndValidateWindow(IntPtr hwnd) {
+    RECT window;
+    if (!GetWindowRect(hwnd, out window)) throw new InvalidOperationException("GetWindowRect failed");
+    int width = window.Right - window.Left, height = window.Bottom - window.Top;
+    IntPtr monitor = MonitorFromWindow(hwnd, 2); // MONITOR_DEFAULTTONEAREST
+    MONITORINFO info = new MONITORINFO();
+    info.Size = Marshal.SizeOf(typeof(MONITORINFO));
+    if (monitor == IntPtr.Zero || !GetMonitorInfo(monitor, ref info)) throw new InvalidOperationException("GetMonitorInfo failed");
+    int monitorWidth = info.Monitor.Right - info.Monitor.Left;
+    int monitorHeight = info.Monitor.Bottom - info.Monitor.Top;
+    if (width > monitorWidth || height > monitorHeight) {
+      throw new InvalidOperationException("window " + width + "x" + height + " exceeds capturable monitor " + monitorWidth + "x" + monitorHeight);
+    }
+    int x = info.Monitor.Left + (monitorWidth - width) / 2;
+    int y = info.Monitor.Top + (monitorHeight - height) / 2;
+    if (!SetWindowPos(hwnd, IntPtr.Zero, x, y, width, height, 0x0014)) throw new InvalidOperationException("SetWindowPos failed");
+    if (!GetWindowRect(hwnd, out window)) throw new InvalidOperationException("GetWindowRect failed after placement");
+    monitor = MonitorFromWindow(hwnd, 2);
+    info = new MONITORINFO(); info.Size = Marshal.SizeOf(typeof(MONITORINFO));
+    if (!GetMonitorInfo(monitor, ref info)) throw new InvalidOperationException("GetMonitorInfo failed after placement");
+    if (window.Left < info.Monitor.Left || window.Top < info.Monitor.Top || window.Right > info.Monitor.Right || window.Bottom > info.Monitor.Bottom) {
+      throw new InvalidOperationException("physical window rectangle is not fully inside its monitor after placement");
+    }
+    int virtualLeft = GetSystemMetrics(76), virtualTop = GetSystemMetrics(77);
+    int virtualRight = virtualLeft + GetSystemMetrics(78), virtualBottom = virtualTop + GetSystemMetrics(79);
+    if (window.Left < virtualLeft || window.Top < virtualTop || window.Right > virtualRight || window.Bottom > virtualBottom) {
+      throw new InvalidOperationException("physical window rectangle is not fully inside the capturable virtual desktop");
+    }
+    return string.Format("\"{0}:{1}:{2}:{3}\",\"{4}:{5}:{6}:{7}\",\"{8}:{9}:{10}:{11}\"",
+      virtualLeft, virtualTop, virtualRight, virtualBottom,
+      info.Monitor.Left, info.Monitor.Top, info.Monitor.Right, info.Monitor.Bottom,
+      window.Left, window.Top, window.Right, window.Bottom);
   }
 }
 "@
@@ -89,7 +197,11 @@ function Save-View([string]$appearance, [string]$view) {
     if ($driver -notin @("hardware", "warp")) { throw "$view reported unknown D3D driver '$driver'" }
     Add-Content $driverLog "$appearance,$view,$driver"
     Write-Host "$appearance-$view D3D driver: $driver"
+    $bounds = [CapturesFixtureNative]::PositionAndValidateWindow($handle)
+    Add-Content $boundsLog "$appearance,$view,$bounds"
     Start-Sleep -Milliseconds 350
+    # Revalidate after composition settles; never capture an off-screen partial window.
+    [void][CapturesFixtureNative]::PositionAndValidateWindow($handle)
     $rect = New-Object CapturesFixtureNative+RECT
     if (![CapturesFixtureNative]::GetWindowRect($handle, [ref]$rect)) { throw "GetWindowRect failed for $view" }
     $bitmap = New-Object Drawing.Bitmap ($rect.Right-$rect.Left), ($rect.Bottom-$rect.Top)
@@ -110,6 +222,11 @@ function Save-View([string]$appearance, [string]$view) {
 
 $previousData = $env:CAPTURES_WINDOWS_NATIVE_DATA
 try {
+  # Protect both temporary thread DPI state and the first display-mode side effect.
+  [CapturesFixtureNative]::EnterPhysicalDpiContext()
+  $displayMode = [CapturesFixtureNative]::EnsureCaptureDisplay(1600, 1000)
+  Write-Host "Fixture display mode: $displayMode"
+  Start-Sleep -Milliseconds 500
   $env:CAPTURES_WINDOWS_NATIVE_DATA = $profile
   foreach ($appearance in @("light", "dark")) {
     foreach ($view in @("menu", "editor", "editor-shapes", "editor-export", "recording-selector", "recording-hud", "recording-editor", "preview", "history", "preferences", "delete-confirmation")) {
@@ -119,4 +236,6 @@ try {
 } finally {
   $env:CAPTURES_WINDOWS_NATIVE_DATA = $previousData
   Remove-Item -Recurse -Force $profile -ErrorAction SilentlyContinue
+  [CapturesFixtureNative]::RestoreDisplay()
+  [CapturesFixtureNative]::RestoreDpiContext()
 }

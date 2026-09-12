@@ -381,6 +381,20 @@ def main():
             assert position.queryValue().currentValue > start_playback + 100
             click("Pause preview", "Edit recording — Captures")
             source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+            make_copy = find("Save as new file", frame="Edit recording — Captures")
+            assert make_copy.getState().contains(pyatspi.STATE_SENSITIVE)
+            click("Save as new file", "Edit recording — Captures")
+            wait(lambda: find(f"Replacing in  {source.parent}", frame="Edit recording — Captures"))
+            save = find("Save", frame="Edit recording — Captures")
+            wait(lambda: save.getState().contains(pyatspi.STATE_SENSITIVE))
+            click("Save", "Edit recording — Captures")
+            wait(lambda: find("Replace original recording?", "frame"))
+            assert hashlib.sha256(source.read_bytes()).hexdigest() == source_hash
+            capture(args.artifacts, "recording-replace-confirmation", "Replace original recording?")
+            click("Keep original", "Replace original recording?")
+            wait(lambda: not find("Replace original recording?", "frame"))
+            wait(lambda: not list(output.glob(".captures-editor-export-*")))
+            assert hashlib.sha256(source.read_bytes()).hexdigest() == source_hash
             destination = profile / "chosen-output"
             destination.mkdir()
             click("Change save location", "Edit recording — Captures", pointer=True)

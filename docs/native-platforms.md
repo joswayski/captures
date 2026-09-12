@@ -54,12 +54,13 @@ No automatic profile migration is part of these comparison runs.
 These are implemented experiments, not drop-in replacements. In particular:
 
 - **Linux:** the full X11 interaction suite is not green: GTK4 accessibility
-  visibility/coordinates can become stale during automation. Focused real-window
-  checks do not establish full-suite success. Recording exports still preserve
-  the source rather than implementing the shipping overwrite workflow. Physical
+  visibility/coordinates can become stale, and pointer-drag/inline-rename failures
+  are being investigated in the GTK4 event adapters. Focused real-window checks
+  do not establish full-suite success. Recording replacement uses a synced stage
+  and explicit confirmation; cancellation preserves the original. Physical
   multi-monitor, hardware GPU, and Wayland behavior remain unverified.
-- **Windows:** screenshot-editor layout and selected-shape transforms still
-  differ from Tauri. Recording playback uses a CPU FFmpeg decoder feeding D2D,
+- **Windows:** editable canvas/background/zoom, image layers, and several layer
+  operations remain incomplete. Recording playback uses a CPU FFmpeg decoder feeding D2D,
   not Media Foundation/D3D video decoding; playback audio, recording split/video
   crop, and microphone/countdown parity remain incomplete. Recording segment
   assembly still blocks during stop. Hosted D3D fixture captures do not establish

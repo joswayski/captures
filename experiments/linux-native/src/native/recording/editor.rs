@@ -13,7 +13,9 @@ use std::{
     time::Duration,
 };
 
-use super::{create_private_work_directory, named_output};
+use super::{
+    Output, ReplacementOutput, create_private_work_directory, named_output, replacement_output,
+};
 use crate::compat::prelude::*;
 use crate::ui;
 
@@ -394,6 +396,72 @@ enum TimelineDrag {
     Scrub,
     Start,
     End,
+}
+
+enum PendingExport {
+    NewFile(Output),
+    Replacement(ReplacementOutput),
+}
+
+enum FinishedExport {
+    Saved(PathBuf),
+    AwaitingReplacement(ReplacementOutput),
+}
+
+impl PendingExport {
+    fn path(&self) -> &Path {
+        match self {
+            Self::NewFile(output) => &output.path,
+            Self::Replacement(output) => &output.path,
+        }
+    }
+
+    fn finish(self) -> Result<FinishedExport, String> {
+        match self {
+            Self::NewFile(output) => output.commit().map(FinishedExport::Saved),
+            Self::Replacement(output) => output
+                .finish_export()
+                .map(FinishedExport::AwaitingReplacement),
+        }
+    }
+}
+
+fn source_format(path: &Path) -> Option<&str> {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .and_then(|extension| {
+            if extension.eq_ignore_ascii_case("mp4") {
+                Some("mp4")
+            } else if extension.eq_ignore_ascii_case("gif") {
+                Some("gif")
+            } else {
+                None
+            }
+        })
+}
+
+fn replacement_identity_matches(
+    source: &Path,
+    directory: &Path,
+    filename: &str,
+    extension: &str,
+) -> bool {
+    source.parent() == Some(directory)
+        && source
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .is_some_and(|stem| stem == filename.trim())
+        && source_format(source).is_some_and(|format| format == extension)
+}
+
+fn commit_replacement_if_open(
+    output: ReplacementOutput,
+    editor_closed: bool,
+) -> Result<Option<PathBuf>, String> {
+    if editor_closed {
+        return Ok(None);
+    }
+    output.commit().map(Some)
 }
 
 fn set_timeline_accessible_name(area: &gtk::DrawingArea, target: TimelineDrag) {
@@ -1039,7 +1107,7 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     format.append(Some("mp4"), ".mp4");
     format.append(Some("gif"), ".gif");
     format.append(Some("webm"), ".webm — unavailable");
-    format.set_active_id(Some("mp4"));
+    format.set_active_id(Some(source_format(&path).unwrap_or("mp4")));
     accessible_name(&format, "Format");
     let quality = gtk::ComboBoxText::new();
     for (id, name) in [
@@ -1108,6 +1176,7 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     filename_box.set_size_request(380, -1);
     let destination_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     destination_row.pack_start(&ui::label("Filename", "muted"), false, false, 0);
+    let copy_directory = directory.clone();
     let destination = Rc::new(RefCell::new(directory));
     let destination_label = ui::label(
         &format!("Saving to  {}", destination.borrow().display()),
@@ -1123,7 +1192,8 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     let stem = path
         .file_stem()
         .and_then(|value| value.to_str())
-        .unwrap_or("Recording");
+        .unwrap_or("Recording")
+        .to_owned();
     filename.set_text(&format!("{stem} edited"));
     filename.set_hexpand(true);
     accessible_name(&filename, "Saved filename");
@@ -1133,11 +1203,9 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     filename_box.pack_start(&filename_row, false, false, 0);
     let make_copy = gtk::Switch::new();
     make_copy.set_active(true);
-    make_copy.set_sensitive(false);
+    make_copy.set_sensitive(true);
     accessible_name(&make_copy, "Save as new file");
-    make_copy.set_tooltip_text(Some(
-        "The Linux experiment always preserves the source recording",
-    ));
+    make_copy.set_tooltip_text(Some("Save separately and preserve the source recording"));
     let make_copy_row = gtk::Box::new(gtk::Orientation::Horizontal, 7);
     make_copy_row.append(&make_copy);
     make_copy_row.append(&gtk::Label::new(Some("Save as new file")));
@@ -1905,14 +1973,68 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     });
 
     let active_cancel = Rc::new(RefCell::new(None::<CancelToken>));
+    let updating_save_identity = Rc::new(Cell::new(false));
+    make_copy.connect_active_notify({
+        let path = path.clone();
+        let filename = filename.clone();
+        let format = format.clone();
+        let destination = destination.clone();
+        let destination_label = destination_label.clone();
+        let copy_directory = copy_directory.clone();
+        let status = status.clone();
+        let updating = updating_save_identity.clone();
+        move |toggle| {
+            if updating.replace(true) {
+                return;
+            }
+            if toggle.is_active() {
+                if filename.text().trim() == stem {
+                    filename.set_text(&format!("{stem} edited"));
+                }
+                *destination.borrow_mut() = copy_directory.clone();
+                destination_label.set_text(&format!("Saving to  {}", copy_directory.display()));
+            } else if let (Some(extension), Some(parent)) = (source_format(&path), path.parent()) {
+                filename.set_text(&stem);
+                format.set_active_id(Some(extension));
+                *destination.borrow_mut() = parent.to_owned();
+                destination_label.set_text(&format!("Replacing in  {}", parent.display()));
+                status.set_text("Save will ask before replacing the original");
+            } else {
+                toggle.set_active(true);
+                status.set_text("This source format must be saved as a new file");
+            }
+            updating.set(false);
+        }
+    });
+    filename.connect_changed({
+        let make_copy = make_copy.clone();
+        let updating = updating_save_identity.clone();
+        move |_| {
+            if !updating.get() && !make_copy.is_active() {
+                make_copy.set_active(true);
+            }
+        }
+    });
+    format.connect_changed({
+        let make_copy = make_copy.clone();
+        let updating = updating_save_identity.clone();
+        move |_| {
+            if !updating.get() && !make_copy.is_active() {
+                make_copy.set_active(true);
+            }
+        }
+    });
     choose_destination.connect_clicked({
         let window = window.clone();
         let destination = destination.clone();
         let label = destination_label.clone();
+        let make_copy = make_copy.clone();
         move |_| {
-            let (destination, label) = (destination.clone(), label.clone());
+            let (destination, label, make_copy) =
+                (destination.clone(), label.clone(), make_copy.clone());
             let initial = destination.borrow().clone();
             ui::choose_folder(&window, "Save recording to", &initial, move |path| {
+                make_copy.set_active(true);
                 label.set_text(&format!("Saving to  {}", path.display()));
                 *destination.borrow_mut() = path;
             });
@@ -1985,6 +2107,7 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
         &path,
         &destination,
         &filename,
+        &make_copy,
         on_saved,
         &trim_start_ms,
         &trim_end_ms,
@@ -2149,6 +2272,72 @@ fn apply_timeline_drag(
     position.set_value(playhead as f64);
 }
 
+fn confirm_source_replacement(
+    window: &gtk::Window,
+    status: &gtk::Label,
+    output: ReplacementOutput,
+    closed: &Rc<Cell<bool>>,
+    on_saved: Rc<dyn Fn(PathBuf)>,
+) {
+    let source = output.source.display().to_string();
+    let (dialog, content, actions) = ui::panel(window, "Replace original recording?");
+    let message = ui::label(
+        &format!("The edited recording is ready. Replace {source}? This cannot be undone."),
+        "notice-message",
+    );
+    message.set_wrap(true);
+    message.set_max_width_chars(48);
+    content.append(&message);
+    let cancel = ui::button("Keep original");
+    let replace = ui::button("Replace original");
+    replace.style_context().add_class("destructive");
+    actions.append(&cancel);
+    actions.append(&replace);
+    status.set_text("Waiting for confirmation — original unchanged");
+
+    let staged = Rc::new(RefCell::new(Some(output)));
+    cancel.connect_clicked({
+        let dialog = dialog.clone();
+        move |_| dialog.close()
+    });
+    replace.connect_clicked({
+        let dialog = dialog.clone();
+        let window = window.clone();
+        let status = status.clone();
+        let staged = staged.clone();
+        let closed = closed.clone();
+        move |_| {
+            let output = staged.borrow_mut().take();
+            dialog.close();
+            let Some(output) = output else {
+                return;
+            };
+            match commit_replacement_if_open(output, closed.get()) {
+                Ok(Some(path)) => {
+                    status.set_text("Original recording replaced");
+                    on_saved(path);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    status.set_text("Replacement failed — original is unchanged");
+                    ui::error(&window, &error);
+                }
+            }
+        }
+    });
+    dialog.connect_close_request({
+        let staged = staged.clone();
+        let status = status.clone();
+        move |_| {
+            if staged.borrow_mut().take().is_some() {
+                status.set_text("Replacement cancelled — original unchanged");
+            }
+            glib::Propagation::Proceed
+        }
+    });
+    dialog.present();
+}
+
 #[allow(clippy::too_many_arguments)]
 fn connect_export(
     button: &gtk::Button,
@@ -2158,6 +2347,7 @@ fn connect_export(
     path: &Path,
     directory: &Rc<RefCell<PathBuf>>,
     filename: &gtk::Entry,
+    make_copy: &gtk::Switch,
     on_saved: Rc<dyn Fn(PathBuf)>,
     trim_start: &Rc<Cell<u64>>,
     trim_end: &Rc<Cell<u64>>,
@@ -2206,7 +2396,18 @@ fn connect_export(
         mono,
         source_audio,
     );
-    let (button, cancel, status, window, path, directory, filename, active_cancel, closed) = (
+    let (
+        button,
+        cancel,
+        status,
+        window,
+        path,
+        directory,
+        filename,
+        make_copy,
+        active_cancel,
+        closed,
+    ) = (
         button.clone(),
         cancel.clone(),
         status.clone(),
@@ -2214,6 +2415,7 @@ fn connect_export(
         path.to_path_buf(),
         directory.clone(),
         filename.clone(),
+        make_copy.clone(),
         active_cancel.clone(),
         closed.clone(),
     );
@@ -2222,11 +2424,27 @@ fn connect_export(
             return;
         }
         let (edit, spec, extension) = values.spec();
-        let destination = match named_output(
-            directory.borrow().as_path(),
-            filename.text().as_str(),
-            extension,
-        ) {
+        let replace_source = !make_copy.is_active()
+            && replacement_identity_matches(
+                &path,
+                directory.borrow().as_path(),
+                filename.text().as_str(),
+                extension,
+            );
+        if !make_copy.is_active() && !replace_source {
+            make_copy.set_active(true);
+            status.set_text("Filename or format changed — saving as a new file");
+        }
+        let destination = match if replace_source {
+            replacement_output(&path, extension).map(PendingExport::Replacement)
+        } else {
+            named_output(
+                directory.borrow().as_path(),
+                filename.text().as_str(),
+                extension,
+            )
+            .map(PendingExport::NewFile)
+        } {
             Ok(value) => value,
             Err(error) => {
                 ui::error(&window, &error);
@@ -2252,12 +2470,12 @@ fn connect_export(
         ui::job(
             move || {
                 MediaToolchain::from_command_names()
-                    .export(&path, &destination.path, &edit, &spec, &token, |_| {})
+                    .export(&path, destination.path(), &edit, &spec, &token, |_| {})
                     .map_err(|error| error.to_string())?;
                 if token.is_cancelled() {
                     return Err("Export cancelled".into());
                 }
-                destination.commit()
+                destination.finish()
             },
             move |result| {
                 *active_cancel.borrow_mut() = None;
@@ -2268,9 +2486,18 @@ fn connect_export(
                 cancel.set_sensitive(false);
                 cancel.set_opacity(0.0);
                 match result {
-                    Ok(path) => {
+                    Ok(FinishedExport::Saved(path)) => {
                         status.set_text("Export complete");
                         on_saved(path);
+                    }
+                    Ok(FinishedExport::AwaitingReplacement(output)) => {
+                        confirm_source_replacement(
+                            &window,
+                            &status,
+                            output,
+                            &closed,
+                            on_saved.clone(),
+                        );
                     }
                     Err(error) => {
                         status.set_text("Export failed — draft and source are unchanged");
@@ -2840,6 +3067,46 @@ fn spin(min: f64, max: f64, step: f64, name: &str) -> gtk::SpinButton {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacement_requires_source_identity_and_rejects_a_stale_editor() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("clip.mp4");
+        fs::write(&source, b"original").unwrap();
+        assert!(replacement_identity_matches(
+            &source,
+            directory.path(),
+            "clip",
+            "mp4"
+        ));
+        assert!(!replacement_identity_matches(
+            &source,
+            directory.path(),
+            "renamed",
+            "mp4"
+        ));
+        assert!(!replacement_identity_matches(
+            &source,
+            directory.path(),
+            "clip",
+            "gif"
+        ));
+        let other = tempfile::tempdir().unwrap();
+        assert!(!replacement_identity_matches(
+            &source,
+            other.path(),
+            "clip",
+            "mp4"
+        ));
+
+        let replacement = replacement_output(&source, "mp4").unwrap();
+        let work = replacement.work.clone();
+        fs::write(&replacement.path, b"stale export").unwrap();
+        let replacement = replacement.finish_export().unwrap();
+        assert_eq!(commit_replacement_if_open(replacement, true).unwrap(), None);
+        assert_eq!(fs::read(source).unwrap(), b"original");
+        assert!(!work.exists());
+    }
 
     #[test]
     fn letterboxed_preview_maps_only_the_fitted_media() {

@@ -534,7 +534,7 @@ impl Renderer {
                 &self.body,
             );
             self.text(
-                "Add images — unavailable",
+                "Add images unavailable",
                 Rect {
                     x: w - 214.0,
                     y: 13.0,
@@ -549,6 +549,66 @@ impl Renderer {
                 && let Ok(image) = document.render()
             {
                 self.bitmap_contain(&image, screenshot_editor_canvas(w, h))?;
+            }
+
+            if state.editor_tool == Tool::Select
+                && let Some(document) = document
+                && let Some(layer) = state.selected_layer.and_then(|id| {
+                    document
+                        .layers
+                        .iter()
+                        .find(|layer| layer.id == id && layer.visible)
+                })
+                && let Some(corners) = layer.selection_corners()
+            {
+                let viewport = contain(
+                    (
+                        document.crop.width.max(1.0).round() as u32,
+                        document.crop.height.max(1.0).round() as u32,
+                    ),
+                    screenshot_editor_canvas(w, h),
+                );
+                let to_screen = |point: captures_windows_native::geometry::Point| Vector2 {
+                    X: viewport.x
+                        + (point.x - document.crop.x) / document.crop.width * viewport.width,
+                    Y: viewport.y
+                        + (point.y - document.crop.y) / document.crop.height * viewport.height,
+                };
+                let corners = corners.map(to_screen);
+                let selection = self.brush(p.accent)?;
+                for index in 0..4 {
+                    self.target.DrawLine(
+                        corners[index],
+                        corners[(index + 1) % 4],
+                        &selection,
+                        1.5,
+                        None,
+                    );
+                }
+                let top = Vector2 {
+                    X: (corners[0].X + corners[1].X) / 2.0,
+                    Y: (corners[0].Y + corners[1].Y) / 2.0,
+                };
+                let center = Vector2 {
+                    X: corners.iter().map(|point| point.X).sum::<f32>() / 4.0,
+                    Y: corners.iter().map(|point| point.Y).sum::<f32>() / 4.0,
+                };
+                let length = (top.X - center.X).hypot(top.Y - center.Y).max(1.0);
+                let rotation = Vector2 {
+                    X: top.X + (top.X - center.X) / length * 28.0,
+                    Y: top.Y + (top.Y - center.Y) / length * 28.0,
+                };
+                self.target.DrawLine(top, rotation, &selection, 1.5, None);
+                let handle = self.brush(p.raised)?;
+                for point in corners.into_iter().chain([rotation]) {
+                    let ellipse = windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE {
+                        point,
+                        radiusX: 5.0,
+                        radiusY: 5.0,
+                    };
+                    self.target.FillEllipse(&ellipse, &handle);
+                    self.target.DrawEllipse(&ellipse, &selection, 1.5, None);
+                }
             }
 
             for (index, (tool, icon)) in [
@@ -672,7 +732,7 @@ impl Renderer {
             );
             let mut layer_y = 104.0;
             if let Some(document) = document {
-                for layer in document.layers.iter().rev().take(4) {
+                for layer in document.layers.iter().rev().take(3) {
                     let selected = state.selected_layer == Some(layer.id);
                     self.panel(
                         Rect {
@@ -738,6 +798,16 @@ impl Renderer {
                 &self.body,
             );
             let properties_y = (layer_y + 72.0).min(footer_y - 154.0);
+            let selected_layer = state.selected_layer.and_then(|id| {
+                document.and_then(|document| document.layers.iter().find(|layer| layer.id == id))
+            });
+            let property_color = selected_layer.map_or(state.editor_color, |layer| layer.color);
+            let property_stroke = selected_layer.map_or(state.editor_stroke, |layer| layer.stroke);
+            let property_fill = selected_layer.map_or(state.editor_fill, |layer| layer.fill);
+            let property_color_hex = format!(
+                "#{:02x}{:02x}{:02x}",
+                property_color[0], property_color[1], property_color[2]
+            );
             self.text(
                 if state.selected_layer.is_some() {
                     "Properties · selected layer"
@@ -773,13 +843,17 @@ impl Renderer {
                 },
                 p.field,
                 p.text,
-                &state.editor_color_hex,
+                if state.editor_editing_color {
+                    &state.editor_color_hex
+                } else {
+                    &property_color_hex
+                },
             );
             let swatch = self.brush(Color(
-                state.editor_color[0],
-                state.editor_color[1],
-                state.editor_color[2],
-                state.editor_color[3],
+                property_color[0],
+                property_color[1],
+                property_color[2],
+                property_color[3],
             ))?;
             self.target.FillEllipse(
                 &windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE {
@@ -792,6 +866,135 @@ impl Renderer {
                 },
                 &swatch,
             );
+            self.text(
+                "Stroke width",
+                Rect {
+                    x: sidebar_x + 20.0,
+                    y: properties_y + 74.0,
+                    width: 100.0,
+                    height: 28.0,
+                },
+                p.muted,
+                &self.body,
+            );
+            self.button(
+                Rect {
+                    x: sidebar_x + 184.0,
+                    y: properties_y + 70.0,
+                    width: 52.0,
+                    height: 32.0,
+                },
+                p.field,
+                p.text,
+                "−",
+            );
+            self.text(
+                &format!("{property_stroke:.0} px"),
+                Rect {
+                    x: sidebar_x + 120.0,
+                    y: properties_y + 74.0,
+                    width: 64.0,
+                    height: 28.0,
+                },
+                p.text,
+                &self.body,
+            );
+            self.button(
+                Rect {
+                    x: sidebar_x + 240.0,
+                    y: properties_y + 70.0,
+                    width: 52.0,
+                    height: 32.0,
+                },
+                p.field,
+                p.text,
+                "+",
+            );
+            self.text(
+                if selected_layer.is_none_or(|layer| layer.supports_fill()) {
+                    "Fill shape"
+                } else {
+                    "Fill unavailable"
+                },
+                Rect {
+                    x: sidebar_x + 20.0,
+                    y: properties_y + 114.0,
+                    width: 150.0,
+                    height: 28.0,
+                },
+                p.muted,
+                &self.body,
+            );
+            if selected_layer.is_none_or(|layer| layer.supports_fill()) {
+                self.toggle(
+                    Rect {
+                        x: sidebar_x + 248.0,
+                        y: properties_y + 118.0,
+                        width: 36.0,
+                        height: 20.0,
+                    },
+                    p,
+                    property_fill.is_some(),
+                )?;
+            }
+            self.text(
+                "Rotation",
+                Rect {
+                    x: sidebar_x + 20.0,
+                    y: properties_y + 154.0,
+                    width: 90.0,
+                    height: 28.0,
+                },
+                p.muted,
+                &self.body,
+            );
+            if let Some(layer) = selected_layer {
+                self.text(
+                    &format!("{:.0}°", layer.rotation_degrees),
+                    Rect {
+                        x: sidebar_x + 120.0,
+                        y: properties_y + 154.0,
+                        width: 64.0,
+                        height: 28.0,
+                    },
+                    p.text,
+                    &self.body,
+                );
+                self.button(
+                    Rect {
+                        x: sidebar_x + 184.0,
+                        y: properties_y + 150.0,
+                        width: 52.0,
+                        height: 32.0,
+                    },
+                    p.field,
+                    p.text,
+                    "−15°",
+                );
+                self.button(
+                    Rect {
+                        x: sidebar_x + 240.0,
+                        y: properties_y + 150.0,
+                        width: 52.0,
+                        height: 32.0,
+                    },
+                    p.field,
+                    p.text,
+                    "+15°",
+                );
+            } else {
+                self.text(
+                    "Select a layer to rotate",
+                    Rect {
+                        x: sidebar_x + 120.0,
+                        y: properties_y + 154.0,
+                        width: 172.0,
+                        height: 28.0,
+                    },
+                    p.muted,
+                    &self.body,
+                );
+            }
 
             if state.editor_export_settings_open {
                 self.panel(

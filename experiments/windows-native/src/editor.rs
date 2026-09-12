@@ -60,7 +60,7 @@ impl FreehandGesture {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Layer {
     pub id: u64,
     pub shape: Shape,
@@ -69,6 +69,141 @@ pub struct Layer {
     pub fill: Option<[u8; 4]>,
     pub rotation_degrees: f32,
     pub visible: bool,
+}
+
+impl Layer {
+    pub fn supports_fill(&self) -> bool {
+        matches!(
+            self.shape,
+            Shape::Rectangle(_) | Shape::Ellipse(_) | Shape::Polygon(_)
+        )
+    }
+
+    /// Unrotated geometry bounds in source pixels. This is the transform source
+    /// of truth; using the post-rotation AABB would skew rotated annotations.
+    pub fn geometry_bounds(&self) -> Option<Rect> {
+        let mut raster = to_raster_layer(self);
+        raster.rotation_degrees = 0.0;
+        raster.stroke_width = 0.0;
+        raster.bounds().map(|bounds| Rect {
+            x: bounds.x,
+            y: bounds.y,
+            width: bounds.width,
+            height: bounds.height,
+        })
+    }
+
+    pub fn selection_corners(&self) -> Option<[Point; 4]> {
+        let bounds = self.geometry_bounds()?;
+        let center = Point {
+            x: bounds.x + bounds.width / 2.0,
+            y: bounds.y + bounds.height / 2.0,
+        };
+        Some(
+            [
+                Point {
+                    x: bounds.x,
+                    y: bounds.y,
+                },
+                Point {
+                    x: bounds.x + bounds.width,
+                    y: bounds.y,
+                },
+                Point {
+                    x: bounds.x + bounds.width,
+                    y: bounds.y + bounds.height,
+                },
+                Point {
+                    x: bounds.x,
+                    y: bounds.y + bounds.height,
+                },
+            ]
+            .map(|point| rotate(point, center, self.rotation_degrees)),
+        )
+    }
+
+    pub fn translated(&self, delta: Point) -> Self {
+        let mut layer = self.clone();
+        transform_shape(&mut layer.shape, |point| Point {
+            x: point.x + delta.x,
+            y: point.y + delta.y,
+        });
+        layer
+    }
+
+    pub fn resized_to(&self, target: Rect) -> Option<Self> {
+        let source = self.geometry_bounds()?;
+        if source.width <= 0.0 || source.height <= 0.0 || target.width < 1.0 || target.height < 1.0
+        {
+            return None;
+        }
+        let mut layer = self.clone();
+        let scale_x = target.width / source.width;
+        let scale_y = target.height / source.height;
+        transform_shape(&mut layer.shape, |point| Point {
+            x: target.x + (point.x - source.x) * scale_x,
+            y: target.y + (point.y - source.y) * scale_y,
+        });
+        if let Shape::Text { font_size, .. } = &mut layer.shape {
+            *font_size *= scale_x.abs().min(scale_y.abs());
+        }
+        Some(layer)
+    }
+}
+
+fn rotate(point: Point, center: Point, degrees: f32) -> Point {
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    Point {
+        x: center.x + (point.x - center.x) * cos - (point.y - center.y) * sin,
+        y: center.y + (point.x - center.x) * sin + (point.y - center.y) * cos,
+    }
+}
+
+fn transform_shape(shape: &mut Shape, transform: impl Fn(Point) -> Point) {
+    match shape {
+        Shape::Stroke(points) | Shape::Polygon(points) => {
+            points
+                .iter_mut()
+                .for_each(|point| *point = transform(*point));
+        }
+        Shape::Arrow(start, end) | Shape::Line(start, end) => {
+            *start = transform(*start);
+            *end = transform(*end);
+        }
+        Shape::Rectangle(rect) | Shape::Ellipse(rect) => {
+            let top_left = transform(Point {
+                x: rect.x,
+                y: rect.y,
+            });
+            let bottom_right = transform(Point {
+                x: rect.x + rect.width,
+                y: rect.y + rect.height,
+            });
+            *rect = Rect::from_points(top_left, bottom_right);
+        }
+        Shape::Text { origin, .. } => *origin = transform(*origin),
+    }
+}
+
+/// Resize a rotated layer by dragging one visual corner while keeping its
+/// opposite visual corner fixed. The returned geometry stays unrotated and
+/// retains the layer rotation, matching the raster backend's coordinate model.
+pub fn resize_from_corner(layer: &Layer, corner: usize, pointer: Point) -> Option<Layer> {
+    let corners = layer.selection_corners()?;
+    let fixed = corners[(corner + 2) % 4];
+    let local_delta = rotate(pointer, fixed, -layer.rotation_degrees);
+    let width = (local_delta.x - fixed.x).abs().max(1.0);
+    let height = (local_delta.y - fixed.y).abs().max(1.0);
+    let center = Point {
+        x: (fixed.x + pointer.x) / 2.0,
+        y: (fixed.y + pointer.y) / 2.0,
+    };
+    layer.resized_to(Rect {
+        x: center.x - width / 2.0,
+        y: center.y - height / 2.0,
+        width,
+        height,
+    })
 }
 
 #[derive(Clone)]
@@ -137,6 +272,71 @@ impl Document {
         self.checkpoint();
         self.layers[index].visible = !self.layers[index].visible;
         true
+    }
+
+    pub fn set_layer_color(&mut self, id: u64, color: [u8; 4]) -> bool {
+        self.edit_layer(id, |layer| layer.color = color)
+    }
+
+    pub fn set_layer_stroke(&mut self, id: u64, stroke: f32) -> bool {
+        self.edit_layer(id, |layer| layer.stroke = stroke.clamp(1.0, 48.0))
+    }
+
+    pub fn set_layer_fill(&mut self, id: u64, fill: Option<[u8; 4]>) -> bool {
+        self.edit_layer(id, |layer| layer.fill = fill)
+    }
+
+    pub fn set_layer_rotation(&mut self, id: u64, rotation_degrees: f32) -> bool {
+        self.edit_layer(id, |layer| {
+            layer.rotation_degrees = ((rotation_degrees + 180.0).rem_euclid(360.0)) - 180.0;
+        })
+    }
+
+    fn edit_layer(&mut self, id: u64, edit: impl FnOnce(&mut Layer)) -> bool {
+        let Some(index) = self.layers.iter().position(|layer| layer.id == id) else {
+            return false;
+        };
+        let before = self.layers[index].clone();
+        edit(&mut self.layers[index]);
+        if self.layers[index] == before {
+            return false;
+        }
+        self.push_undo_with_layer(index, before);
+        true
+    }
+
+    pub fn preview_layer(&mut self, layer: Layer) -> bool {
+        let Some(current) = self
+            .layers
+            .iter_mut()
+            .find(|current| current.id == layer.id)
+        else {
+            return false;
+        };
+        *current = layer;
+        true
+    }
+
+    /// Commits a sequence of preview replacements as one undoable edit.
+    pub fn commit_layer_preview(&mut self, original: Layer) -> bool {
+        let Some(index) = self.layers.iter().position(|layer| layer.id == original.id) else {
+            return false;
+        };
+        if self.layers[index] == original {
+            return false;
+        }
+        self.push_undo_with_layer(index, original);
+        true
+    }
+
+    fn push_undo_with_layer(&mut self, index: usize, layer: Layer) {
+        let mut snapshot = self.snapshot();
+        snapshot.layers[index] = layer;
+        self.undo.push(snapshot);
+        if self.undo.len() > 64 {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
     }
 
     pub fn set_crop(&mut self, crop: Rect) -> bool {
@@ -392,6 +592,106 @@ mod tests {
             document.hit_test(Point { x: 10.0, y: 20.0 }, 2.0),
             Some(hidden)
         );
+    }
+
+    #[test]
+    fn rotated_asymmetric_resize_preserves_rotation_and_is_one_undo_step() {
+        let mut document = Document::new(RgbaImage::new(300, 200));
+        let id = document.add(
+            Shape::Rectangle(Rect {
+                x: 20.0,
+                y: 30.0,
+                width: 80.0,
+                height: 30.0,
+            }),
+            [12, 34, 56, 255],
+            5.0,
+        );
+        assert!(document.set_layer_rotation(id, 30.0));
+        let original = document.layers[0].clone();
+        let corners = original.selection_corners().unwrap();
+        let edited = resize_from_corner(
+            &original,
+            2,
+            Point {
+                x: corners[2].x + 47.0,
+                y: corners[2].y + 19.0,
+            },
+        )
+        .unwrap();
+        assert_eq!(edited.rotation_degrees, 30.0);
+        let resized = edited.geometry_bounds().unwrap();
+        assert!((resized.width - resized.height).abs() > 25.0);
+        let edited_corners = edited.selection_corners().unwrap();
+        assert!((edited_corners[0].x - corners[0].x).abs() < 0.001);
+        assert!((edited_corners[0].y - corners[0].y).abs() < 0.001);
+        assert!(document.preview_layer(edited.clone()));
+        assert!(document.commit_layer_preview(original.clone()));
+        assert_eq!(document.layers[0], edited);
+        assert!(document.undo());
+        assert_eq!(document.layers[0], original);
+        assert!(document.redo());
+        assert_eq!(document.layers[0], edited);
+    }
+
+    #[test]
+    fn rotated_bounds_and_move_use_source_coordinates_and_undo_once() {
+        let mut document = Document::new(RgbaImage::new(300, 200));
+        let id = document.add(
+            Shape::Rectangle(Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 70.0,
+                height: 30.0,
+            }),
+            [30, 40, 50, 255],
+            3.0,
+        );
+        assert!(document.set_layer_rotation(id, 90.0));
+        let original = document.layers[0].clone();
+        let corners = original.selection_corners().unwrap();
+        assert!((corners[0].x - 60.0).abs() < 0.001);
+        assert!((corners[0].y - 0.0).abs() < 0.001);
+        assert!((corners[2].x - 30.0).abs() < 0.001);
+        assert!((corners[2].y - 70.0).abs() < 0.001);
+
+        let moved = original.translated(Point { x: 17.0, y: -9.0 });
+        assert!(document.preview_layer(moved.clone()));
+        assert!(document.commit_layer_preview(original.clone()));
+        assert_eq!(
+            moved.geometry_bounds().unwrap(),
+            Rect {
+                x: 27.0,
+                y: 11.0,
+                width: 70.0,
+                height: 30.0,
+            }
+        );
+        assert!(document.undo());
+        assert_eq!(document.layers[0], original);
+        assert!(document.redo());
+        assert_eq!(document.layers[0], moved);
+    }
+
+    #[test]
+    fn selected_properties_are_undoable_without_changing_geometry() {
+        let mut document = Document::new(RgbaImage::new(100, 100));
+        let id = document.add(
+            Shape::Line(Point { x: 7.0, y: 9.0 }, Point { x: 80.0, y: 51.0 }),
+            [1, 2, 3, 255],
+            2.0,
+        );
+        let shape = document.layers[0].shape.clone();
+        assert!(document.set_layer_color(id, [90, 80, 70, 255]));
+        assert!(document.set_layer_stroke(id, 11.0));
+        assert!(document.set_layer_fill(id, Some([4, 5, 6, 128])));
+        assert_eq!(document.layers[0].shape, shape);
+        assert!(document.undo());
+        assert_eq!(document.layers[0].fill, None);
+        assert!(document.undo());
+        assert_eq!(document.layers[0].stroke, 2.0);
+        assert!(document.undo());
+        assert_eq!(document.layers[0].color, [1, 2, 3, 255]);
     }
 
     #[test]

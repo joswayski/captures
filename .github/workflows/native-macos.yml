@@ -30,6 +30,7 @@ jobs:
         with:
           toolchain: 1.94.0
           components: rustfmt, clippy
+          cache-workspaces: experiments/macos-native/bridge -> ../build/rust
       - name: Install test-only media tools
         run: |
           command -v ffmpeg >/dev/null || brew install ffmpeg

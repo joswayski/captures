@@ -1668,6 +1668,46 @@ impl Drop for Output {
         let _ = fs::remove_dir_all(&self.work);
     }
 }
+
+struct ReplacementOutput {
+    path: PathBuf,
+    work: PathBuf,
+    source: PathBuf,
+}
+impl ReplacementOutput {
+    fn finish_export(self) -> Result<Self, String> {
+        fs::File::open(&self.path)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| error.to_string())?;
+        Ok(self)
+    }
+
+    fn commit(self) -> Result<PathBuf, String> {
+        fs::rename(&self.path, &self.source).map_err(|error| error.to_string())?;
+        Ok(self.source.clone())
+    }
+}
+impl Drop for ReplacementOutput {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.work);
+    }
+}
+
+fn replacement_output(source: &Path, extension: &str) -> Result<ReplacementOutput, String> {
+    let directory = source
+        .parent()
+        .ok_or_else(|| "The source recording has no parent directory.".to_owned())?;
+    if !source.is_file() {
+        return Err("The source recording is no longer available.".into());
+    }
+    let work = create_private_work_directory(directory, "editor-export")?;
+    Ok(ReplacementOutput {
+        path: work.join(format!("media.{extension}")),
+        work,
+        source: source.to_owned(),
+    })
+}
+
 fn unique_output(directory: &Path, extension: &str) -> Result<Output, String> {
     let work = create_private_work_directory(directory, "export")?;
     Ok(Output {
@@ -1733,7 +1773,7 @@ fn create_private_work_directory(parent: &Path, purpose: &str) -> Result<PathBuf
     unreachable!()
 }
 
-/// Open the visual native editor (never edits the source).
+/// Open the visual native editor.
 pub fn open_editor(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     editor::open(path, directory, on_saved);
 }
@@ -2180,6 +2220,35 @@ mod tests {
             b"existing"
         );
         assert!(named_output(dir.path(), "../escape", "mp4").is_err());
+    }
+
+    #[test]
+    fn replacement_output_syncs_before_atomic_commit_and_cleans_owned_stages() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.mp4");
+        fs::write(&source, b"original").unwrap();
+
+        let replacement = replacement_output(&source, "mp4").unwrap();
+        let work = replacement.work.clone();
+        fs::write(&replacement.path, b"replacement").unwrap();
+        let replacement = replacement.finish_export().unwrap();
+        assert_eq!(fs::read(&source).unwrap(), b"original");
+        assert_eq!(replacement.commit().unwrap(), source);
+        assert_eq!(fs::read(&source).unwrap(), b"replacement");
+        assert!(!work.exists());
+
+        let cancelled = replacement_output(&source, "mp4").unwrap();
+        let cancelled_work = cancelled.work.clone();
+        fs::write(&cancelled.path, b"cancelled").unwrap();
+        drop(cancelled);
+        assert_eq!(fs::read(&source).unwrap(), b"replacement");
+        assert!(!cancelled_work.exists());
+
+        let failed = replacement_output(&source, "mp4").unwrap();
+        let failed_work = failed.work.clone();
+        assert!(failed.finish_export().is_err());
+        assert_eq!(fs::read(&source).unwrap(), b"replacement");
+        assert!(!failed_work.exists());
     }
 
     #[test]
