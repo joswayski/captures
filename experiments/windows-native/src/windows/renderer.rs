@@ -3,6 +3,7 @@ use captures_windows_native::{
     geometry::{
         Rect, contain, cover, editor_layer_lock_button, editor_layer_visibility_button,
         editor_shape_flyout_cell, recording_editor_timeline_track, screenshot_editor_canvas,
+        screenshot_editor_viewport,
     },
     history::Artifact,
     settings::Settings,
@@ -19,11 +20,12 @@ use windows::{
                     D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F,
                     D2D1_PIXEL_FORMAT,
                 },
-                D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET,
-                D2D1_BITMAP_PROPERTIES1, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
-                D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-                D2D1_INTERPOLATION_MODE_LINEAR, D2D1CreateFactory, ID2D1Bitmap1,
-                ID2D1DeviceContext, ID2D1Factory1, ID2D1SolidColorBrush,
+                D2D1_ANTIALIAS_MODE_ALIASED, D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+                D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
+                D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_DRAW_TEXT_OPTIONS_NONE,
+                D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_INTERPOLATION_MODE_LINEAR,
+                D2D1CreateFactory, ID2D1Bitmap1, ID2D1DeviceContext, ID2D1Factory1,
+                ID2D1SolidColorBrush,
             },
             Direct3D::{
                 D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP,
@@ -483,8 +485,20 @@ impl Renderer {
                 |document| {
                     format!(
                         "W   {}       ×       H   {}",
-                        document.crop.width.round() as u32,
-                        document.crop.height.round() as u32
+                        if state.editor_input_field
+                            == Some(captures_windows_native::state::EditorInputField::CanvasWidth)
+                        {
+                            state.editor_input_text.clone()
+                        } else {
+                            document.canvas_width.to_string()
+                        },
+                        if state.editor_input_field
+                            == Some(captures_windows_native::state::EditorInputField::CanvasHeight)
+                        {
+                            state.editor_input_text.clone()
+                        } else {
+                            document.canvas_height.to_string()
+                        }
                     )
                 },
             );
@@ -558,11 +572,19 @@ impl Renderer {
                     width: 14.0,
                     height: 14.0,
                 },
-                Color(255, 255, 255, 255),
+                document
+                    .and_then(|document| document.background)
+                    .map_or(Color(255, 255, 255, 255), |color| {
+                        Color(color[0], color[1], color[2], color[3])
+                    }),
                 3.0,
             )?;
             self.text(
-                "Background",
+                if document.is_some_and(|document| document.background.is_some()) {
+                    "Solid"
+                } else {
+                    "Transparent"
+                },
                 Rect {
                     x: 370.0,
                     y: 13.0,
@@ -644,8 +666,13 @@ impl Renderer {
                 },
                 p.muted,
             )?;
+            let zoom_label = if state.editor_zoom_fit {
+                "Fit".to_owned()
+            } else {
+                format!("{}%", state.editor_zoom_percent)
+            };
             self.text(
-                "Fit",
+                &zoom_label,
                 Rect {
                     x: w - 258.0,
                     y: 13.0,
@@ -687,10 +714,21 @@ impl Renderer {
                 &self.body,
             );
 
-            if let Some(document) = document
-                && let Ok(image) = document.render()
-            {
-                self.bitmap_contain(&image, screenshot_editor_canvas(w, h))?;
+            if let (Some(document), Some(image)) = (document, state.editor_preview.as_ref()) {
+                let viewport = screenshot_editor_viewport(
+                    (document.canvas_width, document.canvas_height),
+                    screenshot_editor_canvas(w, h),
+                    state.editor_zoom_fit,
+                    state.editor_zoom_percent,
+                    state.editor_pan,
+                );
+                self.target.PushAxisAlignedClip(
+                    &to_d2d(screenshot_editor_canvas(w, h)),
+                    D2D1_ANTIALIAS_MODE_ALIASED,
+                );
+                let result = self.bitmap_rect(image, viewport);
+                self.target.PopAxisAlignedClip();
+                result?;
             }
 
             if state.editor_tool == Tool::Select
@@ -703,18 +741,20 @@ impl Renderer {
                 })
                 && let Some(corners) = layer.selection_corners()
             {
-                let viewport = contain(
-                    (
-                        document.crop.width.max(1.0).round() as u32,
-                        document.crop.height.max(1.0).round() as u32,
-                    ),
+                let viewport = screenshot_editor_viewport(
+                    (document.canvas_width, document.canvas_height),
                     screenshot_editor_canvas(w, h),
+                    state.editor_zoom_fit,
+                    state.editor_zoom_percent,
+                    state.editor_pan,
                 );
                 let to_screen = |point: captures_windows_native::geometry::Point| Vector2 {
                     X: viewport.x
-                        + (point.x - document.crop.x) / document.crop.width * viewport.width,
+                        + (point.x - document.crop.x) / document.canvas_width as f32
+                            * viewport.width,
                     Y: viewport.y
-                        + (point.y - document.crop.y) / document.crop.height * viewport.height,
+                        + (point.y - document.crop.y) / document.canvas_height as f32
+                            * viewport.height,
                 };
                 let resize_handles = layer
                     .resize_handles()
@@ -1009,7 +1049,7 @@ impl Renderer {
                 },
                 p.muted,
             )?;
-            let properties_y = (layer_y + 72.0).min(footer_y - 154.0);
+            let properties_y = (layer_y + 72.0).min(footer_y - 194.0);
             let selected_layer = state.selected_layer.and_then(|id| {
                 document.and_then(|document| document.layers.iter().find(|layer| layer.id == id))
             });
@@ -1034,18 +1074,34 @@ impl Renderer {
                     property_color[0], property_color[1], property_color[2]
                 );
                 self.text(
-                    selected_layer
-                        .map(|layer| shape_label(&layer.shape))
-                        .unwrap_or_else(|| tool_label(state.editor_tool)),
+                    &selected_layer.map_or_else(
+                        || tool_label(state.editor_tool).to_owned(),
+                        |layer| blend_mode_label(layer.blend_mode).to_owned(),
+                    ),
                     Rect {
                         x: sidebar_x + 20.0,
                         y: properties_y,
-                        width: 280.0,
+                        width: 90.0,
                         height: 24.0,
                     },
                     p.text,
                     &self.strong,
                 );
+                if selected_layer.is_some() {
+                    for (index, label) in ["Front", "Back", "Copy", "Delete"].iter().enumerate() {
+                        self.button(
+                            Rect {
+                                x: sidebar_x + 112.0 + index as f32 * 46.0,
+                                y: properties_y - 3.0,
+                                width: 44.0,
+                                height: 28.0,
+                            },
+                            p.field,
+                            if *label == "Delete" { p.signal } else { p.text },
+                            label,
+                        );
+                    }
+                }
                 if let Some((image_width, image_height, opacity, rotation)) = selected_layer
                     .and_then(|layer| match &layer.shape {
                         captures_windows_native::editor::Shape::Image { width, height, .. } => {
@@ -1057,6 +1113,13 @@ impl Renderer {
                     self.property_value(
                         sidebar_x,
                         properties_y + 34.0,
+                        "Blend mode",
+                        blend_mode_label(selected_layer.expect("selected image").blend_mode),
+                        p,
+                    );
+                    self.property_value(
+                        sidebar_x,
+                        properties_y + 64.0,
                         "Dimensions",
                         &format!("{image_width:.0} × {image_height:.0} px"),
                         p,
@@ -1064,7 +1127,7 @@ impl Renderer {
                     self.property_stepper(
                         captures_windows_native::geometry::Point {
                             x: sidebar_x,
-                            y: properties_y + 74.0,
+                            y: properties_y + 94.0,
                         },
                         "Opacity",
                         &format!("{}%", (u16::from(opacity) * 100 + 127) / 255),
@@ -1075,7 +1138,7 @@ impl Renderer {
                     self.property_stepper(
                         captures_windows_native::geometry::Point {
                             x: sidebar_x,
-                            y: properties_y + 114.0,
+                            y: properties_y + 134.0,
                         },
                         "Rotation",
                         &format!("{rotation:.0}°"),
@@ -1244,6 +1307,17 @@ impl Renderer {
                             p.text,
                             "+15°",
                         );
+                        self.property_stepper(
+                            captures_windows_native::geometry::Point {
+                                x: sidebar_x,
+                                y: properties_y + 194.0,
+                            },
+                            "Opacity",
+                            &format!("{}%", (u16::from(layer.opacity) * 100 + 127) / 255),
+                            "−10%",
+                            "+10%",
+                            p,
+                        );
                     } else {
                         self.text(
                             "Select a layer to rotate",
@@ -1264,22 +1338,77 @@ impl Renderer {
                 self.panel(
                     Rect {
                         x: 16.0,
-                        y: footer_y - 84.0,
+                        y: footer_y - 132.0,
                         width: w - 32.0,
-                        height: 72.0,
+                        height: 120.0,
                     },
                     p.field,
                 );
+                let output = document.map_or((0, 0), |document| {
+                    state.editor_export_size.dimensions(
+                        document,
+                        (
+                            state.editor_custom_export_width,
+                            state.editor_custom_export_height,
+                        ),
+                    )
+                });
                 self.text(
                     &format!(
-                        "Output size   Original · {} × {}       Save quality   Preserve quality       Estimate unavailable",
-                        document.map_or(0, |value| value.crop.width.round() as u32),
-                        document.map_or(0, |value| value.crop.height.round() as u32)
+                        "Output size     {}  ▾     {} × {}",
+                        state.editor_export_size.label(),
+                        output.0,
+                        output.1
                     ),
                     Rect {
                         x: 30.0,
-                        y: footer_y - 61.0,
-                        width: w - 60.0,
+                        y: footer_y - 122.0,
+                        width: 390.0,
+                        height: 28.0,
+                    },
+                    p.text,
+                    &self.body,
+                );
+                self.text(
+                    &format!(
+                        "Save quality    {}  ▾{}",
+                        state.editor_quality_mode.label(),
+                        if state.editor_quality_mode
+                            == captures_windows_native::state::EditorQualityMode::Compress
+                        {
+                            format!("     Quality {}", state.editor_quality)
+                        } else if state.editor_quality_mode
+                            == captures_windows_native::state::EditorQualityMode::Maximum
+                        {
+                            format!("     Maximum {} KB", state.editor_maximum_kilobytes)
+                        } else {
+                            String::new()
+                        }
+                    ),
+                    Rect {
+                        x: 30.0,
+                        y: footer_y - 86.0,
+                        width: 560.0,
+                        height: 28.0,
+                    },
+                    p.text,
+                    &self.body,
+                );
+                self.text(
+                    &format!(
+                        "Est. size       {}",
+                        if state.editor_estimate_pending {
+                            "Estimating…".to_owned()
+                        } else {
+                            state
+                                .editor_estimated_bytes
+                                .map_or_else(|| "—".to_owned(), format_bytes)
+                        }
+                    ),
+                    Rect {
+                        x: 30.0,
+                        y: footer_y - 50.0,
+                        width: 390.0,
                         height: 28.0,
                     },
                     p.muted,
@@ -1296,8 +1425,10 @@ impl Renderer {
                 p.field,
                 p.text,
                 &format!(
-                    "Export settings\n{} · Original · Preserve",
-                    state.editor_format.to_uppercase()
+                    "Export settings\n{} · {} · {}",
+                    state.editor_format.to_uppercase(),
+                    state.editor_export_size.label(),
+                    state.editor_quality_mode.label()
                 ),
             );
             self.editor_icon(
@@ -2987,7 +3118,28 @@ impl Renderer {
         p: Palette,
     ) {
         unsafe {
-            self.property_value(origin.x, origin.y, label, value, p);
+            self.text(
+                label,
+                Rect {
+                    x: origin.x + 20.0,
+                    y: origin.y,
+                    width: 96.0,
+                    height: 28.0,
+                },
+                p.muted,
+                &self.body,
+            );
+            self.text(
+                value,
+                Rect {
+                    x: origin.x + 120.0,
+                    y: origin.y,
+                    width: 64.0,
+                    height: 28.0,
+                },
+                p.text,
+                &self.body,
+            );
             self.button(
                 Rect {
                     x: origin.x + 184.0,
@@ -3662,6 +3814,21 @@ impl Renderer {
         }
     }
 
+    unsafe fn bitmap_rect(&mut self, image: &RgbaImage, destination: Rect) -> Result<()> {
+        unsafe {
+            self.ensure_bitmap(image)?;
+            self.target.DrawBitmap(
+                self.image.as_ref().unwrap(),
+                Some(&to_d2d(destination)),
+                1.0,
+                D2D1_INTERPOLATION_MODE_LINEAR,
+                None,
+                None,
+            );
+            Ok(())
+        }
+    }
+
     unsafe fn ensure_bitmap(&mut self, image: &RgbaImage) -> Result<()> {
         unsafe {
             let key = (image.as_ptr() as usize, image.width(), image.height());
@@ -3801,20 +3968,6 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-fn shape_label(shape: &captures_windows_native::editor::Shape) -> &'static str {
-    use captures_windows_native::editor::Shape;
-    match shape {
-        Shape::Stroke(_) => "Freehand",
-        Shape::Arrow(_, _) => "Arrow",
-        Shape::Line(_, _) => "Line",
-        Shape::Rectangle(_) => "Rectangle",
-        Shape::Ellipse(_) => "Ellipse",
-        Shape::Polygon(_) => "Shape",
-        Shape::Image { .. } => "Image",
-        Shape::Text { .. } => "Text",
-    }
-}
-
 fn shape_icon(shape: &captures_windows_native::editor::Shape) -> &'static str {
     use captures_windows_native::editor::Shape;
     match shape {
@@ -3826,6 +3979,17 @@ fn shape_icon(shape: &captures_windows_native::editor::Shape) -> &'static str {
         Shape::Polygon(_) => "shapes",
         Shape::Image { .. } => "image",
         Shape::Text { .. } => "text",
+    }
+}
+
+fn blend_mode_label(mode: captures_windows_native::editor::BlendMode) -> &'static str {
+    match mode {
+        captures_windows_native::editor::BlendMode::Normal => "Normal",
+        captures_windows_native::editor::BlendMode::Multiply => "Multiply",
+        captures_windows_native::editor::BlendMode::Screen => "Screen",
+        captures_windows_native::editor::BlendMode::Overlay => "Overlay",
+        captures_windows_native::editor::BlendMode::Darken => "Darken",
+        captures_windows_native::editor::BlendMode::Lighten => "Lighten",
     }
 }
 

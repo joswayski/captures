@@ -1,6 +1,13 @@
 use crate::geometry::{Point, Rect};
-use image::RgbaImage;
-use std::sync::Arc;
+use image::{GenericImageView, Rgba, RgbaImage, imageops::FilterType};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
+
+const MAX_CANVAS_DIMENSION: u32 = 16_384;
+const MAX_CANVAS_PIXELS: u64 = 100_000_000;
+static NEXT_DOCUMENT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tool {
@@ -323,17 +330,25 @@ pub fn resize_from_corner(layer: &Layer, corner: usize, pointer: Point) -> Optio
 
 #[derive(Clone)]
 pub struct Document {
+    id: u64,
     original: Arc<RgbaImage>,
     pub crop: Rect,
+    pub canvas_width: u32,
+    pub canvas_height: u32,
+    pub background: Option<[u8; 4]>,
     pub layers: Vec<Layer>,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     next_id: u64,
+    revision: u64,
 }
 
 #[derive(Clone)]
 struct Snapshot {
     crop: Rect,
+    canvas_width: u32,
+    canvas_height: u32,
+    background: Option<[u8; 4]>,
     layers: Vec<Layer>,
 }
 
@@ -346,13 +361,26 @@ impl Document {
             height: image.height() as f32,
         };
         Self {
+            id: NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed),
             original: Arc::new(image),
             crop,
+            canvas_width: crop.width.round() as u32,
+            canvas_height: crop.height.round() as u32,
+            background: None,
             layers: Vec::new(),
             undo: Vec::new(),
             redo: Vec::new(),
             next_id: 1,
+            revision: 1,
         }
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn render_key(&self) -> (u64, u64) {
+        (self.id, self.revision)
     }
 
     pub fn add(&mut self, shape: Shape, color: [u8; 4], stroke: f32) -> u64 {
@@ -477,9 +505,6 @@ impl Document {
 
     pub fn duplicate(&mut self, id: u64) -> Option<u64> {
         let source = self.layers.iter().find(|layer| layer.id == id)?.clone();
-        if source.locked {
-            return None;
-        }
         self.checkpoint();
         let new_id = self.next_id;
         self.next_id += 1;
@@ -549,6 +574,7 @@ impl Document {
             return false;
         };
         *current = layer;
+        self.revision = self.revision.wrapping_add(1);
         true
     }
 
@@ -572,26 +598,51 @@ impl Document {
             self.undo.remove(0);
         }
         self.redo.clear();
+        self.revision = self.revision.wrapping_add(1);
     }
 
     pub fn set_crop(&mut self, crop: Rect) -> bool {
-        let right = (crop.x + crop.width).min(self.original.width() as f32);
-        let bottom = (crop.y + crop.height).min(self.original.height() as f32);
+        let canvas_right = self.crop.x + self.canvas_width as f32;
+        let canvas_bottom = self.crop.y + self.canvas_height as f32;
+        let right = (crop.x + crop.width).min(canvas_right);
+        let bottom = (crop.y + crop.height).min(canvas_bottom);
         let crop = Rect {
-            x: crop
-                .x
-                .clamp(0.0, self.original.width().saturating_sub(1) as f32),
-            y: crop
-                .y
-                .clamp(0.0, self.original.height().saturating_sub(1) as f32),
-            width: (right - crop.x.max(0.0)).max(1.0),
-            height: (bottom - crop.y.max(0.0)).max(1.0),
+            x: crop.x.clamp(self.crop.x, canvas_right - 1.0),
+            y: crop.y.clamp(self.crop.y, canvas_bottom - 1.0),
+            width: (right - crop.x.max(self.crop.x)).max(1.0),
+            height: (bottom - crop.y.max(self.crop.y)).max(1.0),
         };
         if crop == self.crop {
             return false;
         }
         self.checkpoint();
         self.crop = crop;
+        self.canvas_width = crop.width.round().max(1.0) as u32;
+        self.canvas_height = crop.height.round().max(1.0) as u32;
+        true
+    }
+
+    pub fn set_canvas_size(&mut self, width: u32, height: u32) -> Result<bool, &'static str> {
+        let width = width.clamp(1, MAX_CANVAS_DIMENSION);
+        let height = height.clamp(1, MAX_CANVAS_DIMENSION);
+        if u64::from(width) * u64::from(height) > MAX_CANVAS_PIXELS {
+            return Err("Canvas size is limited to 100 million pixels");
+        }
+        if (width, height) == (self.canvas_width, self.canvas_height) {
+            return Ok(false);
+        }
+        self.checkpoint();
+        self.canvas_width = width;
+        self.canvas_height = height;
+        Ok(true)
+    }
+
+    pub fn set_background(&mut self, background: Option<[u8; 4]>) -> bool {
+        if self.background == background {
+            return false;
+        }
+        self.checkpoint();
+        self.background = background;
         true
     }
 
@@ -601,6 +652,7 @@ impl Document {
         };
         self.redo.push(self.snapshot());
         self.restore(previous);
+        self.revision = self.revision.wrapping_add(1);
         true
     }
 
@@ -610,6 +662,7 @@ impl Document {
         };
         self.undo.push(self.snapshot());
         self.restore(next);
+        self.revision = self.revision.wrapping_add(1);
         true
     }
 
@@ -619,36 +672,91 @@ impl Document {
             self.undo.remove(0);
         }
         self.redo.clear();
+        self.revision = self.revision.wrapping_add(1);
     }
 
     fn snapshot(&self) -> Snapshot {
         Snapshot {
             crop: self.crop,
+            canvas_width: self.canvas_width,
+            canvas_height: self.canvas_height,
+            background: self.background,
             layers: self.layers.clone(),
         }
     }
 
     fn restore(&mut self, snapshot: Snapshot) {
         self.crop = snapshot.crop;
+        self.canvas_width = snapshot.canvas_width;
+        self.canvas_height = snapshot.canvas_height;
+        self.background = snapshot.background;
         self.layers = snapshot.layers;
     }
 
     pub fn render(&self) -> Result<RgbaImage, String> {
+        let mut source = RgbaImage::from_pixel(
+            self.canvas_width,
+            self.canvas_height,
+            Rgba(self.background.unwrap_or([0, 0, 0, 0])),
+        );
+        let crop_x = self.crop.x.max(0.0).round() as u32;
+        let crop_y = self.crop.y.max(0.0).round() as u32;
+        let crop_width =
+            self.crop
+                .width
+                .max(1.0)
+                .round()
+                .min(self.original.width().saturating_sub(crop_x) as f32) as u32;
+        let crop_height =
+            self.crop
+                .height
+                .max(1.0)
+                .round()
+                .min(self.original.height().saturating_sub(crop_y) as f32) as u32;
+        if crop_width > 0 && crop_height > 0 {
+            let original = self
+                .original
+                .view(crop_x, crop_y, crop_width, crop_height)
+                .to_image();
+            image::imageops::overlay(&mut source, &original, 0, 0);
+        }
+        let offset = captures_image::Point {
+            x: -self.crop.x,
+            y: -self.crop.y,
+        };
         captures_image::render(&captures_image::Document {
-            source: self.original.clone(),
-            crop: Some(captures_image::PixelRect {
-                x: self.crop.x.max(0.0).round() as u32,
-                y: self.crop.y.max(0.0).round() as u32,
-                width: self.crop.width.max(1.0).round() as u32,
-                height: self.crop.height.max(1.0).round() as u32,
-            }),
+            source: Arc::new(source),
+            crop: None,
             layers: self
                 .layers
                 .iter()
                 .filter(|layer| layer.visible)
-                .map(to_raster_layer)
+                .map(|layer| {
+                    let mut layer = to_raster_layer(layer);
+                    translate_raster_shape(&mut layer.shape, offset);
+                    layer
+                })
                 .collect(),
         })
+    }
+
+    pub fn render_resized(&self, width: u32, height: u32) -> Result<RgbaImage, String> {
+        let width = width.clamp(1, 16_384);
+        let height = height.clamp(1, 16_384);
+        if u64::from(width) * u64::from(height) > MAX_CANVAS_PIXELS {
+            return Err("Output size is limited to 100 million pixels".into());
+        }
+        let rendered = self.render()?;
+        if rendered.dimensions() == (width, height) {
+            Ok(rendered)
+        } else {
+            Ok(image::imageops::resize(
+                &rendered,
+                width,
+                height,
+                FilterType::Lanczos3,
+            ))
+        }
     }
 
     pub fn hit_test(&self, point: Point, tolerance: f32) -> Option<u64> {
@@ -662,6 +770,27 @@ impl Document {
                     .hit_test(to_raster_point(point), tolerance)
                     .then_some(layer.id)
             })
+    }
+}
+
+fn translate_raster_shape(shape: &mut captures_image::Shape, offset: captures_image::Point) {
+    let translate = |point: &mut captures_image::Point| {
+        point.x += offset.x;
+        point.y += offset.y;
+    };
+    match shape {
+        captures_image::Shape::Freehand(points) | captures_image::Shape::Polygon(points) => {
+            points.iter_mut().for_each(translate)
+        }
+        captures_image::Shape::Arrow { start, end }
+        | captures_image::Shape::Line { start, end } => {
+            translate(start);
+            translate(end);
+        }
+        captures_image::Shape::Rectangle { origin, .. }
+        | captures_image::Shape::Ellipse { origin, .. }
+        | captures_image::Shape::Image { origin, .. }
+        | captures_image::Shape::Text { origin, .. } => translate(origin),
     }
 }
 
@@ -789,6 +918,75 @@ mod tests {
         assert!(document.redo());
         assert_eq!(document.layers.len(), 2);
     }
+
+    #[test]
+    fn layer_order_duplicate_and_delete_are_independently_undoable() {
+        let mut document = Document::new(RgbaImage::new(160, 90));
+        let back = document.add(
+            Shape::Line(Point { x: 3.0, y: 8.0 }, Point { x: 71.0, y: 29.0 }),
+            [10, 20, 30, 255],
+            2.0,
+        );
+        let middle = document.add(
+            Shape::Rectangle(Rect {
+                x: 17.0,
+                y: 11.0,
+                width: 41.0,
+                height: 23.0,
+            }),
+            [40, 50, 60, 255],
+            3.0,
+        );
+        let front = document.add(
+            Shape::Ellipse(Rect {
+                x: 33.0,
+                y: 19.0,
+                width: 27.0,
+                height: 39.0,
+            }),
+            [70, 80, 90, 255],
+            4.0,
+        );
+
+        assert!(document.move_layer(back, isize::MAX));
+        assert_eq!(
+            document
+                .layers
+                .iter()
+                .map(|layer| layer.id)
+                .collect::<Vec<_>>(),
+            [middle, front, back]
+        );
+        assert!(document.undo());
+        assert_eq!(
+            document
+                .layers
+                .iter()
+                .map(|layer| layer.id)
+                .collect::<Vec<_>>(),
+            [back, middle, front]
+        );
+
+        assert!(document.toggle_locked(middle));
+        let duplicate = document
+            .duplicate(middle)
+            .expect("locked layers remain duplicable");
+        assert_eq!(document.layers.last().unwrap().id, duplicate);
+        assert_eq!(document.layers.last().unwrap().name, "Rectangle copy");
+        assert!(document.layers.last().unwrap().locked);
+        assert!(document.undo());
+        assert_eq!(document.layers.len(), 3);
+        assert!(document.redo());
+        assert_eq!(document.layers.len(), 4);
+
+        assert!(!document.delete(duplicate));
+        assert!(document.toggle_locked(duplicate));
+        assert!(document.delete(duplicate));
+        assert_eq!(document.layers.len(), 3);
+        assert!(document.undo());
+        assert_eq!(document.layers.last().unwrap().id, duplicate);
+    }
+
     #[test]
     fn crop_render_has_exact_requested_dimensions() {
         let mut document = Document::new(RgbaImage::new(100, 80));
@@ -803,6 +1001,75 @@ mod tests {
         assert_eq!(document.render().unwrap().dimensions(), (100, 80));
         assert!(document.redo());
         assert_eq!(document.render().unwrap().dimensions(), (33, 17));
+    }
+
+    #[test]
+    fn canvas_expansion_background_and_output_resize_are_undoable() {
+        let mut source = RgbaImage::from_pixel(3, 2, Rgba([12, 34, 56, 255]));
+        source.put_pixel(2, 1, Rgba([91, 72, 53, 255]));
+        let mut document = Document::new(source);
+        assert!(document.set_canvas_size(7, 5).unwrap());
+        assert!(document.set_background(Some([240, 230, 220, 255])));
+
+        let rendered = document.render().unwrap();
+        assert_eq!(rendered.dimensions(), (7, 5));
+        assert_eq!(rendered.get_pixel(2, 1).0, [91, 72, 53, 255]);
+        assert_eq!(rendered.get_pixel(6, 4).0, [240, 230, 220, 255]);
+        assert_eq!(document.render_resized(5, 9).unwrap().dimensions(), (5, 9));
+
+        assert!(document.undo());
+        assert_eq!(document.background, None);
+        assert_eq!((document.canvas_width, document.canvas_height), (7, 5));
+        assert!(document.undo());
+        assert_eq!((document.canvas_width, document.canvas_height), (3, 2));
+    }
+
+    #[test]
+    fn expanded_canvas_crop_keeps_annotation_pixels_beyond_original_raster() {
+        let mut source = RgbaImage::from_pixel(40, 20, Rgba([11, 22, 33, 255]));
+        source.put_pixel(39, 19, Rgba([44, 55, 66, 255]));
+        let mut document = Document::new(source);
+        document.set_canvas_size(100, 70).unwrap();
+        document.set_background(Some([5, 7, 9, 255]));
+        let annotation = document.add(
+            Shape::Rectangle(Rect {
+                x: 63.0,
+                y: 34.0,
+                width: 11.0,
+                height: 9.0,
+            }),
+            [210, 30, 20, 255],
+            1.0,
+        );
+        assert!(document.set_layer_fill(annotation, Some([90, 170, 40, 255])));
+
+        assert!(document.set_crop(Rect {
+            x: 60.0,
+            y: 30.0,
+            width: 25.0,
+            height: 23.0,
+        }));
+        assert_eq!(document.crop.x, 60.0);
+        assert_eq!(document.crop.y, 30.0);
+        let cropped = document.render().unwrap();
+        assert_eq!(cropped.dimensions(), (25, 23));
+        assert_eq!(cropped.get_pixel(8, 8).0, [90, 170, 40, 255]);
+        assert_eq!(cropped.get_pixel(24, 22).0, [5, 7, 9, 255]);
+
+        assert!(document.undo());
+        assert_eq!(
+            document.crop,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 40.0,
+                height: 20.0
+            }
+        );
+        assert_eq!((document.canvas_width, document.canvas_height), (100, 70));
+        let restored = document.render().unwrap();
+        assert_eq!(restored.get_pixel(68, 38).0, [90, 170, 40, 255]);
+        assert_eq!(restored.get_pixel(39, 19).0, [44, 55, 66, 255]);
     }
 
     #[test]

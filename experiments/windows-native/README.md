@@ -24,7 +24,10 @@ From the repository root in Developer PowerShell for VS 2022:
 desktop. The helper temporarily changes the primary display mode when needed and therefore must run
 only in a disposable test desktop, not an interactive user session. It restores the previous display
 mode and thread DPI context during cleanup. Its PNGs are runtime review artifacts and intentionally
-ignored by Git. The Linux cross-check used during development is:
+ignored by Git. In addition to prepared visual states, the editor input-smoke fixture changes the
+canvas width, selects a shape, and draws it through real HWND keyboard and pointer messages; the
+resulting image still requires inspection and is not a substitute for broader accessibility, IME,
+or hardware-input testing. The Linux cross-check used during development is:
 
 ```sh
 cargo check --manifest-path experiments/windows-native/Cargo.toml --target x86_64-pc-windows-gnu
@@ -42,7 +45,9 @@ tool rail and shape flyout, fitted canvas, layers/properties sidebar, and filena
 footer. Filename edits, format changes, Save as new file, layer selection/visibility, copy, and Save
 are functional. Replacing a source is allowed only while its sanitized filename and supported format
 remain unchanged; staged bytes are flushed and synced before replacement. Canvas
-dimension/background/zoom controls are currently read-only. Add images opens the native multi-file
+dimension/background and fit/manual zoom/pan controls are functional. Export settings choose original,
+percentage, or aspect-locked custom dimensions and preserve, compressed, or maximum-size encoding;
+preview rendering and exact encoded-size estimates run outside the message thread. Add images opens the native multi-file
 picker, decodes selected images off the message thread, and adds independently selectable raster
 layers through the shared `captures-image` renderer. Imported layers preserve aspect ratio and can
 be moved, resized, rotated, hidden, exported, and undone/redone. The picker filters to the image
@@ -53,7 +58,8 @@ header, and filename/export footer. Switches share the shipping 30-by-18 geometr
 on, off, and disabled states. Light and dark runtime fixtures cover default, imported-image, shapes,
 export, selected-properties, and selected-line editor states.
 Selected annotations can be moved, resized, and rotated, and their color, stroke, and supported fill
-state can be edited with undo/redo.
+state can be edited with undo/redo. Selected layers can also change opacity and blend mode, move to
+the front or back, duplicate, delete, lock, hide, and—when they are images—be renamed.
 The recording editor probes real media, decodes playback frames, seeks, trims, chooses quality,
 exports through `captures-media`, and can either preserve the source or safely replace it. Probe,
 paused-frame extraction, compression comparison, and export run outside the Win32 message thread.
@@ -61,7 +67,7 @@ Playback uses one long-lived FFmpeg child per play/seek interval to CPU-decode r
 D2D presentation; it is **not** hardware-accelerated video presentation. Leaving the editor and
 superseding frame/comparison/export work cancel active workers, while request generations prevent
 stale results from changing the current editor. The shared probe API is asynchronous here but does
-not yet expose child-process cancellation. Playback audio and split/video-crop controls remain
+not yet expose child-process cancellation. Playback audio and video-crop controls remain
 unavailable and are labeled as such. The native recording editor uses one thumbnail track, two trim
 handles, and one playhead; it does not draw a second decorative trim control. Opening the editor and
 changing its custom quality dropdown automatically encode a one-second sample and show a real
@@ -81,8 +87,8 @@ off-thread `captures-feedback` client enforces transport validation, timeout, no
 cooldown; no feedback or telemetry is sent at startup. Fixture rendering never submits the form.
 Crash collection and crash-reporting consent are not implemented, so raw panic text is never sent.
 
-The eraser tool, editable canvas size/background/zoom, remaining image-layer actions, recording crop
-and preview audio are not implemented. Their controls are
+The eraser tool, merge/flatten and image flip/rotate layer actions, recording crop, and preview audio
+are not implemented. Their controls are
 omitted or explicitly marked unavailable rather than presented as working. Windows DirectComposition
 fixtures are required to assess final pixel-level parity; they cannot be rendered in the Linux orb.
 

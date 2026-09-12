@@ -1,4 +1,5 @@
 mod feedback_worker;
+mod image_worker;
 mod media_worker;
 mod renderer;
 
@@ -11,23 +12,25 @@ use captures_recording::{
 };
 use captures_recording_xcap::XcapRecordingSegment;
 use captures_windows_native::{
-    editor::{FreehandGesture, Layer, resize_from_corner},
+    async_state::{SaveTracker, accepts_document_request},
+    editor::{BlendMode, FreehandGesture, Layer, resize_from_corner},
     geometry::{
-        Point, Rect, SelectionDrag, contain, editor_layer_lock_button,
-        editor_layer_visibility_button, editor_shape_flyout_index, recording_editor_timeline_track,
-        rounded_contains, screenshot_editor_canvas, update_selection,
+        Point, Rect, SelectionDrag, editor_layer_lock_button, editor_layer_visibility_button,
+        editor_shape_flyout_index, recording_editor_timeline_track, rounded_contains,
+        screenshot_editor_canvas, screenshot_editor_viewport, update_selection,
     },
     history::{Artifact, History, move_to_trash, restore_from_trash, safe_delete},
     settings::{Settings, data_dir, profile_id},
     state::{
-        AppState, PreferencesPage, RecordingEditorState, RecordingUi, Surface, backspace_feedback,
-        can_replace_editor_source, delete_feedback, replace_feedback_selection,
-        sanitize_editor_filename,
+        AppState, EditorExportSize, EditorInputField, EditorQualityMode, PreferencesPage,
+        RecordingEditorState, RecordingUi, Surface, backspace_feedback, can_replace_editor_source,
+        delete_feedback, replace_feedback_selection, sanitize_editor_filename,
     },
     theme::{palette, theme_colors},
 };
 use feedback_worker::FeedbackWorker;
 use image::RgbaImage;
+use image_worker::{EncodeSpec as ImageEncodeSpec, Event as ImageEvent, ImageWorker};
 use media_worker::{ComparisonSpec, Event as MediaEvent, ExportJob, MediaWorker, PlaybackSpec};
 use renderer::{Frame, Renderer};
 use std::os::windows::ffi::OsStrExt;
@@ -99,6 +102,18 @@ const TIMER_ANIMATION: usize = 1;
 const HOTKEY_CAPTURE: i32 = 100;
 const HOTKEY_DISPLAY: i32 = 101;
 
+type EditorEstimateKey = (
+    u64,
+    u64,
+    String,
+    EditorExportSize,
+    EditorQualityMode,
+    u8,
+    u64,
+    u32,
+    u32,
+);
+
 struct RecordingSession {
     options: RecordingOptions,
     display: DisplayDescriptor,
@@ -157,6 +172,16 @@ struct App {
     feedback: FeedbackWorker,
     feedback_request: u64,
     feedback_high_surrogate: Option<u16>,
+    images: ImageWorker,
+    editor_render_requested: (u64, u64),
+    editor_render_inflight: bool,
+    editor_estimate_request: u64,
+    editor_estimate_key: Option<EditorEstimateKey>,
+    editor_copy_request: u64,
+    editor_save_request: u64,
+    editor_saves: SaveTracker,
+    editor_pan_drag: Option<(Point, Point)>,
+    editor_input_select_all: bool,
 }
 
 #[derive(Clone)]
@@ -299,6 +324,16 @@ pub fn run() -> Result<(), String> {
             feedback: FeedbackWorker::new(),
             feedback_request: 0,
             feedback_high_surrogate: None,
+            images: ImageWorker::new(),
+            editor_render_requested: (0, 0),
+            editor_render_inflight: false,
+            editor_estimate_request: 0,
+            editor_estimate_key: None,
+            editor_copy_request: 0,
+            editor_save_request: 0,
+            editor_saves: SaveTracker::default(),
+            editor_pan_drag: None,
+            editor_input_select_all: false,
         });
         let raw = Box::into_raw(app);
         let _hwnd = CreateWindowExW(
@@ -466,6 +501,8 @@ unsafe extern "system" fn wndproc(
                 app.tick_recording_editor(now);
                 app.process_media_events();
                 app.process_feedback_events();
+                app.tick_image_editor();
+                app.process_image_events();
                 if had_previews
                     && app.state.previews.is_empty()
                     && app.state.surface == Surface::Preview
@@ -854,6 +891,14 @@ impl App {
 
     unsafe fn pointer_move(&mut self, p: Point) {
         unsafe {
+            if let Some((start, original)) = self.editor_pan_drag {
+                self.state.editor_pan = Point {
+                    x: original.x + p.x - start.x,
+                    y: original.y + p.y - start.y,
+                };
+                let _ = InvalidateRect(Some(self.hwnd), None, false);
+                return;
+            }
             if self.state.surface == Surface::ScreenshotEditor
                 && let Some(source) = self.editor_source_point_unbounded(p)
                 && let Some(transform) = &self.editor_transform
@@ -899,7 +944,10 @@ impl App {
     }
     unsafe fn pointer_up(&mut self, _p: Point) {
         unsafe {
-            if let Some(overlay) = &mut self.state.overlay {
+            if self.editor_pan_drag.take().is_some() {
+                let _ = ReleaseCapture();
+                let _ = InvalidateRect(Some(self.hwnd), None, false);
+            } else if let Some(overlay) = &mut self.state.overlay {
                 overlay.drag = None;
                 let _ = ReleaseCapture();
                 let _ = InvalidateRect(Some(self.hwnd), None, false);
@@ -1164,7 +1212,62 @@ impl App {
         let sidebar_layer = (p.x > sidebar_x && (104.0..260.0).contains(&p.y))
             .then(|| ((p.y - 104.0) / 52.0).floor() as usize)
             .filter(|index| *index < 3);
-        if p.y >= footer_y {
+        if self.state.editor_export_settings_open && (footer_y - 132.0..footer_y).contains(&p.y) {
+            if p.y < footer_y - 96.0 {
+                if self.state.editor_export_size == EditorExportSize::Custom && p.x >= 300.0 {
+                    let (field, value) = if p.x < 390.0 {
+                        (
+                            EditorInputField::ExportWidth,
+                            self.state.editor_custom_export_width,
+                        )
+                    } else if p.x < 480.0 {
+                        (
+                            EditorInputField::ExportHeight,
+                            self.state.editor_custom_export_height,
+                        )
+                    } else {
+                        self.state.editor_export_aspect_locked =
+                            !self.state.editor_export_aspect_locked;
+                        return;
+                    };
+                    self.begin_editor_input(field, value.to_string());
+                } else {
+                    self.state.editor_export_size = match self.state.editor_export_size {
+                        EditorExportSize::Original => EditorExportSize::Percent75,
+                        EditorExportSize::Percent75 => EditorExportSize::Percent50,
+                        EditorExportSize::Percent50 => {
+                            if let Some(document) = self.state.editor.as_ref() {
+                                self.state.editor_custom_export_width = document.canvas_width;
+                                self.state.editor_custom_export_height = document.canvas_height;
+                            }
+                            EditorExportSize::Custom
+                        }
+                        EditorExportSize::Custom => EditorExportSize::Original,
+                    };
+                }
+            } else if p.y < footer_y - 60.0 {
+                if p.x < 340.0 {
+                    self.state.editor_quality_mode = match self.state.editor_quality_mode {
+                        EditorQualityMode::Preserve => EditorQualityMode::Compress,
+                        EditorQualityMode::Compress => EditorQualityMode::Maximum,
+                        EditorQualityMode::Maximum => EditorQualityMode::Preserve,
+                    };
+                } else if self.state.editor_quality_mode == EditorQualityMode::Compress {
+                    self.state.editor_quality = match self.state.editor_quality {
+                        0..=55 => 70,
+                        56..=70 => 85,
+                        71..=85 => 92,
+                        86..=92 => 98,
+                        _ => 55,
+                    };
+                } else if self.state.editor_quality_mode == EditorQualityMode::Maximum {
+                    self.begin_editor_input(
+                        EditorInputField::MaximumKilobytes,
+                        self.state.editor_maximum_kilobytes.to_string(),
+                    );
+                }
+            }
+        } else if p.y >= footer_y {
             if p.x < 208.0 {
                 self.state.editor_export_settings_open = !self.state.editor_export_settings_open;
             } else if (216.0..416.0).contains(&p.x) {
@@ -1185,13 +1288,13 @@ impl App {
                     self.state.editor_save_as_new = true;
                 }
             } else if (width - 492.0..width - 360.0).contains(&p.x) {
-                if let Some(document) = &self.state.editor {
-                    match document.render() {
-                        Ok(image) => {
-                            let _ = copy_image(self.hwnd, &image);
-                        }
-                        Err(error) => self.set_error(error),
-                    }
+                if let (Some(document), Some(dimensions)) =
+                    (self.state.editor.clone(), self.editor_output_dimensions())
+                {
+                    self.editor_copy_request = self.editor_copy_request.wrapping_add(1);
+                    self.state.status = Some(("Preparing copy…".into(), Instant::now()));
+                    self.images
+                        .copy(self.editor_copy_request, document, dimensions);
                 }
             } else if (width - 360.0..width - 180.0).contains(&p.x) {
                 if can_replace_editor_source(
@@ -1222,6 +1325,47 @@ impl App {
                     Ok(_) => {}
                     Err(error) => self.set_error(error),
                 }
+            } else if (78.0..154.0).contains(&p.x) {
+                let value = self
+                    .state
+                    .editor
+                    .as_ref()
+                    .map_or(1, |document| document.canvas_width);
+                self.begin_editor_input(EditorInputField::CanvasWidth, value.to_string());
+            } else if (154.0..232.0).contains(&p.x) {
+                let value = self
+                    .state
+                    .editor
+                    .as_ref()
+                    .map_or(1, |document| document.canvas_height);
+                self.begin_editor_input(EditorInputField::CanvasHeight, value.to_string());
+            } else if (340.0..368.0).contains(&p.x) {
+                let value = self
+                    .state
+                    .editor
+                    .as_ref()
+                    .and_then(|document| document.background)
+                    .map_or_else(|| "transparent".to_owned(), format_color);
+                self.begin_editor_input(EditorInputField::Background, value);
+            } else if (368.0..462.0).contains(&p.x) {
+                if let Some(document) = self.state.editor.as_mut() {
+                    let next = document
+                        .background
+                        .is_none()
+                        .then_some([247, 247, 245, 255]);
+                    document.set_background(next);
+                }
+            } else if (width - 414.0..width - 380.0).contains(&p.x) {
+                self.state.editor_zoom_fit = true;
+                self.state.editor_pan = Point::default();
+            } else if (width - 380.0..width - 344.0).contains(&p.x) {
+                self.state.editor_zoom_fit = false;
+                self.state.editor_zoom_percent =
+                    (self.state.editor_zoom_percent.saturating_mul(4) / 5).max(5);
+            } else if (width - 292.0..width - 264.0).contains(&p.x) {
+                self.state.editor_zoom_fit = false;
+                self.state.editor_zoom_percent =
+                    (self.state.editor_zoom_percent.saturating_mul(5) / 4).min(800);
             } else if (width - 498.0..width - 460.0).contains(&p.x) {
                 if let Some(document) = self.state.editor.as_mut() {
                     document.undo();
@@ -1287,6 +1431,7 @@ impl App {
                 .and_then(|document| document.layers.iter().rev().nth(index))
                 .map(|layer| layer.id)
         {
+            let was_selected = self.state.selected_layer == Some(id);
             self.state.selected_layer = Some(id);
             self.state.editor_tool = captures_windows_native::editor::Tool::Select;
             if let Some(layer) = self
@@ -1303,6 +1448,24 @@ impl App {
                     document.toggle_visibility(id);
                 } else if editor_layer_lock_button(sidebar_x, row_y).contains(p) {
                     document.toggle_locked(id);
+                } else if was_selected
+                    && (sidebar_x + 52.0..sidebar_x + 220.0).contains(&p.x)
+                    && document.layers.iter().any(|layer| {
+                        layer.id == id
+                            && !layer.locked
+                            && matches!(
+                                layer.shape,
+                                captures_windows_native::editor::Shape::Image { .. }
+                            )
+                    })
+                {
+                    let name = document
+                        .layers
+                        .iter()
+                        .find(|layer| layer.id == id)
+                        .map(|layer| layer.name.clone())
+                        .unwrap_or_default();
+                    self.begin_editor_input(EditorInputField::LayerName, name);
                 }
             }
         } else if p.x > sidebar_x && {
@@ -1311,15 +1474,65 @@ impl App {
                 .editor
                 .as_ref()
                 .map_or(0, |document| document.layers.len().min(3));
-            let properties_y = (176.0 + count as f32 * 52.0).min(footer_y - 154.0);
-            (properties_y + 28.0..properties_y + 188.0).contains(&p.y)
+            let properties_y = (176.0 + count as f32 * 52.0).min(footer_y - 194.0);
+            (properties_y - 4.0..properties_y + 228.0).contains(&p.y)
         } {
             let count = self
                 .state
                 .editor
                 .as_ref()
                 .map_or(0, |document| document.layers.len().min(3));
-            let properties_y = (176.0 + count as f32 * 52.0).min(footer_y - 154.0);
+            let properties_y = (176.0 + count as f32 * 52.0).min(footer_y - 194.0);
+            if let Some(id) = self.state.selected_layer
+                && (properties_y - 4.0..properties_y + 28.0).contains(&p.y)
+            {
+                if p.x < sidebar_x + 112.0 {
+                    if let Some(document) = self.state.editor.as_mut()
+                        && let Some(mode) = document
+                            .layers
+                            .iter()
+                            .find(|layer| layer.id == id)
+                            .map(|layer| layer.blend_mode)
+                    {
+                        document.set_layer_blend_mode(id, next_blend_mode(mode));
+                    }
+                } else {
+                    match ((p.x - sidebar_x - 112.0) / 46.0).floor() as usize {
+                        0 => {
+                            if let Some(document) = self.state.editor.as_mut() {
+                                document.move_layer(id, isize::MAX);
+                            }
+                        }
+                        1 => {
+                            if let Some(document) = self.state.editor.as_mut() {
+                                document.move_layer(id, isize::MIN);
+                            }
+                        }
+                        2 => {
+                            if let Some(document) = self.state.editor.as_mut()
+                                && let Some(duplicate) = document.duplicate(id)
+                            {
+                                self.state.selected_layer = Some(duplicate);
+                            }
+                        }
+                        3 => {
+                            if self
+                                .state
+                                .editor
+                                .as_mut()
+                                .is_some_and(|document| document.delete(id))
+                            {
+                                self.state.selected_layer = None;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                unsafe {
+                    let _ = InvalidateRect(Some(self.hwnd), None, false);
+                }
+                return;
+            }
             let row = ((p.y - properties_y - 28.0) / 40.0).floor() as usize;
             let selected = self.state.selected_layer;
             let selected_image = selected.is_some_and(|id| {
@@ -1335,32 +1548,38 @@ impl App {
             });
             if selected_image {
                 let id = selected.unwrap_or_default();
-                match row {
-                    1 => {
-                        let delta = if p.x < sidebar_x + 236.0 { -26 } else { 26 };
-                        if let Some(document) = self.state.editor.as_mut()
-                            && let Some(opacity) = document
-                                .layers
-                                .iter()
-                                .find(|layer| layer.id == id)
-                                .map(|layer| layer.opacity)
-                        {
-                            document.set_layer_opacity(id, opacity.saturating_add_signed(delta));
-                        }
+                if (properties_y + 28.0..properties_y + 62.0).contains(&p.y) {
+                    if let Some(document) = self.state.editor.as_mut()
+                        && let Some(mode) = document
+                            .layers
+                            .iter()
+                            .find(|layer| layer.id == id)
+                            .map(|layer| layer.blend_mode)
+                    {
+                        document.set_layer_blend_mode(id, next_blend_mode(mode));
                     }
-                    2 => {
-                        let delta = if p.x < sidebar_x + 236.0 { -15.0 } else { 15.0 };
-                        if let Some(document) = self.state.editor.as_mut()
-                            && let Some(rotation) = document
-                                .layers
-                                .iter()
-                                .find(|layer| layer.id == id)
-                                .map(|layer| layer.rotation_degrees)
-                        {
-                            document.set_layer_rotation(id, rotation + delta);
-                        }
+                } else if (properties_y + 78.0..properties_y + 122.0).contains(&p.y) {
+                    let delta = if p.x < sidebar_x + 236.0 { -26 } else { 26 };
+                    if let Some(document) = self.state.editor.as_mut()
+                        && let Some(opacity) = document
+                            .layers
+                            .iter()
+                            .find(|layer| layer.id == id)
+                            .map(|layer| layer.opacity)
+                    {
+                        document.set_layer_opacity(id, opacity.saturating_add_signed(delta));
                     }
-                    _ => {}
+                } else if (properties_y + 122.0..properties_y + 174.0).contains(&p.y) {
+                    let delta = if p.x < sidebar_x + 236.0 { -15.0 } else { 15.0 };
+                    if let Some(document) = self.state.editor.as_mut()
+                        && let Some(rotation) = document
+                            .layers
+                            .iter()
+                            .find(|layer| layer.id == id)
+                            .map(|layer| layer.rotation_degrees)
+                    {
+                        document.set_layer_rotation(id, rotation + delta);
+                    }
                 }
             } else {
                 match row {
@@ -1426,9 +1645,27 @@ impl App {
                             document.set_layer_rotation(id, rotation + delta);
                         }
                     }
+                    4 if selected.is_some() => {
+                        let id = selected.unwrap_or_default();
+                        let delta = if p.x < sidebar_x + 236.0 { -26 } else { 26 };
+                        if let Some(document) = self.state.editor.as_mut()
+                            && let Some(opacity) = document
+                                .layers
+                                .iter()
+                                .find(|layer| layer.id == id)
+                                .map(|layer| layer.opacity)
+                        {
+                            document.set_layer_opacity(id, opacity.saturating_add_signed(delta));
+                        }
+                    }
                     _ => {}
                 }
             }
+        } else if screenshot_editor_canvas(width, height).contains(p)
+            && unsafe { GetKeyState(VK_CONTROL.0 as i32) < 0 }
+        {
+            self.editor_pan_drag = Some((p, self.state.editor_pan));
+            unsafe { SetCapture(self.hwnd) };
         } else if self.state.editor_tool == captures_windows_native::editor::Tool::Select
             && let Some(source) = self.editor_source_point_unbounded(p)
             && let Some(transform) = self.editor_transform_at(p, source)
@@ -1593,12 +1830,12 @@ impl App {
         let document = self.state.editor.as_ref()?;
         let width = self.width as f32 * 96.0 / self.dpi;
         let height = self.height as f32 * 96.0 / self.dpi;
-        let viewport = contain(
-            (
-                document.crop.width.max(1.0).round() as u32,
-                document.crop.height.max(1.0).round() as u32,
-            ),
+        let viewport = screenshot_editor_viewport(
+            (document.canvas_width, document.canvas_height),
             screenshot_editor_canvas(width, height),
+            self.state.editor_zoom_fit,
+            self.state.editor_zoom_percent,
+            self.state.editor_pan,
         );
         if !viewport.contains(point) {
             return None;
@@ -1610,16 +1847,18 @@ impl App {
         let document = self.state.editor.as_ref()?;
         let width = self.width as f32 * 96.0 / self.dpi;
         let height = self.height as f32 * 96.0 / self.dpi;
-        let viewport = contain(
-            (
-                document.crop.width.max(1.0).round() as u32,
-                document.crop.height.max(1.0).round() as u32,
-            ),
+        let viewport = screenshot_editor_viewport(
+            (document.canvas_width, document.canvas_height),
             screenshot_editor_canvas(width, height),
+            self.state.editor_zoom_fit,
+            self.state.editor_zoom_percent,
+            self.state.editor_pan,
         );
         Some(Point {
-            x: document.crop.x + (point.x - viewport.x) / viewport.width * document.crop.width,
-            y: document.crop.y + (point.y - viewport.y) / viewport.height * document.crop.height,
+            x: document.crop.x
+                + (point.x - viewport.x) / viewport.width * document.canvas_width as f32,
+            y: document.crop.y
+                + (point.y - viewport.y) / viewport.height * document.canvas_height as f32,
         })
     }
 
@@ -1627,16 +1866,18 @@ impl App {
         let document = self.state.editor.as_ref()?;
         let width = self.width as f32 * 96.0 / self.dpi;
         let height = self.height as f32 * 96.0 / self.dpi;
-        let viewport = contain(
-            (
-                document.crop.width.max(1.0).round() as u32,
-                document.crop.height.max(1.0).round() as u32,
-            ),
+        let viewport = screenshot_editor_viewport(
+            (document.canvas_width, document.canvas_height),
             screenshot_editor_canvas(width, height),
+            self.state.editor_zoom_fit,
+            self.state.editor_zoom_percent,
+            self.state.editor_pan,
         );
         Some(Point {
-            x: viewport.x + (point.x - document.crop.x) / document.crop.width * viewport.width,
-            y: viewport.y + (point.y - document.crop.y) / document.crop.height * viewport.height,
+            x: viewport.x
+                + (point.x - document.crop.x) / document.canvas_width as f32 * viewport.width,
+            y: viewport.y
+                + (point.y - document.crop.y) / document.canvas_height as f32 * viewport.height,
         })
     }
 
@@ -1789,6 +2030,194 @@ impl App {
         self.state.recording_preview = None;
         self.state.status = Some(("Opening recording…".into(), Instant::now()));
         self.media.probe(self.media_epoch, source);
+    }
+
+    fn editor_output_dimensions(&self) -> Option<(u32, u32)> {
+        let document = self.state.editor.as_ref()?;
+        Some(self.state.editor_export_size.dimensions(
+            document,
+            (
+                self.state.editor_custom_export_width,
+                self.state.editor_custom_export_height,
+            ),
+        ))
+    }
+
+    fn editor_encode_spec(&self) -> Option<ImageEncodeSpec> {
+        let (width, height) = self.editor_output_dimensions()?;
+        Some(ImageEncodeSpec {
+            format: self.state.editor_format.clone(),
+            quality_mode: self.state.editor_quality_mode,
+            quality: self.state.editor_quality,
+            maximum_bytes: self.state.editor_maximum_kilobytes.saturating_mul(1_000),
+            width,
+            height,
+        })
+    }
+
+    fn tick_image_editor(&mut self) {
+        if self.state.surface != Surface::ScreenshotEditor {
+            return;
+        }
+        let Some(document) = self.state.editor.as_ref() else {
+            return;
+        };
+        let render_key = document.render_key();
+        if render_key != self.editor_render_requested && !self.editor_render_inflight {
+            self.editor_render_requested = render_key;
+            self.editor_render_inflight = true;
+            self.images.render_preview(render_key, document.clone());
+        }
+        if !self.state.editor_export_settings_open {
+            self.editor_estimate_key = None;
+            self.state.editor_estimate_pending = false;
+            return;
+        }
+        let Some(spec) = self.editor_encode_spec() else {
+            return;
+        };
+        let key = (
+            render_key.0,
+            render_key.1,
+            spec.format.clone(),
+            self.state.editor_export_size,
+            spec.quality_mode,
+            spec.quality,
+            spec.maximum_bytes,
+            spec.width,
+            spec.height,
+        );
+        if self.editor_estimate_key.as_ref() != Some(&key) {
+            self.editor_estimate_key = Some(key);
+            self.editor_estimate_request = self.editor_estimate_request.wrapping_add(1);
+            self.state.editor_estimate_pending = true;
+            self.state.editor_estimated_bytes = None;
+            self.images.estimate(
+                render_key,
+                self.editor_estimate_request,
+                document.clone(),
+                spec,
+            );
+        }
+    }
+
+    fn process_image_events(&mut self) {
+        while let Some(event) = self.images.try_recv() {
+            match event {
+                ImageEvent::Preview { key, result } => {
+                    self.editor_render_inflight = false;
+                    if self
+                        .state
+                        .editor
+                        .as_ref()
+                        .is_some_and(|document| document.render_key() == key)
+                    {
+                        match result {
+                            Ok(image) => self.state.editor_preview = Some(image),
+                            Err(error) => self.set_error(error),
+                        }
+                        unsafe {
+                            let _ = InvalidateRect(Some(self.hwnd), None, false);
+                        }
+                    }
+                }
+                ImageEvent::Estimate {
+                    key,
+                    request,
+                    result,
+                } if request == self.editor_estimate_request
+                    && self
+                        .state
+                        .editor
+                        .as_ref()
+                        .is_some_and(|document| document.render_key() == key) =>
+                {
+                    self.state.editor_estimate_pending = false;
+                    match result {
+                        Ok(bytes) => self.state.editor_estimated_bytes = Some(bytes),
+                        Err(error) => {
+                            self.state.editor_estimated_bytes = None;
+                            self.set_error(error);
+                        }
+                    }
+                    unsafe {
+                        let _ = InvalidateRect(Some(self.hwnd), None, false);
+                    }
+                }
+                ImageEvent::Copy {
+                    document_id,
+                    request,
+                    result,
+                } if accepts_document_request(
+                    self.state
+                        .editor
+                        .as_ref()
+                        .map(|document| document.render_key()),
+                    self.editor_copy_request,
+                    document_id,
+                    request,
+                ) =>
+                {
+                    match result.and_then(|image| copy_image(self.hwnd, &image)) {
+                        Ok(()) => {
+                            self.state.status = Some(("Copied edited image".into(), Instant::now()))
+                        }
+                        Err(error) => self.set_error(error),
+                    }
+                    unsafe {
+                        let _ = InvalidateRect(Some(self.hwnd), None, false);
+                    }
+                }
+                ImageEvent::Save {
+                    document_id,
+                    request,
+                    destination,
+                    dimensions,
+                    result,
+                } => {
+                    self.editor_saves.finish(request);
+                    let current_document = accepts_document_request(
+                        self.state
+                            .editor
+                            .as_ref()
+                            .map(|document| document.render_key()),
+                        self.editor_save_request,
+                        document_id,
+                        request,
+                    );
+                    match result {
+                        Ok(()) => {
+                            let artifact = Artifact::from_path(
+                                destination.clone(),
+                                dimensions.0,
+                                dimensions.1,
+                            );
+                            let history_result = self.history.add(artifact);
+                            if current_document {
+                                if let Err(error) = history_result {
+                                    self.set_error(error);
+                                } else {
+                                    self.state.editor_source = Some(destination.clone());
+                                    self.state.editor_save_as_new = false;
+                                    self.state.status = Some((
+                                        format!("Saved {}", destination.display()),
+                                        Instant::now(),
+                                    ));
+                                }
+                            }
+                        }
+                        Err(error) if current_document => self.set_error(error),
+                        Err(_) => {}
+                    }
+                    if current_document {
+                        unsafe {
+                            let _ = InvalidateRect(Some(self.hwnd), None, false);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn tick_recording_editor(&mut self, now: Instant) {
@@ -2162,7 +2591,9 @@ impl App {
                 let _ = InvalidateRect(Some(self.hwnd), None, false);
                 return;
             }
-            if editor && key == VK_RETURN.0 as u32 && self.editor_text_origin.is_some() {
+            if editor && key == VK_RETURN.0 as u32 && self.state.editor_input_field.is_some() {
+                self.commit_editor_input();
+            } else if editor && key == VK_RETURN.0 as u32 && self.editor_text_origin.is_some() {
                 self.commit_editor_text();
             } else if editor && key == VK_RETURN.0 as u32 && self.state.editor_editing_filename {
                 self.state.editor_filename = sanitize_editor_filename(&self.state.editor_filename);
@@ -2199,6 +2630,14 @@ impl App {
                     document.delete(id);
                     let _ = InvalidateRect(Some(self.hwnd), None, false);
                 }
+            } else if editor && control && key == 0x44 {
+                if let Some(id) = self.state.selected_layer
+                    && let Some(document) = self.state.editor.as_mut()
+                    && let Some(duplicate) = document.duplicate(id)
+                {
+                    self.state.selected_layer = Some(duplicate);
+                    let _ = InvalidateRect(Some(self.hwnd), None, false);
+                }
             } else if editor && control && key == 0x5a {
                 if let Some(document) = self.state.editor.as_mut() {
                     document.undo();
@@ -2216,6 +2655,9 @@ impl App {
             } else if key == VK_ESCAPE.0 as u32 {
                 if self.state.editor_shapes_open {
                     self.state.editor_shapes_open = false;
+                    let _ = InvalidateRect(Some(self.hwnd), None, false);
+                } else if self.state.editor_input_field.take().is_some() {
+                    self.state.editor_input_text.clear();
                     let _ = InvalidateRect(Some(self.hwnd), None, false);
                 } else if self.editor_text_origin.take().is_some()
                     || self.state.editor_editing_color
@@ -2316,7 +2758,41 @@ impl App {
         if self.state.surface != Surface::ScreenshotEditor {
             return;
         }
-        if self.state.editor_editing_color {
+        if self.state.editor_input_field.is_some() {
+            let maximum = if self.state.editor_input_field == Some(EditorInputField::LayerName) {
+                80
+            } else {
+                16
+            };
+            match character {
+                '\u{8}' => {
+                    if self.editor_input_select_all {
+                        self.state.editor_input_text.clear();
+                    } else {
+                        self.state.editor_input_text.pop();
+                    }
+                    self.editor_input_select_all = false;
+                }
+                value
+                    if !value.is_control()
+                        && (self.editor_input_select_all
+                            || self.state.editor_input_text.chars().count() < maximum)
+                        && (self.state.editor_input_field == Some(EditorInputField::LayerName)
+                            || value.is_ascii_hexdigit()
+                            || (self.state.editor_input_field
+                                == Some(EditorInputField::Background)
+                                && value.is_ascii_alphabetic())
+                            || matches!(value, '#' | '.')) =>
+                {
+                    if self.editor_input_select_all {
+                        self.state.editor_input_text.clear();
+                    }
+                    self.state.editor_input_text.push(value);
+                    self.editor_input_select_all = false;
+                }
+                _ => {}
+            }
+        } else if self.state.editor_editing_color {
             match character {
                 '\u{8}' => {
                     self.state.editor_color_hex.pop();
@@ -2423,6 +2899,117 @@ impl App {
                 );
             }
             Err(error) => self.set_error(error),
+        }
+        unsafe {
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
+        }
+    }
+
+    fn begin_editor_input(&mut self, field: EditorInputField, value: String) {
+        self.state.editor_input_field = Some(field);
+        self.state.editor_input_text = value;
+        self.editor_input_select_all = true;
+        self.state.status = Some(("Type a value and press Enter".into(), Instant::now()));
+    }
+
+    fn commit_editor_input(&mut self) {
+        let Some(field) = self.state.editor_input_field.take() else {
+            return;
+        };
+        let text = std::mem::take(&mut self.state.editor_input_text);
+        let result = match field {
+            EditorInputField::CanvasWidth | EditorInputField::CanvasHeight => text
+                .parse::<u32>()
+                .map_err(|_| "Canvas dimensions must be whole pixels".to_owned())
+                .and_then(|value| {
+                    let document = self.state.editor.as_mut().ok_or("Editor is unavailable")?;
+                    let dimensions = if field == EditorInputField::CanvasWidth {
+                        (value, document.canvas_height)
+                    } else {
+                        (document.canvas_width, value)
+                    };
+                    document
+                        .set_canvas_size(dimensions.0, dimensions.1)
+                        .map(|_| ())
+                        .map_err(str::to_owned)
+                }),
+            EditorInputField::Background => {
+                let color = if text.trim().eq_ignore_ascii_case("transparent") {
+                    Some(None)
+                } else {
+                    parse_hex_color(text.trim()).map(Some)
+                };
+                color
+                    .ok_or_else(|| "Background must be transparent or #RRGGBB".to_owned())
+                    .and_then(|color| {
+                        self.state
+                            .editor
+                            .as_mut()
+                            .ok_or_else(|| "Editor is unavailable".to_owned())?
+                            .set_background(color);
+                        Ok(())
+                    })
+            }
+            EditorInputField::ExportWidth | EditorInputField::ExportHeight => text
+                .parse::<u32>()
+                .map_err(|_| "Output dimensions must be whole pixels".to_owned())
+                .and_then(|value| {
+                    if !(1..=16_384).contains(&value) {
+                        return Err("Output dimensions must be between 1 and 16384".into());
+                    }
+                    let document = self.state.editor.as_ref().ok_or("Editor is unavailable")?;
+                    if field == EditorInputField::ExportWidth {
+                        self.state.editor_custom_export_width = value;
+                        if self.state.editor_export_aspect_locked {
+                            self.state.editor_custom_export_height =
+                                ((u64::from(value) * u64::from(document.canvas_height)
+                                    + u64::from(document.canvas_width) / 2)
+                                    / u64::from(document.canvas_width))
+                                .clamp(1, 16_384) as u32;
+                        }
+                    } else {
+                        self.state.editor_custom_export_height = value;
+                        if self.state.editor_export_aspect_locked {
+                            self.state.editor_custom_export_width =
+                                ((u64::from(value) * u64::from(document.canvas_width)
+                                    + u64::from(document.canvas_height) / 2)
+                                    / u64::from(document.canvas_height))
+                                .clamp(1, 16_384) as u32;
+                        }
+                    }
+                    self.state.editor_export_size = EditorExportSize::Custom;
+                    Ok(())
+                }),
+            EditorInputField::MaximumKilobytes => text
+                .parse::<u64>()
+                .map_err(|_| "Maximum file size must be a whole number of KB".to_owned())
+                .and_then(|value| {
+                    if value < 10 {
+                        Err("Maximum file size must be at least 10 KB".into())
+                    } else {
+                        self.state.editor_maximum_kilobytes = value;
+                        Ok(())
+                    }
+                }),
+            EditorInputField::LayerName => {
+                if let Some(id) = self.state.selected_layer {
+                    if self
+                        .state
+                        .editor
+                        .as_mut()
+                        .is_some_and(|document| document.rename_layer(id, text))
+                    {
+                        Ok(())
+                    } else {
+                        Err("Layer name cannot be empty or the layer is locked".into())
+                    }
+                } else {
+                    Err("Select a layer to rename".into())
+                }
+            }
+        };
+        if let Err(error) = result {
+            self.set_error(error);
         }
         unsafe {
             let _ = InvalidateRect(Some(self.hwnd), None, false);
@@ -2568,16 +3155,18 @@ impl App {
     }
 
     fn save_editor_document(&mut self) {
-        let Some(result) = self.state.editor.as_ref().map(|document| document.render()) else {
+        let Some(document) = self.state.editor.clone() else {
             return;
         };
-        let image = match result {
-            Ok(image) => image,
-            Err(error) => {
-                self.set_error(error);
-                return;
-            }
+        let Some(spec) = self.editor_encode_spec() else {
+            return;
         };
+        if self.state.editor_quality_mode == EditorQualityMode::Maximum
+            && self.state.editor_maximum_kilobytes < 10
+        {
+            self.set_error("Maximum file size must be at least 10 KB");
+            return;
+        }
         let extension = self.state.editor_format.clone();
         let source = self.state.editor_source.clone();
         let replace = !self.state.editor_save_as_new
@@ -2586,36 +3175,46 @@ impl App {
                 &extension,
                 &self.state.editor_filename,
             );
-        let result = (|| {
-            let path = if replace {
+        let result: Result<(PathBuf, Option<PathBuf>), String> = (|| {
+            let (path, replace_source) = if replace {
                 let original = source.as_ref().expect("source checked above");
                 let staged = unique_path(
-                    original.parent().ok_or("source has no parent directory")?,
+                    original
+                        .parent()
+                        .ok_or_else(|| "source has no parent directory".to_owned())?,
                     ".Captures image edit",
                     &extension,
                 );
-                if let Err(error) = write_image_file(&staged, &image, &extension)
-                    .and_then(|()| replace_file_safely(&staged, original))
-                {
-                    let _ = fs::remove_file(staged);
-                    return Err(error);
-                }
-                original.clone()
+                (staged, Some(original.clone()))
             } else {
                 let stem = sanitize_editor_filename(&self.state.editor_filename);
                 let path = available_named_path(&self.settings.output_directory, &stem, &extension);
-                write_image_file(&path, &image, &extension)?;
-                path
+                (path, None)
             };
-            Ok(Artifact::from_path(path, image.width(), image.height()))
+            Ok((path, replace_source))
         })();
         match result {
-            Ok(artifact) => {
-                let _ = self.history.add(artifact.clone());
-                self.state.editor_source = Some(artifact.path.clone());
-                self.state.editor_save_as_new = false;
-                self.state.status =
-                    Some((format!("Saved {}", artifact.path.display()), Instant::now()));
+            Ok((destination, replace_source)) => {
+                let request = self.editor_save_request.wrapping_add(1);
+                let document_id = document.render_key().0;
+                let final_destination = replace_source.as_ref().unwrap_or(&destination);
+                if !self
+                    .editor_saves
+                    .try_start(request, document_id, final_destination)
+                {
+                    self.state.status = Some((
+                        "A save for this document or destination is already in progress".into(),
+                        Instant::now(),
+                    ));
+                    unsafe {
+                        let _ = InvalidateRect(Some(self.hwnd), None, false);
+                    }
+                    return;
+                }
+                self.editor_save_request = request;
+                self.state.status = Some(("Saving edited image…".into(), Instant::now()));
+                self.images
+                    .save(request, document, spec, destination, replace_source);
             }
             Err(error) => self.set_error(error),
         }
@@ -3269,6 +3868,17 @@ fn polygon_points(bounds: Rect, sides: usize, rotation_degrees: f32) -> Vec<Poin
             }
         })
         .collect()
+}
+
+fn next_blend_mode(mode: BlendMode) -> BlendMode {
+    match mode {
+        BlendMode::Normal => BlendMode::Multiply,
+        BlendMode::Multiply => BlendMode::Screen,
+        BlendMode::Screen => BlendMode::Overlay,
+        BlendMode::Overlay => BlendMode::Darken,
+        BlendMode::Darken => BlendMode::Lighten,
+        BlendMode::Lighten => BlendMode::Normal,
+    }
 }
 
 fn parse_hex_color(value: &str) -> Option<[u8; 4]> {

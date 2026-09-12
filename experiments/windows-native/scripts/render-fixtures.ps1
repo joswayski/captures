@@ -44,6 +44,8 @@ public static class CapturesFixtureNative {
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
   [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
   [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
+  [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hwnd);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr wparam, IntPtr lparam);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern bool EnumDisplaySettings(string device, int mode, ref DEVMODE settings);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int ChangeDisplaySettings(ref DEVMODE settings, uint flags);
   [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
@@ -163,6 +165,47 @@ public static class CapturesFixtureNative {
       info.Monitor.Left, info.Monitor.Top, info.Monitor.Right, info.Monitor.Bottom,
       window.Left, window.Top, window.Right, window.Bottom);
   }
+
+  static IntPtr LogicalPoint(IntPtr hwnd, int x, int y) {
+    uint dpi = GetDpiForWindow(hwnd);
+    int physicalX = (int)Math.Round(x * dpi / 96.0);
+    int physicalY = (int)Math.Round(y * dpi / 96.0);
+    return new IntPtr((physicalY << 16) | (physicalX & 0xffff));
+  }
+
+  public static void ClickLogical(IntPtr hwnd, int x, int y) {
+    IntPtr point = LogicalPoint(hwnd, x, y);
+    if (!PostMessage(hwnd, 0x0201, new IntPtr(1), point) || !PostMessage(hwnd, 0x0202, IntPtr.Zero, point)) {
+      throw new InvalidOperationException("PostMessage could not deliver a fixture click");
+    }
+  }
+
+  public static void DragLogical(IntPtr hwnd, int fromX, int fromY, int toX, int toY) {
+    if (!PostMessage(hwnd, 0x0201, new IntPtr(1), LogicalPoint(hwnd, fromX, fromY))) {
+      throw new InvalidOperationException("PostMessage could not begin a fixture drag");
+    }
+    for (int step = 1; step <= 8; step++) {
+      int x = fromX + (toX - fromX) * step / 8;
+      int y = fromY + (toY - fromY) * step / 8;
+      if (!PostMessage(hwnd, 0x0200, new IntPtr(1), LogicalPoint(hwnd, x, y))) {
+        throw new InvalidOperationException("PostMessage could not continue a fixture drag");
+      }
+    }
+    if (!PostMessage(hwnd, 0x0202, IntPtr.Zero, LogicalPoint(hwnd, toX, toY))) {
+      throw new InvalidOperationException("PostMessage could not finish a fixture drag");
+    }
+  }
+
+  public static void TypeAndCommit(IntPtr hwnd, string value) {
+    foreach (char unit in value) {
+      if (!PostMessage(hwnd, 0x0102, new IntPtr(unit), IntPtr.Zero)) {
+        throw new InvalidOperationException("PostMessage could not deliver fixture text");
+      }
+    }
+    if (!PostMessage(hwnd, 0x0100, new IntPtr(0x0d), IntPtr.Zero)) {
+      throw new InvalidOperationException("PostMessage could not commit fixture text");
+    }
+  }
 }
 "@
 
@@ -180,7 +223,7 @@ function Assert-NonBlank([Drawing.Bitmap]$bitmap, [string]$view) {
   if ($colors.Count -lt 4) { throw "$view capture is blank or nearly uniform ($($colors.Count) sampled colors)" }
 }
 
-function Save-View([string]$appearance, [string]$view) {
+function Save-View([string]$appearance, [string]$view, [string]$artifactView = $view, [bool]$inputSmoke = $false) {
   $source = if ($view -eq "recording-editor") { $videoFrame } else { $ImagePath }
   Remove-Item (Join-Path $profile "render-driver.txt") -Force -ErrorAction SilentlyContinue
   $recordingReadyFile = Join-Path $profile "recording-frame-presented.txt"
@@ -200,10 +243,10 @@ function Save-View([string]$appearance, [string]$view) {
     if (!(Test-Path $driverFile)) { throw "$view did not report its D3D driver" }
     $driver = (Get-Content $driverFile -Raw).Trim()
     if ($driver -notin @("hardware", "warp")) { throw "$view reported unknown D3D driver '$driver'" }
-    Add-Content $driverLog "$appearance,$view,$driver"
-    Write-Host "$appearance-$view D3D driver: $driver"
+    Add-Content $driverLog "$appearance,$artifactView,$driver"
+    Write-Host "$appearance-$artifactView D3D driver: $driver"
     $bounds = [CapturesFixtureNative]::PositionAndValidateWindow($handle)
-    Add-Content $boundsLog "$appearance,$view,$bounds"
+    Add-Content $boundsLog "$appearance,$artifactView,$bounds"
     $recordingReady = $true
     if ($view -eq "recording-editor") {
       $recordingReady = $false
@@ -218,6 +261,17 @@ function Save-View([string]$appearance, [string]$view) {
     } else {
       Start-Sleep -Milliseconds 350
     }
+    if ($inputSmoke) {
+      # Exercise the real HWND routes rather than preparing the resulting Frame:
+      # replace the canvas width through WM_CHAR, choose Star through two clicks,
+      # and draw an asymmetric shape through the native pointer path.
+      [CapturesFixtureNative]::ClickLogical($handle, 110, 26)
+      [CapturesFixtureNative]::TypeAndCommit($handle, "777")
+      [CapturesFixtureNative]::ClickLogical($handle, 28, 232)
+      [CapturesFixtureNative]::ClickLogical($handle, 296, 311)
+      [CapturesFixtureNative]::DragLogical($handle, 250, 190, 430, 330)
+      Start-Sleep -Milliseconds 1000
+    }
     # Revalidate after composition settles; never capture an off-screen partial window.
     [void][CapturesFixtureNative]::PositionAndValidateWindow($handle)
     $rect = New-Object CapturesFixtureNative+RECT
@@ -228,7 +282,7 @@ function Save-View([string]$appearance, [string]$view) {
       # This intentionally throws on hosted Windows sessions without a capturable desktop.
       $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
     } finally { $graphics.Dispose() }
-    $path = Join-Path $out "$appearance-$view.png"
+    $path = Join-Path $out "$appearance-$artifactView.png"
     try {
       # Persist diagnostics before assertions so every captured failure remains reviewable.
       $bitmap.Save($path, [Drawing.Imaging.ImageFormat]::Png)
@@ -255,6 +309,7 @@ try {
     foreach ($view in @("menu", "editor", "editor-image", "editor-shapes", "editor-export", "editor-properties", "editor-line", "recording-selector", "recording-hud", "recording-editor", "preview", "history", "preferences", "preferences-capture", "preferences-recording", "preferences-appearance", "feedback", "delete-confirmation")) {
       Save-View $appearance $view
     }
+    Save-View $appearance "editor" "editor-input-smoke" $true
   }
 } finally {
   $env:CAPTURES_WINDOWS_NATIVE_DATA = $previousData

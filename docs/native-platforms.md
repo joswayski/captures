@@ -67,14 +67,21 @@ These are implemented experiments, not drop-in replacements. In particular:
   released selection and a saved capture. Recording replacement uses a synced stage
   and explicit confirmation; cancellation preserves the original. Physical
   multi-monitor, hardware GPU, and Wayland behavior remain unverified.
-- **Windows:** editable canvas/background/zoom and several layer operations
-  remain incomplete. Imported image layers now use the shared raster renderer
+- **Windows:** canvas dimensions/background, fit/manual zoom, Ctrl-drag pan,
+  output dimensions/quality/maximum-size settings and layer front/back/duplicate/
+  delete/rename actions are implemented. Erase, background removal, merge/flatten
+  and richer layer controls remain incomplete. Imported image layers use the shared raster renderer
   with native multi-select file picking, asynchronous decode, transformed hit
   testing, and batch undo/redo. The model supports locking, independent opacity,
   and six blend modes. Native image controls now expose dimensions, opacity and
   rotation rather than ignored stroke/fill properties. Preferences has General,
   Capture, Recording, Shortcuts and Appearance pages; some settings still need
-  runtime consumers and shortcuts remain read-only. Explicit worker-thread
+  runtime consumers and shortcuts remain read-only. Image preview and encoding
+  run off the message thread. Estimates retain only the newest pending job;
+  completion checks fence document identity and revision. Save jobs exclude
+  simultaneous writes for the same document or normalized destination, retain
+  successful older artifacts in history, and never retarget a newer editor.
+  Expanded-canvas cropping has independent pixel/undo coverage. Explicit worker-thread
   feedback has its own form; no startup request is made.
   Recording playback uses a CPU FFmpeg decoder feeding D2D,
   not Media Foundation/D3D video decoding; playback audio, video
@@ -85,12 +92,16 @@ These are implemented experiments, not drop-in replacements. In particular:
   passed MSVC build, 45 tests, strict clippy, and 36 light/dark captures with
   hardware drivers and verified full desktop bounds. The imported-image renders
   contain real rotated translucent raster layers. Preferences and feedback
-  layouts were inspected; image-property values overlap their stepper buttons
-  and need correction. Static fixtures do not verify picker or text input.
+  layouts were inspected. The new increment fixes image-property values that
+  overlapped stepper buttons and adds an HWND-message input fixture for canvas
+  editing and shape drawing. Its 55 portable tests and host strict Clippy pass;
+  MSVC tests and the new interaction renders await CI. The parent orb lacks
+  MinGW GCC for its independent GNU cross-check. Static fixtures do not verify
+  picker or physical text input.
   Inspected recording
   fixtures show decoded paused frames, not playback timing or hardware video decode.
-- **macOS:** Swift builds, 18 XCTest tests, normal layouts, and independent real
-  video/dust compositor checks passed in [the native CI run](https://github.com/joswayski/captures/actions/runs/34724020586).
+- **macOS:** Swift builds, 19 XCTest tests, normal layouts, and independent real
+  video/dust compositor checks passed in [the native CI run](https://github.com/joswayski/captures/actions/runs/34724671189).
   The inspected dust frame contains displaced source fragments and transparent
   holes; the video frame contains only Captures' custom controls. These checks
   do not establish performance or full interaction parity. Capture permissions, microphone/audio,
@@ -105,7 +116,9 @@ These are implemented experiments, not drop-in replacements. In particular:
   76 KB recording estimate. Crash consent and feedback layouts were inspected;
   no request was submitted. Inspection found persisted drafts contaminating
   successive editor reference states. Reference-only models now start from fresh
-  source documents; the isolation regression and clean rerender await CI.
+  source documents. Native CI passed the isolation regression; inspected renders
+  show exactly two layers in overflow/snap states with no inherited shapes or
+  restored-draft banner, plus the expected expansion action and both guides.
 
 ## Feature parity acceptance
 

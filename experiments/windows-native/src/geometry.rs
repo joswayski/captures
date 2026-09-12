@@ -159,6 +159,30 @@ pub fn screenshot_editor_canvas(width: f32, height: f32) -> Rect {
     }
 }
 
+pub fn screenshot_editor_viewport(
+    source: (u32, u32),
+    destination: Rect,
+    fit: bool,
+    zoom_percent: u16,
+    pan: Point,
+) -> Rect {
+    let scale = if fit {
+        1.0_f32
+            .min(destination.width / source.0.max(1) as f32)
+            .min(destination.height / source.1.max(1) as f32)
+    } else {
+        (f32::from(zoom_percent) / 100.0).clamp(0.05, 8.0)
+    };
+    let width = source.0 as f32 * scale;
+    let height = source.1 as f32 * scale;
+    Rect {
+        x: destination.x + (destination.width - width) / 2.0 + pan.x,
+        y: destination.y + (destination.height - height) / 2.0 + pan.y,
+        width,
+        height,
+    }
+}
+
 pub fn editor_shape_flyout_cell(index: usize) -> Option<Rect> {
     (index < 6).then_some(Rect {
         x: 68.0 + (index % 3) as f32 * 92.0,
@@ -309,6 +333,46 @@ mod tests {
                 y: 76.0,
                 width: 676.0,
                 height: 532.0,
+            }
+        );
+    }
+
+    #[test]
+    fn screenshot_viewport_fit_caps_upscale_and_manual_zoom_keeps_asymmetric_pan() {
+        let destination = Rect {
+            x: 80.0,
+            y: 76.0,
+            width: 600.0,
+            height: 400.0,
+        };
+        assert_eq!(
+            screenshot_editor_viewport(
+                (200, 100),
+                destination,
+                true,
+                800,
+                Point { x: 0.0, y: 0.0 }
+            ),
+            Rect {
+                x: 280.0,
+                y: 226.0,
+                width: 200.0,
+                height: 100.0,
+            }
+        );
+        assert_eq!(
+            screenshot_editor_viewport(
+                (200, 100),
+                destination,
+                false,
+                150,
+                Point { x: 17.0, y: -9.0 }
+            ),
+            Rect {
+                x: 247.0,
+                y: 192.0,
+                width: 300.0,
+                height: 150.0,
             }
         );
     }

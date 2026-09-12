@@ -168,6 +168,72 @@ impl PreferencesPage {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum EditorExportSize {
+    #[default]
+    Original,
+    Percent75,
+    Percent50,
+    Custom,
+}
+
+impl EditorExportSize {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Original => "Original",
+            Self::Percent75 => "75%",
+            Self::Percent50 => "50%",
+            Self::Custom => "Custom",
+        }
+    }
+
+    pub fn dimensions(self, document: &Document, custom: (u32, u32)) -> (u32, u32) {
+        match self {
+            Self::Original => (document.canvas_width, document.canvas_height),
+            Self::Percent75 => proportional_dimensions(document, 3, 4),
+            Self::Percent50 => proportional_dimensions(document, 1, 2),
+            Self::Custom => (custom.0.max(1), custom.1.max(1)),
+        }
+    }
+}
+
+fn proportional_dimensions(document: &Document, numerator: u64, denominator: u64) -> (u32, u32) {
+    let canvas_width = u64::from(document.canvas_width.max(1));
+    let width = ((canvas_width * numerator + denominator / 2) / denominator).max(1);
+    let height =
+        ((width * u64::from(document.canvas_height) + canvas_width / 2) / canvas_width).max(1);
+    (width as u32, height as u32)
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum EditorQualityMode {
+    #[default]
+    Preserve,
+    Compress,
+    Maximum,
+}
+
+impl EditorQualityMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Preserve => "Preserve quality",
+            Self::Compress => "Compress",
+            Self::Maximum => "Maximum file size",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EditorInputField {
+    CanvasWidth,
+    CanvasHeight,
+    Background,
+    ExportWidth,
+    ExportHeight,
+    MaximumKilobytes,
+    LayerName,
+}
+
 #[derive(Clone, Debug)]
 pub struct Preview {
     pub artifact: Artifact,
@@ -367,6 +433,21 @@ pub struct AppState {
     pub editor_format: String,
     pub editor_save_as_new: bool,
     pub editor_export_settings_open: bool,
+    pub editor_export_size: EditorExportSize,
+    pub editor_custom_export_width: u32,
+    pub editor_custom_export_height: u32,
+    pub editor_export_aspect_locked: bool,
+    pub editor_quality_mode: EditorQualityMode,
+    pub editor_quality: u8,
+    pub editor_maximum_kilobytes: u64,
+    pub editor_estimated_bytes: Option<u64>,
+    pub editor_estimate_pending: bool,
+    pub editor_preview: Option<RgbaImage>,
+    pub editor_zoom_fit: bool,
+    pub editor_zoom_percent: u16,
+    pub editor_pan: Point,
+    pub editor_input_field: Option<EditorInputField>,
+    pub editor_input_text: String,
     pub editor_shapes_open: bool,
     pub previews: Vec<Preview>,
     pub recording: Option<RecordingUi>,
@@ -404,6 +485,21 @@ impl Default for AppState {
             editor_format: "png".into(),
             editor_save_as_new: true,
             editor_export_settings_open: false,
+            editor_export_size: EditorExportSize::Original,
+            editor_custom_export_width: 1,
+            editor_custom_export_height: 1,
+            editor_export_aspect_locked: true,
+            editor_quality_mode: EditorQualityMode::Preserve,
+            editor_quality: 92,
+            editor_maximum_kilobytes: 500,
+            editor_estimated_bytes: None,
+            editor_estimate_pending: false,
+            editor_preview: None,
+            editor_zoom_fit: true,
+            editor_zoom_percent: 100,
+            editor_pan: Point::default(),
+            editor_input_field: None,
+            editor_input_text: String::new(),
             editor_shapes_open: false,
             previews: Vec::new(),
             recording: None,
@@ -455,6 +551,7 @@ impl AppState {
     }
 
     pub fn edit_image_from(&mut self, image: RgbaImage, source: Option<PathBuf>) {
+        let dimensions = image.dimensions();
         let filename = source
             .as_ref()
             .and_then(|path| path.file_stem())
@@ -475,6 +572,20 @@ impl AppState {
         self.editor_save_as_new = save_as_new;
         self.editor_source = source;
         self.editor_export_settings_open = false;
+        self.editor_export_size = EditorExportSize::Original;
+        self.editor_custom_export_width = dimensions.0;
+        self.editor_custom_export_height = dimensions.1;
+        self.editor_export_aspect_locked = true;
+        self.editor_quality_mode = EditorQualityMode::Preserve;
+        self.editor_quality = 92;
+        self.editor_estimated_bytes = None;
+        self.editor_estimate_pending = false;
+        self.editor_preview = None;
+        self.editor_zoom_fit = true;
+        self.editor_zoom_percent = 100;
+        self.editor_pan = Point::default();
+        self.editor_input_field = None;
+        self.editor_input_text.clear();
         self.editor_shapes_open = false;
         self.surface = Surface::ScreenshotEditor;
     }
@@ -620,6 +731,32 @@ mod tests {
     fn unsupported_source_extension_cannot_be_replaced_as_png() {
         let source = Path::new("/Captures/original.bmp");
         assert!(!can_replace_editor_source(Some(source), "png", "original"));
+    }
+
+    #[test]
+    fn editor_export_sizes_preserve_asymmetric_dimensions() {
+        let mut document = Document::new(RgbaImage::new(803, 457));
+        document.set_canvas_size(997, 613).unwrap();
+        assert_eq!(
+            EditorExportSize::Original.dimensions(&document, (17, 29)),
+            (997, 613)
+        );
+        assert_eq!(
+            EditorExportSize::Percent75.dimensions(&document, (17, 29)),
+            (748, 460)
+        );
+        assert_eq!(
+            EditorExportSize::Percent50.dimensions(&document, (17, 29)),
+            (499, 307)
+        );
+        assert_eq!(
+            EditorExportSize::Custom.dimensions(&document, (389, 211)),
+            (389, 211)
+        );
+        assert_eq!(
+            EditorExportSize::Custom.dimensions(&document, (0, 0)),
+            (1, 1)
+        );
     }
 
     #[test]
