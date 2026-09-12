@@ -49,6 +49,26 @@ Every exported or deleted file in automation must be a disposable fixture.
 Never point a native experiment at the shipping app's settings/history directory.
 No automatic profile migration is part of these comparison runs.
 
+## Remaining replacement blockers
+
+These are implemented experiments, not drop-in replacements. In particular:
+
+- **Linux:** the full X11 interaction suite is not green: GTK4 accessibility
+  visibility/coordinates can become stale during automation. Focused real-window
+  checks do not establish full-suite success. Recording exports still preserve
+  the source rather than implementing the shipping overwrite workflow. Physical
+  multi-monitor, hardware GPU, and Wayland behavior remain unverified.
+- **Windows:** screenshot-editor layout and selected-shape transforms still
+  differ from Tauri. Recording playback uses a CPU FFmpeg decoder feeding D2D,
+  not Media Foundation/D3D video decoding; playback audio, recording split/video
+  crop, and microphone/countdown parity remain incomplete. Recording segment
+  assembly still blocks during stop. Hosted D3D fixture captures do not establish
+  physical DPI, capture, clipboard, drag, or cross-process click-through behavior.
+- **macOS:** Swift builds, XCTest, and cached layout renders exercise different
+  guarantees from actual AVPlayer presentation and dust animation. Compositor
+  evidence must pass independently. Capture permissions, microphone/audio,
+  session recovery, and physical multi-display behavior still need native use.
+
 ## Matched measurements
 
 The Linux comparison helper accepts explicit release binaries so the GTK4 app
@@ -71,6 +91,9 @@ from the compositor; a correctly sized blank backing pixmap is not evidence.
 The helper checks process IDs and actual client dimensions. Both apps use the
 same image, appearance, disabled mini previews for document-only measurements,
 and viewport sizes. Samples alternate app order after discarded visual warmups.
+Use a 1600×1000 or larger desktop so the window manager's decorations fit around
+the 1280×760 editor client. `xwininfo` supplies absolute client coordinates;
+`xdotool` can double-count frame offsets on reparented windows.
 
 Reported Linux memory is whole-process-tree PSS, RSS, and private memory; it
 includes Tauri helper processes but not desktop services or GPU allocations.
@@ -84,3 +107,33 @@ macOS and Windows need their own native desktop runs. Linux software-rendering
 numbers cannot establish their memory, latency, energy use, or GPU performance.
 Native compilation in CI is useful evidence, but does not validate physical
 capture permissions, audio, high-refresh frame pacing, or mixed-DPI desktops.
+
+### Measured results: September 12, 2026
+
+Five alternating release trials per app/state, following discarded visual
+warmups, at [the measured revision](https://github.com/joswayski/captures/commit/922eaecc756731441dee5f6b4743125e40c6457d).
+Both apps used the same 960×540 fixture, dark appearance, disabled mini previews,
+and client sizes of 980×720 (Preferences) or 1280×760 (editor). Each trial settled
+for 15 seconds before a 2-second idle sample. Screenshots were captured from the
+compositor and inspected; stale-binary and clipped-capture attempts were rejected
+and are not included.
+
+| Platform / state | Tauri PSS | Native PSS | Native reduction | First mapped window, Tauri → native | Idle CPU, Tauri / native |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Linux / Preferences | 572.5 MiB | 237.1 MiB | 58.6% | 1,305 → 707 ms | 0.5% / 0.5% |
+| Linux / image editor | 589.2 MiB | 246.1 MiB | 58.2% | 1,330 → 680 ms | 0.5% / 0.5% |
+| macOS | Not measured | Not measured | — | Not measured | Not measured |
+| Windows | Not measured | Not measured | — | Not measured | Not measured |
+
+All numbers are medians. PSS apportions shared pages across processes, avoiding
+the double-counting of summed RSS; the samples include one GTK4 process versus
+six Tauri processes. CPU is percent of one logical core with coarse 2-second
+sampling. These are Linux/X11 software-rendering results, not physical GPU,
+animation, recording, video playback, energy, or content-ready benchmarks.
+Native macOS/Windows runtime fixtures exist, but no matched whole-app benchmark
+was obtained on those platforms. No cross-platform performance claim follows.
+
+Measured binary SHA-256 values:
+
+- GTK4: `625603a601b6884c777fc48bc04e34e7d3a61a47a0e28a3336126d6adc474911`
+- Tauri: `cc594b7e8741edbb15e81e9bb6047a915291b9894fe5de39cccec9c7acc68ef1`

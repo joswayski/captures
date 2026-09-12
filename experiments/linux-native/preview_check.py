@@ -14,6 +14,20 @@ def command(*args):
     return subprocess.check_output([str(arg) for arg in args], text=True).strip()
 
 
+def xwindow_geometry(window):
+    values = {}
+    for line in command("xwininfo", "-id", window).splitlines():
+        label, separator, value = line.strip().partition(":")
+        if separator and label in ("Absolute upper-left X", "Absolute upper-left Y", "Width", "Height"):
+            values[label] = int(value.strip())
+    return (
+        values["Absolute upper-left X"],
+        values["Absolute upper-left Y"],
+        values["Width"],
+        values["Height"],
+    )
+
+
 def walk(node):
     yield node
     try:
@@ -137,13 +151,9 @@ Gtk.main()
             text=True,
         ).stdout.strip())
         window_id = window.splitlines()[-1]
-        geometry = command("xdotool", "getwindowgeometry", "--shell", window_id)
-        values = dict(line.split("=", 1) for line in geometry.splitlines() if "=" in line)
+        x, y, width, height = xwindow_geometry(window_id)
         time.sleep(0.4)
-        yield (
-            int(values["X"]) + int(values["WIDTH"]) // 2,
-            int(values["Y"]) + int(values["HEIGHT"]) // 2,
-        )
+        yield (x + width // 2, y + height // 2)
     finally:
         process.terminate()
         process.wait(timeout=5)

@@ -42,7 +42,7 @@ def capture_window(window, screenshot, expected):
     # GPU surfaces may not appear in the client's backing pixmap. Read the
     # composited screen at the actual client bounds instead.
     crop=f'{actual[0]}x{actual[1]}{int(geometry["X"]):+d}{int(geometry["Y"]):+d}'
-    subprocess.run(['import','-window','root','-crop',crop,str(screenshot)],check=True)
+    subprocess.run(['import','-window','root','-crop',crop,'+repage',str(screenshot)],check=True)
     header=screenshot.read_bytes()[:24]
     if header[:8] != b'\x89PNG\r\n\x1a\n' or header[12:16] != b'IHDR':
         raise RuntimeError('The compositor capture is not a PNG')

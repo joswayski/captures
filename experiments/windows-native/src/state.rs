@@ -8,9 +8,45 @@ use captures_media::QualityPreset;
 use captures_recording::{RecordingKind, RecordingState};
 use image::RgbaImage;
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
+
+pub fn sanitize_editor_filename(value: &str) -> String {
+    let value = value
+        .chars()
+        .filter(|character| {
+            !matches!(
+                character,
+                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+            )
+        })
+        .collect::<String>();
+    let value = value.trim().trim_end_matches(['.', ' ']);
+    if value.is_empty() {
+        "Capture".into()
+    } else {
+        value.chars().take(120).collect()
+    }
+}
+
+pub fn source_image_format(path: &Path) -> Option<&'static str> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "jpg" | "jpeg" => Some("jpeg"),
+        "png" => Some("png"),
+        "webp" => Some("webp"),
+        _ => None,
+    }
+}
+
+pub fn can_replace_editor_source(source: Option<&Path>, format: &str, filename: &str) -> bool {
+    let Some(source) = source else {
+        return false;
+    };
+    let filename = sanitize_editor_filename(filename);
+    source_image_format(source) == Some(format)
+        && source.file_stem().and_then(|value| value.to_str()) == Some(filename.as_str())
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Surface {
@@ -217,6 +253,13 @@ pub struct AppState {
     pub editor_color: [u8; 4],
     pub editor_color_hex: String,
     pub editor_editing_color: bool,
+    pub editor_source: Option<PathBuf>,
+    pub editor_filename: String,
+    pub editor_editing_filename: bool,
+    pub editor_format: String,
+    pub editor_save_as_new: bool,
+    pub editor_export_settings_open: bool,
+    pub editor_shapes_open: bool,
     pub previews: Vec<Preview>,
     pub recording: Option<RecordingUi>,
     pub pending_delete: Option<Artifact>,
@@ -237,6 +280,13 @@ impl Default for AppState {
             editor_color: [239, 70, 80, 255],
             editor_color_hex: "#ef4650".into(),
             editor_editing_color: false,
+            editor_source: None,
+            editor_filename: "Capture".into(),
+            editor_editing_filename: false,
+            editor_format: "png".into(),
+            editor_save_as_new: true,
+            editor_export_settings_open: false,
+            editor_shapes_open: false,
             previews: Vec::new(),
             recording: None,
             pending_delete: None,
@@ -275,8 +325,31 @@ impl AppState {
     }
 
     pub fn edit_image(&mut self, image: RgbaImage) {
+        self.edit_image_from(image, None);
+    }
+
+    pub fn edit_image_from(&mut self, image: RgbaImage, source: Option<PathBuf>) {
+        let filename = source
+            .as_ref()
+            .and_then(|path| path.file_stem())
+            .and_then(|value| value.to_str())
+            .unwrap_or("Capture")
+            .to_owned();
+        let format = source
+            .as_deref()
+            .and_then(source_image_format)
+            .unwrap_or("png")
+            .to_owned();
+        let save_as_new = !can_replace_editor_source(source.as_deref(), &format, &filename);
         self.editor = Some(Document::new(image));
         self.selected_layer = None;
+        self.editor_filename = filename;
+        self.editor_editing_filename = false;
+        self.editor_format = format;
+        self.editor_save_as_new = save_as_new;
+        self.editor_source = source;
+        self.editor_export_settings_open = false;
+        self.editor_shapes_open = false;
         self.surface = Surface::ScreenshotEditor;
     }
 
@@ -377,5 +450,49 @@ mod tests {
         assert_eq!(editor.trim_start_ms, 7_653);
         editor.set_trim_end(1_000);
         assert_eq!(editor.trim_end_ms, 7_654);
+    }
+
+    #[test]
+    fn existing_jpg_editor_preserves_filename_and_replace_option() {
+        let mut state = AppState::default();
+        state.edit_image_from(
+            RgbaImage::new(3, 7),
+            Some(PathBuf::from("/Captures/uneven-name.JPG")),
+        );
+        assert_eq!(state.editor_filename, "uneven-name");
+        assert_eq!(state.editor_format, "jpeg");
+        assert!(!state.editor_save_as_new);
+        assert_eq!(
+            state.editor_source,
+            Some(PathBuf::from("/Captures/uneven-name.JPG"))
+        );
+        assert!(can_replace_editor_source(
+            state.editor_source.as_deref(),
+            &state.editor_format,
+            &state.editor_filename
+        ));
+    }
+
+    #[test]
+    fn format_divergence_forces_new_file() {
+        let source = Path::new("/Captures/original.jpg");
+        assert!(!can_replace_editor_source(Some(source), "png", "original"));
+    }
+
+    #[test]
+    fn filename_divergence_forces_new_file() {
+        let source = Path::new("/Captures/original.png");
+        assert!(!can_replace_editor_source(Some(source), "png", "renamed"));
+    }
+
+    #[test]
+    fn unsaved_image_cannot_replace_a_source() {
+        assert!(!can_replace_editor_source(None, "png", "Capture"));
+    }
+
+    #[test]
+    fn unsupported_source_extension_cannot_be_replaced_as_png() {
+        let source = Path::new("/Captures/original.bmp");
+        assert!(!can_replace_editor_source(Some(source), "png", "original"));
     }
 }

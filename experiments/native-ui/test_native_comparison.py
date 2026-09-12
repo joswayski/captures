@@ -26,7 +26,7 @@ class ComparisonTests(unittest.TestCase):
                 comparison.capture_window('401', target, (123, 77))
             self.assertEqual(output.call_args_list[0].args[0], ['xwininfo', '-id', '401'])
             self.assertEqual(run.call_args.args[0], [
-                'import', '-window', 'root', '-crop', '123x77+12+9', str(target),
+                'import', '-window', 'root', '-crop', '123x77+12+9', '+repage', str(target),
             ])
 
     def test_clamped_window_size_is_not_reported_as_matched(self):

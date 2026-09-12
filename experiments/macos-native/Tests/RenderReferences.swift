@@ -75,13 +75,35 @@ enum RenderReferences {
                     let name = dustCapture
                         ? "preview-dust-compositor.png" : "recording-editor-compositor.png"
                     let destination = output.appendingPathComponent(name)
-                    let capture = Process()
-                    capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-                    capture.arguments = ["-x", "-o", "-l", "\(window.windowNumber)", destination.path]
                     do {
-                        try capture.run(); capture.waitUntilExit()
-                        guard capture.terminationStatus == 0,
-                              let image = NSImage(contentsOf: destination),
+                        let image: NSImage
+                        if dustCapture {
+                            // Process startup made the short dust sequence reach
+                            // its nearly-empty tail before `screencapture` sampled
+                            // it. Read this window directly from WindowServer at
+                            // the scheduled 0.66 s presentation phase instead.
+                            guard let captured = CGWindowListCreateImage(
+                                .null, .optionIncludingWindow,
+                                CGWindowID(window.windowNumber), [.boundsIgnoreFraming]
+                            ) else { throw NativeFailure("WindowServer did not return the dust presentation.") }
+                            let bitmap = NSBitmapImageRep(cgImage: captured)
+                            guard let data = bitmap.representation(using: .png, properties: [:]) else {
+                                throw NativeFailure("Could not encode the dust compositor capture.")
+                            }
+                            try data.write(to: destination, options: .withoutOverwriting)
+                            image = NSImage(cgImage: captured, size: .zero)
+                        } else {
+                            let capture = Process()
+                            capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                            capture.arguments = ["-x", "-o", "-l", "\(window.windowNumber)", destination.path]
+                            try capture.run(); capture.waitUntilExit()
+                            guard capture.terminationStatus == 0,
+                                  let captured = NSImage(contentsOf: destination) else {
+                                throw NativeFailure("screencapture did not return the recording presentation.")
+                            }
+                            image = captured
+                        }
+                        guard
                               (dustCapture ? hasDustPresentation(image)
                                   : hasSharedFixtureFeature(image)) else {
                             fputs("Compositor capture for \(fixture.name) did not contain its required presented media. Grant Screen Recording permission, verify the window is unobscured, and rerun.\n", stderr)
@@ -158,18 +180,29 @@ enum RenderReferences {
         let minimumY = bitmap.pixelsHigh * 18 / 100
         let maximumY = bitmap.pixelsHigh * 82 / 100
         var sourcePixels = 0
+        var clearInteriorPixels = 0
         for y in stride(from: minimumY, to: maximumY, by: 2) {
             for x in stride(from: minimumX, to: maximumX, by: 2) {
-                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
-                      color.alphaComponent > 0.08,
-                      color.blueComponent > 0.18,
-                      color.blueComponent - color.redComponent > 0.05,
-                      color.blueComponent - color.greenComponent > 0.015 else { continue }
-                sourcePixels += 1
-                if sourcePixels >= 120 { return true }
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                if color.alphaComponent > 0.08,
+                   color.blueComponent > 0.18,
+                   color.blueComponent - color.redComponent > 0.05,
+                   color.blueComponent - color.greenComponent > 0.015 {
+                    sourcePixels += 1
+                }
+                // The intact source fills the card. Require holes through its
+                // central area as independent evidence that the compositor is
+                // presenting displaced fragments rather than a static model
+                // layer. This band remains inside the card with either bitmap
+                // row orientation, including captures that contain a titlebar.
+                if y >= bitmap.pixelsHigh * 30 / 100,
+                   y < bitmap.pixelsHigh * 70 / 100,
+                   color.alphaComponent < 0.03 {
+                    clearInteriorPixels += 1
+                }
             }
         }
-        return false
+        return sourcePixels >= 120 && clearInteriorPixels >= 30
     }
 
     private static func hasSharedFixtureFeature(_ image: NSImage) -> Bool {

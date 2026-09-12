@@ -15,6 +15,20 @@ def command(*args):
     return subprocess.check_output([str(arg) for arg in args], text=True).strip()
 
 
+def xwindow_geometry(window):
+    values = {}
+    for line in command("xwininfo", "-id", window).splitlines():
+        label, separator, value = line.strip().partition(":")
+        if separator and label in ("Absolute upper-left X", "Absolute upper-left Y", "Width", "Height"):
+            values[label] = int(value.strip())
+    return (
+        values["Absolute upper-left X"],
+        values["Absolute upper-left Y"],
+        values["Width"],
+        values["Height"],
+    )
+
+
 def walk(node):
     yield node
     try:
@@ -108,7 +122,9 @@ def capture(artifacts, name, title):
         ["xdotool", "search", "--onlyvisible", "--name", title], capture_output=True, text=True
     ).stdout.strip().splitlines()[-1:] or None)[0]
     time.sleep(0.4)
-    command("import", "-window", window, artifacts / f"{name}.png")
+    x, y, width, height = xwindow_geometry(window)
+    geometry = f"{width}x{height}{x:+d}{y:+d}"
+    command("import", "-window", "root", "-crop", geometry, "+repage", artifacts / f"{name}.png")
 
 
 def stop(process):

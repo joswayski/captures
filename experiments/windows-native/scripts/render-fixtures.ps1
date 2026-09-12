@@ -112,7 +112,7 @@ $previousData = $env:CAPTURES_WINDOWS_NATIVE_DATA
 try {
   $env:CAPTURES_WINDOWS_NATIVE_DATA = $profile
   foreach ($appearance in @("light", "dark")) {
-    foreach ($view in @("menu", "editor", "recording-selector", "recording-hud", "recording-editor", "preview", "history", "preferences", "delete-confirmation")) {
+    foreach ($view in @("menu", "editor", "editor-shapes", "editor-export", "recording-selector", "recording-hud", "recording-editor", "preview", "history", "preferences", "delete-confirmation")) {
       Save-View $appearance $view
     }
   }

@@ -948,7 +948,11 @@ private final class DustAnimationView: NSView {
                 x: particle.origin.x + particle.size.width / 2,
                 y: particle.origin.y + particle.size.height / 2
             )
-            chip.opacity = 0
+            // Future-staggered animations are not guaranteed to apply their
+            // backwards fill before beginTime in a captured window compositor.
+            // Keep each not-yet-started chip visibly intact in the model layer;
+            // the retained animation supplies the final zero-opacity state.
+            chip.opacity = 1
             if let blur = CIFilter(name: "CIGaussianBlur", parameters: [kCIInputRadiusKey: 2]) {
                 chip.filters = [blur]
             }

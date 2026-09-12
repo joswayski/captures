@@ -176,14 +176,21 @@ impl MediaWorker {
                     |_| {},
                 )
                 .map_err(|error| error.to_string());
-            let _ = sender.send(Event::Export {
-                epoch: spec.epoch,
-                request: spec.request,
-                source: spec.source,
-                destination: spec.destination,
-                save_as_new: spec.save_as_new,
-                result,
-            });
+            let destination = spec.destination.clone();
+            let delivered = sender
+                .send(Event::Export {
+                    epoch: spec.epoch,
+                    request: spec.request,
+                    source: spec.source,
+                    destination: spec.destination,
+                    save_as_new: spec.save_as_new,
+                    result,
+                })
+                .is_ok();
+            captures_windows_native::async_state::cleanup_undelivered_staged_file(
+                &destination,
+                delivered,
+            );
         });
     }
 }

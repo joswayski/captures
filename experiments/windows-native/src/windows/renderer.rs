@@ -1,5 +1,6 @@
 use captures_windows_native::{
-    geometry::{Rect, contain, cover},
+    editor::Tool,
+    geometry::{Rect, contain, cover, screenshot_editor_canvas},
     history::Artifact,
     settings::Settings,
     state::{AppState, Surface},
@@ -400,108 +401,374 @@ impl Renderer {
 
     unsafe fn image_editor(&mut self, state: &AppState, p: Palette, w: f32, h: f32) -> Result<()> {
         unsafe {
+            let footer_y = h - 92.0;
+            let sidebar_x = w - 320.0;
             self.panel(
                 Rect {
                     x: 0.0,
                     y: 0.0,
                     width: w,
-                    height: 56.0,
+                    height: 52.0,
                 },
                 p.raised,
             );
-            self.text(
-                "Select  Crop  Text  Pen  Arrow  Line  Rect  Ellipse  Triangle  Diamond  Star",
+            self.panel(
                 Rect {
-                    x: 20.0,
-                    y: 14.0,
-                    width: w - 280.0,
+                    x: 0.0,
+                    y: 52.0,
+                    width: 56.0,
+                    height: footer_y - 52.0,
+                },
+                p.raised,
+            );
+            self.panel(
+                Rect {
+                    x: sidebar_x,
+                    y: 52.0,
+                    width: 320.0,
+                    height: footer_y - 52.0,
+                },
+                p.raised,
+            );
+            self.panel(
+                Rect {
+                    x: 0.0,
+                    y: footer_y,
+                    width: w,
+                    height: 92.0,
+                },
+                p.raised,
+            );
+            let border = self.brush(p.border)?;
+            self.target.DrawLine(
+                Vector2 { X: 0.0, Y: 52.0 },
+                Vector2 { X: w, Y: 52.0 },
+                &border,
+                1.0,
+                None,
+            );
+            self.target.DrawLine(
+                Vector2 {
+                    X: sidebar_x,
+                    Y: 52.0,
+                },
+                Vector2 {
+                    X: sidebar_x,
+                    Y: footer_y,
+                },
+                &border,
+                1.0,
+                None,
+            );
+            self.target.DrawLine(
+                Vector2 {
+                    X: 0.0,
+                    Y: footer_y,
+                },
+                Vector2 { X: w, Y: footer_y },
+                &border,
+                1.0,
+                None,
+            );
+
+            let document = state.editor.as_ref();
+            let dimensions = document.map_or_else(
+                || "Canvas".to_owned(),
+                |document| {
+                    format!(
+                        "Canvas    W  {}    ×    H  {}",
+                        document.crop.width.round() as u32,
+                        document.crop.height.round() as u32
+                    )
+                },
+            );
+            self.panel(
+                Rect {
+                    x: 72.0,
+                    y: 9.0,
+                    width: 246.0,
+                    height: 34.0,
+                },
+                p.field,
+            );
+            self.text(
+                &dimensions,
+                Rect {
+                    x: 78.0,
+                    y: 13.0,
+                    width: 234.0,
+                    height: 26.0,
+                },
+                p.text,
+                &self.body,
+            );
+            self.text(
+                "Background  Original",
+                Rect {
+                    x: 330.0,
+                    y: 13.0,
+                    width: 150.0,
+                    height: 26.0,
+                },
+                p.muted,
+                &self.body,
+            );
+            for (index, icon) in ["undo", "redo"].iter().enumerate() {
+                let rect = Rect {
+                    x: w - 498.0 + index as f32 * 38.0,
+                    y: 9.0,
+                    width: 34.0,
+                    height: 34.0,
+                };
+                self.editor_icon(icon, rect.inset(8.0), p.muted)?;
+            }
+            self.text(
+                "Fit view   −   100%   +",
+                Rect {
+                    x: w - 410.0,
+                    y: 13.0,
+                    width: 190.0,
+                    height: 26.0,
+                },
+                p.muted,
+                &self.body,
+            );
+            self.text(
+                "Add images — unavailable",
+                Rect {
+                    x: w - 214.0,
+                    y: 13.0,
+                    width: 194.0,
+                    height: 26.0,
+                },
+                p.muted,
+                &self.body,
+            );
+
+            if let Some(document) = document
+                && let Ok(image) = document.render()
+            {
+                self.bitmap_contain(&image, screenshot_editor_canvas(w, h))?;
+            }
+
+            for (index, (tool, icon)) in [
+                (Tool::Select, "select"),
+                (Tool::Crop, "crop"),
+                (Tool::Text, "text"),
+                (Tool::Pen, "pen"),
+                (Tool::Arrow, "shapes"),
+            ]
+            .iter()
+            .enumerate()
+            {
+                let rect = Rect {
+                    x: 8.0,
+                    y: 64.0 + index as f32 * 48.0,
+                    width: 40.0,
+                    height: 40.0,
+                };
+                let grouped = matches!(
+                    state.editor_tool,
+                    Tool::Arrow
+                        | Tool::Line
+                        | Tool::Rectangle
+                        | Tool::Ellipse
+                        | Tool::Triangle
+                        | Tool::Diamond
+                        | Tool::Star
+                );
+                if state.editor_tool == *tool || (*tool == Tool::Arrow && grouped) {
+                    self.panel(rect, p.field);
+                    let active = self.brush(p.accent)?;
+                    self.target.FillRectangle(
+                        &D2D_RECT_F {
+                            left: rect.x,
+                            top: rect.y,
+                            right: rect.x + 3.0,
+                            bottom: rect.y + rect.height,
+                        },
+                        &active,
+                    );
+                }
+                self.editor_icon(icon, rect.inset(10.0), p.text)?;
+            }
+            if state.editor_shapes_open {
+                let flyout = Rect {
+                    x: 60.0,
+                    y: 246.0,
+                    width: 214.0,
+                    height: 244.0,
+                };
+                self.panel(flyout, p.raised);
+                self.text(
+                    "Shapes",
+                    Rect {
+                        x: 72.0,
+                        y: 256.0,
+                        width: 190.0,
+                        height: 24.0,
+                    },
+                    p.text,
+                    &self.strong,
+                );
+                for (index, (name, label)) in [
+                    ("arrow", "Arrow"),
+                    ("line", "Line"),
+                    ("rectangle", "Rectangle"),
+                    ("ellipse", "Ellipse"),
+                    ("triangle", "Triangle"),
+                    ("diamond", "Diamond"),
+                    ("star", "Star"),
+                ]
+                .iter()
+                .enumerate()
+                {
+                    let row = index / 2;
+                    let column = index % 2;
+                    let rect = Rect {
+                        x: 70.0 + column as f32 * 98.0,
+                        y: 288.0 + row as f32 * 47.0,
+                        width: 94.0,
+                        height: 40.0,
+                    };
+                    self.panel(rect, p.field);
+                    self.editor_icon(
+                        name,
+                        Rect {
+                            x: rect.x + 8.0,
+                            y: rect.y + 10.0,
+                            width: 20.0,
+                            height: 20.0,
+                        },
+                        p.text,
+                    )?;
+                    self.text(
+                        label,
+                        Rect {
+                            x: rect.x + 30.0,
+                            y: rect.y + 9.0,
+                            width: 60.0,
+                            height: 22.0,
+                        },
+                        p.text,
+                        &self.body,
+                    );
+                }
+            }
+
+            self.text(
+                &format!(
+                    "Layers   {}",
+                    document.map_or(1, |value| value.layers.len() + 1)
+                ),
+                Rect {
+                    x: sidebar_x + 20.0,
+                    y: 68.0,
+                    width: 280.0,
                     height: 28.0,
                 },
                 p.text,
                 &self.strong,
             );
-            self.button(
-                Rect {
-                    x: w - 236.0,
-                    y: 11.0,
-                    width: 68.0,
-                    height: 34.0,
-                },
-                p.raised,
-                p.text,
-                "Copy",
-            );
-            self.button(
-                Rect {
-                    x: w - 160.0,
-                    y: 11.0,
-                    width: 68.0,
-                    height: 34.0,
-                },
-                p.raised,
-                p.text,
-                "Save",
-            );
-            self.button(
-                Rect {
-                    x: w - 84.0,
-                    y: 11.0,
-                    width: 68.0,
-                    height: 34.0,
-                },
-                p.accent,
-                Color(23, 24, 27, 255),
-                "Done",
-            );
-            if let Some(document) = state.editor.as_ref()
-                && let Ok(image) = document.render()
-            {
-                self.bitmap_contain(
-                    &image,
-                    Rect {
-                        x: 76.0,
-                        y: 80.0,
-                        width: w - 300.0,
-                        height: h - 130.0,
-                    },
-                )?;
+            let mut layer_y = 104.0;
+            if let Some(document) = document {
+                for layer in document.layers.iter().rev().take(4) {
+                    let selected = state.selected_layer == Some(layer.id);
+                    self.panel(
+                        Rect {
+                            x: sidebar_x + 16.0,
+                            y: layer_y,
+                            width: 288.0,
+                            height: 48.0,
+                        },
+                        if selected { p.field } else { p.raised },
+                    );
+                    self.editor_icon(
+                        shape_icon(&layer.shape),
+                        Rect {
+                            x: sidebar_x + 28.0,
+                            y: layer_y + 14.0,
+                            width: 20.0,
+                            height: 20.0,
+                        },
+                        p.text,
+                    )?;
+                    self.text(
+                        shape_label(&layer.shape),
+                        Rect {
+                            x: sidebar_x + 58.0,
+                            y: layer_y + 7.0,
+                            width: 158.0,
+                            height: 32.0,
+                        },
+                        p.text,
+                        &self.body,
+                    );
+                    self.editor_icon(
+                        if layer.visible { "eye" } else { "eye-off" },
+                        Rect {
+                            x: sidebar_x + 264.0,
+                            y: layer_y + 14.0,
+                            width: 20.0,
+                            height: 20.0,
+                        },
+                        p.muted,
+                    )?;
+                    layer_y += 52.0;
+                }
             }
             self.panel(
                 Rect {
-                    x: w - 208.0,
-                    y: 72.0,
-                    width: 192.0,
-                    height: h - 88.0,
+                    x: sidebar_x + 16.0,
+                    y: layer_y,
+                    width: 288.0,
+                    height: 48.0,
                 },
-                p.raised,
+                p.field,
             );
             self.text(
-                "Layers",
+                "Original screenshot\nImage · locked background",
                 Rect {
-                    x: w - 190.0,
-                    y: 88.0,
-                    width: 160.0,
+                    x: sidebar_x + 28.0,
+                    y: layer_y + 6.0,
+                    width: 244.0,
+                    height: 36.0,
+                },
+                p.muted,
+                &self.body,
+            );
+            let properties_y = (layer_y + 72.0).min(footer_y - 154.0);
+            self.text(
+                if state.selected_layer.is_some() {
+                    "Properties · selected layer"
+                } else {
+                    "Annotation properties"
+                },
+                Rect {
+                    x: sidebar_x + 20.0,
+                    y: properties_y,
+                    width: 280.0,
                     height: 24.0,
                 },
                 p.text,
                 &self.strong,
             );
             self.text(
-                "Original screenshot\nAnnotations",
+                "Stroke color",
                 Rect {
-                    x: w - 190.0,
-                    y: 128.0,
-                    width: 160.0,
-                    height: 80.0,
+                    x: sidebar_x + 20.0,
+                    y: properties_y + 34.0,
+                    width: 92.0,
+                    height: 28.0,
                 },
                 p.muted,
                 &self.body,
             );
             self.button(
                 Rect {
-                    x: w - 190.0,
-                    y: 228.0,
-                    width: 112.0,
+                    x: sidebar_x + 116.0,
+                    y: properties_y + 31.0,
+                    width: 132.0,
                     height: 32.0,
                 },
                 p.field,
@@ -517,13 +784,131 @@ impl Renderer {
             self.target.FillEllipse(
                 &windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE {
                     point: Vector2 {
-                        X: w - 48.0,
-                        Y: 244.0,
+                        X: sidebar_x + 276.0,
+                        Y: properties_y + 47.0,
                     },
                     radiusX: 13.0,
                     radiusY: 13.0,
                 },
                 &swatch,
+            );
+
+            if state.editor_export_settings_open {
+                self.panel(
+                    Rect {
+                        x: 16.0,
+                        y: footer_y - 84.0,
+                        width: w - 32.0,
+                        height: 72.0,
+                    },
+                    p.field,
+                );
+                self.text(
+                    &format!(
+                        "Output size   Original · {} × {}       Save quality   Preserve quality       Est. size   after save",
+                        document.map_or(0, |value| value.crop.width.round() as u32),
+                        document.map_or(0, |value| value.crop.height.round() as u32)
+                    ),
+                    Rect {
+                        x: 30.0,
+                        y: footer_y - 61.0,
+                        width: w - 60.0,
+                        height: 28.0,
+                    },
+                    p.muted,
+                    &self.body,
+                );
+            }
+            self.button(
+                Rect {
+                    x: 16.0,
+                    y: footer_y + 18.0,
+                    width: 184.0,
+                    height: 56.0,
+                },
+                p.field,
+                p.text,
+                if state.editor_export_settings_open {
+                    "Export settings  ▴\nOriginal · Preserve"
+                } else {
+                    "Export settings  ▾\nOriginal · Preserve"
+                },
+            );
+            self.text(
+                "Filename",
+                Rect {
+                    x: 216.0,
+                    y: footer_y + 8.0,
+                    width: 270.0,
+                    height: 18.0,
+                },
+                p.muted,
+                &self.body,
+            );
+            self.button(
+                Rect {
+                    x: 216.0,
+                    y: footer_y + 30.0,
+                    width: 198.0,
+                    height: 42.0,
+                },
+                p.field,
+                p.text,
+                &state.editor_filename,
+            );
+            self.button(
+                Rect {
+                    x: 418.0,
+                    y: footer_y + 30.0,
+                    width: 68.0,
+                    height: 42.0,
+                },
+                p.field,
+                p.text,
+                &format!(".{}", state.editor_format),
+            );
+            self.button(
+                Rect {
+                    x: w - 492.0,
+                    y: footer_y + 30.0,
+                    width: 122.0,
+                    height: 42.0,
+                },
+                p.field,
+                p.text,
+                "Copy image",
+            );
+            self.toggle(
+                Rect {
+                    x: w - 348.0,
+                    y: footer_y + 42.0,
+                    width: 28.0,
+                    height: 16.0,
+                },
+                p,
+                state.editor_save_as_new,
+            )?;
+            self.text(
+                "Save as new file",
+                Rect {
+                    x: w - 314.0,
+                    y: footer_y + 34.0,
+                    width: 122.0,
+                    height: 32.0,
+                },
+                p.text,
+                &self.body,
+            );
+            self.button(
+                Rect {
+                    x: w - 168.0,
+                    y: footer_y + 26.0,
+                    width: 148.0,
+                    height: 46.0,
+                },
+                p.accent,
+                contrast_ink(p.accent),
+                "Save",
             );
             Ok(())
         }
@@ -1376,6 +1761,152 @@ impl Renderer {
         }
     }
 
+    unsafe fn editor_icon(&self, name: &str, rect: Rect, ink: Color) -> Result<()> {
+        unsafe {
+            let brush = self.brush(ink)?;
+            let left = rect.x;
+            let top = rect.y;
+            let right = rect.x + rect.width;
+            let bottom = rect.y + rect.height;
+            let cx = rect.x + rect.width / 2.0;
+            let cy = rect.y + rect.height / 2.0;
+            let line = |x1, y1, x2, y2| {
+                self.target.DrawLine(
+                    Vector2 { X: x1, Y: y1 },
+                    Vector2 { X: x2, Y: y2 },
+                    &brush,
+                    1.8,
+                    None,
+                )
+            };
+            let polygon = |points: &[(f32, f32)]| {
+                for pair in points.windows(2) {
+                    line(pair[0].0, pair[0].1, pair[1].0, pair[1].1);
+                }
+                if let (Some(first), Some(last)) = (points.first(), points.last()) {
+                    line(last.0, last.1, first.0, first.1);
+                }
+            };
+            match name {
+                "select" => polygon(&[
+                    (left + 2.0, top + 1.0),
+                    (right - 2.0, cy),
+                    (cx, cy + 2.0),
+                    (cx - 2.0, bottom - 1.0),
+                ]),
+                "crop" => {
+                    line(left + 3.0, top, left + 3.0, bottom - 3.0);
+                    line(left, top + 3.0, right - 3.0, top + 3.0);
+                    line(right - 3.0, top + 3.0, right - 3.0, bottom);
+                    line(left + 3.0, bottom - 3.0, right, bottom - 3.0);
+                }
+                "text" => {
+                    line(left + 2.0, top + 2.0, right - 2.0, top + 2.0);
+                    line(cx, top + 2.0, cx, bottom - 2.0);
+                    line(cx - 4.0, bottom - 2.0, cx + 4.0, bottom - 2.0);
+                }
+                "pen" => {
+                    line(left, bottom - 3.0, cx - 3.0, cy - 2.0);
+                    line(cx - 3.0, cy - 2.0, cx + 2.0, cy + 4.0);
+                    line(cx + 2.0, cy + 4.0, right, top + 2.0);
+                    line(left, bottom, right, bottom);
+                }
+                "shapes" => {
+                    self.target.DrawRectangle(
+                        &D2D_RECT_F {
+                            left,
+                            top: cy - 2.0,
+                            right: cx + 2.0,
+                            bottom,
+                        },
+                        &brush,
+                        1.8,
+                        None,
+                    );
+                    self.target.DrawEllipse(
+                        &windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE {
+                            point: Vector2 {
+                                X: right - 5.0,
+                                Y: top + 6.0,
+                            },
+                            radiusX: 6.0,
+                            radiusY: 6.0,
+                        },
+                        &brush,
+                        1.8,
+                        None,
+                    );
+                }
+                "arrow" => {
+                    line(left, bottom, right, top);
+                    line(cx + 2.0, top, right, top);
+                    line(right, top, right, cy - 2.0);
+                }
+                "line" => line(left, bottom, right, top),
+                "rectangle" => self.target.DrawRectangle(
+                    &D2D_RECT_F {
+                        left,
+                        top: top + 2.0,
+                        right,
+                        bottom: bottom - 2.0,
+                    },
+                    &brush,
+                    1.8,
+                    None,
+                ),
+                "ellipse" | "eye" | "eye-off" => {
+                    self.target.DrawEllipse(
+                        &windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE {
+                            point: Vector2 { X: cx, Y: cy },
+                            radiusX: rect.width / 2.0,
+                            radiusY: rect.height / 3.0,
+                        },
+                        &brush,
+                        1.8,
+                        None,
+                    );
+                    if name == "eye" {
+                        self.target.FillEllipse(
+                            &windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE {
+                                point: Vector2 { X: cx, Y: cy },
+                                radiusX: 2.5,
+                                radiusY: 2.5,
+                            },
+                            &brush,
+                        );
+                    } else if name == "eye-off" {
+                        line(left, top, right, bottom);
+                    }
+                }
+                "triangle" => polygon(&[(cx, top), (right, bottom), (left, bottom)]),
+                "diamond" => polygon(&[(cx, top), (right, cy), (cx, bottom), (left, cy)]),
+                "star" => {
+                    let points = (0..10)
+                        .map(|index| {
+                            let angle = (-90.0 + index as f32 * 36.0).to_radians();
+                            let radius = if index % 2 == 0 { 1.0 } else { 0.42 };
+                            (
+                                cx + angle.cos() * rect.width / 2.0 * radius,
+                                cy + angle.sin() * rect.height / 2.0 * radius,
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    polygon(&points);
+                }
+                "undo" | "redo" => {
+                    let reverse = name == "undo";
+                    let from = if reverse { right } else { left };
+                    let to = if reverse { left } else { right };
+                    line(from, cy, to + if reverse { 4.0 } else { -4.0 }, cy);
+                    line(to, cy, to + if reverse { 5.0 } else { -5.0 }, top + 4.0);
+                    line(to, cy, to + if reverse { 5.0 } else { -5.0 }, bottom - 4.0);
+                }
+                _ => line(left, top, right, bottom),
+            }
+            Ok(())
+        }
+    }
+
     unsafe fn hud_icon(&self, name: &str, rect: Rect, ink: Color) -> Result<()> {
         unsafe {
             let brush = self.brush(ink)?;
@@ -1709,6 +2240,44 @@ fn format_bytes(bytes: u64) -> String {
         format!("{:.1} MB", bytes as f64 / 1_000_000.0)
     } else {
         format!("{} KB", bytes.div_ceil(1_000))
+    }
+}
+
+fn shape_label(shape: &captures_windows_native::editor::Shape) -> &'static str {
+    use captures_windows_native::editor::Shape;
+    match shape {
+        Shape::Stroke(_) => "Freehand",
+        Shape::Arrow(_, _) => "Arrow",
+        Shape::Line(_, _) => "Line",
+        Shape::Rectangle(_) => "Rectangle",
+        Shape::Ellipse(_) => "Ellipse",
+        Shape::Polygon(_) => "Shape",
+        Shape::Text { .. } => "Text",
+    }
+}
+
+fn shape_icon(shape: &captures_windows_native::editor::Shape) -> &'static str {
+    use captures_windows_native::editor::Shape;
+    match shape {
+        Shape::Stroke(_) => "pen",
+        Shape::Arrow(_, _) => "arrow",
+        Shape::Line(_, _) => "line",
+        Shape::Rectangle(_) => "rectangle",
+        Shape::Ellipse(_) => "ellipse",
+        Shape::Polygon(_) => "shapes",
+        Shape::Text { .. } => "text",
+    }
+}
+
+fn contrast_ink(background: Color) -> Color {
+    let brightness = (u32::from(background.0) * 299
+        + u32::from(background.1) * 587
+        + u32::from(background.2) * 114)
+        / 1_000;
+    if brightness > 150 {
+        Color(23, 24, 27, 255)
+    } else {
+        Color(250, 250, 252, 255)
     }
 }
 

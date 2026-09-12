@@ -150,6 +150,15 @@ pub fn contain(source: (u32, u32), destination: Rect) -> Rect {
     }
 }
 
+pub fn screenshot_editor_canvas(width: f32, height: f32) -> Rect {
+    Rect {
+        x: 80.0,
+        y: 76.0,
+        width: (width - 424.0).max(1.0),
+        height: (height - 188.0).max(1.0),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,6 +256,19 @@ mod tests {
                 y: 45.0,
                 width: 100.0,
                 height: 50.0,
+            }
+        );
+    }
+
+    #[test]
+    fn screenshot_editor_canvas_reserves_shipping_chrome() {
+        assert_eq!(
+            screenshot_editor_canvas(1100.0, 720.0),
+            Rect {
+                x: 80.0,
+                y: 76.0,
+                width: 676.0,
+                height: 532.0,
             }
         );
     }

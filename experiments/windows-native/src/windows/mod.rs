@@ -10,10 +10,16 @@ use captures_recording::{
 use captures_recording_xcap::XcapRecordingSegment;
 use captures_windows_native::{
     editor::FreehandGesture,
-    geometry::{Point, Rect, SelectionDrag, contain, rounded_contains, update_selection},
+    geometry::{
+        Point, Rect, SelectionDrag, contain, rounded_contains, screenshot_editor_canvas,
+        update_selection,
+    },
     history::{Artifact, History, move_to_trash, restore_from_trash, safe_delete},
     settings::{Settings, data_dir, profile_id},
-    state::{AppState, RecordingEditorState, RecordingUi, Surface},
+    state::{
+        AppState, RecordingEditorState, RecordingUi, Surface, can_replace_editor_source,
+        sanitize_editor_filename,
+    },
     theme::{palette, theme_colors},
 };
 use image::RgbaImage;
@@ -703,7 +709,10 @@ impl App {
                     if p.y > self.height as f32 * 96.0 / self.dpi - 42.0 {
                         if p.x < 85.0 {
                             if let Some(preview) = self.state.previews.first() {
-                                self.state.edit_image(preview.image.clone());
+                                self.state.edit_image_from(
+                                    preview.image.clone(),
+                                    Some(preview.artifact.path.clone()),
+                                );
                                 self.show_surface(Surface::ScreenshotEditor, 1100, 720, false)
                             }
                         } else if p.x < 170.0 {
@@ -744,7 +753,10 @@ impl App {
                 Surface::RecordingHud => self.hud_click(p),
                 Surface::Preferences => self.preferences_click(p),
                 Surface::History => self.history_click(p),
-                Surface::ScreenshotEditor => self.editor_pointer_down(p),
+                Surface::ScreenshotEditor => {
+                    self.editor_pointer_down(p);
+                    let _ = InvalidateRect(Some(self.hwnd), None, false);
+                }
                 Surface::RecordingEditor => self.recording_editor_click(p),
             }
         }
@@ -855,7 +867,8 @@ impl App {
                 if artifact.kind == captures_windows_native::history::ArtifactKind::Image {
                     match image::open(&artifact.path) {
                         Ok(image) => {
-                            self.state.edit_image(image.to_rgba8());
+                            self.state
+                                .edit_image_from(image.to_rgba8(), Some(artifact.path.clone()));
                             unsafe {
                                 self.show_surface(Surface::ScreenshotEditor, 1100, 720, false)
                             };
@@ -901,34 +914,33 @@ impl App {
 
     unsafe fn editor_pointer_down(&mut self, p: Point) {
         let width = self.width as f32 * 96.0 / self.dpi;
-        if p.y <= 56.0 {
-            if p.x > width - 84.0 {
-                unsafe {
-                    self.show_surface(Surface::Menu, 420, 430, false);
+        let height = self.height as f32 * 96.0 / self.dpi;
+        let footer_y = height - 92.0;
+        let sidebar_x = width - 320.0;
+        let sidebar_layer = (p.x > sidebar_x && (104.0..312.0).contains(&p.y))
+            .then(|| ((p.y - 104.0) / 52.0).floor() as usize)
+            .filter(|index| *index < 4);
+        if p.y >= footer_y {
+            if p.x < 208.0 {
+                self.state.editor_export_settings_open = !self.state.editor_export_settings_open;
+            } else if (216.0..416.0).contains(&p.x) {
+                self.state.editor_editing_filename = true;
+                self.state.status = Some(("Editing export filename".into(), Instant::now()));
+            } else if (416.0..496.0).contains(&p.x) {
+                self.state.editor_format = match self.state.editor_format.as_str() {
+                    "png" => "jpeg",
+                    "jpeg" => "webp",
+                    _ => "png",
                 }
-                return;
-            } else if p.x > width - 160.0 {
-                let Some(result) = self.state.editor.as_ref().map(|document| document.render())
-                else {
-                    return;
-                };
-                let image = match result {
-                    Ok(image) => image,
-                    Err(error) => {
-                        self.set_error(error);
-                        return;
-                    }
-                };
-                match self.save_image(&image) {
-                    Ok(artifact) => {
-                        let _ = self.history.add(artifact.clone());
-                        self.state.add_preview(artifact, image, Instant::now());
-                        unsafe { self.show_preview() };
-                    }
-                    Err(error) => self.set_error(error),
+                .into();
+                if !can_replace_editor_source(
+                    self.state.editor_source.as_deref(),
+                    &self.state.editor_format,
+                    &self.state.editor_filename,
+                ) {
+                    self.state.editor_save_as_new = true;
                 }
-                return;
-            } else if p.x > width - 236.0 {
+            } else if (width - 492.0..width - 360.0).contains(&p.x) {
                 if let Some(document) = &self.state.editor {
                     match document.render() {
                         Ok(image) => {
@@ -937,14 +949,70 @@ impl App {
                         Err(error) => self.set_error(error),
                     }
                 }
-                return;
+            } else if (width - 360.0..width - 180.0).contains(&p.x) {
+                if can_replace_editor_source(
+                    self.state.editor_source.as_deref(),
+                    &self.state.editor_format,
+                    &self.state.editor_filename,
+                ) {
+                    self.state.editor_save_as_new = !self.state.editor_save_as_new;
+                } else {
+                    self.state.editor_save_as_new = true;
+                    self.state.status = Some((
+                        "Source format and filename must match before replacing the original"
+                            .into(),
+                        Instant::now(),
+                    ));
+                }
+            } else if p.x >= width - 176.0 {
+                self.save_editor_document();
             }
-            let index = (p.x / 70.0).floor() as usize;
-            self.state.editor_tool = [
+        } else if p.y < 52.0 {
+            if (width - 498.0..width - 460.0).contains(&p.x) {
+                if let Some(document) = self.state.editor.as_mut() {
+                    document.undo();
+                    self.state.selected_layer = None;
+                }
+            } else if (width - 460.0..width - 422.0).contains(&p.x)
+                && let Some(document) = self.state.editor.as_mut()
+            {
+                document.redo();
+                self.state.selected_layer = None;
+            }
+        } else if p.x < 56.0 && (64.0..304.0).contains(&p.y) {
+            let index = ((p.y - 64.0) / 48.0).floor() as usize;
+            if index == 4 {
+                self.state.editor_shapes_open = !self.state.editor_shapes_open;
+                if !matches!(
+                    self.state.editor_tool,
+                    captures_windows_native::editor::Tool::Arrow
+                        | captures_windows_native::editor::Tool::Line
+                        | captures_windows_native::editor::Tool::Rectangle
+                        | captures_windows_native::editor::Tool::Ellipse
+                        | captures_windows_native::editor::Tool::Triangle
+                        | captures_windows_native::editor::Tool::Diamond
+                        | captures_windows_native::editor::Tool::Star
+                ) {
+                    self.state.editor_tool = captures_windows_native::editor::Tool::Arrow;
+                }
+            } else if let Some(tool) = [
                 captures_windows_native::editor::Tool::Select,
                 captures_windows_native::editor::Tool::Crop,
                 captures_windows_native::editor::Tool::Text,
                 captures_windows_native::editor::Tool::Pen,
+            ]
+            .get(index)
+            {
+                self.state.editor_tool = *tool;
+                self.state.editor_shapes_open = false;
+            }
+        } else if self.state.editor_shapes_open
+            && (70.0..266.0).contains(&p.x)
+            && (288.0..476.0).contains(&p.y)
+        {
+            let column = ((p.x - 70.0) / 98.0).floor() as usize;
+            let row = ((p.y - 288.0) / 47.0).floor() as usize;
+            if let Some(tool) = [
                 captures_windows_native::editor::Tool::Arrow,
                 captures_windows_native::editor::Tool::Line,
                 captures_windows_native::editor::Tool::Rectangle,
@@ -953,10 +1021,37 @@ impl App {
                 captures_windows_native::editor::Tool::Diamond,
                 captures_windows_native::editor::Tool::Star,
             ]
-            .get(index)
-            .copied()
-            .unwrap_or(captures_windows_native::editor::Tool::Select);
-        } else if p.x > width - 190.0 && p.x < width - 78.0 && (228.0..262.0).contains(&p.y) {
+            .get(row * 2 + column)
+            {
+                self.state.editor_tool = *tool;
+                self.state.editor_shapes_open = false;
+            }
+        } else if p.x > sidebar_x
+            && (104.0..312.0).contains(&p.y)
+            && let Some(index) = sidebar_layer
+            && let Some(id) = self
+                .state
+                .editor
+                .as_ref()
+                .and_then(|document| document.layers.iter().rev().nth(index))
+                .map(|layer| layer.id)
+        {
+            self.state.selected_layer = Some(id);
+            self.state.editor_tool = captures_windows_native::editor::Tool::Select;
+            if p.x > sidebar_x + 244.0
+                && let Some(document) = self.state.editor.as_mut()
+            {
+                document.toggle_visibility(id);
+            }
+        } else if p.x > sidebar_x + 116.0 && p.x < sidebar_x + 248.0 && {
+            let count = self
+                .state
+                .editor
+                .as_ref()
+                .map_or(0, |document| document.layers.len().min(4));
+            let properties_y = (176.0 + count as f32 * 52.0).min(footer_y - 154.0);
+            (properties_y + 31.0..properties_y + 63.0).contains(&p.y)
+        } {
             self.state.editor_editing_color = true;
             self.state.status = Some((
                 "Type a #RRGGBB color and press Enter".into(),
@@ -1080,12 +1175,7 @@ impl App {
                 document.crop.width.max(1.0).round() as u32,
                 document.crop.height.max(1.0).round() as u32,
             ),
-            Rect {
-                x: 76.0,
-                y: 80.0,
-                width: width - 300.0,
-                height: height - 130.0,
-            },
+            screenshot_editor_canvas(width, height),
         );
         if !viewport.contains(point) {
             return None;
@@ -1451,6 +1541,16 @@ impl App {
             let control = GetKeyState(VK_CONTROL.0 as i32) < 0;
             if editor && key == VK_RETURN.0 as u32 && self.editor_text_origin.is_some() {
                 self.commit_editor_text();
+            } else if editor && key == VK_RETURN.0 as u32 && self.state.editor_editing_filename {
+                self.state.editor_filename = sanitize_editor_filename(&self.state.editor_filename);
+                self.state.editor_editing_filename = false;
+                if !can_replace_editor_source(
+                    self.state.editor_source.as_deref(),
+                    &self.state.editor_format,
+                    &self.state.editor_filename,
+                ) {
+                    self.state.editor_save_as_new = true;
+                }
             } else if editor && key == VK_RETURN.0 as u32 && self.state.editor_editing_color {
                 match parse_hex_color(&self.state.editor_color_hex) {
                     Some(color) => {
@@ -1479,10 +1579,19 @@ impl App {
                     self.state.selected_layer = None;
                     let _ = InvalidateRect(Some(self.hwnd), None, false);
                 }
+            } else if editor && control && key == 0x53 {
+                self.save_editor_document();
             } else if key == VK_ESCAPE.0 as u32 {
-                if self.editor_text_origin.take().is_some() || self.state.editor_editing_color {
+                if self.state.editor_shapes_open {
+                    self.state.editor_shapes_open = false;
+                    let _ = InvalidateRect(Some(self.hwnd), None, false);
+                } else if self.editor_text_origin.take().is_some()
+                    || self.state.editor_editing_color
+                    || self.state.editor_editing_filename
+                {
                     self.editor_text.clear();
                     self.state.editor_editing_color = false;
+                    self.state.editor_editing_filename = false;
                     let _ = InvalidateRect(Some(self.hwnd), None, false);
                 } else if self.state.surface == Surface::Overlay {
                     self.state.cancel_overlay();
@@ -1534,6 +1643,25 @@ impl App {
                         .push(character.to_ascii_lowercase());
                 }
                 _ => {}
+            }
+        } else if self.state.editor_editing_filename {
+            match character {
+                '\u{8}' => {
+                    self.state.editor_filename.pop();
+                }
+                value
+                    if !value.is_control() && self.state.editor_filename.chars().count() < 120 =>
+                {
+                    self.state.editor_filename.push(value)
+                }
+                _ => {}
+            }
+            if !can_replace_editor_source(
+                self.state.editor_source.as_deref(),
+                &self.state.editor_format,
+                &self.state.editor_filename,
+            ) {
+                self.state.editor_save_as_new = true;
             }
         } else if self.editor_text_origin.is_some() {
             match character {
@@ -1687,19 +1815,106 @@ impl App {
     fn save_image(&self, image: &RgbaImage) -> Result<Artifact, String> {
         let extension = &self.settings.screenshot_format;
         let path = unique_path(&self.settings.output_directory, "Capture", extension);
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|e| e.to_string())?;
-        let bytes = match extension.as_str() {
-            "jpeg" => captures_windows_native::encoder::encode_jpeg(image, 92),
-            "webp" => captures_windows_native::encoder::encode_webp(image, None),
-            _ => captures_windows_native::encoder::encode_png(image, None),
-        };
-        std::io::Write::write_all(&mut BufWriter::new(file), &bytes?).map_err(|e| e.to_string())?;
+        write_image_file(&path, image, extension)?;
         Ok(Artifact::from_path(path, image.width(), image.height()))
     }
+
+    fn save_editor_document(&mut self) {
+        let Some(result) = self.state.editor.as_ref().map(|document| document.render()) else {
+            return;
+        };
+        let image = match result {
+            Ok(image) => image,
+            Err(error) => {
+                self.set_error(error);
+                return;
+            }
+        };
+        let extension = self.state.editor_format.clone();
+        let source = self.state.editor_source.clone();
+        let replace = !self.state.editor_save_as_new
+            && can_replace_editor_source(
+                source.as_deref(),
+                &extension,
+                &self.state.editor_filename,
+            );
+        let result = (|| {
+            let path = if replace {
+                let original = source.as_ref().expect("source checked above");
+                let staged = unique_path(
+                    original.parent().ok_or("source has no parent directory")?,
+                    ".Captures image edit",
+                    &extension,
+                );
+                if let Err(error) = write_image_file(&staged, &image, &extension)
+                    .and_then(|()| replace_file_safely(&staged, original))
+                {
+                    let _ = fs::remove_file(staged);
+                    return Err(error);
+                }
+                original.clone()
+            } else {
+                let stem = sanitize_editor_filename(&self.state.editor_filename);
+                let path = available_named_path(&self.settings.output_directory, &stem, &extension);
+                write_image_file(&path, &image, &extension)?;
+                path
+            };
+            Ok(Artifact::from_path(path, image.width(), image.height()))
+        })();
+        match result {
+            Ok(artifact) => {
+                let _ = self.history.add(artifact.clone());
+                self.state.editor_source = Some(artifact.path.clone());
+                self.state.editor_save_as_new = false;
+                self.state.status =
+                    Some((format!("Saved {}", artifact.path.display()), Instant::now()));
+            }
+            Err(error) => self.set_error(error),
+        }
+        unsafe {
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
+        }
+    }
+}
+
+fn write_image_file(path: &Path, image: &RgbaImage, extension: &str) -> Result<(), String> {
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    let bytes = match extension {
+        "jpeg" => captures_windows_native::encoder::encode_jpeg(image, 92),
+        "webp" => captures_windows_native::encoder::encode_webp(image, None),
+        _ => captures_windows_native::encoder::encode_png(image, None),
+    };
+    let result = bytes.and_then(|bytes| {
+        let mut writer = BufWriter::new(file);
+        std::io::Write::write_all(&mut writer, &bytes).map_err(|e| e.to_string())?;
+        std::io::Write::flush(&mut writer).map_err(|e| e.to_string())?;
+        writer.get_ref().sync_all().map_err(|e| e.to_string())
+    });
+    if result.is_err() {
+        let _ = fs::remove_file(path);
+    }
+    result
+}
+
+fn available_named_path(root: &Path, stem: &str, extension: &str) -> PathBuf {
+    let first = root.join(format!("{stem}.{extension}"));
+    if !first.exists() {
+        return first;
+    }
+    for suffix in 2..1000 {
+        let path = root.join(format!("{stem}-{suffix}.{extension}"));
+        if !path.exists() {
+            return path;
+        }
+    }
+    root.join(format!("{stem}-{}.{}", uuid::Uuid::new_v4(), extension))
+}
+
+impl App {
     unsafe fn show_preview(&mut self) {
         unsafe {
             let work = work_area();
@@ -2321,6 +2536,15 @@ fn prepare_fixture(
     });
     match view {
         "editor" => state.edit_image(image),
+        "editor-shapes" => {
+            state.edit_image(image);
+            state.editor_tool = captures_windows_native::editor::Tool::Rectangle;
+            state.editor_shapes_open = true;
+        }
+        "editor-export" => {
+            state.edit_image(image);
+            state.editor_export_settings_open = true;
+        }
         "recording-selector" => state.surface = Surface::RecordingSelector,
         "recording-hud" => {
             state.surface = Surface::RecordingHud;

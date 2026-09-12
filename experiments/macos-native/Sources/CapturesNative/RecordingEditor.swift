@@ -24,6 +24,22 @@ private enum RecordingTimelineTarget: Equatable {
     case start, end, playhead
 }
 
+private struct RecordingPlayerSurface: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.player = player
+        view.controlsStyle = .none
+        view.videoGravity = .resizeAspect
+        return view
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        view.player = player
+    }
+}
+
 @MainActor
 private final class RecordingEditorModel: ObservableObject {
     @Published var probe: RecordingProbe?
@@ -381,7 +397,7 @@ struct RecordingEditorView: View {
             GeometryReader { geometry in
                 ScrollView([.horizontal, .vertical]) {
                     ZStack {
-                        VideoPlayer(player: model.player)
+                        RecordingPlayerSurface(player: model.player)
                             .onTapGesture { model.togglePlayback(loop: loop) }
                         if model.cropEnabled { cropOverlay }
                         if model.comparisonBefore != nil { comparisonOverlay }

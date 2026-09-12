@@ -35,7 +35,13 @@ recording start/pause/resume/restart/finalization, session safeguards, native fi
 profile-scoped single-instance IPC, autostart, and custom-rendered routes are wired to the shared
 Rust backends. The screenshot editor supports source-coordinate shapes, selection, crop, undo/redo,
 delete, Segoe UI text entry, editable hex color, rectangle/ellipse/triangle/diamond/star shapes,
-raster export, and copy; moving/resizing/rotating selected shapes and richer fill controls remain.
+raster export, and copy. Its custom D2D layout follows the shipping editor hierarchy with a vector
+tool rail and shape flyout, fitted canvas, layers/properties sidebar, and filename/format/export
+footer. Filename edits, format changes, Save as new file, layer selection/visibility, copy, and Save
+are functional. Replacing a source is allowed only while its sanitized filename and supported format
+remain unchanged; staged bytes are flushed and synced before replacement. Canvas
+dimension/background/zoom controls are currently read-only, Add images is
+explicitly unavailable, and moving/resizing/rotating selected shapes and richer fill controls remain.
 The recording editor probes real media, decodes playback frames, seeks, trims, chooses quality,
 exports through `captures-media`, and can either preserve the source or safely replace it. Probe,
 paused-frame extraction, compression comparison, and export run outside the Win32 message thread.

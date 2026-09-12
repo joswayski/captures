@@ -130,6 +130,15 @@ impl Document {
         true
     }
 
+    pub fn toggle_visibility(&mut self, id: u64) -> bool {
+        let Some(index) = self.layers.iter().position(|layer| layer.id == id) else {
+            return false;
+        };
+        self.checkpoint();
+        self.layers[index].visible = !self.layers[index].visible;
+        true
+    }
+
     pub fn set_crop(&mut self, crop: Rect) -> bool {
         let right = (crop.x + crop.width).min(self.original.width() as f32);
         let bottom = (crop.y + crop.height).min(self.original.height() as f32);
@@ -372,11 +381,16 @@ mod tests {
             [0, 255, 0, 255],
             4.0,
         );
-        document.layers.last_mut().unwrap().visible = false;
+        assert!(document.toggle_visibility(hidden));
         assert_ne!(visible, hidden);
         assert_eq!(
             document.hit_test(Point { x: 10.0, y: 20.0 }, 2.0),
             Some(visible)
+        );
+        assert!(document.undo());
+        assert_eq!(
+            document.hit_test(Point { x: 10.0, y: 20.0 }, 2.0),
+            Some(hidden)
         );
     }
 

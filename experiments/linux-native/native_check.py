@@ -18,6 +18,16 @@ def cmd(*args):
     return subprocess.check_output([str(a) for a in args], text=True).strip()
 
 
+def xwindow_geometry(window):
+    values = {}
+    for line in cmd('xwininfo', '-id', window).splitlines():
+        label, separator, value = line.strip().partition(':')
+        if separator and label in ('Absolute upper-left X', 'Absolute upper-left Y', 'Width', 'Height'):
+            values[label] = int(value.strip())
+    return (values['Absolute upper-left X'], values['Absolute upper-left Y'],
+            values['Width'], values['Height'])
+
+
 def walk(node):
     yield node
     try:
@@ -113,9 +123,17 @@ def capture(artifacts, name, title=None):
     def visible_window():
         result=subprocess.run(['xdotool','search','--onlyvisible','--name',title],capture_output=True,text=True)
         return result.stdout.strip().splitlines()[-1] if result.returncode==0 else None
-    window = 'root' if title is None else wait(visible_window)
     time.sleep(.3)
-    cmd('import','-window',window,artifacts / f'after-{name}.png')
+    output = artifacts / f'after-{name}.png'
+    if title is None:
+        cmd('import', '-window', 'root', output)
+        return
+    window = wait(visible_window)
+    x, y, width, height = xwindow_geometry(window)
+    geometry = f'{width}x{height}{x:+d}{y:+d}'
+    # Capturing the root at xwininfo's client coordinates avoids xdotool's
+    # doubled reparenting offset and proves the whole client is on-screen.
+    cmd('import', '-window', 'root', '-crop', geometry, '+repage', output)
 
 
 def run(binary, fixture, args, artifacts):
