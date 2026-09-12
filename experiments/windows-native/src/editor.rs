@@ -39,6 +39,17 @@ pub enum Shape {
     },
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum BlendMode {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+}
+
 pub struct FreehandGesture {
     points: Vec<Point>,
 }
@@ -69,12 +80,16 @@ impl FreehandGesture {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Layer {
     pub id: u64,
+    pub name: String,
     pub shape: Shape,
     pub color: [u8; 4],
     pub stroke: f32,
     pub fill: Option<[u8; 4]>,
+    pub opacity: u8,
+    pub blend_mode: BlendMode,
     pub rotation_degrees: f32,
     pub visible: bool,
+    pub locked: bool,
 }
 
 impl Layer {
@@ -342,21 +357,52 @@ impl Document {
 
     pub fn add(&mut self, shape: Shape, color: [u8; 4], stroke: f32) -> u64 {
         self.checkpoint();
+        self.push_layer(shape, color, stroke)
+    }
+
+    fn push_layer(&mut self, shape: Shape, color: [u8; 4], stroke: f32) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         self.layers.push(Layer {
             id,
+            name: default_layer_name(&shape).into(),
             shape,
             color,
             stroke: stroke.clamp(1.0, 48.0),
             fill: None,
+            opacity: 255,
+            blend_mode: BlendMode::Normal,
             rotation_degrees: 0.0,
             visible: true,
+            locked: false,
         });
         id
     }
 
-    pub fn add_image(&mut self, image: RgbaImage, offset: usize) -> u64 {
+    pub fn add_image(&mut self, image: RgbaImage, offset: usize, name: String) -> u64 {
+        self.add_images(vec![(image, name)], offset)
+            .into_iter()
+            .next()
+            .expect("one image produces one layer")
+    }
+
+    pub fn add_images(
+        &mut self,
+        images: Vec<(RgbaImage, String)>,
+        initial_offset: usize,
+    ) -> Vec<u64> {
+        if images.is_empty() {
+            return Vec::new();
+        }
+        self.checkpoint();
+        images
+            .into_iter()
+            .enumerate()
+            .map(|(offset, (image, name))| self.push_image(image, initial_offset + offset, name))
+            .collect()
+    }
+
+    fn push_image(&mut self, image: RgbaImage, offset: usize, name: String) -> u64 {
         let source_width = image.width().max(1) as f32;
         let source_height = image.height().max(1) as f32;
         let scale = (self.crop.width * 0.55 / source_width)
@@ -369,7 +415,7 @@ impl Document {
             x: self.crop.x + (self.crop.width - width) / 2.0 + cascade,
             y: self.crop.y + (self.crop.height - height) / 2.0 + cascade,
         };
-        self.add(
+        let id = self.push_layer(
             Shape::Image {
                 origin,
                 width,
@@ -378,13 +424,18 @@ impl Document {
             },
             [255, 255, 255, 255],
             1.0,
-        )
+        );
+        self.layers.last_mut().expect("layer was just added").name = name;
+        id
     }
 
     pub fn delete(&mut self, id: u64) -> bool {
         let Some(index) = self.layers.iter().position(|layer| layer.id == id) else {
             return false;
         };
+        if self.layers[index].locked {
+            return false;
+        }
         self.checkpoint();
         self.layers.remove(index);
         true
@@ -396,6 +447,62 @@ impl Document {
         };
         self.checkpoint();
         self.layers[index].visible = !self.layers[index].visible;
+        true
+    }
+
+    pub fn toggle_locked(&mut self, id: u64) -> bool {
+        let Some(index) = self.layers.iter().position(|layer| layer.id == id) else {
+            return false;
+        };
+        self.checkpoint();
+        self.layers[index].locked = !self.layers[index].locked;
+        true
+    }
+
+    pub fn set_layer_opacity(&mut self, id: u64, opacity: u8) -> bool {
+        self.edit_layer(id, |layer| layer.opacity = opacity)
+    }
+
+    pub fn set_layer_blend_mode(&mut self, id: u64, blend_mode: BlendMode) -> bool {
+        self.edit_layer(id, |layer| layer.blend_mode = blend_mode)
+    }
+
+    pub fn rename_layer(&mut self, id: u64, name: String) -> bool {
+        let name = name.trim().chars().take(80).collect::<String>();
+        if name.is_empty() {
+            return false;
+        }
+        self.edit_layer(id, move |layer| layer.name = name)
+    }
+
+    pub fn duplicate(&mut self, id: u64) -> Option<u64> {
+        let source = self.layers.iter().find(|layer| layer.id == id)?.clone();
+        if source.locked {
+            return None;
+        }
+        self.checkpoint();
+        let new_id = self.next_id;
+        self.next_id += 1;
+        let mut duplicate = source.translated(Point { x: 16.0, y: 16.0 });
+        duplicate.id = new_id;
+        duplicate.name = format!("{} copy", duplicate.name);
+        self.layers.push(duplicate);
+        Some(new_id)
+    }
+
+    pub fn move_layer(&mut self, id: u64, delta: isize) -> bool {
+        let Some(index) = self.layers.iter().position(|layer| layer.id == id) else {
+            return false;
+        };
+        let destination = index
+            .saturating_add_signed(delta)
+            .min(self.layers.len() - 1);
+        if index == destination || self.layers[index].locked {
+            return false;
+        }
+        self.checkpoint();
+        let layer = self.layers.remove(index);
+        self.layers.insert(destination, layer);
         true
     }
 
@@ -421,6 +528,9 @@ impl Document {
         let Some(index) = self.layers.iter().position(|layer| layer.id == id) else {
             return false;
         };
+        if self.layers[index].locked {
+            return false;
+        }
         let before = self.layers[index].clone();
         edit(&mut self.layers[index]);
         if self.layers[index] == before {
@@ -545,7 +655,7 @@ impl Document {
         self.layers
             .iter()
             .rev()
-            .filter(|layer| layer.visible)
+            .filter(|layer| layer.visible && !layer.locked)
             .find_map(|layer| {
                 let raster = to_raster_layer(layer);
                 raster
@@ -610,13 +720,38 @@ fn to_raster_layer(layer: &Layer) -> captures_image::Layer {
             font_data: font_data.clone(),
         },
     };
+    let apply_opacity = |mut color: [u8; 4]| {
+        color[3] = ((u16::from(color[3]) * u16::from(layer.opacity) + 127) / 255) as u8;
+        color
+    };
     captures_image::Layer {
         id: layer.id,
         shape,
-        color: layer.color,
+        color: apply_opacity(layer.color),
         stroke_width: layer.stroke,
-        fill: layer.fill,
+        fill: layer.fill.map(apply_opacity),
         rotation_degrees: layer.rotation_degrees,
+        blend_mode: match layer.blend_mode {
+            BlendMode::Normal => captures_image::BlendMode::Normal,
+            BlendMode::Multiply => captures_image::BlendMode::Multiply,
+            BlendMode::Screen => captures_image::BlendMode::Screen,
+            BlendMode::Overlay => captures_image::BlendMode::Overlay,
+            BlendMode::Darken => captures_image::BlendMode::Darken,
+            BlendMode::Lighten => captures_image::BlendMode::Lighten,
+        },
+    }
+}
+
+fn default_layer_name(shape: &Shape) -> &'static str {
+    match shape {
+        Shape::Stroke(_) => "Freehand",
+        Shape::Arrow(_, _) => "Arrow",
+        Shape::Line(_, _) => "Line",
+        Shape::Rectangle(_) => "Rectangle",
+        Shape::Ellipse(_) => "Ellipse",
+        Shape::Polygon(_) => "Shape",
+        Shape::Image { .. } => "Image",
+        Shape::Text { .. } => "Text",
     }
 }
 
@@ -728,6 +863,58 @@ mod tests {
             document.hit_test(Point { x: 10.0, y: 20.0 }, 2.0),
             Some(hidden)
         );
+        assert!(document.toggle_locked(hidden));
+        assert_eq!(
+            document.hit_test(Point { x: 10.0, y: 20.0 }, 2.0),
+            Some(visible)
+        );
+    }
+
+    #[test]
+    fn layer_opacity_scales_fill_and_outline_alpha() {
+        let mut document = Document::new(RgbaImage::new(80, 60));
+        let id = document.add(
+            Shape::Rectangle(Rect {
+                x: 10.0,
+                y: 10.0,
+                width: 50.0,
+                height: 35.0,
+            }),
+            [220, 40, 30, 240],
+            4.0,
+        );
+        assert!(document.set_layer_fill(id, Some([20, 190, 60, 200])));
+        assert!(document.set_layer_opacity(id, 128));
+        let rendered = document.render().unwrap();
+        let fill = rendered.get_pixel(35, 28);
+        let outline = rendered.get_pixel(10, 25);
+        assert!((98..=102).contains(&fill[3]), "fill alpha was {}", fill[3]);
+        // At the edge the independently scaled fill (~100) and outline (~120)
+        // composite to ~173; an unscaled fill would push this above 220.
+        assert!(
+            (171..=175).contains(&outline[3]),
+            "outline alpha was {}",
+            outline[3]
+        );
+
+        let mut image_document = Document::new(RgbaImage::new(20, 20));
+        let mut pixels = RgbaImage::new(2, 2);
+        pixels
+            .pixels_mut()
+            .for_each(|pixel| *pixel = image::Rgba([40, 80, 160, 200]));
+        let image_id = image_document.add_image(pixels, 0, "alpha.png".into());
+        assert!(image_document.set_layer_opacity(image_id, 128));
+        let image = image_document.render().unwrap();
+        let pixel = image.pixels().find(|pixel| pixel[3] > 0).unwrap();
+        assert!(
+            (98..=102).contains(&pixel[3]),
+            "image alpha was {}",
+            pixel[3]
+        );
+        assert!(image_document.set_layer_blend_mode(image_id, BlendMode::Multiply));
+        assert_eq!(image_document.layers[0].blend_mode, BlendMode::Multiply);
+        assert!(image_document.undo());
+        assert_eq!(image_document.layers[0].blend_mode, BlendMode::Normal);
     }
 
     #[test]
@@ -774,12 +961,16 @@ mod tests {
     fn horizontal_line_resizes_by_endpoint_and_crossing_keeps_anchor() {
         let layer = Layer {
             id: 9,
+            name: "Line".into(),
             shape: Shape::Line(Point { x: 10.0, y: 20.0 }, Point { x: 90.0, y: 20.0 }),
             color: [1, 2, 3, 255],
             stroke: 4.0,
             fill: None,
+            opacity: 255,
+            blend_mode: BlendMode::Normal,
             rotation_degrees: 0.0,
             visible: true,
+            locked: false,
         };
         assert_eq!(
             layer.resize_handles(),
@@ -804,6 +995,7 @@ mod tests {
     fn rotated_rectangle_crossing_keeps_physical_opposite_corner_fixed() {
         let layer = Layer {
             id: 4,
+            name: "Rectangle".into(),
             shape: Shape::Rectangle(Rect {
                 x: 20.0,
                 y: 30.0,
@@ -813,8 +1005,11 @@ mod tests {
             color: [4, 5, 6, 255],
             stroke: 3.0,
             fill: Some([7, 8, 9, 128]),
+            opacity: 255,
+            blend_mode: BlendMode::Normal,
             rotation_degrees: 31.0,
             visible: true,
+            locked: false,
         };
         let original = layer.selection_corners().unwrap();
         let fixed = original[0];
@@ -918,7 +1113,7 @@ mod tests {
         let mut imported = RgbaImage::new(80, 40);
         imported.put_pixel(79, 0, image::Rgba([17, 91, 203, 255]));
 
-        let id = document.add_image(imported, 0);
+        let id = document.add_image(imported, 0, "asymmetric.png".into());
         let layer = document.layers.iter().find(|layer| layer.id == id).unwrap();
         let Shape::Image {
             origin,
@@ -943,9 +1138,63 @@ mod tests {
     }
 
     #[test]
+    fn multi_image_import_is_one_undo_step_and_preserves_order() {
+        let mut document = Document::new(RgbaImage::new(640, 360));
+        let ids = document.add_images(
+            vec![
+                (RgbaImage::new(23, 41), "portrait.png".into()),
+                (RgbaImage::new(91, 17), "banner.webp".into()),
+                (RgbaImage::new(37, 29), "tile.jpg".into()),
+            ],
+            0,
+        );
+        assert_eq!(ids.len(), 3);
+        assert_eq!(
+            document
+                .layers
+                .iter()
+                .map(|layer| layer.name.as_str())
+                .collect::<Vec<_>>(),
+            ["portrait.png", "banner.webp", "tile.jpg"]
+        );
+        assert!(document.undo());
+        assert!(document.layers.is_empty());
+        assert!(!document.undo());
+        assert!(document.redo());
+        assert_eq!(document.layers.len(), 3);
+    }
+
+    #[test]
+    fn lock_blocks_edits_but_unlock_and_undo_restore_state() {
+        let mut document = Document::new(RgbaImage::new(200, 120));
+        let id = document.add(
+            Shape::Rectangle(Rect {
+                x: 17.0,
+                y: 29.0,
+                width: 61.0,
+                height: 33.0,
+            }),
+            [10, 20, 30, 255],
+            4.0,
+        );
+        assert!(document.toggle_locked(id));
+        assert!(!document.set_layer_opacity(id, 73));
+        assert!(!document.delete(id));
+        assert!(document.layers[0].locked);
+        assert!(document.toggle_locked(id));
+        assert!(document.set_layer_opacity(id, 73));
+        assert_eq!(document.layers[0].opacity, 73);
+        assert!(document.undo());
+        assert_eq!(document.layers[0].opacity, 255);
+        assert!(document.undo());
+        assert!(document.layers[0].locked);
+    }
+
+    #[test]
     fn imported_image_resize_crossing_corner_normalizes_geometry() {
         let layer = Layer {
             id: 9,
+            name: "Inset".into(),
             shape: Shape::Image {
                 origin: Point { x: 10.0, y: 20.0 },
                 width: 80.0,
@@ -955,8 +1204,11 @@ mod tests {
             color: [255; 4],
             stroke: 1.0,
             fill: None,
+            opacity: 255,
+            blend_mode: BlendMode::Normal,
             rotation_degrees: 0.0,
             visible: true,
+            locked: false,
         };
         let resized = resize_from_corner(&layer, 0, Point { x: 110.0, y: 75.0 }).unwrap();
         let Shape::Image {

@@ -377,6 +377,8 @@ private final class RecordingEditorModel: ObservableObject {
 
 struct RecordingEditorView: View {
     let artifact: Artifact
+    private let referenceQualityOnly: Bool
+    private let onEstimateReady: ((String) -> Void)?
     @StateObject private var model: RecordingEditorModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var previewActualSize = false
@@ -406,41 +408,64 @@ struct RecordingEditorView: View {
     @State private var timelineDragTarget: RecordingTimelineTarget?
     @State private var timelineDragInitialMS: Double?
 
-    init(artifact: Artifact) {
+    init(
+        artifact: Artifact,
+        referenceQualityOnly: Bool = false,
+        onEstimateReady: ((String) -> Void)? = nil
+    ) {
         self.artifact = artifact
+        self.referenceQualityOnly = referenceQualityOnly
+        self.onEstimateReady = onEstimateReady
         _model = StateObject(wrappedValue: RecordingEditorModel(artifact: artifact))
         let format = artifact.kind == "gif" ? "gif" : "mp4"
         _outputFormat = State(initialValue: format)
         _makeCopy = State(initialValue: artifact.url.pathExtension.lowercased() != format)
         _exportDirectory = State(initialValue: artifact.url.deletingLastPathComponent())
         _exportFilename = State(initialValue: artifact.url.deletingPathExtension().lastPathComponent)
+        if referenceQualityOnly {
+            _qualityMode = State(initialValue: "compress")
+            _comparisonExpanded = State(initialValue: false)
+        }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView {
+            if referenceQualityOnly {
                 VStack(alignment: .leading, spacing: NativeTheme.metric("s-6")) {
-                    Text(artifact.kind == "gif" ? "Edit GIF" : "Edit recording")
+                    Text("Recording export quality")
                         .font(.system(size: NativeTheme.metric("text-2xl"), weight: .bold))
-                    previewCard
-                    timelineCard
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: NativeTheme.metric("s-6")) {
-                        cropCard
-                        qualityCard
-                        if let probe = model.probe, probe.hasSystemAudio || probe.hasMicrophoneAudio {
-                            audioCard(probe).gridCellColumns(2)
+                    qualityCard
+                }
+                .padding(NativeTheme.metric("s-8"))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: NativeTheme.metric("s-6")) {
+                        Text(artifact.kind == "gif" ? "Edit GIF" : "Edit recording")
+                            .font(.system(size: NativeTheme.metric("text-2xl"), weight: .bold))
+                        previewCard
+                        timelineCard
+                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: NativeTheme.metric("s-6")) {
+                            cropCard
+                            qualityCard
+                            if let probe = model.probe, probe.hasSystemAudio || probe.hasMicrophoneAudio {
+                                audioCard(probe).gridCellColumns(2)
+                            }
                         }
                     }
+                    .padding(NativeTheme.metric("s-8")).frame(maxWidth: 1220)
+                    .frame(maxWidth: .infinity)
                 }
-                .padding(NativeTheme.metric("s-8")).frame(maxWidth: 1220)
-                .frame(maxWidth: .infinity)
+                saveFooter
             }
-            saveFooter
         }
         .background(NativeTheme.canvas(colorScheme))
         .foregroundStyle(NativeTheme.text(colorScheme))
         .onChange(of: loop) { value in model.loopEnabled = value }
         .onChange(of: model.probe) { _ in scheduleComparison() }
+        .onChange(of: model.estimatedBytes) { bytes in
+            if bytes != nil, !model.estimatePending { onEstimateReady?(estimatedSizeLabel) }
+        }
         .onChange(of: qualityMode) { _ in scheduleComparison() }
         .onChange(of: quality) { _ in scheduleComparison() }
         .onChange(of: maximumSizeMB) { _ in scheduleComparison() }
@@ -760,6 +785,7 @@ struct RecordingEditorView: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Estimated saved file size")
+            .accessibilityValue(estimatedSizeLabel)
             if qualityMode != "preserve" {
                 Button {
                     comparisonExpanded.toggle()

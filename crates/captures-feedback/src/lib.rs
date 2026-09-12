@@ -1,6 +1,9 @@
-//! Explicit, user-initiated native feedback. This crate never collects files,
-//! captures, logs, environment values, or diagnostics and never sends at startup.
+//! Explicit, user-initiated native feedback. The client never collects files
+//! or diagnostics and never sends at startup. Optional local crash evidence is
+//! separately available through [`crash_diagnostics`] for review before consent.
 //! Construct and call the blocking client on a worker, not a native UI thread.
+
+pub mod crash_diagnostics;
 
 use std::{
     io::Read,

@@ -22,6 +22,10 @@ Every request has an `op`. Every response is exactly one of:
 Panics are caught at the operation and C ABI boundaries. The bridge does not log
 request JSON, paths, pixels, audio, or media-tool output.
 
+`feedback_submit` is the only network operation. It runs on a separate Swift
+worker queue, never on the UI, recording lifecycle, permission, or media queue.
+It is invoked only by an explicit Send feedback action and never at startup.
+
 ## Shared JSON types
 
 `DisplayDescriptor`, `WindowDescriptor`, `AudioDevice`, and `RecordingOptions`
@@ -75,6 +79,12 @@ Artifact values are `{"path":string,"width":number,"height":number,"kind":
 - `{"op":"session_status"}` returns `{"available":bool}` from the recording
   worker. It is the cheap pre-overlay check and does not enumerate targets or
   request permission.
+- `{"op":"feedback_submit","draft":{"category":"bug|idea|other","message":"...",
+  "contact"?:string},"context":{"app_version":"...","os":"macos",
+  "os_version":"...","arch":"..."}}` returns `{}`. The shared feedback
+  client validates and trims fields, allows only HTTPS (or loopback HTTP for
+  tests), does not follow redirects, times out, bounds responses, and applies a
+  one-minute cooldown only after success. No captures, files, or logs are sent.
 - `{"op":"screenshot","target":TARGET,"cursor":false,"output_dir":"..."}`
   returns an image artifact. `TARGET` is `display`, `region`, `window`, or the
   `frozen_region` target below. A generated `Capture-*.png` is created without

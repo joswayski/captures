@@ -64,6 +64,10 @@ struct NativeSettings: Codable, Equatable {
         let existing = Set(shortcuts.map(\.id))
         shortcuts.append(contentsOf: Shortcut.defaults.filter { !existing.contains($0.id) })
     }
+
+    var shortcutsAreUnique: Bool {
+        Set(shortcuts.map { "\($0.keyCode):\($0.modifiers)" }).count == shortcuts.count
+    }
 }
 
 struct CaptureRoute: Equatable {

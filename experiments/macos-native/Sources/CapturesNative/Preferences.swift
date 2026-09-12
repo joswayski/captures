@@ -272,6 +272,9 @@ struct PreferencesView: View {
             Text("Captures · Native macOS experiment").fontWeight(.semibold)
             Text("SwiftUI and AppKit, with the existing Rust capture and media engines. No webview. Separate settings, history, and permissions from the shipping Preview.")
                 .foregroundColor(NativeTheme.muted(scheme))
+            setting("Send feedback", "Report a bug or share an idea. Only what you type and the listed app/system details are sent.") {
+                Button("Open") { store.showFeedback() }.buttonStyle(CaptureButtonStyle())
+            }
             setting("Screen recording permission", "macOS must allow this app to capture the desktop.") {
                 Button("Request permission") {
                     Backend.shared.call("describe", ["request_permission": true]) { result in

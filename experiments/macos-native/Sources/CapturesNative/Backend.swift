@@ -9,6 +9,7 @@ final class Backend {
     static let shared = Backend()
     private let queue = DispatchQueue(label: "es.captur.native.engine", qos: .userInitiated)
     private let mediaQueue = DispatchQueue(label: "es.captur.native.media", qos: .userInitiated)
+    private let feedbackQueue = DispatchQueue(label: "es.captur.native.feedback", qos: .userInitiated)
     private let permissionQueue = DispatchQueue(label: "es.captur.native.permission", qos: .userInitiated)
 
     // Never block AppKit on permission prompts, capture, encoding, or Rust's
@@ -19,7 +20,7 @@ final class Backend {
         // session checks. Rust likewise dispatches these outside its engine.
         // TCC can wait for user input; neither media exports nor the recording
         // safety/status queue should wait behind that prompt.
-        let destination = op == "microphone_permission" ? permissionQueue :
+        let destination = op == "feedback_submit" ? feedbackQueue : op == "microphone_permission" ? permissionQueue :
             (["media_probe", "media_estimate", "media_export", "image_encode"].contains(op) ? mediaQueue : queue)
         destination.async {
             let result = Result<[String: Any], Error> {

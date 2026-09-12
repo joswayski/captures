@@ -118,6 +118,31 @@ pub enum Shape {
     },
 }
 
+/// The six compositing choices exposed by the shipping image editor.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum BlendMode {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+}
+
+impl BlendMode {
+    fn raster(self) -> tiny_skia::BlendMode {
+        match self {
+            Self::Normal => tiny_skia::BlendMode::SourceOver,
+            Self::Multiply => tiny_skia::BlendMode::Multiply,
+            Self::Screen => tiny_skia::BlendMode::Screen,
+            Self::Overlay => tiny_skia::BlendMode::Overlay,
+            Self::Darken => tiny_skia::BlendMode::Darken,
+            Self::Lighten => tiny_skia::BlendMode::Lighten,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Layer {
     pub id: u64,
@@ -127,6 +152,7 @@ pub struct Layer {
     pub fill: Option<[u8; 4]>,
     /// Clockwise rotation around the unrotated geometry's center.
     pub rotation_degrees: f32,
+    pub blend_mode: BlendMode,
 }
 
 #[derive(Clone, Debug)]
@@ -396,10 +422,11 @@ impl Layer {
     }
 }
 
-fn paint(color: [u8; 4]) -> Paint<'static> {
+fn paint(color: [u8; 4], blend_mode: BlendMode) -> Paint<'static> {
     let mut paint = Paint::default();
     paint.set_color_rgba8(color[0], color[1], color[2], color[3]);
     paint.anti_alias = true;
+    paint.blend_mode = blend_mode.raster();
     paint
 }
 
@@ -430,7 +457,7 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
             &tiny_skia::PixmapPaint {
                 opacity: f32::from(layer.color[3]) / 255.0,
                 quality: tiny_skia::FilterQuality::Bilinear,
-                ..Default::default()
+                blend_mode: layer.blend_mode.raster(),
             },
             Transform::from_scale(
                 *width / pixels.width() as f32,
@@ -472,7 +499,10 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
                 0,
                 0,
                 pixels.as_ref(),
-                &tiny_skia::PixmapPaint::default(),
+                &tiny_skia::PixmapPaint {
+                    blend_mode: layer.blend_mode.raster(),
+                    ..Default::default()
+                },
                 Transform::from_translate(glyph.x, glyph.y).post_concat(transform),
                 None,
             );
@@ -490,7 +520,7 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
                     if let Some(path) = path.finish() {
                         canvas.fill_path(
                             &path,
-                            &paint(layer.color),
+                            &paint(layer.color, layer.blend_mode),
                             FillRule::Winding,
                             transform,
                             None,
@@ -543,7 +573,13 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
         return Ok(());
     };
     if closed && let Some(color) = layer.fill {
-        canvas.fill_path(&path, &paint(color), FillRule::Winding, transform, None);
+        canvas.fill_path(
+            &path,
+            &paint(color, layer.blend_mode),
+            FillRule::Winding,
+            transform,
+            None,
+        );
     }
     if layer.stroke_width > 0.0 {
         let stroke = Stroke {
@@ -552,7 +588,13 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
             line_join: LineJoin::Round,
             ..Stroke::default()
         };
-        canvas.stroke_path(&path, &paint(layer.color), &stroke, transform, None);
+        canvas.stroke_path(
+            &path,
+            &paint(layer.color, layer.blend_mode),
+            &stroke,
+            transform,
+            None,
+        );
     }
     Ok(())
 }
@@ -573,21 +615,48 @@ pub fn render(document: &Document) -> Result<RgbaImage, String> {
     let mut output = (*document.source).clone();
     if !document.layers.is_empty() {
         let mut canvas = Pixmap::new(width, height).ok_or("Source image is too large")?;
+        let blend_source = document
+            .layers
+            .iter()
+            .any(|layer| layer.blend_mode != BlendMode::Normal);
+        if blend_source {
+            // Non-normal blending needs the source image as its backdrop,
+            // not a transparent annotation plane composed over it afterward.
+            for (pixel, source) in canvas.pixels_mut().iter_mut().zip(output.pixels()) {
+                *pixel = tiny_skia::ColorU8::from_rgba(source[0], source[1], source[2], source[3])
+                    .premultiply();
+            }
+        }
         for layer in &document.layers {
             draw_layer(&mut canvas, layer)?;
         }
-        // tiny-skia uses premultiplied RGBA; image uses straight RGBA. Preserve
-        // source pixels exactly rather than round-tripping them through skia.
-        let bytes = canvas
-            .pixels()
-            .iter()
-            .flat_map(|p| {
-                let c = p.demultiply();
-                [c.red(), c.green(), c.blue(), c.alpha()]
-            })
-            .collect();
-        let overlay = RgbaImage::from_raw(width, height, bytes).ok_or("Invalid rendered buffer")?;
-        image::imageops::overlay(&mut output, &overlay, 0, 0);
+        if blend_source {
+            for (source, rendered) in output.pixels_mut().zip(canvas.pixels()) {
+                let original =
+                    tiny_skia::ColorU8::from_rgba(source[0], source[1], source[2], source[3])
+                        .premultiply();
+                // Keep untouched source pixels, including hidden RGB and low
+                // alpha, exact rather than round-tripping them through skia.
+                if original != *rendered {
+                    let color = rendered.demultiply();
+                    source.0 = [color.red(), color.green(), color.blue(), color.alpha()];
+                }
+            }
+        } else {
+            // Preserve the established normal-only rendering path and its
+            // straight-alpha compositing results.
+            let bytes = canvas
+                .pixels()
+                .iter()
+                .flat_map(|p| {
+                    let c = p.demultiply();
+                    [c.red(), c.green(), c.blue(), c.alpha()]
+                })
+                .collect();
+            let overlay =
+                RgbaImage::from_raw(width, height, bytes).ok_or("Invalid rendered buffer")?;
+            image::imageops::overlay(&mut output, &overlay, 0, 0);
+        }
     }
     if let Some(crop) = document.crop {
         output =

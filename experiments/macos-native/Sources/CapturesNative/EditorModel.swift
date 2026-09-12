@@ -455,21 +455,32 @@ final class EditorModel: ObservableObject {
         if !bounds.isNull { crop(to: bounds) }
     }
 
-    func erase(at documentPoint: CGPoint, radius: CGFloat, restore: Bool) throws {
+    func erase(at documentPoint: CGPoint, radius: CGFloat, softness: CGFloat = 0, restore: Bool) throws {
+        try eraseStroke(
+            from: documentPoint, to: documentPoint,
+            radius: radius, softness: softness, restore: restore
+        )
+    }
+
+    func eraseStroke(
+        from startPoint: CGPoint, to endPoint: CGPoint,
+        radius: CGFloat, softness: CGFloat = 0, restore: Bool
+    ) throws {
         guard let index = selectedLayerIndex else { return }
         let layer = document.layers[index]
-        guard !layer.locked else { return }
         let frame = layer.frame.cgRect
         let center = CGPoint(x: frame.midX, y: frame.midY)
-        let dx = documentPoint.x - center.x
-        let dy = documentPoint.y - center.y
         let cosine = cos(-layer.rotation)
         let sine = sin(-layer.rotation)
-        let localDocumentPoint = CGPoint(
-            x: center.x + dx * cosine - dy * sine,
-            y: center.y + dx * sine + dy * cosine
-        )
-        guard frame.contains(localDocumentPoint), case let .image(currentData, originalData) = layer.content,
+        let localPoint: (CGPoint) -> CGPoint = { point in
+            let dx = point.x - center.x
+            let dy = point.y - center.y
+            return CGPoint(
+                x: center.x + dx * cosine - dy * sine,
+                y: center.y + dx * sine + dy * cosine
+            )
+        }
+        guard case let .image(currentData, originalData) = layer.content,
               let current = NSImage(data: currentData), let original = NSImage(data: originalData),
               let currentCG = current.cgImage(forProposedRect: nil, context: nil, hints: nil),
               let originalCG = original.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
@@ -486,30 +497,72 @@ final class EditorModel: ObservableObject {
         defer { withExtendedLifetime((context, originalContext)) {} }
         context.draw(currentCG, in: CGRect(x: 0, y: 0, width: width, height: height))
         originalContext.draw(originalCG, in: CGRect(x: 0, y: 0, width: width, height: height))
-        let centerX = (localDocumentPoint.x - frame.minX) / frame.width * CGFloat(width)
-        let centerY = (localDocumentPoint.y - frame.minY) / frame.height * CGFloat(height)
-        let pixelRadius = max(1, radius * CGFloat(width) / frame.width)
-        for y in max(0, Int(centerY - pixelRadius))..<min(height, Int(centerY + pixelRadius + 1)) {
-            for x in max(0, Int(centerX - pixelRadius))..<min(width, Int(centerX + pixelRadius + 1))
-                where hypot(CGFloat(x) - centerX, CGFloat(y) - centerY) <= pixelRadius {
-                let offset = (y * width + x) * 4
-                for component in 0..<4 {
-                    // Fully transparent premultiplied pixels must also have
-                    // zero color channels, not just zero alpha.
-                    pixels[offset + component] = restore ? originalPixels[offset + component] : 0
+        let localStart = localPoint(startPoint)
+        let localEnd = localPoint(endPoint)
+        let radiusX = max(1, radius * CGFloat(width) / frame.width)
+        let radiusY = max(1, radius * CGFloat(height) / frame.height)
+        let feather = min(1, max(0, softness))
+        let hardDistance = 1 - feather
+        let segmentDistance = hypot(localEnd.x - localStart.x, localEnd.y - localStart.y)
+        let spacing = max(0.5, radius * 0.35)
+        let steps = max(1, Int(ceil(segmentDistance / spacing)))
+        var changedPixels = false
+        for step in 0...steps {
+            let progress = CGFloat(step) / CGFloat(steps)
+            let local = CGPoint(
+                x: localStart.x + (localEnd.x - localStart.x) * progress,
+                y: localStart.y + (localEnd.y - localStart.y) * progress
+            )
+            let centerX = (local.x - frame.minX) / frame.width * CGFloat(width)
+            let centerY = (local.y - frame.minY) / frame.height * CGFloat(height)
+            let minimumY = min(height, max(0, Int(floor(centerY - radiusY))))
+            let maximumY = min(height, max(0, Int(ceil(centerY + radiusY))))
+            let minimumX = min(width, max(0, Int(floor(centerX - radiusX))))
+            let maximumX = min(width, max(0, Int(ceil(centerX + radiusX))))
+            guard minimumX < maximumX, minimumY < maximumY else { continue }
+            for y in minimumY..<maximumY {
+                for x in minimumX..<maximumX {
+                    // Document coordinates address pixel edges; sample the
+                    // center of each destination pixel for symmetric stamps.
+                    let dx = (CGFloat(x) + 0.5 - centerX) / radiusX
+                    let dy = (CGFloat(y) + 0.5 - centerY) / radiusY
+                    let distance = hypot(dx, dy)
+                    guard distance <= 1 else { continue }
+                    let coverage = feather == 0 || distance <= hardDistance
+                        ? CGFloat(1)
+                        : max(0, min(1, (1 - distance) / max(0.001, feather)))
+                    let offset = (y * width + x) * 4
+                    for component in 0..<4 {
+                        let current = CGFloat(pixels[offset + component])
+                        let target = restore ? CGFloat(originalPixels[offset + component]) : 0
+                        let updated = UInt8(
+                            (current + (target - current) * coverage).rounded()
+                        )
+                        if updated != pixels[offset + component] {
+                            pixels[offset + component] = updated
+                            changedPixels = true
+                        }
+                    }
                 }
             }
         }
+        guard changedPixels else { return }
         guard let editedCG = context.makeImage() else { throw EditorError.cannotRender }
         let rep = NSBitmapImageRep(cgImage: editedCG)
         guard let png = rep.representation(using: .png, properties: [:]) else { throw EditorError.cannotRender }
-        updateSelected { $0.content = .image(png, original: originalData) }
+        if interactiveCheckpoint != nil {
+            document.layers[index].content = .image(png, original: originalData)
+            dirty = true
+        } else {
+            mutate { $0.layers[index].content = .image(png, original: originalData) }
+        }
     }
 
-    func removeBackgroundColor(at documentPoint: CGPoint, tolerance: CGFloat = 0.12) throws {
+    func removeBackgroundColor(
+        at documentPoint: CGPoint, tolerance: CGFloat = 0.12, contiguous: Bool = true
+    ) throws {
         guard let index = selectedLayerIndex else { return }
         let layer = document.layers[index]
-        guard !layer.locked else { return }
         let frame = layer.frame.cgRect
         let center = CGPoint(x: frame.midX, y: frame.midY)
         let dx = documentPoint.x - center.x
@@ -534,19 +587,32 @@ final class EditorModel: ObservableObject {
         let seedOffset = (seedY * width + seedX) * 4
         let seed = (pixels[seedOffset], pixels[seedOffset + 1], pixels[seedOffset + 2], pixels[seedOffset + 3])
         let limit = max(1, Int(tolerance * 255))
-        var visited = [Bool](repeating: false, count: width * height)
-        var pending = [(seedX, seedY)]
-        visited[seedY * width + seedX] = true
-        while let (x, y) = pending.popLast() {
-            let pixelIndex = y * width + x
-            let offset = pixelIndex * 4
-            let distance = max(
+        let matches: (Int) -> Bool = { offset in
+            max(
                 abs(Int(pixels[offset]) - Int(seed.0)),
                 abs(Int(pixels[offset + 1]) - Int(seed.1)),
                 abs(Int(pixels[offset + 2]) - Int(seed.2)),
                 abs(Int(pixels[offset + 3]) - Int(seed.3))
-            )
-            guard distance <= limit else { continue }
+            ) <= limit
+        }
+        if !contiguous {
+            for y in 0..<height {
+                for x in 0..<width {
+                    let offset = (y * width + x) * 4
+                    if matches(offset) {
+                        pixels[offset] = 0; pixels[offset + 1] = 0
+                        pixels[offset + 2] = 0; pixels[offset + 3] = 0
+                    }
+                }
+            }
+        }
+        var visited = [Bool](repeating: false, count: width * height)
+        var pending = [(seedX, seedY)]
+        visited[seedY * width + seedX] = true
+        while contiguous, let (x, y) = pending.popLast() {
+            let pixelIndex = y * width + x
+            let offset = pixelIndex * 4
+            guard matches(offset) else { continue }
             pixels[offset] = 0; pixels[offset + 1] = 0; pixels[offset + 2] = 0; pixels[offset + 3] = 0
             for (nextX, nextY) in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]
                 where nextX >= 0 && nextX < width && nextY >= 0 && nextY < height {
@@ -560,7 +626,7 @@ final class EditorModel: ObservableObject {
         guard let edited = context.makeImage(),
               let png = NSBitmapImageRep(cgImage: edited).representation(using: .png, properties: [:])
         else { throw EditorError.cannotRender }
-        updateSelected { $0.content = .image(png, original: original) }
+        mutate { $0.layers[index].content = .image(png, original: original) }
     }
 
     func renderedImage() throws -> NSImage {

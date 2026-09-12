@@ -11,9 +11,13 @@ final class AppStore: NSObject, ObservableObject, NSWindowDelegate {
     @Published var previews: [Artifact] = []
     @Published var saveStatus = "Changes save automatically"
     @Published var shortcutWarning = ""
+    @Published private(set) var onboardingCompleted = FileManager.default.fileExists(
+        atPath: AppStore.dataDirectory.appendingPathComponent("onboarding-complete.json").path
+    )
     private var subscriptions = Set<AnyCancellable>()
     private var windows: [String: NSWindow] = [:]
     private var loadingError: Error?
+    private var lastSavedSettings = NativeSettings()
 
     private override init() {
         super.init()
@@ -23,6 +27,7 @@ final class AppStore: NSObject, ObservableObject, NSWindowDelegate {
             settings = loaded
             settings.migrateShortcuts()
             if settings != loaded { try NativeStorage.write(settings, to: settingsURL) }
+            lastSavedSettings = settings
             artifacts = NativeStorage.recent(try NativeStorage.read([Artifact].self, from: Self.dataDirectory.appendingPathComponent("history.json")) ?? [])
         } catch { loadingError = error }
         $settings.dropFirst().removeDuplicates().sink { [weak self] _ in
@@ -31,8 +36,15 @@ final class AppStore: NSObject, ObservableObject, NSWindowDelegate {
         $settings.dropFirst().removeDuplicates().debounce(for: .milliseconds(250), scheduler: RunLoop.main)
             .sink { [weak self] settings in
                 guard let self else { return }
+                guard settings.shortcutsAreUnique else {
+                    self.saveStatus = "Could not save: shortcuts must be unique"
+                    self.shortcutWarning = "Shortcuts must be unique. The conflicting change was not saved."
+                    self.settings = self.lastSavedSettings
+                    return
+                }
                 do {
                     try NativeStorage.write(settings, to: Self.dataDirectory.appendingPathComponent("settings.json"))
+                    self.lastSavedSettings = settings
                     self.saveStatus = "All changes saved"
                     self.applyAppearance()
                     ShortcutManager.shared.register(settings.shortcuts)
@@ -104,6 +116,23 @@ final class AppStore: NSObject, ObservableObject, NSWindowDelegate {
 
     func showPreferences() { show("preferences", title: "Preferences", size: NSSize(width: 980, height: 720), view: PreferencesView()) }
     func showHistory() { show("history", title: "Capture History", size: NSSize(width: 980, height: 720), view: HistoryView()) }
+    func showFeedback() { show("feedback", title: "Send feedback", size: NSSize(width: 720, height: 700), view: FeedbackView()) }
+    func showOnboarding() { show("onboarding", title: "Captures", size: NSSize(width: 760, height: 620), view: OnboardingView()) }
+
+    func requireOnboarding() -> Bool {
+        guard !onboardingCompleted else { return false }
+        showOnboarding()
+        return true
+    }
+
+    func completeOnboarding() {
+        do {
+            try NativeStorage.write(true, to: Self.dataDirectory.appendingPathComponent("onboarding-complete.json"))
+            onboardingCompleted = true
+            windows["onboarding"]?.close()
+            showPreferences()
+        } catch { report(error) }
+    }
 
     func open(_ artifact: Artifact) {
         guard FileManager.default.fileExists(atPath: artifact.path) else {

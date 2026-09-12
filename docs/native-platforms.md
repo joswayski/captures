@@ -4,7 +4,8 @@ Captures is moving toward platform-specific native presentation around the
 existing Rust capture, recording, media, and session engines. The shipping Tauri
 Preview remains the comparison baseline and distributed app until the native
 frontends pass their replacement checks. This work does not change installers,
-update channels, production profiles, or OS permissions.
+update channels or production profiles. Native setup requests its own OS
+permissions; existing Tauri permission grants are not migrated.
 
 ## Presentation choices
 
@@ -69,22 +70,33 @@ These are implemented experiments, not drop-in replacements. In particular:
 - **Windows:** editable canvas/background/zoom and several layer operations
   remain incomplete. Imported image layers now use the shared raster renderer
   with native multi-select file picking, asynchronous decode, transformed hit
-  testing, and undo/redo; their new native fixture still needs acceptance.
+  testing, and batch undo/redo. The model supports locking, independent opacity,
+  and six blend modes. Native image controls now expose dimensions, opacity and
+  rotation rather than ignored stroke/fill properties. Preferences has General,
+  Capture, Recording, Shortcuts and Appearance pages; some settings still need
+  runtime consumers and shortcuts remain read-only. Explicit worker-thread
+  feedback has its own form; no startup request is made.
   Recording playback uses a CPU FFmpeg decoder feeding D2D,
   not Media Foundation/D3D video decoding; playback audio, video
   crop, and microphone/countdown parity remain incomplete. Recording segment
   assembly still blocks during stop. Hosted D3D fixture captures do not establish
   physical DPI, capture, clipboard, drag, or cross-process click-through behavior.
-  [The accepted Windows run](https://github.com/joswayski/captures/actions/runs/34720104027)
-  passed MSVC build, 38 tests, strict clippy, and all 26 light/dark captures with
-  hardware drivers and verified full desktop bounds. Inspected recording
+  [The accepted Windows run](https://github.com/joswayski/captures/actions/runs/34721633995)
+  passed MSVC build, 40 tests, strict clippy, and 28 light/dark captures with
+  hardware drivers and verified full desktop bounds. The imported-image renders
+  contain real rotated translucent raster layers. Subsequent lock/opacity,
+  Preferences, image-inspector and feedback changes still require native CI.
+  Inspected recording
   fixtures show decoded paused frames, not playback timing or hardware video decode.
 - **macOS:** Swift builds, 11 XCTest tests, normal layouts, and independent real
-  video/dust compositor checks passed in [the native CI run](https://github.com/joswayski/captures/actions/runs/34720104041).
+  video/dust compositor checks passed in [the native CI run](https://github.com/joswayski/captures/actions/runs/34721634028).
   The inspected dust frame contains displaced source fragments and transparent
   holes; the video frame contains only Captures' custom controls. These checks
   do not establish performance or full interaction parity. Capture permissions, microphone/audio,
   session recovery, and physical multi-display behavior still need native use.
+  The next slice adds first-run permission setup, explicit feedback, soft
+  interpolated erase/restore, contiguous/global wand, and a successful-estimate
+  reference. New AppKit pixel tests and these surfaces require native CI.
 
 ## Feature parity acceptance
 
@@ -110,8 +122,13 @@ bridge check verified exact source/full-encode sizes and independently reproduce
 sampled estimates, while Swift presentation still requires native CI.
 Shared native feedback transport now has loopback tests for exact request fields,
 concurrent submission cooldown, retries, Unicode limits and response bounds;
-frontend integration and consent flows remain in progress. It collects no files
-or diagnostics and makes no automatic requests.
+frontend integration and consent flows remain in progress. It makes no automatic
+requests. The optional local crash module retains profile-isolated unclean-session
+and redacted panic evidence, and summarizes caller-supplied OS reports only after
+native executable identity/timestamp checks. Tests cover a real subprocess panic,
+retention across clean relaunch, path redaction, modern macOS IPS, UTF-16 Windows
+WER and Linux Apport. Platform shutdown integration and review/Send/Dismiss UI
+are required before enabling it; an unclean marker alone is not a proven crash.
 Native installer/Open With registration,
 signed updater/channel, and production-profile migration are separate rollout
 gates, not satisfied by local command-line routing. Never install a Tauri update
@@ -148,7 +165,10 @@ captures are saved and uploaded for diagnosis. Readiness validation passed in
 normal left/right thumbnail samples were 1,446/1,296 and compositor samples
 1,448/1,299, above 40 per side. Inspection then found twelve decoded cells
 overflowing their track; explicit equal cell widths fix that layout, pending
-its next native render. The
+its next native render at that revision. The
+[next run](https://github.com/joswayski/captures/actions/runs/34721634028)
+now shows all twelve decoded cells fitting the strip, verified by direct image
+inspection. The
 [Windows parity run](https://github.com/joswayski/captures/actions/runs/34719051988)
 passed 38 MSVC tests and rendered 26 fully contained light/dark hardware-driver
 captures, including decoded paused video frames. Inspection found wrapped labels
@@ -157,8 +177,8 @@ playhead between the two trim handles for independent visual verification.
 The [Windows follow-up](https://github.com/joswayski/captures/actions/runs/34720104027)
 verified those corrections in both appearances and a separate one-third playhead.
 Neither run verifies continuous playback, audio, or WARP rendering. Windows
-eraser, editable canvas controls, and non-General preference pages remain
-explicitly unavailable. This pass does not establish full feature parity or
+eraser and editable canvas controls remain incomplete; the new Preferences
+pages do not yet cover every shipping setting and consumer. This pass does not establish full feature parity or
 change the measured revision below.
 
 ## Matched measurements

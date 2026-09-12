@@ -15,6 +15,7 @@ use captures_capture::{
     PointerCursor, XcapBackend, overlay_pointer_cursor, overlay_pointer_cursor_in_crop,
     overlay_pointer_cursor_on_window, screenshot_pointer_scale,
 };
+use captures_feedback::{DEFAULT_FEEDBACK_URL, FeedbackClient};
 use captures_media::{
     AudioEdit, CancelToken, EditSpec, ExportFormat, ExportSpec, MediaToolchain,
     RecordingAudioLayout, RecordingSegmentInput, estimate_sample_windows,
@@ -28,11 +29,11 @@ use serde_json::{Value, json};
 
 use crate::{
     protocol::{
-        self, BridgeResult, DescribeRequest, Envelope, FreezeCreateRequest, FreezeDiscardRequest,
-        ImageEncodeRequest, ImageFormat, MediaEstimateRequest, MediaExportRequest,
-        MediaPathRequest, MicrophonePermissionRequest, RecordMuteRequest, RecordStartRequest,
-        RecoverDiscardRequest, RecoverRequest, ScreenshotRequest, ScreenshotTarget, failure_json,
-        success_json,
+        self, BridgeResult, DescribeRequest, Envelope, FeedbackSubmitRequest, FreezeCreateRequest,
+        FreezeDiscardRequest, ImageEncodeRequest, ImageFormat, MediaEstimateRequest,
+        MediaExportRequest, MediaPathRequest, MicrophonePermissionRequest, RecordMuteRequest,
+        RecordStartRequest, RecoverDiscardRequest, RecoverRequest, ScreenshotRequest,
+        ScreenshotTarget, failure_json, success_json,
     },
     storage::{
         self, Draft, PendingSegment, checked_draft_file, complete_segment, create_draft,
@@ -113,7 +114,8 @@ const fn microphone_permission_operation(
 
 fn operation_lane(operation: &str) -> OperationLane {
     match operation {
-        "image_encode"
+        "feedback_submit"
+        | "image_encode"
         | "media_probe"
         | "media_estimate"
         | "media_export"
@@ -144,6 +146,7 @@ fn dispatch_direct(request: &str) -> Option<BridgeResult<Value>> {
     match operation_lane(&envelope.op) {
         OperationLane::RecordingEngine => None,
         OperationLane::Stateless => Some(match envelope.op.as_str() {
+            "feedback_submit" => protocol::parse(&value).and_then(Engine::feedback_submit),
             "image_encode" => protocol::parse(&value).and_then(Engine::image_encode),
             "media_probe" => protocol::parse(&value).and_then(Engine::media_probe),
             "media_estimate" => protocol::parse(&value).and_then(Engine::media_estimate),
@@ -654,6 +657,11 @@ impl Engine {
             "has_system_audio": probe.audio_stream_count >= 1,
             "has_microphone_audio": probe.audio_stream_count >= 2,
         }))
+    }
+
+    fn feedback_submit(request: FeedbackSubmitRequest) -> BridgeResult<Value> {
+        feedback_client()?.submit(request.draft, request.context)?;
+        Ok(json!({}))
     }
 
     fn image_encode(request: ImageEncodeRequest) -> BridgeResult<Value> {
@@ -1218,6 +1226,18 @@ fn media_toolchain() -> MediaToolchain {
     MediaToolchain::new(ffmpeg, ffprobe)
 }
 
+fn feedback_client() -> BridgeResult<&'static FeedbackClient> {
+    static CLIENT: OnceLock<Result<FeedbackClient, String>> = OnceLock::new();
+    match CLIENT.get_or_init(|| {
+        let endpoint = std::env::var("CAPTURES_FEEDBACK_URL")
+            .unwrap_or_else(|_| DEFAULT_FEEDBACK_URL.to_owned());
+        FeedbackClient::new(&endpoint)
+    }) {
+        Ok(client) => Ok(client),
+        Err(error) => Err(error.clone()),
+    }
+}
+
 fn ensure_regular_source(path: &Path) -> BridgeResult<()> {
     let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
@@ -1388,6 +1408,7 @@ mod tests {
     #[test]
     fn long_stateless_operations_are_not_routed_to_recording_engine() {
         for operation in [
+            "feedback_submit",
             "image_encode",
             "media_probe",
             "media_estimate",
@@ -1443,6 +1464,27 @@ mod tests {
             .expect("media estimate is stateless")
             .unwrap_err();
         assert_eq!(error, "media estimate max_bytes must be greater than zero");
+    }
+
+    #[test]
+    fn feedback_requires_explicit_nonempty_user_content_without_sending() {
+        let request = serde_json::json!({
+            "op": "feedback_submit",
+            "draft": { "category": "bug", "message": "   ", "contact": null },
+            "context": {
+                "app_version": "test",
+                "os": "macos",
+                "os_version": "test",
+                "arch": "arm64"
+            }
+        });
+        let error = super::dispatch_direct(&request.to_string())
+            .expect("feedback is stateless")
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "Please enter a short description of the issue or idea."
+        );
     }
 
     #[test]

@@ -45,9 +45,8 @@ remain unchanged; staged bytes are flushed and synced before replacement. Canvas
 dimension/background/zoom controls are currently read-only. Add images opens the native multi-file
 picker, decodes selected images off the message thread, and adds independently selectable raster
 layers through the shared `captures-image` renderer. Imported layers preserve aspect ratio and can
-be moved, resized, rotated, hidden, exported, and undone/redone. The picker does not yet filter its
-visible file list to supported image formats, and one multi-select import currently creates one undo
-checkpoint per image rather than one checkpoint for the batch.
+be moved, resized, rotated, hidden, exported, and undone/redone. The picker filters to the image
+formats supported by the experiment, and a multi-select import is committed as one undo step.
 The current native chrome uses the shipping editor's icon-led tool rail, separate Arrow tool,
 three-column shape flyout, empty default inspector, locked-background layer row, grouped canvas/zoom
 header, and filename/export footer. Switches share the shipping 30-by-18 geometry and have distinct
@@ -69,8 +68,21 @@ changing its custom quality dropdown automatically encode a one-second sample an
 split-frame before/after comparison plus an extrapolated size estimate. Any performance measurement
 must include FFmpeg child-process CPU and memory.
 
+General, Capture, Recording, Shortcuts, and Appearance preference pages are native routes. Changed
+values persist through the experiment profile. Screenshot format/freeze, recording format/rate/cursor/
+system audio/editor handoff, and capture-exclusion appearance values are consumed by native paths;
+screenshot countdown/cursor are not yet applied during capture. Shortcuts are currently read-only and
+registration conflicts fail closed. Microphone selection, GIF-specific limits, custom shortcut
+editing, and custom accent entry remain unavailable.
+
+Preferences links to an explicit native feedback form. It sends only the typed message, optional
+contact, selected category, and bounded app/platform context after the user presses Send. A single
+off-thread `captures-feedback` client enforces transport validation, timeout, no redirects, and local
+cooldown; no feedback or telemetry is sent at startup. Fixture rendering never submits the form.
+Crash collection and crash-reporting consent are not implemented, so raw panic text is never sent.
+
 The eraser tool, editable canvas size/background/zoom, remaining image-layer actions, recording crop
-and preview audio, and the non-General preference pages are not implemented. Their controls are
+and preview audio are not implemented. Their controls are
 omitted or explicitly marked unavailable rather than presented as working. Windows DirectComposition
 fixtures are required to assess final pixel-level parity; they cannot be rendered in the Linux orb.
 

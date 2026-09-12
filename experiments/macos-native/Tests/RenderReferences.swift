@@ -69,6 +69,7 @@ enum RenderReferences {
             window.makeKeyAndOrderFront(nil)
             application.activate(ignoringOtherApps: true)
             let filmstripDeadline = Date().addingTimeInterval(10)
+            let estimateDeadline = Date().addingTimeInterval(30)
             func captureWhenReady() {
                 view.layoutSubtreeIfNeeded()
                 view.displayIfNeeded()
@@ -82,6 +83,12 @@ enum RenderReferences {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { captureWhenReady() }
                         return
                     }
+                }
+                if fixture.name == "recording-editor-quality-estimate",
+                   resolvedNativeReferenceEstimateLabel() == nil,
+                   Date() < estimateDeadline {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { captureWhenReady() }
+                    return
                 }
                 if captureAnimations && (dustCapture || fixture.name == "recording-editor-layout") {
                     let name = dustCapture
@@ -142,6 +149,7 @@ enum RenderReferences {
                 if [
                     "previews-collapsed", "previews-collapsed-fanned", "previews-expanded",
                     "image-editor", "image-editor-shapes", "image-editor-properties",
+                    "image-editor-erase", "image-editor-wand",
                 ].contains(fixture.name),
                    !hasSharedFixtureFeature(bitmap) {
                     fputs("Native \(fixture.name) reference omitted the shared source fixture's distinctive media content.\n", stderr)
@@ -153,6 +161,14 @@ enum RenderReferences {
                 if fixture.name == "recording-editor-layout", !hasTimelineFilmstrip(bitmap) {
                     fputs("Native recording-editor-layout reference did not contain decoded filmstrip frames within 10 seconds; diagnostic PNG saved.\n", stderr)
                     exit(1)
+                }
+                if fixture.name == "recording-editor-quality-estimate" {
+                    guard let label = resolvedNativeReferenceEstimateLabel(),
+                          label != "—", label != "Estimating…" else {
+                        fputs("Native recording quality reference did not complete a successful media estimate within 30 seconds; diagnostic PNG saved.\n", stderr)
+                        exit(1)
+                    }
+                    print("Completed native recording estimate: \(label)")
                 }
                 print("Rendered native \(fixture.name): \(bitmap.pixelsWide) × \(bitmap.pixelsHigh)")
                 render(index + 1)

@@ -1,7 +1,9 @@
+mod feedback_worker;
 mod media_worker;
 mod renderer;
 
 use captures_capture::{CaptureMode, DisplayDescriptor, XcapBackend};
+use captures_feedback::FeedbackDraft;
 use captures_media::{AudioEdit, EditSpec, ExportFormat, ExportSpec, QualityPreset};
 use captures_recording::{
     AudioOptions, GifOptions, RecordingKind, RecordingOptions, RecordingSegmentInfo,
@@ -11,18 +13,20 @@ use captures_recording_xcap::XcapRecordingSegment;
 use captures_windows_native::{
     editor::{FreehandGesture, Layer, resize_from_corner},
     geometry::{
-        Point, Rect, SelectionDrag, contain, editor_layer_visibility_button,
-        editor_shape_flyout_index, recording_editor_timeline_track, rounded_contains,
-        screenshot_editor_canvas, update_selection,
+        Point, Rect, SelectionDrag, contain, editor_layer_lock_button,
+        editor_layer_visibility_button, editor_shape_flyout_index, recording_editor_timeline_track,
+        rounded_contains, screenshot_editor_canvas, update_selection,
     },
     history::{Artifact, History, move_to_trash, restore_from_trash, safe_delete},
     settings::{Settings, data_dir, profile_id},
     state::{
-        AppState, RecordingEditorState, RecordingUi, Surface, can_replace_editor_source,
+        AppState, PreferencesPage, RecordingEditorState, RecordingUi, Surface, backspace_feedback,
+        can_replace_editor_source, delete_feedback, replace_feedback_selection,
         sanitize_editor_filename,
     },
     theme::{palette, theme_colors},
 };
+use feedback_worker::FeedbackWorker;
 use image::RgbaImage;
 use media_worker::{ComparisonSpec, Event as MediaEvent, ExportJob, MediaWorker, PlaybackSpec};
 use renderer::{Frame, Renderer};
@@ -49,12 +53,14 @@ use windows::{
                 CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
                 CoTaskMemFree, CoUninitialize, IDataObject,
             },
-            DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
+            DataExchange::{
+                CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
+            },
             LibraryLoader::GetModuleHandleW,
-            Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock},
+            Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock},
             Ole::{
-                DROPEFFECT, DROPEFFECT_COPY, DoDragDrop, IDropSource, IDropSource_Impl,
-                OleInitialize, OleUninitialize,
+                CF_UNICODETEXT, DROPEFFECT, DROPEFFECT_COPY, DoDragDrop, IDropSource,
+                IDropSource_Impl, OleInitialize, OleUninitialize,
             },
             Registry::{
                 HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
@@ -70,14 +76,15 @@ use windows::{
             },
             Input::KeyboardAndMouse::{
                 GetKeyState, HOT_KEY_MODIFIERS, MOD_CONTROL, MOD_SHIFT, RegisterHotKey,
-                ReleaseCapture, SetCapture, UnregisterHotKey, VK_CONTROL, VK_DELETE, VK_ESCAPE,
-                VK_RETURN,
+                ReleaseCapture, SetCapture, UnregisterHotKey, VK_CONTROL, VK_DELETE, VK_END,
+                VK_ESCAPE, VK_HOME, VK_LEFT, VK_RETURN, VK_RIGHT,
             },
             Shell::{
-                Common::ITEMIDLIST, FOS_ALLOWMULTISELECT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM,
-                FileOpenDialog, IFileOpenDialog, ILClone, ILCreateFromPathW, ILFindLastID,
-                ILRemoveLastID, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
-                NOTIFYICONDATAW, SHCreateDataObject, SIGDN_FILESYSPATH, Shell_NotifyIconW,
+                Common::{COMDLG_FILTERSPEC, ITEMIDLIST},
+                FOS_ALLOWMULTISELECT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FileOpenDialog,
+                IFileOpenDialog, ILClone, ILCreateFromPathW, ILFindLastID, ILRemoveLastID,
+                NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+                SHCreateDataObject, SIGDN_FILESYSPATH, Shell_NotifyIconW,
             },
             WindowsAndMessaging::*,
         },
@@ -147,6 +154,9 @@ struct App {
     frame_request: u64,
     comparison_request: u64,
     export_request: u64,
+    feedback: FeedbackWorker,
+    feedback_request: u64,
+    feedback_high_surrogate: Option<u16>,
 }
 
 #[derive(Clone)]
@@ -286,6 +296,9 @@ pub fn run() -> Result<(), String> {
             frame_request: 0,
             comparison_request: 0,
             export_request: 0,
+            feedback: FeedbackWorker::new(),
+            feedback_request: 0,
+            feedback_high_surrogate: None,
         });
         let raw = Box::into_raw(app);
         let _hwnd = CreateWindowExW(
@@ -413,7 +426,11 @@ unsafe extern "system" fn wndproc(
                 LRESULT(0)
             }
             WM_CHAR => {
-                app.character(char::from_u32(wparam.0 as u32));
+                app.character_utf16(wparam.0 as u16);
+                LRESULT(0)
+            }
+            WM_PASTE => {
+                app.paste_feedback();
                 LRESULT(0)
             }
             WM_HOTKEY => {
@@ -448,6 +465,7 @@ unsafe extern "system" fn wndproc(
                 app.state.tick(now);
                 app.tick_recording_editor(now);
                 app.process_media_events();
+                app.process_feedback_events();
                 if had_previews
                     && app.state.previews.is_empty()
                     && app.state.surface == Surface::Preview
@@ -530,6 +548,7 @@ impl App {
                 Surface::Preview => (Surface::Preview, 340, 200),
                 Surface::History => (Surface::History, 720, 430),
                 Surface::Preferences => (Surface::Preferences, 760, 520),
+                Surface::Feedback => (Surface::Feedback, 620, 500),
                 Surface::DeleteConfirmation => (Surface::DeleteConfirmation, 480, 300),
                 _ => (Surface::Menu, 420, 430),
             };
@@ -822,6 +841,7 @@ impl App {
                 }
                 Surface::RecordingHud => self.hud_click(p),
                 Surface::Preferences => self.preferences_click(p),
+                Surface::Feedback => self.feedback_click(p),
                 Surface::History => self.history_click(p),
                 Surface::ScreenshotEditor => {
                     self.editor_pointer_down(p);
@@ -890,11 +910,26 @@ impl App {
     }
 
     unsafe fn preferences_click(&mut self, p: Point) {
-        if p.x < 200.0 || p.y < 78.0 {
+        if p.x < 184.0 {
+            if p.y >= 430.0 {
+                unsafe { self.show_surface(Surface::Feedback, 620, 500, false) };
+                return;
+            }
+            let index = ((p.y - 72.0) / 44.0).floor() as usize;
+            if let Some(page) = PreferencesPage::ALL.get(index) {
+                self.state.preferences_page = *page;
+                unsafe {
+                    let _ = InvalidateRect(Some(self.hwnd), None, false);
+                }
+            }
             return;
         }
-        match ((p.y - 84.0) / 64.0).floor() as i32 {
-            0 => {
+        if p.y < 78.0 {
+            return;
+        }
+        let row = ((p.y - 84.0) / 64.0).floor() as i32;
+        match (self.state.preferences_page, row) {
+            (PreferencesPage::General, 0) => {
                 let enabled = !self.settings.launch_at_login;
                 if let Err(error) = set_autostart(enabled) {
                     self.set_error(error);
@@ -902,10 +937,75 @@ impl App {
                 }
                 self.settings.launch_at_login = enabled;
             }
-            1 => self.settings.auto_copy_to_clipboard = !self.settings.auto_copy_to_clipboard,
-            2 => self.settings.show_mini_previews = !self.settings.show_mini_previews,
-            3 => self.settings.freeze_screen = !self.settings.freeze_screen,
-            4 => {
+            (PreferencesPage::General, 1) => {
+                self.settings.auto_copy_to_clipboard = !self.settings.auto_copy_to_clipboard
+            }
+            (PreferencesPage::General, 2) => {
+                self.settings.show_mini_previews = !self.settings.show_mini_previews
+            }
+            (PreferencesPage::General, 3) => {
+                self.settings.freeze_screen = !self.settings.freeze_screen
+            }
+            (PreferencesPage::Capture, 0) => {
+                self.settings.screenshot_countdown_seconds =
+                    match self.settings.screenshot_countdown_seconds {
+                        0 => 3,
+                        3 => 5,
+                        5 => 10,
+                        _ => 0,
+                    }
+            }
+            (PreferencesPage::Capture, 1) => {
+                self.settings.show_cursor_in_screenshots = !self.settings.show_cursor_in_screenshots
+            }
+            (PreferencesPage::Capture, 2) => {
+                self.settings.freeze_screen = !self.settings.freeze_screen
+            }
+            (PreferencesPage::Capture, 3) => {
+                self.settings.screenshot_format = match self.settings.screenshot_format.as_str() {
+                    "png" => "jpeg",
+                    "jpeg" => "webp",
+                    _ => "png",
+                }
+                .into()
+            }
+            (PreferencesPage::Recording, 0) => {
+                self.settings.recording.video_format =
+                    if self.settings.recording.video_format == "mp4" {
+                        "gif"
+                    } else {
+                        "mp4"
+                    }
+                    .into()
+            }
+            (PreferencesPage::Recording, 1) => {
+                self.settings.recording.video_fps = match self.settings.recording.video_fps {
+                    15 => 30,
+                    30 => 60,
+                    _ => 15,
+                }
+            }
+            (PreferencesPage::Recording, 2) => {
+                self.settings.recording.countdown_seconds =
+                    match self.settings.recording.countdown_seconds {
+                        0 => 3,
+                        3 => 5,
+                        5 => 10,
+                        _ => 0,
+                    }
+            }
+            (PreferencesPage::Recording, 3) => {
+                self.settings.recording.show_cursor = !self.settings.recording.show_cursor
+            }
+            (PreferencesPage::Recording, 4) => {
+                self.settings.recording.capture_system_audio =
+                    !self.settings.recording.capture_system_audio
+            }
+            (PreferencesPage::Recording, 5) => {
+                self.settings.recording.open_editor_after_recording =
+                    !self.settings.recording.open_editor_after_recording
+            }
+            (PreferencesPage::Appearance, 0) => {
                 self.settings.appearance = match self.settings.appearance.as_str() {
                     "system" => "light",
                     "light" => "dark",
@@ -913,13 +1013,21 @@ impl App {
                 }
                 .into()
             }
-            5 => {
+            (PreferencesPage::Appearance, 1) => {
                 self.settings.theme = match self.settings.theme.as_str() {
                     "mustard" => "cobalt",
                     "cobalt" => "mint",
                     _ => "mustard",
                 }
                 .into()
+            }
+            (PreferencesPage::Appearance, 2) => {
+                self.settings.include_mini_previews_in_captures =
+                    !self.settings.include_mini_previews_in_captures
+            }
+            (PreferencesPage::Appearance, 3) => {
+                self.settings.include_recording_controls_in_captures =
+                    !self.settings.include_recording_controls_in_captures
             }
             _ => return,
         }
@@ -928,6 +1036,62 @@ impl App {
         }
         unsafe {
             let _ = InvalidateRect(Some(self.hwnd), None, false);
+        }
+    }
+
+    unsafe fn feedback_click(&mut self, p: Point) {
+        if self.state.feedback_submitting {
+            return;
+        }
+        if (92.0..258.0).contains(&p.y) {
+            self.state.feedback_field = 0;
+            self.state.feedback_caret = self.state.feedback_message.chars().count();
+            self.state.feedback_select_all = false;
+        } else if (274.0..320.0).contains(&p.y) {
+            self.state.feedback_field = 1;
+            self.state.feedback_caret = self.state.feedback_contact.chars().count();
+            self.state.feedback_select_all = false;
+        } else if (338.0..378.0).contains(&p.y) {
+            let index = ((p.x - 32.0) / 112.0).floor() as usize;
+            if let Some(category) = ["bug", "idea", "other"].get(index) {
+                self.state.feedback_category = (*category).into();
+            }
+        } else if p.y >= 430.0 && p.x < 300.0 {
+            unsafe { self.show_surface(Surface::Preferences, 760, 520, false) };
+            return;
+        } else if p.y >= 430.0 && p.x >= 430.0 {
+            self.feedback_request = self.feedback_request.wrapping_add(1);
+            let draft = FeedbackDraft {
+                message: self.state.feedback_message.clone(),
+                contact: Some(self.state.feedback_contact.clone()),
+                category: self.state.feedback_category.clone(),
+            };
+            match self.feedback.submit(self.feedback_request, draft) {
+                Ok(()) => self.state.feedback_submitting = true,
+                Err(error) => self.set_error(error),
+            }
+        }
+        unsafe {
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
+        }
+    }
+
+    fn process_feedback_events(&mut self) {
+        while let Some(event) = self.feedback.try_recv() {
+            if event.request != self.feedback_request {
+                continue;
+            }
+            self.state.feedback_submitting = false;
+            match event.result {
+                Ok(()) => {
+                    self.state.feedback_message.clear();
+                    self.state.status = Some(("Feedback sent. Thank you.".into(), Instant::now()));
+                }
+                Err(error) => self.set_error(error),
+            }
+            unsafe {
+                let _ = InvalidateRect(Some(self.hwnd), None, false);
+            }
         }
     }
 
@@ -1134,10 +1298,12 @@ impl App {
                 self.state.editor_color_hex = format_color(layer.color);
             }
             let row_y = 104.0 + index as f32 * 52.0;
-            if editor_layer_visibility_button(sidebar_x, row_y).contains(p)
-                && let Some(document) = self.state.editor.as_mut()
-            {
-                document.toggle_visibility(id);
+            if let Some(document) = self.state.editor.as_mut() {
+                if editor_layer_visibility_button(sidebar_x, row_y).contains(p) {
+                    document.toggle_visibility(id);
+                } else if editor_layer_lock_button(sidebar_x, row_y).contains(p) {
+                    document.toggle_locked(id);
+                }
             }
         } else if p.x > sidebar_x && {
             let count = self
@@ -1156,69 +1322,112 @@ impl App {
             let properties_y = (176.0 + count as f32 * 52.0).min(footer_y - 154.0);
             let row = ((p.y - properties_y - 28.0) / 40.0).floor() as usize;
             let selected = self.state.selected_layer;
-            match row {
-                0 if (sidebar_x + 116.0..sidebar_x + 296.0).contains(&p.x) => {
-                    self.state.editor_editing_color = true;
-                    if let Some(id) = selected
-                        && let Some(layer) = self.state.editor.as_ref().and_then(|document| {
-                            document.layers.iter().find(|layer| layer.id == id)
-                        })
-                    {
-                        self.state.editor_color_hex = format_color(layer.color);
-                    }
-                    self.state.status = Some((
-                        "Type a #RRGGBB color and press Enter".into(),
-                        Instant::now(),
-                    ));
-                }
-                1 => {
-                    let delta = if p.x < sidebar_x + 236.0 { -1.0 } else { 1.0 };
-                    if let Some(id) = selected {
+            let selected_image = selected.is_some_and(|id| {
+                self.state.editor.as_ref().is_some_and(|document| {
+                    document.layers.iter().any(|layer| {
+                        layer.id == id
+                            && matches!(
+                                layer.shape,
+                                captures_windows_native::editor::Shape::Image { .. }
+                            )
+                    })
+                })
+            });
+            if selected_image {
+                let id = selected.unwrap_or_default();
+                match row {
+                    1 => {
+                        let delta = if p.x < sidebar_x + 236.0 { -26 } else { 26 };
                         if let Some(document) = self.state.editor.as_mut()
-                            && let Some(stroke) = document
+                            && let Some(opacity) = document
                                 .layers
                                 .iter()
                                 .find(|layer| layer.id == id)
-                                .map(|layer| layer.stroke)
+                                .map(|layer| layer.opacity)
                         {
-                            document.set_layer_stroke(id, stroke + delta);
+                            document.set_layer_opacity(id, opacity.saturating_add_signed(delta));
                         }
-                    } else {
-                        self.state.editor_stroke =
-                            (self.state.editor_stroke + delta).clamp(1.0, 48.0);
                     }
-                }
-                2 => {
-                    if let Some(id) = selected {
+                    2 => {
+                        let delta = if p.x < sidebar_x + 236.0 { -15.0 } else { 15.0 };
                         if let Some(document) = self.state.editor.as_mut()
-                            && let Some(layer) = document.layers.iter().find(|layer| layer.id == id)
-                            && layer.supports_fill()
+                            && let Some(rotation) = document
+                                .layers
+                                .iter()
+                                .find(|layer| layer.id == id)
+                                .map(|layer| layer.rotation_degrees)
                         {
-                            let fill = layer.fill.is_none().then_some(layer.color);
-                            document.set_layer_fill(id, fill);
+                            document.set_layer_rotation(id, rotation + delta);
                         }
-                    } else {
-                        self.state.editor_fill = self
-                            .state
-                            .editor_fill
-                            .is_none()
-                            .then_some(self.state.editor_color);
                     }
+                    _ => {}
                 }
-                3 if selected.is_some() => {
-                    let id = selected.unwrap_or_default();
-                    let delta = if p.x < sidebar_x + 236.0 { -15.0 } else { 15.0 };
-                    if let Some(document) = self.state.editor.as_mut()
-                        && let Some(rotation) = document
-                            .layers
-                            .iter()
-                            .find(|layer| layer.id == id)
-                            .map(|layer| layer.rotation_degrees)
-                    {
-                        document.set_layer_rotation(id, rotation + delta);
+            } else {
+                match row {
+                    0 if (sidebar_x + 116.0..sidebar_x + 296.0).contains(&p.x) => {
+                        self.state.editor_editing_color = true;
+                        if let Some(id) = selected
+                            && let Some(layer) = self.state.editor.as_ref().and_then(|document| {
+                                document.layers.iter().find(|layer| layer.id == id)
+                            })
+                        {
+                            self.state.editor_color_hex = format_color(layer.color);
+                        }
+                        self.state.status = Some((
+                            "Type a #RRGGBB color and press Enter".into(),
+                            Instant::now(),
+                        ));
                     }
+                    1 => {
+                        let delta = if p.x < sidebar_x + 236.0 { -1.0 } else { 1.0 };
+                        if let Some(id) = selected {
+                            if let Some(document) = self.state.editor.as_mut()
+                                && let Some(stroke) = document
+                                    .layers
+                                    .iter()
+                                    .find(|layer| layer.id == id)
+                                    .map(|layer| layer.stroke)
+                            {
+                                document.set_layer_stroke(id, stroke + delta);
+                            }
+                        } else {
+                            self.state.editor_stroke =
+                                (self.state.editor_stroke + delta).clamp(1.0, 48.0);
+                        }
+                    }
+                    2 => {
+                        if let Some(id) = selected {
+                            if let Some(document) = self.state.editor.as_mut()
+                                && let Some(layer) =
+                                    document.layers.iter().find(|layer| layer.id == id)
+                                && layer.supports_fill()
+                            {
+                                let fill = layer.fill.is_none().then_some(layer.color);
+                                document.set_layer_fill(id, fill);
+                            }
+                        } else {
+                            self.state.editor_fill = self
+                                .state
+                                .editor_fill
+                                .is_none()
+                                .then_some(self.state.editor_color);
+                        }
+                    }
+                    3 if selected.is_some() => {
+                        let id = selected.unwrap_or_default();
+                        let delta = if p.x < sidebar_x + 236.0 { -15.0 } else { 15.0 };
+                        if let Some(document) = self.state.editor.as_mut()
+                            && let Some(rotation) = document
+                                .layers
+                                .iter()
+                                .find(|layer| layer.id == id)
+                                .map(|layer| layer.rotation_degrees)
+                        {
+                            document.set_layer_rotation(id, rotation + delta);
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         } else if self.state.editor_tool == captures_windows_native::editor::Tool::Select
             && let Some(source) = self.editor_source_point_unbounded(p)
@@ -1441,6 +1650,9 @@ impl App {
             .iter()
             .find(|layer| layer.id == id)?
             .clone();
+        if original.locked {
+            return None;
+        }
         let corners = original.selection_corners()?;
         let screen_corners =
             corners.map(|point| self.editor_screen_point(point).unwrap_or_default());
@@ -1629,9 +1841,18 @@ impl App {
                         Ok(images) => {
                             let mut selected = None;
                             if let Some(document) = self.state.editor.as_mut() {
-                                for (offset, (_, image)) in images.into_iter().enumerate() {
-                                    selected = Some(document.add_image(image, offset));
-                                }
+                                let images = images
+                                    .into_iter()
+                                    .map(|(path, image)| {
+                                        let name = path
+                                            .file_name()
+                                            .and_then(|value| value.to_str())
+                                            .unwrap_or("Image")
+                                            .to_owned();
+                                        (image, name)
+                                    })
+                                    .collect();
+                                selected = document.add_images(images, 0).last().copied();
                             }
                             self.state.selected_layer = selected;
                             self.state.editor_tool = captures_windows_native::editor::Tool::Select;
@@ -1880,6 +2101,67 @@ impl App {
         unsafe {
             let editor = self.state.surface == Surface::ScreenshotEditor;
             let control = GetKeyState(VK_CONTROL.0 as i32) < 0;
+            if self.state.surface == Surface::Feedback {
+                if self.state.feedback_submitting {
+                    return;
+                }
+                let length = if self.state.feedback_field == 0 {
+                    self.state.feedback_message.chars().count()
+                } else {
+                    self.state.feedback_contact.chars().count()
+                };
+                match key {
+                    0x41 if control => self.state.feedback_select_all = true,
+                    0x56 if control => {
+                        self.paste_feedback();
+                        return;
+                    }
+                    value if value == VK_ESCAPE.0 as u32 => {
+                        self.show_surface(Surface::Preferences, 760, 520, false);
+                        return;
+                    }
+                    value if value == VK_RETURN.0 as u32 && self.state.feedback_field == 0 => {
+                        replace_feedback_selection(
+                            &mut self.state.feedback_message,
+                            &mut self.state.feedback_caret,
+                            &mut self.state.feedback_select_all,
+                            "\n",
+                            8_000,
+                        );
+                    }
+                    value if value == VK_LEFT.0 as u32 => {
+                        self.state.feedback_caret = self.state.feedback_caret.saturating_sub(1);
+                        self.state.feedback_select_all = false;
+                    }
+                    value if value == VK_RIGHT.0 as u32 => {
+                        self.state.feedback_caret = (self.state.feedback_caret + 1).min(length);
+                        self.state.feedback_select_all = false;
+                    }
+                    value if value == VK_HOME.0 as u32 => {
+                        self.state.feedback_caret = 0;
+                        self.state.feedback_select_all = false;
+                    }
+                    value if value == VK_END.0 as u32 => {
+                        self.state.feedback_caret = length;
+                        self.state.feedback_select_all = false;
+                    }
+                    value if value == VK_DELETE.0 as u32 => {
+                        let field = if self.state.feedback_field == 0 {
+                            &mut self.state.feedback_message
+                        } else {
+                            &mut self.state.feedback_contact
+                        };
+                        delete_feedback(
+                            field,
+                            &mut self.state.feedback_caret,
+                            &mut self.state.feedback_select_all,
+                        );
+                    }
+                    _ => {}
+                }
+                let _ = InvalidateRect(Some(self.hwnd), None, false);
+                return;
+            }
             if editor && key == VK_RETURN.0 as u32 && self.editor_text_origin.is_some() {
                 self.commit_editor_text();
             } else if editor && key == VK_RETURN.0 as u32 && self.state.editor_editing_filename {
@@ -1973,10 +2255,64 @@ impl App {
         }
     }
 
-    fn character(&mut self, character: Option<char>) {
-        let Some(character) = character else {
+    fn character_utf16(&mut self, unit: u16) {
+        if self.state.surface == Surface::Feedback && self.state.feedback_submitting {
+            self.feedback_high_surrogate = None;
             return;
-        };
+        }
+        if (0xd800..=0xdbff).contains(&unit) {
+            self.feedback_high_surrogate = Some(unit);
+            return;
+        }
+        if let Some(high) = self.feedback_high_surrogate.take() {
+            if (0xdc00..=0xdfff).contains(&unit) {
+                if let Some(character) =
+                    char::decode_utf16([high, unit]).next().and_then(Result::ok)
+                {
+                    self.character(character);
+                }
+                return;
+            }
+            self.character(char::REPLACEMENT_CHARACTER);
+        }
+        self.character(char::from_u32(u32::from(unit)).unwrap_or(char::REPLACEMENT_CHARACTER));
+    }
+
+    fn character(&mut self, character: char) {
+        if self.state.surface == Surface::Feedback {
+            if self.state.feedback_submitting {
+                return;
+            }
+            let field = if self.state.feedback_field == 0 {
+                &mut self.state.feedback_message
+            } else {
+                &mut self.state.feedback_contact
+            };
+            let maximum = if self.state.feedback_field == 0 {
+                8_000
+            } else {
+                200
+            };
+            match character {
+                '\u{8}' => backspace_feedback(
+                    field,
+                    &mut self.state.feedback_caret,
+                    &mut self.state.feedback_select_all,
+                ),
+                value if !value.is_control() => replace_feedback_selection(
+                    field,
+                    &mut self.state.feedback_caret,
+                    &mut self.state.feedback_select_all,
+                    &value.to_string(),
+                    maximum,
+                ),
+                _ => {}
+            }
+            unsafe {
+                let _ = InvalidateRect(Some(self.hwnd), None, false);
+            }
+            return;
+        }
         if self.state.surface != Surface::ScreenshotEditor {
             return;
         }
@@ -2025,6 +2361,68 @@ impl App {
                 _ => {}
             }
             self.state.status = Some((format!("Text: {}", self.editor_text), Instant::now()));
+        }
+        unsafe {
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
+        }
+    }
+
+    fn paste_feedback(&mut self) {
+        if self.state.surface != Surface::Feedback || self.state.feedback_submitting {
+            return;
+        }
+        let result = unsafe {
+            match OpenClipboard(Some(self.hwnd)) {
+                Err(error) => Err(error.to_string()),
+                Ok(()) => {
+                    let result = (|| {
+                        let handle = GetClipboardData(u32::from(CF_UNICODETEXT.0))
+                            .map_err(|error| error.to_string())?;
+                        let global = windows::Win32::Foundation::HGLOBAL(handle.0);
+                        let bytes = GlobalSize(global);
+                        if bytes < 2 {
+                            return Err("Clipboard text is unavailable.".into());
+                        }
+                        let pointer = GlobalLock(global).cast::<u16>();
+                        if pointer.is_null() {
+                            return Err("Clipboard text is unavailable.".into());
+                        }
+                        let words = std::slice::from_raw_parts(pointer, bytes / 2);
+                        let length = words
+                            .iter()
+                            .position(|word| *word == 0)
+                            .unwrap_or(words.len());
+                        let text = String::from_utf16_lossy(&words[..length]);
+                        let _ = GlobalUnlock(global);
+                        Ok(text)
+                    })();
+                    let _ = CloseClipboard();
+                    result
+                }
+            }
+        };
+        match result {
+            Ok(mut text) => {
+                let maximum = if self.state.feedback_field == 0 {
+                    8_000
+                } else {
+                    text = text.replace(['\r', '\n'], " ");
+                    200
+                };
+                let field = if self.state.feedback_field == 0 {
+                    &mut self.state.feedback_message
+                } else {
+                    &mut self.state.feedback_contact
+                };
+                replace_feedback_selection(
+                    field,
+                    &mut self.state.feedback_caret,
+                    &mut self.state.feedback_select_all,
+                    &text,
+                    maximum,
+                );
+            }
+            Err(error) => self.set_error(error),
         }
         unsafe {
             let _ = InvalidateRect(Some(self.hwnd), None, false);
@@ -2256,6 +2654,11 @@ unsafe fn choose_editor_images(owner: HWND) -> Result<Vec<PathBuf>, String> {
             .map_err(|error| error.to_string())?
     };
     let options = unsafe { dialog.GetOptions() }.map_err(|error| error.to_string())?;
+    let filters = [COMDLG_FILTERSPEC {
+        pszName: w!("Images"),
+        pszSpec: w!("*.png;*.jpg;*.jpeg;*.webp;*.gif"),
+    }];
+    unsafe { dialog.SetFileTypes(&filters) }.map_err(|error| error.to_string())?;
     unsafe {
         dialog.SetOptions(options | FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM)
     }
@@ -2932,7 +3335,7 @@ fn prepare_fixture(
             });
             state.edit_image(image);
             if let Some(document) = state.editor.as_mut() {
-                let id = document.add_image(imported, 0);
+                let id = document.add_image(imported, 0, "Imported gradient.png".into());
                 document.set_layer_rotation(id, -8.0);
                 state.selected_layer = Some(id);
                 state.editor_tool = captures_windows_native::editor::Tool::Select;
@@ -3021,6 +3424,23 @@ fn prepare_fixture(
         }
         "history" => state.surface = Surface::History,
         "preferences" => state.surface = Surface::Preferences,
+        "preferences-capture" => {
+            state.surface = Surface::Preferences;
+            state.preferences_page = PreferencesPage::Capture;
+        }
+        "preferences-recording" => {
+            state.surface = Surface::Preferences;
+            state.preferences_page = PreferencesPage::Recording;
+        }
+        "preferences-appearance" => {
+            state.surface = Surface::Preferences;
+            state.preferences_page = PreferencesPage::Appearance;
+        }
+        "feedback" => {
+            state.surface = Surface::Feedback;
+            state.feedback_message = "The export controls overlap at 150% scaling.".into();
+            state.feedback_contact = "optional@example.com".into();
+        }
         "delete-confirmation" => {
             state.pending_delete = Some(Artifact::from_path(
                 data_dir().join("Capture-example.png"),

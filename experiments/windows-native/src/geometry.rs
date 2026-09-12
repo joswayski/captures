@@ -174,6 +174,15 @@ pub fn editor_shape_flyout_index(point: Point) -> Option<usize> {
 
 pub fn editor_layer_visibility_button(sidebar_x: f32, row_y: f32) -> Rect {
     Rect {
+        x: sidebar_x + 224.0,
+        y: row_y + 10.0,
+        width: 28.0,
+        height: 28.0,
+    }
+}
+
+pub fn editor_layer_lock_button(sidebar_x: f32, row_y: f32) -> Rect {
+    Rect {
         x: sidebar_x + 260.0,
         y: row_y + 10.0,
         width: 28.0,
@@ -334,16 +343,27 @@ mod tests {
     fn layer_visibility_hit_target_is_limited_to_the_eye() {
         let eye = editor_layer_visibility_button(780.0, 104.0);
         assert!(eye.contains(Point {
-            x: 1_054.0,
+            x: 1_018.0,
             y: 128.0
         }));
-        assert!(!eye.contains(Point {
-            x: 1_030.0,
-            y: 128.0
-        }));
+        assert!(!eye.contains(Point { x: 994.0, y: 128.0 }));
         assert!(!eye.contains(Point {
             x: 1_074.0,
             y: 150.0
+        }));
+    }
+
+    #[test]
+    fn layer_eye_and_lock_targets_do_not_overlap() {
+        let eye = editor_layer_visibility_button(780.0, 104.0);
+        let lock = editor_layer_lock_button(780.0, 104.0);
+        assert!(!eye.contains(Point {
+            x: lock.x + 1.0,
+            y: lock.y + 1.0
+        }));
+        assert!(!lock.contains(Point {
+            x: eye.x + 1.0,
+            y: eye.y + 1.0
         }));
     }
 

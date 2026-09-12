@@ -48,6 +48,81 @@ pub fn can_replace_editor_source(source: Option<&Path>, format: &str, filename: 
         && source.file_stem().and_then(|value| value.to_str()) == Some(filename.as_str())
 }
 
+pub fn replace_feedback_selection(
+    value: &mut String,
+    caret: &mut usize,
+    select_all: &mut bool,
+    inserted: &str,
+    maximum: usize,
+) {
+    let mut next = if *select_all {
+        String::new()
+    } else {
+        value.clone()
+    };
+    let current = if *select_all {
+        0
+    } else {
+        (*caret).min(next.chars().count())
+    };
+    let remaining = maximum.saturating_sub(next.chars().count());
+    let inserted = inserted.chars().take(remaining).collect::<String>();
+    let byte = next
+        .char_indices()
+        .nth(current)
+        .map_or(next.len(), |(index, _)| index);
+    next.insert_str(byte, &inserted);
+    *caret = current + inserted.chars().count();
+    *select_all = false;
+    *value = next;
+}
+
+pub fn backspace_feedback(value: &mut String, caret: &mut usize, select_all: &mut bool) {
+    if *select_all {
+        value.clear();
+        *caret = 0;
+        *select_all = false;
+        return;
+    }
+    let current = (*caret).min(value.chars().count());
+    if current == 0 {
+        return;
+    }
+    let start = value
+        .char_indices()
+        .nth(current - 1)
+        .map_or(0, |(index, _)| index);
+    let end = value
+        .char_indices()
+        .nth(current)
+        .map_or(value.len(), |(index, _)| index);
+    value.replace_range(start..end, "");
+    *caret = current - 1;
+}
+
+pub fn delete_feedback(value: &mut String, caret: &mut usize, select_all: &mut bool) {
+    if *select_all {
+        value.clear();
+        *caret = 0;
+        *select_all = false;
+        return;
+    }
+    let current = (*caret).min(value.chars().count());
+    if current >= value.chars().count() {
+        return;
+    }
+    let start = value
+        .char_indices()
+        .nth(current)
+        .map_or(value.len(), |(index, _)| index);
+    let end = value
+        .char_indices()
+        .nth(current + 1)
+        .map_or(value.len(), |(index, _)| index);
+    value.replace_range(start..end, "");
+    *caret = current;
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Surface {
     Menu,
@@ -59,7 +134,38 @@ pub enum Surface {
     Preview,
     History,
     Preferences,
+    Feedback,
     DeleteConfirmation,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PreferencesPage {
+    #[default]
+    General,
+    Capture,
+    Recording,
+    Shortcuts,
+    Appearance,
+}
+
+impl PreferencesPage {
+    pub const ALL: [Self; 5] = [
+        Self::General,
+        Self::Capture,
+        Self::Recording,
+        Self::Shortcuts,
+        Self::Appearance,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::Capture => "Capture",
+            Self::Recording => "Recording",
+            Self::Shortcuts => "Shortcuts",
+            Self::Appearance => "Appearance",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -269,6 +375,14 @@ pub struct AppState {
     pub display: Option<DisplayDescriptor>,
     pub recording_preview: Option<RgbaImage>,
     pub recording_editor: Option<RecordingEditorState>,
+    pub preferences_page: PreferencesPage,
+    pub feedback_message: String,
+    pub feedback_contact: String,
+    pub feedback_category: String,
+    pub feedback_field: u8,
+    pub feedback_submitting: bool,
+    pub feedback_caret: usize,
+    pub feedback_select_all: bool,
 }
 
 impl Default for AppState {
@@ -298,6 +412,14 @@ impl Default for AppState {
             display: None,
             recording_preview: None,
             recording_editor: None,
+            preferences_page: PreferencesPage::General,
+            feedback_message: String::new(),
+            feedback_contact: String::new(),
+            feedback_category: "bug".into(),
+            feedback_field: 0,
+            feedback_submitting: false,
+            feedback_caret: 0,
+            feedback_select_all: false,
         }
     }
 }
@@ -498,5 +620,33 @@ mod tests {
     fn unsupported_source_extension_cannot_be_replaced_as_png() {
         let source = Path::new("/Captures/original.bmp");
         assert!(!can_replace_editor_source(Some(source), "png", "original"));
+    }
+
+    #[test]
+    fn feedback_editing_is_unicode_safe_and_enforces_field_limits() {
+        let mut value = "AéZ".to_owned();
+        let mut caret = 2;
+        let mut selected = false;
+        replace_feedback_selection(&mut value, &mut caret, &mut selected, "🙂", 200);
+        assert_eq!(value, "Aé🙂Z");
+        assert_eq!(caret, 3);
+        backspace_feedback(&mut value, &mut caret, &mut selected);
+        assert_eq!(value, "AéZ");
+        assert_eq!(caret, 2);
+
+        delete_feedback(&mut value, &mut caret, &mut selected);
+        assert_eq!(value, "Aé");
+        delete_feedback(&mut value, &mut caret, &mut selected);
+        assert_eq!(value, "Aé", "Delete at end must not backspace");
+
+        selected = true;
+        replace_feedback_selection(&mut value, &mut caret, &mut selected, &"é".repeat(207), 200);
+        assert_eq!(value.chars().count(), 200);
+        assert_eq!(caret, 200);
+
+        selected = true;
+        delete_feedback(&mut value, &mut caret, &mut selected);
+        assert!(value.is_empty());
+        assert_eq!(caret, 0);
     }
 }

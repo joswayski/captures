@@ -252,7 +252,7 @@ try {
   Start-Sleep -Milliseconds 500
   $env:CAPTURES_WINDOWS_NATIVE_DATA = $profile
   foreach ($appearance in @("light", "dark")) {
-    foreach ($view in @("menu", "editor", "editor-image", "editor-shapes", "editor-export", "editor-properties", "editor-line", "recording-selector", "recording-hud", "recording-editor", "preview", "history", "preferences", "delete-confirmation")) {
+    foreach ($view in @("menu", "editor", "editor-image", "editor-shapes", "editor-export", "editor-properties", "editor-line", "recording-selector", "recording-hud", "recording-editor", "preview", "history", "preferences", "preferences-capture", "preferences-recording", "preferences-appearance", "feedback", "delete-confirmation")) {
       Save-View $appearance $view
     }
   }

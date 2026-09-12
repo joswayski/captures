@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 captures-capture = { path = "../../crates/captures-capture" }
+captures-feedback = { path = "../../crates/captures-feedback" }
 captures-image = { path = "../../crates/captures-image" }
 captures-media = { path = "../../crates/captures-media" }
 captures-recording = { path = "../../crates/captures-recording" }

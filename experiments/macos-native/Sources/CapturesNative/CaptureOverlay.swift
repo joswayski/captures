@@ -151,6 +151,7 @@ final class CaptureController {
 
     func show(kind: String = "image", target: String = "region") {
         DispatchQueue.main.async {
+            guard !AppStore.shared.requireOnboarding() else { return }
             self.cancelNow(invalidate: false)
             let generation = UUID()
             self.generation = generation

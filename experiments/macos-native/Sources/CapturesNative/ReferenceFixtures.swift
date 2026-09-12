@@ -8,6 +8,11 @@ struct NativeReferenceFixture {
     let makeView: @MainActor () -> AnyView
 }
 
+@MainActor private var nativeReferenceEstimateLabel: String?
+
+@MainActor
+func resolvedNativeReferenceEstimateLabel() -> String? { nativeReferenceEstimateLabel }
+
 @MainActor
 func nativeReferenceFixtures(
     imageURL: URL,
@@ -22,6 +27,10 @@ func nativeReferenceFixtures(
 
     AppStore.shared.artifacts = [imageArtifacts[0], recording, imageArtifacts[1], imageArtifacts[2]]
     var fixtures = [
+        NativeReferenceFixture(name: "onboarding", size: CGSize(width: 760, height: 620), scheme: .light,
+                               makeView: { AnyView(OnboardingView()) }),
+        NativeReferenceFixture(name: "feedback", size: CGSize(width: 720, height: 700), scheme: .light,
+                               makeView: { AnyView(FeedbackView()) }),
         NativeReferenceFixture(name: "preferences-light", size: CGSize(width: 980, height: 720), scheme: .light,
                                makeView: { AnyView(PreferencesView()) }),
         NativeReferenceFixture(name: "preferences-dark", size: CGSize(width: 980, height: 720), scheme: .dark,
@@ -46,8 +55,19 @@ func nativeReferenceFixtures(
                                makeView: { imageEditorReferenceView(artifact: imageArtifacts[0], state: "shapes") }),
         NativeReferenceFixture(name: "image-editor-properties", size: CGSize(width: 1280, height: 760), scheme: .dark,
                                makeView: { imageEditorReferenceView(artifact: imageArtifacts[0], state: "properties") }),
+        NativeReferenceFixture(name: "image-editor-erase", size: CGSize(width: 1280, height: 760), scheme: .dark,
+                               makeView: { imageEditorReferenceView(artifact: imageArtifacts[0], state: "erase") }),
+        NativeReferenceFixture(name: "image-editor-wand", size: CGSize(width: 1280, height: 760), scheme: .dark,
+                               makeView: { imageEditorReferenceView(artifact: imageArtifacts[0], state: "wand") }),
         NativeReferenceFixture(name: "recording-editor-layout", size: CGSize(width: 1100, height: 800), scheme: .dark,
                                makeView: { AnyView(RecordingEditorView(artifact: recording)) }),
+        NativeReferenceFixture(name: "recording-editor-quality-estimate", size: CGSize(width: 760, height: 520), scheme: .dark,
+                               makeView: {
+                                   AnyView(RecordingEditorView(
+                                       artifact: recording, referenceQualityOnly: true,
+                                       onEstimateReady: { nativeReferenceEstimateLabel = $0 }
+                                   ))
+                               }),
         NativeReferenceFixture(name: "history", size: CGSize(width: 980, height: 720), scheme: .light,
                                makeView: { AnyView(HistoryView()) }),
         NativeReferenceFixture(name: "delete-confirmation", size: CGSize(width: 430, height: 210), scheme: .dark,

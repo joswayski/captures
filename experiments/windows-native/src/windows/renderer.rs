@@ -1,12 +1,12 @@
 use captures_windows_native::{
     editor::Tool,
     geometry::{
-        Rect, contain, cover, editor_layer_visibility_button, editor_shape_flyout_cell,
-        recording_editor_timeline_track, screenshot_editor_canvas,
+        Rect, contain, cover, editor_layer_lock_button, editor_layer_visibility_button,
+        editor_shape_flyout_cell, recording_editor_timeline_track, screenshot_editor_canvas,
     },
     history::Artifact,
     settings::Settings,
-    state::{AppState, Surface, can_replace_editor_source},
+    state::{AppState, PreferencesPage, Surface, can_replace_editor_source},
     theme::{Color, Palette},
 };
 use image::RgbaImage;
@@ -201,7 +201,10 @@ impl Renderer {
                 Surface::RecordingEditor => self.recording_editor(state, palette, width, height)?,
                 Surface::Preview => self.preview(state, palette, width, height)?,
                 Surface::History => self.history(history, palette, width, height)?,
-                Surface::Preferences => self.preferences(settings, palette, width, height)?,
+                Surface::Preferences => {
+                    self.preferences(state, settings, palette, width, height)?
+                }
+                Surface::Feedback => self.feedback(state, palette, width, height)?,
                 Surface::DeleteConfirmation => self.confirmation(state, palette, width, height)?,
             }
             self.target.EndDraw(None, None)?;
@@ -696,7 +699,7 @@ impl Renderer {
                     document
                         .layers
                         .iter()
-                        .find(|layer| layer.id == id && layer.visible)
+                        .find(|layer| layer.id == id && layer.visible && !layer.locked)
                 })
                 && let Some(corners) = layer.selection_corners()
             {
@@ -941,11 +944,11 @@ impl Renderer {
                         p.text,
                     )?;
                     self.text(
-                        shape_label(&layer.shape),
+                        &layer.name,
                         Rect {
                             x: sidebar_x + 58.0,
                             y: layer_y + 7.0,
-                            width: 158.0,
+                            width: 154.0,
                             height: 32.0,
                         },
                         p.text,
@@ -956,6 +959,12 @@ impl Renderer {
                         if layer.visible { "eye" } else { "eye-off" },
                         eye.inset(4.0),
                         p.muted,
+                    )?;
+                    let lock = editor_layer_lock_button(sidebar_x, layer_y);
+                    self.editor_icon(
+                        if layer.locked { "lock" } else { "unlock" },
+                        lock.inset(5.0),
+                        if layer.locked { p.accent } else { p.muted },
                     )?;
                     layer_y += 52.0;
                 }
@@ -1037,138 +1046,114 @@ impl Renderer {
                     p.text,
                     &self.strong,
                 );
-                self.text(
-                    "Stroke color",
-                    Rect {
-                        x: sidebar_x + 20.0,
-                        y: properties_y + 34.0,
-                        width: 92.0,
-                        height: 28.0,
-                    },
-                    p.muted,
-                    &self.body,
-                );
-                self.button(
-                    Rect {
-                        x: sidebar_x + 116.0,
-                        y: properties_y + 31.0,
-                        width: 132.0,
-                        height: 32.0,
-                    },
-                    p.field,
-                    p.text,
-                    if state.editor_editing_color {
-                        &state.editor_color_hex
-                    } else {
-                        &property_color_hex
-                    },
-                );
-                let swatch = self.brush(Color(
-                    property_color[0],
-                    property_color[1],
-                    property_color[2],
-                    property_color[3],
-                ))?;
-                self.target.FillEllipse(
-                    &windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE {
-                        point: Vector2 {
-                            X: sidebar_x + 276.0,
-                            Y: properties_y + 47.0,
-                        },
-                        radiusX: 13.0,
-                        radiusY: 13.0,
-                    },
-                    &swatch,
-                );
-                self.text(
-                    "Stroke width",
-                    Rect {
-                        x: sidebar_x + 20.0,
-                        y: properties_y + 74.0,
-                        width: 100.0,
-                        height: 28.0,
-                    },
-                    p.muted,
-                    &self.body,
-                );
-                self.button(
-                    Rect {
-                        x: sidebar_x + 184.0,
-                        y: properties_y + 70.0,
-                        width: 52.0,
-                        height: 32.0,
-                    },
-                    p.field,
-                    p.text,
-                    "−",
-                );
-                self.text(
-                    &format!("{property_stroke:.0} px"),
-                    Rect {
-                        x: sidebar_x + 120.0,
-                        y: properties_y + 74.0,
-                        width: 64.0,
-                        height: 28.0,
-                    },
-                    p.text,
-                    &self.body,
-                );
-                self.button(
-                    Rect {
-                        x: sidebar_x + 240.0,
-                        y: properties_y + 70.0,
-                        width: 52.0,
-                        height: 32.0,
-                    },
-                    p.field,
-                    p.text,
-                    "+",
-                );
-                self.text(
-                    if selected_layer.is_none_or(|layer| layer.supports_fill()) {
-                        "Fill shape"
-                    } else {
-                        "Fill unavailable"
-                    },
-                    Rect {
-                        x: sidebar_x + 20.0,
-                        y: properties_y + 114.0,
-                        width: 150.0,
-                        height: 28.0,
-                    },
-                    p.muted,
-                    &self.body,
-                );
-                if selected_layer.is_none_or(|layer| layer.supports_fill()) {
-                    self.toggle(
-                        Rect {
-                            x: sidebar_x + 248.0,
-                            y: properties_y + 118.0,
-                            width: 36.0,
-                            height: 20.0,
-                        },
+                if let Some((image_width, image_height, opacity, rotation)) = selected_layer
+                    .and_then(|layer| match &layer.shape {
+                        captures_windows_native::editor::Shape::Image { width, height, .. } => {
+                            Some((*width, *height, layer.opacity, layer.rotation_degrees))
+                        }
+                        _ => None,
+                    })
+                {
+                    self.property_value(
+                        sidebar_x,
+                        properties_y + 34.0,
+                        "Dimensions",
+                        &format!("{image_width:.0} × {image_height:.0} px"),
                         p,
-                        property_fill.is_some(),
-                        false,
-                    )?;
-                }
-                self.text(
-                    "Rotation",
-                    Rect {
-                        x: sidebar_x + 20.0,
-                        y: properties_y + 154.0,
-                        width: 90.0,
-                        height: 28.0,
-                    },
-                    p.muted,
-                    &self.body,
-                );
-                if let Some(layer) = selected_layer {
+                    );
+                    self.property_stepper(
+                        captures_windows_native::geometry::Point {
+                            x: sidebar_x,
+                            y: properties_y + 74.0,
+                        },
+                        "Opacity",
+                        &format!("{}%", (u16::from(opacity) * 100 + 127) / 255),
+                        "−10%",
+                        "+10%",
+                        p,
+                    );
+                    self.property_stepper(
+                        captures_windows_native::geometry::Point {
+                            x: sidebar_x,
+                            y: properties_y + 114.0,
+                        },
+                        "Rotation",
+                        &format!("{rotation:.0}°"),
+                        "−15°",
+                        "+15°",
+                        p,
+                    );
+                } else {
                     self.text(
-                        &format!("{:.0}°", layer.rotation_degrees),
+                        "Stroke color",
+                        Rect {
+                            x: sidebar_x + 20.0,
+                            y: properties_y + 34.0,
+                            width: 92.0,
+                            height: 28.0,
+                        },
+                        p.muted,
+                        &self.body,
+                    );
+                    self.button(
+                        Rect {
+                            x: sidebar_x + 116.0,
+                            y: properties_y + 31.0,
+                            width: 132.0,
+                            height: 32.0,
+                        },
+                        p.field,
+                        p.text,
+                        if state.editor_editing_color {
+                            &state.editor_color_hex
+                        } else {
+                            &property_color_hex
+                        },
+                    );
+                    let swatch = self.brush(Color(
+                        property_color[0],
+                        property_color[1],
+                        property_color[2],
+                        property_color[3],
+                    ))?;
+                    self.target.FillEllipse(
+                        &windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE {
+                            point: Vector2 {
+                                X: sidebar_x + 276.0,
+                                Y: properties_y + 47.0,
+                            },
+                            radiusX: 13.0,
+                            radiusY: 13.0,
+                        },
+                        &swatch,
+                    );
+                    self.text(
+                        "Stroke width",
+                        Rect {
+                            x: sidebar_x + 20.0,
+                            y: properties_y + 74.0,
+                            width: 100.0,
+                            height: 28.0,
+                        },
+                        p.muted,
+                        &self.body,
+                    );
+                    self.button(
+                        Rect {
+                            x: sidebar_x + 184.0,
+                            y: properties_y + 70.0,
+                            width: 52.0,
+                            height: 32.0,
+                        },
+                        p.field,
+                        p.text,
+                        "−",
+                    );
+                    self.text(
+                        &format!("{property_stroke:.0} px"),
                         Rect {
                             x: sidebar_x + 120.0,
-                            y: properties_y + 154.0,
+                            y: properties_y + 74.0,
                             width: 64.0,
                             height: 28.0,
                         },
@@ -1177,38 +1162,101 @@ impl Renderer {
                     );
                     self.button(
                         Rect {
-                            x: sidebar_x + 184.0,
-                            y: properties_y + 150.0,
-                            width: 52.0,
-                            height: 32.0,
-                        },
-                        p.field,
-                        p.text,
-                        "−15°",
-                    );
-                    self.button(
-                        Rect {
                             x: sidebar_x + 240.0,
-                            y: properties_y + 150.0,
+                            y: properties_y + 70.0,
                             width: 52.0,
                             height: 32.0,
                         },
                         p.field,
                         p.text,
-                        "+15°",
+                        "+",
                     );
-                } else {
                     self.text(
-                        "Select a layer to rotate",
+                        if selected_layer.is_none_or(|layer| layer.supports_fill()) {
+                            "Fill shape"
+                        } else {
+                            "Fill unavailable"
+                        },
                         Rect {
-                            x: sidebar_x + 120.0,
-                            y: properties_y + 154.0,
-                            width: 172.0,
+                            x: sidebar_x + 20.0,
+                            y: properties_y + 114.0,
+                            width: 150.0,
                             height: 28.0,
                         },
                         p.muted,
                         &self.body,
                     );
+                    if selected_layer.is_none_or(|layer| layer.supports_fill()) {
+                        self.toggle(
+                            Rect {
+                                x: sidebar_x + 248.0,
+                                y: properties_y + 118.0,
+                                width: 36.0,
+                                height: 20.0,
+                            },
+                            p,
+                            property_fill.is_some(),
+                            false,
+                        )?;
+                    }
+                    self.text(
+                        "Rotation",
+                        Rect {
+                            x: sidebar_x + 20.0,
+                            y: properties_y + 154.0,
+                            width: 90.0,
+                            height: 28.0,
+                        },
+                        p.muted,
+                        &self.body,
+                    );
+                    if let Some(layer) = selected_layer {
+                        self.text(
+                            &format!("{:.0}°", layer.rotation_degrees),
+                            Rect {
+                                x: sidebar_x + 120.0,
+                                y: properties_y + 154.0,
+                                width: 64.0,
+                                height: 28.0,
+                            },
+                            p.text,
+                            &self.body,
+                        );
+                        self.button(
+                            Rect {
+                                x: sidebar_x + 184.0,
+                                y: properties_y + 150.0,
+                                width: 52.0,
+                                height: 32.0,
+                            },
+                            p.field,
+                            p.text,
+                            "−15°",
+                        );
+                        self.button(
+                            Rect {
+                                x: sidebar_x + 240.0,
+                                y: properties_y + 150.0,
+                                width: 52.0,
+                                height: 32.0,
+                            },
+                            p.field,
+                            p.text,
+                            "+15°",
+                        );
+                    } else {
+                        self.text(
+                            "Select a layer to rotate",
+                            Rect {
+                                x: sidebar_x + 120.0,
+                                y: properties_y + 154.0,
+                                width: 172.0,
+                                height: 28.0,
+                            },
+                            p.muted,
+                            &self.body,
+                        );
+                    }
                 }
             }
 
@@ -2287,7 +2335,14 @@ impl Renderer {
             Ok(())
         }
     }
-    unsafe fn preferences(&self, settings: &Settings, p: Palette, w: f32, h: f32) -> Result<()> {
+    unsafe fn preferences(
+        &self,
+        state: &AppState,
+        settings: &Settings,
+        p: Palette,
+        w: f32,
+        h: f32,
+    ) -> Result<()> {
         unsafe {
             self.panel(
                 Rect {
@@ -2309,40 +2364,53 @@ impl Renderer {
                 p.text,
                 &self.title,
             );
-            self.rounded_panel(
+            for (index, page) in PreferencesPage::ALL.into_iter().enumerate() {
+                let y = 72.0 + index as f32 * 44.0;
+                if page == state.preferences_page {
+                    self.rounded_panel(
+                        Rect {
+                            x: 12.0,
+                            y,
+                            width: 160.0,
+                            height: 38.0,
+                        },
+                        p.field,
+                        7.0,
+                    )?;
+                }
+                self.text(
+                    page.label(),
+                    Rect {
+                        x: 22.0,
+                        y: y + 4.0,
+                        width: 140.0,
+                        height: 28.0,
+                    },
+                    if page == state.preferences_page {
+                        p.text
+                    } else {
+                        p.muted
+                    },
+                    if page == state.preferences_page {
+                        &self.strong
+                    } else {
+                        &self.body
+                    },
+                );
+            }
+            self.button(
                 Rect {
                     x: 12.0,
-                    y: 72.0,
+                    y: h - 58.0,
                     width: 160.0,
                     height: 38.0,
                 },
                 p.field,
-                7.0,
-            )?;
-            self.text(
-                "General",
-                Rect {
-                    x: 22.0,
-                    y: 76.0,
-                    width: 140.0,
-                    height: 28.0,
-                },
                 p.text,
-                &self.strong,
+                "Send feedback",
             );
             self.text(
-                "Capture\n\nRecording\n\nShortcuts\n\nAppearance\n\nAdditional pages unavailable",
-                Rect {
-                    x: 22.0,
-                    y: 126.0,
-                    width: 142.0,
-                    height: 260.0,
-                },
-                p.muted,
-                &self.body,
-            );
-            self.text(
-                "Preferences",
+                state.preferences_page.label(),
                 Rect {
                     x: 216.0,
                     y: 22.0,
@@ -2352,44 +2420,138 @@ impl Renderer {
                 p.text,
                 &self.title,
             );
-            let rows = [
-                (
-                    "Start Captures at login",
-                    Some(settings.launch_at_login),
-                    "",
-                    "Open Captures when you sign in.",
-                ),
-                (
-                    "Copy captures automatically",
-                    Some(settings.auto_copy_to_clipboard),
-                    "",
-                    "Copy new captures without replacing controls.",
-                ),
-                (
-                    "Show mini previews",
-                    Some(settings.show_mini_previews),
-                    "",
-                    "Keep quick actions near the screen edge.",
-                ),
-                (
-                    "Freeze screen while selecting",
-                    Some(settings.freeze_screen),
-                    "",
-                    "Hold menus, hover states, and motion still.",
-                ),
-                (
-                    "Appearance",
-                    None,
-                    settings.appearance.as_str(),
-                    "Follow Windows or choose a fixed appearance.",
-                ),
-                (
-                    "Color theme",
-                    None,
-                    settings.theme.as_str(),
-                    "Accent for capture actions and selection.",
-                ),
-            ];
+            let rows: Vec<(String, Option<bool>, String, String)> = match state.preferences_page {
+                PreferencesPage::General => vec![
+                    (
+                        "Start Captures at login".into(),
+                        Some(settings.launch_at_login),
+                        "".into(),
+                        "Open Captures when you sign in.".into(),
+                    ),
+                    (
+                        "Copy captures automatically".into(),
+                        Some(settings.auto_copy_to_clipboard),
+                        "".into(),
+                        "Copy new captures without replacing controls.".into(),
+                    ),
+                    (
+                        "Show mini previews".into(),
+                        Some(settings.show_mini_previews),
+                        "".into(),
+                        "Keep quick actions near the screen edge.".into(),
+                    ),
+                    (
+                        "Freeze screen while selecting".into(),
+                        Some(settings.freeze_screen),
+                        "".into(),
+                        "Hold menus, hover states, and motion still.".into(),
+                    ),
+                ],
+                PreferencesPage::Capture => vec![
+                    (
+                        "Countdown".into(),
+                        None,
+                        format!("{} seconds", settings.screenshot_countdown_seconds),
+                        "Delay before taking a screenshot.".into(),
+                    ),
+                    (
+                        "Show cursor".into(),
+                        Some(settings.show_cursor_in_screenshots),
+                        "".into(),
+                        "Include the pointer in screenshots.".into(),
+                    ),
+                    (
+                        "Freeze screen".into(),
+                        Some(settings.freeze_screen),
+                        "".into(),
+                        "Keep the captured selection visually stable.".into(),
+                    ),
+                    (
+                        "Screenshot format".into(),
+                        None,
+                        settings.screenshot_format.to_uppercase(),
+                        "Format used for new screenshots.".into(),
+                    ),
+                ],
+                PreferencesPage::Recording => vec![
+                    (
+                        "Format".into(),
+                        None,
+                        settings.recording.video_format.to_uppercase(),
+                        "Video or animated image output.".into(),
+                    ),
+                    (
+                        "Frame rate".into(),
+                        None,
+                        format!("{} FPS", settings.recording.video_fps),
+                        "Video capture frame rate.".into(),
+                    ),
+                    (
+                        "Countdown".into(),
+                        None,
+                        format!("{} seconds", settings.recording.countdown_seconds),
+                        "Delay before recording starts.".into(),
+                    ),
+                    (
+                        "Show cursor".into(),
+                        Some(settings.recording.show_cursor),
+                        "".into(),
+                        "Include the pointer in recordings.".into(),
+                    ),
+                    (
+                        "System audio".into(),
+                        Some(settings.recording.capture_system_audio),
+                        "".into(),
+                        "Capture desktop audio when supported.".into(),
+                    ),
+                    (
+                        "Open editor after recording".into(),
+                        Some(settings.recording.open_editor_after_recording),
+                        "".into(),
+                        "Review trim and export before saving.".into(),
+                    ),
+                ],
+                PreferencesPage::Shortcuts => vec![
+                    (
+                        "Capture region".into(),
+                        None,
+                        "Ctrl + Shift + 4".into(),
+                        "Global shortcut; registration conflicts fail closed.".into(),
+                    ),
+                    (
+                        "Capture display".into(),
+                        None,
+                        "Ctrl + Shift + 3".into(),
+                        "Global shortcut; registration conflicts fail closed.".into(),
+                    ),
+                ],
+                PreferencesPage::Appearance => vec![
+                    (
+                        "Appearance".into(),
+                        None,
+                        settings.appearance.clone(),
+                        "Follow Windows or choose light/dark.".into(),
+                    ),
+                    (
+                        "Color theme".into(),
+                        None,
+                        settings.theme.clone(),
+                        "Accent for capture actions and selection.".into(),
+                    ),
+                    (
+                        "Include previews in captures".into(),
+                        Some(settings.include_mini_previews_in_captures),
+                        "".into(),
+                        "Allow mini previews to appear in captures.".into(),
+                    ),
+                    (
+                        "Include recording controls".into(),
+                        Some(settings.include_recording_controls_in_captures),
+                        "".into(),
+                        "Allow the HUD to appear in captures.".into(),
+                    ),
+                ],
+            };
             for (i, (label, toggle, value, description)) in rows.iter().enumerate() {
                 let y = 88.0 + i as f32 * 64.0;
                 self.text(
@@ -2463,6 +2625,161 @@ impl Renderer {
                     )?;
                 }
             }
+            Ok(())
+        }
+    }
+    unsafe fn feedback(&self, state: &AppState, p: Palette, w: f32, h: f32) -> Result<()> {
+        unsafe {
+            self.text(
+                "Send feedback",
+                Rect {
+                    x: 32.0,
+                    y: 24.0,
+                    width: w - 64.0,
+                    height: 34.0,
+                },
+                p.text,
+                &self.title,
+            );
+            self.text(
+                "Sent only when you press Send. Captures, files, logs, and diagnostics are never attached.",
+                Rect { x: 32.0, y: 58.0, width: w - 64.0, height: 28.0 },
+                p.muted,
+                &self.body,
+            );
+            self.text(
+                "Message",
+                Rect {
+                    x: 32.0,
+                    y: 92.0,
+                    width: 100.0,
+                    height: 24.0,
+                },
+                p.text,
+                &self.strong,
+            );
+            self.panel(
+                Rect {
+                    x: 32.0,
+                    y: 118.0,
+                    width: w - 64.0,
+                    height: 132.0,
+                },
+                p.field,
+            );
+            self.text(
+                if state.feedback_message.is_empty() {
+                    "Describe the issue or idea…"
+                } else {
+                    &state.feedback_message
+                },
+                Rect {
+                    x: 44.0,
+                    y: 128.0,
+                    width: w - 88.0,
+                    height: 110.0,
+                },
+                if state.feedback_message.is_empty() {
+                    p.muted
+                } else {
+                    p.text
+                },
+                &self.body,
+            );
+            self.text(
+                "Contact (optional)",
+                Rect {
+                    x: 32.0,
+                    y: 266.0,
+                    width: 160.0,
+                    height: 24.0,
+                },
+                p.text,
+                &self.strong,
+            );
+            self.panel(
+                Rect {
+                    x: 32.0,
+                    y: 292.0,
+                    width: w - 64.0,
+                    height: 38.0,
+                },
+                p.field,
+            );
+            self.text(
+                if state.feedback_contact.is_empty() {
+                    "Email or handle"
+                } else {
+                    &state.feedback_contact
+                },
+                Rect {
+                    x: 44.0,
+                    y: 299.0,
+                    width: w - 88.0,
+                    height: 24.0,
+                },
+                if state.feedback_contact.is_empty() {
+                    p.muted
+                } else {
+                    p.text
+                },
+                &self.body,
+            );
+            for (index, category) in ["bug", "idea", "other"].iter().enumerate() {
+                self.button(
+                    Rect {
+                        x: 32.0 + index as f32 * 112.0,
+                        y: 348.0,
+                        width: 104.0,
+                        height: 36.0,
+                    },
+                    if state.feedback_category == *category {
+                        p.accent
+                    } else {
+                        p.field
+                    },
+                    if state.feedback_category == *category {
+                        Color(255, 255, 255, 255)
+                    } else {
+                        p.text
+                    },
+                    &category.to_ascii_uppercase(),
+                );
+            }
+            self.button(
+                Rect {
+                    x: 32.0,
+                    y: h - 58.0,
+                    width: 120.0,
+                    height: 38.0,
+                },
+                p.field,
+                p.text,
+                "Back",
+            );
+            self.button(
+                Rect {
+                    x: w - 160.0,
+                    y: h - 58.0,
+                    width: 128.0,
+                    height: 38.0,
+                },
+                if state.feedback_submitting {
+                    p.field
+                } else {
+                    p.accent
+                },
+                if state.feedback_submitting {
+                    p.muted
+                } else {
+                    Color(255, 255, 255, 255)
+                },
+                if state.feedback_submitting {
+                    "Sending…"
+                } else {
+                    "Send"
+                },
+            );
             Ok(())
         }
     }
@@ -2632,6 +2949,67 @@ impl Renderer {
         unsafe {
             self.panel(rect, fill);
             self.text(label, rect.inset(4.0), ink, &self.strong)
+        }
+    }
+    unsafe fn property_value(&self, sidebar_x: f32, y: f32, label: &str, value: &str, p: Palette) {
+        unsafe {
+            self.text(
+                label,
+                Rect {
+                    x: sidebar_x + 20.0,
+                    y,
+                    width: 96.0,
+                    height: 28.0,
+                },
+                p.muted,
+                &self.body,
+            );
+            self.text(
+                value,
+                Rect {
+                    x: sidebar_x + 120.0,
+                    y,
+                    width: 172.0,
+                    height: 28.0,
+                },
+                p.text,
+                &self.body,
+            );
+        }
+    }
+    unsafe fn property_stepper(
+        &self,
+        origin: captures_windows_native::geometry::Point,
+        label: &str,
+        value: &str,
+        decrement: &str,
+        increment: &str,
+        p: Palette,
+    ) {
+        unsafe {
+            self.property_value(origin.x, origin.y, label, value, p);
+            self.button(
+                Rect {
+                    x: origin.x + 184.0,
+                    y: origin.y - 4.0,
+                    width: 52.0,
+                    height: 32.0,
+                },
+                p.field,
+                p.text,
+                decrement,
+            );
+            self.button(
+                Rect {
+                    x: origin.x + 240.0,
+                    y: origin.y - 4.0,
+                    width: 52.0,
+                    height: 32.0,
+                },
+                p.field,
+                p.text,
+                increment,
+            );
         }
     }
     unsafe fn text(&self, value: &str, rect: Rect, ink: Color, format: &IDWriteTextFormat) {
@@ -2945,6 +3323,22 @@ impl Renderer {
                     line(left + 5.0, cy, left + 5.0, top + 5.0);
                     line(left + 5.0, top + 5.0, right - 5.0, top + 5.0);
                     line(right - 5.0, top + 5.0, right - 5.0, cy);
+                }
+                "unlock" => {
+                    self.target.DrawRectangle(
+                        &D2D_RECT_F {
+                            left: left + 3.0,
+                            top: cy,
+                            right: right - 3.0,
+                            bottom: bottom - 1.0,
+                        },
+                        &brush,
+                        1.8,
+                        None,
+                    );
+                    line(left + 5.0, cy, left + 5.0, top + 6.0);
+                    line(left + 5.0, top + 6.0, right - 7.0, top + 3.0);
+                    line(right - 7.0, top + 3.0, right - 4.0, top + 7.0);
                 }
                 "more" => {
                     for offset in [-5.0, 0.0, 5.0] {

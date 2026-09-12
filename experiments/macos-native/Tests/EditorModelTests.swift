@@ -150,7 +150,7 @@ final class EditorModelTests: XCTestCase {
         XCTAssertEqual(try pixel(image, x: 0, y: 3), [0, 0, 255, 255], "Exported blue")
     }
 
-    func testEraseInverseTransformsRotatedLayerAndRejectsLockedLayer() throws {
+    func testEraseInverseTransformsRotatedLayerAndEditsLockedBackground() throws {
         let opaque = try solidPNG(.white, rgba: [255, 255, 255, 255], width: 5, height: 3)
         let frame = EditorRect(x: 10, y: 20, width: 50, height: 30)
         let layer = EditorLayer(name: "Rotated", content: .image(opaque, original: opaque), frame: frame, rotation: .pi / 2)
@@ -184,8 +184,106 @@ final class EditorModelTests: XCTestCase {
         )
         lockedModel.selectedLayerID = locked.id
         try lockedModel.erase(at: CGPoint(x: 35, y: 15), radius: 5, restore: false)
-        XCTAssertEqual(lockedModel.document.layers[0], locked)
-        XCTAssertFalse(lockedModel.canUndo)
+        guard case let .image(lockedEdited, _) = lockedModel.document.layers[0].content else {
+            return XCTFail("Expected locked image layer to remain an image")
+        }
+        XCTAssertEqual(try pixel(decodePNG(lockedEdited), x: 0, y: 1), [0, 0, 0, 0])
+        XCTAssertTrue(lockedModel.canUndo)
+    }
+
+    func testEraseSoftnessFeathersTheBrushEdge() throws {
+        let opaque = try solidPNG(.white, rgba: [255, 255, 255, 255], width: 9, height: 9)
+        let layer = EditorLayer(
+            name: "Background", content: .image(opaque, original: opaque),
+            frame: EditorRect(x: 0, y: 0, width: 9, height: 9)
+        )
+        let model = EditorModel(
+            document: EditorDocument(width: 9, height: 9, layers: [layer]),
+            sourceURL: URL(fileURLWithPath: "/tmp/soft-erase.png")
+        )
+        model.selectedLayerID = layer.id
+
+        try model.erase(at: CGPoint(x: 4.5, y: 4.5), radius: 4.5, softness: 1, restore: false)
+
+        guard case let .image(edited, _) = model.document.layers[0].content else {
+            return XCTFail("Expected edited image layer")
+        }
+        let image = try decodePNG(edited)
+        XCTAssertEqual(try pixel(image, x: 4, y: 4), [0, 0, 0, 0])
+        let feathered = try pixel(image, x: 1, y: 4)
+        XCTAssertGreaterThan(feathered[3], 0)
+        XCTAssertLessThan(feathered[3], 255)
+        XCTAssertLessThanOrEqual(abs(Int(feathered[0]) - Int(feathered[3])), 1)
+    }
+
+    func testEraseStrokeInterpolatesAcrossFastPointerMovementAsOneUndo() throws {
+        let opaque = try solidPNG(.white, rgba: [255, 255, 255, 255], width: 21, height: 5)
+        let layer = EditorLayer(
+            name: "Background", content: .image(opaque, original: opaque),
+            frame: EditorRect(x: 0, y: 0, width: 21, height: 5), locked: true
+        )
+        let model = EditorModel(
+            document: EditorDocument(width: 21, height: 5, layers: [layer]),
+            sourceURL: URL(fileURLWithPath: "/tmp/interpolated-erase.png")
+        )
+        model.selectedLayerID = layer.id
+        model.beginInteractiveEdit()
+
+        try model.eraseStroke(
+            from: CGPoint(x: 2.5, y: 2.5), to: CGPoint(x: 18.5, y: 2.5),
+            radius: 1, softness: 0, restore: false
+        )
+        model.endInteractiveEdit()
+
+        guard case let .image(edited, _) = model.document.layers[0].content else {
+            return XCTFail("Expected edited image layer")
+        }
+        let image = try decodePNG(edited)
+        for x in 2...18 {
+            XCTAssertEqual(try pixel(image, x: x, y: 2), [0, 0, 0, 0], "Gap at x=\(x)")
+        }
+        model.undo()
+        XCTAssertEqual(model.document.layers[0], layer)
+        XCTAssertFalse(model.canUndo)
+    }
+
+    func testEraseStrokeSafelyClipsSegmentsThatLeaveAndReenterImage() throws {
+        let opaque = try solidPNG(.white, rgba: [255, 255, 255, 255], width: 21, height: 5)
+        let layer = EditorLayer(
+            name: "Background", content: .image(opaque, original: opaque),
+            frame: EditorRect(x: 0, y: 0, width: 21, height: 5)
+        )
+        let model = EditorModel(
+            document: EditorDocument(width: 21, height: 5, layers: [layer]),
+            sourceURL: URL(fileURLWithPath: "/tmp/clipped-erase.png")
+        )
+        model.selectedLayerID = layer.id
+        model.beginInteractiveEdit()
+        try model.eraseStroke(
+            from: CGPoint(x: 2.5, y: 2.5), to: CGPoint(x: 100, y: 2.5),
+            radius: 1, restore: false
+        )
+        try model.eraseStroke(
+            from: CGPoint(x: 100, y: 2.5), to: CGPoint(x: 18.5, y: 2.5),
+            radius: 1, restore: false
+        )
+        model.endInteractiveEdit()
+        guard case let .image(edited, _) = model.document.layers[0].content else {
+            return XCTFail("Expected edited image layer")
+        }
+        XCTAssertEqual(try pixel(decodePNG(edited), x: 20, y: 2), [0, 0, 0, 0])
+
+        let outside = EditorModel(
+            document: EditorDocument(width: 21, height: 5, layers: [layer]),
+            sourceURL: URL(fileURLWithPath: "/tmp/outside-erase.png")
+        )
+        outside.selectedLayerID = layer.id
+        try outside.eraseStroke(
+            from: CGPoint(x: 100, y: 100), to: CGPoint(x: 120, y: 120),
+            radius: 1, restore: false
+        )
+        XCTAssertEqual(outside.document.layers[0], layer)
+        XCTAssertFalse(outside.canUndo)
     }
 
     func testImportedFileDraftSurvivesANewArtifactIdentity() throws {
@@ -209,7 +307,7 @@ final class EditorModelTests: XCTestCase {
         let source = try splitPNG()
         let layer = EditorLayer(
             name: "Background", content: .image(source, original: source),
-            frame: EditorRect(x: 0, y: 0, width: 4, height: 2)
+            frame: EditorRect(x: 0, y: 0, width: 4, height: 2), locked: true
         )
         let model = EditorModel(
             document: EditorDocument(width: 4, height: 2, layers: [layer]),
@@ -227,6 +325,31 @@ final class EditorModelTests: XCTestCase {
         XCTAssertEqual(try pixel(image, x: 3, y: 0), [0, 0, 255, 255])
         model.undo()
         XCTAssertEqual(model.document.layers[0], layer)
+    }
+
+    func testBackgroundWandCanRemoveDisconnectedMatchingColors() throws {
+        let source = try separatedColorPNG()
+        let layer = EditorLayer(
+            name: "Background", content: .image(source, original: source),
+            frame: EditorRect(x: 0, y: 0, width: 5, height: 1)
+        )
+        let model = EditorModel(
+            document: EditorDocument(width: 5, height: 1, layers: [layer]),
+            sourceURL: URL(fileURLWithPath: "/tmp/global-wand.png")
+        )
+        model.selectedLayerID = layer.id
+
+        try model.removeBackgroundColor(
+            at: CGPoint(x: 0.5, y: 0.5), tolerance: 0.01, contiguous: false
+        )
+
+        guard case let .image(edited, _) = model.document.layers[0].content else {
+            return XCTFail("Expected edited image layer")
+        }
+        let image = try decodePNG(edited)
+        XCTAssertEqual(try pixel(image, x: 0, y: 0), [0, 0, 0, 0])
+        XCTAssertEqual(try pixel(image, x: 2, y: 0), [0, 0, 255, 255])
+        XCTAssertEqual(try pixel(image, x: 4, y: 0), [0, 0, 0, 0])
     }
 
     func testLayerShadowRendersOutsideShapeBounds() throws {
@@ -343,6 +466,21 @@ final class EditorModelTests: XCTestCase {
         context.fill(CGRect(x: 0, y: 0, width: 3, height: 2))
         context.setFillColor(NSColor.blue.cgColor)
         context.fill(CGRect(x: 3, y: 0, width: 1, height: 2))
+        let image = try XCTUnwrap(context.makeImage())
+        return try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+    }
+
+    private func separatedColorPNG() throws -> Data {
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: 5, height: 1, bitsPerComponent: 8, bytesPerRow: 20,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.setFillColor(NSColor.yellow.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: 2, height: 1))
+        context.fill(CGRect(x: 3, y: 0, width: 2, height: 1))
+        context.setFillColor(NSColor.blue.cgColor)
+        context.fill(CGRect(x: 2, y: 0, width: 1, height: 1))
         let image = try XCTUnwrap(context.makeImage())
         return try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
     }

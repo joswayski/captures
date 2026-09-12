@@ -22,8 +22,11 @@ enum CapturesNative {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
+    private var deferredLaunch: DispatchWorkItem?
+    private var restartBundleURL: URL?
     private let routeNotification = Notification.Name("es.captur.native-experiment.route")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -41,7 +44,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                             name: routeNotification, object: Bundle.main.bundleIdentifier)
         AppStore.shared.start()
         installMenus()
-        route(arguments)
+        if arguments.isEmpty {
+            // Finder can deliver Open With URLs just after launch. Avoid
+            // flashing setup or Preferences before the editor opens.
+            let work = DispatchWorkItem { [weak self] in self?.route([]) }
+            deferredLaunch = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+        } else {
+            route(arguments)
+        }
         Backend.shared.call("recover_list") { result in
             if case .success(let value) = result,
                let drafts = value["drafts"] as? [Any], !drafts.isEmpty { AppStore.shared.showHistory() }
@@ -50,27 +61,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        AppStore.shared.showPreferences(); return true
+        if !flag {
+            if AppStore.shared.onboardingCompleted { AppStore.shared.showPreferences() }
+            else { AppStore.shared.showOnboarding() }
+        }
+        return true
     }
-    func application(_ application: NSApplication, open urls: [URL]) { urls.forEach { AppStore.shared.importFile($0) } }
+    func application(_ application: NSApplication, open urls: [URL]) {
+        deferredLaunch?.cancel()
+        urls.forEach { AppStore.shared.importFile($0) }
+    }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         CaptureController.shared.cancel()
         Backend.shared.call("record_status") { result in
             guard case .success(let status) = result else {
                 if case .failure(let error) = result { AppStore.shared.report(error) }
-                sender.reply(toApplicationShouldTerminate: false); return
+                self.finishTermination(sender, allowed: false); return
             }
             let state = status["state"] as? String ?? "idle"
             guard ["recording", "paused", "failed", "selecting"].contains(state) else {
-                sender.reply(toApplicationShouldTerminate: true); return
+                self.finishTermination(sender, allowed: true); return
             }
             let discardAndQuit = {
                 Backend.shared.call("record_discard") { result in
-                    if case .success = result { sender.reply(toApplicationShouldTerminate: true) }
+                    if case .success = result { self.finishTermination(sender, allowed: true) }
                     else {
                         if case .failure(let error) = result { AppStore.shared.report(error) }
-                        sender.reply(toApplicationShouldTerminate: false)
+                        self.finishTermination(sender, allowed: false)
                     }
                 }
             }
@@ -81,7 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     action: "Discard and Quit",
                     destructive: true,
                     onConfirm: discardAndQuit,
-                    onCancel: { sender.reply(toApplicationShouldTerminate: false) }
+                    onCancel: { self.finishTermination(sender, allowed: false) }
                 )
                 return
             }
@@ -94,18 +112,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     Backend.shared.call("record_stop") { result in
                         do {
                             AppStore.shared.addArtifact(try Artifact(response: result.get()))
-                            sender.reply(toApplicationShouldTerminate: true)
+                            self.finishTermination(sender, allowed: true)
                         } catch {
                             AppStore.shared.report(error)
-                            sender.reply(toApplicationShouldTerminate: false)
+                            self.finishTermination(sender, allowed: false)
                         }
                     }
                 },
                 onAlternate: discardAndQuit,
-                onCancel: { sender.reply(toApplicationShouldTerminate: false) }
+                onCancel: { self.finishTermination(sender, allowed: false) }
             )
         }
         return .terminateLater
+    }
+
+    func requestRestart() {
+        restartBundleURL = Bundle.main.bundleURL
+        NSApp.terminate(nil)
+    }
+
+    private func finishTermination(_ sender: NSApplication, allowed: Bool) {
+        guard allowed else {
+            restartBundleURL = nil
+            sender.reply(toApplicationShouldTerminate: false)
+            return
+        }
+        guard let bundleURL = restartBundleURL else {
+            sender.reply(toApplicationShouldTerminate: true)
+            return
+        }
+        let waiter = Process()
+        waiter.executableURL = URL(fileURLWithPath: "/bin/sh")
+        waiter.arguments = [
+            "-c",
+            "while kill -0 \"$1\" 2>/dev/null; do sleep 0.05; done; exec /usr/bin/open -n \"$2\"",
+            "captures-restart", String(ProcessInfo.processInfo.processIdentifier), bundleURL.path,
+        ]
+        do {
+            try waiter.run()
+            restartBundleURL = nil
+            sender.reply(toApplicationShouldTerminate: true)
+        } catch {
+            restartBundleURL = nil
+            AppStore.shared.report(error)
+            sender.reply(toApplicationShouldTerminate: false)
+        }
     }
 
     @objc private func receiveRoute(_ notification: Notification) {
@@ -127,7 +178,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                     ["mp4", "webm", "mov"].contains(url.pathExtension.lowercased()) ? "video" : "image")
             }
             PreviewController.shared.refresh()
-        default: AppStore.shared.showPreferences()
+        default:
+            if AppStore.shared.onboardingCompleted { AppStore.shared.showPreferences() }
+            else { AppStore.shared.showOnboarding() }
         }
     }
 
@@ -136,6 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appItem = NSMenuItem()
         let appMenu = NSMenu(title: "Captures")
         appMenu.addItem(item("Preferences…", #selector(preferences), key: ","))
+        appMenu.addItem(item("Send Feedback…", #selector(feedback)))
         appMenu.addItem(.separator())
         appMenu.addItem(item("Quit Captures Native", #selector(quit), key: "q"))
         appItem.submenu = appMenu; main.addItem(appItem)
@@ -165,6 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tray.addItem(item("Preferences…", #selector(preferences)))
         tray.addItem(item("Capture History…", #selector(history)))
         tray.addItem(item("Open File…", #selector(openFile)))
+        tray.addItem(item("Send Feedback…", #selector(feedback)))
         tray.addItem(.separator())
         tray.addItem(item("Quit Captures Native", #selector(quit)))
         statusItem?.menu = tray
@@ -176,6 +231,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func preferences() { AppStore.shared.showPreferences() }
     @objc private func history() { AppStore.shared.showHistory() }
     @objc private func openFile() { AppStore.shared.chooseFile() }
+    @objc private func feedback() { AppStore.shared.showFeedback() }
     @objc private func capture() { CaptureController.shared.show() }
     @objc private func record() { CaptureController.shared.show(kind: "video", target: "region") }
     @objc private func gif() { CaptureController.shared.show(kind: "gif", target: "region") }

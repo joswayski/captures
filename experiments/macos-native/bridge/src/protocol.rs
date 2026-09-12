@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use captures_capture::LogicalRect;
+use captures_feedback::{FeedbackContext, FeedbackDraft};
 use captures_media::{CropRect, ExportFormat, QualityPreset};
 use captures_recording::RecordingOptions;
 use serde::Deserialize;
@@ -23,6 +24,12 @@ pub struct DescribeRequest {
 pub struct MicrophonePermissionRequest {
     #[serde(default)]
     pub request: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FeedbackSubmitRequest {
+    pub draft: FeedbackDraft,
+    pub context: FeedbackContext,
 }
 
 #[derive(Clone, Debug, Deserialize)]

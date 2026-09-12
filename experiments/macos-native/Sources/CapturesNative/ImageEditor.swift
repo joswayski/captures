@@ -81,7 +81,11 @@ private struct ImageEditorSurface: View {
     @State private var strokeWidth: CGFloat = 6
     @State private var defaultOpacity: CGFloat = 1
     @State private var brushSize: CGFloat = 32
+    @State private var brushSoftness: CGFloat = 0.35
     @State private var wandTolerance: CGFloat = 0.12
+    @State private var wandContiguous = true
+    @State private var brushLastPoint: CGPoint?
+    @State private var brushLayerID: UUID?
     @State private var fillShapes = false
     @State private var draftPoints: [CGPoint] = []
     @State private var cropStart: CGPoint?
@@ -158,6 +162,7 @@ private struct ImageEditorSurface: View {
         .onAppear {
             syncDimensions()
             syncEditorColor()
+            if [.wand, .erase, .restore].contains(tool) { selectBackgroundImageIfNeeded() }
         }
         .onChange(of: model.document.width) { _ in syncDimensions() }
         .onChange(of: model.document.height) { _ in syncDimensions() }
@@ -253,7 +258,8 @@ private struct ImageEditorSurface: View {
     private func toolButton(_ item: ImageEditorTool) -> some View {
         Button {
             tool = item
-            if item != .select { model.selectedLayerID = nil }
+            if [.wand, .erase, .restore].contains(item) { selectBackgroundImageIfNeeded() }
+            else if item != .select { model.selectedLayerID = nil }
             shapeFlyoutOpen = false
             backgroundFlyoutOpen = false
         } label: {
@@ -266,7 +272,7 @@ private struct ImageEditorSurface: View {
     private var backgroundTool: some View {
         Button {
             if ![.wand, .erase, .restore].contains(tool) { tool = .wand }
-            model.selectedLayerID = nil
+            selectBackgroundImageIfNeeded()
             shapeFlyoutOpen = false
             backgroundFlyoutOpen.toggle()
         } label: {
@@ -473,7 +479,21 @@ private struct ImageEditorSurface: View {
                     if draftPoints.isEmpty { draftPoints = [start] }
                     draftPoints.append(point)
                 case .erase, .restore:
-                    perform { try model.erase(at: point, radius: brushSize / 2, restore: tool == .restore) }
+                    if brushLayerID == nil {
+                        guard selectBackgroundImage(at: start) else { break }
+                        brushLayerID = model.selectedLayerID
+                        brushLastPoint = start
+                        model.beginInteractiveEdit()
+                    }
+                    guard let layerID = brushLayerID, let previous = brushLastPoint else { break }
+                    model.selectedLayerID = layerID
+                    perform {
+                        try model.eraseStroke(
+                            from: previous, to: point, radius: brushSize / 2,
+                            softness: brushSoftness, restore: tool == .restore
+                        )
+                    }
+                    brushLastPoint = point
                 default: break
                 }
             }
@@ -509,8 +529,17 @@ private struct ImageEditorSurface: View {
                     )
                     draftPoints.removeAll()
                 case .wand:
-                    perform { try model.removeBackgroundColor(at: point, tolerance: wandTolerance) }
-                case .erase, .restore: break
+                    if selectBackgroundImage(at: point) {
+                        perform {
+                            try model.removeBackgroundColor(
+                                at: point, tolerance: wandTolerance, contiguous: wandContiguous
+                            )
+                        }
+                    }
+                case .erase, .restore:
+                    brushLastPoint = nil
+                    brushLayerID = nil
+                    model.endInteractiveEdit()
                 }
                 dragOrigin = nil
                 dragLayerFrame = nil
@@ -677,6 +706,14 @@ private struct ImageEditorSurface: View {
                         value: Binding(get: { Double(brushSize) }, set: { brushSize = CGFloat($0) }),
                         range: 4...160
                     )
+                    HStack {
+                        Text("Softness")
+                        CaptureSlider(
+                            value: Binding(get: { Double(brushSoftness) }, set: { brushSoftness = CGFloat($0) }),
+                            range: 0...1
+                        )
+                        Text("\(Int((brushSoftness * 100).rounded()))%").monospacedDigit().frame(width: 42)
+                    }
                     Text("Drag over the image to \(tool == .restore ? "restore original pixels" : "make pixels transparent").")
                         .font(.caption).foregroundStyle(NativeTheme.muted(colorScheme))
                 }
@@ -686,7 +723,10 @@ private struct ImageEditorSurface: View {
                         value: Binding(get: { Double(wandTolerance) }, set: { wandTolerance = CGFloat($0) }),
                         range: 0.01...0.5
                     )
-                    Text("Click a connected background color to remove it. Undo restores it.")
+                    CaptureCheckboxRow(title: "Contiguous only", isOn: $wandContiguous)
+                    Text(wandContiguous
+                         ? "Click a color to remove that area. Undo restores it."
+                         : "Click a color to remove it everywhere in the layer. Undo restores it.")
                         .font(.caption).foregroundStyle(NativeTheme.muted(colorScheme))
                 }
                 HStack {
@@ -890,6 +930,24 @@ private struct ImageEditorSurface: View {
     private func selectLayer(at point: CGPoint) {
         model.selectedLayerID = model.document.layers.reversed().first(where: {
             $0.visible && layerContains($0, point: point)
+        })?.id
+    }
+
+    @discardableResult
+    private func selectBackgroundImage(at point: CGPoint) -> Bool {
+        guard let layer = model.document.layers.reversed().first(where: {
+            guard $0.visible, case .image = $0.content else { return false }
+            return layerContains($0, point: point)
+        }) else { return false }
+        model.selectedLayerID = layer.id
+        return true
+    }
+
+    private func selectBackgroundImageIfNeeded() {
+        if let index = model.selectedLayerIndex, case .image = model.document.layers[index].content { return }
+        model.selectedLayerID = model.document.layers.reversed().first(where: {
+            guard $0.visible, case .image = $0.content else { return false }
+            return true
         })?.id
     }
 
@@ -1338,6 +1396,10 @@ func imageEditorReferenceView(artifact: Artifact, state: String) -> AnyView {
         case "properties":
             model.addShape(.rectangle, at: CGPoint(x: 320, y: 220))
             return AnyView(ImageEditorSurface(artifact: artifact, model: model))
+        case "erase":
+            return AnyView(ImageEditorSurface(artifact: artifact, model: model, initialTool: .erase))
+        case "wand":
+            return AnyView(ImageEditorSurface(artifact: artifact, model: model, initialTool: .wand))
         default:
             return AnyView(ImageEditorSurface(artifact: artifact, model: model))
         }

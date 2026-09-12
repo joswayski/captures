@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use captures_image::{Document, Layer, PixelRect, Point, Shape, render};
+use captures_image::{BlendMode, Document, Layer, PixelRect, Point, Shape, render};
 use image::{Rgba, RgbaImage};
 
 fn point(x: f32, y: f32) -> Point {
@@ -15,6 +15,7 @@ fn layer(shape: Shape) -> Layer {
         stroke_width: 2.0,
         fill: None,
         rotation_degrees: 0.0,
+        blend_mode: BlendMode::Normal,
     }
 }
 
@@ -337,6 +338,125 @@ fn image_resampling_interpolates_premultiplied_color_and_clips_off_canvas() {
     assert!((55..=70).contains(&edge[3]), "{edge:?}"); // 1/4 coverage.
     assert_eq!(rendered.get_pixel(3, 3)[3], 0);
     assert_eq!(rendered.get_pixel(0, 2)[3], 0);
+}
+
+#[test]
+fn blend_modes_include_source_backdrop_for_images_shapes_text_and_brushes() {
+    // Independently computed channel results for source-over, Cs*Cb,
+    // Cs+Cb-Cs*Cb, backdrop-dependent overlay, min and max, respectively.
+    let modes: [(BlendMode, [u8; 3]); 6] = [
+        (BlendMode::Normal, [192, 96, 32]),
+        (BlendMode::Multiply, [48, 60, 28]),
+        (BlendMode::Screen, [208, 196, 228]),
+        (BlendMode::Overlay, [96, 137, 201]),
+        (BlendMode::Darken, [64, 96, 32]),
+        (BlendMode::Lighten, [192, 160, 224]),
+    ];
+    let shapes = [
+        (
+            Shape::Image {
+                origin: point(10.0, 11.0),
+                width: 20.0,
+                height: 18.0,
+                pixels: Arc::new(RgbaImage::from_pixel(2, 2, Rgba([192, 96, 32, 255]))),
+            },
+            (15, 16),
+        ),
+        (
+            Shape::Rectangle {
+                origin: point(10.0, 11.0),
+                width: 20.0,
+                height: 18.0,
+            },
+            (15, 16),
+        ),
+        (
+            Shape::Text {
+                origin: point(10.0, 5.0),
+                text: "L".into(),
+                font_size: 20.0,
+                font_data: Arc::from(include_bytes!("test-font.ttf").as_slice()),
+            },
+            (11, 8),
+        ),
+        (Shape::Freehand(vec![point(12.5, 12.5)]), (12, 12)),
+    ];
+    for (mode, expected) in modes {
+        for (shape, (x, y)) in &shapes {
+            let mut annotation = layer(shape.clone());
+            annotation.color = [192, 96, 32, 255];
+            annotation.fill = Some(annotation.color);
+            annotation.stroke_width = 4.0;
+            annotation.blend_mode = mode;
+            let mut doc = document(vec![annotation]);
+            doc.source = Arc::new(RgbaImage::from_pixel(80, 60, Rgba([64, 160, 224, 255])));
+            let rendered = render(&doc).unwrap();
+            let actual = rendered.get_pixel(*x, *y).0;
+            for (actual, expected) in actual[..3].iter().zip(expected) {
+                assert!(
+                    (i16::from(*actual) - i16::from(expected)).abs() <= 1,
+                    "{mode:?}: {actual} != {expected}"
+                );
+            }
+            assert_eq!(actual[3], 255);
+            assert_eq!(rendered.get_pixel(0, 0).0, [64, 160, 224, 255]);
+        }
+    }
+}
+
+#[test]
+fn blend_opacity_and_layer_order_preserve_untouched_source_pixels() {
+    let mut image = layer(Shape::Image {
+        origin: point(10.0, 11.0),
+        width: 20.0,
+        height: 18.0,
+        pixels: Arc::new(RgbaImage::from_pixel(2, 2, Rgba([192, 96, 32, 255]))),
+    });
+    image.color[3] = 128;
+    image.blend_mode = BlendMode::Multiply;
+    let mut doc = document(vec![image.clone()]);
+    doc.source = Arc::new(RgbaImage::from_fn(80, 60, |x, y| {
+        if y > 5 {
+            Rgba([64, 160, 224, 255])
+        } else {
+            Rgba([x as u8, 21, 79, (x % 4) as u8])
+        }
+    }));
+    let result = render(&doc).unwrap();
+    for (actual, expected) in result
+        .get_pixel(15, 16)
+        .0
+        .into_iter()
+        .zip([56, 110, 126, 255])
+    {
+        assert!((i16::from(actual) - expected).abs() <= 1);
+    }
+    for x in 0..80 {
+        assert_eq!(result.get_pixel(x, 2), doc.source.get_pixel(x, 2));
+    }
+    let mut normal = layer(Shape::Rectangle {
+        origin: point(10.0, 11.0),
+        width: 20.0,
+        height: 18.0,
+    });
+    normal.fill = Some([128, 64, 192, 255]);
+    normal.stroke_width = 0.0;
+    image.color[3] = 255;
+    doc.layers = vec![normal.clone(), image.clone()];
+    let result = render(&doc).unwrap();
+    for (actual, expected) in result
+        .get_pixel(15, 16)
+        .0
+        .into_iter()
+        .zip([96, 24, 24, 255])
+    {
+        assert!((i16::from(actual) - expected).abs() <= 1);
+    }
+    doc.layers = vec![image, normal];
+    assert_eq!(
+        render(&doc).unwrap().get_pixel(15, 16).0,
+        [128, 64, 192, 255]
+    );
 }
 
 #[test]
