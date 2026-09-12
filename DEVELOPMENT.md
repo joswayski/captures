@@ -386,6 +386,28 @@ observed compositor pixels (`--lab`, `--binary`, `--implementation tauri|gpui|na
 than counting them as fast frames. This is software-X11 observation latency,
 not physical display latency, FPS, energy use, or proof of feature parity.
 
+`effects.py` exercises the real preview expansion and confirmed disintegration
+controls on three disposable copies of the image fixture. Use system Python for
+the existing GTK AT-SPI helper. Run visual inspection separately from resources:
+
+```sh
+/usr/bin/python3 experiments/gpui/effects.py --lab /tmp/captures-gpui-lab \
+  --native "$PWD/experiments/gpui/target/release/captures-linux-native" \
+  --gpui "$PWD/experiments/gpui/target/release/captures-gpui" \
+  --implementation native --inspect --artifacts /tmp/native-effects
+```
+
+Omit `--inspect` to collect five resource trials without a recorder. Use
+`--effect expand` to compare both apps, or `--implementation native --effect delete`
+for native disintegration. Inspect clips/contact sheets before accepting results;
+the recorder's 60 fps is not measured application FPS. CPU covers a fixed four-second
+interaction window, including the settled tail, and PSS is sampled every 0.5s.
+The existing animations differ: GTK delete lasts 2.2s, GPUI 2.9s. This is not an
+equal-work renderer benchmark. GPUI's hover-only delete control could not be
+reliably activated in this fixture; its delete measurement intentionally fails
+unless one disposable source is actually removed. No successful GPUI delete
+benchmark is claimed.
+
 ## macOS-native experiment
 
 This is a separate SwiftUI/AppKit application, not the Tauri packaging command

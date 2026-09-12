@@ -225,6 +225,69 @@ Raw final trials: [Tauri](../experiments/gpui/results/latency-controls-tauri.jso
 [GPUI](../experiments/gpui/results/latency-controls-gpui.json),
 [GTK native](../experiments/gpui/results/latency-controls-native.json).
 
+### Actual preview effects, not idle stacks
+
+The GTK preview implementation already contains perspective stacking and a
+220-image-fragment disintegration renderer. `effects.py` exercised those existing
+implementations through real pointer actions, without adding an animation-only
+test UI. Inspected recordings and 125ms frame contact sheets show intermediate
+expansion positions in both apps. Native confirmed deletion visibly disperses
+the image fragments and leaves two cards; every native deletion trial removed
+exactly the selected disposable source and preserved the other two.
+
+Five fresh-process resource trials per workload, same Mesa25 software-X11 lab,
+three copies of the 960×540 fixture, and preview-only startup (no Preferences).
+Video inspection ran separately; no recorder or build ran during measurement.
+Expansion trials alternated implementations; native deletion ran afterwards.
+CPU below covers the entire application process tree over a fixed four-second
+interaction window, including dispatch/hover and the settled tail. Memory is the
+median of each trial's maximum PSS sampled every 0.5s, **not a true peak**.
+
+| Workload | Native GTK CPU-seconds | GPUI CPU-seconds | Native sampled PSS, MiB | GPUI sampled PSS, MiB |
+| --- | ---: | ---: | ---: | ---: |
+| Expand three-card pile | 0.17 | 1.98 | 37.1 | 162.9 |
+| Confirmed disintegration | 1.30 | — | 45.6 | — |
+
+These are current-implementation costs, not identical-work renderer benchmarks
+or application FPS. Native delete lasts 2.2s; GPUI's implementation uses 2.9s,
+and the drawing/interpolation paths differ. GPUI's hover-only delete control
+could not be reliably activated here: repeated attempts left all sources intact.
+Those attempts are failures, not cheap deletion samples. They establish neither
+a GPUI rendering limitation nor its delete-animation performance. Expansion is
+checked against changed compositor pixels in a previously empty upper card slot;
+reading only the client backing pixmap incorrectly missed GPUI's visible output.
+
+Raw results: [expansion](../experiments/gpui/results/effects-expand-linux.json)
+and [native disintegration](../experiments/gpui/results/effects-native-delete-linux.json).
+
+### Published hardware comparison: promising, but not independently verified
+
+A September 6, 2026 [community comparison](https://github.com/zed-industries/zed/discussions/63832)
+reports AppKit and GPUI 0.2.2 on an M4 Max, 36 GiB RAM, 5K/144Hz display,
+100,000 synthetic rows, 600 scroll steps and 15 fresh processes per toolkit:
+
+| Author-reported metric | AppKit | GPUI 0.2.2 |
+| --- | ---: | ---: |
+| Median first frame | 155.1 ms | 152.5 ms |
+| Median ready time | 194.3 ms | 219.1 ms |
+| Scroll p50 / p99 | 6.95 / 7.87 ms | 6.95 / 8.29 ms |
+| Peak RSS | 124.3 MiB | 125.5 MiB |
+| User / system CPU time | 2.07 / 0.17 s | 4.06 / 0.23 s |
+
+The post and its zero comments provided no source harness or raw traces when
+checked on September 12. Treat the numbers as unverified author reports, not a
+reproduced benchmark. The reported scroll metric is not our input-to-observed-pixel
+test, and RSS is not PSS. This is AppKit, not GTK or Captures' particle effects.
+Its tables suggest similar memory/scroll timing and higher CPU time for GPUI,
+not an across-the-board winner. Its promotional "fastest startup" claim refers
+to first frame; AppKit's reported ready time is faster.
+
+Zed's [rendering architecture article](https://zed.dev/blog/videogame) describes
+specialized GPU primitives and cached text/images, not a GTK-vs-GPUI benchmark.
+Both approaches still need application-specific particle/stack behavior. GTK
+can share Cairo drawing across platforms too; separate UI implementations are
+needed when choosing each OS's own toolkit, not simply because an app is native.
+
 ## Historical release resource comparison
 
 Measured on September 11, 2026 in a two-vCPU Linux orb using Mesa 25.0.7
@@ -345,8 +408,9 @@ and interaction checks above establish only the behaviors they actually ran.
   Clippy: passed; 366 Rust tests passed, one ignored.
 - GPUI locked tests: 88 passed;
   formatting, strict all-target Clippy and release build passed.
-- Python helper tests: fifteen passed (eleven benchmark, four latency), including
-  native CLI/profile isolation and moving-handle/stale-pixel detector checks.
+- Python helper tests: seventeen passed (eleven benchmark, four latency, two
+  effects), including native CLI/profile isolation, moving-handle/stale-pixel
+  checks and whole-process-tree CPU accounting.
 - Three-way comparison: 105 resource samples and 30 successful final input-response
   samples; summaries were independently recomputed and binary hashes matched.
   The native comparator built with locked dependencies in release mode.
