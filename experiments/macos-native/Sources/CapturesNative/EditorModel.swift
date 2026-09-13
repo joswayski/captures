@@ -91,6 +91,36 @@ enum EditorShape: String, Codable, CaseIterable {
     case rectangle, ellipse, line, triangle, diamond, star, arrow
 }
 
+enum EditorBlendMode: String, Codable, CaseIterable, Identifiable {
+    case normal = "source-over"
+    case multiply, screen, overlay, darken, lighten
+
+    var id: String { rawValue }
+    var label: String { self == .normal ? "Normal" : rawValue.capitalized }
+
+    var cgBlendMode: CGBlendMode {
+        switch self {
+        case .normal: return .normal
+        case .multiply: return .multiply
+        case .screen: return .screen
+        case .overlay: return .overlay
+        case .darken: return .darken
+        case .lighten: return .lighten
+        }
+    }
+
+    var nsCompositingOperation: NSCompositingOperation {
+        switch self {
+        case .normal: return .sourceOver
+        case .multiply: return .multiply
+        case .screen: return .screen
+        case .overlay: return .overlay
+        case .darken: return .darken
+        case .lighten: return .lighten
+        }
+    }
+}
+
 enum EditorLayerContent: Codable, Equatable {
     case image(Data, original: Data)
     case text(String)
@@ -150,12 +180,15 @@ struct EditorLayer: Identifiable, Codable, Equatable {
     var fill: EditorColor?
     var lineWidth: CGFloat = 6
     var shadow: EditorShadow?
+    /// Optional so drafts written before blend controls decode as Normal.
+    var blendMode: EditorBlendMode?
 
     init(
         id: UUID = UUID(), name: String, content: EditorLayerContent, frame: EditorRect,
         rotation: CGFloat = 0, visible: Bool = true, locked: Bool = false,
         opacity: CGFloat = 1, color: EditorColor = .signal, fill: EditorColor? = nil,
-        lineWidth: CGFloat = 6, shadow: EditorShadow? = nil
+        lineWidth: CGFloat = 6, shadow: EditorShadow? = nil,
+        blendMode: EditorBlendMode? = nil
     ) {
         self.id = id
         self.name = name
@@ -169,6 +202,7 @@ struct EditorLayer: Identifiable, Codable, Equatable {
         self.fill = fill
         self.lineWidth = lineWidth
         self.shadow = shadow
+        self.blendMode = blendMode
     }
 }
 
@@ -477,6 +511,62 @@ final class EditorModel: ObservableObject {
         }
     }
 
+    var canMergeSelectedDown: Bool {
+        guard let index = selectedLayerIndex, index > 0 else { return false }
+        return !document.layers[index].locked && !document.layers[index - 1].locked
+    }
+
+    var canMergeVisible: Bool { document.layers.filter(\.visible).count >= 2 }
+
+    var canFlatten: Bool {
+        document.layers.count >= 2 || (document.layers.count == 1 && document.background != nil)
+    }
+
+    func mergeSelectedDown() throws {
+        guard canMergeSelectedDown, let index = selectedLayerIndex else { return }
+        let layers = Array(document.layers[(index - 1)...index])
+        let name = layers.first(where: { layer in
+            if case .image = layer.content { return true }
+            return false
+        })?.name ?? "Merged"
+        let merged = try rasterizedLayer(layers: layers, background: nil, name: name)
+        mutate { $0.layers.replaceSubrange((index - 1)...index, with: [merged]) }
+        selectedLayerID = merged.id
+    }
+
+    func mergeVisible() throws {
+        guard canMergeVisible else { return }
+        let merged = try rasterizedLayer(
+            layers: document.layers.filter(\.visible), background: nil, name: "Merged"
+        )
+        var inserted = false
+        var layers: [EditorLayer] = []
+        for layer in document.layers {
+            if layer.visible {
+                if !inserted { layers.append(merged); inserted = true }
+            } else {
+                layers.append(layer)
+            }
+        }
+        mutate { $0.layers = layers }
+        selectedLayerID = merged.id
+    }
+
+    func flatten() throws {
+        guard canFlatten else { return }
+        var merged = try rasterizedLayer(
+            layers: document.layers.filter(\.visible),
+            background: document.background,
+            name: "Flattened"
+        )
+        merged.locked = true
+        mutate {
+            $0.background = nil
+            $0.layers = [merged]
+        }
+        selectedLayerID = merged.id
+    }
+
     func crop(to rect: CGRect) {
         let canvas = CGRect(x: 0, y: 0, width: CGFloat(document.width), height: CGFloat(document.height))
         let crop = rect.standardized.integral.intersection(canvas)
@@ -750,6 +840,27 @@ final class EditorModel: ObservableObject {
     }
 
     func renderedImage() throws -> NSImage {
+        try renderedImage(layers: document.layers.filter(\.visible), background: document.background)
+    }
+
+    private func rasterizedLayer(
+        layers: [EditorLayer], background: EditorColor?, name: String
+    ) throws -> EditorLayer {
+        let image = try renderedImage(layers: layers, background: background)
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let data = NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:])
+        else { throw EditorError.cannotRender }
+        return EditorLayer(
+            name: name,
+            content: .image(data, original: data),
+            frame: EditorRect(
+                x: 0, y: 0,
+                width: CGFloat(document.width), height: CGFloat(document.height)
+            )
+        )
+    }
+
+    private func renderedImage(layers: [EditorLayer], background: EditorColor?) throws -> NSImage {
         guard document.width > 0, document.height > 0 else { throw EditorError.cannotRender }
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
               let context = CGContext(
@@ -762,7 +873,7 @@ final class EditorModel: ObservableObject {
                 bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
               ) else { throw EditorError.cannotRender }
         context.setBlendMode(.copy)
-        context.setFillColor((document.background?.nsColor ?? .clear).cgColor)
+        context.setFillColor((background?.nsColor ?? .clear).cgColor)
         context.fill(CGRect(x: 0, y: 0, width: CGFloat(document.width), height: CGFloat(document.height)))
         context.setBlendMode(.normal)
         context.translateBy(x: 0, y: CGFloat(document.height))
@@ -771,7 +882,9 @@ final class EditorModel: ObservableObject {
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = graphicsContext
         defer { NSGraphicsContext.restoreGraphicsState() }
-        for layer in document.layers where layer.visible {
+        // Callers choose the stack: normal rendering passes visible layers,
+        // while shipping Merge Down intentionally rasterizes its explicit pair.
+        for layer in layers {
             draw(layer, in: context)
         }
         graphicsContext.flushGraphics()
@@ -832,6 +945,7 @@ final class EditorModel: ObservableObject {
         let frame = layer.frame.cgRect
         context.saveGState()
         context.setAlpha(layer.opacity)
+        context.setBlendMode((layer.blendMode ?? .normal).cgBlendMode)
         context.translateBy(x: frame.midX, y: frame.midY)
         context.rotate(by: layer.rotation)
         context.translateBy(x: -frame.midX, y: -frame.midY)
@@ -847,7 +961,7 @@ final class EditorModel: ObservableObject {
             NSImage(data: data)?.draw(
                 in: frame,
                 from: .zero,
-                operation: .sourceOver,
+                operation: (layer.blendMode ?? .normal).nsCompositingOperation,
                 fraction: 1,
                 respectFlipped: true,
                 hints: [.interpolation: NSImageInterpolation.high.rawValue]

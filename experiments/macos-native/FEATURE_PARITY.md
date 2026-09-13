@@ -19,7 +19,9 @@ This ledger distinguishes implemented behavior from native-runtime and rollout g
   live layer movement with edge snap guides, explicit canvas overflow expansion,
   interpolated hard/soft erase and restore brushes, PNG/JPEG/WebP export and
   transparency-preserving PNG/WebP output, fit/manual 5–800% viewport zoom,
-  pointer-anchored modified-wheel/pinch zoom, and Command/Control or middle-drag pan.
+  pointer-anchored modified-wheel/pinch zoom, Command/Control or middle-drag pan,
+  six shipping blend modes, merge down, merge visible, and flatten with matching
+  hidden-layer and canvas-background behavior.
 - App surfaces: persisted preferences with runtime consumers, history restore/edit/
   trash, mini-preview stacks and disintegration, custom confirmations/popovers/
   toggles, global shortcut registration failures, duplicate shortcut rejection,
@@ -37,6 +39,8 @@ This ledger distinguishes implemented behavior from native-runtime and rollout g
   and clean normal quit/restart behavior. The shared collector is subprocess-tested,
   but Swift/AppKit lifecycle behavior still requires native CI and physical-Mac checks.
 - Exact 12-cell filmstrip layout and live estimate pending/exact/approximate states.
+- Layer blend rendering and merge/flatten rasterization. Model contracts and
+  asymmetric pixels are tested, but Core Graphics/AppKit output needs native CI.
 - Native modifier/middle-drag pan, pointer-anchored wheel/pinch zoom, and the
   mostly-offscreen Recenter cue. Model math is asymmetric-tested; physical input
   routing and trackpad magnification still require native interaction evidence.
@@ -45,8 +49,8 @@ This ledger distinguishes implemented behavior from native-runtime and rollout g
 
 ## Confirmed gaps
 
-- Image editing: blend/merge/flatten and the remaining richer text/default
-  annotation properties.
+- Image editing: richer text presets/families, bold/italic/alignment, label
+  backgrounds/outlines, and remaining default annotation properties.
 - Recording responsiveness: stale estimate results are generation-guarded, but queued
   and running estimates/exports are not cancelled or coalesced. They can still delay Save
   on the serial media queue; this needs an owned cancel protocol matching shipping.

@@ -656,6 +656,132 @@ final class EditorModelTests: XCTestCase {
         XCTAssertGreaterThan(try pixel(image, x: 11, y: 6)[3], 0)
     }
 
+    func testLayerBlendModesMatchShippingSetAndMultiplyPixels() throws {
+        XCTAssertEqual(
+            Set(EditorBlendMode.allCases.map(\.rawValue)),
+            Set(["source-over", "multiply", "screen", "overlay", "darken", "lighten"])
+        )
+        let bottomData = try solidPNG(
+            NSColor(srgbRed: 64.0 / 255, green: 128.0 / 255, blue: 192.0 / 255, alpha: 1),
+            rgba: [64, 128, 192, 255], width: 2, height: 2
+        )
+        let topData = try solidPNG(
+            NSColor(srgbRed: 128.0 / 255, green: 64.0 / 255, blue: 192.0 / 255, alpha: 1),
+            rgba: [128, 64, 192, 255], width: 2, height: 2
+        )
+        let frame = EditorRect(x: 0, y: 0, width: 2, height: 2)
+        let model = EditorModel(
+            document: EditorDocument(width: 2, height: 2, layers: [
+                EditorLayer(name: "Bottom", content: .image(bottomData, original: bottomData), frame: frame),
+                EditorLayer(
+                    name: "Top", content: .image(topData, original: topData), frame: frame,
+                    blendMode: .multiply
+                ),
+            ]),
+            sourceURL: URL(fileURLWithPath: "/tmp/blend.png")
+        )
+
+        let image = try XCTUnwrap(model.renderedImage().cgImage(forProposedRect: nil, context: nil, hints: nil))
+        try assertPixel(image, x: 0, y: 0, approximately: [32, 32, 145, 255], tolerance: 3)
+    }
+
+    func testMergeDownRasterizesStackOrderAsOneUndoableImage() throws {
+        let bottomData = try solidPNG(
+            NSColor(srgbRed: 200.0 / 255, green: 40.0 / 255, blue: 20.0 / 255, alpha: 1),
+            rgba: [200, 40, 20, 255], width: 2, height: 2
+        )
+        let topData = try solidPNG(
+            NSColor(srgbRed: 20.0 / 255, green: 80.0 / 255, blue: 220.0 / 255, alpha: 1),
+            rgba: [20, 80, 220, 255], width: 2, height: 2
+        )
+        let frame = EditorRect(x: 0, y: 0, width: 2, height: 2)
+        let bottom = EditorLayer(name: "Photo", content: .image(bottomData, original: bottomData), frame: frame)
+        let top = EditorLayer(
+            name: "Tint", content: .image(topData, original: topData), frame: frame, opacity: 0.5
+        )
+        let original = EditorDocument(width: 2, height: 2, layers: [bottom, top])
+        let model = EditorModel(document: original, sourceURL: URL(fileURLWithPath: "/tmp/merge.png"))
+        model.selectedLayerID = top.id
+
+        XCTAssertTrue(model.canMergeSelectedDown)
+        try model.mergeSelectedDown()
+
+        XCTAssertEqual(model.document.layers.count, 1)
+        XCTAssertEqual(model.document.layers[0].name, "Photo")
+        XCTAssertEqual(model.document.layers[0].frame, frame)
+        XCTAssertEqual(model.selectedLayerID, model.document.layers[0].id)
+        let merged = try XCTUnwrap(model.renderedImage().cgImage(forProposedRect: nil, context: nil, hints: nil))
+        try assertPixel(merged, x: 1, y: 1, approximately: [110, 60, 120, 255], tolerance: 3)
+        model.undo()
+        XCTAssertEqual(model.document, original)
+
+        var lockedBottom = bottom
+        lockedBottom.locked = true
+        let lockedDocument = EditorDocument(width: 2, height: 2, layers: [lockedBottom, top])
+        let lockedModel = EditorModel(
+            document: lockedDocument,
+            sourceURL: URL(fileURLWithPath: "/tmp/locked-merge.png")
+        )
+        lockedModel.selectedLayerID = top.id
+        XCTAssertFalse(lockedModel.canMergeSelectedDown)
+        try lockedModel.mergeSelectedDown()
+        XCTAssertEqual(lockedModel.document, lockedDocument)
+    }
+
+    func testMergeVisibleKeepsHiddenLayersInPlaceAndFlattenDiscardsThem() throws {
+        let red = try solidPNG(.red, rgba: [255, 0, 0, 255], width: 2, height: 2)
+        let blue = try solidPNG(.blue, rgba: [0, 0, 255, 255], width: 1, height: 2)
+        let hiddenBelow = EditorLayer(
+            name: "Hidden below", content: .image(red, original: red),
+            frame: EditorRect(x: 0, y: 0, width: 2, height: 2), visible: false
+        )
+        let visibleBottom = EditorLayer(
+            name: "Visible bottom", content: .image(red, original: red),
+            frame: EditorRect(x: 0, y: 0, width: 1, height: 2)
+        )
+        let hiddenMiddle = EditorLayer(
+            name: "Hidden middle", content: .image(blue, original: blue),
+            frame: EditorRect(x: 1, y: 0, width: 1, height: 2), visible: false
+        )
+        let visibleTop = EditorLayer(
+            name: "Visible top", content: .image(blue, original: blue),
+            frame: EditorRect(x: 1, y: 0, width: 1, height: 2)
+        )
+        let original = EditorDocument(
+            width: 3, height: 2,
+            layers: [hiddenBelow, visibleBottom, hiddenMiddle, visibleTop],
+            background: .white
+        )
+        let model = EditorModel(document: original, sourceURL: URL(fileURLWithPath: "/tmp/visible.png"))
+
+        XCTAssertTrue(model.canMergeVisible)
+        try model.mergeVisible()
+        XCTAssertEqual(model.document.layers.count, 3)
+        XCTAssertEqual(model.document.layers[0].id, hiddenBelow.id)
+        XCTAssertEqual(model.document.layers[1].name, "Merged")
+        XCTAssertEqual(model.document.layers[2].id, hiddenMiddle.id)
+        XCTAssertFalse(model.document.layers[0].visible)
+        XCTAssertFalse(model.document.layers[2].visible)
+        let merged = try XCTUnwrap(model.renderedImage().cgImage(forProposedRect: nil, context: nil, hints: nil))
+        try assertPixel(merged, x: 0, y: 0, approximately: [255, 0, 0, 255], tolerance: 1)
+        try assertPixel(merged, x: 1, y: 0, approximately: [0, 0, 255, 255], tolerance: 1)
+        model.undo()
+        XCTAssertEqual(model.document, original)
+
+        XCTAssertTrue(model.canFlatten)
+        try model.flatten()
+        XCTAssertNil(model.document.background)
+        XCTAssertEqual(model.document.layers.count, 1)
+        XCTAssertEqual(model.document.layers[0].name, "Flattened")
+        XCTAssertTrue(model.document.layers[0].locked)
+        let flattened = try XCTUnwrap(model.renderedImage().cgImage(forProposedRect: nil, context: nil, hints: nil))
+        try assertPixel(flattened, x: 0, y: 0, approximately: [255, 0, 0, 255], tolerance: 1)
+        try assertPixel(flattened, x: 1, y: 0, approximately: [0, 0, 255, 255], tolerance: 1)
+        try assertPixel(flattened, x: 2, y: 0, approximately: [255, 255, 255, 255], tolerance: 1)
+        model.undo()
+        XCTAssertEqual(model.document, original)
+    }
+
     func testLegacyDraftWithoutBackgroundOrShadowStillDecodes() throws {
         let document = EditorDocument(width: 8, height: 6, layers: [
             EditorLayer(name: "Shape", content: .shape(.ellipse), frame: EditorRect(x: 1, y: 1, width: 4, height: 3)),
@@ -664,12 +790,14 @@ final class EditorModelTests: XCTestCase {
         json.removeValue(forKey: "background")
         var layers = try XCTUnwrap(json["layers"] as? [[String: Any]])
         layers[0].removeValue(forKey: "shadow")
+        layers[0].removeValue(forKey: "blendMode")
         json["layers"] = layers
 
         let decoded = try JSONDecoder().decode(EditorDocument.self, from: JSONSerialization.data(withJSONObject: json))
 
         XCTAssertNil(decoded.background)
         XCTAssertNil(decoded.layers[0].shadow)
+        XCTAssertNil(decoded.layers[0].blendMode)
         XCTAssertEqual(decoded.width, 8)
     }
 
@@ -718,6 +846,21 @@ final class EditorModelTests: XCTestCase {
         XCTAssertEqual(actual.minY, expected.minY, accuracy: 0.0001, file: file, line: line)
         XCTAssertEqual(actual.width, expected.width, accuracy: 0.0001, file: file, line: line)
         XCTAssertEqual(actual.height, expected.height, accuracy: 0.0001, file: file, line: line)
+    }
+
+    private func assertPixel(
+        _ image: CGImage, x: Int, y: Int, approximately expected: [UInt8], tolerance: Int,
+        file: StaticString = #filePath, line: UInt = #line
+    ) throws {
+        let actual = try pixel(image, x: x, y: y)
+        XCTAssertEqual(actual.count, expected.count, file: file, line: line)
+        for (component, pair) in zip(["red", "green", "blue", "alpha"], zip(actual, expected)) {
+            XCTAssertLessThanOrEqual(
+                abs(Int(pair.0) - Int(pair.1)), tolerance,
+                "\(component): expected \(pair.1), got \(pair.0)",
+                file: file, line: line
+            )
+        }
     }
 
     private func solidPNG(_ color: NSColor, rgba: [UInt8], width: Int = 1, height: Int = 1) throws -> Data {

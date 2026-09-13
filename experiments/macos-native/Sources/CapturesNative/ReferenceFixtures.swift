@@ -69,6 +69,8 @@ func nativeReferenceFixtures(
                                makeView: { imageEditorReferenceView(artifact: imageArtifacts[0], state: "snap-guides") }),
         NativeReferenceFixture(name: "image-editor-viewport-pan-zoom", size: CGSize(width: 1280, height: 760), scheme: .dark,
                                makeView: { imageEditorReferenceView(artifact: imageArtifacts[0], state: "viewport") }),
+        NativeReferenceFixture(name: "image-editor-layer-compositing", size: CGSize(width: 1280, height: 900), scheme: .dark,
+                               makeView: { imageEditorReferenceView(artifact: imageArtifacts[0], state: "layers") }),
         NativeReferenceFixture(name: "image-editor-erase", size: CGSize(width: 1280, height: 760), scheme: .dark,
                                makeView: { imageEditorReferenceView(artifact: imageArtifacts[0], state: "erase") }),
         NativeReferenceFixture(name: "image-editor-wand", size: CGSize(width: 1280, height: 760), scheme: .dark,

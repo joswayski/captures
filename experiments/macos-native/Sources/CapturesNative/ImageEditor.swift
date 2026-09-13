@@ -994,6 +994,19 @@ private struct ImageEditorSurface: View {
                     Text("\(Int(layer.opacity * 100))%").monospacedDigit().frame(width: 42)
                 }
                 HStack {
+                    Text("Blend mode")
+                    Spacer()
+                    Picker("Blend mode", selection: Binding(
+                        get: { layer.blendMode ?? .normal },
+                        set: { mode in model.updateSelected { $0.blendMode = mode == .normal ? nil : mode } }
+                    )) {
+                        ForEach(EditorBlendMode.allCases) { mode in Text(mode.label).tag(mode) }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 130)
+                }
+                HStack {
                     Text("Rotation")
                     CaptureSlider(value: Binding(
                         get: { Double(layer.rotation * 180 / .pi) },
@@ -1067,6 +1080,20 @@ private struct ImageEditorSurface: View {
                     Button { model.duplicateSelected() } label: { Image(systemName: "plus.square.on.square") }.buttonStyle(CaptureButtonStyle()).help("Duplicate layer")
                     Button { model.deleteSelected() } label: { Image(systemName: "trash") }.buttonStyle(CaptureButtonStyle(destructive: true)).disabled(layer.locked).help("Delete layer")
                 }
+                Divider()
+                Text("Combine").font(.headline)
+                HStack {
+                    Button("Merge down") { perform { try model.mergeSelectedDown() } }
+                        .buttonStyle(CaptureButtonStyle())
+                        .disabled(!model.canMergeSelectedDown)
+                    Button("Merge visible") { perform { try model.mergeVisible() } }
+                        .buttonStyle(CaptureButtonStyle())
+                        .disabled(!model.canMergeVisible)
+                }
+                Button("Flatten image") { perform { try model.flatten() } }
+                    .buttonStyle(CaptureButtonStyle())
+                    .disabled(!model.canFlatten)
+                    .help("Bake the canvas background and visible layers into one locked layer; discard hidden layers")
             }.padding(.top, 14)
         } else if tool == .crop {
             SectionTitle("Crop", subtitle: "Drag on the canvas")
@@ -1814,6 +1841,15 @@ func imageEditorReferenceView(artifact: Artifact, state: String) -> AnyView {
                 // keeping the moon, blue scene, and selected ellipse visible.
                 initialViewPan: CGSize(width: -500, height: -90)
             ))
+        case "layers":
+            model.updateLayer(id: model.document.layers[0].id) { $0.locked = false }
+            model.addShape(.rectangle, at: CGPoint(x: 260, y: 180))
+            model.updateSelected {
+                $0.blendMode = .multiply
+                $0.fill = $0.color
+                $0.opacity = 0.82
+            }
+            return AnyView(ImageEditorSurface(artifact: artifact, model: model))
         case "erase":
             return AnyView(ImageEditorSurface(artifact: artifact, model: model, initialTool: .erase))
         case "wand":
