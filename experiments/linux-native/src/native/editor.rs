@@ -105,6 +105,7 @@ struct State {
     layer_clipboard: Option<(Layer, usize)>,
     space_down: bool,
     dirty: bool,
+    revision: u64,
     source: Option<PathBuf>,
     directory: PathBuf,
     draft: PathBuf,
@@ -169,6 +170,7 @@ fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
     Err("could not allocate a private staging file".into())
 }
 fn changed(s: &mut State) {
+    s.revision = s.revision.wrapping_add(1);
     s.dirty = true;
     if s.comparison_open {
         request_comparison(s);
@@ -398,6 +400,7 @@ fn open_impl(
         layer_clipboard: None,
         space_down: false,
         dirty: restored.is_some(),
+        revision: 0,
         source,
         directory,
         draft,
@@ -2778,6 +2781,51 @@ fn save_named(
     unreachable!()
 }
 
+fn overwrite_source(
+    doc: &Document,
+    path: &Path,
+    quality: ExportQuality,
+) -> Result<PathBuf, String> {
+    let format = match path
+        .extension()
+        .and_then(|v| v.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "jpg" | "jpeg" => "JPEG",
+        "webp" => "WebP",
+        _ => "PNG",
+    };
+    let bytes = encode_output(doc, format, quality)?;
+    // Reopening hashes decoded source pixels, including lossy encoding changes.
+    let image = image::load_from_memory(&bytes)
+        .map_err(|error| error.to_string())?
+        .to_rgba8();
+    let draft = draft_path(Some(path), &image);
+    atomic_write_private(path, &bytes)?;
+    Ok(draft)
+}
+
+fn finish_save(state: &mut State, revision: u64, draft: Option<PathBuf>) -> Result<(), String> {
+    let previous = state.draft.clone();
+    if let Some(draft) = draft {
+        state.draft = draft;
+    }
+    state.dirty = state.revision != revision;
+    if state.dirty {
+        // Commit newer edits under the overwritten source's new identity before
+        // removing the prior draft. On failure, keep it and retry on edit/close.
+        write_draft(state)?;
+    } else {
+        let _ = std::fs::remove_file(&state.draft);
+    }
+    if previous != state.draft {
+        let _ = std::fs::remove_file(previous);
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn setup_output(
     save: &gtk::Button,
@@ -2810,6 +2858,7 @@ fn setup_output(
             .unwrap_or_else(|| "PNG".into());
         let quality = selected_quality(&qm, &q, &maximum_size, &maximum_unit);
         let doc = s.borrow().doc.clone();
+        let revision = s.borrow().revision;
         let source = s.borrow().source.clone();
         let directory = s.borrow().directory.clone();
         let filename = filename.text().trim().to_owned();
@@ -2824,20 +2873,8 @@ fn setup_output(
             move || {
                 if overwrite {
                     let path = source.ok_or("No imported source file")?;
-                    let source_format = match path
-                        .extension()
-                        .and_then(|v| v.to_str())
-                        .unwrap_or("")
-                        .to_ascii_lowercase()
-                        .as_str()
-                    {
-                        "jpg" | "jpeg" => "JPEG",
-                        "webp" => "WebP",
-                        _ => "PNG",
-                    };
-                    let bytes = encode_output(&doc, source_format, quality)?;
-                    atomic_write_private(&path, &bytes)?;
-                    Ok(path)
+                    let draft = overwrite_source(&doc, &path, quality)?;
+                    Ok((path, Some(draft)))
                 } else {
                     let bytes = encode_output(&doc, &format, quality)?;
                     let ext = match format.as_str() {
@@ -2845,19 +2882,21 @@ fn setup_output(
                         "WebP" => "webp",
                         _ => "png",
                     };
-                    save_named(&directory, &filename, ext, &bytes)
+                    save_named(&directory, &filename, ext, &bytes).map(|path| (path, None))
                 }
             },
             move |result| {
                 bb.set_sensitive(true);
                 match result {
-                    Ok(path) => {
+                    Ok((path, draft)) => {
                         let mut st = ss.borrow_mut();
-                        st.dirty = false;
-                        let _ = std::fs::remove_file(&st.draft);
+                        let preserved = finish_save(&mut st, revision, draft);
                         drop(st);
                         notice.set_text("Saved");
-                        cb(path)
+                        cb(path);
+                        if let Err(error) = preserved {
+                            ui::error(&ww, &format!("File saved, but newer edits could not be saved as a draft: {error}"));
+                        }
                     }
                     Err(e) => ui::error(&ww, &e),
                 }
@@ -2898,11 +2937,9 @@ mod tests {
         assert_eq!(std::fs::metadata(&draft).unwrap().mode() & 0o777, 0o600);
     }
 
-    #[test]
-    fn draft_backed_undo_restores_reordered_document() {
-        let directory = tempfile::tempdir().unwrap();
+    fn test_state(directory: &Path) -> State {
         let image = RgbaImage::from_pixel(4, 3, image::Rgba([10, 20, 30, 255]));
-        let mut state = State {
+        State {
             doc: Document::new(image),
             undo: vec![],
             redo: vec![],
@@ -2928,10 +2965,17 @@ mod tests {
             layer_clipboard: None,
             space_down: false,
             dirty: false,
+            revision: 0,
             source: None,
-            directory: directory.path().into(),
-            draft: directory.path().join("draft.json"),
-        };
+            directory: directory.into(),
+            draft: directory.join("draft.json"),
+        }
+    }
+
+    #[test]
+    fn draft_backed_undo_restores_reordered_document() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut state = test_state(directory.path());
         checkpoint(&mut state);
         state.doc.duplicate(0);
         let top = state.doc.duplicate(0).unwrap();
@@ -2982,6 +3026,109 @@ mod tests {
             current,
             Ok(RgbaImage::new(1, 1))
         ));
+    }
+
+    #[test]
+    fn delayed_save_preserves_newer_edits_even_after_editor_close() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut state = test_state(directory.path());
+        changed(&mut state);
+        let exported_revision = state.revision;
+        checkpoint(&mut state);
+        state.doc.width = 7;
+        state.doc.background = Some(Color(0.2, 0.4, 0.7, 1.));
+        state.doc.duplicate(0);
+        changed(&mut state);
+        let expected_draft = std::fs::read(&state.draft).unwrap();
+        state.closed = true;
+
+        finish_save(&mut state, exported_revision, None).unwrap();
+
+        assert!(state.dirty);
+        assert_eq!(std::fs::read(&state.draft).unwrap(), expected_draft);
+        let restored: Document = serde_json::from_slice(&expected_draft).unwrap();
+        assert_eq!((restored.width, restored.height), (7, 3));
+        assert_eq!(restored.background, Some(Color(0.2, 0.4, 0.7, 1.)));
+        assert_eq!(restored.layers.len(), 2);
+        assert_eq!(
+            render(&restored).unwrap().get_pixel(0, 0).0,
+            [10, 20, 30, 255]
+        );
+    }
+
+    #[test]
+    fn source_overwrite_rekeys_newer_and_subsequent_edits_using_decoded_pixels() {
+        let directory = tempfile::tempdir().unwrap();
+        for extension in ["png", "jpg"] {
+            let source = directory.path().join(format!("source.{extension}"));
+            let mut state = test_state(directory.path());
+            state.doc = Document::new(RgbaImage::from_fn(4, 3, |x, y| {
+                image::Rgba([(x * 61 + y * 13) as u8, (y * 89) as u8, (x * 37) as u8, 255])
+            }));
+            changed(&mut state);
+            let exported_revision = state.revision;
+            let exported = state.doc.clone();
+            // The live state can advance while this snapshot is being encoded.
+            state.doc.width = 9;
+            changed(&mut state);
+            let old_draft = state.draft.clone();
+            let published_key =
+                overwrite_source(&exported, &source, ExportQuality::Preserve).unwrap();
+            let reopened = image::open(&source).unwrap().to_rgba8();
+            assert_eq!(published_key, draft_path(Some(&source), &reopened));
+            if extension == "jpg" {
+                assert_ne!(
+                    reopened,
+                    render(&exported).unwrap(),
+                    "JPEG must exercise a lossy key"
+                );
+            }
+            // Keep draft writes in this disposable profile, using the real key.
+            let new_draft = directory.path().join(published_key.file_name().unwrap());
+            finish_save(&mut state, exported_revision, Some(new_draft.clone())).unwrap();
+            assert!(!old_draft.exists());
+            assert!(state.dirty);
+            let restored: Document =
+                serde_json::from_slice(&std::fs::read(&new_draft).unwrap()).unwrap();
+            assert_eq!((restored.width, restored.height), (9, 3));
+
+            let current = state.revision;
+            let current_key =
+                overwrite_source(&state.doc, &source, ExportQuality::Preserve).unwrap();
+            let current_draft = directory.path().join(current_key.file_name().unwrap());
+            finish_save(&mut state, current, Some(current_draft.clone())).unwrap();
+            assert!(!state.dirty);
+            assert!(!new_draft.exists());
+            assert!(!current_draft.exists());
+            state.doc.height = 5;
+            changed(&mut state);
+            assert_eq!(state.draft, current_draft);
+            let restored: Document =
+                serde_json::from_slice(&std::fs::read(&current_draft).unwrap()).unwrap();
+            assert_eq!((restored.width, restored.height), (9, 5));
+        }
+    }
+
+    #[test]
+    fn failed_draft_rekey_keeps_prior_bytes_and_dirty_state_for_retry() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut state = test_state(directory.path());
+        let exported_revision = state.revision;
+        state.doc.width = 11;
+        changed(&mut state);
+        let old_draft = state.draft.clone();
+        let expected = std::fs::read(&old_draft).unwrap();
+        let blocker = directory.path().join("not-a-directory");
+        std::fs::write(&blocker, b"block draft publication").unwrap();
+        let destination = blocker.join("new-source.json");
+
+        assert!(finish_save(&mut state, exported_revision, Some(destination.clone())).is_err());
+        assert!(state.dirty);
+        assert_eq!(state.draft, destination);
+        assert_eq!(std::fs::read(old_draft).unwrap(), expected);
+        std::fs::remove_file(blocker).unwrap();
+        write_draft(&state).unwrap();
+        assert_eq!(std::fs::read(destination).unwrap(), expected);
     }
 
     #[test]

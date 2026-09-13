@@ -324,6 +324,23 @@ def main():
             wait(lambda: not list((output.parent / 'editor-drafts').glob('*.json')))
             assert cmd('identify', '-format', '%wx%h', source) == '960x540'
             assert not list(output.glob('*.png')), 'Save must not create an unrelated export'
+            saved_source = source.read_bytes()
+            # Save replaces the pixels used by draft identity. Further edits
+            # must reopen as editable layers, not disappear under the old key.
+            area = canvas_bounds()
+            click('Shapes', editor)
+            click('Rectangle', editor)
+            drag(area.x + 220, area.y + 130, 95, 65)
+            wait(lambda: find('3 layers', 'label', editor))
+            wait(lambda: list((output.parent / 'editor-drafts').glob('*.json')))
+            window = cmd('xdotool', 'search', '--onlyvisible', '--name', editor).splitlines()[-1]
+            cmd('xdotool', 'windowactivate', '--sync', window, 'key', 'alt+F4')
+            wait(lambda: not find(editor, 'frame'))
+            subprocess.run([str(binary), '--open', str(source)], check=True, timeout=8)
+            wait(lambda: find('Unsaved editing draft restored — export, save, or keep editing.', frame=editor))
+            assert find('3 layers', 'label', editor)
+            assert source.read_bytes() == saved_source
+            capture(args.artifacts, 'editor-post-save-draft-restored', editor)
 
         transparent = Path(temporary) / 'transparent.png'
         cmd('convert', '-size', '240x160', 'xc:none', transparent)
@@ -350,7 +367,7 @@ def main():
             assert cmd('identify', '-format', '%[opaque]', exported) == 'false'
 
     print('PASS editor: space-pan, shape flyout/drawing, inline rename, layer copy/paste, wand/soft brush controls, compression/maximum-size controls, exact undo, reverse crop, PNG/JPEG export')
-    print('PASS source Save: unchanged source before Save, automatic draft reopen, source overwrite, draft removal')
+    print('PASS source Save: unchanged source before Save, automatic draft reopen, source overwrite, draft removal, further edits reopen under the new source identity')
 
 
 if __name__ == '__main__':
