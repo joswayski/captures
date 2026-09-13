@@ -500,6 +500,10 @@ pub fn icon(name: &str, size: i32) -> gtk::DrawingArea {
         }
         if let Some((_, _, pixbuf)) = cache.as_ref() {
             let _ = cr.save();
+            cr.translate(
+                f64::from(area.width() - size) / 2.,
+                f64::from(area.height() - size) / 2.,
+            );
             cr.scale(1. / scale as f64, 1. / scale as f64);
             cr.set_source_pixbuf(pixbuf, 0., 0.);
             let _ = cr.paint();
@@ -524,6 +528,7 @@ pub fn icon_button(label: &str, name: &str) -> gtk::Button {
 pub fn icon_text_button(label: &str, name: &str) -> gtk::Button {
     let button = gtk::Button::new();
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    content.add_css_class("icon-text");
     content.set_halign(gtk::Align::Center);
     content.set_valign(gtk::Align::Center);
     content.append(&icon(name, 14));

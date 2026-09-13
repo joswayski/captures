@@ -3147,10 +3147,6 @@ fn install_editor_styles(window: &gtk::Window) {
             min-height: {field_height};
             padding: 0 {save_horizontal};
         }}
-        .recording-editor-root .recording-make-copy {{
-            min-height: {field_height};
-            padding-bottom: {link_vertical};
-        }}
     "#,
         footer_vertical = ui::token("s-5"),
         footer_horizontal = ui::token("s-8"),

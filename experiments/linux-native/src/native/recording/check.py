@@ -538,7 +538,7 @@ def main():
             assert footer_format.width <= 84, footer_format
             assert footer_save.width <= 90 and footer_save.height <= 44, footer_save
             copy_toggle = screen_bounds(find('Save as new file', frame='Edit recording — Captures'), 'Edit recording — Captures')
-            assert abs(copy_toggle.y + copy_toggle.height / 2 - footer_format.y - footer_format.height / 2) <= 2, (copy_toggle, footer_format)
+            assert abs(copy_toggle.y + copy_toggle.height - footer_save.y - footer_save.height) <= 1, (copy_toggle, footer_save)
             assert abs(footer_save.y + footer_save.height - footer_format.y - footer_format.height) <= 1, (footer_save, footer_format)
             assert filename_heading.x - frame_bounds.x >= 32, (filename_heading, frame_bounds)
             assert not find("Change…", "push button", "Edit recording — Captures")

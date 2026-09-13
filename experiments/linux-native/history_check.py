@@ -12,7 +12,7 @@ import time
 import pyatspi
 
 from process_metrics import stop
-from native_check import capture, click, cmd, find, screen_bounds, wait, xwindow_geometry
+from native_check import assert_button_ink_alignment, capture, click, cmd, find, screen_bounds, wait, xwindow_geometry
 
 
 def checked(name):
@@ -75,10 +75,6 @@ def main():
                                      'label', 'Captures — History'), 'Captures — History')
             assert abs(name.y + name.height / 2 - size.y - size.height / 2) <= 1, (name, size)
             assert name.x + name.width <= size.x, (name, size)
-            for button_name in ('Edit history-first.png', 'Restore history-first.png', 'Delete all captures'):
-                content = list(find(button_name, 'push button', 'Captures — History'))[0]
-                icon, text = [screen_bounds(child, 'Captures — History') for child in content]
-                assert abs(icon.y + icon.height / 2 - text.y - text.height / 2) <= 1, (button_name, icon, text)
             edit = screen_bounds(
                 find('Edit history-first.png', frame='Captures — History'),
                 'Captures — History',
@@ -90,6 +86,9 @@ def main():
             cmd('xdotool', 'mousemove', 0, 0)
             time.sleep(.3)
             cmd('import', '-window', 'root', profile/'idle.png')
+            for button_name in ('Edit history-first.png', 'Restore history-first.png', 'Delete all captures'):
+                assert_button_ink_alignment(find(button_name, 'push button', 'Captures — History'),
+                                            'Captures — History', profile/'idle.png')
             pixel = cmd('convert', profile/'idle.png', '-format', f'%[hex:p{{{edit.x+10},{edit.y+10}}}]', 'info:')
             assert pixel[:6].lower() == 'ffca28', ('Edit lost the primary accent', pixel)
             assert trash.width == trash.height == 32, trash

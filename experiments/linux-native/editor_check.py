@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 import tempfile
@@ -23,7 +24,7 @@ def main():
     os.environ.update(json.loads((args.lab / 'environment.json').read_text()))
 
     # AT-SPI must be imported after the isolated session variables are active.
-    from native_check import capture, choose, click, cmd, drag, find, run, screen_bounds, wait, walk, xwindow_geometry
+    from native_check import assert_button_ink_alignment, capture, choose, click, cmd, drag, find, run, screen_bounds, wait, walk, xwindow_geometry
 
     root = Path(__file__).parent.resolve()
     binary = root / 'target/release/captures-linux-native'
@@ -51,6 +52,11 @@ def main():
         trims = [node for node in walk(find(editor, 'frame'))
                  if node.name == 'Trim edges' and node.getRoleName() == 'push button']
         assert len(trims) == 1, 'The editor must have only one Trim action'
+        assert find('1 layer', 'label', editor)
+        assert not find('Layers', 'label', editor)
+        for dimension in ('Canvas width', 'Canvas height'):
+            field = find(dimension, 'spin button', editor)
+            assert field and not any(child.getRoleName() == 'push button' for child in walk(field)), dimension
         copy_switch = screen_bounds(find('Save as new file', frame=editor), editor)
         assert copy_switch.width <= 30 and copy_switch.height <= 18, copy_switch
         # Scoped editor CSS must not override the shared primary hover treatment.
@@ -62,10 +68,12 @@ def main():
         assert bounds.height == copy_bounds.height == 36, (bounds, copy_bounds)
         assert abs(bounds.y - copy_bounds.y) <= 1, (bounds, copy_bounds)
         assert abs(bounds.y + bounds.height - filename_bounds.y - filename_bounds.height) <= 1
-        assert abs(copy_switch.y + copy_switch.height / 2 - bounds.y - bounds.height / 2) <= 1, (copy_switch, bounds)
+        assert abs(copy_switch.y + copy_switch.height - bounds.y - bounds.height) <= 1, (copy_switch, bounds)
+        client_x, client_y, _, _ = xwindow_geometry(window)
+        assert_button_ink_alignment(save, editor, args.artifacts / 'after-editor-default-1280x800.png',
+                                    (client_x, client_y))
         cmd('xdotool', 'mousemove', bounds.x + bounds.width // 2, bounds.y + bounds.height // 2)
         capture(args.artifacts, 'editor-save-hover', editor)
-        client_x, client_y, _, _ = xwindow_geometry(window)
         sample = f'%[pixel:p{{{bounds.x - client_x + 10},{bounds.y - client_y + 10}}}]'
         idle, hovered = [cmd('convert', args.artifacts / f'after-{state}.png', '-format', sample, 'info:')
                          for state in ['editor-default-1280x800', 'editor-save-hover']]
@@ -85,6 +93,7 @@ def main():
         area = canvas_bounds()
         click('Arrow (A)', editor)
         drag(area.x + 90, area.y + 90, 220, 130)
+        wait(lambda: find('2 layers', 'label', editor))
         arrow = wait(lambda: next((layer
             for draft in (output.parent / 'editor-drafts').glob('*.json')
             for layer in json.loads(draft.read_text())['layers']
@@ -230,7 +239,6 @@ def main():
             wait(lambda: list((output.parent / 'editor-drafts').glob('*.json')))
             window = cmd('xdotool', 'search', '--onlyvisible', '--name', editor).splitlines()[-1]
             cmd('xdotool', 'windowactivate', '--sync', window, 'key', 'alt+F4')
-            import subprocess
             subprocess.run([str(binary), '--open', str(source)], check=True, timeout=8)
             wait(lambda: find('Unsaved editing draft restored — export, save, or keep editing.', frame=editor))
             assert source.read_bytes() == original

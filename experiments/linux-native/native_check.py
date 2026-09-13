@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import Counter
 
 from process_metrics import stop
 
@@ -47,6 +48,31 @@ def walk(node):
             yield from walk(child)
     except Exception:
         pass
+
+
+def assert_button_ink_alignment(button, frame, screenshot, origin=(0, 0)):
+    """Compare visible icon/letter centers, not font line boxes with descender space.
+
+    Use labels without descenders (Save, Edit, Restore, Delete all); a descender
+    legitimately extends below the optical center and changes its ink bounds.
+    """
+    centers = []
+    for node in walk(button):
+        if node.getRoleName() not in ('filler', 'label'):
+            continue
+        rect = screen_bounds(node, frame)
+        raw = subprocess.check_output([
+            'convert', str(screenshot),
+            '-crop', f'{rect.width}x{rect.height}+{rect.x-origin[0]}+{rect.y-origin[1]}',
+            '+repage', '-depth', '8', 'rgb:-',
+        ])
+        pixels = list(zip(raw[::3], raw[1::3], raw[2::3]))
+        background = Counter(pixels).most_common(1)[0][0]
+        rows = [index // rect.width for index, pixel in enumerate(pixels)
+                if max(abs(a-b) for a, b in zip(pixel, background)) > 40]
+        assert rows, ('Missing button ink', node.name)
+        centers.append(rect.y + (min(rows) + max(rows)) / 2)
+    assert len(centers) == 2 and abs(centers[0] - centers[1]) <= .5, (button.name, centers)
 
 
 def find(name=None, role=None, frame=None):

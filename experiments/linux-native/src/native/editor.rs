@@ -436,11 +436,23 @@ fn open_impl(
     let canvas_width = gtk::SpinButton::with_range(1., 16_384., 1.);
     canvas_width.set_value(state.borrow().doc.width as f64);
     canvas_width.set_tooltip_text(Some("Canvas width"));
+    ui::named(&canvas_width, "Canvas width");
     canvas_width.set_size_request(72, 28);
     let canvas_height = gtk::SpinButton::with_range(1., 16_384., 1.);
     canvas_height.set_value(state.borrow().doc.height as f64);
     canvas_height.set_tooltip_text(Some("Canvas height"));
+    ui::named(&canvas_height, "Canvas height");
     canvas_height.set_size_request(72, 28);
+    for dimension in [&canvas_width, &canvas_height] {
+        dimension.set_width_chars(5);
+        let mut child = dimension.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            if widget.is::<gtk::Button>() {
+                widget.set_visible(false);
+            }
+        }
+    }
     canvas_toolbar.pack_start(&ui::label("W", "canvas-dimensions"), false, false, 2);
     canvas_toolbar.pack_start(&canvas_width, false, false, 0);
     canvas_toolbar.pack_start(&ui::label("×  H", "canvas-dimensions"), false, false, 3);
@@ -459,6 +471,8 @@ fn open_impl(
         .add_class("canvas-background");
     ui::named(&background_button, "Background color");
     let background_button_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    background_button_content.add_css_class("icon-text");
+    background_button_content.set_valign(gtk::Align::Center);
     let background_swatch = gtk::DrawingArea::new();
     background_swatch.set_size_request(14, 14);
     background_swatch.set_valign(gtk::Align::Center);
@@ -705,8 +719,7 @@ fn open_impl(
     sidebar_shell.add(&sidebar);
     let layer_header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     layer_header.style_context().add_class("layers-heading");
-    layer_header.pack_start(&ui::label("Layers", "title"), false, false, 0);
-    let layer_count = ui::label(&state.borrow().doc.layers.len().to_string(), "layer-count");
+    let layer_count = ui::label("", "title");
     layer_count.set_halign(gtk::Align::Start);
     layer_header.pack_start(&layer_count, false, false, 0);
     let layer_header_spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -1318,7 +1331,6 @@ fn install_editor_css() {
 .editor-window .canvas-toolbar spinbutton { min-height: 28px; padding: 0; border: 1px solid transparent; border-radius: 5px; background: transparent; font-family: monospace; font-size: 11px; }
 .editor-window .canvas-toolbar spinbutton:focus { border-color: @captures_accent; background: @captures_surface; }
 .editor-window .canvas-toolbar spinbutton entry { min-height: 26px; padding: 0 3px; border: 0; background: transparent; }
-.editor-window .canvas-toolbar spinbutton button { min-width: 14px; min-height: 13px; padding: 0; }
 .editor-window .canvas-toolbar .toolbar-split { min-height: 16px; margin: 6px 3px; }
 .editor-window .canvas-toolbar .canvas-tool { min-width: 0; min-height: 26px; padding: 0 8px; font-size: 12px; }
 .editor-window .canvas-toolbar .canvas-background { margin-left: 2px; }
@@ -1343,7 +1355,6 @@ fn install_editor_css() {
 .editor-window .editor-sidebar { min-width: 320px; border-left: 1px solid @captures_border; background-color: @captures_raised; }
 .editor-window .layers-heading { min-height: 48px; padding: 0 16px 0 20px; border-bottom: 1px solid @captures_border; }
 .editor-window .layers-heading .title { font-size: 14px; font-weight: 600; }
-.editor-window .layers-heading .layer-count { min-width: 19px; min-height: 19px; padding: 0 5px; border-radius: 10px; background: @captures_sunken; color: @captures_text_muted; font-family: monospace; font-size: 10px; }
 .editor-window .layers-heading button { min-width: 30px; min-height: 30px; padding: 0; border: 0; border-radius: 7px; background: transparent; }
 .editor-window .properties-scroll { border-top: 1px solid @captures_border; }
 .editor-window .properties-title { margin: 16px 20px 0; font-size: 14px; font-weight: 600; }
@@ -1378,7 +1389,7 @@ fn install_editor_css() {
 .editor-window .filename-row entry { min-height: 34px; padding: 0 10px; border: 0; background: transparent; }
 .editor-window .filename-row combobox button { min-height: 34px; border: 0; border-left: 1px solid @captures_border; border-radius: 0; background: transparent; }
 .editor-window .secondary-action { min-width: 84px; min-height: 36px; padding: 0 12px; border: 1px solid @captures_border; border-radius: 7px; background: @captures_surface; }
-.editor-window .make-copy { min-height: 36px; font-size: 11px; color: @captures_text_muted; }
+.editor-window .make-copy { font-size: 11px; color: @captures_text_muted; }
 .editor-window .make-copy switch { min-width: 26px; min-height: 14px; }
 .editor-window .make-copy switch slider { min-width: 10px; min-height: 10px; margin: 2px 1px 2px 2px; }
 .editor-window .make-copy switch:checked slider { margin-left: 1px; margin-right: 2px; }
@@ -1931,7 +1942,11 @@ fn setup_sidebar(
         clear(&ls);
         clear(&ps);
         let state = s.borrow();
-        count.set_text(&state.doc.layers.len().to_string());
+        let total = state.doc.layers.len();
+        count.set_text(&format!(
+            "{total} {}",
+            if total == 1 { "layer" } else { "layers" }
+        ));
         let active_name = match state.tool {
             Tool::Select => "Select & move (V)",
             Tool::Crop => "Crop (C)",
