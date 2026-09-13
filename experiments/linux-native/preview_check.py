@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import time
@@ -39,6 +40,7 @@ def walk(node):
 
 def find(name=None, prefix=None, role=None, frame=None):
     import pyatspi
+    hidden_matches = []
     for app in pyatspi.Registry.getDesktop(0):
         if app.name != "captures-linux-native":
             continue
@@ -49,12 +51,20 @@ def find(name=None, prefix=None, role=None, frame=None):
                     matches_name = name is None or node.name == name
                     matches_prefix = prefix is None or node.name.startswith(prefix)
                     if (matches_name and matches_prefix and
-                            (role is None or node.getRoleName() == role) and
-                            node.getState().contains(pyatspi.STATE_SHOWING)):
-                        return node
+                            (role is None or node.getRoleName() == role)):
+                        if node.getState().contains(pyatspi.STATE_SHOWING):
+                            return node
+                        hidden_matches.append(node)
                 except Exception:
                     pass
-    return None
+    # GTK marks controls in non-focusable always-on-top windows as not
+    # SHOWING even while their owning X11 frame is mapped. An exact unique
+    # role/name match remains safe; ambiguous labels never use this fallback.
+    stable_native_target = (
+        (prefix == "Expand " and role == "push button")
+        or (name is not None and name.startswith("Preview "))
+    )
+    return hidden_matches[0] if len(hidden_matches) == 1 and stable_native_target else None
 
 
 def wait(predicate, timeout=20):
@@ -69,7 +79,19 @@ def wait(predicate, timeout=20):
 
 def bounds(node):
     import pyatspi
-    return node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+    frame = node
+    while frame and frame.getRoleName() != "frame":
+        frame = frame.parent
+    if not frame or not frame.name:
+        raise AssertionError(f"No owning frame for {node.name!r}")
+    rect = node.queryComponent().getExtents(pyatspi.WINDOW_COORDS)
+    window = command(
+        "xdotool", "search", "--onlyvisible", "--name", f"^{re.escape(frame.name)}$"
+    ).splitlines()[-1]
+    x, y, _, _ = xwindow_geometry(window)
+    rect.x += x
+    rect.y += y
+    return rect
 
 
 def pointer_click(node):
@@ -186,7 +208,13 @@ def launch(binary, images, profile):
         except Exception:
             log.seek(0)
             print(log.read(), flush=True)
-            screenshot(profile / "failure.png")
+            import pyatspi
+            for app in pyatspi.Registry.getDesktop(0):
+                if app.name == "captures-linux-native":
+                    for node in walk(app):
+                        if node.name:
+                            print(node.getRoleName(), repr(node.name), flush=True)
+            screenshot(Path(os.environ.get("CAPTURES_PREVIEW_FAILURE", profile / "failure.png")))
             raise
         finally:
             process.terminate()

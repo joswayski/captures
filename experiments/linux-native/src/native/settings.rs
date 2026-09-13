@@ -9,6 +9,7 @@ use std::{
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub onboarding_complete: bool,
     pub appearance: String,
     pub theme: String,
     pub custom_accent: String,
@@ -89,6 +90,7 @@ impl Default for RecordingSettings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            onboarding_complete: false,
             appearance: "system".into(),
             theme: "mustard".into(),
             custom_accent: "#32d3ff".into(),

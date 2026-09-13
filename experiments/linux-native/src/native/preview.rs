@@ -911,13 +911,8 @@ impl Preview {
                     widget.show_all();
                 }
                 meta.hide();
-                if let Some(card) = this
-                    .0
-                    .state
-                    .borrow_mut()
-                    .cards
-                    .iter_mut()
-                    .find(|card| card.id == id)
+                if let Ok(mut state) = this.0.state.try_borrow_mut()
+                    && let Some(card) = state.cards.iter_mut().find(|card| card.id == id)
                 {
                     card.hovered = true;
                 }
@@ -937,13 +932,8 @@ impl Preview {
                     widget.show_all();
                 }
                 meta.hide();
-                if let Some(card) = this
-                    .0
-                    .state
-                    .borrow_mut()
-                    .cards
-                    .iter_mut()
-                    .find(|card| card.id == id)
+                if let Ok(mut state) = this.0.state.try_borrow_mut()
+                    && let Some(card) = state.cards.iter_mut().find(|card| card.id == id)
                 {
                     card.hovered = true;
                 }
@@ -964,13 +954,8 @@ impl Preview {
                     widget.set_no_show_all(true);
                 }
                 meta.show();
-                if let Some(card) = this
-                    .0
-                    .state
-                    .borrow_mut()
-                    .cards
-                    .iter_mut()
-                    .find(|card| card.id == id)
+                if let Ok(mut state) = this.0.state.try_borrow_mut()
+                    && let Some(card) = state.cards.iter_mut().find(|card| card.id == id)
                 {
                     card.hovered = false;
                 }
@@ -1011,7 +996,12 @@ impl Preview {
     fn update_card_hover(&self, root_x: f64, root_y: f64) {
         let (x, y) = (root_x, root_y);
         let mut changed = false;
-        let mut state = self.0.state.borrow_mut();
+        // Showing or hiding card chrome emits nested enter/leave signals on
+        // GTK4/X11. The outer pass already owns the authoritative pointer
+        // state, so a nested pass must wait for the next motion/timer tick.
+        let Ok(mut state) = self.0.state.try_borrow_mut() else {
+            return;
+        };
         let scroll_start = state.scroll_start;
         let expanded = state.expanded && state.expansion > 0.94;
         let slots: Vec<(u64, f64)> = state
@@ -1372,9 +1362,16 @@ impl Preview {
                 }
             ),
         );
-        self.0
-            .fixed
-            .move_(&self.0.pile_hit, CARD_X, Self::card_y(&state, 0).round());
+        let pile_y = Self::card_y(&state, 0).round();
+        if !state.expanded && !state.cards.is_empty() {
+            // Cards are appended after the hit target. Keep this transparent
+            // real button above them so collapsed-stack pointer hover/click
+            // is not stolen by the visual card shells underneath.
+            self.0.fixed.remove(&self.0.pile_hit);
+            self.0.fixed.put(&self.0.pile_hit, CARD_X, pile_y);
+        } else {
+            self.0.fixed.move_(&self.0.pile_hit, CARD_X, pile_y);
+        }
         self.0.toolbar.set_visible(controls_visible);
         self.0.toolbar.set_direction(if state.right {
             gtk::TextDirection::Rtl

@@ -13,6 +13,7 @@ native = ["dep:gtk", "dep:global-hotkey", "dep:ksni", "dep:png", "dep:quantette"
 
 [dependencies]
 captures-capture = { path = "../../crates/captures-capture" }
+captures-feedback = { path = "../../crates/captures-feedback" }
 captures-recording = { path = "../../crates/captures-recording" }
 captures-recording-xcap = { path = "../../crates/captures-recording-xcap" }
 captures-media = { path = "../../crates/captures-media" }

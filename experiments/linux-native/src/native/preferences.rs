@@ -5,7 +5,7 @@
 use crate::compat::prelude::*;
 use crate::{settings::Settings, ui};
 use captures_recording::MaxResolution;
-use gtk::{gdk, glib, prelude::*};
+use gtk::{gdk, gio, glib, prelude::*};
 use std::{
     cell::{Cell, RefCell},
     path::PathBuf,
@@ -104,6 +104,14 @@ fn spacing(token: &str, fallback: i32) -> i32 {
         .trim_end_matches("px")
         .parse::<i32>()
         .unwrap_or(fallback)
+}
+
+fn announce_checked(button: &gtk::ToggleButton, checked: bool) {
+    button.update_state(&[gtk::accessible::State::Checked(if checked {
+        gtk::AccessibleTristate::True
+    } else {
+        gtk::AccessibleTristate::False
+    })]);
 }
 
 fn card(title: &str, description: &str) -> gtk::Box {
@@ -231,11 +239,13 @@ fn switch_row(
 }
 
 fn combo(
+    name: &str,
     options: &[(&str, &str)],
     active: &str,
     changed: impl Fn(String) + 'static,
 ) -> gtk::ComboBoxText {
     let combo = gtk::ComboBoxText::new();
+    ui::named(&combo, name);
     for (id, label) in options {
         combo.append(Some(id), label);
     }
@@ -588,6 +598,7 @@ pub fn open(
         0,
     );
     let corners = combo(
+        "Mini preview position",
         &[
             ("0", "Bottom right"),
             ("1", "Bottom left"),
@@ -664,6 +675,7 @@ pub fn open(
         "One look across every Captures window. Capture overlays stay dark so they read on any desktop.",
     );
     let mode = combo(
+        "Interface theme",
         &[("system", "System"), ("light", "Light"), ("dark", "Dark")],
         &initial.appearance,
         staged(&draft, &committed, &apply, &status, |s, v| s.appearance = v),
@@ -737,6 +749,7 @@ pub fn open(
                 if other != clicked {
                     other.set_active(selected);
                 }
+                announce_checked(other, selected);
                 check.set_opacity(if selected { 1.0 } else { 0.0 });
             }
             for row in custom_rows.borrow().iter() {
@@ -817,6 +830,7 @@ pub fn open(
         0,
     );
     let shot_format = combo(
+        "Screenshot format",
         &[("png", "PNG"), ("jpeg", "JPEG"), ("webp", "WebP")],
         &initial.screenshot_format,
         staged(&draft, &committed, &apply, &status, |s, v| {
@@ -871,6 +885,7 @@ pub fn open(
         ), false, false, 0,
     );
     let video_format = combo(
+        "Recording format",
         &[("mp4", "MP4"), ("gif", "GIF")],
         &initial.recording.video_format,
         staged(&draft, &committed, &apply, &status, |s, v| {
@@ -888,6 +903,7 @@ pub fn open(
         0,
     );
     let fps = combo(
+        "Recording frames per second",
         &[("15", "15 fps"), ("30", "30 fps"), ("60", "60 fps")],
         &initial.recording.video_fps.to_string(),
         staged(&draft, &committed, &apply, &status, |s, v: String| {
@@ -905,6 +921,7 @@ pub fn open(
         0,
     );
     let resolution = combo(
+        "Recording maximum resolution",
         &[
             ("original", "Original"),
             ("p1080", "1080p"),
@@ -1204,15 +1221,27 @@ pub fn open(
     keys.pack_start(&key_card, false, false, 0);
 
     let (about_scroll, about) = page("About", "About this build.");
-    about.pack_start(
-        &card(
-            "About",
-            "Captures is in active development. Telling us what breaks is the fastest way to fix it.",
+    let about_card = card(
+        "About",
+        "Captures is in active development. Telling us what breaks is the fastest way to fix it.",
+    );
+    let feedback = ui::icon_text_button("Send feedback", "edit");
+    feedback.connect_clicked(|_| {
+        if let Some(application) = gio::Application::default() {
+            application.activate_action("feedback", None);
+        }
+    });
+    about_card.pack_start(
+        &row(
+            "Feedback",
+            "Send a bug report or idea. Nothing is sent until you choose Send.",
+            &feedback,
         ),
         false,
         false,
         0,
     );
+    about.pack_start(&about_card, false, false, 0);
 
     let targets = [
         ("appearance", appearance_scroll.clone()),
@@ -1249,6 +1278,7 @@ pub fn open(
                 if other != clicked {
                     other.set_active(false);
                 }
+                announce_checked(other, other == clicked);
             }
             adjustment.set_value(target.allocation().y() as f64);
         });

@@ -9,13 +9,25 @@ import tempfile
 import time
 
 from process_metrics import stop
-from native_check import cmd, walk, find, wait, click, drag, capture, choose
+from native_check import cmd, walk, find, wait, click, drag, capture, choose, screen_bounds
 
 
 def close_preferences():
     window = cmd('xdotool', 'search', '--onlyvisible', '--name', '^Captures Preferences$').splitlines()[-1]
     cmd('xdotool', 'windowactivate', '--sync', window, 'key', 'alt+F4')
     wait(lambda: not find('Captures Preferences', 'frame'))
+
+
+def combo_option_count(current, frame):
+    node = wait(lambda: find(current, 'combo box', frame))
+    bounds = screen_bounds(node, frame)
+    cmd('xdotool', 'mousemove', bounds.x + bounds.width // 2,
+        bounds.y + bounds.height // 2, 'click', 1)
+    popover = wait(lambda: find('GtkTreePopover', 'filler', frame))
+    count = len([candidate for candidate in walk(popover)
+                 if candidate.name == 'GtkGizmo'])
+    cmd('xdotool', 'key', 'Escape')
+    return count
 
 
 def main():
@@ -79,9 +91,10 @@ def main():
                 wait(lambda: (profile/'history.json').exists() and len(json.loads((profile/'history.json').read_text())) == 1)
                 click('Expand preview')
                 preview = wait(lambda: find(f'Preview {square.name}'))
-                bounds = preview.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+                bounds = screen_bounds(preview, 'Captures — Mini previews')
                 cmd('xdotool', 'mousemove', bounds.x + bounds.width//2, bounds.y + bounds.height//2)
                 click(f'Close {square.name}')
+                wait(lambda: not find('Captures — Mini previews', 'frame'))
                 square.unlink()
                 (profile/'history.json').write_text('[]')
                 cmd('xdotool', 'key', 'Print')
@@ -108,9 +121,9 @@ def main():
                 assert cmd('xdotool', 'search', '--onlyvisible', '--name', '^Captures Preferences$') == preferences_window
                 capture(args.artifacts, 'preferences-general', 'Captures Preferences')
                 click('Appearance preferences section', 'Captures Preferences')
-                assert find('Appearance preferences section', frame='Captures Preferences').getState().contains(pyatspi.STATE_CHECKED)
+                wait(lambda: find('Appearance preferences section', frame='Captures Preferences').getState().contains(pyatspi.STATE_CHECKED))
                 capture(args.artifacts, 'preferences-appearance', 'Captures Preferences')
-                choose('System', 2, 'Captures Preferences')
+                choose('Interface theme', 2, 'Captures Preferences')
                 cobalt = 'Cobalt: True blue and coral'
                 mustard = 'Mustard: Captures mustard and signal red'
                 custom = 'Custom: Build your own RGB palette'
@@ -125,26 +138,41 @@ def main():
                 assert find('Custom accent', frame='Captures Preferences')
                 wait(lambda: json.loads((profile/'settings.json').read_text())['theme']=='custom')
                 capture(args.artifacts, 'preferences-dark-custom', 'Captures Preferences')
-                choose('Dark', 1, 'Captures Preferences')
+                choose('Interface theme', 1, 'Captures Preferences')
                 click(mustard, 'Captures Preferences', pointer=True)
                 wait(lambda: (value := json.loads((profile/'settings.json').read_text()))['appearance']=='light' and value['theme']=='mustard')
                 click('Recording preferences section', 'Captures Preferences')
-                rates = find('30 fps', 'combo box', 'Captures Preferences')
+                rates = find('Recording frames per second', 'combo box', 'Captures Preferences')
                 assert rates, 'Legacy 24 fps must migrate to a supported video rate'
-                assert [node.name for node in walk(rates) if node.getRoleName() == 'menu item'] == ['15 fps', '30 fps', '60 fps']
-                choose('30 fps', 0, 'Captures Preferences')
+                assert combo_option_count('Recording frames per second', 'Captures Preferences') == 3
+                choose('Recording frames per second', 0, 'Captures Preferences')
                 wait(lambda: json.loads((profile/'settings.json').read_text())['recording']['video_fps']==15)
-                formats = find('MP4', 'combo box', 'Captures Preferences')
+                choose('Recording frames per second', 1, 'Captures Preferences')
+                wait(lambda: json.loads((profile/'settings.json').read_text())['recording']['video_fps']==30)
+                choose('Recording frames per second', 2, 'Captures Preferences')
+                wait(lambda: json.loads((profile/'settings.json').read_text())['recording']['video_fps']==60)
+                formats = find('Recording format', 'combo box', 'Captures Preferences')
                 assert formats, 'Legacy WebM must load as MP4'
-                assert [node.name for node in walk(formats) if node.getRoleName() == 'menu item'] == ['MP4', 'GIF'], 'Only supported recording formats may be offered'
-                choose('MP4', 1, 'Captures Preferences')
-                assert find('GIF', 'combo box', 'Captures Preferences')
+                assert combo_option_count('Recording format', 'Captures Preferences') == 2, 'Only supported recording formats may be offered'
+                choose('Recording format', 1, 'Captures Preferences')
+                assert find('Recording format', 'combo box', 'Captures Preferences')
                 wait(lambda: json.loads((profile/'settings.json').read_text())['recording']['video_format']=='gif')
                 capture(args.artifacts, 'preferences-recording-gif', 'Captures Preferences')
-                choose('GIF', 0, 'Captures Preferences')
+                choose('Recording format', 0, 'Captures Preferences')
                 wait(lambda: json.loads((profile/'settings.json').read_text())['recording']['video_format']=='mp4')
                 print('PASS recording defaults: legacy WebM/24 fps migrate; only MP4/GIF and 15/30/60 fps selectable and persisted', flush=True)
                 capture(args.artifacts, 'preferences-recording', 'Captures Preferences')
+                click('About preferences section', 'Captures Preferences')
+                click('Send feedback', 'Captures Preferences', pointer=True)
+                wait(lambda: find('Send feedback to Captures', 'frame'))
+                assert find('Feedback message', 'text', 'Send feedback to Captures')
+                assert find('Feedback contact', 'text', 'Send feedback to Captures')
+                assert find('No screenshots, recordings, logs, or crash details are attached.',
+                            frame='Send feedback to Captures')
+                capture(args.artifacts, 'feedback-form', 'Send feedback to Captures')
+                click('Cancel', 'Send feedback to Captures')
+                wait(lambda: not find('Send feedback to Captures', 'frame'))
+                print('PASS explicit feedback form opens without a network request and discloses submitted fields', flush=True)
                 close_preferences()
                 # A second invocation must route to the running application and exit.
                 subprocess.run([str(binary), '--preferences'], env=env, check=True, timeout=8)

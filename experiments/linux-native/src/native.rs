@@ -8,6 +8,8 @@ mod compat;
 mod desktop;
 #[path = "native/editor.rs"]
 mod editor;
+#[path = "native/feedback.rs"]
+mod feedback;
 #[path = "native/history.rs"]
 mod history;
 #[path = "native/preferences.rs"]

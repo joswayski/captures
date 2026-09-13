@@ -157,7 +157,7 @@ pub fn confirm(
     dialog.present();
 }
 
-fn notice(parent: &gtk::Window, title: &str, message: &str) -> (gtk::Window, gtk::Box) {
+pub fn notice(parent: &gtk::Window, title: &str, message: &str) -> (gtk::Window, gtk::Box) {
     let (dialog, content, actions) = panel(parent, title);
     let body = label(message, "notice-message");
     body.set_wrap(true);

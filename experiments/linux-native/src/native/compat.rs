@@ -151,8 +151,32 @@ impl WindowCompat for gtk::Window {
     }
     fn move_(&self, x: i32, y: i32) {
         schedule_x11(self, move |connection, xid| {
-            use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt};
-            connection.configure_window(xid, &ConfigureWindowAux::new().x(x).y(y))?;
+            use x11rb::{
+                connection::Connection,
+                protocol::xproto::{
+                    ClientMessageData, ClientMessageEvent, ConnectionExt, EventMask,
+                },
+            };
+            let atom = connection
+                .intern_atom(false, b"_NET_MOVERESIZE_WINDOW")?
+                .reply()?
+                .atom;
+            let screen = &connection.setup().roots[0];
+            // EWMH coordinates are root-relative. Configuring the GTK client
+            // XID directly after reparenting would instead add the WM frame's
+            // current position and can push centered windows off-screen.
+            let flags = 1 | (1 << 8) | (1 << 9) | (1 << 12);
+            connection.send_event(
+                false,
+                screen.root,
+                EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+                ClientMessageEvent::new(
+                    32,
+                    xid,
+                    atom,
+                    ClientMessageData::from([flags, x as u32, y as u32, 0, 0]),
+                ),
+            )?;
             Ok(())
         });
     }

@@ -2,7 +2,7 @@ use crate::compat::prelude::*;
 use crate::{
     capture,
     desktop::{self, Action, Desktop},
-    editor, history, preferences,
+    editor, feedback, history, preferences,
     preview::{Preview, PreviewCallbacks, PreviewMetadata},
     recording,
     settings::Settings,
@@ -142,6 +142,7 @@ impl App {
                 }
             }
             Some(path) if !path.starts_with('-') => app.open(path.into()),
+            _ if !app.settings.borrow().onboarding_complete => app.onboard(),
             _ => app.action(Action::Preferences),
         }
     }
@@ -238,6 +239,21 @@ impl App {
             system_dark: Cell::new(system_dark),
         });
         *weak_slot.borrow_mut() = Rc::downgrade(&app);
+        {
+            let endpoint = std::env::var("CAPTURES_FEEDBACK_URL")
+                .unwrap_or_else(|_| captures_feedback::DEFAULT_FEEDBACK_URL.into());
+            let client = captures_feedback::FeedbackClient::new(&endpoint)
+                .map(std::sync::Arc::new)
+                .map_err(std::sync::Arc::<str>::from);
+            let weak = Rc::downgrade(&app);
+            let action = gio::SimpleAction::new("feedback", None);
+            action.connect_activate(move |_, _| {
+                if let Some(app) = weak.upgrade() {
+                    feedback::open(&app.application, client.clone());
+                }
+            });
+            application.add_action(&action);
+        }
         #[cfg(target_os = "windows")]
         {
             let weak = Rc::downgrade(&app);
@@ -296,6 +312,8 @@ impl App {
             Ok(mut desktop) => {
                 if let Err(error) = desktop.replace_shortcuts(&settings.borrow()) {
                     app.status.set_text(&error);
+                } else if let Some(warning) = desktop.startup_warning() {
+                    app.status.set_text(warning);
                 }
                 *app.desktop.borrow_mut() = Some(desktop);
             }
@@ -330,6 +348,39 @@ impl App {
             glib::idle_add_local_once(move || app.recover());
         }
         app
+    }
+
+    fn onboard(self: &Rc<Self>) {
+        let (window, actions) = ui::notice(
+            &self.window,
+            "Welcome to Captures",
+            "Capture screenshots, GIFs, and video from the tray or global shortcuts. This native preview currently supports X11; Wayland capture and global shortcuts are not presented as available.",
+        );
+        window.set_title(Some("Welcome to Captures"));
+        let quit = ui::button("Not now");
+        let start = ui::button("Continue");
+        start.style_context().add_class("primary");
+        actions.append(&quit);
+        actions.append(&start);
+        quit.connect_clicked({
+            let window = window.clone();
+            move |_| window.close()
+        });
+        let app = self.clone();
+        let onboarding = window.clone();
+        start.connect_clicked(move |_| {
+            let mut settings = app.settings.borrow().clone();
+            settings.onboarding_complete = true;
+            match settings.save() {
+                Ok(()) => {
+                    *app.settings.borrow_mut() = settings;
+                    onboarding.close();
+                    app.action(Action::Preferences);
+                }
+                Err(error) => ui::error(&onboarding, &error),
+            }
+        });
+        window.present();
     }
 
     fn action(self: &Rc<Self>, action: Action) {

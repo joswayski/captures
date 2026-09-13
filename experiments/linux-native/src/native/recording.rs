@@ -168,18 +168,38 @@ pub fn start_with_actions(
     for child in [&stop, &pause, &restart, &screenshot] {
         actions_row.pack_start(child, false, false, 0);
     }
-    if has_microphone {
-        let microphone_level = gtk::DrawingArea::new();
-        microphone_level.set_size_request(34, 4);
-        microphone_level.set_tooltip_text(Some(
-            "Live microphone level is unavailable in this experiment",
-        ));
-        microphone_level
+    let microphone_level = has_microphone.then(|| {
+        let meter = gtk::DrawingArea::new();
+        meter.set_size_request(34, 4);
+        meter.set_tooltip_text(Some("Live microphone input level"));
+        meter
             .style_context()
             .add_class("recording-microphone-level");
-        ui::named(&microphone_level, "Live microphone level unavailable");
-        actions_row.pack_start(&microphone_level, false, false, 8);
-    }
+        ui::named(&meter, "Microphone level 0%");
+        let level = Rc::new(Cell::new(0.0_f32));
+        meter.connect_draw({
+            let level = level.clone();
+            move |area, context| {
+                let color = ui::color("accent");
+                context.set_source_rgba(
+                    f64::from(color.red()),
+                    f64::from(color.green()),
+                    f64::from(color.blue()),
+                    1.0,
+                );
+                context.rectangle(
+                    0.0,
+                    0.0,
+                    f64::from(area.allocated_width()) * f64::from(level.get()),
+                    f64::from(area.allocated_height()),
+                );
+                let _ = context.fill();
+                glib::Propagation::Proceed
+            }
+        });
+        actions_row.pack_start(&meter, false, false, 8);
+        (meter, level, Rc::new(Cell::new(0_u8)))
+    });
     for child in [&microphone, &discard, &hide] {
         actions_row.pack_start(child, false, false, 0);
     }
@@ -236,6 +256,29 @@ pub fn start_with_actions(
     }));
     set_controls(&pause, &stop, &discard, false);
     begin_segment(&window, &elapsed, &pause, &stop, &discard, &session);
+
+    if let Some((meter, level, last_percent)) = microphone_level {
+        let session = session.clone();
+        glib::timeout_add_local(Duration::from_millis(50), move || {
+            let state = session.borrow();
+            if state.closing {
+                return glib::ControlFlow::Break;
+            }
+            let peak = state
+                .active
+                .as_ref()
+                .map_or(0.0, XcapRecordingSegment::microphone_level)
+                .clamp(0.0, 1.0);
+            drop(state);
+            level.set(peak);
+            let percent = (peak * 100.0).round() as u8;
+            if last_percent.replace(percent) != percent {
+                ui::named(&meter, &format!("Microphone level {percent}%"));
+            }
+            meter.queue_draw();
+            glib::ControlFlow::Continue
+        });
+    }
 
     {
         let session = session.clone();

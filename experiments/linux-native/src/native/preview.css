@@ -1,5 +1,6 @@
 /* Preview-only provider. Source geometry mirrors mini-preview.css. */
 .preview-hit {
+  padding: 0;
   color: transparent;
   background: transparent;
   background-image: none;

@@ -21,7 +21,8 @@ pub enum Action {
 pub struct Desktop {
     manager: GlobalHotKeyManager,
     keys: Vec<(HotKey, Action)>,
-    _tray: ksni::blocking::Handle<CapturesTray>,
+    _tray: Option<ksni::blocking::Handle<CapturesTray>>,
+    startup_warning: Option<String>,
     tray_events: Receiver<Action>,
 }
 
@@ -95,15 +96,26 @@ impl Desktop {
         }
         let manager = GlobalHotKeyManager::new().map_err(|e| e.to_string())?;
         let (sender, tray_events) = mpsc::channel();
-        let tray = CapturesTray { events: sender }
-            .spawn()
-            .map_err(|error| error.to_string())?;
+        let (tray, startup_warning) = match (CapturesTray { events: sender }).spawn() {
+            Ok(tray) => (Some(tray), None),
+            Err(error) => (
+                None,
+                Some(format!(
+                    "Tray integration unavailable: {error}. Global shortcuts remain active."
+                )),
+            ),
+        };
         Ok(Self {
             manager,
             keys: vec![],
             _tray: tray,
+            startup_warning,
             tray_events,
         })
+    }
+
+    pub fn startup_warning(&self) -> Option<&str> {
+        self.startup_warning.as_deref()
     }
 
     pub fn replace_shortcuts(&mut self, settings: &Settings) -> Result<(), String> {
