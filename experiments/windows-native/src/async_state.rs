@@ -21,6 +21,30 @@ pub fn accepts_document_request(
     current_request == request && same_document(current_render_key, origin_document)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SaveCompletion {
+    Stale,
+    ExportedRevision,
+    NewerRevision,
+}
+
+pub fn classify_save_completion(
+    current_render_key: Option<(u64, u64)>,
+    current_request: u64,
+    exported_render_key: (u64, u64),
+    request: u64,
+) -> SaveCompletion {
+    if current_request != request
+        || current_render_key.is_none_or(|current| current.0 != exported_render_key.0)
+    {
+        SaveCompletion::Stale
+    } else if current_render_key == Some(exported_render_key) {
+        SaveCompletion::ExportedRevision
+    } else {
+        SaveCompletion::NewerRevision
+    }
+}
+
 #[derive(Default)]
 pub struct SaveTracker {
     active: HashMap<u64, SaveIdentity>,
@@ -149,9 +173,9 @@ pub fn cleanup_undelivered_staged_file(path: &std::path::Path, delivered: bool) 
 #[cfg(test)]
 mod tests {
     use super::{
-        LatestQueue, SaveTracker, accepts, accepts_document_request,
-        cleanup_undelivered_staged_file, destination_key, normalize_windows_destination,
-        same_document,
+        LatestQueue, SaveCompletion, SaveTracker, accepts, accepts_document_request,
+        classify_save_completion, cleanup_undelivered_staged_file, destination_key,
+        normalize_windows_destination, same_document,
     };
 
     #[test]
@@ -184,6 +208,28 @@ mod tests {
         assert!(!accepts_document_request(Some(key_b), 42, key_b.0, 41));
         assert!(!same_document(Some(key_b), key_a.0));
         assert!(!same_document(None, key_b.0));
+    }
+
+    #[test]
+    fn delayed_save_completion_distinguishes_the_exported_and_newer_revision() {
+        let document = crate::editor::Document::new(image::RgbaImage::new(13, 7));
+        let exported = document.render_key();
+        assert_eq!(
+            classify_save_completion(Some(exported), 9, exported, 9),
+            SaveCompletion::ExportedRevision
+        );
+        assert_eq!(
+            classify_save_completion(Some((exported.0, exported.1 + 1)), 9, exported, 9),
+            SaveCompletion::NewerRevision
+        );
+        assert_eq!(
+            classify_save_completion(Some((exported.0 + 1, exported.1)), 9, exported, 9),
+            SaveCompletion::Stale
+        );
+        assert_eq!(
+            classify_save_completion(Some(exported), 10, exported, 9),
+            SaveCompletion::Stale
+        );
     }
 
     #[test]

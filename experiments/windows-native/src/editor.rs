@@ -7,7 +7,7 @@ use std::sync::{
 
 const MAX_CANVAS_DIMENSION: u32 = 16_384;
 const MAX_CANVAS_PIXELS: u64 = 100_000_000;
-static NEXT_DOCUMENT_ID: AtomicU64 = AtomicU64::new(1);
+pub(crate) static NEXT_DOCUMENT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tool {
@@ -345,9 +345,9 @@ pub fn resize_from_corner(layer: &Layer, corner: usize, pointer: Point) -> Optio
 
 #[derive(Clone)]
 pub struct Document {
-    id: u64,
-    original: Arc<RgbaImage>,
-    source: Arc<RgbaImage>,
+    pub(crate) id: u64,
+    pub(crate) original: Arc<RgbaImage>,
+    pub(crate) source: Arc<RgbaImage>,
     pub source_present: bool,
     pub source_visible: bool,
     pub source_name: String,
@@ -356,14 +356,14 @@ pub struct Document {
     pub canvas_height: u32,
     pub background: Option<[u8; 4]>,
     pub layers: Vec<Layer>,
-    undo: Vec<Snapshot>,
-    redo: Vec<Snapshot>,
-    next_id: u64,
-    revision: u64,
+    pub(crate) undo: Vec<Snapshot>,
+    pub(crate) redo: Vec<Snapshot>,
+    pub(crate) next_id: u64,
+    pub(crate) revision: u64,
 }
 
 #[derive(Clone)]
-struct Snapshot {
+pub(crate) struct Snapshot {
     crop: Rect,
     original: Arc<RgbaImage>,
     source: Arc<RgbaImage>,

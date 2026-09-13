@@ -197,7 +197,7 @@ def main():
         (root / 'feedback_check.py', '--lab', args.lab, '--artifacts', args.artifacts),
         (root / 'preview_check.py', '--lab', args.lab, '--artifacts', args.artifacts,
          '--binary', binary),
-        (root / 'history_check.py', '--lab', args.lab),
+        (root / 'history_check.py', '--lab', args.lab, '--artifacts', args.artifacts),
         (root / 'src/native/recording/check.py', '--lab', args.lab,
          '--artifacts', args.artifacts),
     ]

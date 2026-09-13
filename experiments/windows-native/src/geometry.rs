@@ -1,12 +1,13 @@
 use captures_capture::LogicalRect;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Point {
     pub x: f32,
     pub y: f32,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Rect {
     pub x: f32,
     pub y: f32,

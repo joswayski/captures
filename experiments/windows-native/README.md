@@ -106,10 +106,18 @@ off-thread `captures-feedback` client enforces transport validation, timeout, no
 cooldown; no feedback or telemetry is sent at startup. Fixture rendering never submits the form.
 Crash collection and crash-reporting consent are not implemented, so raw panic text is never sent.
 
-Editable screenshot drafts are not yet persisted or restored: closing or restarting the native app
-loses the in-memory document even though raster exports remain on disk. Future draft storage must
-remain inside the isolated experiment profile and retain whether the source was an imported file or
-a new capture. Recording-editor drafts remain intentionally absent, matching the shipping app.
+Editable screenshot drafts are stored inside the isolated experiment profile after 700 ms of idle
+editing and flushed before the editor closes or the process exits. Reopening the same capture
+restores canvas settings, editable vector/text/image layers, original pixels used by Restore, and
+their ordering and properties without rewriting the source file. Versioned manifests and capped
+PNG/font assets distinguish capture, imported-source, and source-less new-capture
+identities. Complete snapshot generations preserve the previous draft when publication fails.
+A successful export clears the exported revision's draft; newer edits made during export are
+retained under the destination identity. History deletion retires the matching live draft session
+before ordered deletion. Current preview/history opens wire Capture identity; Imported/NewCapture
+identities are model-tested only, with no installed Open With/import-root route yet. Native Windows
+restart/autosave interaction still requires verification. Recording-editor drafts remain intentionally
+absent, matching the shipping app.
 
 Image flip/rotate layer actions, recording crop, and preview audio are not implemented. Their controls are
 omitted or explicitly marked unavailable rather than presented as working. Windows DirectComposition

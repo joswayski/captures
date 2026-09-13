@@ -12,17 +12,38 @@ import time
 import pyatspi
 
 from process_metrics import stop
-from native_check import click, cmd, find, wait
+from native_check import capture, click, cmd, find, screen_bounds, wait, xwindow_geometry
 
 
 def checked(name):
     node = find(name, frame="Captures — History")
-    return node and node.getState().contains(pyatspi.STATE_CHECKED)
+    # GtkToggleButton is exposed as an AT-SPI push button whose active state is
+    # PRESSED. CHECKED is used by GtkCheckButton and is never set for filters.
+    return node and node.getState().contains(pyatspi.STATE_PRESSED)
+
+
+def history_fits_display():
+    result = subprocess.run(
+        ['xdotool', 'search', '--onlyvisible', '--name', '^Captures — History$'],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return False
+    x, y, width, height = xwindow_geometry(result.stdout.strip().splitlines()[-1])
+    screen_width, screen_height = map(int, cmd('xdotool', 'getdisplaygeometry').split())
+    return (
+        x >= 0
+        and y >= 0
+        and x + width <= screen_width
+        and y + height <= screen_height
+    )
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lab", type=Path, required=True)
+    parser.add_argument("--artifacts", type=Path)
     args = parser.parse_args()
     os.environ.update(json.loads((args.lab / "environment.json").read_text()))
     binary = Path(__file__).resolve().parent / "target/release/captures-linux-native"
@@ -46,20 +67,31 @@ def main():
             wait(lambda: find("Captures — History", "frame"))
             for name in ("Restore history-first.png", "Delete history-first.png from History", "Delete all captures", "All 2", "Screenshots 2"):
                 wait(lambda name=name: find(name, frame="Captures — History"))
-            edit = find('Edit history-first.png', frame='Captures — History').queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
-            trash = find('Delete history-first.png from History', frame='Captures — History').queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+            wait(history_fits_display)
+            edit = screen_bounds(
+                find('Edit history-first.png', frame='Captures — History'),
+                'Captures — History',
+            )
+            trash = screen_bounds(
+                find('Delete history-first.png from History', frame='Captures — History'),
+                'Captures — History',
+            )
             cmd('xdotool', 'mousemove', 0, 0)
             time.sleep(.3)
             cmd('import', '-window', 'root', profile/'idle.png')
             pixel = cmd('convert', profile/'idle.png', '-format', f'%[hex:p{{{edit.x+10},{edit.y+10}}}]', 'info:')
             assert pixel[:6].lower() == 'ffca28', ('Edit lost the primary accent', pixel)
             assert trash.width == trash.height == 32, trash
+            if args.artifacts:
+                capture(args.artifacts, 'history-centered-idle', 'Captures — History')
             cmd('xdotool', 'mousemove', trash.x+16, trash.y+16)
             time.sleep(.3)
             cmd('import', '-window', 'root', profile/'hover.png')
             pixel = cmd('convert', profile/'hover.png', '-format', f'%[hex:p{{{trash.x+7},{trash.y+7}}}]', 'info:')
             assert pixel[:6].lower() == 'ef4650', ('Trash lost its destructive hover', pixel)
-            assert checked("All 2")
+            if args.artifacts:
+                capture(args.artifacts, 'history-delete-hover', 'Captures — History')
+            wait(lambda: checked("All 2"))
             click("All 2", "Captures — History", pointer=True)
             wait(lambda: checked("All 2"))
             click("Restore history-first.png", "Captures — History")

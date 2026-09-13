@@ -86,8 +86,6 @@ struct Exit {
 struct StackDrag {
     root_x: f64,
     root_y: f64,
-    window_x: i32,
-    window_y: i32,
     moved: bool,
 }
 
@@ -100,6 +98,7 @@ struct State {
     hovering: bool,
     top: bool,
     right: bool,
+    monitor: Option<gdk::Monitor>,
     scroll_start: usize,
     drag: Option<StackDrag>,
     next_id: u64,
@@ -337,6 +336,28 @@ fn placement_for_corner(right: bool, top: bool) -> u8 {
     }
 }
 
+fn corner_position(
+    monitor: (i32, i32, i32, i32),
+    window: (i32, i32),
+    right: bool,
+    top: bool,
+) -> (i32, i32) {
+    let (monitor_x, monitor_y, monitor_width, monitor_height) = monitor;
+    let (window_width, window_height) = window;
+    (
+        if right {
+            monitor_x + monitor_width - window_width
+        } else {
+            monitor_x
+        },
+        if top {
+            monitor_y
+        } else {
+            monitor_y + monitor_height - window_height
+        },
+    )
+}
+
 fn set_accessible_name<W: IsA<gtk::Widget>>(widget: &W, name: &str) {
     ui::named(widget, name);
 }
@@ -349,6 +370,7 @@ fn install_preview_css() {
 
 fn icon_button(name: &'static str, accessible: &str, class: &str, size: i32) -> gtk::Button {
     let button = gtk::Button::new();
+    button.set_focus_on_click(false);
     button.add(&ui::icon(name, size));
     button.style_context().add_class(class);
     set_accessible_name(&button, accessible);
@@ -358,12 +380,34 @@ fn icon_button(name: &'static str, accessible: &str, class: &str, size: i32) -> 
 
 fn action_button(name: &'static str, label: &str) -> gtk::Button {
     let button = gtk::Button::new();
+    button.set_focus_on_click(false);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    row.set_can_target(false);
+    let label_widget = gtk::Label::new(Some(label));
+    label_widget.set_can_target(false);
     row.pack_start(&ui::icon(name, 16), false, false, 0);
-    row.pack_start(&gtk::Label::new(Some(label)), false, false, 0);
+    row.pack_start(&label_widget, false, false, 0);
     button.add(&row);
     button.style_context().add_class("preview-main-action");
     button
+}
+
+fn picked_card_button(window: &gtk::Window, x: f64, y: f64) -> Option<gtk::Button> {
+    window
+        .pick(x, y, gtk::PickFlags::DEFAULT)
+        .and_then(|widget| {
+            widget.clone().downcast::<gtk::Button>().ok().or_else(|| {
+                widget
+                    .ancestor(gtk::Button::static_type())
+                    .and_then(|ancestor| ancestor.downcast::<gtk::Button>().ok())
+            })
+        })
+        .filter(|button| {
+            let style = button.style_context();
+            style.has_class("preview-main-action")
+                || style.has_class("preview-icon-button")
+                || style.has_class("preview-edit-button")
+        })
 }
 
 fn preview_stack_icon() -> gtk::DrawingArea {
@@ -497,6 +541,7 @@ impl Preview {
                 hovering: false,
                 top: false,
                 right: false,
+                monitor: None,
                 scroll_start: 0,
                 drag: None,
                 next_id: 1,
@@ -517,39 +562,123 @@ impl Preview {
                 .window
                 .clone()
                 .connect_motion_notify_event(move |_, event| {
-                    let (x, y) = event.root();
+                    let (x, y) = event.position();
                     this.update_card_hover(x, y);
                     glib::Propagation::Proceed
                 });
+        }
+        let action_pressed = Rc::new(RefCell::new(
+            None::<(gtk::Button, f64, f64, Vec<(i32, i32)>)>,
+        ));
+        {
+            // GTK4/X11 does not consistently complete button gestures in this
+            // shaped, non-focusable toplevel. Route card actions selected by
+            // GTK on press. Snapshot GTK's target over the only allowed release
+            // radius because the live picker becomes unavailable after press;
+            // activate only when release maps to that same visible button.
+            let controller = gtk::EventControllerLegacy::new();
+            controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let window = this.0.window.clone();
+            controller.connect_event({
+                let pressed = action_pressed.clone();
+                move |_, event| {
+                    let Some((x, y)) = event.position() else {
+                        return glib::Propagation::Proceed;
+                    };
+                    match event.event_type() {
+                        gdk::EventType::ButtonPress
+                            if event
+                                .downcast_ref::<gdk::ButtonEvent>()
+                                .is_some_and(|event| event.button() == 1) =>
+                        {
+                            let Some(button) = picked_card_button(&window, x, y) else {
+                                return glib::Propagation::Proceed;
+                            };
+                            let target = button.widget_name();
+                            let same_target_offsets = (-5..=5)
+                                .flat_map(|dx| (-5..=5).map(move |dy| (dx, dy)))
+                                .filter(|(dx, dy)| {
+                                    picked_card_button(
+                                        &window,
+                                        x + f64::from(*dx),
+                                        y + f64::from(*dy),
+                                    )
+                                    .is_some_and(|candidate| candidate.widget_name() == target)
+                                })
+                                .collect();
+                            *pressed.borrow_mut() = Some((button, x, y, same_target_offsets));
+                            glib::Propagation::Stop
+                        }
+                        gdk::EventType::ButtonRelease
+                            if event
+                                .downcast_ref::<gdk::ButtonEvent>()
+                                .is_some_and(|event| event.button() == 1) =>
+                        {
+                            let Some((button, start_x, start_y, same_target_offsets)) =
+                                pressed.borrow_mut().take()
+                            else {
+                                return glib::Propagation::Proceed;
+                            };
+                            let offset =
+                                ((x - start_x).round() as i32, (y - start_y).round() as i32);
+                            let release_is_same_target = same_target_offsets.contains(&offset);
+                            if release_is_same_target
+                                && button.is_visible()
+                                && button.is_sensitive()
+                                && (x - start_x).hypot(y - start_y) <= 5.
+                            {
+                                button.emit_clicked();
+                            }
+                            glib::Propagation::Stop
+                        }
+                        _ => glib::Propagation::Proceed,
+                    }
+                }
+            });
+            this.0.window.add_controller(controller);
         }
         {
             // GTK3 child input windows do not consistently propagate motion to
             // the transparent toplevel. Poll the seat like Tauri's native
             // preview tracking so media, icons, and gaps share one hover truth.
             let weak = Rc::downgrade(&this.0);
+            let action_pressed = action_pressed.clone();
             glib::timeout_add_local(Duration::from_millis(32), move || {
                 let Some(inner) = weak.upgrade() else {
                     return glib::ControlFlow::Break;
                 };
                 let preview = Preview(inner);
-                if preview.0.window.is_visible()
-                    && let Some((_, x, y)) = gdk::Display::default()
+                if action_pressed.borrow().is_some() {
+                    return glib::ControlFlow::Continue;
+                }
+                if preview.0.window.is_visible() {
+                    let pointer = gdk::Display::default()
                         .and_then(|display| display.default_seat())
                         .and_then(|seat| seat.pointer())
-                        .map(|device| device.surface_at_position())
-                {
-                    preview.update_card_hover(x, y);
+                        .map(|device| device.surface_at_position());
+                    let own_surface = gtk::prelude::NativeExt::surface(&preview.0.window);
+                    match (pointer, own_surface) {
+                        (Some((Some(surface), x, y)), Some(own_surface))
+                            if surface == own_surface =>
+                        {
+                            preview.update_card_hover(x, y)
+                        }
+                        _ => preview.update_card_hover(f64::NEG_INFINITY, f64::NEG_INFINITY),
+                    }
                 }
                 glib::ControlFlow::Continue
             });
         }
         {
             let this = this.clone();
+            let action_pressed = action_pressed.clone();
             this.0
                 .window
                 .clone()
                 .connect_leave_notify_event(move |_, event| {
-                    if event.detail() != gdk::NotifyType::Inferior {
+                    if action_pressed.borrow().is_none()
+                        && event.detail() != gdk::NotifyType::Inferior
+                    {
                         this.update_card_hover(f64::NEG_INFINITY, f64::NEG_INFINITY);
                     }
                     glib::Propagation::Proceed
@@ -716,28 +845,35 @@ impl Preview {
     }
 
     pub fn home(&self, right: bool, top: bool) {
+        let monitor = self.0.state.borrow().monitor.clone().or_else(|| {
+            gdk::Display::default()
+                .and_then(|display| display.monitors().item(0).and_downcast::<gdk::Monitor>())
+        });
+        if let Some(monitor) = monitor {
+            self.place_on_monitor(monitor, right, top);
+        }
+    }
+
+    fn place_on_monitor(&self, monitor: gdk::Monitor, right: bool, top: bool) {
+        let geometry = monitor.geometry();
         {
             let mut state = self.0.state.borrow_mut();
             state.top = top;
             state.right = right;
+            state.monitor = Some(monitor);
         }
-        if let Some(display) = gdk::Display::default()
-            && let Some(monitor) = display.monitors().item(0).and_downcast::<gdk::Monitor>()
-        {
-            let r = monitor.geometry();
-            self.0.window.move_(
-                if right {
-                    r.x() + r.width() - (CARD_W + CARD_X * 2.) as i32
-                } else {
-                    r.x()
-                },
-                if top {
-                    r.y()
-                } else {
-                    r.y() + r.height() - HEIGHT
-                },
-            );
-        }
+        let (x, y) = corner_position(
+            (
+                geometry.x(),
+                geometry.y(),
+                geometry.width(),
+                geometry.height(),
+            ),
+            ((CARD_W + CARD_X * 2.) as i32, HEIGHT),
+            right,
+            top,
+        );
+        self.0.window.move_(x, y);
         self.reflow();
     }
 
@@ -760,15 +896,6 @@ impl Preview {
         let spacer = gtk::DrawingArea::new();
         spacer.set_size_request(CARD_W as i32, CARD_H as i32);
         overlay.add(&spacer);
-
-        // Add the full media drag surface before chrome so actual controls
-        // remain the topmost pointer targets.
-        let fill = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        fill.set_hexpand(true);
-        fill.set_vexpand(true);
-        fill.set_halign(gtk::Align::Fill);
-        fill.set_valign(gtk::Align::Fill);
-        overlay.add_overlay(&fill);
 
         let top = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         top.set_halign(if self.0.state.borrow().right {
@@ -862,7 +989,9 @@ impl Preview {
                 },
             ),
         ] {
-            set_accessible_name(button, &format!("{action} {name}"));
+            let accessible = format!("{action} {name}");
+            set_accessible_name(button, &accessible);
+            button.set_widget_name(&accessible);
         }
         {
             let this = self.clone();
@@ -901,68 +1030,6 @@ impl Preview {
             edit.clone().upcast(),
             actions.clone().upcast(),
         ];
-        {
-            let this = self.clone();
-            let hover_widgets = hover_widgets.clone();
-            let meta = meta.clone();
-            shell.connect_enter_notify_event(move |_, _| {
-                for widget in &hover_widgets {
-                    widget.set_no_show_all(false);
-                    widget.show_all();
-                }
-                meta.hide();
-                if let Ok(mut state) = this.0.state.try_borrow_mut()
-                    && let Some(card) = state.cards.iter_mut().find(|card| card.id == id)
-                {
-                    card.hovered = true;
-                }
-                this.0.area.queue_draw();
-                glib::Propagation::Proceed
-            });
-        }
-        {
-            // The transparent URI drag source owns the media input window, so
-            // entering the visible image does not reliably cross `shell` on X11.
-            let this = self.clone();
-            let hover_widgets = hover_widgets.clone();
-            let meta = meta.clone();
-            fill.connect_enter_notify_event(move |_, _| {
-                for widget in &hover_widgets {
-                    widget.set_no_show_all(false);
-                    widget.show_all();
-                }
-                meta.hide();
-                if let Ok(mut state) = this.0.state.try_borrow_mut()
-                    && let Some(card) = state.cards.iter_mut().find(|card| card.id == id)
-                {
-                    card.hovered = true;
-                }
-                this.0.area.queue_draw();
-                glib::Propagation::Proceed
-            });
-        }
-        {
-            let this = self.clone();
-            let hover_widgets = hover_widgets.clone();
-            let meta = meta.clone();
-            shell.connect_leave_notify_event(move |_, event| {
-                if event.detail() == gdk::NotifyType::Inferior {
-                    return glib::Propagation::Proceed;
-                }
-                for widget in &hover_widgets {
-                    widget.hide();
-                    widget.set_no_show_all(true);
-                }
-                meta.show();
-                if let Ok(mut state) = this.0.state.try_borrow_mut()
-                    && let Some(card) = state.cards.iter_mut().find(|card| card.id == id)
-                {
-                    card.hovered = false;
-                }
-                this.0.area.queue_draw();
-                glib::Propagation::Proceed
-            });
-        }
 
         let drag_source = gtk::DragSource::builder()
             .actions(gdk::DragAction::COPY)
@@ -977,7 +1044,7 @@ impl Preview {
         }
         {
             let this = self.clone();
-            fill.connect_button_press_event(move |_, event| {
+            spacer.connect_button_press_event(move |_, event| {
                 if event.is_double_click() {
                     this.run_for_card(id, |callbacks, path| (callbacks.open)(path));
                     return glib::Propagation::Stop;
@@ -989,12 +1056,14 @@ impl Preview {
             let this = self.clone();
             drag_source.connect_drag_end(move |_, context, _| this.finish_file_drag(id, context));
         }
-        fill.add_controller(drag_source);
+        // Keep drag ownership on the media child. A full-size overlay target
+        // or an ancestor click gesture competes with descendant GtkButtons and
+        // makes visible Copy/Save/Edit/Close controls unclickable on GTK4.
+        spacer.add_controller(drag_source);
         (shell, top, edit, hover_widgets, meta)
     }
 
-    fn update_card_hover(&self, root_x: f64, root_y: f64) {
-        let (x, y) = (root_x, root_y);
+    fn update_card_hover(&self, x: f64, y: f64) {
         let mut changed = false;
         // Showing or hiding card chrome emits nested enter/leave signals on
         // GTK4/X11. The outer pass already owns the authoritative pointer
@@ -1049,82 +1118,129 @@ impl Preview {
     }
 
     fn connect_pile_drag(&self) {
-        {
-            let this = self.clone();
-            this.0
-                .pile_hit
-                .clone()
-                .connect_button_press_event(move |_, event| {
-                    if event.button() != 1 {
-                        return glib::Propagation::Proceed;
-                    }
-                    let (root_x, root_y) = event.root();
-                    let (window_x, window_y) = (0, 0);
-                    this.0.state.borrow_mut().drag = Some(StackDrag {
-                        root_x,
-                        root_y,
-                        window_x,
-                        window_y,
-                        moved: false,
-                    });
-                    glib::Propagation::Stop
+        let pressed = self.clone();
+        let motion = self.clone();
+        let released = self.clone();
+        self.0.pile_hit.connect_pointer_events(
+            move |_, event| {
+                if event.button() != 1 {
+                    return glib::Propagation::Proceed;
+                }
+                let (root_x, root_y) = event.root();
+                pressed.0.state.borrow_mut().drag = Some(StackDrag {
+                    root_x,
+                    root_y,
+                    moved: false,
                 });
-        }
-        {
-            let this = self.clone();
-            this.0
-                .pile_hit
-                .clone()
-                .connect_motion_notify_event(move |_, event| {
-                    let (root_x, root_y) = event.root();
-                    let mut state = this.0.state.borrow_mut();
-                    let Some(drag) = state.drag.as_mut() else {
-                        return glib::Propagation::Proceed;
-                    };
-                    let dx = root_x - drag.root_x;
-                    let dy = root_y - drag.root_y;
-                    if dx.hypot(dy) >= 5. {
-                        drag.moved = true;
-                    }
+                pressed.track_pile_drag_release();
+                glib::Propagation::Stop
+            },
+            move |_, event| {
+                let (root_x, root_y) = event.root();
+                let mut state = motion.0.state.borrow_mut();
+                let Some(drag) = state.drag.as_mut() else {
+                    return glib::Propagation::Proceed;
+                };
+                let dx = root_x - drag.root_x;
+                let dy = root_y - drag.root_y;
+                if dx.hypot(dy) >= 5. {
+                    drag.moved = true;
+                }
+                glib::Propagation::Stop
+            },
+            move |_, event| {
+                if event.button() != 1 {
+                    return glib::Propagation::Proceed;
+                }
+                let drag = released.0.state.borrow_mut().drag.take();
+                if let Some(drag) = drag {
                     if drag.moved {
-                        this.0
-                            .window
-                            .move_(drag.window_x + dx as i32, drag.window_y + dy as i32);
-                    }
-                    glib::Propagation::Stop
-                });
-        }
-        {
-            let this = self.clone();
-            this.0
-                .pile_hit
-                .clone()
-                .connect_button_release_event(move |_, event| {
-                    if event.button() != 1 {
-                        return glib::Propagation::Proceed;
-                    }
-                    let moved = this
-                        .0
-                        .state
-                        .borrow_mut()
-                        .drag
-                        .take()
-                        .is_some_and(|drag| drag.moved);
-                    if moved {
-                        this.update_anchor_after_drag();
+                        let (root_x, root_y) = event.root();
+                        released.update_anchor_after_drag(root_x, root_y);
                     } else {
-                        this.set_expanded(true);
+                        released.set_expanded(true);
                     }
-                    glib::Propagation::Stop
-                });
-        }
+                }
+                glib::Propagation::Stop
+            },
+        );
     }
 
-    fn update_anchor_after_drag(&self) {
-        let state = self.0.state.borrow();
-        (self.0.callbacks.placement)(placement_for_corner(state.right, state.top));
-        drop(state);
-        self.reflow();
+    fn track_pile_drag_release(&self) {
+        use x11rb::{
+            connection::Connection,
+            protocol::xproto::{ConnectionExt, KeyButMask},
+        };
+
+        let Ok((connection, screen)) = x11rb::connect(None) else {
+            return;
+        };
+        let Some(root) = connection
+            .setup()
+            .roots
+            .get(screen)
+            .map(|screen| screen.root)
+        else {
+            return;
+        };
+        let weak = Rc::downgrade(&self.0);
+        glib::timeout_add_local(Duration::from_millis(16), move || {
+            let Some(inner) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let Ok(cookie) = connection.query_pointer(root) else {
+                return glib::ControlFlow::Break;
+            };
+            let Ok(pointer) = cookie.reply() else {
+                return glib::ControlFlow::Break;
+            };
+            let preview = Preview(inner);
+            let root_x = f64::from(pointer.root_x);
+            let root_y = f64::from(pointer.root_y);
+            if pointer.mask.contains(KeyButMask::BUTTON1) {
+                if let Some(drag) = preview.0.state.borrow_mut().drag.as_mut()
+                    && (root_x - drag.root_x).hypot(root_y - drag.root_y) >= 5.
+                {
+                    drag.moved = true;
+                }
+                return glib::ControlFlow::Continue;
+            }
+            let drag = preview.0.state.borrow_mut().drag.take();
+            if let Some(drag) = drag {
+                if drag.moved {
+                    preview.update_anchor_after_drag(root_x, root_y);
+                } else {
+                    preview.set_expanded(true);
+                }
+            }
+            glib::ControlFlow::Break
+        });
+    }
+
+    fn update_anchor_after_drag(&self, root_x: f64, root_y: f64) {
+        let Some(display) = gdk::Display::default() else {
+            return;
+        };
+        let Some(monitor) = display
+            .monitors()
+            .iter::<gdk::Monitor>()
+            .find_map(|monitor| {
+                let monitor = monitor.ok()?;
+                let geometry = monitor.geometry();
+                (root_x >= f64::from(geometry.x())
+                    && root_x < f64::from(geometry.x() + geometry.width())
+                    && root_y >= f64::from(geometry.y())
+                    && root_y < f64::from(geometry.y() + geometry.height()))
+                .then_some(monitor)
+            })
+        else {
+            return;
+        };
+        let geometry = monitor.geometry();
+        let right = root_x >= f64::from(geometry.x() + geometry.width() / 2);
+        let top = root_y < f64::from(geometry.y() + geometry.height() / 2);
+        (self.0.callbacks.placement)(placement_for_corner(right, top));
+        self.place_on_monitor(monitor, right, top);
     }
 
     fn set_expanded(&self, expanded: bool) {
@@ -1363,7 +1479,10 @@ impl Preview {
             ),
         );
         let pile_y = Self::card_y(&state, 0).round();
-        if !state.expanded && !state.cards.is_empty() {
+        if !state.expanded
+            && !state.cards.is_empty()
+            && self.0.fixed.last_child().as_ref() != Some(self.0.pile_hit.upcast_ref())
+        {
             // Cards are appended after the hit target. Keep this transparent
             // real button above them so collapsed-stack pointer hover/click
             // is not stolen by the visual card shells underneath.
@@ -1924,6 +2043,23 @@ mod tests {
         assert_eq!(placement_for_corner(false, false), 1);
         assert_eq!(placement_for_corner(true, true), 2);
         assert_eq!(placement_for_corner(false, true), 3);
+    }
+
+    #[test]
+    fn corner_position_preserves_the_selected_monitor_origin() {
+        let window = (340, 760);
+        assert_eq!(
+            corner_position((-1920, 120, 1920, 1080), window, false, true),
+            (-1920, 120)
+        );
+        assert_eq!(
+            corner_position((-1920, 120, 1920, 1080), window, true, false),
+            (-340, 440)
+        );
+        assert_eq!(
+            corner_position((1600, -80, 2560, 1440), window, true, true),
+            (3820, -80)
+        );
     }
 
     #[test]

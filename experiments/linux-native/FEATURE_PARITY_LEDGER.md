@@ -8,14 +8,17 @@ This ledger records exercised user actions, not release readiness.
 - Capture selector: screenshot/record/GIF modes, region move/resize, window and full-display capture, Escape cancellation, session lock, global shortcut without a tray watcher, and single-instance command routing.
 - Screenshot editor: pan, draw, rename, layer copy/paste, undo, crop, PNG/JPEG comparison and export, draft recovery, and confirmed source replacement.
 - Preferences: light/dark/theme persistence, supported recording FPS/format options, shortcut persistence/conflict validation, capture/recording defaults, and explicit updater-unavailable messaging.
-- Recording: real X11 recording, pause/resume, recovery, trim, quality comparison, export, safe same-format source replacement, and live microphone-meter widget. The orb has no physical microphone, so only the meter's zero/unavailable state is exercised here.
+- Recording editor: generated-media quality/comparison and source-replacement checks. Earlier wording overstated this as a full live recording pass; those screenshots and logs did not cover capture startup, microphone acquisition, HUD or segment audio.
 - History and mini previews: open/edit/restore/delete/dismiss are implemented. Close dismisses without deleting the file; Delete uses a custom confirmation.
-- Feedback: explicit form and parent-owned bounded transport are wired. No request occurs at startup; loopback is the only acceptance-test endpoint.
+- Preview follow-up: the clean Openbox suite passes four corner placements, foreign-surface hover rejection, edge/foreign-window release nonactivation, per-card Copy/Close, external file drag, clear and confirmed delete. Captures were inspected; the parent test retains stronger lost-release/hover recovery assertions.
+- History follow-up: uses authoritative X11 coordinates, centers the realized frame, and preserves exact mustard Edit/destructive hover pixels, 32×32 trash controls, toggle state, Restore, removal/clear and source files. Both idle and hover clients were inspected. Preferences centering also uses the realized outer frame rather than GTK's initial 1×1 allocation.
+- Feedback: a held loopback response proves pending freeze, deliberate 500 recovery with exact retained message/contact/category/context, retry without retyping, and read-only success/Close. No request occurs at startup; no production request was submitted.
 - First run: local X11 capability walkthrough is persisted without intercepting explicit `--preferences`, `--open`, or capture CLI routes.
 
 ## Implemented but evidence is incomplete
 
-- Mini-preview stack renders and pointer-drag corner placement works. The full preview suite currently blocks on GTK AT-SPI coordinates becoming stale for card hover after moves; this is not counted as passing Close/hover evidence yet.
+- Preview placement is verified under Openbox only. Selected-monitor math covers negative/offset origins, but runtime cross-monitor, mixed-DPI and other-WM behavior remains unverified. The pile snaps on release rather than following continuously during drag.
+- The full GTK4 recording check has no prior passing log. The current clean lab exposed a present-but-disabled Start action (the helper now waits for sensitivity), then failed default-microphone acquisition because the orb has no ALSA device. Editor-only evidence does not prove live recording behavior.
 - Microphone selection and the live meter consume the real recorder level API. Physical microphone and system-audio capture cannot be exercised in this orb.
 - Launch-at-login writes the user autostart entry; installed package/Open With registration needs package-level evidence outside this directory.
 - X11 topmost/taskbar/absolute placement uses EWMH. Wayland remains deliberately gated because global positioning, capture exclusion, and global shortcuts do not have equivalent generic protocols.

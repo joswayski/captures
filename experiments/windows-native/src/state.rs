@@ -564,6 +564,15 @@ impl AppState {
 
     pub fn edit_image_from(&mut self, image: RgbaImage, source: Option<PathBuf>) {
         let dimensions = image.dimensions();
+        self.edit_document_from(Document::new(image), source, dimensions);
+    }
+
+    pub fn edit_document_from(
+        &mut self,
+        document: Document,
+        source: Option<PathBuf>,
+        original_dimensions: (u32, u32),
+    ) {
         let filename = source
             .as_ref()
             .and_then(|path| path.file_stem())
@@ -576,7 +585,7 @@ impl AppState {
             .unwrap_or("png")
             .to_owned();
         let save_as_new = !can_replace_editor_source(source.as_deref(), &format, &filename);
-        self.editor = Some(Document::new(image));
+        self.editor = Some(document);
         self.selected_layer = None;
         self.editor_filename = filename;
         self.editor_editing_filename = false;
@@ -585,8 +594,8 @@ impl AppState {
         self.editor_source = source;
         self.editor_export_settings_open = false;
         self.editor_export_size = EditorExportSize::Original;
-        self.editor_custom_export_width = dimensions.0;
-        self.editor_custom_export_height = dimensions.1;
+        self.editor_custom_export_width = original_dimensions.0;
+        self.editor_custom_export_height = original_dimensions.1;
         self.editor_export_aspect_locked = true;
         self.editor_quality_mode = EditorQualityMode::Preserve;
         self.editor_quality = 92;

@@ -140,6 +140,7 @@ pub fn open_with_restore(
     let window = gtk::Window::new();
     window.set_title(Some("Captures — History"));
     window.set_default_size(1120, 720);
+    window.set_position(());
     let provider = gtk::CssProvider::new();
     provider.load_from_data(include_str!("history.css"));
     ui::install_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1);

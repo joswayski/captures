@@ -61,10 +61,16 @@ These are implemented experiments, not drop-in replacements. In particular:
   event adapter maps surface coordinates through the native/widget transforms
   and preserves press/motion/release propagation. A single key controller now
   pairs Space press/release so pan does not remain active; editable fields
-  retain their keyboard input. The screenshot-editor result is not a pass for
-  the entire capture/recording interaction suite: the capture fixture still
-  stops at a mini-preview hover/Close lookup after verifying free/Shift-square/
-  released selection and a saved capture. Recording replacement uses a synced stage
+  retain their keyboard input. The current clean Openbox sequence passes capture/
+  preferences, editor/draft reopen/source Save, feedback and strengthened previews.
+  Preview checks cover four corners, foreign-surface hover rejection, release outside
+  the original action, Copy/Close identity, external file drag, clear and confirmed delete.
+  Preferences and History center using the realized outer frame. History now uses
+  authoritative X11 coordinates; its focused suite passes exact Edit/hover pixels,
+  32×32 Delete, Restore, removal/clear and source preservation. Inspected captures
+  show complete History clients and intact preview hover controls. The integrated
+  follow-up has 68 tests plus one ignored, strict Clippy and release build passing.
+  Recording replacement uses a synced stage
   and explicit confirmation; cancellation preserves the original. The next bounded
   increment adds first-run X11 capability setup, a live microphone-level consumer,
   semantic/checked Preferences options, and explicit worker-thread feedback.
@@ -73,9 +79,13 @@ These are implemented experiments, not drop-in replacements. In particular:
   loopback test verified pending freeze, deliberate failure/retry, retained exact
   payloads and read-only success; all three rendered states were inspected.
   First-run Continue persisted completion and opened Preferences, and its X11/
-  Wayland notice rendered without clipping. Physical audio and the full preview
-  suite remain separate acceptance checks. Physical
-  multi-monitor, hardware GPU, and Wayland behavior remain unverified.
+  Wayland notice rendered without clipping. Earlier claims of a full live GTK4
+  recording pass were unsupported: the preserved recording evidence was editor-only.
+  The full check exposed a present-but-disabled Start action, now awaited by the
+  helper, then default-microphone acquisition failed in the device-less lab. Live
+  recording remains a separate acceptance gate. Preview placement is verified on
+  Openbox only and snaps on release; physical multi-monitor/audio, mixed DPI,
+  other WMs, hardware GPU and Wayland behavior remain unverified.
 - **Windows:** canvas dimensions/background, fit/manual zoom, Ctrl-drag pan,
   output dimensions/quality/maximum-size settings and layer front/back/duplicate/
   delete/rename actions are implemented. The new eraser increment adds contiguous/
@@ -99,9 +109,16 @@ These are implemented experiments, not drop-in replacements. In particular:
   desktop/monitor bounds. Inspected input states show the consumed source row gone,
   merged opacity at 90%, preserved shapes, and one locked Flattened source. The narrow
   wrapped Delete label is replaced by a centered signal-colored trash icon, retaining
-  the existing button/hit geometry; native visual verification is pending. Persistent
-  editable screenshot drafts remain incomplete: the proposed increment is held for
-  transactional snapshot publication and preservation of edits made during export.
+  the existing button/hit geometry. The [icon run](https://github.com/joswayski/captures/actions/runs/34730562545)
+  passed 71 library plus two worker MSVC tests and 58 bounded hardware captures;
+  both inspected appearances show a centered unwrapped icon and intact footer. Editable
+  screenshot drafts now use profile-local transactional generations and a bounded worker
+  with idle autosave/ordered close flush. Review fixed partial asset replacement, loss
+  of a recovered generation on a second failed publication, edits discarded during export,
+  and live sessions recreating deleted drafts. All 77 portable tests, fmt and host strict
+  Clippy pass. Capture preview/history opens restore editable documents; imported/new-capture
+  identity separation is model-only until the import route exists. MSVC worker tests and
+  native restart/autosave interaction remain unverified for this increment.
   Imported image layers use the shared raster renderer
   with native multi-select file picking, asynchronous decode, transformed hit
   testing, and batch undo/redo. The model supports locking, independent opacity,
@@ -187,7 +204,11 @@ These are implemented experiments, not drop-in replacements. In particular:
   captures. The next slice adds seven text presets, font families, bold/italic/
   alignment, outlined/boxed labels and annotation shadow defaults. Legacy text
   retains its original renderer; new-label alignment and minimum width follow
-  shipping contracts. New native tests and references await execution. Inline canvas
+  shipping contracts. The [first text run](https://github.com/joswayski/captures/actions/runs/34730562551)
+  compiled and passed legacy/preset/minimum-width/rounded-plate pixels, then failed
+  a test that tried to restyle after undo without reselecting the layer. The corrected
+  test follows the existing selection contract and keeps its exact style/undo assertions;
+  full native tests and references await verification. Inline canvas
   text composition, custom shadow colors and physical font/input checks remain open.
 
 ## Feature parity acceptance

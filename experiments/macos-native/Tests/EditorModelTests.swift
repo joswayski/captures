@@ -299,7 +299,7 @@ final class EditorModelTests: XCTestCase {
         XCTAssertEqual(EditorTextStyle.minimumTextWidth(fontSize: 8), 8)
     }
 
-    func testTextDefaultsEditingAndStyleChangesAreIndependentlyUndoable() {
+    func testTextDefaultsEditingAndStyleChangesAreIndependentlyUndoable() throws {
         let model = EditorModel(
             document: EditorDocument(width: 500, height: 300, layers: []),
             sourceURL: URL(fileURLWithPath: "/tmp/text.png")
@@ -323,8 +323,10 @@ final class EditorModelTests: XCTestCase {
         XCTAssertGreaterThan(edited.frame.height, placed.frame.height)
         XCTAssertEqual(edited.frame.cgRect.midX, placed.frame.cgRect.midX, accuracy: 0.0001)
         model.undo()
-        XCTAssertEqual(model.document.layers[0], placed)
+        XCTAssertEqual(try XCTUnwrap(model.document.layers.first), placed)
+        XCTAssertNil(model.selectedLayerID, "Undo clears selection")
 
+        model.selectedLayerID = placed.id
         model.updateSelectedTextStyle {
             $0.fontFamily = .mono
             $0.fontSize = 64
@@ -336,7 +338,7 @@ final class EditorModelTests: XCTestCase {
         XCTAssertEqual(restyled.textStyle?.fontSize, 64)
         XCTAssertEqual(restyled.frame.cgRect.midX, placed.frame.cgRect.midX, accuracy: 0.0001)
         model.undo()
-        XCTAssertEqual(model.document.layers[0], placed)
+        XCTAssertEqual(try XCTUnwrap(model.document.layers.first), placed)
         model.undo()
         XCTAssertTrue(model.document.layers.isEmpty, "Each text edit and style change contributes one undo step")
     }

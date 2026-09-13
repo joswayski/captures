@@ -39,7 +39,7 @@ pub enum Event {
         result: Result<RgbaImage, String>,
     },
     Save {
-        document_id: u64,
+        document_key: (u64, u64),
         request: u64,
         destination: PathBuf,
         dimensions: (u32, u32),
@@ -129,7 +129,7 @@ impl ImageWorker {
         destination: PathBuf,
         replace: Option<PathBuf>,
     ) {
-        let document_id = document.render_key().0;
+        let document_key = document.render_key();
         let sender = self.sender.clone();
         thread::spawn(move || {
             let dimensions = (spec.width, spec.height);
@@ -142,7 +142,7 @@ impl ImageWorker {
                 }
             });
             let _ = sender.send(Event::Save {
-                document_id,
+                document_key,
                 request,
                 destination: reported_destination,
                 dimensions,

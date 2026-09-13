@@ -90,10 +90,14 @@ def wait(predicate, timeout=45):
 
 
 def click(name, frame=None, pointer=False):
-    node = wait(lambda: find(name, frame=frame))
-    if pointer:
-        import pyatspi
+    import pyatspi
 
+    def ready():
+        node = find(name, frame=frame)
+        return node if node and node.getState().contains(pyatspi.STATE_SENSITIVE) else None
+
+    node = wait(ready)
+    if pointer:
         bounds = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
         command("xdotool", "mousemove", bounds.x + bounds.width // 2, bounds.y + bounds.height // 2, "click", 1)
     else:

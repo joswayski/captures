@@ -132,54 +132,91 @@ impl WindowCompat for gtk::Window {
     fn set_position<T>(&self, _position: T) {
         let window = self.clone();
         self.connect_map(move |_| {
-            let Some(display) = gdk::Display::default() else {
-                return;
-            };
-            let Some(monitor) = display.monitors().item(0).and_downcast::<gdk::Monitor>() else {
-                return;
-            };
-            let geometry = monitor.geometry();
-            let allocation = window.allocation();
-            window.move_(
-                geometry.x() + (geometry.width() - allocation.width()) / 2,
-                geometry.y() + (geometry.height() - allocation.height()) / 2,
-            );
+            let window = window.clone();
+            // ::map precedes the first stable allocation and WM reparenting.
+            // Center the realized outer frame once both have settled instead
+            // of treating the pre-layout 1x1 allocation as the window size.
+            glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
+                request_x11_center(&window);
+            });
         });
     }
     fn resize(&self, width: i32, height: i32) {
         self.set_default_size(width, height);
     }
     fn move_(&self, x: i32, y: i32) {
-        schedule_x11(self, move |connection, xid| {
-            use x11rb::{
-                connection::Connection,
-                protocol::xproto::{
-                    ClientMessageData, ClientMessageEvent, ConnectionExt, EventMask,
-                },
-            };
-            let atom = connection
-                .intern_atom(false, b"_NET_MOVERESIZE_WINDOW")?
-                .reply()?
-                .atom;
-            let screen = &connection.setup().roots[0];
-            // EWMH coordinates are root-relative. Configuring the GTK client
-            // XID directly after reparenting would instead add the WM frame's
-            // current position and can push centered windows off-screen.
-            let flags = 1 | (1 << 8) | (1 << 9) | (1 << 12);
-            connection.send_event(
-                false,
-                screen.root,
-                EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
-                ClientMessageEvent::new(
-                    32,
-                    xid,
-                    atom,
-                    ClientMessageData::from([flags, x as u32, y as u32, 0, 0]),
-                ),
-            )?;
-            Ok(())
+        request_x11_move(self, x, y);
+        let window = self.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
+            // Some X11 WMs ignore a moveresize request while finishing the
+            // preceding pointer grab. Reissue the same idempotent placement
+            // after that grab has unwound; later user actions are not queued.
+            request_x11_move(&window, x, y);
         });
     }
+}
+
+fn request_x11_move(window: &gtk::Window, x: i32, y: i32) {
+    schedule_x11(window, move |connection, xid| {
+        use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt};
+        let target = x11_root_child(connection, xid)?;
+        // Walk through GTK and WM wrappers to the root child. Configuring the
+        // client itself would add its owning frame's offset on every move.
+        connection.configure_window(target, &ConfigureWindowAux::new().x(x).y(y))?;
+        // Complete the configure before this short-lived connection closes;
+        // otherwise rapid opposite-corner moves can be observed out of order.
+        connection.get_input_focus()?.reply()?;
+        Ok(())
+    });
+}
+
+fn request_x11_center(window: &gtk::Window) {
+    let Some(display) = gdk::Display::default() else {
+        return;
+    };
+    let Some(monitor) = display.monitors().item(0).and_downcast::<gdk::Monitor>() else {
+        return;
+    };
+    let monitor = monitor.geometry();
+    schedule_x11(window, move |connection, xid| {
+        use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt};
+        let target = x11_root_child(connection, xid)?;
+        let frame = connection.get_geometry(target)?.reply()?;
+        let border = i32::from(frame.border_width) * 2;
+        let (x, y) = centered_position(
+            (monitor.x(), monitor.y(), monitor.width(), monitor.height()),
+            (
+                i32::from(frame.width) + border,
+                i32::from(frame.height) + border,
+            ),
+        );
+        connection.configure_window(target, &ConfigureWindowAux::new().x(x).y(y))?;
+        connection.get_input_focus()?.reply()?;
+        Ok(())
+    });
+}
+
+fn x11_root_child(
+    connection: &x11rb::rust_connection::RustConnection,
+    xid: u32,
+) -> Result<u32, Box<dyn std::error::Error>> {
+    use x11rb::protocol::xproto::ConnectionExt;
+    let mut target = xid;
+    loop {
+        let tree = connection.query_tree(target)?.reply()?;
+        if tree.parent == tree.root {
+            return Ok(target);
+        }
+        target = tree.parent;
+    }
+}
+
+fn centered_position(area: (i32, i32, i32, i32), window: (i32, i32)) -> (i32, i32) {
+    let (area_x, area_y, area_width, area_height) = area;
+    (
+        area_x + (area_width - window.0) / 2,
+        area_y + (area_height - window.1) / 2,
+    )
 }
 
 fn set_wm_state(window: &gtk::Window, state_name: &'static str, enabled: bool) {
@@ -680,5 +717,22 @@ impl DrawingAreaCompat for gtk::DrawingArea {
         self.set_draw_func(move |area, context, _, _| {
             let _ = f(area, context);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::centered_position;
+
+    #[test]
+    fn centered_position_uses_realized_outer_size_and_monitor_origin() {
+        assert_eq!(
+            centered_position((-1920, 120, 1920, 1080), (980, 720)),
+            (-1450, 300)
+        );
+        assert_eq!(
+            centered_position((1600, -80, 2560, 1440), (984, 744)),
+            (2388, 268)
+        );
     }
 }

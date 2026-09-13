@@ -1,3 +1,4 @@
+mod draft_worker;
 mod feedback_worker;
 mod image_worker;
 mod media_worker;
@@ -12,7 +13,10 @@ use captures_recording::{
 };
 use captures_recording_xcap::XcapRecordingSegment;
 use captures_windows_native::{
-    async_state::{SaveTracker, accepts_document_request},
+    async_state::{
+        SaveCompletion, SaveTracker, accepts_document_request, classify_save_completion,
+    },
+    draft::{DraftIdentity, DraftSession, DraftStore, retire_capture_session},
     editor::{
         BlendMode, FreehandGesture, ImageTarget, Layer, RemoveBackgroundMode, resize_from_corner,
     },
@@ -31,6 +35,7 @@ use captures_windows_native::{
     },
     theme::{palette, theme_colors},
 };
+use draft_worker::DraftWorker;
 use feedback_worker::FeedbackWorker;
 use image::RgbaImage;
 use image_worker::{EncodeSpec as ImageEncodeSpec, Event as ImageEvent, ImageWorker};
@@ -184,6 +189,8 @@ struct App {
     editor_copy_request: u64,
     editor_save_request: u64,
     editor_saves: SaveTracker,
+    drafts: DraftWorker,
+    editor_draft: Option<DraftSession>,
     editor_pan_drag: Option<(Point, Point)>,
     editor_input_select_all: bool,
 }
@@ -337,6 +344,8 @@ pub fn run() -> Result<(), String> {
             editor_copy_request: 0,
             editor_save_request: 0,
             editor_saves: SaveTracker::default(),
+            drafts: DraftWorker::new(data_dir()),
+            editor_draft: None,
             editor_pan_drag: None,
             editor_input_select_all: false,
         });
@@ -508,6 +517,8 @@ unsafe extern "system" fn wndproc(
                 app.process_feedback_events();
                 app.tick_image_editor();
                 app.process_image_events();
+                app.process_draft_events();
+                app.tick_editor_draft(now);
                 if had_previews
                     && app.state.previews.is_empty()
                     && app.state.surface == Surface::Preview
@@ -528,12 +539,14 @@ unsafe extern "system" fn wndproc(
                 LRESULT(0)
             }
             WM_CLOSE => {
+                app.flush_editor_draft();
                 app.media.cancel_jobs();
                 app.media_epoch = app.media_epoch.wrapping_add(1);
                 let _ = ShowWindow(hwnd, SW_HIDE);
                 LRESULT(0)
             }
             WM_DESTROY => {
+                app.flush_editor_draft();
                 app.remove_tray();
                 let _ = UnregisterHotKey(Some(hwnd), HOTKEY_CAPTURE);
                 let _ = UnregisterHotKey(Some(hwnd), HOTKEY_DISPLAY);
@@ -839,10 +852,15 @@ impl App {
                 Surface::Preview => {
                     if p.y > self.height as f32 * 96.0 / self.dpi - 42.0 {
                         if p.x < 85.0 {
-                            if let Some(preview) = self.state.previews.first() {
-                                self.state.edit_image_from(
-                                    preview.image.clone(),
-                                    Some(preview.artifact.path.clone()),
+                            if let Some((image, path)) =
+                                self.state.previews.first().map(|preview| {
+                                    (preview.image.clone(), preview.artifact.path.clone())
+                                })
+                            {
+                                self.open_image_editor(
+                                    image,
+                                    Some(path.clone()),
+                                    DraftIdentity::capture(path),
                                 );
                                 self.show_surface(Surface::ScreenshotEditor, 1100, 720, false)
                             }
@@ -1177,8 +1195,11 @@ impl App {
                 if artifact.kind == captures_windows_native::history::ArtifactKind::Image {
                     match image::open(&artifact.path) {
                         Ok(image) => {
-                            self.state
-                                .edit_image_from(image.to_rgba8(), Some(artifact.path.clone()));
+                            self.open_image_editor(
+                                image.to_rgba8(),
+                                Some(artifact.path.clone()),
+                                DraftIdentity::capture(artifact.path.clone()),
+                            );
                             unsafe {
                                 self.show_surface(Surface::ScreenshotEditor, 1100, 720, false)
                             };
@@ -2456,6 +2477,178 @@ impl App {
         }
     }
 
+    fn tick_editor_draft(&mut self, now: Instant) {
+        if self.state.surface != Surface::ScreenshotEditor {
+            return;
+        }
+        let Some(document) = self.state.editor.as_ref() else {
+            return;
+        };
+        let key = document.render_key();
+        let Some(session) = self.editor_draft.as_mut() else {
+            return;
+        };
+        if session.observed_key != key {
+            session.observed_key = key;
+            session.changed_at = Some(now);
+        }
+        if session.in_flight.is_none()
+            && key != session.persisted_key
+            && session
+                .changed_at
+                .is_some_and(|changed| now.duration_since(changed) >= Duration::from_millis(700))
+        {
+            match self.drafts.save(
+                session.identity.clone(),
+                self.state.editor_source.clone(),
+                document.clone(),
+            ) {
+                Ok(()) => session.in_flight = Some(key),
+                Err(error) => self.set_error(error),
+            }
+        }
+    }
+
+    fn process_draft_events(&mut self) {
+        while let Some(event) = self.drafts.try_recv() {
+            let Some(session) = self
+                .editor_draft
+                .as_mut()
+                .filter(|session| session.identity == event.identity)
+            else {
+                continue;
+            };
+            if session.in_flight == Some(event.document_key) {
+                session.in_flight = None;
+            }
+            match event.result {
+                Ok(()) => {
+                    session.persisted_key = event.document_key;
+                    if session.observed_key == event.document_key {
+                        session.changed_at = None;
+                    }
+                }
+                Err(error) => self.set_error(format!("Could not save screenshot draft: {error}")),
+            }
+        }
+    }
+
+    fn flush_editor_draft(&mut self) {
+        let Some(document) = self.state.editor.clone() else {
+            return;
+        };
+        let Some(session) = self.editor_draft.as_mut() else {
+            return;
+        };
+        let key = document.render_key();
+        if key == session.persisted_key {
+            return;
+        }
+        match self.drafts.save_and_wait(
+            session.identity.clone(),
+            self.state.editor_source.clone(),
+            document,
+        ) {
+            Ok(()) => {
+                session.persisted_key = key;
+                session.observed_key = key;
+                session.changed_at = None;
+                session.in_flight = None;
+            }
+            Err(error) => self.set_error(format!("Could not save screenshot draft: {error}")),
+        }
+    }
+
+    fn open_image_editor(
+        &mut self,
+        image: RgbaImage,
+        source: Option<PathBuf>,
+        identity: DraftIdentity,
+    ) {
+        self.flush_editor_draft();
+        let dimensions = image.dimensions();
+        let restored = DraftStore::new(&data_dir()).load(&identity, source.as_deref());
+        let (document, did_restore) = match restored {
+            Ok(Some(document)) => (document, true),
+            Ok(None) => (captures_windows_native::editor::Document::new(image), false),
+            Err(error) => {
+                self.set_error(format!("Could not restore screenshot draft: {error}"));
+                (captures_windows_native::editor::Document::new(image), false)
+            }
+        };
+        self.state.edit_document_from(document, source, dimensions);
+        let key = self
+            .state
+            .editor
+            .as_ref()
+            .expect("editor document installed")
+            .render_key();
+        self.editor_draft = Some(DraftSession {
+            identity,
+            persisted_key: key,
+            observed_key: key,
+            changed_at: None,
+            in_flight: None,
+        });
+        if did_restore {
+            self.state.status = Some(("Restored unsaved screenshot edits".into(), Instant::now()));
+        }
+    }
+
+    fn reset_editor_draft_after_save(&mut self, destination: &Path, completion: SaveCompletion) {
+        let Some(previous) = self.editor_draft.take() else {
+            return;
+        };
+        let identity = if previous.identity.matches_source_path(destination) {
+            previous.identity.clone()
+        } else {
+            DraftIdentity::capture(destination.to_path_buf())
+        };
+        let document = self.state.editor.clone();
+        let key = document
+            .as_ref()
+            .map_or((0, 0), |document| document.render_key());
+        let persisted = if completion == SaveCompletion::NewerRevision {
+            document.is_some_and(|document| {
+                match self.drafts.save_and_wait(
+                    identity.clone(),
+                    Some(destination.to_path_buf()),
+                    document,
+                ) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        self.set_error(format!(
+                            "Could not preserve newer screenshot edits: {error}"
+                        ));
+                        false
+                    }
+                }
+            })
+        } else {
+            false
+        };
+        let discard_previous = completion == SaveCompletion::ExportedRevision
+            || (completion == SaveCompletion::NewerRevision
+                && persisted
+                && !identity.same_storage_location(&previous.identity));
+        if discard_previous && let Err(error) = self.drafts.discard_and_wait(previous.identity) {
+            self.set_error(format!("Could not clear screenshot draft: {error}"));
+        }
+        while self.drafts.try_recv().is_some() {}
+        self.editor_draft = Some(DraftSession {
+            identity,
+            persisted_key: if persisted || completion == SaveCompletion::ExportedRevision {
+                key
+            } else {
+                (0, 0)
+            },
+            observed_key: key,
+            changed_at: (!persisted && completion == SaveCompletion::NewerRevision)
+                .then(Instant::now),
+            in_flight: None,
+        });
+    }
+
     fn process_image_events(&mut self) {
         while let Some(event) = self.images.try_recv() {
             match event {
@@ -2524,22 +2717,23 @@ impl App {
                     }
                 }
                 ImageEvent::Save {
-                    document_id,
+                    document_key,
                     request,
                     destination,
                     dimensions,
                     result,
                 } => {
                     self.editor_saves.finish(request);
-                    let current_document = accepts_document_request(
+                    let completion = classify_save_completion(
                         self.state
                             .editor
                             .as_ref()
                             .map(|document| document.render_key()),
                         self.editor_save_request,
-                        document_id,
+                        document_key,
                         request,
                     );
+                    let current_document = completion != SaveCompletion::Stale;
                     match result {
                         Ok(()) => {
                             let artifact = Artifact::from_path(
@@ -2558,6 +2752,7 @@ impl App {
                                         format!("Saved {}", destination.display()),
                                         Instant::now(),
                                     ));
+                                    self.reset_editor_draft_after_save(&destination, completion);
                                 }
                             }
                         }
@@ -3958,6 +4153,10 @@ impl App {
                 };
                 match result {
                     Ok(Some(trashed)) => {
+                        retire_capture_session(&mut self.editor_draft, &old);
+                        let _ = self
+                            .drafts
+                            .discard_and_wait(DraftIdentity::capture(old.clone()));
                         let _ = self.history.replace_entry(&old, trashed);
                         self.state
                             .previews
@@ -3965,6 +4164,10 @@ impl App {
                         self.show_delete_return()
                     }
                     Ok(None) => {
+                        retire_capture_session(&mut self.editor_draft, &old);
+                        let _ = self
+                            .drafts
+                            .discard_and_wait(DraftIdentity::capture(old.clone()));
                         let _ = self.history.remove_entry(&old);
                         self.show_delete_return()
                     }

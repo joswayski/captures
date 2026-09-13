@@ -14,7 +14,7 @@
 .native-history-grid flowboxchild { padding: 0; }
 .native-history-card { min-width: 252px; padding: 0; background-color: @captures_raised; border: 1px solid @captures_border; border-radius: 14px; }
 .native-history-image { min-height: 168px; background-color: @captures_sunken; border-bottom: 1px solid @captures_border; }
-.native-history-delete { min-width: 30px; min-height: 30px; padding: 0; border: 1px solid @captures_border; border-radius: 8px; color: @captures_text; background-color: alpha(@captures_raised, 0.88); }
+.native-history-delete { min-width: 32px; min-height: 32px; padding: 0; border: 1px solid @captures_border; border-radius: 8px; color: @captures_text; background-color: alpha(@captures_raised, 0.88); }
 .native-history-delete:hover { color: white; background-color: @captures_signal; border-color: transparent; }
 .native-history-delete.confirm { color: white; background-color: @captures_signal; }
 .native-history-card-body { padding: 12px; }

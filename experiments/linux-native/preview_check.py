@@ -60,11 +60,9 @@ def find(name=None, prefix=None, role=None, frame=None):
     # GTK marks controls in non-focusable always-on-top windows as not
     # SHOWING even while their owning X11 frame is mapped. An exact unique
     # role/name match remains safe; ambiguous labels never use this fallback.
-    stable_native_target = (
-        (prefix == "Expand " and role == "push button")
-        or (name is not None and name.startswith("Preview "))
-    )
-    return hidden_matches[0] if len(hidden_matches) == 1 and stable_native_target else None
+    controls = [node for node in hidden_matches
+                if node.getRoleName() not in ("label", "filler")]
+    return controls[0] if len(controls) == 1 else None
 
 
 def wait(predicate, timeout=20):
@@ -84,6 +82,11 @@ def bounds(node):
         frame = frame.parent
     if not frame or not frame.name:
         raise AssertionError(f"No owning frame for {node.name!r}")
+    # GTK's bridge caches WINDOW_COORDS across EWMH moves. Clear only the
+    # exact, independently selected node and frame before combining those
+    # local coordinates with xwininfo's authoritative client origin.
+    node.clearCache()
+    frame.clearCache()
     rect = node.queryComponent().getExtents(pyatspi.WINDOW_COORDS)
     window = command(
         "xdotool", "search", "--onlyvisible", "--name", f"^{re.escape(frame.name)}$"
@@ -96,7 +99,22 @@ def bounds(node):
 
 def pointer_click(node):
     rect = bounds(node)
-    command("xdotool", "mousemove", rect.x + rect.width // 2, rect.y + rect.height // 2, "click", 1)
+    command("xdotool", "mousemove", "--sync", rect.x + rect.width // 2,
+            rect.y + rect.height // 2, "mousedown", 1)
+    time.sleep(0.08)
+    command("xdotool", "mouseup", 1)
+    time.sleep(0.18)
+
+
+def pointer_release_across_edge(node):
+    rect = bounds(node)
+    # GTK's accessibility bridge reports the 16 px icon bounds for this
+    # button. Include its 5 px CSS padding and 1 px border to press one pixel
+    # inside the actual button edge, then release four pixels beyond it.
+    x = rect.x + rect.width + 5
+    y = rect.y + rect.height // 2
+    command("xdotool", "mousemove", "--sync", x, y, "mousedown", 1,
+            "mousemove", "--sync", x + 5, y, "mouseup", 1)
     time.sleep(0.18)
 
 
@@ -107,18 +125,30 @@ def pointer_hover(node):
 
 
 def pointer_drag(node, destination, source_fraction=(0.5, 0.5)):
-    rect = bounds(node)
-    start = (
-        rect.x + int(rect.width * source_fraction[0]),
-        rect.y + int(rect.height * source_fraction[1]),
-    )
-    print(f"drag {node.name!r}: {start} -> {destination}", flush=True)
-    command("xdotool", "mousemove", "--sync", *start, "mousedown", 1)
-    for step in range(1, 15):
-        x = start[0] + (destination[0] - start[0]) * step // 14
-        y = start[1] + (destination[1] - start[1]) * step // 14
+    def source_point():
+        rect = bounds(node)
+        return (
+            rect.x + int(rect.width * source_fraction[0]),
+            rect.y + int(rect.height * source_fraction[1]),
+        )
+
+    start = source_point()
+    command("xdotool", "mousemove", "--sync", *start)
+    # Let GTK finish hover layout after an EWMH corner move, then refresh the
+    # accessible bounds before press. xdotool's server-side --sync does not
+    # drain GTK's event queue or settle the collapsed-stack hover animation.
+    time.sleep(0.3)
+    start = source_point()
+    command("xdotool", "mousemove", "--sync", *start)
+    time.sleep(0.05)
+    command("xdotool", "mousedown", 1)
+    # Keep early motion within the shaped card long enough for GTK's drag
+    # recognizer to claim the pointer sequence before the native window moves.
+    for step in range(1, 61):
+        x = start[0] + (destination[0] - start[0]) * step // 60
+        y = start[1] + (destination[1] - start[1]) * step // 60
         command("xdotool", "mousemove", "--sync", x, y)
-        time.sleep(0.018)
+        time.sleep(0.01)
     time.sleep(0.25)
     command("xdotool", "mouseup", 1)
     time.sleep(0.35)
@@ -276,6 +306,24 @@ def check_layout_and_actions(binary, images, artifacts, profile):
         for name, destination in corners.items():
             pile = wait(lambda: find(prefix="Expand ", role="push button"))
             pointer_drag(pile, destination)
+            screen_width, screen_height = map(
+                int, command("xdotool", "getdisplaygeometry").split())
+            preview_window = command(
+                "xdotool", "search", "--onlyvisible", "--name",
+                "^Captures — Mini previews$").splitlines()[-1]
+            _, _, preview_width, preview_height = xwindow_geometry(preview_window)
+            expected_x = 0 if destination[0] < screen_width / 2 else screen_width - preview_width
+            expected_y = 0 if destination[1] < screen_height / 2 else screen_height - preview_height
+            try:
+                wait(lambda: (lambda geometry:
+                     abs(geometry[0] - expected_x) <= 2 and
+                     abs(geometry[1] - expected_y) <= 2)(xwindow_geometry(
+                         preview_window)))
+            except AssertionError as error:
+                actual = xwindow_geometry(preview_window)
+                raise AssertionError(
+                    f"{name} preview geometry {actual}, expected ({expected_x}, {expected_y})"
+                ) from error
             screenshot(artifacts / f"after-preview-{name}-collapsed.png")
 
         pile = wait(lambda: find(prefix="Expand ", role="push button"))
@@ -286,6 +334,13 @@ def check_layout_and_actions(binary, images, artifacts, profile):
         assert find("Close amber-small.png", role="push button") is None, (
             "per-card chrome must remain hidden without hover"
         )
+        reference_x, reference_y, _, _ = xwindow_geometry(reference)
+        # These are green-card-like local coordinates, but on the reference
+        # window's surface. A timer that ignores surface identity falsely
+        # exposes green's controls while the pointer is outside the preview.
+        command("xdotool", "mousemove", "--sync", reference_x + 170, reference_y + 400)
+        time.sleep(0.2)
+        assert find("Close green-tall.png", role="push button") is None
         screenshot(artifacts / "after-preview-expanded-idle.png")
         pointer_hover(wait(lambda: find("Preview amber-small.png")))
         wait(lambda: find("Close amber-small.png", role="push button"))
@@ -294,17 +349,33 @@ def check_layout_and_actions(binary, images, artifacts, profile):
         blue_card = wait(lambda: find("Preview blue-square.png"))
         self_drop(blue_card)
         screenshot(artifacts / "after-preview-self-drop-reject.png")
-        assert find("Close blue-square.png", role="push button"), "self-drop dismissed its card"
+        assert find("Preview blue-square.png"), "self-drop dismissed its card"
+        wait(lambda: find("Close blue-square.png", role="push button"))
 
         # Exercise a non-front card by identity, not by an AT-SPI action behind
         # another window. Pointer coordinates must hit the visible GTK button.
         pointer_hover(wait(lambda: find("Preview green-tall.png")))
         pointer_click(wait(lambda: find("Copy green-tall.png", role="push button")))
-        assert find("Copy green-tall.png", role="push button") is None
+        wait(lambda: find("Copy green-tall.png", role="push button") is None)
         pointer_hover(wait(lambda: find("Preview amber-small.png")))
         assert find("Copy amber-small.png", role="push button"), "copy state leaked across cards"
 
         green = images[1]
+        pointer_hover(wait(lambda: find("Preview green-tall.png")))
+        close = wait(lambda: find("Close green-tall.png", role="push button"))
+        pointer_release_across_edge(close)
+        assert find("Close green-tall.png", role="push button"), (
+            "release outside the pressed Close button activated it"
+        )
+        assert green.exists(), "edge release deleted the selected card's file"
+        close_rect = bounds(wait(lambda: find("Close green-tall.png", role="push button")))
+        command("xdotool", "mousemove", "--sync",
+                close_rect.x + close_rect.width // 2,
+                close_rect.y + close_rect.height // 2, "mousedown", 1,
+                "mousemove", "--sync", reference_x + 400, reference_y + 300, "mouseup", 1)
+        wait(lambda: find("Close green-tall.png", role="push button") is None)
+        assert find("Preview green-tall.png"), "foreign-surface release activated Close"
+        assert green.exists(), "foreign-surface release deleted the source"
         pointer_hover(wait(lambda: find("Preview green-tall.png")))
         pointer_click(wait(lambda: find("Close green-tall.png", role="push button")))
         wait(lambda: find("Close green-tall.png", role="push button") is None)
