@@ -525,8 +525,11 @@ pub fn icon_text_button(label: &str, name: &str) -> gtk::Button {
     let button = gtk::Button::new();
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     content.set_halign(gtk::Align::Center);
+    content.set_valign(gtk::Align::Center);
     content.append(&icon(name, 14));
-    content.append(&gtk::Label::new(Some(label)));
+    let text = gtk::Label::new(Some(label));
+    text.set_valign(gtk::Align::Center);
+    content.append(&text);
     button.set_child(Some(&content));
     named(&button, label);
     button

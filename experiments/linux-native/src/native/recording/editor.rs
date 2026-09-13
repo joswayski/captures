@@ -1172,14 +1172,16 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     accessible_name(&make_copy, "Save as new file");
     make_copy.set_tooltip_text(Some("Save separately and preserve the source recording"));
     let make_copy_row = gtk::Box::new(gtk::Orientation::Horizontal, 7);
+    make_copy_row.add_css_class("recording-make-copy");
+    make_copy_row.set_valign(gtk::Align::End);
     make_copy_row.append(&make_copy);
     make_copy_row.append(&gtk::Label::new(Some("Save as new file")));
     let status = ui::label("Preparing editor…", "muted");
     let cancel = ui::button("Cancel export");
     let export = ui::icon_text_button("Save", "save");
     export.style_context().add_class("primary");
-    export.set_valign(gtk::Align::Center);
-    cancel.set_valign(gtk::Align::Center);
+    export.set_valign(gtk::Align::End);
+    cancel.set_valign(gtk::Align::End);
     cancel.set_sensitive(false);
     cancel.set_opacity(0.0);
     footer.pack_start(&filename_box, true, true, 0);
@@ -3142,8 +3144,12 @@ fn install_editor_styles(window: &gtk::Window) {
         }}
         .recording-editor-root .recording-save-footer button.primary {{
             min-width: 0;
-            min-height: 0;
-            padding: {save_vertical} {save_horizontal};
+            min-height: {field_height};
+            padding: 0 {save_horizontal};
+        }}
+        .recording-editor-root .recording-make-copy {{
+            min-height: {field_height};
+            padding-bottom: {link_vertical};
         }}
     "#,
         footer_vertical = ui::token("s-5"),
@@ -3152,7 +3158,6 @@ fn install_editor_styles(window: &gtk::Window) {
         link_vertical = ui::token("s-1"),
         link_horizontal = ui::token("s-2"),
         field_height = ui::token("s-9"),
-        save_vertical = ui::token("s-4"),
         save_horizontal = ui::token("s-5"),
     );
     provider.load_from_data(&css);

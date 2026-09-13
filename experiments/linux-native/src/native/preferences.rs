@@ -175,6 +175,7 @@ fn stacked_row(title: &str, description: &str, control: &impl IsA<gtk::Widget>) 
 fn theme_swatch(accent: &str, signal: &str, custom: bool) -> gtk::DrawingArea {
     let swatch = gtk::DrawingArea::new();
     swatch.set_size_request(18, 18);
+    swatch.set_valign(gtk::Align::Center);
     swatch.style_context().add_class("native-theme-swatch");
     let accent = gdk::RGBA::parse(accent).unwrap();
     let signal = gdk::RGBA::parse(signal).unwrap();
@@ -708,12 +709,9 @@ pub fn open(
         ui::named(&button, &format!("{name}: {description}"));
         button.set_tooltip_text(Some(description));
         let content = gtk::Box::new(gtk::Orientation::Horizontal, spacing("s-3", 6));
-        content.pack_start(
-            &theme_swatch(accent, signal, id == "custom"),
-            false,
-            false,
-            0,
-        );
+        let swatch = theme_swatch(accent, signal, id == "custom");
+        ui::named(&swatch, &format!("{name} color swatch"));
+        content.pack_start(&swatch, false, false, 0);
         let label = ui::label(name, "native-theme-option-label");
         label.set_ellipsize(gtk::pango::EllipsizeMode::End);
         content.pack_start(&label, true, true, 0);

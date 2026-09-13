@@ -70,6 +70,15 @@ def main():
             wait(history_fits_display)
             clear = screen_bounds(find('Delete all captures', frame='Captures — History'), 'Captures — History')
             assert clear.height <= 40, ('Delete all stretched to the heading height', clear)
+            name = screen_bounds(find(first.name, 'label', 'Captures — History'), 'Captures — History')
+            size = screen_bounds(find(f'File size for {first.name}: {first.stat().st_size // 1000} KB',
+                                     'label', 'Captures — History'), 'Captures — History')
+            assert abs(name.y + name.height / 2 - size.y - size.height / 2) <= 1, (name, size)
+            assert name.x + name.width <= size.x, (name, size)
+            for button_name in ('Edit history-first.png', 'Restore history-first.png', 'Delete all captures'):
+                content = list(find(button_name, 'push button', 'Captures — History'))[0]
+                icon, text = [screen_bounds(child, 'Captures — History') for child in content]
+                assert abs(icon.y + icon.height / 2 - text.y - text.height / 2) <= 1, (button_name, icon, text)
             edit = screen_bounds(
                 find('Edit history-first.png', frame='Captures — History'),
                 'Captures — History',

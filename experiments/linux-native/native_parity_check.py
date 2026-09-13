@@ -122,6 +122,12 @@ def main():
                 capture(args.artifacts, 'preferences-general', 'Captures Preferences')
                 click('Appearance preferences section', 'Captures Preferences')
                 wait(lambda: find('Appearance preferences section', frame='Captures Preferences').getState().contains(pyatspi.STATE_CHECKED))
+                swatches = [node for node in walk(find('Color theme', frame='Captures Preferences'))
+                            if node.name.endswith(' color swatch')]
+                assert len(swatches) >= 10, len(swatches)
+                for swatch in swatches:
+                    bounds = screen_bounds(swatch, 'Captures Preferences')
+                    assert bounds.width == bounds.height == 18, (swatch.name, bounds)
                 capture(args.artifacts, 'preferences-appearance', 'Captures Preferences')
                 choose('Interface theme', 2, 'Captures Preferences')
                 cobalt = 'Cobalt: True blue and coral'

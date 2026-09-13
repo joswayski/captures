@@ -29,6 +29,11 @@ not screenshots substituted into a native window. The historical
 [parity audit](native-parity-audit.md) records known gaps in the earlier prototypes;
 it is not a certification of the new implementations.
 
+The pinned [main UI reference set](reference/main-2026-09-13/README.md) preserves
+Preferences, editors, History and capture controls for later comparison. Its
+provenance distinguishes actual Tauri desktop captures from mocked React harness
+views, including the actual Tauri recording preview's black initial state in the orb.
+
 - Capture: screenshot/recording selection, region presets, compact/expanded
   menus, cursor/audio toggles, highlighted inclusion warning, countdown, and
   lock cancellation.
@@ -106,6 +111,16 @@ These are implemented experiments, not drop-in replacements. In particular:
   the trimmed selection duration. Light/dark and long-directory cancellation were
   exercised; fresh photo-editor, Preferences and History views were inspected, and
   History's stretched Delete all action is now vertically centered.
+  The next alignment pass keeps all accent swatches at 18×18, aligns recording
+  Save/copy controls with the filename row, centers shared action icons/text,
+  and places History filename/size together with date/type below. Fresh native
+  Preferences, screenshot-editor and History checks pass geometry assertions;
+  71 Rust tests pass (one benchmark ignored), with fmt and strict Clippy. These
+  are GTK4 changes; shipping Tauri and the other native frontends are unchanged.
+  Full recording revalidation also passes, including the new footer geometry.
+  The helper targets the combo arrow, awaits its popup, selects with closed-combo
+  keyboard input, and awaits export completion before switching formats; real
+  MP4/GIF dimensions and source-preservation assertions remain strict.
   Preview placement is verified on
   Openbox only and snaps on release; physical multi-monitor/audio, mixed DPI,
   other WMs, hardware GPU and Wayland behavior remain unverified.

@@ -62,6 +62,7 @@ def main():
         assert bounds.height == copy_bounds.height == 36, (bounds, copy_bounds)
         assert abs(bounds.y - copy_bounds.y) <= 1, (bounds, copy_bounds)
         assert abs(bounds.y + bounds.height - filename_bounds.y - filename_bounds.height) <= 1
+        assert abs(copy_switch.y + copy_switch.height / 2 - bounds.y - bounds.height / 2) <= 1, (copy_switch, bounds)
         cmd('xdotool', 'mousemove', bounds.x + bounds.width // 2, bounds.y + bounds.height // 2)
         capture(args.artifacts, 'editor-save-hover', editor)
         client_x, client_y, _, _ = xwindow_geometry(window)

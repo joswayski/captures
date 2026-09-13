@@ -83,6 +83,16 @@ fn remove_entry(entries: &mut Vec<Entry>, path: &Path) {
     entries.retain(|entry| entry.path != path);
 }
 
+fn format_size(bytes: u64) -> String {
+    if bytes >= 1_000_000 {
+        format!("{:.1} MB", bytes as f64 / 1_000_000.)
+    } else if bytes >= 1_000 {
+        format!("{} KB", bytes / 1_000)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 fn set_icon_text_button_label(button: &gtk::Button, text: &str) {
     if let Some(label) = button
         .child()
@@ -318,13 +328,24 @@ pub fn open_with_restore(
             .and_then(|date| date.format("%b %-d, %Y, %-I:%M %p"))
             .map(|date| date.to_string())
             .unwrap_or_else(|_| name.clone());
-        let label = ui::label(&date, "native-history-date");
+        let label = ui::label(&name, "native-history-date");
         ui::named(&card, &format!("History item {name}"));
         label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-        label.set_max_width_chars(28);
-        label.set_margin_start(12);
-        label.set_margin_end(12);
-        card.add(&label);
+        label.set_max_width_chars(18);
+        label.set_hexpand(true);
+        label.set_tooltip_text(Some(&name));
+        let identity = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        identity.set_margin_start(12);
+        identity.set_margin_end(12);
+        identity.append(&label);
+        let size = std::fs::metadata(&entry.path).map(|m| m.len()).unwrap_or(0);
+        let size_label = ui::label(&format_size(size), "muted");
+        ui::named(
+            &size_label,
+            &format!("File size for {name}: {}", format_size(size)),
+        );
+        identity.append(&size_label);
+        card.add(&identity);
         let ext = entry
             .path
             .extension()
@@ -332,15 +353,8 @@ pub fn open_with_restore(
             .to_string_lossy()
             .to_ascii_lowercase();
         let category = kind(&entry.path);
-        let size = std::fs::metadata(&entry.path).map(|m| m.len()).unwrap_or(0);
-        let metadata = ui::label(
-            &format!(
-                "{} · {:.1} MB",
-                ext.to_ascii_uppercase(),
-                size as f64 / 1_000_000.
-            ),
-            "muted",
-        );
+        let metadata = ui::label(&format!("{date} · {}", ext.to_ascii_uppercase()), "muted");
+        metadata.set_ellipsize(gtk::pango::EllipsizeMode::End);
         metadata.set_margin_start(12);
         metadata.set_margin_end(12);
         card.add(&metadata);
@@ -511,6 +525,20 @@ pub fn open_with_restore(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sizes_keep_small_files_visible_and_switch_units_at_decimal_boundaries() {
+        for (bytes, expected) in [
+            (999, "999 B"),
+            (1_000, "1 KB"),
+            (27_456, "27 KB"),
+            (999_999, "999 KB"),
+            (1_000_000, "1.0 MB"),
+            (1_700_000, "1.7 MB"),
+        ] {
+            assert_eq!(format_size(bytes), expected);
+        }
+    }
+
     #[test]
     fn retention_boundary_keeps_files_and_drops_only_expired_metadata() {
         let dir = tempfile::tempdir().unwrap();

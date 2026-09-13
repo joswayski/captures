@@ -159,14 +159,23 @@ def enable_check(name, frame):
     wait(lambda: node.getState().contains(pyatspi.STATE_CHECKED))
 
 
-def choose(current, keys, frame="Captures — Linux native"):
+def choose(current, index, frame="Captures — Linux native"):
     node = wait(lambda: find(current, "combo box", frame))
     window = command("xdotool", "search", "--onlyvisible", "--name", frame).splitlines()[-1]
     command("xdotool", "windowactivate", "--sync", window)
-    bounds = screen_bounds(node, frame)
-    command("xdotool", "mousemove", bounds.x + bounds.width // 2, bounds.y + bounds.height // 2, "click", 1)
-    time.sleep(0.3)
-    command("xdotool", "key", "--delay", 100, *keys, "Return")
+    arrow = next(child for child in walk(node) if child.name == "GtkBuiltinIcon")
+    bounds = screen_bounds(arrow, frame)
+    command("xdotool", "mousemove", bounds.x + bounds.width // 2, bounds.y + bounds.height // 2)
+    time.sleep(0.1)
+    command("xdotool", "click", 1)
+    wait(lambda: find('GtkTreePopover', 'filler', frame))
+    # Keep keyboard focus on the combo, but close its separate popup surface.
+    # GTK4 reports popup rows in coordinates that omit its placement offset;
+    # opening near the footer also changes popup positioning. Closed-combo
+    # Home/Down selects directly, without racing popup focus or Return dismissal.
+    command('xdotool', 'key', 'Escape')
+    wait(lambda: not find('GtkTreePopover', 'filler', frame))
+    command('xdotool', 'key', '--delay', 100, 'Home', *(['Down'] * index))
     time.sleep(0.2)
 
 
@@ -505,11 +514,11 @@ def main():
             set_value("Crop X", 80)
             set_value("Crop Y", 50)
             scroll_to("Edit recording — Captures", bottom=True)
-            choose("Output resolution", ("Home", "Down", "Down", "Down"), "Edit recording — Captures")
+            choose("Output resolution", 3, "Edit recording — Captures")
             set_value("Output width", 320)
             set_value("Output height", 200)
-            choose("Save quality", ("Home", "Down"), "Edit recording — Captures")
-            choose("Compression quality", ("Home", "Down", "Down", "Down", "Down"), "Edit recording — Captures")
+            choose("Save quality", 1, "Edit recording — Captures")
+            choose("Compression quality", 4, "Edit recording — Captures")
             capture(args.artifacts, "recording-editor-export-options", "Edit recording — Captures")
             # Changing quality automatically produces the current comparison;
             # do not invoke the hidden implementation trigger via AT-SPI.
@@ -528,6 +537,9 @@ def main():
             filename_heading = screen_bounds(find("Filename", "label", "Edit recording — Captures"), "Edit recording — Captures")
             assert footer_format.width <= 84, footer_format
             assert footer_save.width <= 90 and footer_save.height <= 44, footer_save
+            copy_toggle = screen_bounds(find('Save as new file', frame='Edit recording — Captures'), 'Edit recording — Captures')
+            assert abs(copy_toggle.y + copy_toggle.height / 2 - footer_format.y - footer_format.height / 2) <= 2, (copy_toggle, footer_format)
+            assert abs(footer_save.y + footer_save.height - footer_format.y - footer_format.height) <= 1, (footer_save, footer_format)
             assert filename_heading.x - frame_bounds.x >= 32, (filename_heading, frame_bounds)
             assert not find("Change…", "push button", "Edit recording — Captures")
             bounds = screen_bounds(comparison, "Edit recording — Captures")
@@ -597,12 +609,15 @@ def main():
             find("Saved filename", frame="Edit recording — Captures").queryEditableText().setTextContents("parity-output")
             click("Save", "Edit recording — Captures")
             exported = wait(lambda: next(destination.glob("parity-output*.mp4"), None))
+            # Publication precedes the GTK completion callback. Await that
+            # callback before taking coordinates in the reflowing footer.
+            wait(lambda: find("Export complete", "label", "Edit recording — Captures"))
             video = stream_metadata(exported)[0]
             assert (video["width"], video["height"]) == (320, 200), video
             exported_duration = float(video.get("duration", 0))
             assert 0.3 < exported_duration < duration / 1_000, (duration, exported_duration)
 
-            choose("Format", ("Home", "Down"), "Edit recording — Captures")
+            choose("Format", 1, "Edit recording — Captures")
             click("Save", "Edit recording — Captures")
             gif = wait(lambda: next(destination.glob("parity-output*.gif"), None))
             gif_video = stream_metadata(gif)[0]
