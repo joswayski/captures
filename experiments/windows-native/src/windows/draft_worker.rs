@@ -125,6 +125,20 @@ impl DraftWorker {
             .map_err(|_| "screenshot draft worker stopped".to_owned())?
     }
 
+    pub fn preserve_newer_export(
+        &self,
+        previous: DraftIdentity,
+        destination: DraftIdentity,
+        destination_path: PathBuf,
+        document: Document,
+    ) -> Result<(), String> {
+        self.save_and_wait(destination.clone(), Some(destination_path), document)?;
+        if !destination.same_storage_location(&previous) {
+            self.discard_and_wait(previous)?;
+        }
+        Ok(())
+    }
+
     pub fn try_recv(&self) -> Option<Event> {
         self.events.try_recv().ok()
     }
@@ -153,6 +167,49 @@ mod tests {
         assert!(
             DraftStore::new(profile.path())
                 .load(&identity, Some(&path))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn export_revision_completion_preserves_newer_revision_under_destination_identity() {
+        let profile = tempfile::tempdir().unwrap();
+        let source = profile.path().join("source.png");
+        let destination = profile.path().join("saved.png");
+        let source_identity = DraftIdentity::capture(source.clone());
+        let destination_identity = DraftIdentity::capture(destination.clone());
+        let worker = DraftWorker::new(profile.path().to_path_buf());
+        let mut document = Document::new(RgbaImage::from_pixel(3, 2, Rgba([17, 31, 47, 255])));
+        worker
+            .save_and_wait(
+                source_identity.clone(),
+                Some(source.clone()),
+                document.clone(),
+            )
+            .unwrap();
+        let exported_key = document.render_key();
+        document.set_background(Some([101, 103, 107, 255]));
+        assert_eq!(document.render_key(), (exported_key.0, exported_key.1 + 1));
+
+        worker
+            .preserve_newer_export(
+                source_identity.clone(),
+                destination_identity.clone(),
+                destination.clone(),
+                document.clone(),
+            )
+            .unwrap();
+
+        let restored = DraftStore::new(profile.path())
+            .load(&destination_identity, Some(&destination))
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.background, Some([101, 103, 107, 255]));
+        assert_eq!(restored.render().unwrap(), document.render().unwrap());
+        assert!(
+            DraftStore::new(profile.path())
+                .load(&source_identity, Some(&source))
                 .unwrap()
                 .is_none()
         );

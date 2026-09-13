@@ -206,6 +206,12 @@ public static class CapturesFixtureNative {
       throw new InvalidOperationException("PostMessage could not commit fixture text");
     }
   }
+
+  public static void CloseWindow(IntPtr hwnd) {
+    if (!PostMessage(hwnd, 0x0010, IntPtr.Zero, IntPtr.Zero)) {
+      throw new InvalidOperationException("PostMessage could not deliver WM_CLOSE");
+    }
+  }
 }
 "@
 
@@ -400,6 +406,98 @@ function Save-View([string]$appearance, [string]$view, [string]$artifactView = $
   }
 }
 
+function Wait-FixtureWindow([Diagnostics.Process]$process, [string]$phase) {
+  $handle = [IntPtr]::Zero
+  for ($attempt = 0; $attempt -lt 300 -and $handle -eq [IntPtr]::Zero; $attempt++) {
+    if ($process.HasExited) { throw "draft $phase exited before creating a window (exit $($process.ExitCode))" }
+    Start-Sleep -Milliseconds 100
+    $handle = [CapturesFixtureNative]::FindWindowForProcess([uint32]$process.Id)
+  }
+  if ($handle -eq [IntPtr]::Zero) { throw "draft $phase PID $($process.Id) did not create the Captures window" }
+  return $handle
+}
+
+function Wait-FixtureMarker([Diagnostics.Process]$process, [string]$path, [string]$expected, [string]$phase) {
+  for ($attempt = 0; $attempt -lt 200 -and !(Test-Path $path); $attempt++) {
+    if ($process.HasExited) { throw "draft $phase exited before writing $(Split-Path -Leaf $path) (exit $($process.ExitCode))" }
+    Start-Sleep -Milliseconds 50
+  }
+  if (!(Test-Path $path)) { throw "draft $phase did not write $(Split-Path -Leaf $path)" }
+  $actual = (Get-Content $path -Raw).Trim()
+  if ($actual -ne $expected) { throw "draft $phase marker was '$actual', expected '$expected'" }
+}
+
+function Close-DraftFixture([Diagnostics.Process]$process, [IntPtr]$handle, [string]$marker, [string]$phase) {
+  [CapturesFixtureNative]::CloseWindow($handle)
+  Wait-FixtureMarker $process $marker "flush:exact" $phase
+  if (!$process.WaitForExit(10000)) {
+    throw "draft $phase process $($process.Id) did not terminate within 10 seconds after WM_CLOSE"
+  }
+  if ($process.ExitCode -ne 0) { throw "draft $phase process exited $($process.ExitCode)" }
+}
+
+function Save-DraftRestartFixture() {
+  $source = Join-Path $profile "draft-source-sentinel.png"
+  Copy-Item $ImagePath $source
+  $sourceHash = (Get-FileHash $source -Algorithm SHA256).Hash
+  $editedMarker = Join-Path $profile "editor-draft-edited.txt"
+  $createFlushMarker = Join-Path $profile "editor-draft-create-flushed.txt"
+  $restoredMarker = Join-Path $profile "editor-draft-restored.txt"
+  $restoreFlushMarker = Join-Path $profile "editor-draft-restore-flushed.txt"
+  Remove-Item $editedMarker, $createFlushMarker, $restoredMarker, $restoreFlushMarker -Force -ErrorAction SilentlyContinue
+
+  $createArguments = @("--view", "editor-draft-create", "--appearance", "light", "--fixture-image", ('"{0}"' -f $source), "--fixture-video", ('"{0}"' -f $VideoPath))
+  $create = Start-Process $exe -ArgumentList $createArguments -PassThru
+  try {
+    $createHandle = Wait-FixtureWindow $create "create"
+    [void][CapturesFixtureNative]::PositionAndValidateWindow($createHandle)
+    [CapturesFixtureNative]::ClickLogical($createHandle, 28, 232)
+    [CapturesFixtureNative]::ClickLogical($createHandle, 296, 311)
+    [CapturesFixtureNative]::DragLogical($createHandle, 250, 190, 430, 330)
+    Wait-FixtureMarker $create $editedMarker "edit:polygon-10" "create edit"
+    Close-DraftFixture $create $createHandle $createFlushMarker "create close"
+  } finally {
+    if (!$create.HasExited) { Stop-Process -Id $create.Id -Force }
+  }
+  if ((Get-FileHash $source -Algorithm SHA256).Hash -ne $sourceHash) {
+    throw "draft create/close rewrote the source sentinel"
+  }
+
+  Remove-Item (Join-Path $profile "render-driver.txt") -Force -ErrorAction SilentlyContinue
+  $restoreArguments = @("--view", "editor-draft-restore", "--appearance", "light", "--fixture-image", ('"{0}"' -f $source), "--fixture-video", ('"{0}"' -f $VideoPath))
+  $restore = Start-Process $exe -ArgumentList $restoreArguments -PassThru
+  try {
+    $restoreHandle = Wait-FixtureWindow $restore "restore"
+    Wait-FixtureMarker $restore $restoredMarker "restore:polygon-10:editable-undo" "restore"
+    $bounds = [CapturesFixtureNative]::PositionAndValidateWindow($restoreHandle)
+    Add-Content $boundsLog "light,editor-draft-restored,$bounds"
+    $driver = (Get-Content (Join-Path $profile "render-driver.txt") -Raw).Trim()
+    if ($driver -notin @("hardware", "warp")) { throw "draft restore reported unknown D3D driver '$driver'" }
+    Add-Content $driverLog "light,editor-draft-restored,$driver"
+    Start-Sleep -Milliseconds 350
+    $rect = New-Object CapturesFixtureNative+RECT
+    if (![CapturesFixtureNative]::GetWindowRect($restoreHandle, [ref]$rect)) { throw "GetWindowRect failed for restored draft" }
+    $bitmap = New-Object Drawing.Bitmap ($rect.Right-$rect.Left), ($rect.Bottom-$rect.Top)
+    $graphics = [Drawing.Graphics]::FromImage($bitmap)
+    try {
+      $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
+    } finally { $graphics.Dispose() }
+    try {
+      $path = Join-Path $out "light-editor-draft-restored.png"
+      $bitmap.Save($path, [Drawing.Imaging.ImageFormat]::Png)
+      Assert-NonBlank $bitmap "editor-draft-restored"
+      Write-Host $path
+    } finally { $bitmap.Dispose() }
+    Close-DraftFixture $restore $restoreHandle $restoreFlushMarker "restore close"
+  } finally {
+    if (!$restore.HasExited) { Stop-Process -Id $restore.Id -Force }
+  }
+  if ((Get-FileHash $source -Algorithm SHA256).Hash -ne $sourceHash) {
+    throw "draft restore/edit/close rewrote the source sentinel"
+  }
+  Write-Host "draft restart fixture restored editable polygon and preserved source SHA256 $sourceHash"
+}
+
 $previousData = $env:CAPTURES_WINDOWS_NATIVE_DATA
 try {
   # Protect both temporary thread DPI state and the first display-mode side effect.
@@ -419,6 +517,7 @@ try {
     Save-View $appearance "editor-merge-visible" "editor-source-consumed-input-smoke" $false $false $false $false $true
     Save-View $appearance "editor-flatten-source" "editor-source-only-flatten-smoke" $false $false $false $false $false $true
   }
+  Save-DraftRestartFixture
 } finally {
   $env:CAPTURES_WINDOWS_NATIVE_DATA = $previousData
   Remove-Item -Recurse -Force $profile -ErrorAction SilentlyContinue

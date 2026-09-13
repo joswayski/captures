@@ -4,6 +4,160 @@ import XCTest
 
 @MainActor
 final class EditorModelTests: XCTestCase {
+    func testVisibleCaptureShortcutMatchesShippingRecaptureAndSwitchPolicy() {
+        XCTAssertEqual(visibleCaptureShortcutAction(
+            surface: .none,
+            currentKind: nil, currentTarget: nil,
+            requestedKind: "image", requestedTarget: "region"
+        ), .present)
+        XCTAssertEqual(visibleCaptureShortcutAction(
+            surface: .none,
+            currentKind: "image", currentTarget: "region",
+            requestedKind: "image", requestedTarget: "region"
+        ), .present, "A retained model behind a hidden refreshing panel must restart presentation")
+        for target in ["region", "window", "display"] {
+            XCTAssertEqual(visibleCaptureShortcutAction(
+                surface: .selectorMenu,
+                currentKind: "image", currentTarget: target,
+                requestedKind: "image", requestedTarget: target
+            ), .recaptureVisibleUI)
+        }
+        XCTAssertEqual(visibleCaptureShortcutAction(
+            surface: .selectorMenu,
+            currentKind: "image", currentTarget: "region",
+            requestedKind: "image", requestedTarget: "window"
+        ), .switchInPlace)
+        XCTAssertEqual(visibleCaptureShortcutAction(
+            surface: .screenshotOverlay,
+            currentKind: "image", currentTarget: "region",
+            requestedKind: "image", requestedTarget: "window"
+        ), .recaptureVisibleUI, "Shipping's committed screenshot overlay recaptures for every screenshot target")
+        XCTAssertEqual(visibleCaptureShortcutAction(
+            surface: .selectorMenu,
+            currentKind: "image", currentTarget: "display",
+            requestedKind: "video", requestedTarget: "display"
+        ), .switchInPlace)
+        XCTAssertEqual(visibleCaptureShortcutAction(
+            surface: .selectorMenu,
+            currentKind: "video", currentTarget: "region",
+            requestedKind: "gif", requestedTarget: "region"
+        ), .switchInPlace)
+        XCTAssertEqual(visibleCaptureShortcutAction(
+            surface: .selectorMenu,
+            currentKind: "video", currentTarget: "window",
+            requestedKind: "video", requestedTarget: "window"
+        ), .switchInPlace, "Repeated recording shortcuts switch the existing selector instead of nesting it")
+    }
+
+    func testProgrammaticCoalescedKindSwitchCannotSuppressNextUserChange() {
+        var kind = "video"
+        var refreshes = 0
+
+        // Programmatic shortcuts can change away and back before SwiftUI emits
+        // an observation. They intentionally bypass the user Binding callback.
+        kind = "image"
+        kind = "video"
+        XCTAssertEqual(refreshes, 0)
+
+        applyUserCaptureSelectionChange("image", current: kind) { updated in
+            kind = updated
+            refreshes += 1
+        }
+        XCTAssertEqual(kind, "image")
+        XCTAssertEqual(refreshes, 1, "A later genuine user change must always refresh its freeze")
+
+        applyUserCaptureSelectionChange("image", current: kind) { _ in refreshes += 1 }
+        XCTAssertEqual(refreshes, 1, "Re-selecting the current segment is a no-op")
+    }
+
+    func testUserTargetAndModeSwitchCancelPendingRecaptureBeforeStaleCompletion() {
+        let panel = NSPanel()
+        panel.sharingType = .none
+        let sharing = TemporaryWindowSharing()
+        var state = VisibleCaptureRecaptureState()
+        let targetRequest = UUID()
+        var target = "region"
+
+        state.begin(generation: targetRequest)
+        sharing.makeShareable(panel)
+        applyUserCaptureSelectionChange("window", current: target) { updated in
+            target = updated
+            cancelVisibleCaptureRecapture(state: &state, windowSharing: sharing)
+        }
+        XCTAssertEqual(target, "window")
+        XCTAssertFalse(state.isPending)
+        XCTAssertEqual(panel.sharingType, .none)
+        XCTAssertFalse(state.finish(generation: targetRequest), "Old target recapture cannot install after the user switch")
+
+        let modeRequest = UUID()
+        state.begin(generation: modeRequest)
+        sharing.makeShareable(panel)
+        var modeSteps: [String] = []
+        handleUserCaptureKindChange(
+            freezeScreen: false,
+            invalidate: {
+                modeSteps.append("invalidate")
+                cancelVisibleCaptureRecapture(state: &state, windowSharing: sharing)
+            },
+            refresh: { modeSteps.append("refresh") }
+        )
+        XCTAssertEqual(modeSteps, ["invalidate"], "Freeze-off mode changes still cancel nested work without refreshing")
+        XCTAssertFalse(state.isPending)
+        XCTAssertEqual(panel.sharingType, .none)
+        XCTAssertFalse(state.finish(generation: modeRequest), "Old mode recapture cannot install after cleanup")
+
+        handleUserCaptureKindChange(
+            freezeScreen: true,
+            invalidate: { modeSteps.append("invalidate") },
+            refresh: { modeSteps.append("refresh") }
+        )
+        XCTAssertEqual(modeSteps.suffix(2), ["invalidate", "refresh"], "Freeze-on mode changes retain ordinary refresh ordering")
+    }
+
+    func testRecaptureReadinessBlocksCaptureUntilCurrentRequestFinishes() {
+        var state = VisibleCaptureRecaptureState()
+        let first = UUID()
+        let superseding = UUID()
+        var visibleSelection: CGRect? = CGRect(x: 27, y: 41, width: 319, height: 173)
+        XCTAssertFalse(state.isPending)
+        state.begin(generation: first)
+        XCTAssertFalse(state.allowsCapture)
+        XCTAssertNotNil(visibleSelection, "Selected region chrome remains visible while its pixels are captured")
+        XCTAssertTrue(state.isPending, "Enter/display commit must not consume the previous freeze")
+        state.begin(generation: superseding)
+        XCTAssertTrue(state.isPending, "A superseding shortcut remains pending")
+        XCTAssertFalse(state.finish(generation: first))
+        XCTAssertNotNil(visibleSelection, "A stale result cannot clear the visible selection")
+        XCTAssertTrue(state.isPending, "A stale completion must not unblock capture during its replacement")
+        if state.finish(generation: superseding) { visibleSelection = nil }
+        XCTAssertNil(visibleSelection, "Selection resets only while installing the current captured frame")
+        XCTAssertFalse(state.isPending)
+        XCTAssertTrue(state.allowsCapture)
+        state.cancel()
+        XCTAssertFalse(state.isPending, "Cancellation and cleanup are idempotent")
+    }
+
+    func testTemporaryWindowSharingRestoresOriginalTypeAcrossRepeatsAndReplacement() {
+        let first = NSPanel()
+        first.sharingType = .none
+        let second = NSPanel()
+        second.sharingType = .readWrite
+        let sharing = TemporaryWindowSharing()
+
+        sharing.makeShareable(first)
+        sharing.makeShareable(first)
+        XCTAssertEqual(first.sharingType, .readOnly)
+
+        sharing.makeShareable(second)
+        XCTAssertEqual(first.sharingType, .none, "Replacing an in-flight window restores its exclusion")
+        XCTAssertEqual(second.sharingType, .readOnly)
+
+        sharing.restore()
+        XCTAssertEqual(second.sharingType, .readWrite, "Cancellation restores the exact prior policy")
+        sharing.restore()
+        XCTAssertEqual(second.sharingType, .readWrite, "Repeated cancellation is harmless")
+    }
+
     func testRecordingEstimateLifecycleSchedulesForEitherProbeAndAppearanceOrder() {
         var probeFirst = RecordingEstimateLifecycle()
         XCTAssertFalse(probeFirst.probeChanged(isReady: true))

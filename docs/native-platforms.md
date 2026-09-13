@@ -117,8 +117,13 @@ These are implemented experiments, not drop-in replacements. In particular:
   of a recovered generation on a second failed publication, edits discarded during export,
   and live sessions recreating deleted drafts. All 77 portable tests, fmt and host strict
   Clippy pass. Capture preview/history opens restore editable documents; imported/new-capture
-  identity separation is model-only until the import route exists. MSVC worker tests and
-  native restart/autosave interaction remain unverified for this increment.
+  identity separation is model-only until the import route exists. The [draft run](https://github.com/joswayski/captures/actions/runs/34731402256)
+  passed 78 library and three worker MSVC tests plus 58 bounded hardware captures.
+  A new isolated-profile acceptance fixture draws a Star through HWND messages, closes
+  with an exact revision flush, waits for normal process exit, then reopens through the
+  app's draft path and verifies editable layer structure/undo and unchanged source bytes.
+  The export worker also tests newer-revision preservation under the destination identity.
+  These new native checks await execution; they are not physical-input evidence.
   Imported image layers use the shared raster renderer
   with native multi-select file picking, asynchronous decode, transformed hit
   testing, and batch undo/redo. The model supports locking, independent opacity,
@@ -208,8 +213,18 @@ These are implemented experiments, not drop-in replacements. In particular:
   compiled and passed legacy/preset/minimum-width/rounded-plate pixels, then failed
   a test that tried to restyle after undo without reselecting the layer. The corrected
   test follows the existing selection contract and keeps its exact style/undo assertions;
-  full native tests and references await verification. Inline canvas
-  text composition, custom shadow colors and physical font/input checks remain open.
+  the [corrected text run](https://github.com/joswayski/captures/actions/runs/34731402245)
+  passed 34 AppKit tests, 29 normal references and video/dust compositor checks,
+  including 76 KB estimates in both passes. Inspected text references retain visible
+  media/footer and unclipped style/default controls. Inline canvas text composition,
+  custom shadow colors and physical font/input checks remain open.
+  The next shortcut slice recaptures visible controls for repeated active screenshot
+  targets and switches other modes/targets in place. User toolbar switches cancel
+  nested work even with Freeze screen off; stale completions cannot publish or
+  release a replacement's capture gate. Hidden ordinary refreshes restart presentation.
+  This unified selector follows shipping's menu policy, not its separate committed
+  screenshot-overlay policy. Native unit execution and physical global-hotkey/nested
+  capture evidence remain pending; static references cannot establish that behavior.
 
 ## Feature parity acceptance
 

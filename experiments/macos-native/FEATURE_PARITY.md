@@ -6,7 +6,9 @@ This ledger distinguishes implemented behavior from native-runtime and rollout g
 ## Implemented in the native app
 
 - Capture: display/window/region selection, frozen screenshot selection, cursor,
-  countdown, explicit confirmation/auto-start, aspect presets and dimensions.
+  countdown, explicit confirmation/auto-start, aspect presets and dimensions;
+  repeating the active screenshot target intentionally recaptures the visible UI,
+  while other repeated mode/target shortcuts switch the open selector in place.
 - Recording: display/window/region/GIF starts, cursor/click/key startup options,
   desktop audio and microphone selection, pause/resume/restart countdown, runtime
   microphone mute, crash-draft recovery, custom HUD and region guide.
@@ -44,19 +46,31 @@ This ledger distinguishes implemented behavior from native-runtime and rollout g
   Successful native estimate renders exist, but one rerender timed out intermittently
   without backend diagnostics. The confirmed initial-subscription race is fixed and
   failures now report waiting/pending/backend state; it is not established as that timeout's cause.
+  The latest native run rendered the 76 KB estimate successfully in both passes.
 - Layer blend rendering and merge/flatten rasterization have passed native pixel tests.
   The [lifecycle run](https://github.com/joswayski/captures/actions/runs/34729382697)
   passed 29 AppKit tests, 27 normal references and the video/dust compositor checks.
   Inspected references show no Recenter on the fitted canvas and all three Combine
   controls fully visible after scrolling. Physical menu interaction remains unverified.
 - Rich text family fallback, glyph metrics, outlined glyphs, rounded plates and
-  default-style controls have new model and pixel tests awaiting native execution.
-  Installed-font behavior and physical text entry still require interaction evidence.
+  default-style controls passed model/pixel tests and isolated references in the
+  [latest native run](https://github.com/joswayski/captures/actions/runs/34731402245):
+  34 AppKit tests, 29 normal references and video/dust compositor checks. Inspected
+  references show bold italic and outlined text, a shadowed Rounded Box, and unclipped
+  font/size/alignment/background/color/shadow controls. Installed-font behavior and
+  physical text entry still require interaction evidence.
 - Native modifier/middle-drag pan, pointer-anchored wheel/pinch zoom, and the
   mostly-offscreen Recenter cue. Model math is asymmetric-tested; physical input
   routing and trackpad magnification still require native interaction evidence.
 - Main runtime focus, nonactivation, click-through, capture exclusion and multi-DPI
   behavior. Static references are layout evidence only; video/dust require compositor capture.
+- Repeated capture-shortcut routing and temporary overlay sharing have native unit
+  coverage awaiting execution. Physical global-hotkey delivery and the nested frozen
+  screenshot still require interaction evidence on a Screen Recording-authorized Mac.
+  The unified native selector follows shipping's menu policy (changed screenshot
+  targets switch in place); it has no separate committed screenshot-overlay state,
+  where shipping instead recaptures every requested screenshot target. A shortcut
+  during a hidden ordinary refresh restarts presentation rather than losing its freeze.
 
 ## Confirmed gaps
 
@@ -66,8 +80,6 @@ This ledger distinguishes implemented behavior from native-runtime and rollout g
 - Recording responsiveness: stale estimate results are generation-guarded, but queued
   and running estimates/exports are not cancelled or coalesced. They can still delay Save
   on the serial media queue; this needs an owned cancel protocol matching shipping.
-- Repeated screenshot-hotkey behavior while capture UI is visible is not yet equivalent
-  to shipping's intentional recapture/switch-target state machine.
 - The post-launch tray pill is not yet implemented. Update checking/notices/install are
   intentionally unavailable because no signed native update channel exists.
 

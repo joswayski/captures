@@ -106,6 +106,7 @@ use windows::{
 const CLASS: PCWSTR = w!("CapturesWindowsNativeWindow");
 const WM_TRAY: u32 = WM_APP + 1;
 const WM_ACTIVATE_INSTANCE: u32 = WM_APP + 2;
+const WM_FIXTURE_EXIT: u32 = WM_APP + 3;
 const TIMER_ANIMATION: usize = 1;
 const HOTKEY_CAPTURE: i32 = 100;
 const HOTKEY_DISPLAY: i32 = 101;
@@ -173,6 +174,7 @@ struct App {
     delete_return: Surface,
     start_hidden: bool,
     fixture_mode: bool,
+    draft_fixture_phase: Option<DraftFixturePhase>,
     media: MediaWorker,
     media_epoch: u64,
     frame_request: u64,
@@ -193,6 +195,12 @@ struct App {
     editor_draft: Option<DraftSession>,
     editor_pan_drag: Option<(Point, Point)>,
     editor_input_select_all: bool,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum DraftFixturePhase {
+    Create,
+    Restore,
 }
 
 #[derive(Clone)]
@@ -292,12 +300,28 @@ pub fn run() -> Result<(), String> {
         let history = History::load(&data_dir())?;
         let mut state = AppState::default();
         let requested_view = argument_value("--view");
+        let draft_fixture_phase = match requested_view.as_deref() {
+            Some("editor-draft-create") => Some(DraftFixturePhase::Create),
+            Some("editor-draft-restore") => Some(DraftFixturePhase::Restore),
+            _ => None,
+        };
+        let mut draft_fixture_open = None;
         if let Some(view) = requested_view.as_deref() {
-            let fixture_image = argument_value("--fixture-image")
+            let fixture_path = argument_value("--fixture-image").map(PathBuf::from);
+            let fixture_image = fixture_path
+                .as_ref()
                 .map(image::open)
                 .transpose()
                 .map_err(|error| format!("cannot open fixture image: {error}"))?
                 .map(|image| image.to_rgba8());
+            if draft_fixture_phase.is_some() {
+                draft_fixture_open = Some((
+                    fixture_image
+                        .clone()
+                        .ok_or("draft fixture requires --fixture-image")?,
+                    fixture_path.ok_or("draft fixture requires a source path")?,
+                ));
+            }
             prepare_fixture(
                 &mut state,
                 view,
@@ -305,7 +329,7 @@ pub fn run() -> Result<(), String> {
                 argument_value("--fixture-video").map(PathBuf::from),
             );
         }
-        let app = Box::new(App {
+        let mut app = Box::new(App {
             hwnd: HWND::default(),
             renderer: None,
             state,
@@ -328,6 +352,7 @@ pub fn run() -> Result<(), String> {
             delete_return: Surface::Menu,
             start_hidden: std::env::args().any(|argument| argument == "--background"),
             fixture_mode: requested_view.is_some(),
+            draft_fixture_phase,
             media: MediaWorker::new(),
             media_epoch: 0,
             frame_request: 0,
@@ -349,6 +374,9 @@ pub fn run() -> Result<(), String> {
             editor_pan_drag: None,
             editor_input_select_all: false,
         });
+        if let Some((image, path)) = draft_fixture_open {
+            app.open_image_editor(image, Some(path.clone()), DraftIdentity::capture(path));
+        }
         let raw = Box::into_raw(app);
         let _hwnd = CreateWindowExW(
             WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP,
@@ -367,6 +395,13 @@ pub fn run() -> Result<(), String> {
         .map_err(win_error)?;
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
+            if draft_fixture_phase.is_some()
+                && message.message == WM_FIXTURE_EXIT
+                && message.hwnd == _hwnd
+            {
+                let _ = DestroyWindow(_hwnd);
+                continue;
+            }
             let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
         }
@@ -542,6 +577,11 @@ unsafe extern "system" fn wndproc(
                 app.flush_editor_draft();
                 app.media.cancel_jobs();
                 app.media_epoch = app.media_epoch.wrapping_add(1);
+                if let Some(phase) = app.draft_fixture_phase {
+                    app.write_draft_flush_marker(phase);
+                    let _ = PostMessageW(Some(hwnd), WM_FIXTURE_EXIT, WPARAM(0), LPARAM(0));
+                    return LRESULT(0);
+                }
                 let _ = ShowWindow(hwnd, SW_HIDE);
                 LRESULT(0)
             }
@@ -565,6 +605,28 @@ unsafe extern "system" fn wndproc(
 }
 
 impl App {
+    fn write_draft_flush_marker(&self, phase: DraftFixturePhase) {
+        let expected = self
+            .state
+            .editor
+            .as_ref()
+            .map(|document| document.render_key());
+        let persisted = self
+            .editor_draft
+            .as_ref()
+            .map(|session| session.persisted_key);
+        let value = if expected.is_some() && expected == persisted {
+            "flush:exact"
+        } else {
+            "flush:mismatch"
+        };
+        let name = match phase {
+            DraftFixturePhase::Create => "editor-draft-create-flushed.txt",
+            DraftFixturePhase::Restore => "editor-draft-restore-flushed.txt",
+        };
+        let _ = fs::write(data_dir().join(name), value);
+    }
+
     unsafe fn initialize(&mut self) -> Result<(), String> {
         unsafe {
             self.dpi = GetDpiForWindow(self.hwnd) as f32;
@@ -2197,6 +2259,17 @@ impl App {
             layer.fill = self.state.editor_fill;
         }
         self.state.selected_layer = Some(id);
+        if self.draft_fixture_phase == Some(DraftFixturePhase::Create)
+            && document.layers.iter().any(|layer| {
+                layer.id == id
+                    && matches!(&layer.shape, captures_windows_native::editor::Shape::Polygon(points) if points.len() == 10)
+            })
+        {
+            let _ = fs::write(
+                data_dir().join("editor-draft-edited.txt"),
+                "edit:polygon-10",
+            );
+        }
         unsafe {
             let _ = InvalidateRect(Some(self.hwnd), None, false);
         }
@@ -2593,6 +2666,40 @@ impl App {
         if did_restore {
             self.state.status = Some(("Restored unsaved screenshot edits".into(), Instant::now()));
         }
+        if self.draft_fixture_phase == Some(DraftFixturePhase::Restore) {
+            let marker = self.verify_restored_draft_fixture(did_restore);
+            let _ = fs::write(data_dir().join("editor-draft-restored.txt"), marker);
+        }
+    }
+
+    fn verify_restored_draft_fixture(&mut self, did_restore: bool) -> &'static str {
+        if !did_restore {
+            return "restore:missing";
+        }
+        let Some(document) = self.state.editor.as_mut() else {
+            return "restore:no-document";
+        };
+        let Some(layer) = document.layers.first() else {
+            return "restore:no-layer";
+        };
+        if document.layers.len() != 1
+            || !matches!(&layer.shape, captures_windows_native::editor::Shape::Polygon(points) if points.len() == 10)
+        {
+            return "restore:wrong-layers";
+        }
+        let id = layer.id;
+        let opacity = layer.opacity;
+        if !document.set_layer_opacity(id, opacity.saturating_sub(1)) || !document.undo() {
+            return "restore:not-editable";
+        }
+        if document
+            .layers
+            .first()
+            .is_none_or(|layer| layer.id != id || layer.opacity != opacity)
+        {
+            return "restore:undo-failed";
+        }
+        "restore:polygon-10:editable-undo"
     }
 
     fn reset_editor_draft_after_save(&mut self, destination: &Path, completion: SaveCompletion) {
@@ -2610,9 +2717,10 @@ impl App {
             .map_or((0, 0), |document| document.render_key());
         let persisted = if completion == SaveCompletion::NewerRevision {
             document.is_some_and(|document| {
-                match self.drafts.save_and_wait(
+                match self.drafts.preserve_newer_export(
+                    previous.identity.clone(),
                     identity.clone(),
-                    Some(destination.to_path_buf()),
+                    destination.to_path_buf(),
                     document,
                 ) {
                     Ok(()) => true,
@@ -2627,10 +2735,7 @@ impl App {
         } else {
             false
         };
-        let discard_previous = completion == SaveCompletion::ExportedRevision
-            || (completion == SaveCompletion::NewerRevision
-                && persisted
-                && !identity.same_storage_location(&previous.identity));
+        let discard_previous = completion == SaveCompletion::ExportedRevision;
         if discard_previous && let Err(error) = self.drafts.discard_and_wait(previous.identity) {
             self.set_error(format!("Could not clear screenshot draft: {error}"));
         }

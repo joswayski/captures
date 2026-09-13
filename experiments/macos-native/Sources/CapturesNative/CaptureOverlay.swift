@@ -114,6 +114,103 @@ private enum OverlayTarget: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+enum VisibleCaptureShortcutAction: Equatable {
+    case present
+    case switchInPlace
+    case recaptureVisibleUI
+}
+
+enum VisibleCaptureSurface: Equatable {
+    case none
+    case selectorMenu
+    case screenshotOverlay
+}
+
+func visibleCaptureShortcutAction(
+    surface: VisibleCaptureSurface,
+    currentKind: String?, currentTarget: String?,
+    requestedKind: String, requestedTarget: String
+) -> VisibleCaptureShortcutAction {
+    guard surface != .none, let currentKind, let currentTarget else { return .present }
+    if surface == .screenshotOverlay, requestedKind == OverlayKind.image.rawValue {
+        return .recaptureVisibleUI
+    }
+    return currentKind == OverlayKind.image.rawValue
+        && requestedKind == OverlayKind.image.rawValue
+        && currentTarget == requestedTarget
+        ? .recaptureVisibleUI
+        : .switchInPlace
+}
+
+func applyUserCaptureSelectionChange<Value: Equatable>(
+    _ requested: Value,
+    current: Value,
+    apply: (Value) -> Void
+) {
+    guard requested != current else { return }
+    apply(requested)
+}
+
+struct VisibleCaptureRecaptureState: Equatable {
+    private(set) var isPending = false
+    private var generation: UUID?
+    var allowsCapture: Bool { !isPending }
+
+    mutating func begin(generation: UUID) {
+        self.generation = generation
+        isPending = true
+    }
+
+    @discardableResult
+    mutating func finish(generation: UUID) -> Bool {
+        guard self.generation == generation else { return false }
+        cancel()
+        return true
+    }
+
+    mutating func cancel() {
+        generation = nil
+        isPending = false
+    }
+}
+
+final class TemporaryWindowSharing {
+    private weak var window: NSWindow?
+    private var originalType: NSWindow.SharingType?
+
+    func makeShareable(_ window: NSWindow) {
+        if self.window !== window {
+            restore()
+            self.window = window
+            originalType = window.sharingType
+        }
+        window.sharingType = .readOnly
+    }
+
+    func restore() {
+        if let window, let originalType { window.sharingType = originalType }
+        window = nil
+        originalType = nil
+    }
+}
+
+func cancelVisibleCaptureRecapture(
+    state: inout VisibleCaptureRecaptureState,
+    windowSharing: TemporaryWindowSharing
+) {
+    state.cancel()
+    windowSharing.restore()
+}
+
+func handleUserCaptureKindChange(
+    freezeScreen: Bool,
+    invalidate: () -> Void,
+    refresh: () -> Void
+) {
+    invalidate()
+    if freezeScreen { refresh() }
+}
+
 private enum RegionDrag {
     case create(origin: CGPoint)
     case move(origin: CGPoint, initial: CGRect)
@@ -136,6 +233,7 @@ final class CaptureController {
     private var model: CaptureOverlayModel?
     private var generation = UUID()
     private var freezeGeneration = UUID()
+    private let temporaryPanelSharing = TemporaryWindowSharing()
 
     private init() {
         let center = NSWorkspace.shared.notificationCenter
@@ -152,6 +250,33 @@ final class CaptureController {
     func show(kind: String = "image", target: String = "region") {
         DispatchQueue.main.async {
             guard !AppStore.shared.requireOnboarding() else { return }
+            let captureKind = OverlayKind(rawValue: kind) ?? .image
+            let captureTarget = OverlayTarget(rawValue: target) ?? .region
+            let action = visibleCaptureShortcutAction(
+                // This unified panel remains the mode/target chooser until
+                // commit, so it maps to shipping's recording-selector menu.
+                // Shipping's separate committed screenshot overlay recaptures
+                // every screenshot target; native has no separate such state.
+                // A panel hidden for ordinary refresh has no usable freeze yet.
+                surface: self.panel?.isVisible == true ? .selectorMenu : .none,
+                currentKind: self.model?.kind.rawValue,
+                currentTarget: self.model?.target.rawValue,
+                requestedKind: captureKind.rawValue,
+                requestedTarget: captureTarget.rawValue
+            )
+            if let model = self.model, self.panel != nil {
+                guard model.countdown == nil, !model.busy else { return }
+                switch action {
+                case .switchInPlace:
+                    self.switchVisibleCapture(model, to: captureKind, target: captureTarget)
+                    return
+                case .recaptureVisibleUI:
+                    self.recaptureVisibleUI(model)
+                    return
+                case .present:
+                    break
+                }
+            }
             self.cancelNow(invalidate: false)
             let generation = UUID()
             self.generation = generation
@@ -175,6 +300,7 @@ final class CaptureController {
 
     fileprivate func finish(discardFreeze: Bool = true) {
         freezeGeneration = UUID()
+        temporaryPanelSharing.restore()
         model?.stopSafetyMonitoring()
         if discardFreeze { model?.discardFreeze() }
         panel?.orderOut(nil)
@@ -187,6 +313,7 @@ final class CaptureController {
     private func cancelNow(invalidate: Bool) {
         if invalidate { generation = UUID() }
         freezeGeneration = UUID()
+        temporaryPanelSharing.restore()
         model?.cancelCountdown()
         model?.stopSafetyMonitoring()
         model?.discardFreeze()
@@ -324,19 +451,112 @@ final class CaptureController {
 
     fileprivate func targetChanged(for model: CaptureOverlayModel) {
         guard self.model === model else { return }
+        invalidatePendingRecapture(for: model)
         model.selection = nil
         model.hoveredWindowID = nil
         model.selectedWindowID = nil
     }
 
     fileprivate func kindChanged(for model: CaptureOverlayModel) {
-        guard self.model === model, AppStore.shared.settings.freezeScreen else { return }
-        refreshFreeze(for: model)
+        guard self.model === model else { return }
+        handleUserCaptureKindChange(
+            freezeScreen: AppStore.shared.settings.freezeScreen,
+            invalidate: { self.invalidatePendingRecapture(for: model) },
+            refresh: { self.refreshFreeze(for: model) }
+        )
+    }
+
+    private func invalidatePendingRecapture(for model: CaptureOverlayModel) {
+        freezeGeneration = UUID()
+        cancelVisibleCaptureRecapture(
+            state: &model.recaptureState,
+            windowSharing: temporaryPanelSharing
+        )
+    }
+
+    private func switchVisibleCapture(
+        _ model: CaptureOverlayModel,
+        to kind: OverlayKind,
+        target: OverlayTarget
+    ) {
+        invalidatePendingRecapture(for: model)
+        model.cancelCountdown()
+        model.error = ""
+        model.selection = nil
+        model.hoveredWindowID = nil
+        model.selectedWindowID = nil
+        model.kind = kind
+        model.target = target
+        panel?.orderFrontRegardless()
+        panel?.makeKey()
+    }
+
+    private func recaptureVisibleUI(_ model: CaptureOverlayModel) {
+        let expectedFreezeGeneration = UUID()
+        freezeGeneration = expectedFreezeGeneration
+        let expectedGeneration = generation
+        let previousFreezeID = model.frozenFrame?.id
+        model.cancelCountdown()
+        model.recaptureState.begin(generation: expectedFreezeGeneration)
+        // The ordinary overlay is capture-excluded. Temporarily make it
+        // shareable so the repeated screenshot shortcut intentionally nests
+        // the visible controls into the new frozen frame, matching shipping.
+        if let panel { temporaryPanelSharing.makeShareable(panel) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            guard
+                self.generation == expectedGeneration,
+                self.freezeGeneration == expectedFreezeGeneration,
+                self.model === model
+            else { return }
+            Backend.shared.call("freeze_create", [
+                "display_id": model.display.id,
+                "cursor": model.showCursor,
+            ]) { result in
+                if self.freezeGeneration == expectedFreezeGeneration {
+                    self.temporaryPanelSharing.restore()
+                }
+                guard
+                    self.generation == expectedGeneration,
+                    self.freezeGeneration == expectedFreezeGeneration,
+                    self.model === model
+                else {
+                    if case .success(let value) = result,
+                       let id = value["id"] as? String { self.discardFreeze(id: id) }
+                    return
+                }
+                switch result {
+                case let .failure(error):
+                    model.recaptureState.finish(generation: expectedFreezeGeneration)
+                    AppStore.shared.report(error)
+                case let .success(value):
+                    guard let frame = FrozenFrame(value) else {
+                        model.recaptureState.finish(generation: expectedFreezeGeneration)
+                        if let id = value["id"] as? String { self.discardFreeze(id: id) }
+                        AppStore.shared.report(CaptureOverlayError.freezePreviewUnavailable)
+                        return
+                    }
+                    guard model.recaptureState.finish(generation: expectedFreezeGeneration) else {
+                        self.discardFreeze(id: frame.id)
+                        return
+                    }
+                    model.frozenFrame = frame
+                    model.error = ""
+                    model.selection = nil
+                    model.hoveredWindowID = nil
+                    model.selectedWindowID = nil
+                    if let previousFreezeID { self.discardFreeze(id: previousFreezeID) }
+                    self.panel?.orderFrontRegardless()
+                    self.panel?.makeKey()
+                }
+            }
+        }
     }
 
     private func refreshFreeze(for model: CaptureOverlayModel) {
         let expectedFreezeGeneration = UUID()
         freezeGeneration = expectedFreezeGeneration
+        temporaryPanelSharing.restore()
+        model.recaptureState.cancel()
         model.discardFreeze()
         guard AppStore.shared.settings.freezeScreen else {
             panel?.orderFrontRegardless()
@@ -445,6 +665,7 @@ private final class CaptureOverlayModel: ObservableObject {
     @Published var busy = false
     @Published var error = ""
     @Published var frozenFrame: FrozenFrame?
+    var recaptureState = VisibleCaptureRecaptureState()
     @Published var showCursor: Bool
     @Published var showClicks = false
     @Published var showKeystrokes = false
@@ -631,6 +852,7 @@ private final class CaptureOverlayModel: ObservableObject {
     }
 
     func capture() {
+        guard recaptureState.allowsCapture else { return }
         guard canCapture else {
             error = CaptureOverlayError.emptySelection.localizedDescription
             return
@@ -1099,22 +1321,36 @@ private struct CaptureToolbar: View {
                 .help("Cancel · Esc")
 
                 CaptureSegments(
-                    selection: $model.kind,
+                    selection: Binding(
+                        get: { model.kind },
+                        set: { kind in
+                            applyUserCaptureSelectionChange(kind, current: model.kind) { updated in
+                                model.kind = updated
+                                CaptureController.shared.kindChanged(for: model)
+                            }
+                        }
+                    ),
                     options: OverlayKind.allCases.map { CaptureOption(label: $0.label, value: $0, symbol: $0.symbol) },
                     glass: true
                 )
                 .frame(width: 220)
-                .onChange(of: model.kind) { _ in CaptureController.shared.kindChanged(for: model) }
 
                 Divider().frame(height: 24)
 
                 CaptureSegments(
-                    selection: $model.target,
+                    selection: Binding(
+                        get: { model.target },
+                        set: { target in
+                            applyUserCaptureSelectionChange(target, current: model.target) { updated in
+                                model.target = updated
+                                CaptureController.shared.targetChanged(for: model)
+                            }
+                        }
+                    ),
                     options: OverlayTarget.allCases.map { CaptureOption(label: $0.label, value: $0, symbol: $0.symbol) },
                     glass: true
                 )
                 .frame(width: 260)
-                .onChange(of: model.target) { _ in CaptureController.shared.targetChanged(for: model) }
 
                 if model.displays.count > 1 {
                     CaptureChoice(
