@@ -194,6 +194,7 @@ def main():
     checks = [
         (root / 'native_parity_check.py', '--lab', args.lab, '--artifacts', args.artifacts),
         (root / 'editor_check.py', '--lab', args.lab, '--artifacts', args.artifacts),
+        (root / 'feedback_check.py', '--lab', args.lab, '--artifacts', args.artifacts),
         (root / 'preview_check.py', '--lab', args.lab, '--artifacts', args.artifacts,
          '--binary', binary),
         (root / 'history_check.py', '--lab', args.lab),

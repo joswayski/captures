@@ -121,6 +121,13 @@ Each standalone Cargo workspace needs its own tests; the root gate alone does
 not validate these apps. Native PR checks compile on their respective OS runners.
 That is not physical-desktop capture, audio, or performance certification.
 
+The GTK4 X11 suite (`experiments/linux-native/check-x11.sh`) also runs
+`feedback_check.py` against a loopback server. It holds a response to verify
+pending field protection, returns a deliberate failure, retries the retained
+draft, and checks read-only success. It never submits production feedback.
+The standalone check accepts `--lab` and optional `--artifacts` for its
+pending/error/success captures, using the disposable desktop described below.
+
 The Linux comparison accepts `--native /absolute/binary --native-label GTK4`
 and `--tauri /absolute/binary`. Use `--inspect --appearance light` and `dark`
 before collecting trials. Document-only comparisons disable mini previews in

@@ -65,12 +65,32 @@ These are implemented experiments, not drop-in replacements. In particular:
   the entire capture/recording interaction suite: the capture fixture still
   stops at a mini-preview hover/Close lookup after verifying free/Shift-square/
   released selection and a saved capture. Recording replacement uses a synced stage
-  and explicit confirmation; cancellation preserves the original. Physical
+  and explicit confirmation; cancellation preserves the original. The next bounded
+  increment adds first-run X11 capability setup, a live microphone-level consumer,
+  semantic/checked Preferences options, and explicit worker-thread feedback.
+  Feedback fields freeze during submission, recover on failure, and remain read-only
+  after success. Its 66 tests, strict Clippy and release build pass. A parent-run
+  loopback test verified pending freeze, deliberate failure/retry, retained exact
+  payloads and read-only success; all three rendered states were inspected.
+  First-run Continue persisted completion and opened Preferences, and its X11/
+  Wayland notice rendered without clipping. Physical audio and the full preview
+  suite remain separate acceptance checks. Physical
   multi-monitor, hardware GPU, and Wayland behavior remain unverified.
 - **Windows:** canvas dimensions/background, fit/manual zoom, Ctrl-drag pan,
   output dimensions/quality/maximum-size settings and layer front/back/duplicate/
-  delete/rename actions are implemented. Erase, background removal, merge/flatten
-  and richer layer controls remain incomplete. Imported image layers use the shared raster renderer
+  delete/rename actions are implemented. The new eraser increment adds contiguous/
+  global wand, interpolated soft erase/restore, rotated/locked image targeting,
+  immutable restore pixels and one-action undo. Brush output appears on pointer-up,
+  not live during drag. Source visibility and geometry-based Trim edges preserve
+  negative overhang and reject nonfinite, oversized or over-100-million-pixel frames
+  before mutation. Independent tests verify shifted source pixels and undo safety.
+  Its 64 portable tests and host strict Clippy pass. The eraser run passed 62 MSVC
+  tests and the light HWND Erase marker, but stopped starting a later preview fixture.
+  Fixtures now wait for process exit before launching the next profile instance.
+  Inspection also found flat transparency; a presentation-only checkerboard fixes
+  that without changing exported pixels. Native rerender and Trim input-smoke
+  verification are pending. Merge/flatten and richer layer
+  controls remain incomplete. Imported image layers use the shared raster renderer
   with native multi-select file picking, asynchronous decode, transformed hit
   testing, and batch undo/redo. The model supports locking, independent opacity,
   and six blend modes. Native image controls now expose dimensions, opacity and
@@ -123,7 +143,17 @@ These are implemented experiments, not drop-in replacements. In particular:
   The next viewport slice adds 5–800% logarithmic zoom, pointer-anchored modified
   wheel/pinch zoom, modifier/middle-button pan and Recenter. Regressions cover
   event consumption and anchor retention across rapid zooms and delayed layout;
-  native tests and its 165% panned reference await CI. Physical input remains open.
+  [native CI passed all 25 AppKit tests](https://github.com/joswayski/captures/actions/runs/34725715947),
+  but the 165% panned reference failed its required-media check. The fixture's
+  pan placed the sampled moon outside the viewport. A reference-only correction
+  keeps the source feature in view without weakening the check, and saves diagnostic
+  PNGs before media assertions. The [corrected native run](https://github.com/joswayski/captures/actions/runs/34726240436)
+  passed 25 AppKit tests, 25 normal references, and video/dust compositor checks.
+  Inspection confirmed the 165% label, visible moon and selected ellipse, intact
+  inspector/footer, and no inherited draft. Physical wheel/pinch/drag input remains open.
+  The next layer slice adds six blend modes, Merge down/visible and Flatten, preserving
+  shipping hidden-layer/background rules and one-step undo. Its new asymmetric pixel
+  tests and combine-control reference await native CI; richer text styling remains open.
 
 ## Feature parity acceptance
 
@@ -142,9 +172,10 @@ native frontend before claiming application parity:
 | Preferences/integration | Every shipping preference and its runtime consumer; theme/system appearance; shortcuts/conflicts; first-run setup; launch notice; consent-based feedback/crash behavior; file routing; tray/autostart. Reopen with isolated settings to verify persistence. |
 
 Known implementation work remains in all three frontends. Windows has the
-largest editor/capture/settings gap; Linux still lacks its live microphone
-meter and first-run/launch flows; macOS still needs richer image-layer/viewport
-operations. Its new live recording estimate uses the real save pipeline; a Linux
+largest editor/capture/settings gap; Linux's microphone meter and first-run setup
+are implemented, with physical audio and launch/preview behavior still requiring
+evidence. macOS still needs richer image-layer operations and viewport interaction
+evidence. Its new live recording estimate uses the real save pipeline; a Linux
 bridge check verified exact source/full-encode sizes and independently reproduced
 sampled estimates. Native CI now verifies a successful Swift estimate display.
 Shared native feedback transport now has loopback tests for exact request fields,
@@ -206,7 +237,8 @@ playhead between the two trim handles for independent visual verification.
 The [Windows follow-up](https://github.com/joswayski/captures/actions/runs/34720104027)
 verified those corrections in both appearances and a separate one-third playhead.
 Neither run verifies continuous playback, audio, or WARP rendering. Windows
-eraser and editable canvas controls remain incomplete; the new Preferences
+canvas controls now have native evidence; the newer eraser increment still awaits
+its native check. The new Preferences
 pages do not yet cover every shipping setting and consumer. This pass does not establish full feature parity or
 change the measured revision below.
 
