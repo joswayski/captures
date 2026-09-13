@@ -596,7 +596,6 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
         None::<(gtk::gdk_pixbuf::Pixbuf, gtk::gdk_pixbuf::Pixbuf)>,
     ));
     let comparison_split = Rc::new(Cell::new(0.5_f64));
-    let comparison_dragging = Rc::new(Cell::new(false));
     let comparison_overlay = gtk::DrawingArea::new();
     // A separate GDK child window would cover the non-windowed Play button.
     comparison_overlay.set_has_window(false);
@@ -691,105 +690,37 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
             overlay.queue_draw();
         })
     };
-    comparison_overlay.connect_size_allocate({
+    comparison_overlay.connect_resize({
         let split = comparison_split.clone();
         let handle = comparison_handle.clone();
-        move |_, allocation| {
-            handle.set_margin_start(
-                (f64::from(allocation.width()) * split.get() - 22.0)
-                    .max(0.0)
-                    .round() as i32,
-            );
-        }
-    });
-    preview_events.connect_button_press_event({
-        let dragging = comparison_dragging.clone();
-        let set_split = set_comparison_split.clone();
-        let overlay = comparison_overlay.clone();
-        let handle = comparison_handle.clone();
-        let split = comparison_split.clone();
-        move |_, event| {
-            if event.button() != 1 {
-                return glib::Propagation::Proceed;
-            }
-            let (x, y) = event.position();
-            let divider_x = f64::from(overlay.allocated_width()) * split.get();
-            let divider_y = f64::from(overlay.allocated_height()) / 2.0;
-            if (x - divider_x).abs() > 24.0 || (y - divider_y).abs() > 24.0 {
-                return glib::Propagation::Proceed;
-            }
-            handle.grab_focus();
-            dragging.set(true);
-            set_split(x, f64::from(overlay.allocated_width()));
-            glib::Propagation::Stop
-        }
-    });
-    comparison_handle.connect_button_press_event({
-        let dragging = comparison_dragging.clone();
-        move |handle, event| {
-            if event.button() != 1 {
-                return glib::Propagation::Proceed;
-            }
-            handle.grab_focus();
-            dragging.set(true);
-            glib::Propagation::Stop
-        }
-    });
-    preview_events.connect_motion_notify_event({
-        let dragging = comparison_dragging.clone();
-        let set_split = set_comparison_split.clone();
-        let overlay = comparison_overlay.clone();
-        move |_, event| {
-            if !dragging.get() {
-                return glib::Propagation::Proceed;
-            }
-            set_split(event.position().0, f64::from(overlay.allocated_width()));
-            glib::Propagation::Stop
-        }
-    });
-    comparison_handle.connect_motion_notify_event({
-        let dragging = comparison_dragging.clone();
-        let set_split = set_comparison_split.clone();
-        let overlay = comparison_overlay.clone();
-        move |handle, event| {
-            if !dragging.get() {
-                return glib::Propagation::Proceed;
-            }
-            set_split(
-                f64::from(handle.margin_start()) + event.position().0,
-                f64::from(overlay.allocated_width()),
-            );
-            glib::Propagation::Stop
-        }
-    });
-    preview_events.connect_button_release_event({
-        let dragging = comparison_dragging.clone();
-        move |_, event| {
-            if event.button() == 1 && dragging.replace(false) {
-                glib::Propagation::Stop
-            } else {
-                glib::Propagation::Proceed
-            }
-        }
-    });
-    comparison_handle.connect_button_release_event({
-        let dragging = comparison_dragging.clone();
-        move |_, event| {
-            if event.button() == 1 && dragging.replace(false) {
-                glib::Propagation::Stop
-            } else {
-                glib::Propagation::Proceed
-            }
+        move |_, width, _| {
+            handle
+                .set_margin_start((f64::from(width) * split.get() - 22.0).max(0.0).round() as i32);
         }
     });
     let comparison_gesture = gtk::GestureDrag::new();
-    comparison_handle.add_controller(comparison_gesture.clone());
+    comparison_gesture.set_button(1);
+    comparison_gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
+    // Keep offsets in the stationary preview's coordinates, not the moving handle's.
+    preview_overlay.add_controller(comparison_gesture.clone());
     let comparison_gesture_start = Rc::new(Cell::new(0.5_f64));
     comparison_gesture.connect_drag_begin({
         let split = comparison_split.clone();
         let start = comparison_gesture_start.clone();
         let handle = comparison_handle.clone();
-        move |_, _, _| {
+        move |gesture, x, y| {
+            let hit = handle.is_visible()
+                && gesture
+                    .widget()
+                    .and_then(|widget| handle.compute_bounds(&widget))
+                    .is_some_and(|bounds| {
+                        bounds.contains_point(&gtk::graphene::Point::new(x as f32, y as f32))
+                    });
+            if !hit {
+                gesture.set_state(gtk::EventSequenceState::Denied);
+                return;
+            }
+            gesture.set_state(gtk::EventSequenceState::Claimed);
             start.set(split.get());
             handle.grab_focus();
         }
@@ -1393,7 +1324,6 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
         let playback = playback_slot.clone();
         let comparison = comparison_overlay.clone();
         let handle = comparison_handle.clone();
-        let dragging = comparison_dragging.clone();
         let play_overlay = play_overlay.clone();
         let crop_overlay = crop_overlay.clone();
         play.connect_clicked(move |_| {
@@ -1401,7 +1331,6 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
             comparison.hide();
             handle.set_no_show_all(true);
             handle.hide();
-            dragging.set(false);
             play_overlay.set_valign(gtk::Align::Center);
             play_overlay.set_margin_bottom(0);
             crop_overlay.show();
@@ -2707,12 +2636,8 @@ fn connect_compare(
                     let outcome = media
                         .export(&path, &sample_path, &edit, &spec, &token, |_| {})
                         .map_err(|e| e.to_string())?;
-                    media
-                        .extract_frame(&before_sample_path, at - sample_start, &before_path, &token)
-                        .map_err(|e| e.to_string())?;
-                    media
-                        .extract_frame(&sample_path, at - sample_start, &after_path, &token)
-                        .map_err(|e| e.to_string())?;
+                    extract_comparison_frame(&before_sample_path, at - sample_start, &before_path)?;
+                    extract_comparison_frame(&sample_path, at - sample_start, &after_path)?;
                     Ok((
                         before_path.clone(),
                         after_path.clone(),
@@ -2737,39 +2662,87 @@ fn connect_compare(
                     return;
                 }
                 button.set_sensitive(true);
+                let result = result.and_then(|(before_path, after_path, bytes, sample_ms)| {
+                    let images =
+                        gtk::gdk_pixbuf::Pixbuf::from_file(&before_path).and_then(|before| {
+                            gtk::gdk_pixbuf::Pixbuf::from_file(&after_path)
+                                .map(|after| (before, after, bytes, sample_ms))
+                        });
+                    let _ = fs::remove_file(before_path);
+                    let _ = fs::remove_file(after_path);
+                    images.map_err(|error| error.to_string())
+                });
+                // Playback may have dismissed this request while encoding.
+                if comparison.is_no_show_all() {
+                    return;
+                }
                 match result {
-                    Ok((before_path, after_path, bytes, sample_ms)) => {
-                        // Playback can dismiss stills while encoding is pending.
-                        if !comparison.is_no_show_all()
-                            && let (Ok(before), Ok(after)) = (
-                                gtk::gdk_pixbuf::Pixbuf::from_file(&before_path),
-                                gtk::gdk_pixbuf::Pixbuf::from_file(&after_path),
-                            )
-                        {
-                            *comparison_images.borrow_mut() = Some((before, after));
-                            comparison.set_no_show_all(false);
-                            comparison_handle.set_no_show_all(false);
-                            comparison.show();
-                            comparison_handle.show();
-                            play.set_valign(gtk::Align::End);
-                            play.set_margin_bottom(60);
-                            preview_overlay.reorder_overlay(&play, -1);
-                            preview_overlay.reorder_overlay(&comparison_handle, -1);
-                            comparison.queue_draw();
-                        }
+                    Ok((before, after, bytes, sample_ms)) => {
+                        *comparison_images.borrow_mut() = Some((before, after));
+                        comparison.show();
+                        comparison_handle.show();
+                        play.set_valign(gtk::Align::End);
+                        play.set_margin_bottom(60);
+                        preview_overlay.reorder_overlay(&play, -1);
+                        preview_overlay.reorder_overlay(&comparison_handle, -1);
+                        comparison.queue_draw();
                         let projected = bytes.saturating_mul(duration.get()) / sample_ms.max(1);
                         status.set_text(&format!(
                             "Comparison ready · estimated export {}",
                             format_bytes(projected)
                         ));
-                        let _ = fs::remove_file(before_path);
-                        let _ = fs::remove_file(after_path);
                     }
-                    Err(error) => status.set_text(&format!("Comparison failed: {error}")),
+                    Err(error) => {
+                        comparison_images.borrow_mut().take();
+                        comparison.hide();
+                        comparison_handle.hide();
+                        status.set_text(&format!("Comparison failed: {error}"));
+                    }
                 }
             },
         );
     });
+}
+
+// Only for our <=1-second encoded comparison samples, never the full source.
+// Forward seeking can succeed without a frame near EOF. Retain the last frame
+// whose presentation timestamp is <= the requested time, without guessing FPS.
+fn extract_comparison_frame(sample: &Path, at_ms: u64, destination: &Path) -> Result<(), String> {
+    match fs::remove_file(destination) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.to_string()),
+    }
+    let output = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"])
+        .arg(sample)
+        .args(["-map", "0:v:0", "-an", "-vf"])
+        // Compare integer microsecond PTS, not a rounded floating-point second.
+        .arg(format!("settb=AVTB,select=lte(pts\\,{})", at_ms * 1_000))
+        .args([
+            "-fps_mode",
+            "passthrough",
+            "-c:v",
+            "png",
+            "-f",
+            "image2",
+            "-update",
+            "1",
+        ])
+        .arg(destination)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        let _ = fs::remove_file(destination);
+        return Err(format!(
+            "Comparison frame extraction failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    if !fs::metadata(destination).is_ok_and(|metadata| metadata.len() > 0) {
+        return Err("Comparison sample did not produce a frame".into());
+    }
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -3130,6 +3103,96 @@ fn spin(min: f64, max: f64, step: f64, name: &str) -> gtk::SpinButton {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn comparison_selects_displayed_vfr_frame_at_boundaries_and_eof() {
+        let directory = tempfile::tempdir().unwrap();
+        let frames: Vec<_> = [17, 79, 197]
+            .into_iter()
+            .map(|red| {
+                image::RgbaImage::from_fn(13, 7, |x, y| {
+                    image::Rgba([red, (x * 11) as u8, (y * 19) as u8, 255])
+                })
+            })
+            .collect();
+        for (index, frame) in frames.iter().enumerate() {
+            frame
+                .save(directory.path().join(format!("frame-{index}.png")))
+                .unwrap();
+        }
+        let sample = directory.path().join("sample.mkv");
+        let output = Command::new("ffmpeg")
+            .args(["-v", "error", "-nostdin", "-y", "-framerate", "1000", "-i"])
+            .arg(directory.path().join("frame-%d.png"))
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=48000:cl=mono",
+                "-t",
+                "0.503",
+                "-vf",
+                "setpts=if(eq(N\\,0)\\,0\\,if(eq(N\\,1)\\,173\\,437))",
+                "-fps_mode",
+                "vfr",
+                "-c:v",
+                "ffv1",
+                "-c:a",
+                "pcm_s16le",
+            ])
+            .arg(&sample)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let probe = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_frames",
+                "-show_entries",
+                "frame=best_effort_timestamp_time",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&sample)
+            .output()
+            .unwrap();
+        assert!(probe.status.success());
+        assert_eq!(
+            String::from_utf8(probe.stdout)
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
+            ["0.000000", "0.173000", "0.437000"]
+        );
+        assert_eq!(
+            MediaToolchain::from_command_names()
+                .probe(&sample)
+                .unwrap()
+                .metadata
+                .duration_ms,
+            Some(503)
+        );
+        let destination = directory.path().join("frame.png");
+        for (at_ms, expected) in [(172, 0), (173, 1), (436, 1), (437, 2), (500, 2)] {
+            extract_comparison_frame(&sample, at_ms, &destination).unwrap();
+            assert_eq!(
+                image::open(&destination).unwrap().to_rgba8(),
+                frames[expected],
+                "timestamp {at_ms}"
+            );
+        }
+        // A failed decode must not reuse the last successfully extracted PNG.
+        fs::write(&sample, b"not a video").unwrap();
+        assert!(extract_comparison_frame(&sample, 500, &destination).is_err());
+        assert!(!destination.exists());
+    }
 
     #[test]
     fn replacement_requires_source_identity_and_rejects_a_stale_editor() {

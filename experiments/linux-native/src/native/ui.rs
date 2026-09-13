@@ -225,17 +225,16 @@ pub fn choose_folder(
         Some("Cancel"),
     );
     let _ = dialog.set_current_folder(Some(&gtk::gio::File::for_path(initial)));
-    let selected = RefCell::new(Some(selected));
-    dialog.connect_response(move |dialog, response| {
+    // Native dialogs are not retained as GTK toplevels. Own it until response.
+    glib::spawn_future_local(async move {
+        let response = dialog.run_future().await;
         if response == gtk::ResponseType::Accept
             && let Some(path) = dialog.file().and_then(|file| file.path())
-            && let Some(selected) = selected.borrow_mut().take()
         {
             selected(path);
         }
         dialog.destroy();
     });
-    dialog.show();
 }
 
 thread_local! {

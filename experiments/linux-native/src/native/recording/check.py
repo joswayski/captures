@@ -5,10 +5,16 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
+import sys
 import tempfile
 import time
+
+NATIVE = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(NATIVE))
+from native_check import find, screen_bounds  # noqa: E402
 
 
 def command(*args):
@@ -38,35 +44,6 @@ def walk(node):
         pass
 
 
-def find(name=None, role=None, frame=None):
-    import pyatspi
-
-    for app in pyatspi.Registry.getDesktop(0):
-        if app.name != "captures-linux-native":
-            continue
-        roots = [app] if frame is None else [node for node in app if node.name == frame]
-        for root in roots:
-            for node in walk(root):
-                try:
-                    if (name is None or node.name == name) and (role is None or node.getRoleName() == role):
-                        if frame is not None or node.getState().contains(pyatspi.STATE_SHOWING):
-                            return node
-                except Exception:
-                    pass
-    return None
-
-
-def find_all(role, frame):
-    import pyatspi
-
-    nodes = []
-    for app in pyatspi.Registry.getDesktop(0):
-        if app.name == "captures-linux-native":
-            for root in [node for node in app if node.name == frame]:
-                nodes.extend(node for node in walk(root) if node.getRoleName() == role)
-    return nodes
-
-
 def find_prefix(prefix, frame):
     import pyatspi
 
@@ -79,6 +56,63 @@ def find_prefix(prefix, frame):
     return None
 
 
+def timeline_range(frame="Edit recording — Captures"):
+    import pyatspi
+
+    pattern = re.compile(r"^(\d+):(\d+\.\d) – (\d+):(\d+\.\d)$")
+    for app in pyatspi.Registry.getDesktop(0):
+        if app.name == "captures-linux-native":
+            for root in [node for node in app if node.name == frame]:
+                for node in walk(root):
+                    match = pattern.match(node.name)
+                    if match:
+                        start_minutes, start_seconds, end_minutes, end_seconds = match.groups()
+                        return (
+                            (int(start_minutes) * 60 + float(start_seconds)) * 1_000,
+                            (int(end_minutes) * 60 + float(end_seconds)) * 1_000,
+                        )
+    return None
+
+
+def widget_pixels(bounds):
+    with tempfile.NamedTemporaryFile(suffix=".png") as image:
+        command(
+            "import", "-window", "root", "-crop",
+            f"{bounds.width}x{bounds.height}+{bounds.x}+{bounds.y}",
+            "+repage", image.name,
+        )
+        pixels = subprocess.check_output(["convert", image.name, "rgba:-"])
+    return pixels
+
+
+def changed_pixels(before, after):
+    assert len(before) == len(after)
+    return sum(
+        any(abs(before[offset + channel] - after[offset + channel]) >= 24 for channel in range(3))
+        for offset in range(0, len(before), 4)
+    )
+
+
+def focused_playhead_x(bounds, expected_fraction):
+    pixels = widget_pixels(bounds)
+    stride = bounds.width * 4
+    accent_counts = []
+    for x in range(bounds.width):
+        count = 0
+        for y in range(bounds.height):
+            red, green, blue, alpha = pixels[y * stride + x * 4:y * stride + x * 4 + 4]
+            if red >= 235 and 160 <= green <= 230 and blue <= 100 and alpha >= 240:
+                count += 1
+        accent_counts.append(count)
+    expected = bounds.width * expected_fraction
+    candidates = [
+        x for x, count in enumerate(accent_counts)
+        if abs(x - expected) <= 16 and count >= bounds.height * 0.5
+    ]
+    assert candidates, (expected, max(accent_counts), bounds)
+    return (min(candidates) + max(candidates)) / 2
+
+
 def wait(predicate, timeout=45):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -89,29 +123,50 @@ def wait(predicate, timeout=45):
     raise AssertionError(f"Timed out waiting for {predicate!r}")
 
 
+def owning_frame(node):
+    while node is not None:
+        try:
+            if node.getRoleName() == "frame":
+                return node.name
+            node = node.parent
+        except Exception:
+            break
+    raise AssertionError("Accessible control has no owning frame")
+
+
 def click(name, frame=None, pointer=False):
     import pyatspi
 
     def ready():
-        node = find(name, frame=frame)
+        node = find(name, role="push button", frame=frame) or find(name, frame=frame)
         return node if node and node.getState().contains(pyatspi.STATE_SENSITIVE) else None
 
     node = wait(ready)
     if pointer:
-        bounds = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+        bounds = screen_bounds(node, frame or owning_frame(node))
         command("xdotool", "mousemove", bounds.x + bounds.width // 2, bounds.y + bounds.height // 2, "click", 1)
     else:
         assert node.queryAction().doAction(0), name
     time.sleep(0.2)
 
 
-def choose(current, index, frame="Captures — Linux native"):
+def enable_check(name, frame):
+    import pyatspi
+
+    node = wait(lambda: find(name, role="check box", frame=frame))
+    bounds = screen_bounds(node, frame)
+    command("xdotool", "mousemove", bounds.x + bounds.width // 2, bounds.y + bounds.height // 2, "click", 1)
+    wait(lambda: node.getState().contains(pyatspi.STATE_CHECKED))
+
+
+def choose(current, keys, frame="Captures — Linux native"):
     node = wait(lambda: find(current, "combo box", frame))
     window = command("xdotool", "search", "--onlyvisible", "--name", frame).splitlines()[-1]
     command("xdotool", "windowactivate", "--sync", window)
-    node.queryAction().doAction(0)
+    bounds = screen_bounds(node, frame)
+    command("xdotool", "mousemove", bounds.x + bounds.width // 2, bounds.y + bounds.height // 2, "click", 1)
     time.sleep(0.1)
-    command("xdotool", "key", "Home", *(["Down"] * index), "Return")
+    command("xdotool", "key", *keys, "Return")
     time.sleep(0.2)
 
 
@@ -119,6 +174,49 @@ def set_value(name, value, frame="Edit recording — Captures"):
     node = wait(lambda: find(name, frame=frame))
     node.queryValue().set_currentValue(float(value))
     time.sleep(0.1)
+    assert node.queryValue().currentValue == float(value), (name, value, node.queryValue().currentValue)
+
+
+def scroll_to(title, bottom):
+    window = command("xdotool", "search", "--onlyvisible", "--name", title).splitlines()[-1]
+    command("xdotool", "windowactivate", "--sync", window)
+    x, y, width, height = xwindow_geometry(window)
+    command("xdotool", "mousemove", x + width - 12, y + height // 2)
+    command("xdotool", "click", "--repeat", 80, "--delay", 10, 5 if bottom else 4)
+    time.sleep(0.4)
+
+
+def focus_timeline(node, bounds, frame, attempts=30):
+    import pyatspi
+
+    def state():
+        states = node.getState()
+        return {
+            "focusable": states.contains(pyatspi.STATE_FOCUSABLE),
+            "focused": states.contains(pyatspi.STATE_FOCUSED),
+            "name": node.name,
+        }
+
+    window = command("xdotool", "search", "--onlyvisible", "--name", frame).splitlines()[-1]
+    command("xdotool", "windowactivate", "--sync", window)
+    initial = state()
+    command(
+        "xdotool", "mousemove", bounds.x + 4,
+        bounds.y + bounds.height // 2, "click", 1,
+    )
+    time.sleep(0.1)
+    after_pointer = state()
+    if node.name == "Trim start handle":
+        return node
+    for _ in range(attempts):
+        command("xdotool", "key", "Tab")
+        time.sleep(0.05)
+        if node.name == "Trim start handle":
+            return node
+    raise AssertionError(
+        "Timeline did not receive focus from pointer or Tab: "
+        f"initial={initial}, after_pointer={after_pointer}, after_tabs={state()}"
+    )
 
 
 def capture(artifacts, name, title):
@@ -162,6 +260,13 @@ def stream_metadata(path):
     return json.loads(command("ffprobe", "-v", "error", "-show_streams", "-of", "json", path))["streams"]
 
 
+def video_frame_hash(path, seconds):
+    return command(
+        "ffmpeg", "-v", "error", "-ss", seconds, "-i", path,
+        "-frames:v", 1, "-f", "md5", "-",
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lab", type=Path, required=True)
@@ -177,8 +282,16 @@ def main():
     )
 
     args.artifacts.mkdir(parents=True, exist_ok=True)
-    native = Path(__file__).resolve().parents[3]
+    native = NATIVE
     binary = native / "target/release/captures-linux-native"
+
+    # A failed earlier run may have left the shared reference at the motion
+    # destination. Reset it before recording so every run captures a real move.
+    reference = command(
+        "xdotool", "search", "--onlyvisible", "--name",
+        "Reference content — Captures comparison",
+    ).splitlines()[-1]
+    command("xdotool", "windowmove", reference, 210, 80)
 
     with tempfile.TemporaryDirectory(prefix="captures-recording-check-") as temporary:
         profile = Path(temporary)
@@ -195,7 +308,7 @@ def main():
             wait(lambda: find("Pause recording"))
             time.sleep(1.2)
             hud = wait(lambda: find("Captures recording controls", "frame"))
-            hud_bounds = hud.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+            hud_bounds = screen_bounds(hud, "Captures recording controls")
             assert hud_bounds.width <= 520 and hud_bounds.height <= 90, hud_bounds
             controls = [find(name) for name in (
                 "Stop and save recording", "Pause recording", "Restart recording",
@@ -203,8 +316,8 @@ def main():
                 "Hide recording controls",
             )]
             assert all(controls)
-            assert [node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS).x for node in controls] == sorted(
-                node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS).x for node in controls
+            assert [screen_bounds(node, "Captures recording controls").x for node in controls] == sorted(
+                screen_bounds(node, "Captures recording controls").x for node in controls
             )
             # Capture compositor output: importing an RGBA client window alone
             # drops its alpha and misrepresents transparent margins as black.
@@ -235,7 +348,7 @@ def main():
             ], capture_output=True).stdout, "Screenshot must not re-show excluded previews during recording"
             # Restart gives the independent microphone assertions a fresh segment sequence.
             click("Restart recording", pointer=True)
-            click("OK", pointer=True)
+            click("Restart", "Restart recording?", pointer=True)
             time.sleep(1.0)
             drafts = wait(lambda: list((output / ".captures-recording-drafts").glob("*/manifest.json")))
             click("Mute microphone")
@@ -249,7 +362,10 @@ def main():
             assert unmuted["segments"][2]["microphone_relative_path"]
 
             click("Pause recording")
-            manifest = wait(lambda: (value if (value := json.loads(drafts[0].read_text()))["segments"] else None))
+            manifest = wait(lambda: (
+                value if (value := json.loads(drafts[0].read_text()))["segments"]
+                and value["state"] == "paused" else None
+            ))
             assert manifest["segments"] and manifest["state"] == "paused"
             click("Resume recording")
             wait(lambda: (value if (value := json.loads(drafts[0].read_text()))["state"] == "recording" else None))
@@ -262,8 +378,10 @@ def main():
             wait(lambda: (value if (value := json.loads(drafts[0].read_text()))["state"] == "recording" else None))
 
             click("Restart recording", pointer=True)
-            click("OK", pointer=True)
+            click("Restart", "Restart recording?", pointer=True)
             time.sleep(1.0)
+            command("xdotool", "windowmove", reference, 320, 160)
+            time.sleep(0.6)
             click("Hide recording controls")
             wait(lambda: find("Recording • Show controls"))
             click("Recording • Show controls")
@@ -276,7 +394,7 @@ def main():
             wait(lambda: find("Ready to save.", frame="Edit recording — Captures"))
             assert not list((output / ".captures-recording-drafts").glob("*/manifest.json"))
             preview = wait(lambda: find("Recording frame preview", frame="Edit recording — Captures"))
-            preview_bounds = preview.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+            preview_bounds = screen_bounds(preview, "Edit recording — Captures")
             assert preview_bounds.width >= 600 and preview_bounds.height >= 350, preview_bounds
             assert find("Preview", frame="Edit recording — Captures")
             assert find("Loop preview", frame="Edit recording — Captures")
@@ -292,56 +410,85 @@ def main():
             wait(lambda: not find("Captures — Mini previews", "frame"))
             assert source.exists() and list(output.glob("*.png"))
             save = wait(lambda: find("Save", frame="Edit recording — Captures"))
-            save_y = save.queryComponent().getExtents(pyatspi.DESKTOP_COORDS).y
+            save_y = screen_bounds(save, "Edit recording — Captures").y
             capture(args.artifacts, "recording-editor", "Edit recording — Captures")
             editor_window = command("xdotool", "search", "--onlyvisible", "--name", "Edit recording — Captures").splitlines()[-1]
             command("xdotool", "windowactivate", "--sync", editor_window)
-            scrollbars = find_all("scroll bar", "Edit recording — Captures")
-            vertical = max(scrollbars, key=lambda node: node.queryValue().maximumValue)
-            vertical.queryValue().set_currentValue(vertical.queryValue().maximumValue)
-            time.sleep(0.4)
+            scroll_to("Edit recording — Captures", bottom=True)
             assert find("Crop & size", frame="Edit recording — Captures")
             assert find("Save quality", frame="Edit recording — Captures")
-            assert save.queryComponent().getExtents(pyatspi.DESKTOP_COORDS).y == save_y
+            assert screen_bounds(save, "Edit recording — Captures").y == save_y
             capture(args.artifacts, "recording-editor-options", "Edit recording — Captures")
 
             # Pointer gestures below must target visible media, not offscreen
             # allocations retained in the accessibility tree after scrolling.
-            vertical.queryValue().set_currentValue(0)
-            time.sleep(0.4)
-            position = wait(lambda: find("Playback position", frame="Edit recording — Captures"))
-            before = float(position.queryValue().currentValue)
+            scroll_to("Edit recording — Captures", bottom=False)
+            timeline_node = find(
+                "Interactive trim timeline", role="filler", frame="Edit recording — Captures"
+            )
+            timeline = screen_bounds(timeline_node, "Edit recording — Captures")
+            source_video = next(stream for stream in stream_metadata(source) if stream["codec_type"] == "video")
+            duration = float(source_video["duration"]) * 1_000
+            source_hashes = [
+                video_frame_hash(source, duration * fraction / 1_000)
+                for fraction in (0.1, 0.9)
+            ]
+            assert len(set(source_hashes)) == 2, source_hashes
+            initial_preview = widget_pixels(preview_bounds)
             click("Play preview", "Edit recording — Captures")
-            time.sleep(0.9)
-            after = float(position.queryValue().currentValue)
-            assert after > before + 300, (before, after)
-            click("Pause preview", "Edit recording — Captures")
+            wait(lambda: find("Pause preview", frame="Edit recording — Captures"))
+            playback_changes = []
+            playback_samples = min(24, max(8, int(duration / 250) + 2))
+            for _ in range(playback_samples):
+                time.sleep(0.25)
+                playback_changes.append(changed_pixels(initial_preview, widget_pixels(preview_bounds)))
+            print(f"Playback changed pixels: {playback_changes}; preview={preview_bounds.width}x{preview_bounds.height}", flush=True)
+            assert max(playback_changes) > preview_bounds.width * preview_bounds.height * 0.05, playback_changes
+            pause = find("Pause preview", frame="Edit recording — Captures")
+            if pause and pause.getState().contains(pyatspi.STATE_SENSITIVE):
+                assert pause.queryAction().doAction(0)
+                time.sleep(0.2)
+            else:
+                assert find("Play preview", frame="Edit recording — Captures")
 
-            duration = float(wait(lambda: find("Trim end", frame="Edit recording — Captures")).queryValue().maximumValue)
-            timeline_node = find("Interactive trim timeline", frame="Edit recording — Captures")
-            assert timeline_node.queryComponent().grabFocus()
-            command("xdotool", "key", "Right")
-            assert find("Trim start", frame="Edit recording — Captures").queryValue().currentValue > 0
-            command("xdotool", "key", "Home", "Tab", "Left")
-            assert find("Trim end", frame="Edit recording — Captures").queryValue().currentValue < duration
-            command("xdotool", "key", "End", "Tab", "Home", "Right")
-            assert position.queryValue().currentValue > 0
+            timeline_node = focus_timeline(timeline_node, timeline, "Edit recording — Captures")
+            command("xdotool", "key", "--repeat", 12, "--delay", 20, "Right")
+            keyed_start, _ = wait(lambda: (
+                value if (value := timeline_range()) and value[0] > duration * 0.08 else None
+            ))
+            assert abs(keyed_start - duration * 0.12) <= 75, (keyed_start, duration)
+            command("xdotool", "key", "Home", "Tab")
+            wait(lambda: find("Trim end handle", role="filler", frame="Edit recording — Captures"))
+            command("xdotool", "key", "--repeat", 12, "--delay", 20, "Left")
+            _, keyed_end = wait(lambda: (
+                value if (value := timeline_range()) and value[1] < duration * 0.92 else None
+            ))
+            assert abs(keyed_end - duration * 0.88) <= 75, (keyed_end, duration)
+            command("xdotool", "key", "End", "Tab", "Home")
+            playhead = wait(lambda: find(
+                "Playback position", role="filler", frame="Edit recording — Captures"
+            ))
+            assert playhead.getState().contains(pyatspi.STATE_FOCUSED)
+            command("xdotool", "key", "--repeat", 12, "--delay", 20, "Right")
+            time.sleep(0.15)
+            keyed_playhead = focused_playhead_x(timeline, 0.12)
+            assert abs(keyed_playhead - timeline.width * 0.12) <= 8, (keyed_playhead, timeline)
             command("xdotool", "key", "Home")
             # Use the visible filmstrip itself, not the auxiliary scales.
-            timeline = timeline_node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
             drag(timeline.x + 1, timeline.y + timeline.height // 2, timeline.width // 5, 0)
             drag(timeline.x + timeline.width - 1, timeline.y + timeline.height // 2, -timeline.width // 5, 0)
-            trim_a = find("Trim start", frame="Edit recording — Captures").queryValue().currentValue
-            trim_b = find("Trim end", frame="Edit recording — Captures").queryValue().currentValue
+            trim_a, trim_b = wait(lambda: timeline_range())
             assert .18 * duration < trim_a < .22 * duration, (trim_a, trim_b, duration, timeline)
             assert .78 * duration < trim_b < .82 * duration, (trim_a, trim_b, duration, timeline)
-            set_value("Trim start", min(200, duration / 5))
-            set_value("Trim end", max(700, duration - 200))
-            click("Crop recording", "Edit recording — Captures")
+            scroll_to("Edit recording — Captures", bottom=True)
+            enable_check("Crop recording", "Edit recording — Captures")
             set_value("Crop width", 100)
             set_value("Crop height", 100)
-            overlay = find("Interactive recording crop", frame="Edit recording — Captures").queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
-            source_video = next(stream for stream in stream_metadata(source) if stream["codec_type"] == "video")
+            scroll_to("Edit recording — Captures", bottom=False)
+            overlay = screen_bounds(
+                find("Interactive recording crop", role="filler", frame="Edit recording — Captures"),
+                "Edit recording — Captures",
+            )
             scale = min(overlay.width / source_video["width"], overlay.height / source_video["height"])
             ox = overlay.x + (overlay.width - source_video["width"] * scale) / 2
             oy = overlay.y + (overlay.height - source_video["height"] * scale) / 2
@@ -350,52 +497,64 @@ def main():
             actual = [find(name, frame="Edit recording — Captures").queryValue().currentValue
                       for name in ("Crop X", "Crop Y", "Crop width", "Crop height")]
             assert all(abs(a - b) <= 4 for a, b in zip(actual, (160, 80, 800, 480))), actual
-            vertical.queryValue().set_currentValue(0)
+            scroll_to("Edit recording — Captures", bottom=False)
             capture(args.artifacts, "recording-editor-direct", "Edit recording — Captures")
             click("Reset crop to full recording", "Edit recording — Captures")
             set_value("Crop width", 640)
             set_value("Crop height", 400)
             set_value("Crop X", 80)
             set_value("Crop Y", 50)
-            vertical.queryValue().set_currentValue(vertical.queryValue().maximumValue)
-            time.sleep(0.4)
-            resolution = wait(lambda: find("Output resolution", "combo box", "Edit recording — Captures"))
-            resolution.queryAction().doAction(0)
-            command("xdotool", "key", "End", "Return")
+            scroll_to("Edit recording — Captures", bottom=True)
+            choose("Output resolution", ("Home", "Down", "Down", "Down"), "Edit recording — Captures")
             set_value("Output width", 320)
             set_value("Output height", 200)
-            quality = wait(lambda: find("Save quality", "combo box", "Edit recording — Captures"))
-            quality.queryAction().doAction(0)
-            command("xdotool", "key", "Home", "Down", "Return")
-            preset = wait(lambda: find("Compression quality", "combo box", "Edit recording — Captures"))
-            preset.queryAction().doAction(0)
-            command("xdotool", "key", "End", "Return")
+            choose("Save quality", ("Home", "Down"), "Edit recording — Captures")
+            choose("Compression quality", ("Home", "Down", "Down", "Down", "Down"), "Edit recording — Captures")
+            capture(args.artifacts, "recording-editor-export-options", "Edit recording — Captures")
             # Changing quality automatically produces the current comparison;
             # do not invoke the hidden implementation trigger via AT-SPI.
             wait(lambda: find_prefix("Comparison ready", "Edit recording — Captures"))
-            scrollbars = find_all("scroll bar", "Edit recording — Captures")
-            vertical = max(scrollbars, key=lambda node: node.queryValue().maximumValue)
-            vertical.queryValue().set_currentValue(0)
-            time.sleep(0.4)
+            scroll_to("Edit recording — Captures", bottom=False)
             comparison = find("Embedded compression comparison", frame="Edit recording — Captures")
-            assert comparison.getState().contains(pyatspi.STATE_SHOWING)
-            bounds = comparison.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
-            handle = find("Compression comparison slider, Before on the left and After on the right", frame="Edit recording — Captures")
-            center = handle.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+            assert comparison.getState().contains(pyatspi.STATE_VISIBLE)
+            bounds = screen_bounds(comparison, "Edit recording — Captures")
+            handle = find(
+                "Compression comparison slider, Before on the left and After on the right",
+                role="push button",
+                frame="Edit recording — Captures",
+            )
+            assert handle and handle.getState().contains(pyatspi.STATE_VISIBLE)
+            assert handle.parent.getState().contains(pyatspi.STATE_VISIBLE)
+            assert owning_frame(handle) == "Edit recording — Captures"
+            center = screen_bounds(handle, "Edit recording — Captures")
+            assert (
+                bounds.x <= center.x < center.x + center.width <= bounds.x + bounds.width
+                and bounds.y <= center.y < center.y + center.height <= bounds.y + bounds.height
+            ), (bounds, center)
             drag(center.x + center.width//2, center.y + center.height//2, bounds.width//4, 0)
-            moved = handle.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+            moved = screen_bounds(handle, "Edit recording — Captures")
             fraction = (moved.x + moved.width/2 - bounds.x) / bounds.width
             assert .70 < fraction < .80, fraction
             capture(args.artifacts, "recording-editor-comparison", "Edit recording — Captures")
             command("xdotool", "key", "End")
-            end = handle.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+            end = screen_bounds(handle, "Edit recording — Captures")
             assert .92 < (end.x + end.width/2 - bounds.x) / bounds.width < .96
             click("Play preview", "Edit recording — Captures", pointer=True)
-            wait(lambda: not comparison.getState().contains(pyatspi.STATE_SHOWING))
-            start_playback = position.queryValue().currentValue
+            # GTK4 removes hidden widgets from the live accessibility tree;
+            # a retained proxy can continue reporting its last visible state.
+            wait(lambda: find("Embedded compression comparison", frame="Edit recording — Captures") is None)
+            assert find(
+                "Compression comparison slider, Before on the left and After on the right",
+                role="push button", frame="Edit recording — Captures",
+            ) is None
+            wait(lambda: find("Pause preview", frame="Edit recording — Captures"))
             time.sleep(.45)
-            assert position.queryValue().currentValue > start_playback + 100
-            click("Pause preview", "Edit recording — Captures")
+            pause = find("Pause preview", frame="Edit recording — Captures")
+            if pause and pause.getState().contains(pyatspi.STATE_SENSITIVE):
+                assert pause.queryAction().doAction(0)
+                time.sleep(0.2)
+            else:
+                assert find("Play preview", frame="Edit recording — Captures")
             source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
             make_copy = find("Save as new file", frame="Edit recording — Captures")
             assert make_copy.getState().contains(pyatspi.STATE_SENSITIVE)
@@ -417,8 +576,8 @@ def main():
             wait(lambda: find("Save recording to"))
             command("xdotool", "key", "ctrl+l")
             command("xdotool", "type", "--clearmodifiers", str(destination))
+            # GTK4 accepts an existing folder from its location entry on Enter.
             command("xdotool", "key", "Return")
-            click("Choose", "Save recording to", pointer=True)
             wait(lambda: find(f"Saving to  {destination}", frame="Edit recording — Captures"))
             find("Saved filename", frame="Edit recording — Captures").queryEditableText().setTextContents("parity-output")
             click("Save", "Edit recording — Captures")
@@ -428,9 +587,7 @@ def main():
             exported_duration = float(video.get("duration", 0))
             assert 0.3 < exported_duration < duration / 1_000, (duration, exported_duration)
 
-            format_combo = wait(lambda: find("Format", "combo box", "Edit recording — Captures"))
-            format_combo.queryAction().doAction(0)
-            command("xdotool", "key", "Home", "Down", "Return")
+            choose("Format", ("Home", "Down"), "Edit recording — Captures")
             click("Save", "Edit recording — Captures")
             gif = wait(lambda: next(destination.glob("parity-output*.gif"), None))
             gif_video = stream_metadata(gif)[0]
@@ -463,7 +620,9 @@ def main():
                 if target == "Region":
                     drag(710, 460, -380, -220)
                 else:
-                    command("xdotool", "mousemove", 10, 10, "mousemove", 650, 300)
+                    command("xdotool", "mousemove", 10, 10)
+                    time.sleep(.15)
+                    command("xdotool", "mousemove", 650, 300)
                 wait(lambda: find("Start recording").getState().contains(pyatspi.STATE_SENSITIVE))
                 click("Start recording", "Captures — Select target")
                 wait(lambda: find("Pause recording"))
@@ -532,11 +691,12 @@ def main():
         try:
             wait(lambda: find("Edit recording — Captures", "frame"))
             wait(lambda: find("Ready to save.", frame="Edit recording — Captures"))
+            scroll_to("Edit recording — Captures", bottom=True)
             click("Play preview", "Edit recording — Captures")
             wait(lambda: len(subprocess.run(["pgrep", "-P", str(process.pid), "ffplay"], capture_output=True, text=True).stdout.split()) == 2)
-            click("Mute system audio", "Edit recording — Captures")
+            enable_check("Mute system audio", "Edit recording — Captures")
             wait(lambda: len(subprocess.run(["pgrep", "-P", str(process.pid), "ffplay"], capture_output=True, text=True).stdout.split()) == 1)
-            click("Mute microphone", "Edit recording — Captures")
+            enable_check("Mute microphone", "Edit recording — Captures")
             wait(lambda: not subprocess.run(["pgrep", "-P", str(process.pid), "ffplay"], capture_output=True).stdout)
             print("PASS audio: two headless source streams play independently and each mute removes its child")
         finally:

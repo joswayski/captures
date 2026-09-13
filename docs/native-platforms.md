@@ -82,14 +82,25 @@ These are implemented experiments, not drop-in replacements. In particular:
   Wayland notice rendered without clipping. Earlier claims of a full live GTK4
   recording pass were unsupported: the preserved recording evidence was editor-only.
   The full check exposed a present-but-disabled Start action, now awaited by the
-  helper, then default-microphone acquisition failed in the device-less lab. Live
-  recording remains a separate acceptance gate. A focused editor check then reproduced
+  helper, then default-microphone acquisition failed in the device-less lab.
+  A focused editor check then reproduced
   GTK4's non-focusable custom timeline: `set_focusable` now enables real pointer focus
   and keyboard trim/playhead input. On an independent 3-second source, ten arrow steps
   move start/end to 0.3/2.7 seconds and playhead keys change rendered timeline pixels.
   The sprite now uses `Picture` rather than icon-sized `Image`; an inspected reference
-  shows all 12 frames and an unclipped footer. The full live suite remains blocked on
-  harness corrections and later comparison/export/recovery verification.
+  shows all 12 frames and an unclipped footer. The corrected strict recording helper
+  now passes the full synthetic-audio Xvfb/Openbox flow: HUD/drafts/lock recovery,
+  rendered playback, keyboard/pointer trim/crop, comparison drag/keys/Play dismissal,
+  chosen-folder 320×200 MP4/GIF export with unchanged source, Region GIF/Window MP4,
+  interrupted GIF recovery/history, and independent two-stream ffplay mute controls.
+  Resetting the moving reference before each run fixed a misleading playback failure;
+  no playback production change was needed. Real fixes cover comparison extraction
+  at sample EOF, decoded-image readiness, stable drag coordinates and native folder
+  dialog lifetime. An asymmetric VFR pixel regression checks exact timestamp boundaries
+  and stale-output rejection. All 69 Linux tests pass (one benchmark ignored), with
+  strict Clippy, fmt and release build. Inspected comparison and Custom/Tiny options
+  preserve the divider alignment, full filmstrip and sticky Save footer. The lab uses
+  a private Pulse null sink/monitor and ALSA pulse configuration, not a physical mic.
   Preview placement is verified on
   Openbox only and snaps on release; physical multi-monitor/audio, mixed DPI,
   other WMs, hardware GPU and Wayland behavior remain unverified.
