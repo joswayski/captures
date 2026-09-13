@@ -34,6 +34,12 @@ struct SourceAudio {
     microphone: bool,
 }
 
+struct ComparisonFrames {
+    before: gtk::gdk_pixbuf::Pixbuf,
+    after: gtk::gdk_pixbuf::Pixbuf,
+    labels: [String; 2],
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct Point {
     x: f64,
@@ -592,9 +598,7 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     preview_overlay.set_valign(gtk::Align::Center);
     preview_overlay.add(&preview);
     let preview_events = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let comparison_images = Rc::new(RefCell::new(
-        None::<(gtk::gdk_pixbuf::Pixbuf, gtk::gdk_pixbuf::Pixbuf)>,
-    ));
+    let comparison_images = Rc::new(RefCell::new(None::<ComparisonFrames>));
     let comparison_split = Rc::new(Cell::new(0.5_f64));
     let comparison_overlay = gtk::DrawingArea::new();
     // A separate GDK child window would cover the non-windowed Play button.
@@ -625,7 +629,12 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
         let handle = comparison_handle.clone();
         move |area, context| {
             let images = images.borrow();
-            let Some((before, after)) = images.as_ref() else {
+            let Some(ComparisonFrames {
+                before,
+                after,
+                labels,
+            }) = images.as_ref()
+            else {
                 return glib::Propagation::Proceed;
             };
             let width = f64::from(area.allocated_width()).max(1.0);
@@ -668,8 +677,17 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
             context.move_to(divider_x - 9.0, height / 2.0 + 4.5);
             let _ = context.show_text("‹ ›");
 
-            for (label, x) in [("Before", 14.0), ("After", width - 64.0)] {
-                context.rectangle(x, height - 38.0, 54.0, 24.0);
+            context.set_font_size(11.0);
+            for (index, label) in labels.iter().enumerate() {
+                let label_width = context
+                    .text_extents(label)
+                    .map_or(54.0, |size| size.x_advance() + 18.0);
+                let x = if index == 0 {
+                    14.0
+                } else {
+                    width - label_width - 14.0
+                };
+                context.rectangle(x, height - 38.0, label_width, 24.0);
                 context.set_source_rgba(0.08, 0.09, 0.11, 0.84);
                 let _ = context.fill();
                 context.set_source_rgba(1.0, 1.0, 1.0, 0.96);
@@ -1037,7 +1055,7 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     let format = gtk::ComboBoxText::new();
     format.append(Some("mp4"), ".mp4");
     format.append(Some("gif"), ".gif");
-    format.append(Some("webm"), ".webm — unavailable");
+    format.set_tooltip_text(Some("MP4 and GIF export; WebM export is unavailable"));
     format.set_active_id(Some(source_format(&path).unwrap_or("mp4")));
     accessible_name(&format, "Format");
     let quality_mode = gtk::ComboBoxText::new();
@@ -1114,23 +1132,26 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
 
     let footer = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     footer.style_context().add_class("recording-save-footer");
-    footer.set_margin_start(24);
-    footer.set_margin_end(24);
     let filename_box = gtk::Box::new(gtk::Orientation::Vertical, 3);
     filename_box.set_size_request(380, -1);
     let destination_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    destination_row.add_css_class("recording-destination-row");
     destination_row.pack_start(&ui::label("Filename", "muted"), false, false, 0);
     let copy_directory = directory.clone();
     let destination = Rc::new(RefCell::new(directory));
-    let destination_label = ui::label(
-        &format!("Saving to  {}", destination.borrow().display()),
-        "muted",
-    );
+    let destination_prefix = ui::label("Saving to", "muted");
+    destination_prefix.set_hexpand(true);
+    destination_prefix.set_halign(gtk::Align::End);
+    destination_row.append(&destination_prefix);
+    let destination_label = gtk::Label::new(Some(&destination.borrow().display().to_string()));
     destination_label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-    let choose_destination = ui::button("Change…");
+    destination_label.set_max_width_chars(28);
+    let choose_destination = gtk::Button::new();
+    choose_destination.set_child(Some(&destination_label));
+    choose_destination.add_css_class("recording-directory-link");
+    choose_destination.set_tooltip_text(Some(&destination.borrow().display().to_string()));
     accessible_name(&choose_destination, "Change save location");
-    destination_row.pack_end(&choose_destination, false, false, 0);
-    destination_row.pack_end(&destination_label, true, true, 0);
+    destination_row.append(&choose_destination);
     let filename_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     let filename = gtk::Entry::new();
     let stem = path
@@ -1157,6 +1178,8 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     let cancel = ui::button("Cancel export");
     let export = ui::icon_text_button("Save", "save");
     export.style_context().add_class("primary");
+    export.set_valign(gtk::Align::Center);
+    cancel.set_valign(gtk::Align::Center);
     cancel.set_sensitive(false);
     cancel.set_opacity(0.0);
     footer.pack_start(&filename_box, true, true, 0);
@@ -1943,6 +1966,8 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
         let format = format.clone();
         let destination = destination.clone();
         let destination_label = destination_label.clone();
+        let destination_prefix = destination_prefix.clone();
+        let choose_destination = choose_destination.clone();
         let copy_directory = copy_directory.clone();
         let status = status.clone();
         let updating = updating_save_identity.clone();
@@ -1955,12 +1980,16 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
                     filename.set_text(&format!("{stem} edited"));
                 }
                 *destination.borrow_mut() = copy_directory.clone();
-                destination_label.set_text(&format!("Saving to  {}", copy_directory.display()));
+                destination_prefix.set_text("Saving to");
+                destination_label.set_text(&copy_directory.display().to_string());
+                choose_destination.set_tooltip_text(Some(&copy_directory.display().to_string()));
             } else if let (Some(extension), Some(parent)) = (source_format(&path), path.parent()) {
                 filename.set_text(&stem);
                 format.set_active_id(Some(extension));
                 *destination.borrow_mut() = parent.to_owned();
-                destination_label.set_text(&format!("Replacing in  {}", parent.display()));
+                destination_prefix.set_text("Replacing in");
+                destination_label.set_text(&parent.display().to_string());
+                choose_destination.set_tooltip_text(Some(&parent.display().to_string()));
                 status.set_text("Save will ask before replacing the original");
             } else {
                 toggle.set_active(true);
@@ -1991,14 +2020,20 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
         let window = window.clone();
         let destination = destination.clone();
         let label = destination_label.clone();
+        let link = choose_destination.clone();
         let make_copy = make_copy.clone();
         move |_| {
-            let (destination, label, make_copy) =
-                (destination.clone(), label.clone(), make_copy.clone());
+            let (destination, label, link, make_copy) = (
+                destination.clone(),
+                label.clone(),
+                link.clone(),
+                make_copy.clone(),
+            );
             let initial = destination.borrow().clone();
             ui::choose_folder(&window, "Save recording to", &initial, move |path| {
                 make_copy.set_active(true);
-                label.set_text(&format!("Saving to  {}", path.display()));
+                label.set_text(&path.display().to_string());
+                link.set_tooltip_text(Some(&path.display().to_string()));
                 *destination.borrow_mut() = path;
             });
         }
@@ -2479,7 +2514,7 @@ fn connect_compare(
     comparison_handle: &gtk::Button,
     play: &gtk::Box,
     preview_overlay: &gtk::Overlay,
-    comparison_images: &Rc<RefCell<Option<(gtk::gdk_pixbuf::Pixbuf, gtk::gdk_pixbuf::Pixbuf)>>>,
+    comparison_images: &Rc<RefCell<Option<ComparisonFrames>>>,
     status: &gtk::Label,
     path: &Path,
     scratch: &Path,
@@ -2579,6 +2614,7 @@ fn connect_compare(
             edit.trim_start_ms,
             edit.trim_end_ms.unwrap_or(duration.get()).saturating_sub(1),
         );
+        let selected_ms = edit.trim_end_ms.unwrap_or(duration.get()) - edit.trim_start_ms;
         let sample_start = at.saturating_sub(500).max(edit.trim_start_ms);
         edit.trim_start_ms = sample_start;
         edit.trim_end_ms = Some((sample_start + 1_000).min(values.trim_end.get()));
@@ -2612,7 +2648,6 @@ fn connect_compare(
         );
         let completed_generation = generation.clone();
         let path = path.clone();
-        let duration = duration.clone();
         ui::job(
             move || {
                 let media = MediaToolchain::from_command_names();
@@ -2638,11 +2673,20 @@ fn connect_compare(
                         .map_err(|e| e.to_string())?;
                     extract_comparison_frame(&before_sample_path, at - sample_start, &before_path)?;
                     extract_comparison_frame(&sample_path, at - sample_start, &after_path)?;
+                    let original_bytes = fs::metadata(&path)
+                        .map_err(|error| error.to_string())?
+                        .len();
+                    let [before_label, after_label] = comparison_size_labels(
+                        original_bytes,
+                        outcome.size_bytes,
+                        edit.trim_end_ms.unwrap_or(sample_start) - sample_start,
+                        selected_ms,
+                    );
                     Ok((
                         before_path.clone(),
                         after_path.clone(),
-                        outcome.size_bytes,
-                        edit.trim_end_ms.unwrap_or(sample_start) - sample_start,
+                        before_label,
+                        after_label,
                     ))
                 })();
                 let _ = fs::remove_file(before_sample_path);
@@ -2662,23 +2706,32 @@ fn connect_compare(
                     return;
                 }
                 button.set_sensitive(true);
-                let result = result.and_then(|(before_path, after_path, bytes, sample_ms)| {
-                    let images =
-                        gtk::gdk_pixbuf::Pixbuf::from_file(&before_path).and_then(|before| {
-                            gtk::gdk_pixbuf::Pixbuf::from_file(&after_path)
-                                .map(|after| (before, after, bytes, sample_ms))
-                        });
-                    let _ = fs::remove_file(before_path);
-                    let _ = fs::remove_file(after_path);
-                    images.map_err(|error| error.to_string())
-                });
+                let result =
+                    result.and_then(|(before_path, after_path, before_label, after_label)| {
+                        let images =
+                            gtk::gdk_pixbuf::Pixbuf::from_file(&before_path).and_then(|before| {
+                                gtk::gdk_pixbuf::Pixbuf::from_file(&after_path).map(|after| {
+                                    ComparisonFrames {
+                                        before,
+                                        after,
+                                        labels: [before_label, after_label],
+                                    }
+                                })
+                            });
+                        let _ = fs::remove_file(before_path);
+                        let _ = fs::remove_file(after_path);
+                        images.map_err(|error| error.to_string())
+                    });
                 // Playback may have dismissed this request while encoding.
                 if comparison.is_no_show_all() {
                     return;
                 }
                 match result {
-                    Ok((before, after, bytes, sample_ms)) => {
-                        *comparison_images.borrow_mut() = Some((before, after));
+                    Ok(frames) => {
+                        comparison.update_property(&[gtk::accessible::Property::Description(
+                            &frames.labels.join("; "),
+                        )]);
+                        *comparison_images.borrow_mut() = Some(frames);
                         comparison.show();
                         comparison_handle.show();
                         play.set_valign(gtk::Align::End);
@@ -2686,11 +2739,7 @@ fn connect_compare(
                         preview_overlay.reorder_overlay(&play, -1);
                         preview_overlay.reorder_overlay(&comparison_handle, -1);
                         comparison.queue_draw();
-                        let projected = bytes.saturating_mul(duration.get()) / sample_ms.max(1);
-                        status.set_text(&format!(
-                            "Comparison ready · estimated export {}",
-                            format_bytes(projected)
-                        ));
+                        status.set_text("");
                     }
                     Err(error) => {
                         comparison_images.borrow_mut().take();
@@ -2940,6 +2989,20 @@ fn format_bytes(bytes: u64) -> String {
         format!("{} KB", bytes / 1_000)
     }
 }
+
+fn comparison_size_labels(
+    original_bytes: u64,
+    sample_bytes: u64,
+    sample_ms: u64,
+    selected_ms: u64,
+) -> [String; 2] {
+    let estimated_bytes = sample_bytes.saturating_mul(selected_ms) / sample_ms.max(1);
+    [
+        format!("Before · {}", format_bytes(original_bytes)),
+        format!("After · ≈ {}", format_bytes(estimated_bytes)),
+    ]
+}
+
 fn editor_time(milliseconds: u64) -> String {
     let minutes = milliseconds / 60_000;
     let seconds = (milliseconds % 60_000) as f64 / 1_000.0;
@@ -3046,28 +3109,51 @@ fn install_editor_styles(window: &gtk::Window) {
             padding: 0;
         }}
         .recording-editor-root .recording-save-footer {{
-            min-height: 64px;
-            padding-top: 6px;
-            padding-bottom: 6px;
+            padding: {footer_vertical} {footer_horizontal};
             border-top: 1px solid {border};
             background-color: {raised};
         }}
+        .recording-editor-root .recording-destination-row {{
+            padding-left: {control_padding};
+        }}
+        .recording-editor-root .recording-directory-link {{
+            min-height: 0;
+            min-width: 0;
+            padding: {link_vertical} {link_horizontal};
+            background: {sunken};
+            border-color: transparent;
+            box-shadow: none;
+        }}
+        .recording-editor-root .recording-directory-link:hover {{
+            background: {sunken};
+            border-color: {border};
+        }}
         .recording-editor-root .recording-save-footer entry {{
-            min-height: 22px;
+            min-height: {field_height};
             padding-top: 0;
             padding-bottom: 0;
             border-radius: 7px 0 0 7px;
         }}
         .recording-editor-root .recording-save-footer combobox button {{
-            min-height: 22px;
+            min-height: {field_height};
             padding-top: 0;
             padding-bottom: 0;
             border-radius: 0 7px 7px 0;
         }}
         .recording-editor-root .recording-save-footer button.primary {{
-            min-width: 92px;
+            min-width: 0;
+            min-height: 0;
+            padding: {save_vertical} {save_horizontal};
         }}
-    "#
+    "#,
+        footer_vertical = ui::token("s-5"),
+        footer_horizontal = ui::token("s-8"),
+        control_padding = ui::token("s-4"),
+        link_vertical = ui::token("s-1"),
+        link_horizontal = ui::token("s-2"),
+        field_height = ui::token("s-9"),
+        save_vertical = ui::token("s-4"),
+        save_horizontal = ui::token("s-5"),
     );
     provider.load_from_data(&css);
     ui::install_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
@@ -3103,6 +3189,14 @@ fn spin(min: f64, max: f64, step: f64, name: &str) -> gtk::SpinButton {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn comparison_sizes_distinguish_original_file_from_selected_duration_estimate() {
+        assert_eq!(
+            comparison_size_labels(1_700_000, 18_000, 600, 2_400),
+            ["Before · 1.7 MB", "After · ≈ 72 KB"]
+        );
+    }
 
     #[test]
     fn comparison_selects_displayed_vfr_frame_at_boundaries_and_eof() {

@@ -68,6 +68,8 @@ def main():
             for name in ("Restore history-first.png", "Delete history-first.png from History", "Delete all captures", "All 2", "Screenshots 2"):
                 wait(lambda name=name: find(name, frame="Captures — History"))
             wait(history_fits_display)
+            clear = screen_bounds(find('Delete all captures', frame='Captures — History'), 'Captures — History')
+            assert clear.height <= 40, ('Delete all stretched to the heading height', clear)
             edit = screen_bounds(
                 find('Edit history-first.png', frame='Captures — History'),
                 'Captures — History',

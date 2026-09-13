@@ -170,6 +170,7 @@ pub fn open_with_restore(
     heading.pack_start(&description, false, false, 0);
     header.pack_start(&heading, true, true, 0);
     let clear_button = ui::icon_text_button("Delete all", "trash");
+    clear_button.set_valign(gtk::Align::Center);
     clear_button
         .style_context()
         .add_class("native-history-clear");

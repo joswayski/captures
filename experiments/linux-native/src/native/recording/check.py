@@ -165,8 +165,8 @@ def choose(current, keys, frame="Captures — Linux native"):
     command("xdotool", "windowactivate", "--sync", window)
     bounds = screen_bounds(node, frame)
     command("xdotool", "mousemove", bounds.x + bounds.width // 2, bounds.y + bounds.height // 2, "click", 1)
-    time.sleep(0.1)
-    command("xdotool", "key", *keys, "Return")
+    time.sleep(0.3)
+    command("xdotool", "key", "--delay", 100, *keys, "Return")
     time.sleep(0.2)
 
 
@@ -513,10 +513,23 @@ def main():
             capture(args.artifacts, "recording-editor-export-options", "Edit recording — Captures")
             # Changing quality automatically produces the current comparison;
             # do not invoke the hidden implementation trigger via AT-SPI.
-            wait(lambda: find_prefix("Comparison ready", "Edit recording — Captures"))
+            wait(lambda: find("Embedded compression comparison", frame="Edit recording — Captures")
+                 and not find_prefix("Building compression comparison", "Edit recording — Captures"))
             scroll_to("Edit recording — Captures", bottom=False)
             comparison = find("Embedded compression comparison", frame="Edit recording — Captures")
             assert comparison.getState().contains(pyatspi.STATE_VISIBLE)
+            original_bytes = source.stat().st_size
+            original_size = f"{original_bytes / 1_000_000:.1f} MB" if original_bytes >= 1_000_000 else f"{original_bytes // 1_000} KB"
+            assert comparison.description.startswith(f"Before · {original_size}; After · ≈ "), comparison.description
+            assert not find_prefix("Comparison ready", "Edit recording — Captures")
+            footer_format = screen_bounds(find("Format", "combo box", "Edit recording — Captures"), "Edit recording — Captures")
+            footer_save = screen_bounds(find("Save", "push button", "Edit recording — Captures"), "Edit recording — Captures")
+            frame_bounds = screen_bounds(find("Edit recording — Captures", "frame"), "Edit recording — Captures")
+            filename_heading = screen_bounds(find("Filename", "label", "Edit recording — Captures"), "Edit recording — Captures")
+            assert footer_format.width <= 84, footer_format
+            assert footer_save.width <= 90 and footer_save.height <= 44, footer_save
+            assert filename_heading.x - frame_bounds.x >= 32, (filename_heading, frame_bounds)
+            assert not find("Change…", "push button", "Edit recording — Captures")
             bounds = screen_bounds(comparison, "Edit recording — Captures")
             handle = find(
                 "Compression comparison slider, Before on the left and After on the right",
@@ -559,7 +572,8 @@ def main():
             make_copy = find("Save as new file", frame="Edit recording — Captures")
             assert make_copy.getState().contains(pyatspi.STATE_SENSITIVE)
             click("Save as new file", "Edit recording — Captures")
-            wait(lambda: find(f"Replacing in  {source.parent}", frame="Edit recording — Captures"))
+            wait(lambda: find("Replacing in", frame="Edit recording — Captures"))
+            assert find(str(source.parent), "label", "Edit recording — Captures")
             save = find("Save", frame="Edit recording — Captures")
             wait(lambda: save.getState().contains(pyatspi.STATE_SENSITIVE))
             click("Save", "Edit recording — Captures")
@@ -578,7 +592,8 @@ def main():
             command("xdotool", "type", "--clearmodifiers", str(destination))
             # GTK4 accepts an existing folder from its location entry on Enter.
             command("xdotool", "key", "Return")
-            wait(lambda: find(f"Saving to  {destination}", frame="Edit recording — Captures"))
+            wait(lambda: find(str(destination), "label", "Edit recording — Captures"))
+            assert find("Saving to", "label", "Edit recording — Captures")
             find("Saved filename", frame="Edit recording — Captures").queryEditableText().setTextContents("parity-output")
             click("Save", "Edit recording — Captures")
             exported = wait(lambda: next(destination.glob("parity-output*.mp4"), None))

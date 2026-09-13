@@ -97,10 +97,15 @@ These are implemented experiments, not drop-in replacements. In particular:
   no playback production change was needed. Real fixes cover comparison extraction
   at sample EOF, decoded-image readiness, stable drag coordinates and native folder
   dialog lifetime. An asymmetric VFR pixel regression checks exact timestamp boundaries
-  and stale-output rejection. All 69 Linux tests pass (one benchmark ignored), with
+  and stale-output rejection. All 70 Linux tests pass (one benchmark ignored), with
   strict Clippy, fmt and release build. Inspected comparison and Custom/Tiny options
   preserve the divider alignment, full filmstrip and sticky Save footer. The lab uses
   a private Pulse null sink/monitor and ALSA pulse configuration, not a physical mic.
+  A visual follow-up adds compact footer actions, a highlighted directory picker link,
+  and original/estimated output sizes directly on the comparison. The estimate uses
+  the trimmed selection duration. Light/dark and long-directory cancellation were
+  exercised; fresh photo-editor, Preferences and History views were inspected, and
+  History's stretched Delete all action is now vertically centered.
   Preview placement is verified on
   Openbox only and snaps on release; physical multi-monitor/audio, mixed DPI,
   other WMs, hardware GPU and Wayland behavior remain unverified.
