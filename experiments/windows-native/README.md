@@ -27,7 +27,9 @@ mode and thread DPI context during cleanup. Its PNGs are runtime review artifact
 ignored by Git. In addition to prepared visual states, the editor input-smoke fixture changes the
 canvas width, selects a shape, and draws it through real HWND keyboard and pointer messages. A second
 input-smoke fixture selects Eraser, switches to Erase, and paints through the same native pointer
-route. The resulting images still require inspection and are not substitutes for broader
+route. A Trim input smoke hides the locked original layer and invokes Trim edges through real HWND
+hit targets, failing unless the expected asymmetric output dimensions are committed. The resulting
+images still require inspection and are not substitutes for broader
 accessibility, IME, physical-pointer, or hardware-input testing. The Linux cross-check used during
 development is:
 
@@ -40,8 +42,9 @@ cargo check --manifest-path experiments/windows-native/Cargo.toml --target x86_6
 The capture overlay, screenshot persistence and clipboard path, mini preview, history storage,
 recording start/pause/resume/restart/finalization, session safeguards, native file drag,
 profile-scoped single-instance IPC, autostart, and custom-rendered routes are wired to the shared
-Rust backends. The screenshot editor supports source-coordinate shapes, selection, crop, undo/redo,
-delete, Segoe UI text entry, editable hex color, rectangle/ellipse/triangle/diamond/star shapes,
+Rust backends. The screenshot editor supports source-coordinate shapes, selection, crop,
+geometry-based Trim edges, undo/redo, delete, Segoe UI text entry, editable hex color,
+rectangle/ellipse/triangle/diamond/star shapes,
 raster export, and copy. Its custom D2D layout follows the shipping editor hierarchy with a vector
 tool rail and shape flyout, fitted canvas, layers/properties sidebar, and filename/format/export
 footer. Filename edits, format changes, Save as new file, layer selection/visibility, copy, and Save
@@ -58,14 +61,20 @@ The current native chrome uses the shipping editor's icon-led tool rail, separat
 three-column shape flyout, empty default inspector, locked-background layer row, grouped canvas/zoom
 header, and filename/export footer. Switches share the shipping 30-by-18 geometry and have distinct
 on, off, and disabled states. Light and dark runtime fixtures cover default, imported-image, shapes,
-export, selected-properties, selected-line, and erased-source editor states.
+export, selected-properties, selected-line, erased-source, and trim-ready editor states.
 Selected annotations can be moved, resized, and rotated, and their color, stroke, and supported fill
 state can be edited with undo/redo. Selected layers can also change opacity and blend mode, move to
 the front or back, duplicate, delete, lock, hide, and—when they are images—be renamed.
 The Eraser tool targets the topmost visible image (including locked image layers and the locked
 original screenshot). Its contiguous or global color wand, continuous soft erase brush, and restore
 brush edit real alpha pixels, clear an active solid canvas background, and commit each action as one
-undoable transaction. Restore uses pixels frozen before that image's first alpha edit.
+undoable transaction. Restore uses pixels frozen before that image's first alpha edit. Brush points
+are collected continuously, but the edited preview is currently presented only after pointer-up;
+live during-drag brush presentation remains outstanding.
+The locked original screenshot can be hidden without making it editable. Trim edges fits the canvas
+to every visible layer's axis-aligned bounds (locked layers included, hidden layers ignored), retains
+content that overhangs the old canvas, and is one undoable action. Nonfinite bounds, dimensions over
+16,384 pixels, and frames over 100 million pixels are rejected before document mutation.
 The recording editor probes real media, decodes playback frames, seeks, trims, chooses quality,
 exports through `captures-media`, and can either preserve the source or safely replace it. Probe,
 paused-frame extraction, compression comparison, and export run outside the Win32 message thread.

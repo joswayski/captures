@@ -348,6 +348,7 @@ pub struct Document {
     id: u64,
     original: Arc<RgbaImage>,
     source: Arc<RgbaImage>,
+    pub source_visible: bool,
     pub crop: Rect,
     pub canvas_width: u32,
     pub canvas_height: u32,
@@ -363,6 +364,7 @@ pub struct Document {
 struct Snapshot {
     crop: Rect,
     source: Arc<RgbaImage>,
+    source_visible: bool,
     canvas_width: u32,
     canvas_height: u32,
     background: Option<[u8; 4]>,
@@ -382,6 +384,7 @@ impl Document {
             id: NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed),
             original: original.clone(),
             source: original,
+            source_visible: true,
             crop,
             canvas_width: crop.width.round() as u32,
             canvas_height: crop.height.round() as u32,
@@ -666,6 +669,104 @@ impl Document {
         true
     }
 
+    pub fn toggle_source_visibility(&mut self) -> bool {
+        self.checkpoint();
+        self.source_visible = !self.source_visible;
+        self.source_visible
+    }
+
+    pub fn can_trim_to_visible_content(&self) -> bool {
+        match self.visible_content_frame() {
+            Ok(Some(frame)) => {
+                self.crop.x != frame.x
+                    || self.crop.y != frame.y
+                    || self.canvas_width != frame.width.round() as u32
+                    || self.canvas_height != frame.height.round() as u32
+            }
+            Err(_) => true,
+            Ok(None) => false,
+        }
+    }
+
+    pub fn trim_to_visible_content(&mut self) -> Result<bool, &'static str> {
+        let Some(frame) = self.visible_content_frame()? else {
+            return Ok(false);
+        };
+        let width = frame.width.round() as u32;
+        let height = frame.height.round() as u32;
+        if self.crop.x == frame.x
+            && self.crop.y == frame.y
+            && self.canvas_width == width
+            && self.canvas_height == height
+        {
+            return Ok(false);
+        }
+        self.checkpoint();
+        self.crop = frame;
+        self.canvas_width = width;
+        self.canvas_height = height;
+        Ok(true)
+    }
+
+    fn visible_content_frame(&self) -> Result<Option<Rect>, &'static str> {
+        let mut bounds = self.source_visible.then(|| Rect {
+            x: 0.0,
+            y: 0.0,
+            width: self.source.width() as f32,
+            height: self.source.height() as f32,
+        });
+        for layer in self.layers.iter().filter(|layer| layer.visible) {
+            if !layer_geometry_is_finite(layer) {
+                return Err("Trim bounds must be finite");
+            }
+            let Some(layer_bounds) = to_raster_layer(layer).bounds().map(|value| Rect {
+                x: value.x,
+                y: value.y,
+                width: value.width,
+                height: value.height,
+            }) else {
+                continue;
+            };
+            if !rect_is_finite(layer_bounds) {
+                return Err("Trim bounds must be finite");
+            }
+            bounds = Some(match bounds {
+                Some(current) => union_rect(current, layer_bounds),
+                None => layer_bounds,
+            });
+        }
+        let Some(bounds) = bounds else {
+            return Ok(None);
+        };
+        if !rect_is_finite(bounds) {
+            return Err("Trim bounds must be finite");
+        }
+        let frame = {
+            let x = bounds.x.floor();
+            let y = bounds.y.floor();
+            let right = (bounds.x + bounds.width).ceil();
+            let bottom = (bounds.y + bounds.height).ceil();
+            Rect {
+                x,
+                y,
+                width: (right - x).max(1.0),
+                height: (bottom - y).max(1.0),
+            }
+        };
+        if !rect_is_finite(frame) {
+            return Err("Trim bounds must be finite");
+        }
+        if frame.width > MAX_CANVAS_DIMENSION as f32 || frame.height > MAX_CANVAS_DIMENSION as f32 {
+            return Err("Trim canvas dimensions are limited to 16384 pixels");
+        }
+        let width = frame.width.round() as u64;
+        let height = frame.height.round() as u64;
+        if width * height > MAX_CANVAS_PIXELS {
+            return Err("Trim canvas size is limited to 100 million pixels");
+        }
+        Ok(Some(frame))
+    }
+
     pub fn undo(&mut self) -> bool {
         let Some(previous) = self.undo.pop() else {
             return false;
@@ -699,6 +800,7 @@ impl Document {
         Snapshot {
             crop: self.crop,
             source: self.source.clone(),
+            source_visible: self.source_visible,
             canvas_width: self.canvas_width,
             canvas_height: self.canvas_height,
             background: self.background,
@@ -709,6 +811,7 @@ impl Document {
     fn restore(&mut self, snapshot: Snapshot) {
         self.crop = snapshot.crop;
         self.source = snapshot.source;
+        self.source_visible = snapshot.source_visible;
         self.canvas_width = snapshot.canvas_width;
         self.canvas_height = snapshot.canvas_height;
         self.background = snapshot.background;
@@ -735,12 +838,14 @@ impl Document {
                 .max(1.0)
                 .round()
                 .min(self.original.height().saturating_sub(crop_y) as f32) as u32;
-        if crop_width > 0 && crop_height > 0 {
+        if self.source_visible && crop_width > 0 && crop_height > 0 {
             let original = self
                 .source
                 .view(crop_x, crop_y, crop_width, crop_height)
                 .to_image();
-            image::imageops::overlay(&mut source, &original, 0, 0);
+            let destination_x = (crop_x as f32 - self.crop.x).round().max(0.0) as i64;
+            let destination_y = (crop_y as f32 - self.crop.y).round().max(0.0) as i64;
+            image::imageops::overlay(&mut source, &original, destination_x, destination_y);
         }
         let offset = captures_image::Point {
             x: -self.crop.x,
@@ -787,7 +892,12 @@ impl Document {
             .rev()
             .filter(|layer| layer.visible)
             .find_map(|layer| image_pixel(layer, point).map(|_| ImageTarget::Layer(layer.id)))
-            .or_else(|| source_pixel(&self.source, point).map(|_| ImageTarget::Source))
+            .or_else(|| {
+                self.source_visible
+                    .then(|| source_pixel(&self.source, point))
+                    .flatten()
+                    .map(|_| ImageTarget::Source)
+            })
     }
 
     pub fn remove_background_wand(
@@ -938,6 +1048,49 @@ fn source_pixel(image: &RgbaImage, point: Point) -> Option<(u32, u32)> {
         && point.x < image.width() as f32
         && point.y < image.height() as f32)
         .then(|| (point.x.floor() as u32, point.y.floor() as u32))
+}
+
+fn union_rect(left: Rect, right: Rect) -> Rect {
+    let x = left.x.min(right.x);
+    let y = left.y.min(right.y);
+    let far_x = (left.x + left.width).max(right.x + right.width);
+    let far_y = (left.y + left.height).max(right.y + right.height);
+    Rect {
+        x,
+        y,
+        width: far_x - x,
+        height: far_y - y,
+    }
+}
+
+fn rect_is_finite(rect: Rect) -> bool {
+    rect.x.is_finite()
+        && rect.y.is_finite()
+        && rect.width.is_finite()
+        && rect.height.is_finite()
+        && rect.width >= 0.0
+        && rect.height >= 0.0
+}
+
+fn layer_geometry_is_finite(layer: &Layer) -> bool {
+    let point_is_finite = |point: &Point| point.x.is_finite() && point.y.is_finite();
+    let shape_is_finite = match &layer.shape {
+        Shape::Stroke(points) | Shape::Polygon(points) => points.iter().all(point_is_finite),
+        Shape::Arrow(start, end) | Shape::Line(start, end) => {
+            point_is_finite(start) && point_is_finite(end)
+        }
+        Shape::Rectangle(rect) | Shape::Ellipse(rect) => rect_is_finite(*rect),
+        Shape::Image {
+            origin,
+            width,
+            height,
+            ..
+        } => point_is_finite(origin) && width.is_finite() && height.is_finite(),
+        Shape::Text {
+            origin, font_size, ..
+        } => point_is_finite(origin) && font_size.is_finite(),
+    };
+    shape_is_finite && layer.stroke.is_finite() && layer.rotation_degrees.is_finite()
 }
 
 fn image_pixel(layer: &Layer, point: Point) -> Option<(u32, u32)> {
@@ -1245,6 +1398,30 @@ fn to_raster_point(point: Point) -> captures_image::Point {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn set_image_geometry(document: &mut Document, id: u64, rect: Rect) {
+        let layer = document
+            .layers
+            .iter_mut()
+            .find(|layer| layer.id == id)
+            .unwrap();
+        let Shape::Image {
+            origin,
+            width,
+            height,
+            ..
+        } = &mut layer.shape
+        else {
+            panic!("expected image");
+        };
+        *origin = Point {
+            x: rect.x,
+            y: rect.y,
+        };
+        *width = rect.width;
+        *height = rect.height;
+    }
+
     #[test]
     fn undo_and_redo_restore_asymmetric_edits() {
         let mut document = Document::new(RgbaImage::new(80, 40));
@@ -1492,6 +1669,252 @@ mod tests {
         );
         assert!(feather < 255, "soft edge must change alpha");
         assert_eq!(soft.get_pixel(0, 0)[3], 255);
+    }
+
+    #[test]
+    fn trim_uses_locked_visible_geometry_ignores_hidden_overhang_and_undoes_once() {
+        let source = RgbaImage::from_pixel(40, 20, Rgba([12, 34, 56, 255]));
+        let mut document = Document::new(source);
+        assert!(!document.can_trim_to_visible_content());
+        assert!(!document.toggle_source_visibility());
+        assert!(document.undo());
+        assert!(document.source_visible);
+        assert!(document.redo());
+        assert!(!document.source_visible);
+
+        let pixels = RgbaImage::from_fn(2, 1, |x, _| {
+            if x == 0 {
+                Rgba([220, 40, 20, 255])
+            } else {
+                Rgba([10, 80, 230, 255])
+            }
+        });
+        let visible = document.add_image(pixels, 0, "Visible.png".into());
+        let hidden = document.add_image(
+            RgbaImage::from_pixel(1, 1, Rgba([1, 250, 2, 255])),
+            1,
+            "Hidden.png".into(),
+        );
+        if let Shape::Image {
+            origin,
+            width,
+            height,
+            ..
+        } = &mut document
+            .layers
+            .iter_mut()
+            .find(|layer| layer.id == visible)
+            .unwrap()
+            .shape
+        {
+            *origin = Point { x: -17.2, y: 23.4 };
+            *width = 31.1;
+            *height = 19.2;
+        }
+        document
+            .layers
+            .iter_mut()
+            .find(|layer| layer.id == visible)
+            .unwrap()
+            .locked = true;
+        let hidden_layer = document
+            .layers
+            .iter_mut()
+            .find(|layer| layer.id == hidden)
+            .unwrap();
+        hidden_layer.visible = false;
+        if let Shape::Image { origin, .. } = &mut hidden_layer.shape {
+            *origin = Point { x: 500.0, y: 600.0 };
+        }
+
+        assert!(document.can_trim_to_visible_content());
+        assert!(document.trim_to_visible_content().unwrap());
+        assert_eq!(
+            document.crop,
+            Rect {
+                x: -18.0,
+                y: 23.0,
+                width: 32.0,
+                height: 20.0,
+            }
+        );
+        let rendered = document.render().unwrap();
+        assert_eq!(rendered.dimensions(), (32, 20));
+        let left = rendered.get_pixel(1, 10);
+        let right = rendered.get_pixel(30, 10);
+        assert!(left[0] > left[2], "left image orientation changed");
+        assert!(right[2] > right[0], "right image orientation changed");
+        assert_eq!((left[3], right[3]), (255, 255));
+        assert!(!document.trim_to_visible_content().unwrap());
+
+        assert!(document.undo());
+        assert_eq!((document.canvas_width, document.canvas_height), (40, 20));
+        assert!(!document.source_visible);
+        assert!(document.redo());
+        assert_eq!((document.canvas_width, document.canvas_height), (32, 20));
+    }
+
+    #[test]
+    fn trim_rejects_nonfinite_dimension_and_area_without_mutation_or_checkpoint() {
+        let make_document = |frame: Rect| {
+            let mut document = Document::new(RgbaImage::new(3, 2));
+            document.toggle_source_visibility();
+            let id = document.add_image(RgbaImage::new(1, 1), 0, "Far.png".into());
+            set_image_geometry(&mut document, id, frame);
+            document
+        };
+
+        let mut dimension = make_document(Rect {
+            x: -7.0,
+            y: 11.0,
+            width: 16_385.0,
+            height: 3.0,
+        });
+        let dimension_key = dimension.render_key();
+        let dimension_crop = dimension.crop;
+        let dimension_canvas = (dimension.canvas_width, dimension.canvas_height);
+        assert_eq!(
+            dimension.trim_to_visible_content(),
+            Err("Trim canvas dimensions are limited to 16384 pixels")
+        );
+        assert_eq!(dimension.render_key(), dimension_key);
+        assert_eq!(dimension.crop, dimension_crop);
+        assert_eq!(
+            (dimension.canvas_width, dimension.canvas_height),
+            dimension_canvas
+        );
+        assert!(dimension.undo());
+        assert!(
+            dimension.layers.is_empty(),
+            "rejection added an undo checkpoint"
+        );
+
+        let mut area = make_document(Rect {
+            x: 13.0,
+            y: -17.0,
+            width: 10_001.0,
+            height: 10_000.0,
+        });
+        let area_key = area.render_key();
+        let area_crop = area.crop;
+        let area_canvas = (area.canvas_width, area.canvas_height);
+        assert_eq!(
+            area.trim_to_visible_content(),
+            Err("Trim canvas size is limited to 100 million pixels")
+        );
+        assert_eq!(area.render_key(), area_key);
+        assert_eq!(area.crop, area_crop);
+        assert_eq!((area.canvas_width, area.canvas_height), area_canvas);
+        assert!(area.undo());
+        assert!(area.layers.is_empty(), "rejection added an undo checkpoint");
+
+        let mut nonfinite = make_document(Rect {
+            x: f32::NAN,
+            y: 0.0,
+            width: 2.0,
+            height: 3.0,
+        });
+        let nonfinite_key = nonfinite.render_key();
+        assert_eq!(
+            nonfinite.trim_to_visible_content(),
+            Err("Trim bounds must be finite")
+        );
+        assert_eq!(nonfinite.render_key(), nonfinite_key);
+    }
+
+    #[test]
+    fn trim_accepts_exact_limits_without_allocating_render_output() {
+        let mut exact_dimension = Document::new(RgbaImage::new(1, 1));
+        exact_dimension.toggle_source_visibility();
+        let id = exact_dimension.add_image(RgbaImage::new(1, 1), 0, "Wide.png".into());
+        set_image_geometry(
+            &mut exact_dimension,
+            id,
+            Rect {
+                x: -3.0,
+                y: 5.0,
+                width: 16_384.0,
+                height: 2.0,
+            },
+        );
+        assert!(exact_dimension.trim_to_visible_content().unwrap());
+        assert_eq!(
+            (exact_dimension.canvas_width, exact_dimension.canvas_height),
+            (16_384, 2)
+        );
+
+        let mut exact_area = Document::new(RgbaImage::new(1, 1));
+        exact_area.toggle_source_visibility();
+        let id = exact_area.add_image(RgbaImage::new(1, 1), 0, "Area.png".into());
+        set_image_geometry(
+            &mut exact_area,
+            id,
+            Rect {
+                x: 9.0,
+                y: -4.0,
+                width: 10_000.0,
+                height: 10_000.0,
+            },
+        );
+        assert!(exact_area.trim_to_visible_content().unwrap());
+        assert_eq!(
+            (exact_area.canvas_width, exact_area.canvas_height),
+            (10_000, 10_000)
+        );
+    }
+
+    #[test]
+    fn negative_overhang_shifts_visible_asymmetric_source_in_expanded_frame() {
+        let mut source = RgbaImage::from_pixel(3, 2, Rgba([0, 0, 0, 0]));
+        source.put_pixel(0, 0, Rgba([11, 21, 31, 255]));
+        source.put_pixel(1, 0, Rgba([41, 51, 61, 255]));
+        source.put_pixel(2, 0, Rgba([71, 81, 91, 255]));
+        source.put_pixel(0, 1, Rgba([101, 111, 121, 255]));
+        let mut document = Document::new(source.clone());
+        let id = document.add_image(
+            RgbaImage::from_pixel(1, 1, Rgba([230, 20, 40, 255])),
+            0,
+            "Overhang.png".into(),
+        );
+        set_image_geometry(
+            &mut document,
+            id,
+            Rect {
+                x: -2.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+        );
+
+        assert!(document.trim_to_visible_content().unwrap());
+        assert_eq!(
+            document.crop,
+            Rect {
+                x: -2.0,
+                y: 0.0,
+                width: 5.0,
+                height: 2.0
+            }
+        );
+        let rendered = document.render().unwrap();
+        assert_eq!(rendered.get_pixel(0, 0).0, [230, 20, 40, 255]);
+        assert_eq!(rendered.get_pixel(1, 0).0, [0, 0, 0, 0]);
+        assert_eq!(rendered.get_pixel(2, 0), source.get_pixel(0, 0));
+        assert_eq!(rendered.get_pixel(4, 0), source.get_pixel(2, 0));
+        assert_eq!(rendered.get_pixel(2, 1), source.get_pixel(0, 1));
+
+        assert!(document.undo());
+        assert_eq!(
+            document.crop,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 3.0,
+                height: 2.0
+            }
+        );
+        assert!(document.source_visible);
     }
 
     #[test]

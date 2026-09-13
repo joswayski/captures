@@ -539,6 +539,12 @@ impl Renderer {
                 Vector2 { X: 232.0, Y: 34.0 },
                 p.border,
             )?;
+            let trim_ink =
+                if document.is_some_and(|document| document.can_trim_to_visible_content()) {
+                    p.text
+                } else {
+                    p.border
+                };
             self.editor_icon(
                 "crop",
                 Rect {
@@ -547,7 +553,7 @@ impl Renderer {
                     width: 14.0,
                     height: 14.0,
                 },
-                p.border,
+                trim_ink,
             )?;
             self.text(
                 "Trim edges",
@@ -557,7 +563,7 @@ impl Renderer {
                     width: 74.0,
                     height: 26.0,
                 },
-                p.border,
+                trim_ink,
                 &self.body,
             );
             self.divider(
@@ -726,6 +732,14 @@ impl Renderer {
                     &to_d2d(screenshot_editor_canvas(w, h)),
                     D2D1_ANTIALIAS_MODE_ALIASED,
                 );
+                if document.background.is_none() {
+                    self.checkerboard(
+                        viewport,
+                        screenshot_editor_canvas(w, h),
+                        p.canvas_checker_a,
+                        p.canvas_checker_b,
+                    )?;
+                }
                 let result = self.bitmap_rect(image, viewport);
                 self.target.PopAxisAlignedClip();
                 result?;
@@ -1040,6 +1054,16 @@ impl Renderer {
                 p.muted,
                 &self.body,
             );
+            let source_eye = editor_layer_visibility_button(sidebar_x, layer_y);
+            self.editor_icon(
+                if document.is_some_and(|document| document.source_visible) {
+                    "eye"
+                } else {
+                    "eye-off"
+                },
+                source_eye.inset(4.0),
+                p.muted,
+            )?;
             self.editor_icon(
                 "lock",
                 Rect {
@@ -3168,6 +3192,61 @@ impl Renderer {
         unsafe {
             let brush = self.brush(fill).expect("brush");
             self.target.FillRectangle(&to_d2d(rect), &brush)
+        }
+    }
+    unsafe fn checkerboard(
+        &self,
+        viewport: Rect,
+        clip: Rect,
+        checker_a: Color,
+        checker_b: Color,
+    ) -> Result<()> {
+        unsafe {
+            let left = viewport.x.max(clip.x);
+            let top = viewport.y.max(clip.y);
+            let right = (viewport.x + viewport.width).min(clip.x + clip.width);
+            let bottom = (viewport.y + viewport.height).min(clip.y + clip.height);
+            if right <= left || bottom <= top {
+                return Ok(());
+            }
+            let visible = Rect {
+                x: left,
+                y: top,
+                width: right - left,
+                height: bottom - top,
+            };
+            let background = self.brush(checker_b)?;
+            self.target.FillRectangle(&to_d2d(visible), &background);
+
+            const CHECK_SIZE: f32 = 8.0;
+            let first_column = ((left - viewport.x) / CHECK_SIZE).floor() as i32;
+            let last_column = ((right - viewport.x) / CHECK_SIZE).ceil() as i32;
+            let first_row = ((top - viewport.y) / CHECK_SIZE).floor() as i32;
+            let last_row = ((bottom - viewport.y) / CHECK_SIZE).ceil() as i32;
+            let foreground = self.brush(checker_a)?;
+            for row in first_row..last_row {
+                for column in first_column..last_column {
+                    if (row + column).rem_euclid(2) != 0 {
+                        continue;
+                    }
+                    let raw_left = viewport.x + column as f32 * CHECK_SIZE;
+                    let raw_top = viewport.y + row as f32 * CHECK_SIZE;
+                    let square_left = raw_left.max(left);
+                    let square_top = raw_top.max(top);
+                    let square_right = (raw_left + CHECK_SIZE).min(right);
+                    let square_bottom = (raw_top + CHECK_SIZE).min(bottom);
+                    self.target.FillRectangle(
+                        &D2D_RECT_F {
+                            left: square_left,
+                            top: square_top,
+                            right: square_right,
+                            bottom: square_bottom,
+                        },
+                        &foreground,
+                    );
+                }
+            }
+            Ok(())
         }
     }
     unsafe fn rounded_panel(&self, rect: Rect, fill: Color, radius: f32) -> Result<()> {

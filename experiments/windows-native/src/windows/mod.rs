@@ -1342,6 +1342,32 @@ impl App {
                     Ok(_) => {}
                     Err(error) => self.set_error(error),
                 }
+            } else if (232.0..340.0).contains(&p.x) {
+                if let Some(document) = self.state.editor.as_mut() {
+                    match document.trim_to_visible_content() {
+                        Ok(trimmed) => {
+                            self.state.status = Some((
+                                if trimmed {
+                                    "Trimmed to visible layers"
+                                } else {
+                                    "Canvas already fits visible layers"
+                                }
+                                .into(),
+                                Instant::now(),
+                            ));
+                            if self.fixture_mode && trimmed {
+                                let _ = fs::write(
+                                    data_dir().join("editor-trim-applied.txt"),
+                                    format!(
+                                        "trim:{}x{}",
+                                        document.canvas_width, document.canvas_height
+                                    ),
+                                );
+                            }
+                        }
+                        Err(error) => self.set_error(error),
+                    }
+                }
             } else if (78.0..154.0).contains(&p.x) {
                 let value = self
                     .state
@@ -1438,6 +1464,14 @@ impl App {
             {
                 self.state.editor_tool = *tool;
                 self.state.editor_shapes_open = false;
+            }
+        } else if self.state.editor.as_ref().is_some_and(|document| {
+            let row_y = 104.0 + document.layers.len().min(3) as f32 * 52.0;
+            editor_layer_visibility_button(sidebar_x, row_y).contains(p)
+        }) {
+            if let Some(document) = self.state.editor.as_mut() {
+                document.toggle_source_visibility();
+                self.state.selected_layer = None;
             }
         } else if p.x > sidebar_x
             && (104.0..260.0).contains(&p.y)
@@ -4197,6 +4231,34 @@ fn prepare_fixture(
             }
             state.editor_tool = captures_windows_native::editor::Tool::Eraser;
             state.editor_remove_mode = RemoveBackgroundMode::Restore;
+        }
+        "editor-trim" => {
+            let imported = RgbaImage::from_fn(420, 260, |x, y| {
+                image::Rgba([
+                    (24 + x / 2).min(255) as u8,
+                    (36 + y / 2).min(255) as u8,
+                    if x > y { 220 } else { 76 },
+                    255,
+                ])
+            });
+            state.edit_image(image);
+            if let Some(document) = state.editor.as_mut() {
+                let id = document.add_image(imported, 0, "Trim subject.png".into());
+                if let Some(layer) = document.layers.iter_mut().find(|layer| layer.id == id)
+                    && let captures_windows_native::editor::Shape::Image {
+                        origin,
+                        width,
+                        height,
+                        ..
+                    } = &mut layer.shape
+                {
+                    *origin = Point { x: 190.2, y: 130.4 };
+                    *width = 420.0;
+                    *height = 260.0;
+                }
+                state.selected_layer = Some(id);
+                state.editor_tool = captures_windows_native::editor::Tool::Select;
+            }
         }
         "recording-selector" => state.surface = Surface::RecordingSelector,
         "recording-hud" => {

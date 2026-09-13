@@ -223,16 +223,19 @@ function Assert-NonBlank([Drawing.Bitmap]$bitmap, [string]$view) {
   if ($colors.Count -lt 4) { throw "$view capture is blank or nearly uniform ($($colors.Count) sampled colors)" }
 }
 
-function Save-View([string]$appearance, [string]$view, [string]$artifactView = $view, [bool]$inputSmoke = $false, [bool]$eraserInputSmoke = $false) {
+function Save-View([string]$appearance, [string]$view, [string]$artifactView = $view, [bool]$inputSmoke = $false, [bool]$eraserInputSmoke = $false, [bool]$trimInputSmoke = $false) {
   $source = if ($view -eq "recording-editor") { $videoFrame } else { $ImagePath }
   Remove-Item (Join-Path $profile "render-driver.txt") -Force -ErrorAction SilentlyContinue
   $recordingReadyFile = Join-Path $profile "recording-frame-presented.txt"
   Remove-Item $recordingReadyFile -Force -ErrorAction SilentlyContinue
   $eraserAppliedFile = Join-Path $profile "editor-eraser-applied.txt"
   Remove-Item $eraserAppliedFile -Force -ErrorAction SilentlyContinue
+  $trimAppliedFile = Join-Path $profile "editor-trim-applied.txt"
+  Remove-Item $trimAppliedFile -Force -ErrorAction SilentlyContinue
   # Start-Process flattens ArgumentList, so explicitly quote paths that may contain spaces.
   $arguments = @("--view", $view, "--appearance", $appearance, "--fixture-image", ('"{0}"' -f $source), "--fixture-video", ('"{0}"' -f $VideoPath))
   $process = Start-Process $exe -ArgumentList $arguments -PassThru
+  $viewFailure = $null
   try {
     $handle = [IntPtr]::Zero
     for ($attempt = 0; $attempt -lt 300 -and $handle -eq [IntPtr]::Zero; $attempt++) {
@@ -289,6 +292,20 @@ function Save-View([string]$appearance, [string]$view, [string]$artifactView = $
       }
       Start-Sleep -Milliseconds 500
     }
+    if ($trimInputSmoke) {
+      # Hide the locked original layer, then invoke Trim edges through its real
+      # source-eye and toolbar hit targets. The marker includes resulting size.
+      [CapturesFixtureNative]::ClickLogical($handle, 1018, 180)
+      [CapturesFixtureNative]::ClickLogical($handle, 290, 26)
+      for ($attempt = 0; $attempt -lt 100 -and !(Test-Path $trimAppliedFile); $attempt++) {
+        if ($process.HasExited) { throw "$view exited before applying the trim input smoke" }
+        Start-Sleep -Milliseconds 50
+      }
+      if (!(Test-Path $trimAppliedFile) -or (Get-Content $trimAppliedFile -Raw).Trim() -ne "trim:421x261") {
+        throw "$appearance-$artifactView did not hide the source and trim to the imported layer's 421x261 bounds"
+      }
+      Start-Sleep -Milliseconds 500
+    }
     # Revalidate after composition settles; never capture an off-screen partial window.
     [void][CapturesFixtureNative]::PositionAndValidateWindow($handle)
     $rect = New-Object CapturesFixtureNative+RECT
@@ -309,8 +326,31 @@ function Save-View([string]$appearance, [string]$view, [string]$artifactView = $
       }
     } finally { $bitmap.Dispose() }
     Write-Host $path
+  } catch {
+    $viewFailure = $_
   } finally {
-    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    try {
+      if (!$process.HasExited) {
+        try {
+          Stop-Process -Id $process.Id -Force -ErrorAction Stop
+        } catch {
+          # Exiting between HasExited and Stop-Process is already success.
+          if (!$process.HasExited) { throw }
+        }
+      }
+      if (!$process.WaitForExit(10000)) {
+        throw "$appearance-$artifactView process $($process.Id) did not terminate within 10 seconds"
+      }
+    } catch {
+      if ($null -eq $viewFailure) {
+        $viewFailure = $_
+      } else {
+        Write-Error "$appearance-$artifactView also failed during process teardown: $($_.Exception.Message)" -ErrorAction Continue
+      }
+    }
+  }
+  if ($null -ne $viewFailure) {
+    throw $viewFailure
   }
 }
 
@@ -323,11 +363,12 @@ try {
   Start-Sleep -Milliseconds 500
   $env:CAPTURES_WINDOWS_NATIVE_DATA = $profile
   foreach ($appearance in @("light", "dark")) {
-    foreach ($view in @("menu", "editor", "editor-image", "editor-shapes", "editor-export", "editor-properties", "editor-line", "editor-eraser", "recording-selector", "recording-hud", "recording-editor", "preview", "history", "preferences", "preferences-capture", "preferences-recording", "preferences-appearance", "feedback", "delete-confirmation")) {
+    foreach ($view in @("menu", "editor", "editor-image", "editor-shapes", "editor-export", "editor-properties", "editor-line", "editor-eraser", "editor-trim", "recording-selector", "recording-hud", "recording-editor", "preview", "history", "preferences", "preferences-capture", "preferences-recording", "preferences-appearance", "feedback", "delete-confirmation")) {
       Save-View $appearance $view
     }
     Save-View $appearance "editor" "editor-input-smoke" $true
     Save-View $appearance "editor" "editor-eraser-input-smoke" $false $true
+    Save-View $appearance "editor-trim" "editor-trim-input-smoke" $false $false $true
   }
 } finally {
   $env:CAPTURES_WINDOWS_NATIVE_DATA = $previousData

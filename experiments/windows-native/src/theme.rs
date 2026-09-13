@@ -28,6 +28,8 @@ impl Color {
 #[derive(Clone, Copy)]
 pub struct Palette {
     pub canvas: Color,
+    pub canvas_checker_a: Color,
+    pub canvas_checker_b: Color,
     pub raised: Color,
     pub field: Color,
     pub text: Color,
@@ -43,6 +45,8 @@ pub fn palette(light: bool, accent: Color, signal: Color) -> Palette {
     if light {
         Palette {
             canvas: Color(245, 245, 247, 255),
+            canvas_checker_a: Color(234, 234, 238, 255),
+            canvas_checker_b: Color(246, 246, 248, 255),
             raised: Color(255, 255, 255, 255),
             field: Color(255, 255, 255, 255),
             text: Color(19, 19, 24, 255),
@@ -56,6 +60,8 @@ pub fn palette(light: bool, accent: Color, signal: Color) -> Palette {
     } else {
         Palette {
             canvas: Color(16, 16, 20, 255),
+            canvas_checker_a: Color(15, 15, 19, 255),
+            canvas_checker_b: Color(23, 23, 28, 255),
             raised: Color(22, 22, 27, 255),
             field: Color(14, 14, 18, 255),
             text: Color(242, 242, 244, 255),
@@ -83,5 +89,22 @@ pub fn theme_colors(name: &str, custom_accent: &str, custom_signal: &str) -> (Co
             Color::from_hex(custom_signal).unwrap_or(Color(255, 79, 195, 255)),
         ),
         _ => (Color(255, 202, 40, 255), Color(239, 70, 80, 255)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checker_colors_match_shipping_appearance_tokens() {
+        let accent = Color(1, 2, 3, 255);
+        let signal = Color(4, 5, 6, 255);
+        let light = palette(true, accent, signal);
+        assert_eq!(light.canvas_checker_a, Color(234, 234, 238, 255));
+        assert_eq!(light.canvas_checker_b, Color(246, 246, 248, 255));
+        let dark = palette(false, accent, signal);
+        assert_eq!(dark.canvas_checker_a, Color(15, 15, 19, 255));
+        assert_eq!(dark.canvas_checker_b, Color(23, 23, 28, 255));
     }
 }
