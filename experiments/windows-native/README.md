@@ -115,9 +115,11 @@ identities. Complete snapshot generations preserve the previous draft when publi
 A successful export clears the exported revision's draft; newer edits made during export are
 retained under the destination identity. History deletion retires the matching live draft session
 before ordered deletion. Current preview/history opens wire Capture identity; Imported/NewCapture
-identities are model-tested only, with no installed Open With/import-root route yet. Native Windows
-restart/autosave interaction still requires verification. Recording-editor drafts remain intentionally
-absent, matching the shipping app.
+identities are model-tested only, with no installed Open With/import-root route yet. The native
+[restart fixture](https://github.com/joswayski/captures/actions/runs/34732533721) verifies HWND-driven
+editing, exact close flush, normal process exit, editable restore/undo, and unchanged source bytes.
+Physical input and idle-only autosave timing remain separate checks. Recording-editor drafts remain
+intentionally absent, matching the shipping app.
 
 Image flip/rotate layer actions, recording crop, and preview audio are not implemented. Their controls are
 omitted or explicitly marked unavailable rather than presented as working. Windows DirectComposition

@@ -83,7 +83,14 @@ These are implemented experiments, not drop-in replacements. In particular:
   recording pass were unsupported: the preserved recording evidence was editor-only.
   The full check exposed a present-but-disabled Start action, now awaited by the
   helper, then default-microphone acquisition failed in the device-less lab. Live
-  recording remains a separate acceptance gate. Preview placement is verified on
+  recording remains a separate acceptance gate. A focused editor check then reproduced
+  GTK4's non-focusable custom timeline: `set_focusable` now enables real pointer focus
+  and keyboard trim/playhead input. On an independent 3-second source, ten arrow steps
+  move start/end to 0.3/2.7 seconds and playhead keys change rendered timeline pixels.
+  The sprite now uses `Picture` rather than icon-sized `Image`; an inspected reference
+  shows all 12 frames and an unclipped footer. The full live suite remains blocked on
+  harness corrections and later comparison/export/recovery verification.
+  Preview placement is verified on
   Openbox only and snaps on release; physical multi-monitor/audio, mixed DPI,
   other WMs, hardware GPU and Wayland behavior remain unverified.
 - **Windows:** canvas dimensions/background, fit/manual zoom, Ctrl-drag pan,
@@ -123,7 +130,11 @@ These are implemented experiments, not drop-in replacements. In particular:
   with an exact revision flush, waits for normal process exit, then reopens through the
   app's draft path and verifies editable layer structure/undo and unchanged source bytes.
   The export worker also tests newer-revision preservation under the destination identity.
-  These new native checks await execution; they are not physical-input evidence.
+  The [restart acceptance run](https://github.com/joswayski/captures/actions/runs/34732533721)
+  passed 78 library plus four worker MSVC tests and all 59 hardware captures, independently
+  bounded to the monitor/desktop. Its restart fixture passed source SHA256 preservation;
+  the inspected restored state shows one red-outline polygon over the source and an
+  intact footer. These checks use HWND messages, not physical input.
   Imported image layers use the shared raster renderer
   with native multi-select file picking, asynchronous decode, transformed hit
   testing, and batch undo/redo. The model supports locking, independent opacity,
@@ -223,8 +234,10 @@ These are implemented experiments, not drop-in replacements. In particular:
   nested work even with Freeze screen off; stale completions cannot publish or
   release a replacement's capture gate. Hidden ordinary refreshes restart presentation.
   This unified selector follows shipping's menu policy, not its separate committed
-  screenshot-overlay policy. Native unit execution and physical global-hotkey/nested
-  capture evidence remain pending; static references cannot establish that behavior.
+  screenshot-overlay policy. The [shortcut run](https://github.com/joswayski/captures/actions/runs/34732533715)
+  passed 39 AppKit tests, 29 normal references and video/dust compositor checks, with
+  76 KB estimates in both passes. Physical global-hotkey/nested capture evidence remains
+  pending; unit policy tests and static references cannot establish that behavior.
 
 ## Feature parity acceptance
 

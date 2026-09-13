@@ -64,8 +64,10 @@ This ledger distinguishes implemented behavior from native-runtime and rollout g
   routing and trackpad magnification still require native interaction evidence.
 - Main runtime focus, nonactivation, click-through, capture exclusion and multi-DPI
   behavior. Static references are layout evidence only; video/dust require compositor capture.
-- Repeated capture-shortcut routing and temporary overlay sharing have native unit
-  coverage awaiting execution. Physical global-hotkey delivery and the nested frozen
+- Repeated capture-shortcut routing and temporary overlay sharing passed native unit
+  coverage in the [shortcut run](https://github.com/joswayski/captures/actions/runs/34732533715):
+  39 AppKit tests, 29 normal references and video/dust compositor checks, with 76 KB
+  estimates in both passes. Physical global-hotkey delivery and the nested frozen
   screenshot still require interaction evidence on a Screen Recording-authorized Mac.
   The unified native selector follows shipping's menu policy (changed screenshot
   targets switch in place); it has no separate committed screenshot-overlay state,

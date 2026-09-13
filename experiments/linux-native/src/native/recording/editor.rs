@@ -876,13 +876,13 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     timeline_summary.pack_start(&timeline_range, false, false, 0);
     timeline_summary.pack_end(&timeline_selected, false, false, 0);
     timeline_card.pack_start(&timeline_summary, false, false, 0);
-    let timeline = gtk::Image::new();
+    let timeline = gtk::Picture::new();
     timeline.set_size_request(1080, 68);
     accessible_name(&timeline, "Recording timeline filmstrip");
     let timeline_overlay = gtk::Overlay::new();
     timeline_overlay.add(&timeline);
     let timeline_interaction = gtk::DrawingArea::new();
-    timeline_interaction.set_can_focus(true);
+    timeline_interaction.set_focusable(true);
     accessible_name(&timeline_interaction, "Interactive trim timeline");
     timeline_interaction.set_tooltip_text(Some(
         "Tab cycles trim start, trim end, and playhead; arrow keys adjust the focused control",
@@ -1358,7 +1358,7 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
                 if let Ok(sprite) =
                     gtk::gdk_pixbuf::Pixbuf::from_file_at_scale(&sprite, 1080, 68, false)
                 {
-                    timeline.set_from_pixbuf(Some(&sprite));
+                    timeline.set_pixbuf(Some(&sprite));
                 }
                 let playback = Playback::new(
                     playback_path,
