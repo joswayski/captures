@@ -1,7 +1,6 @@
-CREATE SCHEMA IF NOT EXISTS captures;
-
+-- Use the default public schema in the dedicated captures database, like Caper.
 -- Provider-independent account foundation; no sign-in or provisioning is active.
-CREATE TABLE captures.users (
+CREATE TABLE users (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     email text,
     email_verified boolean NOT NULL DEFAULT false,

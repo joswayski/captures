@@ -37,15 +37,25 @@ second paid cluster. Create the database and roles before startup; changing a UR
 path does not create a database. Database separation still shares cluster compute,
 storage capacity, and failure modes.
 
-All application objects, including SQLx's `_sqlx_migrations` ledger, stay in the
-`captures` schema. Users retain an internal bigint ID, nullable email, verification
-state (false by default), creation/update timestamps, and disabled/deleted timestamps.
-Deleted rows must have no email. There is no public identifier or email uniqueness
-constraint. No account writes are currently exposed by the service.
+Application tables and SQLx's `_sqlx_migrations` ledger use the default `public`
+schema, matching Caper. The databases remain separate: Captures connects to
+`captures`, Caper to `caperchat`. A schema is a namespace inside a database;
+`public` does not mean publicly accessible.
 
-Runtime queries must explicitly qualify the schema. Runtime connections must not
-send a `search_path` startup option, which PlanetScale's pooler rejects. Only the
-direct migration connection sets it, keeping the migration ledger isolated.
+The direct migration connection explicitly pins `search_path=public`, so role or
+database settings and username schemas cannot redirect table or ledger creation.
+Runtime pooler connections receive no startup override. For runtime and manual
+queries, keep `public` on the search path without another `users` table ahead of
+it. PostgreSQL's usual `"$user", public` default works unless the username schema
+shadows that table. With normal lookup, use `SELECT * FROM users` and
+`SELECT * FROM _sqlx_migrations`; no prefix or per-session `SET` is required.
+If lookup was customized, check `SHOW search_path` and correct the role/database
+defaults. Pinning migrations does not change those defaults or move existing tables.
+
+Users retain an internal bigint ID, nullable email, verification state (false by
+default), creation/update timestamps, and disabled/deleted timestamps. Deleted
+rows must have no email. There is no public identifier or email uniqueness
+constraint. No account writes are currently exposed by the service.
 
 ```dotenv
 DATABASE_URL=postgresql://captures_app:PASSWORD@HOST:6432/captures?sslmode=verify-full
@@ -61,12 +71,14 @@ or use a real CA PEM file mounted in the API container. Do not use
 `sslrootcert=system`: SQLx treats it as a filename.
 
 Use separate migration-owner and runtime roles; neither should be cluster admin.
-The migration owner must be able to create/own the schema. At every API startup:
+The migration role needs `USAGE, CREATE` on `public` and owns the tables it creates.
+The runtime role needs only schema usage and the table/sequence grants below, not
+schema-changing privileges. At every API startup:
 
 1. Validate both URLs; never fall back to runtime credentials for DDL.
-2. Run migrations through one direct connection before listening. Advisory locks
-   serialize concurrent schema bootstrap and SQLx migrations. Bootstrap and
-   migration stages each have a five-minute timeout; failures prevent startup.
+2. Run migrations through one direct connection before listening. SQLx's advisory
+   lock serializes concurrent migrations. Connection and migration stages each
+   have a five-minute timeout; failures prevent startup. No custom schema is created.
 3. Close the migration connection, then open the runtime pool.
 
 The API receives both secrets. Closing the migration connection does not remove
@@ -77,26 +89,40 @@ only `MIGRATION_DATABASE_URL`:
 cargo run -p captures-api -- migrate
 ```
 
-Grant the runtime role access with the schema owner (adapt role names):
+As the database/schema administrator, allow the migration role to create tables
+(adapt these example role names to the actual PostgreSQL role names):
 
 ```sql
-GRANT USAGE ON SCHEMA captures TO captures_app;
-GRANT SELECT, INSERT, UPDATE ON captures.users TO captures_app;
-GRANT USAGE ON SEQUENCE captures.users_id_seq TO captures_app;
+GRANT USAGE, CREATE ON SCHEMA public TO captures_migrator;
 ```
+
+After migration, use the table-owning migration role to grant runtime access:
+
+```sql
+GRANT USAGE ON SCHEMA public TO captures_app;
+GRANT SELECT, INSERT, UPDATE ON users TO captures_app;
+GRANT USAGE ON SEQUENCE users_id_seq TO captures_app;
+```
+
+Object ownership and name lookup are separate. Using `public` removes the need
+for a schema prefix; it does not let the runtime role or a temporary web-console
+role drop tables owned by the migration role.
 
 Audit database `CONNECT`, schema, and role-inheritance privileges without globally
 revoking access needed by other apps. Use a disposable database for development.
 
-## One-time reset of the unused account schema
+## Transition from the unused custom schema
 
-The initial migration was rewritten deliberately, not extended with an upgrade
-migration. Existing ledgers have a different checksum. Do not roll out the new
-API against the old schema or merely change the ledger checksum.
+The initial migration now targets `public` for the approved empty installation.
+This is not an automatic data move or upgrade of the old migration ledger. If the
+old account tables have already been deleted, **no further table deletion is
+needed**. An empty `captures` schema can remain; the API no longer uses or creates it.
+Caper's separate database already targets `public`; it needs no schema reset for
+this Captures transition.
 
-For the approved empty installation, stop the old API and prevent reconciliation
-from restarting it before resetting. From the infrastructure checkout, suspend
-its application reconciliation and scale down:
+Before the new API image starts, stop any old Captures API instance that could
+recreate the custom-schema tables. From the infrastructure checkout with the
+production Kubernetes context selected:
 
 ```sh
 flux suspend kustomization production-apps -n flux-system
@@ -104,37 +130,56 @@ kubectl -n default scale deployment/captures-api --replicas=0
 kubectl -n default wait --for=delete pod -l app.kubernetes.io/name=captures-api --timeout=5m
 ```
 
-From this checkout, set `MIGRATION_DATABASE_URL` securely to the direct **captures**
-database as the migration owner, then run the scoped reset and new migration.
-This destroys only the `captures` schema and its unused account data/ledger:
+If the old tables still exist, connect to the `captures` database using the
+**table-owning migration credentials**, not the runtime role or temporary browser
+console role. For this empty installation only, run the following SQL. It does
+not drop schemas/databases or any `public` tables, and deliberately omits `CASCADE`:
 
-```sh
-psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+```sql
 DO $$ BEGIN
   IF current_database() <> 'captures' THEN
     RAISE EXCEPTION 'Expected captures database';
   END IF;
+  DROP TABLE IF EXISTS captures.users, captures._sqlx_migrations;
 END $$;
-DROP SCHEMA captures CASCADE;
-SQL
+```
+
+Keep the connection's default search path (`SHOW search_path;`). If this session
+previously used `SET search_path TO captures`, reconnect or run `RESET search_path`.
+The migration role must have `USAGE, CREATE` on `public` as described above. Do not
+reset passwords or widen the runtime role's permissions to perform DDL.
+
+Deploy the new API image through the existing infrastructure deployment workflow;
+its startup creates `public.users` and `public._sqlx_migrations`. For an explicit
+migration before deployment, run from this checkout with the direct migration URL
+securely exported (this command belongs in a terminal, not the SQL console):
+
+```sh
 cargo run -p captures-api -- migrate
 ```
 
-Reapply the runtime grants above because recreated objects lose their grants.
-Verify the new API image pin in infrastructure `main` before resuming reconciliation; never restart the old
-API against the reset schema. Resume and verify from the infrastructure checkout:
+If `public.users` or a conflicting public migration ledger already exists before
+this first migration, stop and inspect it rather than dropping it or changing
+checksums. The migration will not overwrite existing tables. Reapply the runtime
+grants above to the newly created tables. Do not restart the old API image; verify
+the new API image pin in infrastructure `main` before resuming reconciliation:
 
 ```sh
 flux resume kustomization production-apps -n flux-system
 flux reconcile kustomization production-apps -n flux-system --with-source
 kubectl -n default rollout status deployment/captures-api --timeout=15m
-kubectl -n default exec deployment/captures-web -- node -e \
-  'fetch("http://captures-api/api/account/me").then(r=>{console.log(r.status);if(r.status!==503)process.exit(1)})'
 ```
 
-The account endpoint must return 503. Coordinate this reset with Caper's separate
-`caperchat` reset and deploy both provider-free websites before removing old secret
-projections. No reset or deployment happens merely by publishing an image.
+After startup, connect to the `captures` database as the migration or runtime role
+and verify unqualified queries work without any `SET search_path`:
+
+```sql
+SELECT current_database(), current_schema(); -- captures, public
+SELECT * FROM users;
+```
+
+Account HTTP access remains unavailable (503). Publishing or merging this PR does
+not reset a production database or deploy an image.
 
 ## Build and test
 
@@ -148,8 +193,9 @@ TEST_DATABASE_URL=postgres://captures_test@127.0.0.1:55432/postgres \
 ```
 
 The ignored PostgreSQL test creates a unique disposable database, concurrently
-runs startup migrations, verifies schema/ledger isolation, checks the generic
-users columns and unverified defaults, and drops that database. The test role
+runs startup migrations, verifies that only `public` contains the users table and
+ledger, checks unqualified reads/writes/DDL and unverified defaults, verifies a
+restart preserves rows, and drops that database. The test role
 must be able to create databases. Never supply production credentials.
 
 ## Image publication and routing

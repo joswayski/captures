@@ -55,7 +55,9 @@ jobs:
             test "$(curl -fsS http://127.0.0.1:3001/health)" = '{"status":"ok"}'
             test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3001/api/account/me)" = 503
             test "$(docker exec captures-db-test psql -U captures_test -Atc \
-              'SELECT count(*) FROM captures._sqlx_migrations WHERE success')" -gt 0
+              'SELECT count(*) FROM _sqlx_migrations WHERE success')" -gt 0
+            test "$(docker exec captures-db-test psql -U captures_test -Atc \
+              'SELECT count(*) FROM users')" = 0
             test "$(docker exec captures-db-test psql -U captures_test -Atc \
               "SELECT count(*) FROM pg_stat_activity WHERE application_name='migration'")" = 0
           done

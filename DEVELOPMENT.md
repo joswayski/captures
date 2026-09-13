@@ -14,7 +14,7 @@ On Debian or Ubuntu, install `libpipewire-0.3-dev`, `libspa-0.2-dev`, and `libas
 
 The optional Rust account API also needs PostgreSQL for database integration
 tests. It does not participate in local desktop capture. See
-[`apps/api/README.md`](apps/api/README.md) for configuration, schema isolation,
+[`apps/api/README.md`](apps/api/README.md) for configuration, database isolation,
 migrations and tests, and [`apps/web/README.md`](apps/web/README.md#optional-accounts)
 for the account placeholder. Sign-in is unavailable. `npm run check` verifies
 that account requests fail closed and the built public website still works.
