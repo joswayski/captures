@@ -424,3 +424,56 @@ Measured binary SHA-256 values:
 
 - GTK4: `625603a601b6884c777fc48bc04e34e7d3a61a47a0e28a3336126d6adc474911`
 - Tauri: `cc594b7e8741edbb15e81e9bb6047a915291b9894fe5de39cccec9c7acc68ef1`
+
+### Pre-merge rendering optimizations: September 13, 2026
+
+These are release-profile **rendering microbenchmarks**, not updates to the
+whole-app memory table above. They ran sequentially in the Linux orb, without
+concurrent builds or recording. The baseline is the previous algorithm retained
+in each benchmark, not the shipping Tauri app.
+
+| Workload | Before | After | Scope |
+| --- | ---: | ---: | --- |
+| 4K image redrawn into a 1280×720 Cairo canvas | 225.55 ms | 60.97 ms | GTK4 warm image cache; median of six alternating five-draw batches |
+| 4K normal annotations, three sparse shapes | 101.88 ms | 34.03 ms | `captures-image`, used by the Windows native editor; three-render mean |
+| 4K normal annotations, 96 dense shapes | 536.84 ms | 532.89 ms | Same renderer; effectively unchanged when drawing dominates |
+
+The shared renderer now composites directly into the output with the same
+`image::Pixel::blend` operation, skipping transparent annotation pixels instead
+of building an intermediate straight-alpha overlay. This removes one
+33,177,600-byte allocation (31.64 MiB) per 3840×2160 render. Differential tests
+compare every byte against the legacy overlay path, including sparse/dense
+coverage, all source alpha values, rotations, antialiasing and cropping. Existing
+non-normal blending and image/text/geometry regressions remain unchanged.
+
+The GTK4 canvas retains decoded Cairo image surfaces instead of base64-decoding,
+PNG-decoding and converting to premultiplied pixels on every pan/selection redraw.
+Each cache belongs to one canvas, compares exact PNG content even when an ID is
+reused, and releases hidden/deleted image entries. Geometry and blending remain
+live; exports and serialized drafts do not use the cache. Cached pixel/key payload
+is capped at 64 MiB; images that do not fit render uncached. This trades bounded
+resident memory for redraw time, and does **not** cap document/undo or temporary
+decode memory. Tests cover same-ID pixel replacement, undo, transforms, hidden/
+deleted layers, surface reuse and both sides of cache-budget admission.
+
+Raw GTK4 batches, in ms/draw:
+
+```text
+uncached: 237.959, 228.755, 225.216, 224.635, 225.880, 224.412
+cached:    62.452,  65.465,  60.588,  59.838,  60.362,  61.356
+```
+
+Reproduce with the same release toolchain; do not run these concurrently:
+
+```sh
+cargo test --locked --release --manifest-path experiments/linux-native/Cargo.toml \
+  benchmark_canvas_image_cache -- --ignored --nocapture
+cargo test --locked --release -p captures-image \
+  benchmark_normal_compositing_4k -- --ignored --nocapture
+```
+
+Editor revalidation also caught initial Fit running before GTK allocated the
+viewport, leaving a 5% canvas. Initial Fit now waits for a valid frame allocation
+and immediately removes its tick callback. No permanent animation loop was added.
+These changes make no new macOS, physical Windows/GPU, FPS, capture-latency or
+whole-app memory claim. Shipping Tauri behavior and root README remain accurate.

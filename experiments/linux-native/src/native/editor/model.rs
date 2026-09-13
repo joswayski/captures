@@ -2,7 +2,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gtk::cairo;
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
-use std::{f64::consts::PI, io::Cursor};
+use std::{collections::HashMap, f64::consts::PI, io::Cursor};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Point {
@@ -268,7 +268,7 @@ impl Document {
     }
 }
 
-pub fn source_image(ctx: &cairo::Context, image: &RgbaImage, x: f64, y: f64, w: f64, h: f64) {
+fn image_surface(image: &RgbaImage) -> cairo::ImageSurface {
     let mut data = Vec::with_capacity(image.as_raw().len());
     for p in image.pixels() {
         let a = u32::from(p[3]);
@@ -278,21 +278,76 @@ pub fn source_image(ctx: &cairo::Context, image: &RgbaImage, x: f64, y: f64, w: 
             | (u32::from(p[2]) * a / 255);
         data.extend_from_slice(&word.to_ne_bytes())
     }
-    let surface = cairo::ImageSurface::create_for_data(
+    cairo::ImageSurface::create_for_data(
         data,
         cairo::Format::ARgb32,
         image.width() as i32,
         image.height() as i32,
         image.width() as i32 * 4,
     )
-    .expect("image surface");
+    .expect("image surface")
+}
+
+pub fn source_image(ctx: &cairo::Context, image: &RgbaImage, x: f64, y: f64, w: f64, h: f64) {
+    source_surface(ctx, &image_surface(image), x, y, w, h);
+}
+
+fn source_surface(
+    ctx: &cairo::Context,
+    surface: &cairo::ImageSurface,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) {
     let _ = ctx.save();
     ctx.translate(x, y);
-    ctx.scale(w / image.width() as f64, h / image.height() as f64);
-    let _ = ctx.set_source_surface(&surface, 0., 0.);
+    ctx.scale(w / surface.width() as f64, h / surface.height() as f64);
+    let _ = ctx.set_source_surface(surface, 0., 0.);
     let _ = ctx.paint();
     let _ = ctx.restore();
 }
+
+/// Canvas-local decoded images. Keys compare exact PNG content, so edits and
+/// undo with a reused layer ID cannot display stale pixels. Geometry and blend
+/// remain live; only decoding and RGBA-to-Cairo conversion are cached.
+#[derive(Default)]
+pub struct ImageCache {
+    images: HashMap<u64, (String, cairo::ImageSurface)>,
+}
+
+impl ImageCache {
+    pub fn retain(&mut self, doc: &Document) {
+        self.images.retain(|id, _| {
+            doc.layers.iter().any(|layer| {
+                layer.id == *id && layer.visible && matches!(layer.kind, LayerKind::Image { .. })
+            })
+        });
+    }
+
+    fn surface(&mut self, id: u64, png: &str) -> Result<cairo::ImageSurface, String> {
+        if let Some((key, surface)) = self.images.get(&id)
+            && key == png
+        {
+            return Ok(surface.clone());
+        }
+        let surface = image_surface(&decode(png)?);
+        self.images.remove(&id);
+        // Bound retained decoded pixels and key bytes per canvas. Images that
+        // exceed the remaining budget still draw normally without retention.
+        let used: usize = self
+            .images
+            .values()
+            .map(|(key, surface)| key.len() + surface.stride() as usize * surface.height() as usize)
+            .sum();
+        let size = png.len() + surface.stride() as usize * surface.height() as usize;
+        if used + size <= 64 * 1024 * 1024 {
+            self.images.insert(id, (png.to_owned(), surface.clone()));
+        }
+        Ok(surface)
+    }
+}
+
 fn path(ctx: &cairo::Context, l: &Layer) {
     match &l.kind {
         LayerKind::Stroke(ps) => {
@@ -352,17 +407,32 @@ fn path(ctx: &cairo::Context, l: &Layer) {
     }
 }
 pub fn draw_layer(ctx: &cairo::Context, l: &Layer) -> Result<(), String> {
+    draw_layer_cached(ctx, l, None)
+}
+
+pub fn draw_layer_cached(
+    ctx: &cairo::Context,
+    l: &Layer,
+    images: Option<&mut ImageCache>,
+) -> Result<(), String> {
     if !l.visible {
         return Ok(());
     }
+    let image = match &l.kind {
+        LayerKind::Image { png, .. } => Some(match images {
+            Some(images) => images.surface(l.id, png)?,
+            None => image_surface(&decode(png)?),
+        }),
+        _ => None,
+    };
     let _ = ctx.save();
     ctx.set_operator(l.blend.operator());
     ctx.translate(l.frame.x + l.frame.w / 2., l.frame.y + l.frame.h / 2.);
     ctx.rotate(l.rotation);
     ctx.translate(-l.frame.w / 2., -l.frame.h / 2.);
     match &l.kind {
-        LayerKind::Image { png, .. } => {
-            source_image(ctx, &decode(png)?, 0., 0., l.frame.w, l.frame.h)
+        LayerKind::Image { .. } => {
+            source_surface(ctx, image.as_ref().unwrap(), 0., 0., l.frame.w, l.frame.h)
         }
         LayerKind::Text(text) => {
             ctx.set_source_rgba(l.color.0, l.color.1, l.color.2, l.color.3 * l.opacity);
@@ -892,6 +962,150 @@ mod tests {
 
         document.background = Some(Color(1., 1., 1., 1.));
         assert_eq!(render(&document).unwrap().get_pixel(0, 0).0, [255; 4]);
+    }
+
+    #[test]
+    fn canvas_cache_reuses_pixels_but_tracks_edits_undo_geometry_and_removal() {
+        let mut doc = Document::new(RgbaImage::from_fn(7, 5, |x, y| {
+            image::Rgba([(x * 31) as u8, (y * 43) as u8, 117, (x * 29 + y * 11) as u8])
+        }));
+        let original = doc.layers[0].kind.clone();
+        let mut cache = ImageCache::default();
+        let draw = |layer: &Layer, cache: Option<&mut ImageCache>| {
+            let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, 43, 31).unwrap();
+            {
+                let context = cairo::Context::new(&surface).unwrap();
+                context.set_source_rgb(0.17, 0.31, 0.63);
+                context.paint().unwrap();
+                draw_layer_cached(&context, layer, cache).unwrap();
+            }
+            surface.data().unwrap().to_vec()
+        };
+        for step in 0..5 {
+            let layer = &mut doc.layers[0];
+            match step {
+                1 => {
+                    layer.frame = Rect {
+                        x: 9.,
+                        y: -2.,
+                        w: 21.,
+                        h: 15.,
+                    };
+                    layer.rotation = 0.37;
+                    layer.blend = Blend::Multiply;
+                }
+                2 => {
+                    // Same ID and dimensions, different pixels: not a new layer.
+                    let png = encode(&RgbaImage::from_pixel(
+                        7,
+                        5,
+                        image::Rgba([231, 19, 73, 137]),
+                    ));
+                    layer.kind = LayerKind::Image {
+                        png: png.clone(),
+                        original_png: png,
+                    };
+                }
+                3 => layer.kind = original.clone(), // Undo must invalidate too.
+                4 => layer.visible = false,
+                _ => {}
+            }
+            let expected = draw(layer, None);
+            cache.retain(&doc);
+            assert_eq!(
+                draw(&doc.layers[0], Some(&mut cache)),
+                expected,
+                "step {step}"
+            );
+            if step < 4 {
+                let surface = cache.images[&doc.layers[0].id].1.clone();
+                assert_eq!(draw(&doc.layers[0], Some(&mut cache)), expected);
+                assert_eq!(
+                    surface.to_raw_none(),
+                    cache.images[&doc.layers[0].id].1.to_raw_none()
+                );
+            }
+        }
+        assert!(
+            cache.images.is_empty(),
+            "hidden image must release cached pixels"
+        );
+        doc.layers[0].visible = true;
+        draw(&doc.layers[0], Some(&mut cache));
+        doc.layers.clear();
+        cache.retain(&doc);
+        assert!(
+            cache.images.is_empty(),
+            "deleted image must release cached pixels"
+        );
+    }
+
+    #[test]
+    fn canvas_cache_budget_falls_back_without_retaining_or_losing_images() {
+        let mut cache = ImageCache::default();
+        // Leave just under one 4096-pixel row (16 KiB) in the 64 MiB budget.
+        let reservation = cairo::ImageSurface::create(cairo::Format::ARgb32, 4096, 4095).unwrap();
+        cache.images.insert(99, ("reserved".into(), reservation));
+        let small = encode(&RgbaImage::from_pixel(
+            7,
+            5,
+            image::Rgba([19, 211, 73, 255]),
+        ));
+        let large = encode(&RgbaImage::from_pixel(
+            200,
+            30,
+            image::Rgba([93, 17, 137, 255]),
+        ));
+        cache.surface(1, &small).unwrap();
+        assert!(cache.images.contains_key(&1));
+        let mut uncached = cache.surface(1, &large).unwrap();
+        assert_eq!((uncached.width(), uncached.height()), (200, 30));
+        assert_eq!(
+            &uncached.data().unwrap()[..4],
+            &0xff5d1189_u32.to_ne_bytes()
+        );
+        assert!(
+            !cache.images.contains_key(&1),
+            "replacement cannot leave stale cached pixels"
+        );
+        cache.images.remove(&99);
+        cache.surface(1, &large).unwrap();
+        assert!(cache.images.contains_key(&1));
+        assert!(cache.surface(1, "invalid PNG").is_err());
+    }
+
+    #[test]
+    #[ignore = "manual release-profile canvas image decode benchmark"]
+    fn benchmark_canvas_image_cache() {
+        use std::{hint::black_box, time::Instant};
+        let doc = Document::new(RgbaImage::from_fn(3840, 2160, |x, y| {
+            image::Rgba([(x % 251) as u8, (y % 239) as u8, ((x + y) % 233) as u8, 255])
+        }));
+        let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 720).unwrap();
+        let context = cairo::Context::new(&surface).unwrap();
+        context.scale(1. / 3., 1. / 3.);
+        let mut cache = ImageCache::default();
+        draw_layer_cached(&context, &doc.layers[0], Some(&mut cache)).unwrap();
+        let mut samples = [Vec::new(), Vec::new()];
+        for trial in 0..6 {
+            for cached in [trial % 2 == 0, trial % 2 != 0] {
+                let start = Instant::now();
+                for _ in 0..5 {
+                    cache.retain(&doc);
+                    draw_layer_cached(
+                        &context,
+                        black_box(&doc.layers[0]),
+                        cached.then_some(&mut cache),
+                    )
+                    .unwrap();
+                }
+                samples[usize::from(cached)].push(start.elapsed().as_secs_f64() * 1000. / 5.);
+            }
+        }
+        eprintln!(
+            "4K image redraw at 1280x720, ms/draw (6 alternating batches of 5): uncached={:?}; cached={:?}",
+            samples[0], samples[1]
+        );
     }
 
     fn thumbnail_pixel(doc: &Document, layer: &Layer, x: usize, y: usize) -> u32 {

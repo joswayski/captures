@@ -1289,8 +1289,16 @@ fn open_impl(
         f()
     }
     // The sidebar/footer determine the real viewport only after allocation.
-    // The provisional zoom above must not leave the source clipped on open.
-    glib::idle_add_local_once(move || fit.emit_clicked());
+    // An idle callback can precede that allocation and clamp Fit to 5%.
+    // Wait for an actual frame allocation, then stop requesting frame ticks.
+    scroll.add_tick_callback(move |scroll, _| {
+        let allocation = scroll.allocation();
+        if allocation.width() <= 64 || allocation.height() <= 64 {
+            return glib::ControlFlow::Continue;
+        }
+        fit.emit_clicked();
+        glib::ControlFlow::Break
+    });
 }
 
 fn install_editor_css() {
@@ -1429,8 +1437,11 @@ fn setup_canvas(
 ) {
     {
         let s = state.clone();
+        let images = RefCell::new(ImageCache::default());
         area.connect_draw(move |a, c| {
             let s = s.borrow();
+            let mut images = images.borrow_mut();
+            images.retain(&s.doc);
             a.set_size_request(
                 (s.doc.width as f64 * s.zoom) as i32,
                 (s.doc.height as f64 * s.zoom) as i32,
@@ -1444,7 +1455,7 @@ fn setup_canvas(
             // A transparent document uses the shipping editor's light document
             // surface for display only. Export paint still clears to alpha.
             for layer in &s.doc.layers {
-                let _ = draw_layer(c, layer);
+                let _ = draw_layer_cached(c, layer, Some(&mut images));
             }
             if let Some(p) = &s.preview {
                 let _ = draw_layer(c, p);

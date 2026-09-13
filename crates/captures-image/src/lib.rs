@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle};
-use image::RgbaImage;
+use image::{Pixel, Rgba, RgbaImage};
 use tiny_skia::{FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -643,19 +643,21 @@ pub fn render(document: &Document) -> Result<RgbaImage, String> {
                 }
             }
         } else {
-            // Preserve the established normal-only rendering path and its
-            // straight-alpha compositing results.
-            let bytes = canvas
-                .pixels()
-                .iter()
-                .flat_map(|p| {
-                    let c = p.demultiply();
-                    [c.red(), c.green(), c.blue(), c.alpha()]
-                })
-                .collect();
-            let overlay =
-                RgbaImage::from_raw(width, height, bytes).ok_or("Invalid rendered buffer")?;
-            image::imageops::overlay(&mut output, &overlay, 0, 0);
+            // Match imageops::overlay's Pixel::blend operation without first
+            // materializing a second full-size RgbaImage. Pixel::blend is a
+            // no-op for transparent foreground pixels, so avoid demultiplying
+            // and visiting the output for the common untouched case.
+            for (source, rendered) in output.pixels_mut().zip(canvas.pixels()) {
+                if rendered.alpha() != 0 {
+                    let color = rendered.demultiply();
+                    source.blend(&Rgba([
+                        color.red(),
+                        color.green(),
+                        color.blue(),
+                        color.alpha(),
+                    ]));
+                }
+            }
         }
     }
     if let Some(crop) = document.crop {
@@ -663,4 +665,129 @@ pub fn render(document: &Document) -> Result<RgbaImage, String> {
             image::imageops::crop_imm(&output, crop.x, crop.y, crop.width, crop.height).to_image();
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{hint::black_box, sync::Arc, time::Instant};
+
+    use super::*;
+
+    fn legacy_render(document: &Document) -> RgbaImage {
+        let (width, height) = document.source.dimensions();
+        let mut output = (*document.source).clone();
+        let mut canvas = Pixmap::new(width, height).unwrap();
+        for layer in &document.layers {
+            draw_layer(&mut canvas, layer).unwrap();
+        }
+        let bytes = canvas
+            .pixels()
+            .iter()
+            .flat_map(|pixel| {
+                let color = pixel.demultiply();
+                [color.red(), color.green(), color.blue(), color.alpha()]
+            })
+            .collect();
+        let overlay = RgbaImage::from_raw(width, height, bytes).unwrap();
+        image::imageops::overlay(&mut output, &overlay, 0, 0);
+        if let Some(crop) = document.crop {
+            output = image::imageops::crop_imm(&output, crop.x, crop.y, crop.width, crop.height)
+                .to_image();
+        }
+        output
+    }
+
+    fn normal_document(width: u32, height: u32, dense: bool) -> Document {
+        let source = RgbaImage::from_fn(width, height, |x, y| {
+            Rgba([
+                (x.wrapping_mul(37).wrapping_add(y * 11)) as u8,
+                (x.wrapping_mul(3).wrapping_add(y * 29)) as u8,
+                (x ^ y).wrapping_add(91) as u8,
+                (x * 17 + y * 13) as u8,
+            ])
+        });
+        let count = if dense { 96 } else { 3 };
+        let mut layers = Vec::with_capacity(count);
+        for index in 0..count {
+            let index = index as u32;
+            let mut layer = Layer {
+                id: u64::from(index),
+                shape: if index.is_multiple_of(3) {
+                    Shape::Ellipse {
+                        origin: Point {
+                            x: (index * 83 % width.saturating_sub(300).max(1)) as f32 + 0.35,
+                            y: (index * 47 % height.saturating_sub(220).max(1)) as f32 + 0.7,
+                        },
+                        width: if dense { 900.5 } else { 180.5 },
+                        height: if dense { 620.25 } else { 120.25 },
+                    }
+                } else {
+                    Shape::Rectangle {
+                        origin: Point {
+                            x: (index * 101 % width.saturating_sub(400).max(1)) as f32 + 0.2,
+                            y: (index * 61 % height.saturating_sub(300).max(1)) as f32 + 0.4,
+                        },
+                        width: if dense { 1200.75 } else { 240.75 },
+                        height: if dense { 800.5 } else { 160.5 },
+                    }
+                },
+                color: [17, 211, 93, 137],
+                stroke_width: 5.25,
+                fill: Some([231, 41, 167, 89]),
+                rotation_degrees: index as f32 * 13.7 + 17.25,
+                blend_mode: BlendMode::Normal,
+            };
+            if index % 5 == 4 {
+                layer.fill = None;
+            }
+            layers.push(layer);
+        }
+        Document {
+            source: Arc::new(source),
+            crop: None,
+            layers,
+        }
+    }
+
+    #[test]
+    fn normal_compositing_is_byte_exact_with_legacy_overlay() {
+        for dense in [false, true] {
+            // Sparse includes untouched pixels and partial coverage; dense
+            // saturates overlapping alpha. Test both before and after cropping.
+            let mut document = normal_document(641, 479, dense);
+            document.layers.truncate(16);
+            assert_eq!(render(&document).unwrap(), legacy_render(&document));
+            document.crop = Some(PixelRect {
+                x: 19,
+                y: 11,
+                width: 537,
+                height: 403,
+            });
+            assert_eq!(render(&document).unwrap(), legacy_render(&document));
+        }
+    }
+
+    #[test]
+    #[ignore = "manual release benchmark"]
+    fn benchmark_normal_compositing_4k() {
+        for (name, dense) in [("sparse", false), ("dense", true)] {
+            let document = normal_document(3840, 2160, dense);
+            for (implementation, render_once) in [
+                (
+                    "direct",
+                    render as fn(&Document) -> Result<RgbaImage, String>,
+                ),
+                ("legacy", |document: &Document| Ok(legacy_render(document))),
+            ] {
+                let started = Instant::now();
+                for _ in 0..3 {
+                    black_box(render_once(black_box(&document)).unwrap());
+                }
+                eprintln!(
+                    "4k {name} {implementation}: {:.3} ms/render (3 renders)",
+                    started.elapsed().as_secs_f64() * 1000.0 / 3.0
+                );
+            }
+        }
+    }
 }
