@@ -504,7 +504,7 @@ fn open_impl(
         }
     });
     background_button_content.append(&background_swatch);
-    background_button_content.append(&gtk::Label::new(Some("Background color")));
+    background_button_content.append(&ui::centered_label("Background color"));
     background_button_content.append(&ui::icon("chevron-down", 12));
     background_button.set_child(Some(&background_button_content));
     let background_popover = gtk::Popover::new();
@@ -517,7 +517,7 @@ fn open_impl(
     background_toggle.set_active(state.borrow().doc.background.is_some());
     ui::named(&background_toggle, "Solid background");
     background_toggle_row.append(&background_toggle);
-    background_toggle_row.append(&gtk::Label::new(Some("Solid background")));
+    background_toggle_row.append(&ui::centered_label("Solid background"));
     background_panel.append(&background_toggle_row);
     let background_hex = gtk::Entry::new();
     background_hex.set_width_chars(8);
@@ -973,7 +973,7 @@ fn open_impl(
     make_copy_row.style_context().add_class("make-copy");
     make_copy_row.set_valign(gtk::Align::End);
     make_copy_row.append(&make_copy);
-    make_copy_row.append(&gtk::Label::new(Some("Save as new file")));
+    make_copy_row.append(&ui::centered_label("Save as new file"));
     save_row.pack_start(&make_copy_row, false, false, 0);
     let save = ui::icon_text_button("Save", "save");
     save.style_context().add_class("primary");

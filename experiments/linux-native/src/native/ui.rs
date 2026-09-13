@@ -62,7 +62,33 @@ pub fn texture(image: &RgbaImage) -> gdk::Texture {
 }
 
 pub fn button(text: &str) -> gtk::Button {
-    gtk::Button::with_label(text)
+    let button = gtk::Button::with_label(text);
+    if let Some(label) = button.child().and_downcast::<gtk::Label>() {
+        center_label(&label);
+    }
+    button
+}
+
+/// Center visible text, including descenders, rather than the font's line box.
+pub fn centered_label(text: &str) -> gtk::Label {
+    let label = gtk::Label::new(Some(text));
+    center_label(&label);
+    label
+}
+
+fn center_label(label: &gtk::Label) {
+    fn align(label: &gtk::Label) {
+        let (ink, logical) = label.layout().extents();
+        // Round the center difference once, not each edge of the ink box.
+        let offset = (f64::from(2 * (logical.y() - ink.y()) + logical.height() - ink.height())
+            / f64::from(gtk::pango::SCALE))
+        .round() as i32;
+        label.set_margin_top(offset.max(0));
+        label.set_margin_bottom((-offset).max(0));
+    }
+    label.set_valign(gtk::Align::Center);
+    label.connect_map(align);
+    label.connect_label_notify(align);
 }
 
 /// Keep the track at its CSS size instead of stretching with its settings row.
@@ -532,9 +558,7 @@ pub fn icon_text_button(label: &str, name: &str) -> gtk::Button {
     content.set_halign(gtk::Align::Center);
     content.set_valign(gtk::Align::Center);
     content.append(&icon(name, 14));
-    let text = gtk::Label::new(Some(label));
-    text.set_valign(gtk::Align::Center);
-    content.append(&text);
+    content.append(&centered_label(label));
     button.set_child(Some(&content));
     named(&button, label);
     button

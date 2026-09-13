@@ -1306,7 +1306,7 @@ fn icon_text_toggle(label: &str, icon: &str) -> gtk::ToggleButton {
     let button = gtk::ToggleButton::new();
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     content.append(&ui::icon(icon, 16));
-    content.append(&gtk::Label::new(Some(label)));
+    content.append(&ui::centered_label(label));
     button.set_child(Some(&content));
     ui::named(&button, label);
     button
@@ -1316,7 +1316,7 @@ fn set_icon_text_button(button: &gtk::Button, label: &str, icon: &str) {
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     content.set_halign(gtk::Align::Center);
     content.append(&ui::icon(icon, 14));
-    content.append(&gtk::Label::new(Some(label)));
+    content.append(&ui::centered_label(label));
     button.set_child(Some(&content));
 }
 
@@ -1324,7 +1324,8 @@ fn option_switch(name: &str, active: bool) -> (gtk::Switch, gtk::Box) {
     let control = ui::switch();
     control.set_active(active);
     ui::named(&control, name);
-    let label = ui::label(if active { "On" } else { "Off" }, "muted");
+    let label = ui::centered_label(if active { "On" } else { "Off" });
+    label.add_css_class("muted");
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     row.set_size_request(-1, 36);
     row.pack_start(&control, false, false, 0);

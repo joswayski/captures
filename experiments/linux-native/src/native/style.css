@@ -15,8 +15,7 @@
 window { background-color: var(--surface-canvas); color: var(--text); }
 window.floating { background-color: transparent; }
 label { color: inherit; font-family: inherit; font-size: inherit; font-weight: inherit; }
-/* Center the visible glyphs against icons, not the font's descender space. */
-.icon-text > label { padding-top: var(--s-1); }
+.canvas-background .icon-text { padding: var(--s-2) var(--s-5); }
 .title { font-size: var(--text-xl); font-weight: 600; }
 .muted { color: var(--text-subtle); }
 .section-title { font-weight: 600; }

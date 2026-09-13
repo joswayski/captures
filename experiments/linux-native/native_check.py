@@ -50,28 +50,27 @@ def walk(node):
         pass
 
 
-def assert_button_ink_alignment(button, frame, screenshot, origin=(0, 0)):
-    """Compare visible icon/letter centers, not font line boxes with descender space.
+def ink_center(node, frame, screenshot, origin=(0, 0)):
+    """Measure rendered ink, including glyph overhang outside the logical box."""
+    rect = screen_bounds(node, frame)
+    y = rect.y - 2
+    raw = subprocess.check_output([
+        'convert', str(screenshot),
+        '-crop', f'{rect.width}x{rect.height+4}+{rect.x-origin[0]}+{y-origin[1]}',
+        '+repage', '-depth', '8', 'rgb:-',
+    ])
+    pixels = list(zip(raw[::3], raw[1::3], raw[2::3]))
+    background = Counter(pixels).most_common(1)[0][0]
+    rows = [index // rect.width for index, pixel in enumerate(pixels)
+            if max(abs(a-b) for a, b in zip(pixel, background)) > 40]
+    assert rows, ('Missing control ink', node.name)
+    return y + (min(rows) + max(rows)) / 2
 
-    Use labels without descenders (Save, Edit, Restore, Delete all); a descender
-    legitimately extends below the optical center and changes its ink bounds.
-    """
-    centers = []
-    for node in walk(button):
-        if node.getRoleName() not in ('filler', 'label'):
-            continue
-        rect = screen_bounds(node, frame)
-        raw = subprocess.check_output([
-            'convert', str(screenshot),
-            '-crop', f'{rect.width}x{rect.height}+{rect.x-origin[0]}+{rect.y-origin[1]}',
-            '+repage', '-depth', '8', 'rgb:-',
-        ])
-        pixels = list(zip(raw[::3], raw[1::3], raw[2::3]))
-        background = Counter(pixels).most_common(1)[0][0]
-        rows = [index // rect.width for index, pixel in enumerate(pixels)
-                if max(abs(a-b) for a, b in zip(pixel, background)) > 40]
-        assert rows, ('Missing button ink', node.name)
-        centers.append(rect.y + (min(rows) + max(rows)) / 2)
+
+def assert_button_ink_alignment(button, frame, screenshot, origin=(0, 0)):
+    """Compare visible icon/letter centers, including labels with descenders."""
+    centers = [ink_center(node, frame, screenshot, origin) for node in walk(button)
+               if node.getRoleName() in ('filler', 'label')]
     assert len(centers) == 2 and abs(centers[0] - centers[1]) <= .5, (button.name, centers)
 
 

@@ -14,7 +14,7 @@ import time
 
 NATIVE = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(NATIVE))
-from native_check import find, screen_bounds  # noqa: E402
+from native_check import assert_button_ink_alignment, find, ink_center, screen_bounds  # noqa: E402
 
 
 def command(*args):
@@ -561,6 +561,13 @@ def main():
             fraction = (moved.x + moved.width/2 - bounds.x) / bounds.width
             assert .70 < fraction < .80, fraction
             capture(args.artifacts, "recording-editor-comparison", "Edit recording — Captures")
+            shot = args.artifacts / 'recording-editor-comparison.png'
+            origin = (frame_bounds.x, frame_bounds.y)
+            text_center = ink_center(find('Save as new file', 'label', 'Edit recording — Captures'),
+                                     'Edit recording — Captures', shot, origin)
+            assert abs(text_center - copy_toggle.y - (copy_toggle.height - 1) / 2) <= .5, (text_center, copy_toggle)
+            assert_button_ink_alignment(find('Save', 'push button', 'Edit recording — Captures'),
+                                        'Edit recording — Captures', shot, origin)
             command("xdotool", "key", "End")
             end = screen_bounds(handle, "Edit recording — Captures")
             assert .92 < (end.x + end.width/2 - bounds.x) / bounds.width < .96

@@ -22,7 +22,8 @@ pub fn body(name: &str) -> Option<&'static str> {
         }
         "close" | "window-close-symbolic" => r#"<path d="m6 6 12 12M18 6 6 18"/>"#,
         "copy" | "edit-copy-symbolic" => {
-            r#"<rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>"#
+            // Center the original 4..19 artwork in the 24-unit viewbox.
+            r#"<g transform="translate(.5 .5)"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></g>"#
         }
         "folder" | "folder-open-symbolic" => {
             r#"<path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><circle cx="16.5" cy="13.5" r="2.5"/><path d="m18.3 15.3 2.2 2.2"/>"#

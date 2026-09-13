@@ -1175,7 +1175,7 @@ pub fn open(path: PathBuf, directory: PathBuf, on_saved: Rc<dyn Fn(PathBuf)>) {
     make_copy_row.add_css_class("recording-make-copy");
     make_copy_row.set_valign(gtk::Align::End);
     make_copy_row.append(&make_copy);
-    make_copy_row.append(&gtk::Label::new(Some("Save as new file")));
+    make_copy_row.append(&ui::centered_label("Save as new file"));
     let status = ui::label("Preparing editor…", "muted");
     let cancel = ui::button("Cancel export");
     let export = ui::icon_text_button("Save", "save");

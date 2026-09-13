@@ -383,7 +383,7 @@ fn action_button(name: &'static str, label: &str) -> gtk::Button {
     button.set_focus_on_click(false);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     row.set_can_target(false);
-    let label_widget = gtk::Label::new(Some(label));
+    let label_widget = ui::centered_label(label);
     label_widget.set_can_target(false);
     row.pack_start(&ui::icon(name, 16), false, false, 0);
     row.pack_start(&label_widget, false, false, 0);

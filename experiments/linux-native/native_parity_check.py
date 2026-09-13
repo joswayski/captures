@@ -103,7 +103,9 @@ def main():
                 try:
                     saver.SetActive(True)
                     click('Capture', selector)
-                    click('Close')
+                    wait(lambda: find('Close', 'push button', 'Something went wrong'))
+                    click('Close', 'Something went wrong')
+                    wait(lambda: not find('Something went wrong', 'frame'))
                     wait(lambda: not find(selector, 'frame'))
                     assert not list((profile/'captures').glob('*.png')), 'Capture published while locked'
                 finally:

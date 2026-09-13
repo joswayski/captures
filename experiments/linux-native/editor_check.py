@@ -24,7 +24,7 @@ def main():
     os.environ.update(json.loads((args.lab / 'environment.json').read_text()))
 
     # AT-SPI must be imported after the isolated session variables are active.
-    from native_check import assert_button_ink_alignment, capture, choose, click, cmd, drag, find, run, screen_bounds, wait, walk, xwindow_geometry
+    from native_check import assert_button_ink_alignment, capture, choose, click, cmd, drag, find, ink_center, run, screen_bounds, wait, walk, xwindow_geometry
 
     root = Path(__file__).parent.resolve()
     binary = root / 'target/release/captures-linux-native'
@@ -127,8 +127,21 @@ def main():
         assert abs(bounds.y + bounds.height - filename_bounds.y - filename_bounds.height) <= 1
         assert abs(copy_switch.y + copy_switch.height - bounds.y - bounds.height) <= 1, (copy_switch, bounds)
         client_x, client_y, _, _ = xwindow_geometry(window)
-        assert_button_ink_alignment(save, editor, args.artifacts / 'after-editor-default-1280x800.png',
-                                    (client_x, client_y))
+        shot = args.artifacts / 'after-editor-default-1280x800.png'
+        origin = (client_x, client_y)
+        for name in ('Save', 'Copy image', 'Trim edges', 'Add images'):
+            assert_button_ink_alignment(find(name, 'push button', editor), editor, shot, origin)
+        toggle_text = ink_center(find('Save as new file', 'label', editor), editor, shot, origin)
+        assert abs(toggle_text - copy_switch.y - (copy_switch.height - 1) / 2) <= .5, toggle_text
+        background = find('Background color', 'push button', editor)
+        swatch, label, chevron = [node for node in walk(background)
+                                   if node.getRoleName() in ('filler', 'label')]
+        swatch_rect = screen_bounds(swatch, editor)
+        button_rect = screen_bounds(background, editor)
+        chevron_rect = screen_bounds(chevron, editor)
+        assert swatch_rect.x - button_rect.x >= 12
+        assert button_rect.x + button_rect.width - chevron_rect.x - chevron_rect.width >= 12
+        assert abs(ink_center(label, editor, shot, origin) - swatch_rect.y - (swatch_rect.height - 1) / 2) <= .5
         cmd('xdotool', 'mousemove', bounds.x + bounds.width // 2, bounds.y + bounds.height // 2)
         capture(args.artifacts, 'editor-save-hover', editor)
         sample = f'%[pixel:p{{{bounds.x - client_x + 10},{bounds.y - client_y + 10}}}]'
