@@ -89,8 +89,14 @@ These are implemented experiments, not drop-in replacements. In particular:
   desktop/monitor bounds. Both inspected Erase states show checkerboard cutouts;
   both Trim states show 421×261 with the source hidden and no clipping. The checker
   is presentation-only; exported pixels are unchanged. Fixtures now wait for actual
-  process exit before the next launch. Merge/flatten, richer layer controls and
-  persistent editable screenshot drafts remain incomplete. Imported image layers use the shared raster renderer
+  process exit before the next launch. The next slice implements Merge down/visible
+  and Flatten with one-step undo, hidden-layer order, and source consumption.
+  Review caught double-applied crop origins during Flatten and shifted inspector
+  hit targets after consuming the source; asymmetric pixel/undo tests and a shared
+  source-aware layout calculation now cover those cases. All 70 portable tests,
+  fmt and host strict Clippy pass; the new native menu/property smoke fixtures
+  remain pending. Richer layer controls and persistent editable screenshot drafts
+  remain incomplete. Imported image layers use the shared raster renderer
   with native multi-select file picking, asynchronous decode, transformed hit
   testing, and batch undo/redo. The model supports locking, independent opacity,
   and six blend modes. Native image controls now expose dimensions, opacity and
@@ -155,8 +161,14 @@ These are implemented experiments, not drop-in replacements. In particular:
   shipping hidden-layer/background rules and one-step undo. Its new asymmetric pixel
   test caught bitmap opacity being overridden by `NSImage.draw(fraction: 1)`.
   Bitmap drawing now passes the layer opacity explicitly; ordinary rendering and
-  merged output share the independent half-opacity expectation. The corrected
-  native tests and combine-control reference are pending; richer text styling remains open.
+  merged output share the independent half-opacity expectation. The [corrected run](https://github.com/joswayski/captures/actions/runs/34727843027)
+  passed 28 AppKit tests and all 26 normal references. Inspection confirmed
+  Multiply/82% but found the combine controls below the inspector fold and an
+  erroneous Recenter button over a fully fitted canvas; focused corrections remain
+  open. Its compositor rerender passed video/filmstrip checks, then failed waiting
+  for a successful recording estimate within 30 seconds, before reaching dust.
+  This is not a fully green native run. Diagnostic uploads now retain ordinary
+  failed-reference PNGs as well as compositor captures. Richer text styling remains open.
 
 ## Feature parity acceptance
 

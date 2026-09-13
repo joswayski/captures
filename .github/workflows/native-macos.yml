@@ -64,6 +64,8 @@ jobs:
         if: always()
         with:
           name: captures-native-macos-compositor-references
-          path: experiments/macos-native/build/compositor-references/*-compositor.png
+          # Keep ordinary diagnostic frames too when a readiness assertion
+          # fails before the compositor-only fixtures finish.
+          path: experiments/macos-native/build/compositor-references/*.png
           if-no-files-found: warn
           retention-days: 7

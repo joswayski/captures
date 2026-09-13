@@ -223,7 +223,7 @@ function Assert-NonBlank([Drawing.Bitmap]$bitmap, [string]$view) {
   if ($colors.Count -lt 4) { throw "$view capture is blank or nearly uniform ($($colors.Count) sampled colors)" }
 }
 
-function Save-View([string]$appearance, [string]$view, [string]$artifactView = $view, [bool]$inputSmoke = $false, [bool]$eraserInputSmoke = $false, [bool]$trimInputSmoke = $false) {
+function Save-View([string]$appearance, [string]$view, [string]$artifactView = $view, [bool]$inputSmoke = $false, [bool]$eraserInputSmoke = $false, [bool]$trimInputSmoke = $false, [bool]$mergeInputSmoke = $false, [bool]$sourceConsumedInputSmoke = $false, [bool]$sourceOnlyFlattenSmoke = $false) {
   $source = if ($view -eq "recording-editor") { $videoFrame } else { $ImagePath }
   Remove-Item (Join-Path $profile "render-driver.txt") -Force -ErrorAction SilentlyContinue
   $recordingReadyFile = Join-Path $profile "recording-frame-presented.txt"
@@ -232,6 +232,12 @@ function Save-View([string]$appearance, [string]$view, [string]$artifactView = $
   Remove-Item $eraserAppliedFile -Force -ErrorAction SilentlyContinue
   $trimAppliedFile = Join-Path $profile "editor-trim-applied.txt"
   Remove-Item $trimAppliedFile -Force -ErrorAction SilentlyContinue
+  $mergeAppliedFile = Join-Path $profile "editor-merge-applied.txt"
+  Remove-Item $mergeAppliedFile -Force -ErrorAction SilentlyContinue
+  $sourceConsumedInputFile = Join-Path $profile "editor-source-consumed-input.txt"
+  Remove-Item $sourceConsumedInputFile -Force -ErrorAction SilentlyContinue
+  $sourceOnlyFlattenFile = Join-Path $profile "editor-flatten-source-applied.txt"
+  Remove-Item $sourceOnlyFlattenFile -Force -ErrorAction SilentlyContinue
   # Start-Process flattens ArgumentList, so explicitly quote paths that may contain spaces.
   $arguments = @("--view", $view, "--appearance", $appearance, "--fixture-image", ('"{0}"' -f $source), "--fixture-video", ('"{0}"' -f $VideoPath))
   $process = Start-Process $exe -ArgumentList $arguments -PassThru
@@ -306,6 +312,46 @@ function Save-View([string]$appearance, [string]$view, [string]$artifactView = $
       }
       Start-Sleep -Milliseconds 500
     }
+    if ($mergeInputSmoke) {
+      # Invoke the already-open Combine menu's Merge down action through the
+      # real HWND route. The app marker verifies that the pair became one image.
+      [CapturesFixtureNative]::ClickLogical($handle, 900, 155)
+      for ($attempt = 0; $attempt -lt 100 -and !(Test-Path $mergeAppliedFile); $attempt++) {
+        if ($process.HasExited) { throw "$view exited before applying the merge input smoke" }
+        Start-Sleep -Milliseconds 50
+      }
+      if (!(Test-Path $mergeAppliedFile) -or (Get-Content $mergeAppliedFile -Raw).Trim() -ne "merge-down:one-image-layer") {
+        throw "$appearance-$artifactView did not merge the selected pair into one image layer"
+      }
+      Start-Sleep -Milliseconds 500
+    }
+    if ($sourceConsumedInputSmoke) {
+      # Merge visible consumed the source row before launch. Click the displayed
+      # opacity decrement using the shared source-aware inspector geometry.
+      [CapturesFixtureNative]::ClickLogical($handle, 990, 280)
+      for ($attempt = 0; $attempt -lt 100 -and !(Test-Path $sourceConsumedInputFile); $attempt++) {
+        if ($process.HasExited) { throw "$view exited before applying the source-consumed property input smoke" }
+        Start-Sleep -Milliseconds 50
+      }
+      if (!(Test-Path $sourceConsumedInputFile) -or (Get-Content $sourceConsumedInputFile -Raw).Trim() -ne "opacity:229") {
+        throw "$appearance-$artifactView did not route the source-consumed inspector click to opacity"
+      }
+      Start-Sleep -Milliseconds 500
+    }
+    if ($sourceOnlyFlattenSmoke) {
+      # No annotation is selected: open Combine from the source+background
+      # document, then invoke its eligible Flatten image action.
+      [CapturesFixtureNative]::ClickLogical($handle, 1030, 82)
+      [CapturesFixtureNative]::ClickLogical($handle, 900, 220)
+      for ($attempt = 0; $attempt -lt 100 -and !(Test-Path $sourceOnlyFlattenFile); $attempt++) {
+        if ($process.HasExited) { throw "$view exited before applying source-only flatten" }
+        Start-Sleep -Milliseconds 50
+      }
+      if (!(Test-Path $sourceOnlyFlattenFile) -or (Get-Content $sourceOnlyFlattenFile -Raw).Trim() -ne "flatten:source-only-background") {
+        throw "$appearance-$artifactView could not flatten an eligible source+background without a selected annotation"
+      }
+      Start-Sleep -Milliseconds 500
+    }
     # Revalidate after composition settles; never capture an off-screen partial window.
     [void][CapturesFixtureNative]::PositionAndValidateWindow($handle)
     $rect = New-Object CapturesFixtureNative+RECT
@@ -363,12 +409,15 @@ try {
   Start-Sleep -Milliseconds 500
   $env:CAPTURES_WINDOWS_NATIVE_DATA = $profile
   foreach ($appearance in @("light", "dark")) {
-    foreach ($view in @("menu", "editor", "editor-image", "editor-shapes", "editor-export", "editor-properties", "editor-line", "editor-eraser", "editor-trim", "recording-selector", "recording-hud", "recording-editor", "preview", "history", "preferences", "preferences-capture", "preferences-recording", "preferences-appearance", "feedback", "delete-confirmation")) {
+    foreach ($view in @("menu", "editor", "editor-image", "editor-shapes", "editor-export", "editor-properties", "editor-line", "editor-merge", "editor-merge-visible", "editor-flatten-source", "editor-eraser", "editor-trim", "recording-selector", "recording-hud", "recording-editor", "preview", "history", "preferences", "preferences-capture", "preferences-recording", "preferences-appearance", "feedback", "delete-confirmation")) {
       Save-View $appearance $view
     }
     Save-View $appearance "editor" "editor-input-smoke" $true
     Save-View $appearance "editor" "editor-eraser-input-smoke" $false $true
     Save-View $appearance "editor-trim" "editor-trim-input-smoke" $false $false $true
+    Save-View $appearance "editor-merge" "editor-merge-input-smoke" $false $false $false $true
+    Save-View $appearance "editor-merge-visible" "editor-source-consumed-input-smoke" $false $false $false $false $true
+    Save-View $appearance "editor-flatten-source" "editor-source-only-flatten-smoke" $false $false $false $false $false $true
   }
 } finally {
   $env:CAPTURES_WINDOWS_NATIVE_DATA = $previousData

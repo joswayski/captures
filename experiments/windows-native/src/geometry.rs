@@ -214,6 +214,16 @@ pub fn editor_layer_lock_button(sidebar_x: f32, row_y: f32) -> Rect {
     }
 }
 
+pub fn screenshot_editor_properties_y(
+    height: f32,
+    visible_layer_rows: usize,
+    source_present: bool,
+) -> f32 {
+    let rows_height = visible_layer_rows.min(3) as f32 * 52.0;
+    let source_height = if source_present { 52.0 } else { 0.0 };
+    (124.0 + rows_height + source_height).min(height - 286.0)
+}
+
 pub fn recording_editor_timeline_track(width: f32, height: f32) -> Rect {
     Rect {
         x: 88.0,
@@ -429,6 +439,14 @@ mod tests {
             x: eye.x + 1.0,
             y: eye.y + 1.0
         }));
+    }
+
+    #[test]
+    fn editor_properties_follow_consumed_source_row() {
+        assert_eq!(screenshot_editor_properties_y(720.0, 2, true), 280.0);
+        assert_eq!(screenshot_editor_properties_y(720.0, 2, false), 228.0);
+        assert_eq!(screenshot_editor_properties_y(420.0, 2, true), 134.0);
+        assert_eq!(screenshot_editor_properties_y(420.0, 2, false), 134.0);
     }
 
     #[test]

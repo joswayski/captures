@@ -449,6 +449,7 @@ pub struct AppState {
     pub editor_input_field: Option<EditorInputField>,
     pub editor_input_text: String,
     pub editor_shapes_open: bool,
+    pub editor_layer_menu_open: bool,
     pub editor_remove_mode: RemoveBackgroundMode,
     pub editor_remove_brush_size: u16,
     pub editor_remove_softness: u8,
@@ -506,6 +507,7 @@ impl Default for AppState {
             editor_input_field: None,
             editor_input_text: String::new(),
             editor_shapes_open: false,
+            editor_layer_menu_open: false,
             editor_remove_mode: RemoveBackgroundMode::Wand,
             editor_remove_brush_size: 28,
             editor_remove_softness: 18,
@@ -597,6 +599,7 @@ impl AppState {
         self.editor_input_field = None;
         self.editor_input_text.clear();
         self.editor_shapes_open = false;
+        self.editor_layer_menu_open = false;
         self.surface = Surface::ScreenshotEditor;
     }
 

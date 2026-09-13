@@ -348,7 +348,9 @@ pub struct Document {
     id: u64,
     original: Arc<RgbaImage>,
     source: Arc<RgbaImage>,
+    pub source_present: bool,
     pub source_visible: bool,
+    pub source_name: String,
     pub crop: Rect,
     pub canvas_width: u32,
     pub canvas_height: u32,
@@ -363,8 +365,11 @@ pub struct Document {
 #[derive(Clone)]
 struct Snapshot {
     crop: Rect,
+    original: Arc<RgbaImage>,
     source: Arc<RgbaImage>,
+    source_present: bool,
     source_visible: bool,
+    source_name: String,
     canvas_width: u32,
     canvas_height: u32,
     background: Option<[u8; 4]>,
@@ -384,7 +389,9 @@ impl Document {
             id: NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed),
             original: original.clone(),
             source: original,
+            source_present: true,
             source_visible: true,
+            source_name: "Original screenshot".into(),
             crop,
             canvas_width: crop.width.round() as u32,
             canvas_height: crop.height.round() as u32,
@@ -670,6 +677,9 @@ impl Document {
     }
 
     pub fn toggle_source_visibility(&mut self) -> bool {
+        if !self.source_present {
+            return false;
+        }
         self.checkpoint();
         self.source_visible = !self.source_visible;
         self.source_visible
@@ -709,7 +719,7 @@ impl Document {
     }
 
     fn visible_content_frame(&self) -> Result<Option<Rect>, &'static str> {
-        let mut bounds = self.source_visible.then(|| Rect {
+        let mut bounds = (self.source_present && self.source_visible).then(|| Rect {
             x: 0.0,
             y: 0.0,
             width: self.source.width() as f32,
@@ -767,6 +777,142 @@ impl Document {
         Ok(Some(frame))
     }
 
+    pub fn can_merge_layer_down(&self, selected_id: u64) -> bool {
+        let Some(index) = self.layers.iter().position(|layer| layer.id == selected_id) else {
+            return false;
+        };
+        index > 0 && !self.layers[index].locked && !self.layers[index - 1].locked
+    }
+
+    pub fn can_merge_visible_layers(&self) -> bool {
+        let source = usize::from(self.source_present && self.source_visible);
+        source + self.layers.iter().filter(|layer| layer.visible).count() >= 2
+    }
+
+    pub fn can_flatten_layers(&self) -> bool {
+        let count = usize::from(self.source_present) + self.layers.len();
+        count >= 2 || (count == 1 && self.background.is_some())
+    }
+
+    pub fn merge_layer_down(&mut self, selected_id: u64) -> Result<Option<u64>, String> {
+        if !self.can_merge_layer_down(selected_id) {
+            return Ok(None);
+        }
+        let index = self
+            .layers
+            .iter()
+            .position(|layer| layer.id == selected_id)
+            .expect("merge eligibility checked selected layer");
+        let (pixels, name) = {
+            let layers = [&self.layers[index - 1], &self.layers[index]];
+            let pixels = self.render_layer_stack(&layers, false, None)?;
+            let name = merged_layer_name(&layers);
+            (pixels, name)
+        };
+        self.checkpoint();
+        let merged = self.create_merged_layer(pixels, name, false);
+        let id = merged.id;
+        self.layers.splice(index - 1..=index, [merged]);
+        Ok(Some(id))
+    }
+
+    pub fn merge_visible_layers(&mut self) -> Result<Option<u64>, String> {
+        if !self.can_merge_visible_layers() {
+            return Ok(None);
+        }
+        let include_source = self.source_present && self.source_visible;
+        let pixels = {
+            let layers = self
+                .layers
+                .iter()
+                .filter(|layer| layer.visible)
+                .collect::<Vec<_>>();
+            self.render_layer_stack(&layers, include_source, None)?
+        };
+        self.checkpoint();
+        let merged = self.create_merged_layer(pixels, "Merged".into(), false);
+        let id = merged.id;
+        let mut merged = Some(merged);
+        let mut next = Vec::with_capacity(self.layers.len() + 1);
+        if include_source {
+            self.source_present = false;
+            self.source_visible = false;
+            next.push(merged.take().expect("merged layer available"));
+        }
+        for layer in std::mem::take(&mut self.layers) {
+            if layer.visible {
+                if let Some(merged) = merged.take() {
+                    next.push(merged);
+                }
+            } else {
+                next.push(layer);
+            }
+        }
+        self.layers = next;
+        Ok(Some(id))
+    }
+
+    pub fn flatten_layers(&mut self) -> Result<bool, String> {
+        if !self.can_flatten_layers() {
+            return Ok(false);
+        }
+        let pixels = {
+            let layers = self
+                .layers
+                .iter()
+                .filter(|layer| layer.visible)
+                .collect::<Vec<_>>();
+            self.render_layer_stack(
+                &layers,
+                self.source_present && self.source_visible,
+                self.background,
+            )?
+        };
+        self.checkpoint();
+        let flattened = Arc::new(pixels);
+        self.original = flattened.clone();
+        self.source = flattened;
+        self.source_present = true;
+        self.source_visible = true;
+        self.source_name = "Flattened".into();
+        self.crop = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: self.canvas_width as f32,
+            height: self.canvas_height as f32,
+        };
+        self.background = None;
+        self.layers.clear();
+        Ok(true)
+    }
+
+    fn create_merged_layer(&mut self, pixels: RgbaImage, name: String, locked: bool) -> Layer {
+        let id = self.next_id;
+        self.next_id += 1;
+        Layer {
+            id,
+            name,
+            shape: Shape::Image {
+                origin: Point {
+                    x: self.crop.x,
+                    y: self.crop.y,
+                },
+                width: self.canvas_width as f32,
+                height: self.canvas_height as f32,
+                pixels: Arc::new(pixels),
+            },
+            original_pixels: None,
+            color: [255, 255, 255, 255],
+            stroke: 1.0,
+            fill: None,
+            opacity: 255,
+            blend_mode: BlendMode::Normal,
+            rotation_degrees: 0.0,
+            visible: true,
+            locked,
+        }
+    }
+
     pub fn undo(&mut self) -> bool {
         let Some(previous) = self.undo.pop() else {
             return false;
@@ -799,8 +945,11 @@ impl Document {
     fn snapshot(&self) -> Snapshot {
         Snapshot {
             crop: self.crop,
+            original: self.original.clone(),
             source: self.source.clone(),
+            source_present: self.source_present,
             source_visible: self.source_visible,
+            source_name: self.source_name.clone(),
             canvas_width: self.canvas_width,
             canvas_height: self.canvas_height,
             background: self.background,
@@ -810,8 +959,11 @@ impl Document {
 
     fn restore(&mut self, snapshot: Snapshot) {
         self.crop = snapshot.crop;
+        self.original = snapshot.original;
         self.source = snapshot.source;
+        self.source_present = snapshot.source_present;
         self.source_visible = snapshot.source_visible;
+        self.source_name = snapshot.source_name;
         self.canvas_width = snapshot.canvas_width;
         self.canvas_height = snapshot.canvas_height;
         self.background = snapshot.background;
@@ -819,10 +971,28 @@ impl Document {
     }
 
     pub fn render(&self) -> Result<RgbaImage, String> {
+        let layers = self
+            .layers
+            .iter()
+            .filter(|layer| layer.visible)
+            .collect::<Vec<_>>();
+        self.render_layer_stack(
+            &layers,
+            self.source_present && self.source_visible,
+            self.background,
+        )
+    }
+
+    fn render_layer_stack(
+        &self,
+        layers: &[&Layer],
+        include_source: bool,
+        background: Option<[u8; 4]>,
+    ) -> Result<RgbaImage, String> {
         let mut source = RgbaImage::from_pixel(
             self.canvas_width,
             self.canvas_height,
-            Rgba(self.background.unwrap_or([0, 0, 0, 0])),
+            Rgba(background.unwrap_or([0, 0, 0, 0])),
         );
         let crop_x = self.crop.x.max(0.0).round() as u32;
         let crop_y = self.crop.y.max(0.0).round() as u32;
@@ -838,7 +1008,7 @@ impl Document {
                 .max(1.0)
                 .round()
                 .min(self.original.height().saturating_sub(crop_y) as f32) as u32;
-        if self.source_visible && crop_width > 0 && crop_height > 0 {
+        if include_source && crop_width > 0 && crop_height > 0 {
             let original = self
                 .source
                 .view(crop_x, crop_y, crop_width, crop_height)
@@ -854,10 +1024,8 @@ impl Document {
         captures_image::render(&captures_image::Document {
             source: Arc::new(source),
             crop: None,
-            layers: self
-                .layers
+            layers: layers
                 .iter()
-                .filter(|layer| layer.visible)
                 .map(|layer| {
                     let mut layer = to_raster_layer(layer);
                     translate_raster_shape(&mut layer.shape, offset);
@@ -893,7 +1061,7 @@ impl Document {
             .filter(|layer| layer.visible)
             .find_map(|layer| image_pixel(layer, point).map(|_| ImageTarget::Layer(layer.id)))
             .or_else(|| {
-                self.source_visible
+                (self.source_present && self.source_visible)
                     .then(|| source_pixel(&self.source, point))
                     .flatten()
                     .map(|_| ImageTarget::Source)
@@ -1091,6 +1259,13 @@ fn layer_geometry_is_finite(layer: &Layer) -> bool {
         } => point_is_finite(origin) && font_size.is_finite(),
     };
     shape_is_finite && layer.stroke.is_finite() && layer.rotation_degrees.is_finite()
+}
+
+fn merged_layer_name(layers: &[&Layer]) -> String {
+    layers
+        .iter()
+        .find(|layer| matches!(&layer.shape, Shape::Image { .. }))
+        .map_or_else(|| "Merged".into(), |layer| layer.name.clone())
 }
 
 fn image_pixel(layer: &Layer, point: Point) -> Option<(u32, u32)> {
@@ -1420,6 +1595,12 @@ mod tests {
         };
         *width = rect.width;
         *height = rect.height;
+    }
+
+    fn add_pixel_image(document: &mut Document, color: [u8; 4], rect: Rect, name: &str) -> u64 {
+        let id = document.add_image(RgbaImage::from_pixel(1, 1, Rgba(color)), 0, name.into());
+        set_image_geometry(document, id, rect);
+        id
     }
 
     #[test]
@@ -1915,6 +2096,348 @@ mod tests {
             }
         );
         assert!(document.source_visible);
+    }
+
+    #[test]
+    fn merge_down_rasterizes_exact_pair_preserves_neighbors_and_undoes_once() {
+        let mut document = Document::new(RgbaImage::from_pixel(4, 3, Rgba([9, 8, 7, 255])));
+        let hidden_bottom = add_pixel_image(
+            &mut document,
+            [20, 220, 40, 255],
+            Rect {
+                x: 3.0,
+                y: 2.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            "Hidden bottom.png",
+        );
+        document.layers.last_mut().unwrap().visible = false;
+        let below = add_pixel_image(
+            &mut document,
+            [220, 30, 20, 255],
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 2.0,
+                height: 2.0,
+            },
+            "Below.png",
+        );
+        let selected = add_pixel_image(
+            &mut document,
+            [20, 40, 230, 255],
+            Rect {
+                x: 1.0,
+                y: 0.0,
+                width: 2.0,
+                height: 2.0,
+            },
+            "Top.png",
+        );
+        let hidden_top = add_pixel_image(
+            &mut document,
+            [240, 220, 10, 255],
+            Rect {
+                x: 0.0,
+                y: 2.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            "Hidden top.png",
+        );
+        document.layers.last_mut().unwrap().visible = false;
+
+        document
+            .layers
+            .iter_mut()
+            .find(|layer| layer.id == below)
+            .unwrap()
+            .locked = true;
+        assert!(!document.can_merge_layer_down(selected));
+        document
+            .layers
+            .iter_mut()
+            .find(|layer| layer.id == below)
+            .unwrap()
+            .locked = false;
+        assert!(document.can_merge_layer_down(selected));
+
+        let merged = document.merge_layer_down(selected).unwrap().unwrap();
+        assert_eq!(
+            document
+                .layers
+                .iter()
+                .map(|layer| layer.id)
+                .collect::<Vec<_>>(),
+            vec![hidden_bottom, merged, hidden_top]
+        );
+        let layer = document
+            .layers
+            .iter()
+            .find(|layer| layer.id == merged)
+            .unwrap();
+        assert_eq!(layer.name, "Below.png");
+        let Shape::Image { pixels, .. } = &layer.shape else {
+            panic!("expected merged image");
+        };
+        assert_eq!(pixels.get_pixel(0, 0).0, [220, 30, 20, 255]);
+        assert_eq!(pixels.get_pixel(1, 0).0, [20, 40, 230, 255]);
+        assert_eq!(pixels.get_pixel(3, 2).0, [0, 0, 0, 0]);
+
+        assert!(document.undo());
+        assert_eq!(
+            document
+                .layers
+                .iter()
+                .map(|layer| layer.id)
+                .collect::<Vec<_>>(),
+            vec![hidden_bottom, below, selected, hidden_top]
+        );
+        assert!(document.source_present);
+    }
+
+    #[test]
+    fn merge_visible_consumes_visible_source_preserves_hidden_order_and_negative_crop() {
+        let mut source = RgbaImage::from_pixel(3, 2, Rgba([0, 0, 0, 0]));
+        source.put_pixel(0, 0, Rgba([11, 21, 31, 255]));
+        source.put_pixel(2, 1, Rgba([71, 81, 91, 255]));
+        let mut document = Document::new(source);
+        document.background = Some([7, 9, 13, 255]);
+        let hidden_bottom = add_pixel_image(
+            &mut document,
+            [10, 230, 30, 255],
+            Rect {
+                x: 1.0,
+                y: 1.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            "Hidden bottom.png",
+        );
+        document.layers.last_mut().unwrap().visible = false;
+        let overhang = add_pixel_image(
+            &mut document,
+            [230, 20, 40, 255],
+            Rect {
+                x: -1.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            "Overhang.png",
+        );
+        let hidden_top = add_pixel_image(
+            &mut document,
+            [240, 220, 10, 255],
+            Rect {
+                x: 2.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            "Hidden top.png",
+        );
+        document.layers.last_mut().unwrap().visible = false;
+        assert!(document.trim_to_visible_content().unwrap());
+        assert_eq!(document.crop.x, -1.0);
+        let before = document.render().unwrap();
+
+        assert!(document.can_merge_visible_layers());
+        let merged = document.merge_visible_layers().unwrap().unwrap();
+        assert!(!document.source_present);
+        assert_eq!(document.background, Some([7, 9, 13, 255]));
+        assert_eq!(
+            document
+                .layers
+                .iter()
+                .map(|layer| layer.id)
+                .collect::<Vec<_>>(),
+            vec![merged, hidden_bottom, hidden_top]
+        );
+        assert_eq!(document.render().unwrap(), before);
+        let Shape::Image { origin, pixels, .. } = &document.layers[0].shape else {
+            panic!("expected merged image");
+        };
+        assert_eq!(*origin, Point { x: -1.0, y: 0.0 });
+        assert_eq!(pixels.get_pixel(0, 0).0, [230, 20, 40, 255]);
+        assert_eq!(pixels.get_pixel(2, 1).0, [0, 0, 0, 0]);
+
+        assert!(document.undo());
+        assert!(document.source_present && document.source_visible);
+        assert_eq!(
+            document
+                .layers
+                .iter()
+                .map(|layer| layer.id)
+                .collect::<Vec<_>>(),
+            vec![hidden_bottom, overhang, hidden_top]
+        );
+        assert_eq!(document.render().unwrap(), before);
+    }
+
+    #[test]
+    fn flatten_bakes_background_discards_hidden_and_undoes_exact_document() {
+        let mut source = RgbaImage::from_pixel(3, 2, Rgba([0, 0, 0, 0]));
+        source.put_pixel(0, 0, Rgba([90, 100, 110, 255]));
+        let mut document = Document::new(source);
+        document.set_background(Some([5, 7, 11, 255]));
+        let visible = add_pixel_image(
+            &mut document,
+            [210, 30, 50, 255],
+            Rect {
+                x: 1.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            "Visible.png",
+        );
+        document.layers.last_mut().unwrap().locked = true;
+        let hidden = add_pixel_image(
+            &mut document,
+            [20, 230, 40, 255],
+            Rect {
+                x: 2.0,
+                y: 1.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            "Hidden.png",
+        );
+        document.layers.last_mut().unwrap().visible = false;
+        let before = document.render().unwrap();
+
+        assert!(document.can_flatten_layers());
+        assert!(document.flatten_layers().unwrap());
+        assert!(document.source_present && document.source_visible);
+        assert_eq!(document.source_name, "Flattened");
+        assert!(document.layers.is_empty());
+        assert_eq!(document.background, None);
+        assert_eq!(document.render().unwrap(), before);
+        assert_eq!(
+            document.render().unwrap().get_pixel(2, 1).0,
+            [5, 7, 11, 255]
+        );
+
+        assert!(document.undo());
+        assert_eq!(document.source_name, "Original screenshot");
+        assert_eq!(document.background, Some([5, 7, 11, 255]));
+        assert_eq!(
+            document
+                .layers
+                .iter()
+                .map(|layer| layer.id)
+                .collect::<Vec<_>>(),
+            vec![visible, hidden]
+        );
+        assert!(document.layers[0].locked);
+        assert!(!document.layers[1].visible);
+        assert_eq!(document.render().unwrap(), before);
+    }
+
+    #[test]
+    fn flatten_rebases_positive_crop_and_supports_undo_redo_erase_restore_and_trim() {
+        let source = RgbaImage::from_fn(6, 5, |x, y| {
+            Rgba([
+                (17 + x * 29) as u8,
+                (11 + y * 41) as u8,
+                (x * 7 + y * 13) as u8,
+                255,
+            ])
+        });
+        let mut document = Document::new(source);
+        assert!(document.set_crop(Rect {
+            x: 2.0,
+            y: 1.0,
+            width: 3.0,
+            height: 3.0,
+        }));
+        assert!(document.set_background(Some([3, 5, 7, 255])));
+        let before = document.render().unwrap();
+        assert_eq!(before.get_pixel(0, 0).0, [75, 52, 27, 255]);
+        assert_eq!(before.get_pixel(2, 2).0, [133, 134, 67, 255]);
+
+        assert!(document.flatten_layers().unwrap());
+        assert_eq!(
+            document.crop,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 3.0,
+                height: 3.0
+            }
+        );
+        assert_eq!(document.render().unwrap(), before);
+        assert!(document.undo());
+        assert_eq!(document.crop.x, 2.0);
+        assert_eq!(document.render().unwrap(), before);
+        assert!(document.redo());
+        assert_eq!(document.crop.x, 0.0);
+        assert_eq!(document.render().unwrap(), before);
+
+        let point = Point { x: 0.25, y: 0.25 };
+        assert!(
+            document
+                .remove_background_wand(ImageTarget::Source, point, 0, true)
+                .unwrap()
+        );
+        assert_eq!(document.render().unwrap().get_pixel(0, 0).0[3], 0);
+        assert!(
+            document
+                .remove_background_stroke(ImageTarget::Source, &[point], 1.0, 0.0, true)
+                .unwrap()
+        );
+        assert_eq!(
+            document.render().unwrap().get_pixel(0, 0),
+            before.get_pixel(0, 0)
+        );
+        assert!(document.set_canvas_size(5, 4).unwrap());
+        assert!(document.trim_to_visible_content().unwrap());
+        assert_eq!((document.canvas_width, document.canvas_height), (3, 3));
+    }
+
+    #[test]
+    fn flatten_rebases_negative_crop_without_shifting_pixels_twice() {
+        let mut source = RgbaImage::from_pixel(3, 2, Rgba([0, 0, 0, 0]));
+        source.put_pixel(0, 0, Rgba([31, 47, 59, 255]));
+        source.put_pixel(2, 1, Rgba([101, 131, 151, 255]));
+        let mut document = Document::new(source);
+        add_pixel_image(
+            &mut document,
+            [211, 37, 73, 255],
+            Rect {
+                x: -1.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            "Negative overhang.png",
+        );
+        assert!(document.trim_to_visible_content().unwrap());
+        assert_eq!(document.crop.x, -1.0);
+        let before = document.render().unwrap();
+        assert_eq!(before.get_pixel(0, 0).0, [211, 37, 73, 255]);
+        assert_eq!(before.get_pixel(1, 0).0, [31, 47, 59, 255]);
+        assert_eq!(before.get_pixel(3, 1).0, [101, 131, 151, 255]);
+
+        assert!(document.flatten_layers().unwrap());
+        assert_eq!(
+            document.crop,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 4.0,
+                height: 2.0
+            }
+        );
+        assert_eq!(document.render().unwrap(), before);
+        assert!(document.undo());
+        assert_eq!(document.crop.x, -1.0);
+        assert_eq!(document.render().unwrap(), before);
+        assert!(document.redo());
+        assert_eq!(document.crop.x, 0.0);
+        assert_eq!(document.render().unwrap(), before);
     }
 
     #[test]

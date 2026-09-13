@@ -3,7 +3,7 @@ use captures_windows_native::{
     geometry::{
         Rect, contain, cover, editor_layer_lock_button, editor_layer_visibility_button,
         editor_shape_flyout_cell, recording_editor_timeline_track, screenshot_editor_canvas,
-        screenshot_editor_viewport,
+        screenshot_editor_properties_y, screenshot_editor_viewport,
     },
     history::Artifact,
     settings::Settings,
@@ -946,7 +946,9 @@ impl Renderer {
             )?;
             self.text(
                 &document
-                    .map_or(1, |value| value.layers.len() + 1)
+                    .map_or(1, |value| {
+                        value.layers.len() + usize::from(value.source_present)
+                    })
                     .to_string(),
                 Rect {
                     x: sidebar_x + 86.0,
@@ -957,6 +959,28 @@ impl Renderer {
                 p.muted,
                 &self.body,
             );
+            self.editor_icon(
+                "more",
+                Rect {
+                    x: sidebar_x + 240.0,
+                    y: 75.0,
+                    width: 14.0,
+                    height: 14.0,
+                },
+                if state.editor_layer_menu_open {
+                    p.accent
+                } else if document.is_some_and(|document| {
+                    state
+                        .selected_layer
+                        .is_some_and(|id| document.can_merge_layer_down(id))
+                        || document.can_merge_visible_layers()
+                        || document.can_flatten_layers()
+                }) {
+                    p.text
+                } else {
+                    p.muted
+                },
+            )?;
             self.editor_icon(
                 "plus",
                 Rect {
@@ -1024,57 +1048,67 @@ impl Renderer {
                     layer_y += 52.0;
                 }
             }
-            self.panel(
-                Rect {
-                    x: sidebar_x + 16.0,
-                    y: layer_y,
-                    width: 288.0,
-                    height: 48.0,
-                },
-                p.field,
+            let source_present = document.is_none_or(|document| document.source_present);
+            if source_present {
+                self.panel(
+                    Rect {
+                        x: sidebar_x + 16.0,
+                        y: layer_y,
+                        width: 288.0,
+                        height: 48.0,
+                    },
+                    p.field,
+                );
+                self.editor_icon(
+                    "image",
+                    Rect {
+                        x: sidebar_x + 28.0,
+                        y: layer_y + 14.0,
+                        width: 20.0,
+                        height: 20.0,
+                    },
+                    p.muted,
+                )?;
+                self.text(
+                    &format!(
+                        "{}\nLocked background",
+                        document.map_or("Original screenshot", |document| &document.source_name)
+                    ),
+                    Rect {
+                        x: sidebar_x + 58.0,
+                        y: layer_y + 6.0,
+                        width: 144.0,
+                        height: 36.0,
+                    },
+                    p.muted,
+                    &self.body,
+                );
+                let source_eye = editor_layer_visibility_button(sidebar_x, layer_y);
+                self.editor_icon(
+                    if document.is_some_and(|document| document.source_visible) {
+                        "eye"
+                    } else {
+                        "eye-off"
+                    },
+                    source_eye.inset(4.0),
+                    p.muted,
+                )?;
+                self.editor_icon(
+                    "lock",
+                    Rect {
+                        x: sidebar_x + 268.0,
+                        y: layer_y + 16.0,
+                        width: 16.0,
+                        height: 16.0,
+                    },
+                    p.muted,
+                )?;
+            }
+            let properties_y = screenshot_editor_properties_y(
+                h,
+                document.map_or(0, |document| document.layers.len()),
+                source_present,
             );
-            self.editor_icon(
-                "image",
-                Rect {
-                    x: sidebar_x + 28.0,
-                    y: layer_y + 14.0,
-                    width: 20.0,
-                    height: 20.0,
-                },
-                p.muted,
-            )?;
-            self.text(
-                "Original screenshot\nLocked background",
-                Rect {
-                    x: sidebar_x + 58.0,
-                    y: layer_y + 6.0,
-                    width: 144.0,
-                    height: 36.0,
-                },
-                p.muted,
-                &self.body,
-            );
-            let source_eye = editor_layer_visibility_button(sidebar_x, layer_y);
-            self.editor_icon(
-                if document.is_some_and(|document| document.source_visible) {
-                    "eye"
-                } else {
-                    "eye-off"
-                },
-                source_eye.inset(4.0),
-                p.muted,
-            )?;
-            self.editor_icon(
-                "lock",
-                Rect {
-                    x: sidebar_x + 268.0,
-                    y: layer_y + 16.0,
-                    width: 16.0,
-                    height: 16.0,
-                },
-                p.muted,
-            )?;
-            let properties_y = (layer_y + 72.0).min(footer_y - 194.0);
             let selected_layer = state.selected_layer.and_then(|id| {
                 document.and_then(|document| document.layers.iter().find(|layer| layer.id == id))
             });
@@ -1470,6 +1504,57 @@ impl Renderer {
                             );
                         }
                     }
+                }
+            }
+
+            if state.editor_layer_menu_open {
+                let selected_id = state.selected_layer;
+                let can_merge_down = selected_id.is_some_and(|id| {
+                    document.is_some_and(|document| document.can_merge_layer_down(id))
+                });
+                let can_merge_visible =
+                    document.is_some_and(|document| document.can_merge_visible_layers());
+                let can_flatten = document.is_some_and(|document| document.can_flatten_layers());
+                self.rounded_panel(
+                    Rect {
+                        x: sidebar_x + 18.0,
+                        y: 102.0,
+                        width: 284.0,
+                        height: 148.0,
+                    },
+                    p.raised,
+                    8.0,
+                )?;
+                self.text(
+                    "Combine",
+                    Rect {
+                        x: sidebar_x + 32.0,
+                        y: 112.0,
+                        width: 120.0,
+                        height: 24.0,
+                    },
+                    p.text,
+                    &self.strong,
+                );
+                for (index, (label, enabled)) in [
+                    ("Merge down", can_merge_down),
+                    ("Merge visible", can_merge_visible),
+                    ("Flatten image", can_flatten),
+                ]
+                .iter()
+                .enumerate()
+                {
+                    self.button(
+                        Rect {
+                            x: sidebar_x + 30.0,
+                            y: 140.0 + index as f32 * 34.0,
+                            width: 260.0,
+                            height: 30.0,
+                        },
+                        p.field,
+                        if *enabled { p.text } else { p.muted },
+                        label,
+                    );
                 }
             }
 

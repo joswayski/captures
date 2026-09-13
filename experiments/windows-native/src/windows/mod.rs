@@ -19,7 +19,8 @@ use captures_windows_native::{
     geometry::{
         Point, Rect, SelectionDrag, editor_layer_lock_button, editor_layer_visibility_button,
         editor_shape_flyout_index, recording_editor_timeline_track, rounded_contains,
-        screenshot_editor_canvas, screenshot_editor_viewport, update_selection,
+        screenshot_editor_canvas, screenshot_editor_properties_y, screenshot_editor_viewport,
+        update_selection,
     },
     history::{Artifact, History, move_to_trash, restore_from_trash, safe_delete},
     settings::{Settings, data_dir, profile_id},
@@ -1284,6 +1285,104 @@ impl App {
                     );
                 }
             }
+        } else if self.state.editor_layer_menu_open {
+            let menu_button = Rect {
+                x: sidebar_x + 230.0,
+                y: 64.0,
+                width: 40.0,
+                height: 36.0,
+            };
+            let menu = Rect {
+                x: sidebar_x + 18.0,
+                y: 102.0,
+                width: 284.0,
+                height: 148.0,
+            };
+            if menu_button.contains(p) {
+                self.state.editor_layer_menu_open = false;
+            } else if menu.contains(p) {
+                let action = (0..3).find(|index| {
+                    Rect {
+                        x: sidebar_x + 30.0,
+                        y: 140.0 + *index as f32 * 34.0,
+                        width: 260.0,
+                        height: 30.0,
+                    }
+                    .contains(p)
+                });
+                let result = match action {
+                    Some(0) => self.state.selected_layer.map_or(Ok(None), |id| {
+                        self.state
+                            .editor
+                            .as_mut()
+                            .map_or(Ok(None), |document| document.merge_layer_down(id))
+                    }),
+                    Some(1) => self
+                        .state
+                        .editor
+                        .as_mut()
+                        .map_or(Ok(None), |document| document.merge_visible_layers()),
+                    Some(2) => self.state.editor.as_mut().map_or(Ok(None), |document| {
+                        document
+                            .flatten_layers()
+                            .map(|changed| changed.then_some(0))
+                    }),
+                    _ => Ok(None),
+                };
+                match result {
+                    Ok(Some(0)) => {
+                        self.state.selected_layer = None;
+                        self.state.editor_layer_menu_open = false;
+                        self.state.status =
+                            Some(("Flattened visible layers".into(), Instant::now()));
+                        if self.fixture_mode
+                            && action == Some(2)
+                            && self.state.editor.as_ref().is_some_and(|document| {
+                                document.source_present
+                                    && document.layers.is_empty()
+                                    && document.background.is_none()
+                                    && document.crop.x == 0.0
+                                    && document.crop.y == 0.0
+                            })
+                        {
+                            let _ = fs::write(
+                                data_dir().join("editor-flatten-source-applied.txt"),
+                                "flatten:source-only-background",
+                            );
+                        }
+                    }
+                    Ok(Some(id)) => {
+                        self.state.selected_layer = Some(id);
+                        self.state.editor_layer_menu_open = false;
+                        self.state.status = Some(("Combined image layers".into(), Instant::now()));
+                        if self.fixture_mode
+                            && action == Some(0)
+                            && self.state.editor.as_ref().is_some_and(|document| {
+                                document.layers.len() == 1
+                                    && document.layers.iter().any(|layer| {
+                                        layer.id == id
+                                            && matches!(
+                                                layer.shape,
+                                                captures_windows_native::editor::Shape::Image { .. }
+                                            )
+                                    })
+                            })
+                        {
+                            let _ = fs::write(
+                                data_dir().join("editor-merge-applied.txt"),
+                                "merge-down:one-image-layer",
+                            );
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => self.set_error(error),
+                }
+            } else {
+                self.state.editor_layer_menu_open = false;
+            }
+            unsafe {
+                let _ = InvalidateRect(Some(self.hwnd), None, false);
+            }
         } else if p.y >= footer_y {
             if p.x < 208.0 {
                 self.state.editor_export_settings_open = !self.state.editor_export_settings_open;
@@ -1420,6 +1519,22 @@ impl App {
                 document.redo();
                 self.state.selected_layer = None;
             }
+        } else if (Rect {
+            x: sidebar_x + 230.0,
+            y: 64.0,
+            width: 40.0,
+            height: 36.0,
+        })
+        .contains(p)
+        {
+            self.state.editor_layer_menu_open =
+                self.state.editor.as_ref().is_some_and(|document| {
+                    self.state
+                        .selected_layer
+                        .is_some_and(|id| document.can_merge_layer_down(id))
+                        || document.can_merge_visible_layers()
+                        || document.can_flatten_layers()
+                });
         } else if p.x < 56.0 && (64.0..400.0).contains(&p.y) {
             let index = ((p.y - 64.0) / 48.0).floor() as usize;
             if index == 3 {
@@ -1467,7 +1582,7 @@ impl App {
             }
         } else if self.state.editor.as_ref().is_some_and(|document| {
             let row_y = 104.0 + document.layers.len().min(3) as f32 * 52.0;
-            editor_layer_visibility_button(sidebar_x, row_y).contains(p)
+            document.source_present && editor_layer_visibility_button(sidebar_x, row_y).contains(p)
         }) {
             if let Some(document) = self.state.editor.as_mut() {
                 document.toggle_source_visibility();
@@ -1485,6 +1600,7 @@ impl App {
         {
             let was_selected = self.state.selected_layer == Some(id);
             self.state.selected_layer = Some(id);
+            self.state.editor_layer_menu_open = false;
             self.state.editor_tool = captures_windows_native::editor::Tool::Select;
             if let Some(layer) = self
                 .state
@@ -1526,7 +1642,12 @@ impl App {
                 .editor
                 .as_ref()
                 .map_or(0, |document| document.layers.len().min(3));
-            let properties_y = (176.0 + count as f32 * 52.0).min(footer_y - 194.0);
+            let source_present = self
+                .state
+                .editor
+                .as_ref()
+                .is_none_or(|document| document.source_present);
+            let properties_y = screenshot_editor_properties_y(height, count, source_present);
             (properties_y - 4.0..properties_y + 228.0).contains(&p.y)
         } {
             let count = self
@@ -1534,7 +1655,12 @@ impl App {
                 .editor
                 .as_ref()
                 .map_or(0, |document| document.layers.len().min(3));
-            let properties_y = (176.0 + count as f32 * 52.0).min(footer_y - 194.0);
+            let source_present = self
+                .state
+                .editor
+                .as_ref()
+                .is_none_or(|document| document.source_present);
+            let properties_y = screenshot_editor_properties_y(height, count, source_present);
             if self.state.editor_tool == captures_windows_native::editor::Tool::Eraser {
                 if let Some(mode) = [
                     RemoveBackgroundMode::Wand,
@@ -1719,7 +1845,17 @@ impl App {
                             .find(|layer| layer.id == id)
                             .map(|layer| layer.opacity)
                     {
-                        document.set_layer_opacity(id, opacity.saturating_add_signed(delta));
+                        let next = opacity.saturating_add_signed(delta);
+                        if document.set_layer_opacity(id, next)
+                            && self.fixture_mode
+                            && !document.source_present
+                            && next == 229
+                        {
+                            let _ = fs::write(
+                                data_dir().join("editor-source-consumed-input.txt"),
+                                "opacity:229",
+                            );
+                        }
                     }
                 } else if (properties_y + 122.0..properties_y + 174.0).contains(&p.y) {
                     let delta = if p.x < sidebar_x + 236.0 { -15.0 } else { 15.0 };
@@ -4212,6 +4348,61 @@ fn prepare_fixture(
                 document.set_layer_rotation(id, 24.0);
                 state.selected_layer = Some(id);
                 state.editor_tool = captures_windows_native::editor::Tool::Select;
+            }
+        }
+        "editor-merge" => {
+            state.edit_image(image);
+            if let Some(document) = state.editor.as_mut() {
+                document.add(
+                    captures_windows_native::editor::Shape::Rectangle(Rect {
+                        x: 180.0,
+                        y: 160.0,
+                        width: 360.0,
+                        height: 240.0,
+                    }),
+                    [37, 99, 235, 255],
+                    10.0,
+                );
+                let id = document.add(
+                    captures_windows_native::editor::Shape::Ellipse(Rect {
+                        x: 390.0,
+                        y: 240.0,
+                        width: 310.0,
+                        height: 190.0,
+                    }),
+                    [239, 70, 80, 255],
+                    12.0,
+                );
+                state.selected_layer = Some(id);
+                state.editor_tool = captures_windows_native::editor::Tool::Select;
+                state.editor_layer_menu_open = true;
+            }
+        }
+        "editor-merge-visible" => {
+            state.edit_image(image);
+            if let Some(document) = state.editor.as_mut() {
+                document.add(
+                    captures_windows_native::editor::Shape::Rectangle(Rect {
+                        x: 240.0,
+                        y: 170.0,
+                        width: 390.0,
+                        height: 250.0,
+                    }),
+                    [37, 99, 235, 255],
+                    10.0,
+                );
+                let id = document
+                    .merge_visible_layers()
+                    .expect("fixture merge visible renders")
+                    .expect("fixture source and shape are visible");
+                state.selected_layer = Some(id);
+                state.editor_tool = captures_windows_native::editor::Tool::Select;
+            }
+        }
+        "editor-flatten-source" => {
+            state.edit_image(image);
+            if let Some(document) = state.editor.as_mut() {
+                document.set_background(Some([247, 247, 245, 255]));
             }
         }
         "editor-eraser" => {

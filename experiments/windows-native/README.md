@@ -61,10 +61,14 @@ The current native chrome uses the shipping editor's icon-led tool rail, separat
 three-column shape flyout, empty default inspector, locked-background layer row, grouped canvas/zoom
 header, and filename/export footer. Switches share the shipping 30-by-18 geometry and have distinct
 on, off, and disabled states. Light and dark runtime fixtures cover default, imported-image, shapes,
-export, selected-properties, selected-line, erased-source, and trim-ready editor states.
+export, selected-properties, selected-line, merge/combine, source-consumed, flattened-source,
+erased-source, and trim-ready editor states.
 Selected annotations can be moved, resized, and rotated, and their color, stroke, and supported fill
 state can be edited with undo/redo. Selected layers can also change opacity and blend mode, move to
 the front or back, duplicate, delete, lock, hide, and—when they are images—be renamed.
+The layer Combine menu implements Merge down for an unlocked adjacent pair, Merge visible while
+retaining hidden-layer order, and Flatten image with the canvas background baked into one locked
+source. Each operation rasterizes through `captures-image` and is one undoable transaction.
 The Eraser tool targets the topmost visible image (including locked image layers and the locked
 original screenshot). Its contiguous or global color wand, continuous soft erase brush, and restore
 brush edit real alpha pixels, clear an active solid canvas background, and commit each action as one
@@ -102,8 +106,12 @@ off-thread `captures-feedback` client enforces transport validation, timeout, no
 cooldown; no feedback or telemetry is sent at startup. Fixture rendering never submits the form.
 Crash collection and crash-reporting consent are not implemented, so raw panic text is never sent.
 
-Merge/flatten and image flip/rotate layer actions, recording crop, and preview audio are not
-implemented. Their controls are
+Editable screenshot drafts are not yet persisted or restored: closing or restarting the native app
+loses the in-memory document even though raster exports remain on disk. Future draft storage must
+remain inside the isolated experiment profile and retain whether the source was an imported file or
+a new capture. Recording-editor drafts remain intentionally absent, matching the shipping app.
+
+Image flip/rotate layer actions, recording crop, and preview audio are not implemented. Their controls are
 omitted or explicitly marked unavailable rather than presented as working. Windows DirectComposition
 fixtures are required to assess final pixel-level parity; they cannot be rendered in the Linux orb.
 
