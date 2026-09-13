@@ -4,7 +4,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 experiment="$root/experiments/macos-native"
 if [[ "$(uname -s)" != Darwin ]]; then
-  printf 'The native app must be linked on macOS with Xcode. Linux can test bridge logic and parse Swift, not build AppKit.\n' >&2
+  printf 'The native app requires macOS with Xcode; non-macOS hosts cannot typecheck or build AppKit.\n' >&2
   exit 1
 fi
 for tool in cargo python3 xcrun codesign; do command -v "$tool" >/dev/null; done
@@ -38,6 +38,7 @@ xcrun swiftc -swift-version 5 -parse-as-library -O -whole-module-optimization \
   "$out/rust/$rust_target/release/libcaptures_macos_bridge.a" \
   "${native_links[@]}" \
   -framework SwiftUI -framework AppKit -framework AVKit -framework Carbon \
+  -framework CoreImage -framework QuartzCore \
   -framework ServiceManagement -framework UniformTypeIdentifiers -framework ImageIO \
   -o "$app/Contents/MacOS/captures-native"
 
@@ -80,6 +81,7 @@ if [[ "${1:-}" == --test ]]; then
     "${sources[@]}" "$experiment/Tests/EditorModelTests.swift" \
     "$out/rust/$rust_target/release/libcaptures_macos_bridge.a" "${native_links[@]}" \
     -framework SwiftUI -framework AppKit -framework AVKit -framework Carbon \
+    -framework CoreImage -framework QuartzCore \
     -framework ServiceManagement -framework UniformTypeIdentifiers -framework ImageIO \
     -framework XCTest -o "$out/editor-tests"
   test_data="$(mktemp -d "$out/test-data.XXXXXX")"
@@ -90,6 +92,7 @@ if [[ "${1:-}" == --test ]]; then
     "${sources[@]}" "$experiment/Tests/RenderReferences.swift" \
     "$out/rust/$rust_target/release/libcaptures_macos_bridge.a" "${native_links[@]}" \
     -framework SwiftUI -framework AppKit -framework AVKit -framework Carbon \
+    -framework CoreImage -framework QuartzCore \
     -framework ServiceManagement -framework UniformTypeIdentifiers -framework ImageIO \
     -o "$out/render-references"
 fi

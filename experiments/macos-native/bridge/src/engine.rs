@@ -3,21 +3,26 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     sync::{
-        OnceLock,
+        Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 
 use captures_capture::{
     PointerCursor, XcapBackend, overlay_pointer_cursor, overlay_pointer_cursor_in_crop,
     overlay_pointer_cursor_on_window, screenshot_pointer_scale,
 };
+use captures_feedback::{
+    DEFAULT_FEEDBACK_URL, FeedbackClient,
+    crash_diagnostics::{CrashSession, ReportIdentity, summarize_report_path},
+};
 use captures_media::{
     AudioEdit, CancelToken, EditSpec, ExportFormat, ExportSpec, MediaToolchain,
-    RecordingAudioLayout, RecordingSegmentInput,
+    RecordingAudioLayout, RecordingSegmentInput, estimate_sample_windows,
+    export_preserves_source_bytes, extrapolate_sampled_size, visual_edit_is_identity,
 };
 use captures_recording::{
     RecordingDraftManifest, RecordingKind, RecordingOptions, RecordingSegmentInfo, RecordingState,
@@ -27,8 +32,9 @@ use serde_json::{Value, json};
 
 use crate::{
     protocol::{
-        self, BridgeResult, DescribeRequest, Envelope, FreezeCreateRequest, FreezeDiscardRequest,
-        ImageEncodeRequest, ImageFormat, MediaExportRequest, MediaPathRequest,
+        self, BridgeResult, CrashPreviewRequest, CrashStartRequest, DescribeRequest, Envelope,
+        FeedbackSubmitRequest, FreezeCreateRequest, FreezeDiscardRequest, ImageEncodeRequest,
+        ImageFormat, MediaEstimateRequest, MediaExportRequest, MediaPathRequest,
         MicrophonePermissionRequest, RecordMuteRequest, RecordStartRequest, RecoverDiscardRequest,
         RecoverRequest, ScreenshotRequest, ScreenshotTarget, failure_json, success_json,
     },
@@ -45,6 +51,7 @@ struct Job {
 }
 
 static ENGINE: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
+static CRASH_SESSION: Mutex<Option<CrashSession>> = Mutex::new(None);
 static RECOVERY_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 pub fn request(request: String) -> String {
@@ -111,8 +118,15 @@ const fn microphone_permission_operation(
 
 fn operation_lane(operation: &str) -> OperationLane {
     match operation {
-        "image_encode"
+        "crash_dismiss"
+        | "crash_mark_clean"
+        | "crash_preview"
+        | "crash_resume"
+        | "crash_start"
+        | "feedback_submit"
+        | "image_encode"
         | "media_probe"
+        | "media_estimate"
         | "media_export"
         | "recover_list"
         | "microphone_permission" => OperationLane::Stateless,
@@ -141,8 +155,15 @@ fn dispatch_direct(request: &str) -> Option<BridgeResult<Value>> {
     match operation_lane(&envelope.op) {
         OperationLane::RecordingEngine => None,
         OperationLane::Stateless => Some(match envelope.op.as_str() {
+            "crash_dismiss" => Engine::crash_dismiss(),
+            "crash_mark_clean" => Engine::crash_mark_clean(),
+            "crash_preview" => protocol::parse(&value).and_then(Engine::crash_preview),
+            "crash_resume" => Engine::crash_resume(),
+            "crash_start" => protocol::parse(&value).and_then(Engine::crash_start),
+            "feedback_submit" => protocol::parse(&value).and_then(Engine::feedback_submit),
             "image_encode" => protocol::parse(&value).and_then(Engine::image_encode),
             "media_probe" => protocol::parse(&value).and_then(Engine::media_probe),
+            "media_estimate" => protocol::parse(&value).and_then(Engine::media_estimate),
             "media_export" => protocol::parse(&value).and_then(Engine::media_export),
             "microphone_permission" => {
                 protocol::parse(&value).and_then(Engine::microphone_permission)
@@ -553,7 +574,10 @@ impl Engine {
         session.segments.clear();
         session.lifecycle.restart();
         session.warning = None;
-        session.begin_segment()?;
+        // Restart is a two-phase operation. The frontend owns the visible,
+        // cancellable countdown and calls record_resume only after it reaches
+        // zero. Keeping the engine in Selecting prevents frames from being
+        // recorded behind that countdown.
         Ok(session.status())
     }
 
@@ -643,7 +667,80 @@ impl Engine {
             "duration_ms": probe.metadata.duration_ms.unwrap_or(0),
             "width": probe.metadata.width,
             "height": probe.metadata.height,
+            "size_bytes": probe.metadata.size_bytes,
+            "has_system_audio": probe.audio_stream_count >= 1,
+            "has_microphone_audio": probe.audio_stream_count >= 2,
         }))
+    }
+
+    fn feedback_submit(request: FeedbackSubmitRequest) -> BridgeResult<Value> {
+        feedback_client()?.submit(request.draft, request.context)?;
+        Ok(json!({}))
+    }
+
+    fn crash_start(request: CrashStartRequest) -> BridgeResult<Value> {
+        start_crash_session(&CRASH_SESSION, request.profile_root)?;
+        with_crash_session(|session| {
+            session.install_panic_hook();
+            Ok(())
+        })?;
+        Ok(json!({}))
+    }
+
+    fn crash_preview(request: CrashPreviewRequest) -> BridgeResult<Value> {
+        let preview = with_crash_session(|session| Ok(session.preview()))?;
+        let identity = ReportIdentity {
+            executable_name: &request.executable_name,
+            bundle_id: request.bundle_id.as_deref(),
+            executable_path: request.executable_path.as_deref(),
+        };
+        let os_report = request.reports.into_iter().find_map(|candidate| {
+            let modified = UNIX_EPOCH.checked_add(Duration::from_millis(candidate.modified_ms))?;
+            summarize_report_path(
+                &candidate.path,
+                modified,
+                preview.previous_session_started_at,
+                &identity,
+            )
+            .ok()
+            .flatten()
+        });
+        let started_ms = preview.previous_session_started_at.and_then(|value| {
+            value
+                .duration_since(UNIX_EPOCH)
+                .ok()
+                .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+        });
+        Ok(json!({
+            "unclean_exit": preview.unclean_exit,
+            "has_exception_evidence": preview.rust_panic.is_some() || os_report.is_some(),
+            "rust_panic": preview.rust_panic,
+            "os_report": os_report,
+            "previous_session_started_ms": started_ms,
+        }))
+    }
+
+    fn crash_dismiss() -> BridgeResult<Value> {
+        with_crash_session(|session| {
+            session
+                .dismiss_previous()
+                .map_err(|error| error.to_string())
+        })?;
+        Ok(json!({}))
+    }
+
+    fn crash_mark_clean() -> BridgeResult<Value> {
+        with_crash_session(|session| session.mark_clean_exit().map_err(|error| error.to_string()))?;
+        Ok(json!({}))
+    }
+
+    fn crash_resume() -> BridgeResult<Value> {
+        with_crash_session(|session| {
+            session
+                .resume_after_cancelled_exit()
+                .map_err(|error| error.to_string())
+        })?;
+        Ok(json!({}))
     }
 
     fn image_encode(request: ImageEncodeRequest) -> BridgeResult<Value> {
@@ -687,6 +784,9 @@ impl Engine {
         if request.fps.is_some_and(|fps| !(1..=30).contains(&fps)) {
             return Err("GIF export fps must be between 1 and 30".to_owned());
         }
+        if request.max_bytes == Some(0) {
+            return Err("media export max_bytes must be greater than zero".to_owned());
+        }
         if request.output.exists() {
             return Err(format!(
                 "export destination already exists: {}",
@@ -729,7 +829,7 @@ impl Engine {
         let spec = ExportSpec {
             format: request.format,
             quality: request.quality,
-            max_size_bytes: None,
+            max_size_bytes: request.max_bytes,
             frames_per_second: request.fps,
             gif_max_colors: None,
         };
@@ -755,6 +855,125 @@ impl Engine {
             output_probe.metadata.height,
             kind_for_format(request.format),
         ))
+    }
+
+    fn media_estimate(request: MediaEstimateRequest) -> BridgeResult<Value> {
+        ensure_regular_source(&request.path)?;
+        if request.format == ExportFormat::WebM {
+            return Err("size estimates are not available for WebM".to_owned());
+        }
+        if request.end_ms <= request.start_ms {
+            return Err("media estimate end_ms must be greater than start_ms".to_owned());
+        }
+        if request.fps.is_some() && request.format != ExportFormat::Gif {
+            return Err("fps is accepted only for GIF media estimates".to_owned());
+        }
+        if request.fps.is_some_and(|fps| !(1..=30).contains(&fps)) {
+            return Err("GIF estimate fps must be between 1 and 30".to_owned());
+        }
+        if request.max_bytes == Some(0) {
+            return Err("media estimate max_bytes must be greater than zero".to_owned());
+        }
+        if !(request.system_volume.is_finite()
+            && request.microphone_volume.is_finite()
+            && (0.0..=2.0).contains(&request.system_volume)
+            && (0.0..=2.0).contains(&request.microphone_volume))
+        {
+            return Err("audio volume must be a finite multiplier between 0 and 2".to_owned());
+        }
+        let media = media_toolchain();
+        let probe = media
+            .probe(&request.path)
+            .map_err(|error| error.to_string())?;
+        let source_duration_ms = probe
+            .metadata
+            .duration_ms
+            .ok_or_else(|| "media estimate source duration is unavailable".to_owned())?;
+        let start_ms = request.start_ms.min(source_duration_ms.saturating_sub(1));
+        let end_ms = request.end_ms.min(source_duration_ms).max(start_ms + 1);
+        let trimmed_ms = end_ms - start_ms;
+        let (output_width, output_height) = scaled_dimensions(
+            request.width,
+            request.crop,
+            probe.metadata.width,
+            probe.metadata.height,
+        )?;
+        let edit = EditSpec {
+            trim_start_ms: start_ms,
+            trim_end_ms: Some(end_ms),
+            crop: request.crop,
+            output_width,
+            output_height,
+            audio: AudioEdit {
+                system_volume: request.system_volume,
+                microphone_volume: request.microphone_volume,
+                mute_system_audio: request.system_volume == 0.0,
+                mute_microphone: request.microphone_volume == 0.0,
+                mono_output: request.mono,
+                source_has_system_audio: probe.audio_stream_count >= 1,
+                source_has_microphone_audio: probe.audio_stream_count >= 2,
+            },
+        };
+        let spec = ExportSpec {
+            format: request.format,
+            quality: request.quality,
+            max_size_bytes: request.max_bytes,
+            frames_per_second: request.fps,
+            gif_max_colors: None,
+        };
+        if export_preserves_source_bytes(&probe, &edit, &spec) {
+            return Ok(json!({ "size_bytes": probe.metadata.size_bytes, "exact": true }));
+        }
+        if request.format == ExportFormat::Mp4
+            && request.quality == captures_media::QualityPreset::Preserve
+            && request.max_bytes.is_none()
+            && visual_edit_is_identity(&probe, &edit)
+        {
+            return Ok(json!({ "size_bytes": probe.metadata.size_bytes, "exact": false }));
+        }
+        let windows = estimate_sample_windows(start_ms, trimmed_ms);
+        let exact = windows.len() == 1;
+        let extension = extension_for_format(request.format)?;
+        let scratch =
+            std::env::temp_dir().join(format!("captures-native-estimate-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&scratch).map_err(|error| error.to_string())?;
+        let result = (|| {
+            let mut sampled_bytes = 0_u64;
+            let mut sampled_ms = 0_u64;
+            for (index, (window_start, window_ms)) in windows.iter().copied().enumerate() {
+                let mut sample_edit = edit.clone();
+                sample_edit.trim_start_ms = window_start;
+                sample_edit.trim_end_ms = Some(window_start + window_ms);
+                let mut sample_spec = spec.clone();
+                sample_spec.max_size_bytes = spec.max_size_bytes.map(|cap| {
+                    u64::try_from(
+                        u128::from(cap) * u128::from(window_ms) / u128::from(trimmed_ms.max(1)),
+                    )
+                    .unwrap_or(cap)
+                    .max(1)
+                });
+                let destination = scratch.join(format!("sample-{index}.{extension}"));
+                let outcome = media
+                    .export(
+                        &request.path,
+                        &destination,
+                        &sample_edit,
+                        &sample_spec,
+                        &CancelToken::default(),
+                        |_| {},
+                    )
+                    .map_err(|error| error.to_string())?;
+                sampled_bytes = sampled_bytes.saturating_add(outcome.size_bytes);
+                sampled_ms = sampled_ms.saturating_add(window_ms);
+            }
+            Ok::<_, String>(extrapolate_sampled_size(
+                sampled_bytes,
+                sampled_ms,
+                trimmed_ms,
+            ))
+        })();
+        let _ = fs::remove_dir_all(&scratch);
+        Ok(json!({ "size_bytes": result?, "exact": exact }))
     }
 
     fn recover_list() -> BridgeResult<Value> {
@@ -1086,6 +1305,43 @@ fn media_toolchain() -> MediaToolchain {
     MediaToolchain::new(ffmpeg, ffprobe)
 }
 
+fn feedback_client() -> BridgeResult<&'static FeedbackClient> {
+    static CLIENT: OnceLock<Result<FeedbackClient, String>> = OnceLock::new();
+    match CLIENT.get_or_init(|| {
+        let endpoint = std::env::var("CAPTURES_FEEDBACK_URL")
+            .unwrap_or_else(|_| DEFAULT_FEEDBACK_URL.to_owned());
+        FeedbackClient::new(&endpoint)
+    }) {
+        Ok(client) => Ok(client),
+        Err(error) => Err(error.clone()),
+    }
+}
+
+fn start_crash_session(
+    slot: &Mutex<Option<CrashSession>>,
+    profile_root: PathBuf,
+) -> BridgeResult<()> {
+    let mut session = slot
+        .lock()
+        .map_err(|_| "crash diagnostics are unavailable".to_owned())?;
+    if session.is_some() {
+        return Err("crash diagnostics were already started".to_owned());
+    }
+    *session = Some(CrashSession::start(profile_root).map_err(|error| error.to_string())?);
+    Ok(())
+}
+
+fn with_crash_session<T>(body: impl FnOnce(&CrashSession) -> BridgeResult<T>) -> BridgeResult<T> {
+    let session = CRASH_SESSION
+        .lock()
+        .map_err(|_| "crash diagnostics are unavailable".to_owned())?;
+    body(
+        session
+            .as_ref()
+            .ok_or_else(|| "crash diagnostics have not started".to_owned())?,
+    )
+}
+
 fn ensure_regular_source(path: &Path) -> BridgeResult<()> {
     let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
@@ -1186,7 +1442,7 @@ const fn pointer_cursor() -> Option<PointerCursor> {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::atomic::AtomicBool,
+        sync::{Mutex, atomic::AtomicBool},
         time::{Duration, Instant},
     };
 
@@ -1196,6 +1452,7 @@ mod tests {
     use super::{
         Engine, Lifecycle, MicrophonePermissionOperation, OperationLane, Reservation,
         ensure_recovery_idle, microphone_permission_operation, operation_lane, scaled_dimensions,
+        start_crash_session,
     };
 
     #[test]
@@ -1256,8 +1513,15 @@ mod tests {
     #[test]
     fn long_stateless_operations_are_not_routed_to_recording_engine() {
         for operation in [
+            "crash_dismiss",
+            "crash_mark_clean",
+            "crash_preview",
+            "crash_resume",
+            "crash_start",
+            "feedback_submit",
             "image_encode",
             "media_probe",
+            "media_estimate",
             "media_export",
             "recover_list",
             "microphone_permission",
@@ -1270,6 +1534,66 @@ mod tests {
         assert_eq!(
             operation_lane("record_status"),
             OperationLane::RecordingEngine
+        );
+    }
+
+    #[test]
+    fn media_export_rejects_a_zero_size_budget_before_running_the_toolchain() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.mp4");
+        std::fs::write(&source, b"not media").unwrap();
+        let request = serde_json::json!({
+            "op": "media_export",
+            "path": source,
+            "output": directory.path().join("output.mp4"),
+            "format": "mp4",
+            "start_ms": 0,
+            "end_ms": 1,
+            "max_bytes": 0
+        });
+        let error = super::dispatch_direct(&request.to_string())
+            .expect("media export is stateless")
+            .unwrap_err();
+        assert_eq!(error, "media export max_bytes must be greater than zero");
+    }
+
+    #[test]
+    fn media_estimate_validates_the_request_before_running_the_toolchain() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.mp4");
+        std::fs::write(&source, b"not media").unwrap();
+        let request = serde_json::json!({
+            "op": "media_estimate",
+            "path": source,
+            "format": "mp4",
+            "start_ms": 0,
+            "end_ms": 1,
+            "max_bytes": 0
+        });
+        let error = super::dispatch_direct(&request.to_string())
+            .expect("media estimate is stateless")
+            .unwrap_err();
+        assert_eq!(error, "media estimate max_bytes must be greater than zero");
+    }
+
+    #[test]
+    fn feedback_requires_explicit_nonempty_user_content_without_sending() {
+        let request = serde_json::json!({
+            "op": "feedback_submit",
+            "draft": { "category": "bug", "message": "   ", "contact": null },
+            "context": {
+                "app_version": "test",
+                "os": "macos",
+                "os_version": "test",
+                "arch": "arm64"
+            }
+        });
+        let error = super::dispatch_direct(&request.to_string())
+            .expect("feedback is stateless")
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "Please enter a short description of the issue or idea."
         );
     }
 
@@ -1323,6 +1647,8 @@ mod tests {
         lifecycle.restart();
         assert_eq!(lifecycle.elapsed_ms(), 0);
         assert_eq!(lifecycle.state, RecordingState::Selecting);
+        lifecycle.begin().unwrap();
+        assert_eq!(lifecycle.state, RecordingState::Recording);
     }
 
     #[test]
@@ -1347,5 +1673,28 @@ mod tests {
             (Some(640), Some(360))
         );
         assert!(scaled_dimensions(Some(1), None, 1920, 1080).is_err());
+    }
+
+    #[test]
+    fn repeated_crash_start_rejects_before_mutating_the_live_session() {
+        let profile = tempfile::tempdir().unwrap();
+        let slot = Mutex::new(None);
+        start_crash_session(&slot, profile.path().to_path_buf()).unwrap();
+        let marker = slot.lock().unwrap().as_ref().unwrap().clean_exit_paths()[0].clone();
+        let marker_before = std::fs::read(&marker).unwrap();
+
+        let error = start_crash_session(&slot, profile.path().to_path_buf()).unwrap_err();
+
+        assert_eq!(error, "crash diagnostics were already started");
+        assert_eq!(std::fs::read(marker).unwrap(), marker_before);
+        assert!(
+            !slot
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .preview()
+                .unclean_exit
+        );
     }
 }

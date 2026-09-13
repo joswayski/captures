@@ -1,7 +1,9 @@
 import AppKit
 import AVFoundation
 import Combine
+import CoreImage
 import ImageIO
+import QuartzCore
 import SwiftUI
 
 private enum PreviewGeometry {
@@ -304,16 +306,15 @@ private final class PreviewStackModel: ObservableObject {
         beginExit(artifact, kind: .dismiss)
     }
 
+    @MainActor
     func delete(_ artifact: Artifact) {
-        let alert = NSAlert()
-        alert.messageText = "Delete capture?"
-        alert.informativeText = "This file will be moved to Finder Trash and removed from Capture History."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Delete")
-        alert.addButton(withTitle: "Cancel")
-        alert.buttons.first?.hasDestructiveAction = true
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        beginExit(artifact, kind: .delete)
+        CaptureDialogController.shared.present(
+            title: "Delete capture?",
+            message: "This file will be moved to Finder Trash and removed from Capture History.",
+            action: "Delete",
+            destructive: true,
+            onConfirm: { self.beginExit(artifact, kind: .delete) }
+        )
     }
 
     func clear() {
@@ -476,7 +477,7 @@ private final class PreviewStackModel: ObservableObject {
         return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
     }
 
-    private static func makeDust(image: NSImage, fromRight: Bool) -> [DustParticle] {
+    fileprivate static func makeDust(image: NSImage, fromRight: Bool) -> [DustParticle] {
         var proposed = NSRect(origin: .zero, size: image.size)
         guard
             let original = image.cgImage(forProposedRect: &proposed, context: nil, hints: nil),
@@ -825,12 +826,10 @@ private struct PreviewCardView: View {
                 Button(action: { model.save(state.artifact) }) { Label("Save", systemImage: "square.and.arrow.down") }
                     .foregroundColor(.black.opacity(0.86))
                     .background(NativeTheme.accent, in: RoundedRectangle(cornerRadius: 7))
+                Button(action: { model.reveal(state.artifact) }) { Label("Show in Folder", systemImage: "folder") }
             }
             .buttonStyle(PreviewActionButtonStyle())
-            .frame(width: 140)
-            .contextMenu {
-                Button("Show in Folder") { model.reveal(state.artifact) }
-            }
+            .frame(width: 154)
         }
         .transition(.opacity)
     }
@@ -898,34 +897,93 @@ private struct PreviewActionButtonStyle: ButtonStyle {
     }
 }
 
-private struct DustView: View {
+private struct DustView: NSViewRepresentable {
     let particles: [DustParticle]
     let startedAt: Date
 
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 60)) { timeline in
-            let elapsed = timeline.date.timeIntervalSince(startedAt)
-            ZStack(alignment: .topLeading) {
-                ForEach(particles) { particle in
-                    let progress = min(1, max(0, (elapsed - particle.delay) / particle.duration))
-                    Image(nsImage: particle.image)
-                        .resizable()
-                        .frame(width: particle.size.width, height: particle.size.height)
-                        .position(x: particle.origin.x + particle.size.width / 2, y: particle.origin.y + particle.size.height / 2)
-                        .offset(x: particle.delta.width * eased(progress), y: particle.delta.height * eased(progress))
-                        .rotationEffect(.degrees(particle.rotation * eased(progress)))
-                        .scaleEffect(1 - 0.18 * progress)
-                        .opacity(progress <= 0 ? 1 : 1 - progress)
-                }
-            }
-        }
-        .frame(width: PreviewGeometry.cardWidth, height: PreviewGeometry.cardHeight, alignment: .topLeading)
-        .allowsHitTesting(false)
+    func makeNSView(context: Context) -> DustAnimationView {
+        DustAnimationView()
     }
 
-    private func eased(_ value: Double) -> CGFloat {
-        let t = CGFloat(value)
-        return 1 - pow(1 - t, 3)
+    func updateNSView(_ view: DustAnimationView, context: Context) {
+        view.play(particles: particles, startedAt: startedAt)
+    }
+}
+
+/// The dissolve is deliberately Core Animation rather than 220 SwiftUI views
+/// invalidating at 60 Hz. Each fragment is one compositor layer with a single
+/// animation group. Core Image supplies the tiny per-fragment blur; no custom
+/// Metal pipeline is needed for this image-layer workload.
+private final class DustAnimationView: NSView {
+    private var generation = ""
+
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = false
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    func play(particles: [DustParticle], startedAt: Date) {
+        let nextGeneration = "\(startedAt.timeIntervalSinceReferenceDate)-\(particles.count)"
+        guard generation != nextGeneration else { return }
+        generation = nextGeneration
+        layer?.sublayers?.forEach { $0.removeFromSuperlayer() }
+
+        let timelineOrigin = CACurrentMediaTime() - max(0, Date().timeIntervalSince(startedAt))
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for particle in particles {
+            guard let contents = particle.image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { continue }
+            let chip = CALayer()
+            chip.contents = contents
+            chip.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+            chip.contentsGravity = .resize
+            chip.bounds = CGRect(origin: .zero, size: particle.size)
+            chip.position = CGPoint(
+                x: particle.origin.x + particle.size.width / 2,
+                y: particle.origin.y + particle.size.height / 2
+            )
+            // Future-staggered animations are not guaranteed to apply their
+            // backwards fill before beginTime in a captured window compositor.
+            // Keep each not-yet-started chip visibly intact in the model layer;
+            // the retained animation supplies the final zero-opacity state.
+            chip.opacity = 1
+            if let blur = CIFilter(name: "CIGaussianBlur", parameters: [kCIInputRadiusKey: 2]) {
+                chip.filters = [blur]
+            }
+            layer?.addSublayer(chip)
+
+            let position = CABasicAnimation(keyPath: "position")
+            position.fromValue = chip.position
+            position.toValue = CGPoint(
+                x: chip.position.x + particle.delta.width,
+                y: chip.position.y + particle.delta.height
+            )
+            let rotation = CABasicAnimation(keyPath: "transform.rotation.z")
+            rotation.fromValue = 0
+            rotation.toValue = particle.rotation * .pi / 180
+            let scale = CABasicAnimation(keyPath: "transform.scale")
+            scale.fromValue = 1
+            scale.toValue = 0.82
+            let opacity = CAKeyframeAnimation(keyPath: "opacity")
+            opacity.values = [1, 1, 0]
+            opacity.keyTimes = [0, 0.08, 1]
+
+            let group = CAAnimationGroup()
+            group.animations = [position, rotation, scale, opacity]
+            group.beginTime = timelineOrigin + particle.delay
+            group.duration = particle.duration
+            group.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0.1, 0.25, 1)
+            group.fillMode = .both
+            group.isRemovedOnCompletion = false
+            chip.add(group, forKey: "captures-dust")
+        }
+        CATransaction.commit()
     }
 }
 
@@ -982,4 +1040,29 @@ private final class FileDragNSView: NSView, NSDraggingSource {
         guard operation.contains(.copy), !PreviewController.shared.panelContains(screenPoint: screenPoint) else { return }
         onExternalDrop?()
     }
+}
+
+@MainActor
+func previewReferenceView(
+    artifacts: [Artifact], image: NSImage, expanded: Bool,
+    fanned: Bool = false, deleting: Bool = false
+) -> AnyView {
+    let model = PreviewStackModel()
+    model.cards = artifacts.enumerated().map { index, artifact in
+        PreviewCardState(
+            artifact: artifact,
+            image: image,
+            exit: deleting && index == 0 ? .delete : nil,
+            dust: deleting && index == 0 ? PreviewStackModel.makeDust(image: image, fromRight: false) : [],
+            // The compositor reference adds a 0.18 s settle before capture.
+            // Start 0.24 s earlier so it samples the wave near its 0.38 s
+            // median particle delay, with both intact and displaced fragments.
+            exitingAt: deleting && index == 0 ? Date().addingTimeInterval(-0.24) : nil
+        )
+    }
+    model.expanded = expanded
+    model.pileHovered = fanned
+    model.viewportHeight = expanded ? min(720, model.contentHeight) : PreviewGeometry.collapsedHeight
+    return AnyView(PreviewStackView(model: model)
+        .frame(width: PreviewGeometry.windowWidth, height: model.viewportHeight))
 }

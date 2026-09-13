@@ -32,6 +32,16 @@ struct EditorRect: Codable, Equatable, Hashable {
     var cgRect: CGRect { CGRect(x: x, y: y, width: width, height: height) }
 }
 
+enum EditorAlignmentAxis: Equatable {
+    case horizontal
+    case vertical
+}
+
+struct EditorAlignmentGuide: Equatable {
+    var axis: EditorAlignmentAxis
+    var position: CGFloat
+}
+
 struct EditorColor: Codable, Equatable, Hashable {
     var red: CGFloat
     var green: CGFloat
@@ -43,6 +53,15 @@ struct EditorColor: Codable, Equatable, Hashable {
 
     var nsColor: NSColor {
         NSColor(srgbRed: red, green: green, blue: blue, alpha: alpha)
+    }
+
+    var hex: String {
+        String(
+            format: "#%02X%02X%02X",
+            Int((min(1, max(0, red)) * 255).rounded()),
+            Int((min(1, max(0, green)) * 255).rounded()),
+            Int((min(1, max(0, blue)) * 255).rounded())
+        )
     }
 
     init(red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat = 1) {
@@ -61,8 +80,168 @@ struct EditorColor: Codable, Equatable, Hashable {
     }
 }
 
+struct EditorShadow: Codable, Equatable, Hashable {
+    var radius: CGFloat = 8
+    var offsetX: CGFloat = 0
+    var offsetY: CGFloat = 4
+    var opacity: CGFloat = 0.45
+}
+
 enum EditorShape: String, Codable, CaseIterable {
     case rectangle, ellipse, line, triangle, diamond, star, arrow
+}
+
+enum EditorBlendMode: String, Codable, CaseIterable, Identifiable {
+    case normal = "source-over"
+    case multiply, screen, overlay, darken, lighten
+
+    var id: String { rawValue }
+    var label: String { self == .normal ? "Normal" : rawValue.capitalized }
+
+    var cgBlendMode: CGBlendMode {
+        switch self {
+        case .normal: return .normal
+        case .multiply: return .multiply
+        case .screen: return .screen
+        case .overlay: return .overlay
+        case .darken: return .darken
+        case .lighten: return .lighten
+        }
+    }
+
+    var nsCompositingOperation: NSCompositingOperation {
+        switch self {
+        case .normal: return .sourceOver
+        case .multiply: return .multiply
+        case .screen: return .screen
+        case .overlay: return .overlay
+        case .darken: return .darken
+        case .lighten: return .lighten
+        }
+    }
+}
+
+enum EditorTextFontFamily: String, Codable, CaseIterable, Identifiable {
+    case sans, serif, mono, rounded
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .sans: return "Sans serif"
+        case .serif: return "Serif"
+        case .mono: return "Monospace"
+        case .rounded: return "Rounded"
+        }
+    }
+}
+
+enum EditorTextAlignment: String, Codable, CaseIterable, Identifiable {
+    case left, center, right
+
+    var id: String { rawValue }
+}
+
+enum EditorTextPreset: String, Codable, CaseIterable, Identifiable {
+    case standard, rounded, outlined, mono, box
+    case monoBox = "mono-box"
+    case roundedBox = "rounded-box"
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .monoBox: return "Mono Box"
+        case .roundedBox: return "Rounded Box"
+        default: return rawValue.capitalized
+        }
+    }
+
+    var prefersCenteredNewLabel: Bool {
+        self == .box || self == .monoBox || self == .roundedBox
+    }
+}
+
+struct EditorTextStyle: Codable, Equatable {
+    static let boxBackground = EditorColor(
+        red: 17.0 / 255, green: 19.0 / 255, blue: 24.0 / 255
+    )
+
+    var fontSize: CGFloat
+    var fontFamily: EditorTextFontFamily
+    var bold: Bool
+    var italic: Bool
+    var alignment: EditorTextAlignment
+    var background: EditorColor?
+    var outlined: Bool
+    var roundedBackground: Bool
+
+    static let shippingDefault = EditorTextStyle(
+        fontSize: 48, fontFamily: .rounded, bold: false, italic: false,
+        alignment: .center, background: boxBackground,
+        outlined: false, roundedBackground: true
+    )
+
+    static func defaultFontSize(width: Int, height: Int) -> CGFloat {
+        min(72, max(24, (CGFloat(min(width, height)) * 0.055).rounded()))
+    }
+
+    static func legacy(frameHeight: CGFloat) -> EditorTextStyle {
+        EditorTextStyle(
+            fontSize: max(12, frameHeight * 0.62), fontFamily: .sans,
+            bold: true, italic: false, alignment: .left,
+            background: nil, outlined: false, roundedBackground: false
+        )
+    }
+
+    var preset: EditorTextPreset {
+        if outlined, background == nil { return .outlined }
+        if background != nil {
+            if fontFamily == .rounded, roundedBackground { return .roundedBox }
+            if fontFamily == .mono { return .monoBox }
+            return .box
+        }
+        if fontFamily == .rounded { return .rounded }
+        if fontFamily == .mono { return .mono }
+        return .standard
+    }
+
+    func applying(_ preset: EditorTextPreset) -> EditorTextStyle {
+        var style = self
+        let retainedBackground = background ?? Self.boxBackground
+        switch preset {
+        case .standard:
+            style.fontFamily = .sans; style.background = nil
+            style.outlined = false; style.roundedBackground = false
+        case .rounded:
+            style.fontFamily = .rounded; style.background = nil
+            style.outlined = false; style.roundedBackground = false
+        case .outlined:
+            style.fontFamily = .sans; style.background = nil
+            style.outlined = true; style.roundedBackground = false
+        case .mono:
+            style.fontFamily = .mono; style.background = nil
+            style.outlined = false; style.roundedBackground = false
+        case .box:
+            style.fontFamily = .sans; style.background = retainedBackground
+            style.outlined = false; style.roundedBackground = false
+        case .monoBox:
+            style.fontFamily = .mono; style.background = retainedBackground
+            style.outlined = false; style.roundedBackground = false
+        case .roundedBox:
+            style.fontFamily = .rounded; style.background = retainedBackground
+            style.outlined = false; style.roundedBackground = true
+        }
+        return style
+    }
+
+    func applyingToNewLabel(_ preset: EditorTextPreset) -> EditorTextStyle {
+        var style = applying(preset)
+        style.alignment = preset.prefersCenteredNewLabel ? .center : .left
+        return style
+    }
+
+    static func minimumTextWidth(fontSize: CGFloat) -> CGFloat {
+        max(8, (fontSize * 0.5).rounded())
+    }
 }
 
 enum EditorLayerContent: Codable, Equatable {
@@ -123,12 +302,18 @@ struct EditorLayer: Identifiable, Codable, Equatable {
     var color: EditorColor = .signal
     var fill: EditorColor?
     var lineWidth: CGFloat = 6
+    var shadow: EditorShadow?
+    /// Optional so drafts written before blend controls decode as Normal.
+    var blendMode: EditorBlendMode?
+    /// Optional so existing native drafts retain their established text rendering.
+    var textStyle: EditorTextStyle?
 
     init(
         id: UUID = UUID(), name: String, content: EditorLayerContent, frame: EditorRect,
         rotation: CGFloat = 0, visible: Bool = true, locked: Bool = false,
         opacity: CGFloat = 1, color: EditorColor = .signal, fill: EditorColor? = nil,
-        lineWidth: CGFloat = 6
+        lineWidth: CGFloat = 6, shadow: EditorShadow? = nil,
+        blendMode: EditorBlendMode? = nil, textStyle: EditorTextStyle? = nil
     ) {
         self.id = id
         self.name = name
@@ -141,6 +326,9 @@ struct EditorLayer: Identifiable, Codable, Equatable {
         self.color = color
         self.fill = fill
         self.lineWidth = lineWidth
+        self.shadow = shadow
+        self.blendMode = blendMode
+        self.textStyle = textStyle
     }
 }
 
@@ -148,6 +336,7 @@ struct EditorDocument: Codable, Equatable {
     var width: Int
     var height: Int
     var layers: [EditorLayer]
+    var background: EditorColor?
 
     init(imageData: Data) throws {
         guard let image = NSImage(data: imageData), image.size.width > 0, image.size.height > 0 else {
@@ -156,6 +345,7 @@ struct EditorDocument: Codable, Equatable {
         let pixels = image.pixelSize
         width = pixels.width
         height = pixels.height
+        background = nil
         layers = [EditorLayer(
             name: "Original screenshot",
             content: .image(imageData, original: imageData),
@@ -164,10 +354,11 @@ struct EditorDocument: Codable, Equatable {
         )]
     }
 
-    init(width: Int, height: Int, layers: [EditorLayer] = []) {
+    init(width: Int, height: Int, layers: [EditorLayer] = [], background: EditorColor? = nil) {
         self.width = max(1, width)
         self.height = max(1, height)
         self.layers = layers
+        self.background = background
     }
 }
 
@@ -176,6 +367,7 @@ enum EditorError: LocalizedError, Equatable {
     case cannotRender
     case unsupportedFormat(String)
     case existingFile
+    case canvasTooLarge
 
     var errorDescription: String? {
         switch self {
@@ -183,6 +375,7 @@ enum EditorError: LocalizedError, Equatable {
         case .cannotRender: return "The edited image could not be rendered."
         case let .unsupportedFormat(format): return "The native editor cannot export \(format)."
         case .existingFile: return "A file already exists at that location."
+        case .canvasTooLarge: return "The canvas cannot exceed 16,384 × 16,384 pixels."
         }
     }
 }
@@ -251,28 +444,65 @@ final class EditorModel: ObservableObject {
         changed()
     }
 
-    func addText(_ text: String, at point: CGPoint? = nil) {
-        let frame = EditorRect(x: point?.x ?? 48, y: point?.y ?? 48, width: 260, height: 52)
-        let layer = EditorLayer(name: "Text", content: .text(text), frame: frame, color: .white)
-        mutate { $0.layers.append(layer) }
-        selectedLayerID = layer.id
-    }
-
-    func addShape(_ shape: EditorShape, at point: CGPoint? = nil) {
-        let size: CGSize = shape == .line || shape == .arrow ? CGSize(width: 220, height: 90) : CGSize(width: 180, height: 140)
+    func addText(
+        _ text: String, at point: CGPoint? = nil,
+        color: EditorColor = .signal,
+        style: EditorTextStyle = .shippingDefault,
+        shadow: EditorShadow? = nil
+    ) {
+        let placement = point ?? CGPoint(x: 48, y: 48)
+        let frame = Self.textFrame(text: text, style: style, contentAnchor: placement)
         let layer = EditorLayer(
-            name: shape.rawValue.capitalized, content: .shape(shape),
-            frame: EditorRect(x: point?.x ?? 64, y: point?.y ?? 64, width: size.width, height: size.height)
+            name: "Text", content: .text(text), frame: frame,
+            color: color, shadow: shadow, textStyle: style
         )
         mutate { $0.layers.append(layer) }
         selectedLayerID = layer.id
     }
 
-    func addStroke(_ points: [CGPoint]) {
+    func updateSelectedText(_ text: String) {
+        guard let index = selectedLayerIndex, !document.layers[index].locked,
+              case .text = document.layers[index].content else { return }
+        mutate { document in
+            let layer = document.layers[index]
+            document.layers[index].content = .text(text)
+            guard let style = layer.textStyle else { return }
+            document.layers[index].frame = Self.textFrame(
+                text: text,
+                style: style,
+                preservingContentAnchorOf: layer
+            )
+        }
+    }
+
+    func addShape(
+        _ shape: EditorShape, at point: CGPoint? = nil,
+        color: EditorColor = .signal, lineWidth: CGFloat = 6,
+        fill: Bool = false, opacity: CGFloat = 1, shadow: EditorShadow? = nil
+    ) {
+        let size: CGSize = shape == .line || shape == .arrow ? CGSize(width: 220, height: 90) : CGSize(width: 180, height: 140)
+        let layer = EditorLayer(
+            name: shape.rawValue.capitalized, content: .shape(shape),
+            frame: EditorRect(x: point?.x ?? 64, y: point?.y ?? 64, width: size.width, height: size.height),
+            opacity: opacity, color: color,
+            fill: fill && shape != .line && shape != .arrow ? color : nil,
+            lineWidth: lineWidth, shadow: shadow
+        )
+        mutate { $0.layers.append(layer) }
+        selectedLayerID = layer.id
+    }
+
+    func addStroke(
+        _ points: [CGPoint], color: EditorColor = .signal,
+        lineWidth: CGFloat = 6, opacity: CGFloat = 1, shadow: EditorShadow? = nil
+    ) {
         guard points.count > 1 else { return }
         let bounds = points.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }.insetBy(dx: -8, dy: -8)
         let local = points.map { EditorPoint(x: $0.x - bounds.minX, y: $0.y - bounds.minY) }
-        let layer = EditorLayer(name: "Freehand", content: .freehand(local), frame: EditorRect(bounds))
+        let layer = EditorLayer(
+            name: "Freehand", content: .freehand(local), frame: EditorRect(bounds),
+            opacity: opacity, color: color, lineWidth: lineWidth, shadow: shadow
+        )
         mutate { $0.layers.append(layer) }
         selectedLayerID = layer.id
     }
@@ -319,9 +549,186 @@ final class EditorModel: ObservableObject {
         }
     }
 
+    func snapTranslatedFrame(
+        _ proposed: EditorRect, layerID: UUID, threshold: CGFloat
+    ) -> (frame: EditorRect, guides: [EditorAlignmentGuide]) {
+        guard threshold > 0,
+              let moving = document.layers.first(where: { $0.id == layerID }) else {
+            return (proposed, [])
+        }
+        var vertical = [CGFloat(0), CGFloat(document.width)]
+        var horizontal = [CGFloat(0), CGFloat(document.height)]
+        for layer in document.layers where layer.id != layerID && layer.visible {
+            let bounds = worldBounds(of: layer.frame.cgRect, rotation: layer.rotation)
+            vertical.append(contentsOf: [bounds.minX, bounds.maxX])
+            horizontal.append(contentsOf: [bounds.minY, bounds.maxY])
+        }
+        let proposedBounds = worldBounds(of: proposed.cgRect, rotation: moving.rotation)
+        let xHit = closestAlignment(
+            candidates: [proposedBounds.minX, proposedBounds.maxX],
+            lines: vertical, threshold: threshold
+        )
+        let yHit = closestAlignment(
+            candidates: [proposedBounds.minY, proposedBounds.maxY],
+            lines: horizontal, threshold: threshold
+        )
+        let frame = EditorRect(
+            x: proposed.x + (xHit?.delta ?? 0),
+            y: proposed.y + (yHit?.delta ?? 0),
+            width: proposed.width,
+            height: proposed.height
+        )
+        var guides: [EditorAlignmentGuide] = []
+        if let xHit { guides.append(EditorAlignmentGuide(axis: .vertical, position: xHit.line)) }
+        if let yHit { guides.append(EditorAlignmentGuide(axis: .horizontal, position: yHit.line)) }
+        return (frame, guides)
+    }
+
+    private func closestAlignment(
+        candidates: [CGFloat], lines: [CGFloat], threshold: CGFloat
+    ) -> (delta: CGFloat, line: CGFloat)? {
+        var best: (delta: CGFloat, line: CGFloat)?
+        var bestDistance = threshold + 0.0001
+        for candidate in candidates {
+            for line in lines {
+                let delta = line - candidate
+                let distance = abs(delta)
+                if distance < bestDistance {
+                    bestDistance = distance
+                    best = (delta, line)
+                }
+            }
+        }
+        return best
+    }
+
+    private func worldBounds(of frame: CGRect, rotation: CGFloat) -> CGRect {
+        guard rotation != 0 else { return frame }
+        let center = CGPoint(x: frame.midX, y: frame.midY)
+        let cosine = cos(rotation)
+        let sine = sin(rotation)
+        return [
+            CGPoint(x: frame.minX, y: frame.minY), CGPoint(x: frame.maxX, y: frame.minY),
+            CGPoint(x: frame.maxX, y: frame.maxY), CGPoint(x: frame.minX, y: frame.maxY),
+        ].reduce(into: CGRect.null) { bounds, point in
+            let dx = point.x - center.x
+            let dy = point.y - center.y
+            let rotated = CGPoint(
+                x: center.x + dx * cosine - dy * sine,
+                y: center.y + dx * sine + dy * cosine
+            )
+            bounds = bounds.union(CGRect(origin: rotated, size: .zero))
+        }
+    }
+
     func updateSelected(_ body: (inout EditorLayer) -> Void) {
         guard let index = selectedLayerIndex, !document.layers[index].locked else { return }
         mutate { body(&$0.layers[index]) }
+    }
+
+    func updateSelectedTextStyle(_ body: (inout EditorTextStyle) -> Void) {
+        guard let index = selectedLayerIndex, !document.layers[index].locked,
+              case let .text(text) = document.layers[index].content else { return }
+        mutate { document in
+            let layer = document.layers[index]
+            let previous = layer.textStyle ?? .legacy(frameHeight: layer.frame.height)
+            var next = previous
+            body(&next)
+            next.fontSize = min(512, max(8, next.fontSize))
+            let typographyChanged = next.fontSize != previous.fontSize
+                || next.fontFamily != previous.fontFamily
+                || next.bold != previous.bold
+                || next.italic != previous.italic
+            if typographyChanged {
+                document.layers[index].frame = Self.textFrame(
+                    text: text,
+                    style: next,
+                    preservingContentAnchorOf: layer,
+                    previousStyle: previous
+                )
+            } else {
+                // Shipping alignment changes keep the layout box in place;
+                // plates only extend that same box by their style padding.
+                let oldPadding = Self.textPadding(previous)
+                let nextPadding = Self.textPadding(next)
+                document.layers[index].frame = EditorRect(
+                    x: layer.frame.x + oldPadding.width - nextPadding.width,
+                    y: layer.frame.y + oldPadding.height - nextPadding.height,
+                    width: max(1, layer.frame.width - oldPadding.width * 2) + nextPadding.width * 2,
+                    height: max(1, layer.frame.height - oldPadding.height * 2) + nextPadding.height * 2
+                )
+            }
+            document.layers[index].textStyle = next
+        }
+    }
+
+    private static func textFrame(
+        text: String,
+        style: EditorTextStyle,
+        contentAnchor: CGPoint
+    ) -> EditorRect {
+        let size = textContentSize(text: text, style: style)
+        let padding = textPadding(style)
+        let x: CGFloat
+        switch style.alignment {
+        case .left: x = contentAnchor.x - padding.width
+        case .center: x = contentAnchor.x - size.width / 2 - padding.width
+        case .right: x = contentAnchor.x - size.width - padding.width
+        }
+        return EditorRect(
+            x: x, y: contentAnchor.y - padding.height,
+            width: size.width + padding.width * 2,
+            height: size.height + padding.height * 2
+        )
+    }
+
+    private static func textFrame(
+        text: String,
+        style: EditorTextStyle,
+        preservingContentAnchorOf layer: EditorLayer,
+        previousStyle: EditorTextStyle? = nil
+    ) -> EditorRect {
+        let oldStyle = previousStyle ?? style
+        let oldPadding = textPadding(oldStyle)
+        let oldContentWidth = max(1, layer.frame.width - oldPadding.width * 2)
+        let anchorX: CGFloat
+        switch oldStyle.alignment {
+        case .left: anchorX = layer.frame.x + oldPadding.width
+        case .center: anchorX = layer.frame.x + oldPadding.width + oldContentWidth / 2
+        case .right: anchorX = layer.frame.x + layer.frame.width - oldPadding.width
+        }
+        return textFrame(
+            text: text,
+            style: style,
+            contentAnchor: CGPoint(x: anchorX, y: layer.frame.y + oldPadding.height)
+        )
+    }
+
+    private static func textPadding(_ style: EditorTextStyle) -> CGSize {
+        style.background == nil ? .zero : CGSize(
+            width: style.fontSize * 0.36,
+            height: style.fontSize * 0.22
+        )
+    }
+
+    private static func textContentSize(text: String, style: EditorTextStyle) -> CGSize {
+        let lines = text.components(separatedBy: "\n")
+        let width: CGFloat
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            width = style.fontSize * 8
+        } else {
+            width = max(
+                EditorTextStyle.minimumTextWidth(fontSize: style.fontSize),
+                (lines.map {
+                    (($0.isEmpty ? " " : $0) as NSString)
+                        .size(withAttributes: [.font: style.nsFont]).width
+                }.max() ?? 0) + style.fontSize * 0.35
+            )
+        }
+        return CGSize(
+            width: width,
+            height: CGFloat(max(1, lines.count)) * style.fontSize * 1.25
+        )
     }
 
     func beginInteractiveEdit() {
@@ -359,6 +766,62 @@ final class EditorModel: ObservableObject {
         }
     }
 
+    var canMergeSelectedDown: Bool {
+        guard let index = selectedLayerIndex, index > 0 else { return false }
+        return !document.layers[index].locked && !document.layers[index - 1].locked
+    }
+
+    var canMergeVisible: Bool { document.layers.filter(\.visible).count >= 2 }
+
+    var canFlatten: Bool {
+        document.layers.count >= 2 || (document.layers.count == 1 && document.background != nil)
+    }
+
+    func mergeSelectedDown() throws {
+        guard canMergeSelectedDown, let index = selectedLayerIndex else { return }
+        let layers = Array(document.layers[(index - 1)...index])
+        let name = layers.first(where: { layer in
+            if case .image = layer.content { return true }
+            return false
+        })?.name ?? "Merged"
+        let merged = try rasterizedLayer(layers: layers, background: nil, name: name)
+        mutate { $0.layers.replaceSubrange((index - 1)...index, with: [merged]) }
+        selectedLayerID = merged.id
+    }
+
+    func mergeVisible() throws {
+        guard canMergeVisible else { return }
+        let merged = try rasterizedLayer(
+            layers: document.layers.filter(\.visible), background: nil, name: "Merged"
+        )
+        var inserted = false
+        var layers: [EditorLayer] = []
+        for layer in document.layers {
+            if layer.visible {
+                if !inserted { layers.append(merged); inserted = true }
+            } else {
+                layers.append(layer)
+            }
+        }
+        mutate { $0.layers = layers }
+        selectedLayerID = merged.id
+    }
+
+    func flatten() throws {
+        guard canFlatten else { return }
+        var merged = try rasterizedLayer(
+            layers: document.layers.filter(\.visible),
+            background: document.background,
+            name: "Flattened"
+        )
+        merged.locked = true
+        mutate {
+            $0.background = nil
+            $0.layers = [merged]
+        }
+        selectedLayerID = merged.id
+    }
+
     func crop(to rect: CGRect) {
         let canvas = CGRect(x: 0, y: 0, width: CGFloat(document.width), height: CGFloat(document.height))
         let crop = rect.standardized.integral.intersection(canvas)
@@ -377,6 +840,42 @@ final class EditorModel: ObservableObject {
         mutate {
             $0.width = min(max(width, 1), 16_384)
             $0.height = min(max(height, 1), 16_384)
+        }
+    }
+
+    func canvasExpansion(for layerID: UUID, padding: CGFloat = 0) -> CGRect? {
+        guard let layer = document.layers.first(where: { $0.id == layerID }) else { return nil }
+        let bounds = worldBounds(of: layer.frame.cgRect, rotation: layer.rotation)
+        let shiftX = max(0, ceil(-bounds.minX))
+        let shiftY = max(0, ceil(-bounds.minY))
+        let width = max(
+            CGFloat(document.width) + shiftX,
+            ceil(bounds.maxX + shiftX + max(0, padding))
+        )
+        let height = max(
+            CGFloat(document.height) + shiftY,
+            ceil(bounds.maxY + shiftY + max(0, padding))
+        )
+        guard shiftX > 0 || shiftY > 0
+                || width > CGFloat(document.width) || height > CGFloat(document.height) else { return nil }
+        return CGRect(x: -shiftX, y: -shiftY, width: width, height: height)
+    }
+
+    func expandCanvasToFit(layerID: UUID, padding: CGFloat = 0) throws {
+        guard let expansion = canvasExpansion(for: layerID, padding: padding) else { return }
+        guard expansion.width.isFinite, expansion.height.isFinite,
+              expansion.width <= 16_384, expansion.height <= 16_384 else {
+            throw EditorError.canvasTooLarge
+        }
+        let shiftX = -expansion.minX
+        let shiftY = -expansion.minY
+        mutate {
+            $0.width = max(1, Int(expansion.width))
+            $0.height = max(1, Int(expansion.height))
+            for index in $0.layers.indices {
+                $0.layers[index].frame.x += shiftX
+                $0.layers[index].frame.y += shiftY
+            }
         }
     }
 
@@ -421,21 +920,32 @@ final class EditorModel: ObservableObject {
         if !bounds.isNull { crop(to: bounds) }
     }
 
-    func erase(at documentPoint: CGPoint, radius: CGFloat, restore: Bool) throws {
+    func erase(at documentPoint: CGPoint, radius: CGFloat, softness: CGFloat = 0, restore: Bool) throws {
+        try eraseStroke(
+            from: documentPoint, to: documentPoint,
+            radius: radius, softness: softness, restore: restore
+        )
+    }
+
+    func eraseStroke(
+        from startPoint: CGPoint, to endPoint: CGPoint,
+        radius: CGFloat, softness: CGFloat = 0, restore: Bool
+    ) throws {
         guard let index = selectedLayerIndex else { return }
         let layer = document.layers[index]
-        guard !layer.locked else { return }
         let frame = layer.frame.cgRect
         let center = CGPoint(x: frame.midX, y: frame.midY)
-        let dx = documentPoint.x - center.x
-        let dy = documentPoint.y - center.y
         let cosine = cos(-layer.rotation)
         let sine = sin(-layer.rotation)
-        let localDocumentPoint = CGPoint(
-            x: center.x + dx * cosine - dy * sine,
-            y: center.y + dx * sine + dy * cosine
-        )
-        guard frame.contains(localDocumentPoint), case let .image(currentData, originalData) = layer.content,
+        let localPoint: (CGPoint) -> CGPoint = { point in
+            let dx = point.x - center.x
+            let dy = point.y - center.y
+            return CGPoint(
+                x: center.x + dx * cosine - dy * sine,
+                y: center.y + dx * sine + dy * cosine
+            )
+        }
+        guard case let .image(currentData, originalData) = layer.content,
               let current = NSImage(data: currentData), let original = NSImage(data: originalData),
               let currentCG = current.cgImage(forProposedRect: nil, context: nil, hints: nil),
               let originalCG = original.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
@@ -452,27 +962,160 @@ final class EditorModel: ObservableObject {
         defer { withExtendedLifetime((context, originalContext)) {} }
         context.draw(currentCG, in: CGRect(x: 0, y: 0, width: width, height: height))
         originalContext.draw(originalCG, in: CGRect(x: 0, y: 0, width: width, height: height))
-        let centerX = (localDocumentPoint.x - frame.minX) / frame.width * CGFloat(width)
-        let centerY = (localDocumentPoint.y - frame.minY) / frame.height * CGFloat(height)
-        let pixelRadius = max(1, radius * CGFloat(width) / frame.width)
-        for y in max(0, Int(centerY - pixelRadius))..<min(height, Int(centerY + pixelRadius + 1)) {
-            for x in max(0, Int(centerX - pixelRadius))..<min(width, Int(centerX + pixelRadius + 1))
-                where hypot(CGFloat(x) - centerX, CGFloat(y) - centerY) <= pixelRadius {
-                let offset = (y * width + x) * 4
-                for component in 0..<4 {
-                    // Fully transparent premultiplied pixels must also have
-                    // zero color channels, not just zero alpha.
-                    pixels[offset + component] = restore ? originalPixels[offset + component] : 0
+        let localStart = localPoint(startPoint)
+        let localEnd = localPoint(endPoint)
+        let radiusX = max(1, radius * CGFloat(width) / frame.width)
+        let radiusY = max(1, radius * CGFloat(height) / frame.height)
+        let feather = min(1, max(0, softness))
+        let hardDistance = 1 - feather
+        let segmentDistance = hypot(localEnd.x - localStart.x, localEnd.y - localStart.y)
+        let spacing = max(0.5, radius * 0.35)
+        let steps = max(1, Int(ceil(segmentDistance / spacing)))
+        var changedPixels = false
+        for step in 0...steps {
+            let progress = CGFloat(step) / CGFloat(steps)
+            let local = CGPoint(
+                x: localStart.x + (localEnd.x - localStart.x) * progress,
+                y: localStart.y + (localEnd.y - localStart.y) * progress
+            )
+            let centerX = (local.x - frame.minX) / frame.width * CGFloat(width)
+            let centerY = (local.y - frame.minY) / frame.height * CGFloat(height)
+            let minimumY = min(height, max(0, Int(floor(centerY - radiusY))))
+            let maximumY = min(height, max(0, Int(ceil(centerY + radiusY))))
+            let minimumX = min(width, max(0, Int(floor(centerX - radiusX))))
+            let maximumX = min(width, max(0, Int(ceil(centerX + radiusX))))
+            guard minimumX < maximumX, minimumY < maximumY else { continue }
+            for y in minimumY..<maximumY {
+                for x in minimumX..<maximumX {
+                    // Document coordinates address pixel edges; sample the
+                    // center of each destination pixel for symmetric stamps.
+                    let dx = (CGFloat(x) + 0.5 - centerX) / radiusX
+                    let dy = (CGFloat(y) + 0.5 - centerY) / radiusY
+                    let distance = hypot(dx, dy)
+                    guard distance <= 1 else { continue }
+                    let coverage = feather == 0 || distance <= hardDistance
+                        ? CGFloat(1)
+                        : max(0, min(1, (1 - distance) / max(0.001, feather)))
+                    let offset = (y * width + x) * 4
+                    for component in 0..<4 {
+                        let current = CGFloat(pixels[offset + component])
+                        let target = restore ? CGFloat(originalPixels[offset + component]) : 0
+                        let updated = UInt8(
+                            (current + (target - current) * coverage).rounded()
+                        )
+                        if updated != pixels[offset + component] {
+                            pixels[offset + component] = updated
+                            changedPixels = true
+                        }
+                    }
                 }
             }
         }
+        guard changedPixels else { return }
         guard let editedCG = context.makeImage() else { throw EditorError.cannotRender }
         let rep = NSBitmapImageRep(cgImage: editedCG)
         guard let png = rep.representation(using: .png, properties: [:]) else { throw EditorError.cannotRender }
-        updateSelected { $0.content = .image(png, original: originalData) }
+        if interactiveCheckpoint != nil {
+            document.layers[index].content = .image(png, original: originalData)
+            dirty = true
+        } else {
+            mutate { $0.layers[index].content = .image(png, original: originalData) }
+        }
+    }
+
+    func removeBackgroundColor(
+        at documentPoint: CGPoint, tolerance: CGFloat = 0.12, contiguous: Bool = true
+    ) throws {
+        guard let index = selectedLayerIndex else { return }
+        let layer = document.layers[index]
+        let frame = layer.frame.cgRect
+        let center = CGPoint(x: frame.midX, y: frame.midY)
+        let dx = documentPoint.x - center.x
+        let dy = documentPoint.y - center.y
+        let cosine = cos(-layer.rotation)
+        let sine = sin(-layer.rotation)
+        let local = CGPoint(x: center.x + dx * cosine - dy * sine,
+                            y: center.y + dx * sine + dy * cosine)
+        guard frame.contains(local), case let .image(data, original) = layer.content,
+              let image = NSImage(data: data),
+              let source = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+        let width = source.width
+        let height = source.height
+        guard let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
+        ), let pixels = context.data?.assumingMemoryBound(to: UInt8.self) else { throw EditorError.cannotRender }
+        context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let seedX = min(width - 1, max(0, Int((local.x - frame.minX) / frame.width * CGFloat(width))))
+        let seedY = min(height - 1, max(0, Int((local.y - frame.minY) / frame.height * CGFloat(height))))
+        let seedOffset = (seedY * width + seedX) * 4
+        let seed = (pixels[seedOffset], pixels[seedOffset + 1], pixels[seedOffset + 2], pixels[seedOffset + 3])
+        let limit = max(1, Int(tolerance * 255))
+        let matches: (Int) -> Bool = { offset in
+            max(
+                abs(Int(pixels[offset]) - Int(seed.0)),
+                abs(Int(pixels[offset + 1]) - Int(seed.1)),
+                abs(Int(pixels[offset + 2]) - Int(seed.2)),
+                abs(Int(pixels[offset + 3]) - Int(seed.3))
+            ) <= limit
+        }
+        if !contiguous {
+            for y in 0..<height {
+                for x in 0..<width {
+                    let offset = (y * width + x) * 4
+                    if matches(offset) {
+                        pixels[offset] = 0; pixels[offset + 1] = 0
+                        pixels[offset + 2] = 0; pixels[offset + 3] = 0
+                    }
+                }
+            }
+        }
+        var visited = [Bool](repeating: false, count: width * height)
+        var pending = [(seedX, seedY)]
+        visited[seedY * width + seedX] = true
+        while contiguous, let (x, y) = pending.popLast() {
+            let pixelIndex = y * width + x
+            let offset = pixelIndex * 4
+            guard matches(offset) else { continue }
+            pixels[offset] = 0; pixels[offset + 1] = 0; pixels[offset + 2] = 0; pixels[offset + 3] = 0
+            for (nextX, nextY) in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]
+                where nextX >= 0 && nextX < width && nextY >= 0 && nextY < height {
+                let next = nextY * width + nextX
+                if !visited[next] {
+                    visited[next] = true
+                    pending.append((nextX, nextY))
+                }
+            }
+        }
+        guard let edited = context.makeImage(),
+              let png = NSBitmapImageRep(cgImage: edited).representation(using: .png, properties: [:])
+        else { throw EditorError.cannotRender }
+        mutate { $0.layers[index].content = .image(png, original: original) }
     }
 
     func renderedImage() throws -> NSImage {
+        try renderedImage(layers: document.layers.filter(\.visible), background: document.background)
+    }
+
+    private func rasterizedLayer(
+        layers: [EditorLayer], background: EditorColor?, name: String
+    ) throws -> EditorLayer {
+        let image = try renderedImage(layers: layers, background: background)
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let data = NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:])
+        else { throw EditorError.cannotRender }
+        return EditorLayer(
+            name: name,
+            content: .image(data, original: data),
+            frame: EditorRect(
+                x: 0, y: 0,
+                width: CGFloat(document.width), height: CGFloat(document.height)
+            )
+        )
+    }
+
+    private func renderedImage(layers: [EditorLayer], background: EditorColor?) throws -> NSImage {
         guard document.width > 0, document.height > 0 else { throw EditorError.cannotRender }
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
               let context = CGContext(
@@ -485,7 +1128,7 @@ final class EditorModel: ObservableObject {
                 bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
               ) else { throw EditorError.cannotRender }
         context.setBlendMode(.copy)
-        context.setFillColor(NSColor.clear.cgColor)
+        context.setFillColor((background?.nsColor ?? .clear).cgColor)
         context.fill(CGRect(x: 0, y: 0, width: CGFloat(document.width), height: CGFloat(document.height)))
         context.setBlendMode(.normal)
         context.translateBy(x: 0, y: CGFloat(document.height))
@@ -494,7 +1137,9 @@ final class EditorModel: ObservableObject {
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = graphicsContext
         defer { NSGraphicsContext.restoreGraphicsState() }
-        for layer in document.layers where layer.visible {
+        // Callers choose the stack: normal rendering passes visible layers,
+        // while shipping Merge Down intentionally rasterizes its explicit pair.
+        for layer in layers {
             draw(layer, in: context)
         }
         graphicsContext.flushGraphics()
@@ -555,22 +1200,45 @@ final class EditorModel: ObservableObject {
         let frame = layer.frame.cgRect
         context.saveGState()
         context.setAlpha(layer.opacity)
+        context.setBlendMode((layer.blendMode ?? .normal).cgBlendMode)
         context.translateBy(x: frame.midX, y: frame.midY)
         context.rotate(by: layer.rotation)
         context.translateBy(x: -frame.midX, y: -frame.midY)
+        if let shadow = layer.shadow {
+            context.setShadow(
+                offset: CGSize(width: shadow.offsetX, height: shadow.offsetY),
+                blur: shadow.radius,
+                color: NSColor.black.withAlphaComponent(shadow.opacity).cgColor
+            )
+        }
         switch layer.content {
         case let .image(data, _):
+            // NSImage.draw applies its own compositing fraction and does not
+            // preserve CGContext alpha on the native CI AppKit renderer.
+            // Keep vectors/text on context alpha, but make bitmap opacity
+            // explicit here so preview, export, and merge rasterization agree.
+            context.setAlpha(1)
             NSImage(data: data)?.draw(
                 in: frame,
                 from: .zero,
-                operation: .sourceOver,
-                fraction: 1,
+                operation: (layer.blendMode ?? .normal).nsCompositingOperation,
+                fraction: layer.opacity,
                 respectFlipped: true,
                 hints: [.interpolation: NSImageInterpolation.high.rawValue]
             )
         case let .text(text):
-            let font = NSFont.systemFont(ofSize: max(12, frame.height * 0.62), weight: .semibold)
-            (text as NSString).draw(in: frame, withAttributes: [.font: font, .foregroundColor: layer.color.nsColor])
+            if layer.textStyle == nil {
+                // Preserve drafts authored before rich text byte-for-byte:
+                // this is the original native renderer, not an approximation
+                // through the new paragraph/style path.
+                let font = NSFont.systemFont(ofSize: max(12, frame.height * 0.62), weight: .semibold)
+                (text as NSString).draw(
+                    in: frame,
+                    withAttributes: [.font: font, .foregroundColor: layer.color.nsColor]
+                )
+            } else {
+                draw(text, layer: layer, frame: frame, context: context)
+            }
         case let .shape(shape):
             draw(shape, layer: layer, frame: frame, context: context)
         case let .freehand(points):
@@ -586,6 +1254,60 @@ final class EditorModel: ObservableObject {
             context.strokePath()
         }
         context.restoreGState()
+    }
+
+    private func draw(_ text: String, layer: EditorLayer, frame: CGRect, context: CGContext) {
+        let style = layer.textStyle ?? .legacy(frameHeight: frame.height)
+        var contentFrame = frame
+        if let background = style.background {
+            let radius = style.roundedBackground
+                ? min(min(frame.width, frame.height) * 0.28, style.fontSize * 0.34)
+                : 0
+            let path = CGPath(
+                roundedRect: frame,
+                cornerWidth: radius,
+                cornerHeight: radius,
+                transform: nil
+            )
+            context.addPath(path)
+            context.setFillColor(background.nsColor.cgColor)
+            context.fillPath()
+            // Shipping shadows the plate once, not every glyph on top of it.
+            context.setShadow(offset: .zero, blur: 0, color: nil)
+            contentFrame = frame.insetBy(
+                dx: style.fontSize * 0.36,
+                dy: style.fontSize * 0.22
+            )
+        }
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = style.alignment.nsTextAlignment
+        paragraph.lineBreakMode = .byWordWrapping
+        paragraph.minimumLineHeight = style.fontSize * 1.25
+        paragraph.maximumLineHeight = style.fontSize * 1.25
+        let font = style.nsFont
+        var attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .paragraphStyle: paragraph,
+            .foregroundColor: layer.color.nsColor,
+        ]
+        if style.outlined {
+            attributes[.strokeColor] = layer.color.nsColor
+            attributes[.strokeWidth] = 8
+            attributes[.foregroundColor] = NSColor.clear
+        }
+        let attributed = NSAttributedString(string: text, attributes: attributes)
+        let measured = attributed.boundingRect(
+            with: CGSize(width: contentFrame.width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        )
+        let drawFrame = CGRect(
+            x: contentFrame.minX,
+            y: contentFrame.midY - min(contentFrame.height, measured.height) / 2,
+            width: contentFrame.width,
+            height: max(contentFrame.height, measured.height)
+        )
+        attributed.draw(with: drawFrame, options: [.usesLineFragmentOrigin, .usesFontLeading])
     }
 
     private func draw(_ shape: EditorShape, layer: EditorLayer, frame: CGRect, context: CGContext) {
@@ -623,6 +1345,42 @@ final class EditorModel: ObservableObject {
         context.setLineCap(.round)
         context.setLineJoin(.round)
         context.strokePath()
+    }
+}
+
+private extension EditorTextAlignment {
+    var nsTextAlignment: NSTextAlignment {
+        switch self {
+        case .left: return .left
+        case .center: return .center
+        case .right: return .right
+        }
+    }
+}
+
+private extension EditorTextStyle {
+    var nsFont: NSFont {
+        let weight: NSFont.Weight = bold ? .bold : .regular
+        let base: NSFont
+        switch fontFamily {
+        case .sans:
+            base = .systemFont(ofSize: fontSize, weight: weight)
+        case .serif:
+            base = NSFont(name: bold ? "Georgia-Bold" : "Georgia", size: fontSize)
+                ?? .systemFont(ofSize: fontSize, weight: weight)
+        case .mono:
+            base = .monospacedSystemFont(ofSize: fontSize, weight: weight)
+        case .rounded:
+            let system = NSFont.systemFont(ofSize: fontSize, weight: weight)
+            if let descriptor = system.fontDescriptor.withDesign(.rounded) {
+                base = NSFont(descriptor: descriptor, size: fontSize) ?? system
+            } else {
+                base = system
+            }
+        }
+        return italic
+            ? NSFontManager.shared.convert(base, toHaveTrait: .italicFontMask)
+            : base
     }
 }
 

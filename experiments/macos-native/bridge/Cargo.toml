@@ -19,6 +19,7 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 captures-capture = { path = "../../../crates/captures-capture" }
+captures-feedback = { path = "../../../crates/captures-feedback" }
 captures-media = { path = "../../../crates/captures-media" }
 captures-recording = { path = "../../../crates/captures-recording" }
 captures-recording-macos = { path = "../../../crates/captures-recording-macos" }

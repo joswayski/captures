@@ -1,0 +1,234 @@
+#!/usr/bin/python3
+"""Real GTK/X11 interaction checks. Requires native_desktop.py's disposable session.
+
+No test-only application IPC: use AT-SPI controls and X11 pointer/keyboard events.
+"""
+import argparse
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+from collections import Counter
+
+from process_metrics import stop
+
+
+def cmd(*args):
+    return subprocess.check_output([str(a) for a in args], text=True).strip()
+
+
+def xwindow_geometry(window):
+    values = {}
+    for line in cmd('xwininfo', '-id', window).splitlines():
+        label, separator, value = line.strip().partition(':')
+        if separator and label in ('Absolute upper-left X', 'Absolute upper-left Y', 'Width', 'Height'):
+            values[label] = int(value.strip())
+    return (values['Absolute upper-left X'], values['Absolute upper-left Y'],
+            values['Width'], values['Height'])
+
+
+def screen_bounds(node, frame):
+    import pyatspi
+    # GTK4's X11 bridge can return window-relative positions even when asked
+    # for DESKTOP_COORDS. Request that space explicitly and map it via X11.
+    rect = node.queryComponent().getExtents(pyatspi.WINDOW_COORDS)
+    window = cmd('xdotool', 'search', '--onlyvisible', '--name', frame).splitlines()[-1]
+    x, y, _, _ = xwindow_geometry(window)
+    rect.x += x
+    rect.y += y
+    return rect
+
+
+def walk(node):
+    yield node
+    try:
+        for child in node:
+            yield from walk(child)
+    except Exception:
+        pass
+
+
+def ink_center(node, frame, screenshot, origin=(0, 0)):
+    """Measure rendered ink, including glyph overhang outside the logical box."""
+    rect = screen_bounds(node, frame)
+    y = rect.y - 2
+    raw = subprocess.check_output([
+        'convert', str(screenshot),
+        '-crop', f'{rect.width}x{rect.height+4}+{rect.x-origin[0]}+{y-origin[1]}',
+        '+repage', '-depth', '8', 'rgb:-',
+    ])
+    pixels = list(zip(raw[::3], raw[1::3], raw[2::3]))
+    background = Counter(pixels).most_common(1)[0][0]
+    rows = [index // rect.width for index, pixel in enumerate(pixels)
+            if max(abs(a-b) for a, b in zip(pixel, background)) > 40]
+    assert rows, ('Missing control ink', node.name)
+    return y + (min(rows) + max(rows)) / 2
+
+
+def assert_button_ink_alignment(button, frame, screenshot, origin=(0, 0)):
+    """Compare visible icon/letter centers, including labels with descenders."""
+    centers = [ink_center(node, frame, screenshot, origin) for node in walk(button)
+               if node.getRoleName() in ('filler', 'label')]
+    assert len(centers) == 2 and abs(centers[0] - centers[1]) <= .5, (button.name, centers)
+
+
+def find(name=None, role=None, frame=None):
+    import pyatspi
+    hidden_matches = []
+    for app in pyatspi.Registry.getDesktop(0):
+        if app.name != 'captures-linux-native':
+            continue
+        roots = [app] if frame is None else [n for n in app if n.name == frame]
+        for root in roots:
+            for node in walk(root):
+                try:
+                    if ((name is None or node.name == name) and
+                            (role is None or node.getRoleName() == role)):
+                        if node.getState().contains(pyatspi.STATE_SHOWING):
+                            return node
+                        hidden_matches.append(node)
+                except Exception:
+                    pass
+    # GTK4/AT-SPI can temporarily clear SHOWING for an otherwise mapped X11
+    # subtree after a compositor screenshot. A unique match is still safe to
+    # operate; hidden popover controls with duplicate names remain ambiguous.
+    if len(hidden_matches) == 1:
+        return hidden_matches[0]
+    controls = [node for node in hidden_matches
+                if node.getRoleName() not in ('label', 'filler', 'panel')]
+    if len(controls) == 1:
+        return controls[0]
+    actionable = []
+    for node in hidden_matches:
+        try:
+            if node.queryAction().nActions:
+                actionable.append(node)
+        except Exception:
+            pass
+    return actionable[0] if len(actionable) == 1 else None
+
+
+def wait(predicate, timeout=20):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(.05)
+    raise AssertionError('Timed out waiting for ' + repr(predicate))
+
+
+def click(name, frame=None, pointer=False):
+    node = wait(lambda: find(name, role='push button', frame=frame) or find(name, frame=frame))
+    if pointer:
+        # Opening a modal dialog from AT-SPI's synchronous DoAction keeps its
+        # DBus handler occupied until that dialog closes. Use real X11 input.
+        bounds = screen_bounds(node, frame or 'Captures — Linux native')
+        assert bounds.width > 0 and bounds.height > 0, (name, bounds)
+        cmd('xdotool','mousemove',bounds.x+bounds.width//2,bounds.y+bounds.height//2,'click',1)
+    else:
+        assert node.queryAction().doAction(0), name
+    # GTK4's AT-SPI button action queues ::clicked behind its 250 ms activate
+    # timeout; the DBus reply is not completion of the application handler.
+    time.sleep(.15 if pointer else .35)
+
+
+def choose(current, index, frame=None):
+    node = wait(lambda: find(current, 'combo box', frame))
+    title=frame or 'Captures — Linux native'
+    window=cmd('xdotool','search','--onlyvisible','--name',title).splitlines()[-1]
+    cmd('xdotool','windowactivate','--sync',window)
+    bounds = screen_bounds(node, title)
+    assert bounds.width > 0 and bounds.height > 0, (current, bounds)
+    cmd('xdotool', 'mousemove', bounds.x + bounds.width // 2,
+        bounds.y + bounds.height // 2, 'click', 1)
+    time.sleep(.1)
+    cmd('xdotool', 'key', 'Home', *(['Down'] * index), 'Return')
+    time.sleep(.15)
+
+
+def drag(x, y, dx, dy):
+    cmd('xdotool', 'mousemove', x, y, 'mousedown', 1)
+    for i in range(1, 13):
+        cmd('xdotool', 'mousemove', x+dx*i//12, y+dy*i//12)
+        time.sleep(.015)
+    cmd('xdotool', 'mouseup', 1)
+    time.sleep(.2)
+
+
+def capture(artifacts, name, title=None):
+    def visible_window():
+        result=subprocess.run(['xdotool','search','--onlyvisible','--name',title],capture_output=True,text=True)
+        return result.stdout.strip().splitlines()[-1] if result.returncode==0 else None
+    time.sleep(.3)
+    output = artifacts / f'after-{name}.png'
+    if title is None:
+        cmd('import', '-window', 'root', output)
+        return
+    window = wait(visible_window)
+    x, y, width, height = xwindow_geometry(window)
+    screen_width, screen_height = map(int, cmd('xdotool', 'getdisplaygeometry').split())
+    if not (0 <= x and 0 <= y and width > 0 and height > 0
+            and x + width <= screen_width and y + height <= screen_height):
+        raise AssertionError(f'Client {(x, y, width, height)} exceeds desktop {(screen_width, screen_height)}')
+    geometry = f'{width}x{height}{x:+d}{y:+d}'
+    # Capturing the root at xwininfo's client coordinates avoids xdotool's
+    # doubled reparenting offset; bounds above require the complete client.
+    cmd('import', '-window', 'root', '-crop', geometry, '+repage', output)
+    actual = cmd('identify', '-format', '%wx%h', output)
+    assert actual == f'{width}x{height}', f'Clipped client capture: {actual}, expected {width}x{height}'
+
+
+def run(binary, fixture, args, artifacts):
+    import pyatspi
+    with tempfile.TemporaryDirectory(prefix='captures-native-check-') as temporary:
+        profile = Path(temporary)
+        output = profile / 'captures'
+        env = dict(os.environ, CAPTURES_NATIVE_DATA=str(profile))
+        with (profile/'log').open('w+') as log:
+            process = subprocess.Popen([str(binary), *args],env=env,stdout=log,stderr=log,start_new_session=True)
+            try:
+                wait(lambda: find(role='frame'))
+                time.sleep(.5)
+                yield process, output
+            except Exception:
+                log.seek(0)
+                print(log.read(),flush=True)
+                print(cmd('xdotool','search','--onlyvisible','--name','Captures'),flush=True)
+                cmd('import','-window','root','/tmp/captures-native-failure.png')
+                for app in pyatspi.Registry.getDesktop(0):
+                    if app.name=='captures-linux-native':
+                        for node in walk(app):
+                            if node.name: print(node.getRoleName(),node.name,flush=True)
+                raise
+            finally:
+                stop(process)
+                time.sleep(.3)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--lab', type=Path, required=True)
+    parser.add_argument('--artifacts', type=Path, required=True)
+    args = parser.parse_args()
+
+    root = Path(__file__).resolve().parent
+    binary = (root / 'target/release/captures-linux-native').resolve()
+    checks = [
+        (root / 'native_parity_check.py', '--lab', args.lab, '--artifacts', args.artifacts),
+        (root / 'editor_check.py', '--lab', args.lab, '--artifacts', args.artifacts),
+        (root / 'feedback_check.py', '--lab', args.lab, '--artifacts', args.artifacts),
+        (root / 'preview_check.py', '--lab', args.lab, '--artifacts', args.artifacts,
+         '--binary', binary),
+        (root / 'history_check.py', '--lab', args.lab, '--artifacts', args.artifacts),
+        (root / 'src/native/recording/check.py', '--lab', args.lab,
+         '--artifacts', args.artifacts),
+    ]
+    for check in checks:
+        subprocess.run([sys.executable, *(str(value) for value in check)], check=True)
+
+
+if __name__ == '__main__':
+    main()

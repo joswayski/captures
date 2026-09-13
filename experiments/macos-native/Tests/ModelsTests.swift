@@ -33,6 +33,7 @@ enum ModelsTests {
         let decoded = try JSONDecoder().decode(NativeSettings.self, from: JSONEncoder().encode(defaults))
         precondition(decoded == defaults)
         precondition(Set(defaults.shortcuts.map(\.id)).count == defaults.shortcuts.count)
+        precondition(defaults.shortcutsAreUnique)
         precondition(Shortcut.route(for: "record-gif") == CaptureRoute(kind: "gif", target: "region"))
         precondition(Shortcut.route(for: "unknown") == nil)
         var customized = defaults
@@ -43,6 +44,9 @@ enum ModelsTests {
         precondition(customized.shortcuts.last(where: { $0.id == "record-gif" })?.keyCode == 22)
         customized.migrateShortcuts()
         precondition(customized.shortcuts.filter { $0.id == "record-gif" }.count == 1)
+        customized.shortcuts[1].keyCode = customized.shortcuts[0].keyCode
+        customized.shortcuts[1].modifiers = customized.shortcuts[0].modifiers
+        precondition(!customized.shortcutsAreUnique, "Duplicate shortcut chords were accepted")
         print("ModelsTests: storage, settings, shortcut routing and migration passed")
     }
 }

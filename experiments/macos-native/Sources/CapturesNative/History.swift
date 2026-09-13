@@ -40,8 +40,18 @@ struct HistoryView: View {
                         }.buttonStyle(.plain)
                     }
                     Spacer()
-                    Button("Clear history") { confirmClear = true }.buttonStyle(CaptureButtonStyle(destructive: true))
-                        .disabled(store.artifacts.isEmpty)
+                    if confirmClear {
+                        Button("Cancel") { confirmClear = false }.buttonStyle(CaptureButtonStyle())
+                    }
+                    Button(confirmClear ? "Clear forever" : "Clear history") {
+                        if confirmClear { store.clearHistory(); confirmClear = false }
+                        else {
+                            confirmClear = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { confirmClear = false }
+                        }
+                    }
+                    .buttonStyle(CaptureButtonStyle(destructive: true))
+                    .disabled(store.artifacts.isEmpty)
                 }
                 Divider()
                 if filtered.isEmpty {
@@ -58,9 +68,6 @@ struct HistoryView: View {
             }.padding(NativeTheme.metric("s-9"))
         }
         .foregroundColor(NativeTheme.text(scheme)).background(NativeTheme.canvas(scheme))
-        .confirmationDialog("Clear history? Saved files will not be deleted.", isPresented: $confirmClear, titleVisibility: .visible) {
-            Button("Clear history", role: .destructive) { store.clearHistory() }
-        }
     }
 }
 
@@ -94,17 +101,31 @@ private struct HistoryCard: View {
                     }
                 } else {
                     HStack(spacing: NativeTheme.metric("s-2")) {
-                        Button("Edit") { store.open(artifact) }.buttonStyle(CaptureButtonStyle(primary: true))
-                        Button { NSWorkspace.shared.activateFileViewerSelecting([artifact.url]) } label: { Image(systemName: "folder") }
-                            .buttonStyle(CaptureButtonStyle()).help("Show in Finder")
+                        Button { store.open(artifact) } label: {
+                            Label("Edit", systemImage: "pencil").frame(maxWidth: .infinity)
+                        }
+                            .buttonStyle(CaptureButtonStyle(primary: true))
+                            .frame(maxWidth: .infinity)
                         Button {
                             if !store.previews.contains(where: { $0.path == artifact.path }) { store.previews.insert(artifact, at: 0) }
                             PreviewController.shared.refresh()
-                        } label: { Image(systemName: "rectangle.stack") }.buttonStyle(CaptureButtonStyle()).help("Restore mini preview")
-                        Spacer(minLength: 0)
-                        Button { removing = true } label: { Image(systemName: "trash") }
-                            .buttonStyle(CaptureButtonStyle(destructive: true)).help("Remove from history")
+                        } label: {
+                            Label("Restore", systemImage: "rectangle.stack").frame(maxWidth: .infinity)
+                        }
+                            .buttonStyle(CaptureButtonStyle())
+                            .frame(maxWidth: .infinity)
+                        Button { removing = true } label: {
+                            Label("Delete", systemImage: "trash").frame(maxWidth: .infinity)
+                        }
+                            .buttonStyle(CaptureButtonStyle(destructive: true))
+                            .frame(maxWidth: .infinity)
                     }
+                    Button { NSWorkspace.shared.activateFileViewerSelecting([artifact.url]) } label: {
+                        Label("Show in Finder", systemImage: "folder")
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: NativeTheme.metric("text-sm"), weight: .medium))
+                    .foregroundColor(NativeTheme.muted(scheme))
                 }
             }.padding(NativeTheme.metric("s-6"))
         }
@@ -163,22 +184,18 @@ struct RecoveryView: View {
                         Text(drafts[index]["name"] ?? "Recording draft").lineLimit(1)
                         Spacer()
                         Button("Recover") { recover(drafts[index]["id"]!) }.buttonStyle(CaptureButtonStyle(primary: true)).disabled(busy)
-                        Button("Discard…") { discardID = drafts[index]["id"] }.buttonStyle(CaptureButtonStyle(destructive: true)).disabled(busy)
+                        if discardID == drafts[index]["id"] {
+                            Button("Cancel") { discardID = nil }.buttonStyle(CaptureButtonStyle()).disabled(busy)
+                            Button("Discard forever") { discard(drafts[index]["id"]!) }
+                                .buttonStyle(CaptureButtonStyle(destructive: true)).disabled(busy)
+                        } else {
+                            Button("Discard…") { discardID = drafts[index]["id"] }
+                                .buttonStyle(CaptureButtonStyle(destructive: true)).disabled(busy)
+                        }
                     }
                 }
             }
         }.onAppear(perform: reload)
-            .confirmationDialog("Permanently discard this recording draft?", isPresented: Binding(get: { discardID != nil }, set: { if !$0 { discardID = nil } }), titleVisibility: .visible) {
-                Button("Discard", role: .destructive) {
-                    guard let id = discardID else { return }
-                    busy = true
-                    Backend.shared.call("recover_discard", ["id": id]) { result in
-                        busy = false
-                        if case .failure(let error) = result { store.report(error) }
-                        reload()
-                    }
-                }
-            }
     }
     private func reload() {
         Backend.shared.call("recover_list") { result in
@@ -197,6 +214,15 @@ struct RecoveryView: View {
             busy = false
             do { let artifact = try Artifact(response: result.get()); store.addArtifact(artifact); store.open(artifact) }
             catch { store.report(error) }
+            reload()
+        }
+    }
+    private func discard(_ id: String) {
+        busy = true
+        Backend.shared.call("recover_discard", ["id": id]) { result in
+            busy = false
+            discardID = nil
+            if case .failure(let error) = result { store.report(error) }
             reload()
         }
     }

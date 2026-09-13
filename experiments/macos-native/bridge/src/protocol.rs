@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use captures_capture::LogicalRect;
+use captures_feedback::{FeedbackContext, FeedbackDraft};
 use captures_media::{CropRect, ExportFormat, QualityPreset};
 use captures_recording::RecordingOptions;
 use serde::Deserialize;
@@ -23,6 +24,31 @@ pub struct DescribeRequest {
 pub struct MicrophonePermissionRequest {
     #[serde(default)]
     pub request: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FeedbackSubmitRequest {
+    pub draft: FeedbackDraft,
+    pub context: FeedbackContext,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CrashStartRequest {
+    pub profile_root: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CrashPreviewRequest {
+    pub reports: Vec<CrashReportCandidate>,
+    pub executable_name: String,
+    pub bundle_id: Option<String>,
+    pub executable_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CrashReportCandidate {
+    pub path: PathBuf,
+    pub modified_ms: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -89,6 +115,27 @@ pub struct MediaExportRequest {
     pub fps: Option<u16>,
     #[serde(default)]
     pub quality: QualityPreset,
+    pub max_bytes: Option<u64>,
+    #[serde(default = "one")]
+    pub system_volume: f32,
+    #[serde(default = "one")]
+    pub microphone_volume: f32,
+    #[serde(default)]
+    pub mono: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MediaEstimateRequest {
+    pub path: PathBuf,
+    pub format: ExportFormat,
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub crop: Option<CropRect>,
+    pub width: Option<u32>,
+    pub fps: Option<u16>,
+    #[serde(default)]
+    pub quality: QualityPreset,
+    pub max_bytes: Option<u64>,
     #[serde(default = "one")]
     pub system_volume: f32,
     #[serde(default = "one")]

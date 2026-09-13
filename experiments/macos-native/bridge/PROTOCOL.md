@@ -5,8 +5,9 @@ The bridge is a standalone Rust `staticlib` with no Tauri dependency. Include
 `captures_native_request`, copy the returned UTF-8 JSON, and release it exactly
 once with `captures_native_free`. Calls are synchronous. Recording lifecycle,
 capture discovery, and screenshots execute on one bridge-owned background
-thread. Stateless `image_encode`, `media_probe`, `media_export`, and
-`recover_list` work, plus `microphone_permission`, executes on the calling thread
+thread. Stateless `image_encode`, `media_probe`, `media_estimate`, `media_export`,
+`recover_list`, feedback, crash diagnostics, and `microphone_permission` work
+execute on the calling thread
 so long media jobs or permission prompts cannot block recording safety ticks.
 Recovery assembly/discard executes on the caller
 under a bridge-wide reservation after the recording worker confirms it is idle.
@@ -21,6 +22,10 @@ Every request has an `op`. Every response is exactly one of:
 
 Panics are caught at the operation and C ABI boundaries. The bridge does not log
 request JSON, paths, pixels, audio, or media-tool output.
+
+`feedback_submit` is the only network operation. It runs on a separate Swift
+worker queue, never on the UI, recording lifecycle, permission, or media queue.
+It is invoked only by an explicit Send feedback action and never at startup.
 
 ## Shared JSON types
 
@@ -75,6 +80,31 @@ Artifact values are `{"path":string,"width":number,"height":number,"kind":
 - `{"op":"session_status"}` returns `{"available":bool}` from the recording
   worker. It is the cheap pre-overlay check and does not enumerate targets or
   request permission.
+- `{"op":"feedback_submit","draft":{"category":"bug|idea|other|crash","message":"...",
+  "contact"?:string},"context":{"app_version":"...","os":"macos",
+  "os_version":"...","arch":"..."}}` returns `{}`. The shared feedback
+  client validates and trims fields, allows only HTTPS (or loopback HTTP for
+  tests), does not follow redirects, times out, bounds responses, and applies a
+  one-minute cooldown only after success. No captures, files, or logs are sent.
+- `{"op":"crash_start","profile_root":"..."}` starts the profile-scoped local
+  crash session after single-instance ownership is established. It installs the
+  shared redacting Rust panic hook but performs no network request or OS report scan.
+- `{"op":"crash_preview","reports":[{"path":"...","modified_ms":0}],
+  "executable_name":"Captures Native","bundle_id"?:string,"executable_path"?:string}`
+  returns retained prior-session evidence as `unclean_exit`,
+  `has_exception_evidence`, optional `rust_panic`, optional `os_report`, and
+  `previous_session_started_ms`. Swift supplies only regular `.ips`/`.crash`
+  candidates from its own DiagnosticReports directory whose filename matches the
+  exact native executable prefix. The shared collector bounds, parses, checks exact
+  executable/bundle/path identity, and locally redacts any accepted summary.
+- `{"op":"crash_dismiss"}` removes retained prior-session evidence only.
+  `{"op":"crash_mark_clean"}` clears only the current session marker/evidence and
+  is called after recording-safe normal quit, restart, or OS termination approval.
+  If a later exit step is cancelled, `{"op":"crash_resume"}` restores that same
+  live-session marker without rotating prior evidence or reinstalling panic hooks.
+  Neither operation sends data. The consent UI sends only the displayed redacted
+  summary through an explicit `feedback_submit` with category `crash`; it never
+  attaches a capture, raw panic, or raw OS report.
 - `{"op":"screenshot","target":TARGET,"cursor":false,"output_dir":"..."}`
   returns an image artifact. `TARGET` is `display`, `region`, `window`, or the
   `frozen_region` target below. A generated `Capture-*.png` is created without
@@ -116,8 +146,11 @@ are mode `0700` and are never returned by `recover_list`.
   lifecycle worker or silently omits an unauthorized microphone.
 - `record_pause`, `record_resume`, `record_restart`, `record_status`,
   `record_stop`, and `record_discard` take only `op`.
+  `record_restart` discards the current take and prepares a fresh draft in
+  `selecting`; the frontend runs its visible cancellable countdown and calls
+  `record_resume` at zero. Cancelling that countdown calls `record_discard`.
 - `record_mute`: `{"op":"record_mute","muted":true}`.
-- Status is `{"state":"idle|recording|paused|finalizing|failed",
+- Status is `{"state":"idle|selecting|recording|paused|finalizing|failed",
   "elapsed_ms":u64,"microphone_level":number,"microphone_muted":bool,
   "warning"?:string}`. With no session, `record_status` succeeds with idle,
   zero elapsed/level, and `microphone_muted:false`. Elapsed time excludes pauses.
@@ -156,16 +189,26 @@ are not silently presented as engine features.
   unattainable `max_bytes` returns an error rather than resizing or
   misrepresenting success.
 - `{"op":"media_probe","path":"..."}` returns
-  `{"duration_ms":u64,"width":u32,"height":u32}`.
+  `{"duration_ms":u64,"width":u32,"height":u32,"size_bytes":u64,"has_system_audio":bool,
+  "has_microphone_audio":bool}`. The first audio stream is exposed as system
+  audio and a second stream as microphone audio, matching Captures recordings.
+- `{"op":"media_estimate","path":"...","format":"mp4|gif|webm",
+  "start_ms":u64,"end_ms":u64,"crop"?:RECT,"width"?:u32,"fps"?:1..30,
+  "quality"?:PRESET,"max_bytes"?:u64,"system_volume"?:number,
+  "microphone_volume"?:number,"mono"?:bool}` returns
+  `{"size_bytes":u64,"exact":bool}`. It uses the same edit/export contract as
+  save, encoding the full range up to six seconds or representative samples
+  for longer media. WebM estimates fail with the shared backend limitation.
 - `{"op":"media_export","path":"...","output":"...","format":"mp4|gif|webm",
   "start_ms":u64,"end_ms":u64,"crop"?:{"x":u32,"y":u32,"width":u32,"height":u32},
   "width"?:u32,"fps"?:1..30,"quality"?:"preserve|highest|high|standard|small|tiny",
-  "system_volume"?:number,"microphone_volume"?:number,"mono"?:bool}` returns a
+  "max_bytes"?:u64,"system_volume"?:number,"microphone_volume"?:number,"mono"?:bool}` returns a
   video/GIF artifact. Times are milliseconds with `start_ms < end_ms` inside the
   source. Crop is in source pixels. Width is rounded down to an even value and
   height is derived from the cropped aspect ratio and made even. Volumes are
   finite multipliers from 0 through 2 and default to 1. `fps` is accepted only
-  for GIF and defaults to the media toolchain choice.
+  for GIF and defaults to the media toolchain choice. `max_bytes`, when present,
+  must be greater than zero and applies the media toolchain's hard size budget.
 
 `media_export.output` may be a private temporary path for before/after
 comparison. The bridge treats it exactly like any other caller-owned output,

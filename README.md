@@ -110,6 +110,12 @@ not implemented yet.
 | Linux X11 | Supported; hide recording controls manually when needed |
 | Linux Wayland | Experimental; no window targeting, cursor capture, or click highlights. Mini previews cannot poll the pointer, so the stack stays interactive and may cover apps underneath |
 
+These statuses describe the downloadable Tauri Preview. Separate native frontends
+are in development using GTK4 on Linux, Win32/DirectComposition on Windows, and
+Swift/AppKit on macOS. They retain Captures' custom design and shared Rust engines
+as their target; they are not yet replacement releases. See the
+[native migration and verification notes](docs/native-platforms.md).
+
 ## Shortcuts
 
 Defaults follow each platform’s built-in screenshot keys. Captures-only actions keep extra shortcuts.
@@ -177,10 +183,11 @@ editing with GTK instead of a webview. It also has native history, preferences,
 shortcuts and recording-draft recovery. Before/after comparisons, benchmarks, and
 remaining parity gaps are documented separately. It is X11-only, stores data separately,
 and is not part of Preview or a replacement for the cross-platform app above.
-An experimental [Windows-native port](docs/windows-native-implementation.md) reuses
-that GTK/Cairo frontend with Windows desktop integration. It also stores data
-separately and is not shipped in Preview. Windows hardware testing, visual parity,
-and performance measurements are pending; Linux benchmark numbers do not apply.
+An earlier [Windows GTK/Cairo prototype](docs/windows-native-implementation.md)
+remains a historical baseline. Current Windows-native work uses
+Win32/DirectComposition; see the [native migration notes](docs/native-platforms.md)
+for verified runtime captures and remaining gaps. Neither experiment ships in
+Preview, and Linux benchmark numbers do not establish Windows performance.
 
 An isolated [macOS-native experiment](docs/macos-native-implementation.md) uses
 SwiftUI/AppKit and the existing Rust capture/media engines without a webview.
