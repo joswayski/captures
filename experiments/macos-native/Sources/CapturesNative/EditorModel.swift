@@ -958,11 +958,16 @@ final class EditorModel: ObservableObject {
         }
         switch layer.content {
         case let .image(data, _):
+            // NSImage.draw applies its own compositing fraction and does not
+            // preserve CGContext alpha on the native CI AppKit renderer.
+            // Keep vectors/text on context alpha, but make bitmap opacity
+            // explicit here so preview, export, and merge rasterization agree.
+            context.setAlpha(1)
             NSImage(data: data)?.draw(
                 in: frame,
                 from: .zero,
                 operation: (layer.blendMode ?? .normal).nsCompositingOperation,
-                fraction: 1,
+                fraction: layer.opacity,
                 respectFlipped: true,
                 hints: [.interpolation: NSImageInterpolation.high.rawValue]
             )

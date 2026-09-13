@@ -685,7 +685,7 @@ final class EditorModelTests: XCTestCase {
         try assertPixel(image, x: 0, y: 0, approximately: [32, 32, 145, 255], tolerance: 3)
     }
 
-    func testMergeDownRasterizesStackOrderAsOneUndoableImage() throws {
+    func testImageOpacityRendersAndMergeDownRasterizesStackOrderAsOneUndoableImage() throws {
         let bottomData = try solidPNG(
             NSColor(srgbRed: 200.0 / 255, green: 40.0 / 255, blue: 20.0 / 255, alpha: 1),
             rgba: [200, 40, 20, 255], width: 2, height: 2
@@ -703,6 +703,8 @@ final class EditorModelTests: XCTestCase {
         let model = EditorModel(document: original, sourceURL: URL(fileURLWithPath: "/tmp/merge.png"))
         model.selectedLayerID = top.id
 
+        let preview = try XCTUnwrap(model.renderedImage().cgImage(forProposedRect: nil, context: nil, hints: nil))
+        try assertPixel(preview, x: 1, y: 1, approximately: [110, 60, 120, 255], tolerance: 3)
         XCTAssertTrue(model.canMergeSelectedDown)
         try model.mergeSelectedDown()
 

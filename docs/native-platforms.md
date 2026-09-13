@@ -84,13 +84,13 @@ These are implemented experiments, not drop-in replacements. In particular:
   not live during drag. Source visibility and geometry-based Trim edges preserve
   negative overhang and reject nonfinite, oversized or over-100-million-pixel frames
   before mutation. Independent tests verify shifted source pixels and undo safety.
-  Its 64 portable tests and host strict Clippy pass. The eraser run passed 62 MSVC
-  tests and the light HWND Erase marker, but stopped starting a later preview fixture.
-  Fixtures now wait for process exit before launching the next profile instance.
-  Inspection also found flat transparency; a presentation-only checkerboard fixes
-  that without changing exported pixels. Native rerender and Trim input-smoke
-  verification are pending. Merge/flatten and richer layer
-  controls remain incomplete. Imported image layers use the shared raster renderer
+  Its 64 portable tests and host strict Clippy pass. The [native run](https://github.com/joswayski/captures/actions/runs/34727274080)
+  passed 67 MSVC tests and 46 hardware captures, all independently checked within
+  desktop/monitor bounds. Both inspected Erase states show checkerboard cutouts;
+  both Trim states show 421×261 with the source hidden and no clipping. The checker
+  is presentation-only; exported pixels are unchanged. Fixtures now wait for actual
+  process exit before the next launch. Merge/flatten, richer layer controls and
+  persistent editable screenshot drafts remain incomplete. Imported image layers use the shared raster renderer
   with native multi-select file picking, asynchronous decode, transformed hit
   testing, and batch undo/redo. The model supports locking, independent opacity,
   and six blend modes. Native image controls now expose dimensions, opacity and
@@ -153,7 +153,10 @@ These are implemented experiments, not drop-in replacements. In particular:
   inspector/footer, and no inherited draft. Physical wheel/pinch/drag input remains open.
   The next layer slice adds six blend modes, Merge down/visible and Flatten, preserving
   shipping hidden-layer/background rules and one-step undo. Its new asymmetric pixel
-  tests and combine-control reference await native CI; richer text styling remains open.
+  test caught bitmap opacity being overridden by `NSImage.draw(fraction: 1)`.
+  Bitmap drawing now passes the layer opacity explicitly; ordinary rendering and
+  merged output share the independent half-opacity expectation. The corrected
+  native tests and combine-control reference are pending; richer text styling remains open.
 
 ## Feature parity acceptance
 
@@ -237,8 +240,7 @@ playhead between the two trim handles for independent visual verification.
 The [Windows follow-up](https://github.com/joswayski/captures/actions/runs/34720104027)
 verified those corrections in both appearances and a separate one-third playhead.
 Neither run verifies continuous playback, audio, or WARP rendering. Windows
-canvas controls now have native evidence; the newer eraser increment still awaits
-its native check. The new Preferences
+canvas, eraser and Trim controls now have native evidence. The new Preferences
 pages do not yet cover every shipping setting and consumer. This pass does not establish full feature parity or
 change the measured revision below.
 
