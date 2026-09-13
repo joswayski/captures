@@ -121,6 +121,129 @@ enum EditorBlendMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum EditorTextFontFamily: String, Codable, CaseIterable, Identifiable {
+    case sans, serif, mono, rounded
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .sans: return "Sans serif"
+        case .serif: return "Serif"
+        case .mono: return "Monospace"
+        case .rounded: return "Rounded"
+        }
+    }
+}
+
+enum EditorTextAlignment: String, Codable, CaseIterable, Identifiable {
+    case left, center, right
+
+    var id: String { rawValue }
+}
+
+enum EditorTextPreset: String, Codable, CaseIterable, Identifiable {
+    case standard, rounded, outlined, mono, box
+    case monoBox = "mono-box"
+    case roundedBox = "rounded-box"
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .monoBox: return "Mono Box"
+        case .roundedBox: return "Rounded Box"
+        default: return rawValue.capitalized
+        }
+    }
+
+    var prefersCenteredNewLabel: Bool {
+        self == .box || self == .monoBox || self == .roundedBox
+    }
+}
+
+struct EditorTextStyle: Codable, Equatable {
+    static let boxBackground = EditorColor(
+        red: 17.0 / 255, green: 19.0 / 255, blue: 24.0 / 255
+    )
+
+    var fontSize: CGFloat
+    var fontFamily: EditorTextFontFamily
+    var bold: Bool
+    var italic: Bool
+    var alignment: EditorTextAlignment
+    var background: EditorColor?
+    var outlined: Bool
+    var roundedBackground: Bool
+
+    static let shippingDefault = EditorTextStyle(
+        fontSize: 48, fontFamily: .rounded, bold: false, italic: false,
+        alignment: .center, background: boxBackground,
+        outlined: false, roundedBackground: true
+    )
+
+    static func defaultFontSize(width: Int, height: Int) -> CGFloat {
+        min(72, max(24, (CGFloat(min(width, height)) * 0.055).rounded()))
+    }
+
+    static func legacy(frameHeight: CGFloat) -> EditorTextStyle {
+        EditorTextStyle(
+            fontSize: max(12, frameHeight * 0.62), fontFamily: .sans,
+            bold: true, italic: false, alignment: .left,
+            background: nil, outlined: false, roundedBackground: false
+        )
+    }
+
+    var preset: EditorTextPreset {
+        if outlined, background == nil { return .outlined }
+        if background != nil {
+            if fontFamily == .rounded, roundedBackground { return .roundedBox }
+            if fontFamily == .mono { return .monoBox }
+            return .box
+        }
+        if fontFamily == .rounded { return .rounded }
+        if fontFamily == .mono { return .mono }
+        return .standard
+    }
+
+    func applying(_ preset: EditorTextPreset) -> EditorTextStyle {
+        var style = self
+        let retainedBackground = background ?? Self.boxBackground
+        switch preset {
+        case .standard:
+            style.fontFamily = .sans; style.background = nil
+            style.outlined = false; style.roundedBackground = false
+        case .rounded:
+            style.fontFamily = .rounded; style.background = nil
+            style.outlined = false; style.roundedBackground = false
+        case .outlined:
+            style.fontFamily = .sans; style.background = nil
+            style.outlined = true; style.roundedBackground = false
+        case .mono:
+            style.fontFamily = .mono; style.background = nil
+            style.outlined = false; style.roundedBackground = false
+        case .box:
+            style.fontFamily = .sans; style.background = retainedBackground
+            style.outlined = false; style.roundedBackground = false
+        case .monoBox:
+            style.fontFamily = .mono; style.background = retainedBackground
+            style.outlined = false; style.roundedBackground = false
+        case .roundedBox:
+            style.fontFamily = .rounded; style.background = retainedBackground
+            style.outlined = false; style.roundedBackground = true
+        }
+        return style
+    }
+
+    func applyingToNewLabel(_ preset: EditorTextPreset) -> EditorTextStyle {
+        var style = applying(preset)
+        style.alignment = preset.prefersCenteredNewLabel ? .center : .left
+        return style
+    }
+
+    static func minimumTextWidth(fontSize: CGFloat) -> CGFloat {
+        max(8, (fontSize * 0.5).rounded())
+    }
+}
+
 enum EditorLayerContent: Codable, Equatable {
     case image(Data, original: Data)
     case text(String)
@@ -182,13 +305,15 @@ struct EditorLayer: Identifiable, Codable, Equatable {
     var shadow: EditorShadow?
     /// Optional so drafts written before blend controls decode as Normal.
     var blendMode: EditorBlendMode?
+    /// Optional so existing native drafts retain their established text rendering.
+    var textStyle: EditorTextStyle?
 
     init(
         id: UUID = UUID(), name: String, content: EditorLayerContent, frame: EditorRect,
         rotation: CGFloat = 0, visible: Bool = true, locked: Bool = false,
         opacity: CGFloat = 1, color: EditorColor = .signal, fill: EditorColor? = nil,
         lineWidth: CGFloat = 6, shadow: EditorShadow? = nil,
-        blendMode: EditorBlendMode? = nil
+        blendMode: EditorBlendMode? = nil, textStyle: EditorTextStyle? = nil
     ) {
         self.id = id
         self.name = name
@@ -203,6 +328,7 @@ struct EditorLayer: Identifiable, Codable, Equatable {
         self.lineWidth = lineWidth
         self.shadow = shadow
         self.blendMode = blendMode
+        self.textStyle = textStyle
     }
 }
 
@@ -318,17 +444,41 @@ final class EditorModel: ObservableObject {
         changed()
     }
 
-    func addText(_ text: String, at point: CGPoint? = nil) {
-        let frame = EditorRect(x: point?.x ?? 48, y: point?.y ?? 48, width: 260, height: 52)
-        let layer = EditorLayer(name: "Text", content: .text(text), frame: frame, color: .white)
+    func addText(
+        _ text: String, at point: CGPoint? = nil,
+        color: EditorColor = .signal,
+        style: EditorTextStyle = .shippingDefault,
+        shadow: EditorShadow? = nil
+    ) {
+        let placement = point ?? CGPoint(x: 48, y: 48)
+        let frame = Self.textFrame(text: text, style: style, contentAnchor: placement)
+        let layer = EditorLayer(
+            name: "Text", content: .text(text), frame: frame,
+            color: color, shadow: shadow, textStyle: style
+        )
         mutate { $0.layers.append(layer) }
         selectedLayerID = layer.id
+    }
+
+    func updateSelectedText(_ text: String) {
+        guard let index = selectedLayerIndex, !document.layers[index].locked,
+              case .text = document.layers[index].content else { return }
+        mutate { document in
+            let layer = document.layers[index]
+            document.layers[index].content = .text(text)
+            guard let style = layer.textStyle else { return }
+            document.layers[index].frame = Self.textFrame(
+                text: text,
+                style: style,
+                preservingContentAnchorOf: layer
+            )
+        }
     }
 
     func addShape(
         _ shape: EditorShape, at point: CGPoint? = nil,
         color: EditorColor = .signal, lineWidth: CGFloat = 6,
-        fill: Bool = false, opacity: CGFloat = 1
+        fill: Bool = false, opacity: CGFloat = 1, shadow: EditorShadow? = nil
     ) {
         let size: CGSize = shape == .line || shape == .arrow ? CGSize(width: 220, height: 90) : CGSize(width: 180, height: 140)
         let layer = EditorLayer(
@@ -336,7 +486,7 @@ final class EditorModel: ObservableObject {
             frame: EditorRect(x: point?.x ?? 64, y: point?.y ?? 64, width: size.width, height: size.height),
             opacity: opacity, color: color,
             fill: fill && shape != .line && shape != .arrow ? color : nil,
-            lineWidth: lineWidth
+            lineWidth: lineWidth, shadow: shadow
         )
         mutate { $0.layers.append(layer) }
         selectedLayerID = layer.id
@@ -344,14 +494,14 @@ final class EditorModel: ObservableObject {
 
     func addStroke(
         _ points: [CGPoint], color: EditorColor = .signal,
-        lineWidth: CGFloat = 6, opacity: CGFloat = 1
+        lineWidth: CGFloat = 6, opacity: CGFloat = 1, shadow: EditorShadow? = nil
     ) {
         guard points.count > 1 else { return }
         let bounds = points.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }.insetBy(dx: -8, dy: -8)
         let local = points.map { EditorPoint(x: $0.x - bounds.minX, y: $0.y - bounds.minY) }
         let layer = EditorLayer(
             name: "Freehand", content: .freehand(local), frame: EditorRect(bounds),
-            opacity: opacity, color: color, lineWidth: lineWidth
+            opacity: opacity, color: color, lineWidth: lineWidth, shadow: shadow
         )
         mutate { $0.layers.append(layer) }
         selectedLayerID = layer.id
@@ -474,6 +624,111 @@ final class EditorModel: ObservableObject {
     func updateSelected(_ body: (inout EditorLayer) -> Void) {
         guard let index = selectedLayerIndex, !document.layers[index].locked else { return }
         mutate { body(&$0.layers[index]) }
+    }
+
+    func updateSelectedTextStyle(_ body: (inout EditorTextStyle) -> Void) {
+        guard let index = selectedLayerIndex, !document.layers[index].locked,
+              case let .text(text) = document.layers[index].content else { return }
+        mutate { document in
+            let layer = document.layers[index]
+            let previous = layer.textStyle ?? .legacy(frameHeight: layer.frame.height)
+            var next = previous
+            body(&next)
+            next.fontSize = min(512, max(8, next.fontSize))
+            let typographyChanged = next.fontSize != previous.fontSize
+                || next.fontFamily != previous.fontFamily
+                || next.bold != previous.bold
+                || next.italic != previous.italic
+            if typographyChanged {
+                document.layers[index].frame = Self.textFrame(
+                    text: text,
+                    style: next,
+                    preservingContentAnchorOf: layer,
+                    previousStyle: previous
+                )
+            } else {
+                // Shipping alignment changes keep the layout box in place;
+                // plates only extend that same box by their style padding.
+                let oldPadding = Self.textPadding(previous)
+                let nextPadding = Self.textPadding(next)
+                document.layers[index].frame = EditorRect(
+                    x: layer.frame.x + oldPadding.width - nextPadding.width,
+                    y: layer.frame.y + oldPadding.height - nextPadding.height,
+                    width: max(1, layer.frame.width - oldPadding.width * 2) + nextPadding.width * 2,
+                    height: max(1, layer.frame.height - oldPadding.height * 2) + nextPadding.height * 2
+                )
+            }
+            document.layers[index].textStyle = next
+        }
+    }
+
+    private static func textFrame(
+        text: String,
+        style: EditorTextStyle,
+        contentAnchor: CGPoint
+    ) -> EditorRect {
+        let size = textContentSize(text: text, style: style)
+        let padding = textPadding(style)
+        let x: CGFloat
+        switch style.alignment {
+        case .left: x = contentAnchor.x - padding.width
+        case .center: x = contentAnchor.x - size.width / 2 - padding.width
+        case .right: x = contentAnchor.x - size.width - padding.width
+        }
+        return EditorRect(
+            x: x, y: contentAnchor.y - padding.height,
+            width: size.width + padding.width * 2,
+            height: size.height + padding.height * 2
+        )
+    }
+
+    private static func textFrame(
+        text: String,
+        style: EditorTextStyle,
+        preservingContentAnchorOf layer: EditorLayer,
+        previousStyle: EditorTextStyle? = nil
+    ) -> EditorRect {
+        let oldStyle = previousStyle ?? style
+        let oldPadding = textPadding(oldStyle)
+        let oldContentWidth = max(1, layer.frame.width - oldPadding.width * 2)
+        let anchorX: CGFloat
+        switch oldStyle.alignment {
+        case .left: anchorX = layer.frame.x + oldPadding.width
+        case .center: anchorX = layer.frame.x + oldPadding.width + oldContentWidth / 2
+        case .right: anchorX = layer.frame.x + layer.frame.width - oldPadding.width
+        }
+        return textFrame(
+            text: text,
+            style: style,
+            contentAnchor: CGPoint(x: anchorX, y: layer.frame.y + oldPadding.height)
+        )
+    }
+
+    private static func textPadding(_ style: EditorTextStyle) -> CGSize {
+        style.background == nil ? .zero : CGSize(
+            width: style.fontSize * 0.36,
+            height: style.fontSize * 0.22
+        )
+    }
+
+    private static func textContentSize(text: String, style: EditorTextStyle) -> CGSize {
+        let lines = text.components(separatedBy: "\n")
+        let width: CGFloat
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            width = style.fontSize * 8
+        } else {
+            width = max(
+                EditorTextStyle.minimumTextWidth(fontSize: style.fontSize),
+                (lines.map {
+                    (($0.isEmpty ? " " : $0) as NSString)
+                        .size(withAttributes: [.font: style.nsFont]).width
+                }.max() ?? 0) + style.fontSize * 0.35
+            )
+        }
+        return CGSize(
+            width: width,
+            height: CGFloat(max(1, lines.count)) * style.fontSize * 1.25
+        )
     }
 
     func beginInteractiveEdit() {
@@ -972,8 +1227,18 @@ final class EditorModel: ObservableObject {
                 hints: [.interpolation: NSImageInterpolation.high.rawValue]
             )
         case let .text(text):
-            let font = NSFont.systemFont(ofSize: max(12, frame.height * 0.62), weight: .semibold)
-            (text as NSString).draw(in: frame, withAttributes: [.font: font, .foregroundColor: layer.color.nsColor])
+            if layer.textStyle == nil {
+                // Preserve drafts authored before rich text byte-for-byte:
+                // this is the original native renderer, not an approximation
+                // through the new paragraph/style path.
+                let font = NSFont.systemFont(ofSize: max(12, frame.height * 0.62), weight: .semibold)
+                (text as NSString).draw(
+                    in: frame,
+                    withAttributes: [.font: font, .foregroundColor: layer.color.nsColor]
+                )
+            } else {
+                draw(text, layer: layer, frame: frame, context: context)
+            }
         case let .shape(shape):
             draw(shape, layer: layer, frame: frame, context: context)
         case let .freehand(points):
@@ -989,6 +1254,60 @@ final class EditorModel: ObservableObject {
             context.strokePath()
         }
         context.restoreGState()
+    }
+
+    private func draw(_ text: String, layer: EditorLayer, frame: CGRect, context: CGContext) {
+        let style = layer.textStyle ?? .legacy(frameHeight: frame.height)
+        var contentFrame = frame
+        if let background = style.background {
+            let radius = style.roundedBackground
+                ? min(min(frame.width, frame.height) * 0.28, style.fontSize * 0.34)
+                : 0
+            let path = CGPath(
+                roundedRect: frame,
+                cornerWidth: radius,
+                cornerHeight: radius,
+                transform: nil
+            )
+            context.addPath(path)
+            context.setFillColor(background.nsColor.cgColor)
+            context.fillPath()
+            // Shipping shadows the plate once, not every glyph on top of it.
+            context.setShadow(offset: .zero, blur: 0, color: nil)
+            contentFrame = frame.insetBy(
+                dx: style.fontSize * 0.36,
+                dy: style.fontSize * 0.22
+            )
+        }
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = style.alignment.nsTextAlignment
+        paragraph.lineBreakMode = .byWordWrapping
+        paragraph.minimumLineHeight = style.fontSize * 1.25
+        paragraph.maximumLineHeight = style.fontSize * 1.25
+        let font = style.nsFont
+        var attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .paragraphStyle: paragraph,
+            .foregroundColor: layer.color.nsColor,
+        ]
+        if style.outlined {
+            attributes[.strokeColor] = layer.color.nsColor
+            attributes[.strokeWidth] = 8
+            attributes[.foregroundColor] = NSColor.clear
+        }
+        let attributed = NSAttributedString(string: text, attributes: attributes)
+        let measured = attributed.boundingRect(
+            with: CGSize(width: contentFrame.width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        )
+        let drawFrame = CGRect(
+            x: contentFrame.minX,
+            y: contentFrame.midY - min(contentFrame.height, measured.height) / 2,
+            width: contentFrame.width,
+            height: max(contentFrame.height, measured.height)
+        )
+        attributed.draw(with: drawFrame, options: [.usesLineFragmentOrigin, .usesFontLeading])
     }
 
     private func draw(_ shape: EditorShape, layer: EditorLayer, frame: CGRect, context: CGContext) {
@@ -1026,6 +1345,42 @@ final class EditorModel: ObservableObject {
         context.setLineCap(.round)
         context.setLineJoin(.round)
         context.strokePath()
+    }
+}
+
+private extension EditorTextAlignment {
+    var nsTextAlignment: NSTextAlignment {
+        switch self {
+        case .left: return .left
+        case .center: return .center
+        case .right: return .right
+        }
+    }
+}
+
+private extension EditorTextStyle {
+    var nsFont: NSFont {
+        let weight: NSFont.Weight = bold ? .bold : .regular
+        let base: NSFont
+        switch fontFamily {
+        case .sans:
+            base = .systemFont(ofSize: fontSize, weight: weight)
+        case .serif:
+            base = NSFont(name: bold ? "Georgia-Bold" : "Georgia", size: fontSize)
+                ?? .systemFont(ofSize: fontSize, weight: weight)
+        case .mono:
+            base = .monospacedSystemFont(ofSize: fontSize, weight: weight)
+        case .rounded:
+            let system = NSFont.systemFont(ofSize: fontSize, weight: weight)
+            if let descriptor = system.fontDescriptor.withDesign(.rounded) {
+                base = NSFont(descriptor: descriptor, size: fontSize) ?? system
+            } else {
+                base = system
+            }
+        }
+        return italic
+            ? NSFontManager.shared.convert(base, toHaveTrait: .italicFontMask)
+            : base
     }
 }
 

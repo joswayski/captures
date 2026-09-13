@@ -97,9 +97,12 @@ These are implemented experiments, not drop-in replacements. In particular:
   fmt and host strict Clippy pass. The [native merge run](https://github.com/joswayski/captures/actions/runs/34728600522)
   passed 71 library plus two worker MSVC tests and 58 hardware captures, all within
   desktop/monitor bounds. Inspected input states show the consumed source row gone,
-  merged opacity at 90%, preserved shapes, and one locked Flattened source. A narrow
-  Delete button still wraps and needs a visual correction. Richer layer controls and persistent editable screenshot drafts
-  remain incomplete. Imported image layers use the shared raster renderer
+  merged opacity at 90%, preserved shapes, and one locked Flattened source. The narrow
+  wrapped Delete label is replaced by a centered signal-colored trash icon, retaining
+  the existing button/hit geometry; native visual verification is pending. Persistent
+  editable screenshot drafts remain incomplete: the proposed increment is held for
+  transactional snapshot publication and preservation of edits made during export.
+  Imported image layers use the shared raster renderer
   with native multi-select file picking, asynchronous decode, transformed hit
   testing, and batch undo/redo. The model supports locking, independent opacity,
   and six blend modes. Native image controls now expose dimensions, opacity and
@@ -176,9 +179,16 @@ These are implemented experiments, not drop-in replacements. In particular:
   estimates when probing finishes before view appearance, coalesces duplicate initial
   notifications, and retains explicit pending/error diagnostics. It also recomputes
   Recenter after either geometry callback and adds a scrolled combine-controls
-  reference with a visibility assertion. Native verification of these corrections
-  remains pending. Diagnostic uploads now retain ordinary failed-reference PNGs as
-  well as compositor captures. Richer text styling remains open.
+  reference with a visibility assertion. The [lifecycle run](https://github.com/joswayski/captures/actions/runs/34729382697)
+  passed 29 AppKit tests, 27 normal references and the video/dust compositor checks,
+  with successful 76 KB estimates in both passes. Inspected references show no
+  Recenter on the fitted canvas and fully visible scrolled Combine controls.
+  Diagnostic uploads retain ordinary failed-reference PNGs as well as compositor
+  captures. The next slice adds seven text presets, font families, bold/italic/
+  alignment, outlined/boxed labels and annotation shadow defaults. Legacy text
+  retains its original renderer; new-label alignment and minimum width follow
+  shipping contracts. New native tests and references await execution. Inline canvas
+  text composition, custom shadow colors and physical font/input checks remain open.
 
 ## Feature parity acceptance
 

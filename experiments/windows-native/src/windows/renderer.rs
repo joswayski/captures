@@ -1259,19 +1259,31 @@ impl Renderer {
                         &self.strong,
                     );
                     if selected_layer.is_some() {
-                        for (index, label) in ["Front", "Back", "Copy", "Delete"].iter().enumerate()
-                        {
+                        for (index, label) in ["Front", "Back", "Copy", ""].iter().enumerate() {
+                            let rect = Rect {
+                                x: sidebar_x + 112.0 + index as f32 * 46.0,
+                                y: properties_y - 3.0,
+                                width: 44.0,
+                                height: 28.0,
+                            };
                             self.button(
-                                Rect {
-                                    x: sidebar_x + 112.0 + index as f32 * 46.0,
-                                    y: properties_y - 3.0,
-                                    width: 44.0,
-                                    height: 28.0,
-                                },
+                                rect,
                                 p.field,
-                                if *label == "Delete" { p.signal } else { p.text },
+                                if index == 3 { p.signal } else { p.text },
                                 label,
                             );
+                            if index == 3 {
+                                self.editor_icon(
+                                    "trash",
+                                    Rect {
+                                        x: rect.x + 12.0,
+                                        y: rect.y + 4.0,
+                                        width: 20.0,
+                                        height: 20.0,
+                                    },
+                                    p.signal,
+                                )?;
+                            }
                         }
                     }
                     if let Some((image_width, image_height, opacity, rotation)) = selected_layer

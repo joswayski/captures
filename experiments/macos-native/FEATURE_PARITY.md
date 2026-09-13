@@ -21,7 +21,9 @@ This ledger distinguishes implemented behavior from native-runtime and rollout g
   transparency-preserving PNG/WebP output, fit/manual 5–800% viewport zoom,
   pointer-anchored modified-wheel/pinch zoom, Command/Control or middle-drag pan,
   six shipping blend modes, merge down, merge visible, and flatten with matching
-  hidden-layer and canvas-background behavior.
+  hidden-layer and canvas-background behavior; text style presets, sans/serif/
+  monospace/rounded families, bold/italic/alignment, outlined and box labels,
+  and shared color/opacity/fill/stroke/shadow defaults for new annotations.
 - App surfaces: persisted preferences with runtime consumers, history restore/edit/
   trash, mini-preview stacks and disintegration, custom confirmations/popovers/
   toggles, global shortcut registration failures, duplicate shortcut rejection,
@@ -39,8 +41,17 @@ This ledger distinguishes implemented behavior from native-runtime and rollout g
   and clean normal quit/restart behavior. The shared collector is subprocess-tested,
   but Swift/AppKit lifecycle behavior still requires native CI and physical-Mac checks.
 - Exact 12-cell filmstrip layout and live estimate pending/exact/approximate states.
-- Layer blend rendering and merge/flatten rasterization. Model contracts and
-  asymmetric pixels are tested, but Core Graphics/AppKit output needs native CI.
+  Successful native estimate renders exist, but one rerender timed out intermittently
+  without backend diagnostics. The confirmed initial-subscription race is fixed and
+  failures now report waiting/pending/backend state; it is not established as that timeout's cause.
+- Layer blend rendering and merge/flatten rasterization have passed native pixel tests.
+  The [lifecycle run](https://github.com/joswayski/captures/actions/runs/34729382697)
+  passed 29 AppKit tests, 27 normal references and the video/dust compositor checks.
+  Inspected references show no Recenter on the fitted canvas and all three Combine
+  controls fully visible after scrolling. Physical menu interaction remains unverified.
+- Rich text family fallback, glyph metrics, outlined glyphs, rounded plates and
+  default-style controls have new model and pixel tests awaiting native execution.
+  Installed-font behavior and physical text entry still require interaction evidence.
 - Native modifier/middle-drag pan, pointer-anchored wheel/pinch zoom, and the
   mostly-offscreen Recenter cue. Model math is asymmetric-tested; physical input
   routing and trackpad magnification still require native interaction evidence.
@@ -49,8 +60,9 @@ This ledger distinguishes implemented behavior from native-runtime and rollout g
 
 ## Confirmed gaps
 
-- Image editing: richer text presets/families, bold/italic/alignment, label
-  backgrounds/outlines, and remaining default annotation properties.
+- Text placement edits through the properties TextEditor rather than shipping's
+  inline canvas composer; inline focus/caret behavior and custom shadow colors
+  remain missing even though multiline auto-sizing and shadow geometry are implemented.
 - Recording responsiveness: stale estimate results are generation-guarded, but queued
   and running estimates/exports are not cancelled or coalesced. They can still delay Save
   on the serial media queue; this needs an owned cancel protocol matching shipping.

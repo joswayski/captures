@@ -204,13 +204,18 @@ final class EditorModelTests: XCTestCase {
             sourceURL: URL(fileURLWithPath: "/tmp/source.png")
         )
         let color = EditorColor(red: 0.24, green: 0.48, blue: 0.95)
+        let shadow = EditorShadow(radius: 9, offsetX: 3, offsetY: 6, opacity: 0.4)
 
-        model.addShape(.rectangle, color: color, lineWidth: 11, fill: true, opacity: 0.65)
+        model.addShape(
+            .rectangle, color: color, lineWidth: 11, fill: true,
+            opacity: 0.65, shadow: shadow
+        )
         let shape = model.document.layers[0]
         XCTAssertEqual(shape.color, color)
         XCTAssertEqual(shape.fill, color)
         XCTAssertEqual(shape.lineWidth, 11)
         XCTAssertEqual(shape.opacity, 0.65)
+        XCTAssertEqual(shape.shadow, shadow)
 
         model.addShape(.arrow, color: color, lineWidth: 9, fill: true, opacity: 0.8)
         let arrow = model.document.layers[1]
@@ -219,12 +224,165 @@ final class EditorModelTests: XCTestCase {
 
         model.addStroke(
             [CGPoint(x: 10, y: 12), CGPoint(x: 40, y: 42)],
-            color: color, lineWidth: 7, opacity: 0.45
+            color: color, lineWidth: 7, opacity: 0.45, shadow: shadow
         )
         let stroke = model.document.layers[2]
         XCTAssertEqual(stroke.color, color)
         XCTAssertEqual(stroke.lineWidth, 7)
         XCTAssertEqual(stroke.opacity, 0.45)
+        XCTAssertEqual(stroke.shadow, shadow)
+    }
+
+    func testTextPresetsMatchShippingFamiliesAndTreatments() {
+        XCTAssertEqual(EditorTextStyle.defaultFontSize(width: 960, height: 540), 30)
+        XCTAssertEqual(EditorTextStyle.defaultFontSize(width: 320, height: 10_000), 24)
+        XCTAssertEqual(EditorTextStyle.defaultFontSize(width: 4_000, height: 2_000), 72)
+        var style = EditorTextStyle(
+            fontSize: 37, fontFamily: .serif, bold: true, italic: true,
+            alignment: .right, background: EditorColor(red: 0.2, green: 0.3, blue: 0.4),
+            outlined: false, roundedBackground: false
+        )
+        let expected: [(EditorTextPreset, EditorTextFontFamily, Bool, Bool, Bool)] = [
+            (.standard, .sans, false, false, false),
+            (.rounded, .rounded, false, false, false),
+            (.outlined, .sans, false, true, false),
+            (.mono, .mono, false, false, false),
+            (.box, .sans, true, false, false),
+            (.monoBox, .mono, true, false, false),
+            (.roundedBox, .rounded, true, false, true),
+        ]
+        for (preset, family, hasBackground, outlined, rounded) in expected {
+            let applied = style.applying(preset)
+            XCTAssertEqual(applied.preset, preset)
+            XCTAssertEqual(applied.fontFamily, family)
+            XCTAssertEqual(applied.background != nil, hasBackground)
+            XCTAssertEqual(applied.outlined, outlined)
+            XCTAssertEqual(applied.roundedBackground, rounded)
+            XCTAssertEqual(applied.fontSize, 37)
+            XCTAssertTrue(applied.bold)
+            XCTAssertTrue(applied.italic)
+            XCTAssertEqual(applied.alignment, .right)
+            style = applied
+        }
+
+        for preset in [EditorTextPreset.standard, .rounded, .outlined, .mono] {
+            XCTAssertEqual(style.applyingToNewLabel(preset).alignment, .left)
+        }
+        for preset in [EditorTextPreset.box, .monoBox, .roundedBox] {
+            XCTAssertEqual(style.applyingToNewLabel(preset).alignment, .center)
+        }
+    }
+
+    func testNewTextPresetAlignmentAndEightPixelMinimumWidth() {
+        let model = EditorModel(
+            document: EditorDocument(width: 300, height: 180, layers: []),
+            sourceURL: URL(fileURLWithPath: "/tmp/text-placement.png")
+        )
+        var base = EditorTextStyle.shippingDefault
+        base.fontSize = 8
+        let standard = base.applyingToNewLabel(.standard)
+        model.addText("i", at: CGPoint(x: 31, y: 20), style: standard)
+        XCTAssertEqual(model.document.layers[0].textStyle?.alignment, .left)
+        XCTAssertEqual(model.document.layers[0].frame.x, 31, accuracy: 0.0001)
+        XCTAssertEqual(model.document.layers[0].frame.width, 8, accuracy: 0.0001)
+
+        let outlined = base.applyingToNewLabel(.outlined)
+        model.addText("i", at: CGPoint(x: 73, y: 48), style: outlined)
+        XCTAssertEqual(model.document.layers[1].textStyle?.alignment, .left)
+        XCTAssertEqual(model.document.layers[1].frame.x, 73, accuracy: 0.0001)
+        XCTAssertGreaterThanOrEqual(model.document.layers[1].frame.width, 8)
+
+        let boxed = base.applyingToNewLabel(.box)
+        model.addText("i", at: CGPoint(x: 151, y: 76), style: boxed)
+        XCTAssertEqual(model.document.layers[2].textStyle?.alignment, .center)
+        XCTAssertEqual(model.document.layers[2].frame.cgRect.midX, 151, accuracy: 0.0001)
+        XCTAssertEqual(EditorTextStyle.minimumTextWidth(fontSize: 8), 8)
+    }
+
+    func testTextDefaultsEditingAndStyleChangesAreIndependentlyUndoable() {
+        let model = EditorModel(
+            document: EditorDocument(width: 500, height: 300, layers: []),
+            sourceURL: URL(fileURLWithPath: "/tmp/text.png")
+        )
+        var style = EditorTextStyle.shippingDefault
+        style.fontSize = 40
+        let color = EditorColor(red: 0.2, green: 0.4, blue: 0.9)
+        let shadow = EditorShadow(radius: 7, offsetX: 2, offsetY: 5, opacity: 0.35)
+        model.addText("Text", at: CGPoint(x: 220, y: 45), color: color, style: style, shadow: shadow)
+
+        let placed = model.document.layers[0]
+        XCTAssertEqual(placed.textStyle, style)
+        XCTAssertEqual(placed.color, color)
+        XCTAssertEqual(placed.shadow, shadow)
+        XCTAssertEqual(placed.frame.cgRect.midX, 220, accuracy: 0.0001)
+        XCTAssertEqual(placed.frame.y + style.fontSize * 0.22, 45, accuracy: 0.0001)
+
+        model.updateSelectedText("A much longer label\nsecond line")
+        let edited = model.document.layers[0]
+        XCTAssertGreaterThan(edited.frame.width, placed.frame.width)
+        XCTAssertGreaterThan(edited.frame.height, placed.frame.height)
+        XCTAssertEqual(edited.frame.cgRect.midX, placed.frame.cgRect.midX, accuracy: 0.0001)
+        model.undo()
+        XCTAssertEqual(model.document.layers[0], placed)
+
+        model.updateSelectedTextStyle {
+            $0.fontFamily = .mono
+            $0.fontSize = 64
+            $0.bold = true
+            $0.italic = true
+        }
+        let restyled = model.document.layers[0]
+        XCTAssertEqual(restyled.textStyle?.fontFamily, .mono)
+        XCTAssertEqual(restyled.textStyle?.fontSize, 64)
+        XCTAssertEqual(restyled.frame.cgRect.midX, placed.frame.cgRect.midX, accuracy: 0.0001)
+        model.undo()
+        XCTAssertEqual(model.document.layers[0], placed)
+        model.undo()
+        XCTAssertTrue(model.document.layers.isEmpty, "Each text edit and style change contributes one undo step")
+    }
+
+    func testRoundedTextBackgroundPaintsPlateWithoutFillingCorners() throws {
+        let model = EditorModel(
+            document: EditorDocument(width: 240, height: 120, layers: []),
+            sourceURL: URL(fileURLWithPath: "/tmp/rounded-text.png")
+        )
+        var style = EditorTextStyle.shippingDefault
+        style.fontSize = 32
+        style.background = EditorColor(red: 1, green: 0, blue: 0)
+        model.addText("A", at: CGPoint(x: 120, y: 36), color: .white, style: style)
+        let frame = model.document.layers[0].frame.cgRect
+        let image = try XCTUnwrap(model.renderedImage().cgImage(forProposedRect: nil, context: nil, hints: nil))
+
+        XCTAssertEqual(try pixel(image, x: Int(frame.minX + 1), y: Int(frame.minY + 1))[3], 0)
+        try assertPixel(
+            image,
+            x: Int(frame.midX), y: Int(frame.minY + 2),
+            approximately: [255, 0, 0, 255], tolerance: 2
+        )
+    }
+
+    func testLegacyTextRenderingMatchesOriginalSemiboldPathPixelForPixel() throws {
+        let layer = EditorLayer(
+            name: "Legacy text",
+            content: .text("Legacy 7"),
+            frame: EditorRect(x: 17, y: 13, width: 103, height: 41),
+            rotation: 0.17,
+            opacity: 0.73,
+            color: EditorColor(red: 0.18, green: 0.52, blue: 0.91),
+            shadow: EditorShadow(radius: 3, offsetX: 5, offsetY: 2, opacity: 0.48),
+            textStyle: nil
+        )
+        let model = EditorModel(
+            document: EditorDocument(width: 173, height: 91, layers: [layer]),
+            sourceURL: URL(fileURLWithPath: "/tmp/legacy-text.png")
+        )
+        let actual = try XCTUnwrap(model.renderedImage().cgImage(
+            forProposedRect: nil, context: nil, hints: nil
+        ))
+        let expected = try legacyTextReferenceImage(layer: layer, width: 173, height: 91)
+
+        XCTAssertEqual(try rgbaData(actual), try rgbaData(expected))
+        XCTAssertGreaterThan(try rgbaData(actual).filter { $0 != 0 }.count, 100)
     }
 
     func testCropTranslatesLayersAndSupportsUndo() {
@@ -809,13 +967,14 @@ final class EditorModelTests: XCTestCase {
 
     func testLegacyDraftWithoutBackgroundOrShadowStillDecodes() throws {
         let document = EditorDocument(width: 8, height: 6, layers: [
-            EditorLayer(name: "Shape", content: .shape(.ellipse), frame: EditorRect(x: 1, y: 1, width: 4, height: 3)),
+            EditorLayer(name: "Text", content: .text("Legacy"), frame: EditorRect(x: 1, y: 1, width: 4, height: 3)),
         ])
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(document)) as? [String: Any])
         json.removeValue(forKey: "background")
         var layers = try XCTUnwrap(json["layers"] as? [[String: Any]])
         layers[0].removeValue(forKey: "shadow")
         layers[0].removeValue(forKey: "blendMode")
+        layers[0].removeValue(forKey: "textStyle")
         json["layers"] = layers
 
         let decoded = try JSONDecoder().decode(EditorDocument.self, from: JSONSerialization.data(withJSONObject: json))
@@ -823,6 +982,7 @@ final class EditorModelTests: XCTestCase {
         XCTAssertNil(decoded.background)
         XCTAssertNil(decoded.layers[0].shadow)
         XCTAssertNil(decoded.layers[0].blendMode)
+        XCTAssertNil(decoded.layers[0].textStyle)
         XCTAssertEqual(decoded.width, 8)
     }
 
@@ -864,6 +1024,68 @@ final class EditorModelTests: XCTestCase {
         let xs = corners.map(\.x)
         let ys = corners.map(\.y)
         return CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
+    }
+
+    private func legacyTextReferenceImage(layer: EditorLayer, width: Int, height: Int) throws -> CGImage {
+        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: 0, space: space,
+            bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue
+                | CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.setBlendMode(.copy)
+        context.setFillColor(NSColor.clear.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.setBlendMode(.normal)
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
+        let graphics = NSGraphicsContext(cgContext: context, flipped: true)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphics
+        defer { NSGraphicsContext.restoreGraphicsState() }
+
+        let frame = layer.frame.cgRect
+        context.saveGState()
+        context.setAlpha(layer.opacity)
+        context.translateBy(x: frame.midX, y: frame.midY)
+        context.rotate(by: layer.rotation)
+        context.translateBy(x: -frame.midX, y: -frame.midY)
+        if let shadow = layer.shadow {
+            context.setShadow(
+                offset: CGSize(width: shadow.offsetX, height: shadow.offsetY),
+                blur: shadow.radius,
+                color: NSColor.black.withAlphaComponent(shadow.opacity).cgColor
+            )
+        }
+        guard case let .text(text) = layer.content else {
+            XCTFail("Legacy fixture must be text")
+            throw EditorError.cannotRender
+        }
+        let font = NSFont.systemFont(ofSize: max(12, frame.height * 0.62), weight: .semibold)
+        (text as NSString).draw(
+            in: frame,
+            withAttributes: [.font: font, .foregroundColor: layer.color.nsColor]
+        )
+        context.restoreGState()
+        graphics.flushGraphics()
+        return try XCTUnwrap(context.makeImage())
+    }
+
+    private func rgbaData(_ image: CGImage) throws -> Data {
+        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
+            bytesPerRow: image.width * 4, space: space,
+            bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue
+                | CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.setBlendMode(.copy)
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return Data(
+            bytes: try XCTUnwrap(context.data),
+            count: context.bytesPerRow * image.height
+        )
     }
 
     private func assertRect(_ actual: CGRect, equals expected: CGRect, file: StaticString = #filePath, line: UInt = #line) {

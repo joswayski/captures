@@ -155,6 +155,7 @@ enum RenderReferences {
                     "image-editor-overflow", "image-editor-snap-guides",
                     "image-editor-viewport-pan-zoom",
                     "image-editor-layer-compositing", "image-editor-layer-combine-controls",
+                    "image-editor-text-styles", "image-editor-text-defaults",
                     "image-editor-erase", "image-editor-wand",
                 ].contains(fixture.name),
                    !hasSharedFixtureFeature(bitmap) {

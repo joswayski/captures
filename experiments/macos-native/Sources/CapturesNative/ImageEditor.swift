@@ -336,6 +336,8 @@ private struct ImageEditorSurface: View {
     @State private var heightText = ""
     @State private var strokeWidth: CGFloat = 6
     @State private var defaultOpacity: CGFloat = 1
+    @State private var defaultTextStyle = EditorTextStyle.shippingDefault
+    @State private var defaultShadow: EditorShadow?
     @State private var brushSize: CGFloat = 32
     @State private var brushSoftness: CGFloat = 0.35
     @State private var wandTolerance: CGFloat = 0.12
@@ -393,6 +395,12 @@ private struct ImageEditorSurface: View {
         _zoom = State(initialValue: initialZoom ?? 1)
         _zoomMode = State(initialValue: initialZoom == nil ? "fit" : "custom")
         _viewPan = State(initialValue: initialViewPan)
+        var initialTextStyle = EditorTextStyle.shippingDefault
+        initialTextStyle.fontSize = EditorTextStyle.defaultFontSize(
+            width: model.document.width,
+            height: model.document.height
+        )
+        _defaultTextStyle = State(initialValue: initialTextStyle)
         let sourceExtension = artifact.url.pathExtension.lowercased()
         let sourceFormat = sourceExtension == "jpg" ? "jpeg" : sourceExtension
         let canReplaceSource = ["png", "jpeg", "webp"].contains(sourceFormat)
@@ -859,21 +867,25 @@ private struct ImageEditorSurface: View {
                     cropRect = boundedRect(from: cropStart ?? start, to: point)
                     cropStart = nil
                 case .text:
-                    model.addText("Text", at: point)
+                    model.addText(
+                        "Text", at: point, color: defaultEditorColor,
+                        style: defaultTextStyle, shadow: defaultShadow
+                    )
                 case .shape:
                     model.addShape(
                         selectedShape, at: point, color: defaultEditorColor,
-                        lineWidth: strokeWidth, fill: fillShapes, opacity: defaultOpacity
+                        lineWidth: strokeWidth, fill: fillShapes,
+                        opacity: defaultOpacity, shadow: defaultShadow
                     )
                 case .arrow:
                     model.addShape(
                         .arrow, at: point, color: defaultEditorColor,
-                        lineWidth: strokeWidth, opacity: defaultOpacity
+                        lineWidth: strokeWidth, opacity: defaultOpacity, shadow: defaultShadow
                     )
                 case .pen:
                     model.addStroke(
                         draftPoints, color: defaultEditorColor,
-                        lineWidth: strokeWidth, opacity: defaultOpacity
+                        lineWidth: strokeWidth, opacity: defaultOpacity, shadow: defaultShadow
                     )
                     draftPoints.removeAll()
                 case .wand:
@@ -996,8 +1008,17 @@ private struct ImageEditorSurface: View {
             SectionTitle("Properties", subtitle: layer.name)
             VStack(alignment: .leading, spacing: 12) {
                 if case let .text(text) = layer.content {
-                    TextField("Text", text: Binding(get: { text }, set: { value in model.updateSelected { $0.content = .text(value) } }))
-                        .textFieldStyle(.roundedBorder)
+                    TextEditor(text: Binding(get: { text }, set: model.updateSelectedText))
+                        .font(.body)
+                        .scrollContentBackground(.hidden)
+                        .padding(6)
+                        .frame(minHeight: 72, maxHeight: 108)
+                        .background(NativeTheme.field(colorScheme))
+                        .clipShape(RoundedRectangle(cornerRadius: NativeTheme.metric("r-sm")))
+                        .overlay(RoundedRectangle(cornerRadius: NativeTheme.metric("r-sm"))
+                            .stroke(NativeTheme.border(colorScheme)))
+                        .accessibilityLabel("Text")
+                    textStyleControls(layer)
                 }
                 if case .image = layer.content { EmptyView() }
                 else { layerColorControls(layer) }
@@ -1144,6 +1165,32 @@ private struct ImageEditorSurface: View {
             Button("Apply crop") {
                 if let cropRect { model.crop(to: cropRect); self.cropRect = nil; tool = .select }
             }.buttonStyle(CaptureButtonStyle(primary: true)).disabled(cropRect == nil).padding(.top, 12)
+        } else if tool == .text {
+            SectionTitle("New text", subtitle: "Defaults for the next label")
+            VStack(alignment: .leading, spacing: 12) {
+                textPresetPicker(
+                    selection: Binding(
+                        get: { defaultTextStyle.preset },
+                        set: { defaultTextStyle = defaultTextStyle.applyingToNewLabel($0) }
+                    )
+                )
+                HStack {
+                    Text("Size")
+                    CaptureSlider(
+                        value: Binding(
+                            get: { Double(defaultTextStyle.fontSize) },
+                            set: { defaultTextStyle.fontSize = CGFloat($0) }
+                        ),
+                        range: 8...512
+                    )
+                    Text("\(Int(defaultTextStyle.fontSize.rounded())) px")
+                        .monospacedDigit().frame(width: 54)
+                }
+                defaultColorControls
+                defaultShadowControls
+                Text("These settings apply to the next text layer.")
+                    .font(.caption).foregroundStyle(NativeTheme.muted(colorScheme))
+            }.padding(.top, 12)
         } else if [.shape, .arrow, .pen].contains(tool) {
             SectionTitle(tool == .pen ? "Freehand" : tool.rawValue)
             VStack(alignment: .leading, spacing: 12) {
@@ -1167,6 +1214,7 @@ private struct ImageEditorSurface: View {
                 if tool == .shape, ![.line, .arrow].contains(selectedShape) {
                     CaptureCheckboxRow(title: "Filled shape", isOn: $fillShapes)
                 }
+                defaultShadowControls
                 Text("These settings apply to the next annotation.")
                     .font(.caption).foregroundStyle(NativeTheme.muted(colorScheme))
             }.padding(.top, 12)
@@ -1208,6 +1256,150 @@ private struct ImageEditorSurface: View {
                     .textFieldStyle(.roundedBorder).frame(width: 88)
                     .onSubmit(commitEditorHex)
             }
+        }
+    }
+
+    private func textPresetPicker(selection: Binding<EditorTextPreset>) -> some View {
+        HStack {
+            Text("Text style")
+            Spacer()
+            Picker("Text style", selection: selection) {
+                ForEach(EditorTextPreset.allCases) { preset in Text(preset.label).tag(preset) }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(width: 150)
+        }
+    }
+
+    @ViewBuilder
+    private func textStyleControls(_ layer: EditorLayer) -> some View {
+        let style = layer.textStyle ?? .legacy(frameHeight: layer.frame.height)
+        textPresetPicker(selection: Binding(
+            get: { style.preset },
+            set: { preset in model.updateSelectedTextStyle { current in
+                current = current.applying(preset)
+            } }
+        ))
+        HStack {
+            Text("Font")
+            Picker("Font", selection: Binding(
+                get: { style.fontFamily },
+                set: { family in model.updateSelectedTextStyle { current in
+                    current.fontFamily = family
+                    if family != .rounded { current.roundedBackground = false }
+                } }
+            )) {
+                ForEach(EditorTextFontFamily.allCases) { family in Text(family.label).tag(family) }
+            }
+            .labelsHidden().pickerStyle(.menu).frame(width: 130)
+            Text("Size")
+            TextField("Size", value: Binding(
+                get: { Double(style.fontSize) },
+                set: { size in model.updateSelectedTextStyle { current in
+                    current.fontSize = min(512, max(8, CGFloat(size)))
+                } }
+            ), format: .number.precision(.fractionLength(0)))
+            .textFieldStyle(.roundedBorder).frame(width: 58)
+        }
+        HStack(spacing: 6) {
+            Button("B") { updateSelectedTextStyle { $0.bold.toggle() } }
+                .buttonStyle(CaptureButtonStyle(primary: style.bold)).help("Bold")
+            Button { updateSelectedTextStyle { $0.italic.toggle() } } label: {
+                Text("I").italic()
+            }.buttonStyle(CaptureButtonStyle(primary: style.italic)).help("Italic")
+            ForEach(EditorTextAlignment.allCases) { alignment in
+                Button { updateSelectedTextStyle { $0.alignment = alignment } } label: {
+                    Image(systemName: "text.align\(alignment.rawValue)")
+                }
+                .buttonStyle(CaptureButtonStyle(primary: style.alignment == alignment))
+                .help("Align \(alignment.rawValue)")
+            }
+        }
+        CaptureCheckboxRow(title: "Text background", isOn: Binding(
+            get: { style.background != nil },
+            set: { enabled in updateSelectedTextStyle {
+                $0.background = enabled ? EditorTextStyle.boxBackground : nil
+                if enabled { $0.outlined = false; $0.roundedBackground = false }
+            } }
+        ))
+        if style.background != nil {
+            textBackgroundColors(style)
+        }
+    }
+
+    private func updateSelectedTextStyle(_ body: (inout EditorTextStyle) -> Void) {
+        model.updateSelectedTextStyle(body)
+    }
+
+    private func textBackgroundColors(_ style: EditorTextStyle) -> some View {
+        let colors: [EditorColor] = [
+            EditorTextStyle.boxBackground, .white, .signal,
+            EditorColor(red: 0.12, green: 0.2, blue: 0.38),
+        ]
+        return VStack(alignment: .leading, spacing: 7) {
+            Text("Background color").font(.caption).foregroundStyle(NativeTheme.muted(colorScheme))
+            HStack(spacing: 7) {
+                ForEach(colors, id: \.self) { color in
+                    Button { updateSelectedTextStyle { $0.background = color } } label: {
+                        RoundedRectangle(cornerRadius: 5).fill(Color(nsColor: color.nsColor))
+                            .frame(width: 32, height: 24)
+                            .overlay(RoundedRectangle(cornerRadius: 5).stroke(
+                                style.background == color ? NativeTheme.accent : NativeTheme.border(colorScheme),
+                                lineWidth: style.background == color ? 2 : 1
+                            ))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(color.hex)
+                    .accessibilityAddTraits(style.background == color ? .isSelected : [])
+                }
+            }
+        }
+    }
+
+    private var defaultShadowControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            CaptureCheckboxRow(title: "Shadow", isOn: Binding(
+                get: { defaultShadow != nil },
+                set: { defaultShadow = $0 ? EditorShadow() : nil }
+            ))
+            if let shadow = defaultShadow {
+                HStack {
+                    Text("Blur")
+                    CaptureSlider(value: Binding(
+                        get: { Double(shadow.radius) },
+                        set: { defaultShadow?.radius = CGFloat($0) }
+                    ), range: 0...100)
+                    Text("\(Int(shadow.radius.rounded())) px").monospacedDigit().frame(width: 46)
+                }
+                HStack {
+                    Text("Opacity")
+                    CaptureSlider(value: Binding(
+                        get: { Double(shadow.opacity) },
+                        set: { defaultShadow?.opacity = CGFloat($0) }
+                    ), range: 0...1)
+                    Text("\(Int((shadow.opacity * 100).rounded()))%").monospacedDigit().frame(width: 42)
+                }
+                HStack(spacing: 12) {
+                    defaultShadowOffsetField("X offset", value: shadow.offsetX, keyPath: \EditorShadow.offsetX)
+                    defaultShadowOffsetField("Y offset", value: shadow.offsetY, keyPath: \EditorShadow.offsetY)
+                }
+            }
+        }
+    }
+
+    private func defaultShadowOffsetField(
+        _ title: String,
+        value: CGFloat,
+        keyPath: WritableKeyPath<EditorShadow, CGFloat>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption).foregroundStyle(NativeTheme.muted(colorScheme))
+            TextField(title, value: Binding(
+                get: { Double(value) },
+                set: { defaultShadow?[keyPath: keyPath] = min(500, max(-500, CGFloat($0.rounded()))) }
+            ), format: .number.precision(.fractionLength(0)))
+            .textFieldStyle(.roundedBorder)
         }
     }
 
@@ -1908,6 +2100,27 @@ func imageEditorReferenceView(artifact: Artifact, state: String) -> AnyView {
                     recordNativeReferenceLayerCanvasOffscreen($0)
                 } : nil
             ))
+        case "text-styles":
+            var standard = EditorTextStyle.shippingDefault.applying(.standard)
+            standard.fontSize = 44
+            standard.bold = true
+            standard.italic = true
+            standard.alignment = .left
+            model.addText("Bold italic", at: CGPoint(x: 110, y: 105), color: .white, style: standard)
+            var outlined = EditorTextStyle.shippingDefault.applying(.outlined)
+            outlined.fontSize = 58
+            model.addText("Outlined", at: CGPoint(x: 480, y: 210), color: .signal, style: outlined)
+            var roundedBox = EditorTextStyle.shippingDefault
+            roundedBox.fontSize = 48
+            model.addText(
+                "Rounded Box", at: CGPoint(x: 650, y: 350), color: .white,
+                style: roundedBox,
+                shadow: EditorShadow(radius: 14, offsetX: 0, offsetY: 7, opacity: 0.55)
+            )
+            return AnyView(ImageEditorSurface(artifact: artifact, model: model))
+        case "text-defaults":
+            model.selectedLayerID = nil
+            return AnyView(ImageEditorSurface(artifact: artifact, model: model, initialTool: .text))
         case "erase":
             return AnyView(ImageEditorSurface(artifact: artifact, model: model, initialTool: .erase))
         case "wand":
