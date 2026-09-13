@@ -40,6 +40,63 @@ def main():
         assert rect.width >= 100 and rect.height >= 100, rect
         return rect
 
+    def assert_canvas_metadata(width, height, format='PNG'):
+        wait(lambda: find(f'{format} · {width} × {height}', 'label', editor))
+        for name, expected in [('Canvas width', width), ('Canvas height', height)]:
+            assert find(name, 'spin button', editor).queryValue().currentValue == expected
+
+    with contextmanager(run)(binary, fixture, ['--open', str(fixture)], args.artifacts):
+        import pyatspi
+        wait(lambda: find(editor, 'frame'))
+        assert_canvas_metadata(960, 540)
+        for name, value in [('Canvas width', 957), ('Canvas height', 533)]:
+            click(name, editor, pointer=True)
+            cmd('xdotool', 'key', 'ctrl+a')
+            cmd('xdotool', 'type', str(value))
+            cmd('xdotool', 'key', 'Return')
+        assert_canvas_metadata(957, 533)
+        choose('Format', 1, editor)
+        assert_canvas_metadata(957, 533, 'JPEG')
+        click('Undo', editor)
+        assert_canvas_metadata(957, 540, 'JPEG')
+        click('Undo', editor)
+        assert_canvas_metadata(960, 540, 'JPEG')
+        click('Redo', editor)
+        assert_canvas_metadata(957, 540, 'JPEG')
+        click('Redo', editor)
+        assert_canvas_metadata(957, 533, 'JPEG')
+        choose('Format', 2, editor)
+        assert_canvas_metadata(957, 533, 'WebP')
+        for color in ('#193A7B', '#D87231'):
+            click('Background color', editor, pointer=True)
+            # Popover coordinates are relative to its native surface, not the
+            # editor client. Tab from its initial switch focus into the entry.
+            cmd('xdotool', 'key', 'Tab')
+            wait(lambda: find('Canvas background hex value', 'text', editor)
+                 .getState().contains(pyatspi.STATE_FOCUSED))
+            cmd('xdotool', 'key', 'ctrl+a')
+            cmd('xdotool', 'type', color)
+            # Recommitting unchanged text must not consume another Undo step.
+            cmd('xdotool', 'key', 'Return', 'Return')
+            cmd('xdotool', 'key', 'Escape')
+        click('Undo', editor)
+        click('Background color', editor, pointer=True)
+        text = find('Canvas background hex value', 'text', editor).queryText()
+        assert text.getText(0, text.characterCount) == '#193A7B'
+        cmd('xdotool', 'key', 'Escape')
+        click('Undo', editor)
+        click('Background color', editor, pointer=True)
+        assert not find('Solid background', frame=editor).getState().contains(pyatspi.STATE_CHECKED)
+        cmd('xdotool', 'key', 'Escape')
+        click('Redo', editor)
+        click('Background color', editor, pointer=True)
+        assert find('Solid background', frame=editor).getState().contains(pyatspi.STATE_CHECKED)
+        text = find('Canvas background hex value', 'text', editor).queryText()
+        assert text.getText(0, text.characterCount) == '#193A7B'
+        cmd('xdotool', 'key', 'Escape')
+        capture(args.artifacts, 'editor-metadata-restored', editor)
+        print('PASS live canvas/format metadata and background controls across exact undo/redo')
+
     with contextmanager(run)(binary, fixture, ['--open', str(fixture)], args.artifacts) as (_, output):
         wait(lambda: find(editor, 'frame'))
         window = cmd('xdotool', 'search', '--onlyvisible', '--name', editor).splitlines()[-1]
@@ -218,8 +275,15 @@ def main():
         cropped_size = cmd('identify', '-format', '%wx%h', cropped)
         cropped_width, cropped_height = map(int, cropped_size.split('x'))
         assert 0 < cropped_width < 960 and 0 < cropped_height < 540
+        assert_canvas_metadata(cropped_width, cropped_height)
+        click('Undo', editor)
+        assert_canvas_metadata(960, 540)
+        click('Redo', editor)
+        assert_canvas_metadata(cropped_width, cropped_height)
 
         choose('Format', 1, editor)
+        assert_canvas_metadata(cropped_width, cropped_height, 'JPEG')
+        capture(args.artifacts, 'editor-cropped-jpeg', editor)
         click('Save', editor)
         jpeg = wait(lambda: next(output.glob('*.jpg'), None))
         assert cmd('identify', '-format', '%m %wx%h', jpeg) == f'JPEG {cropped_size}'

@@ -428,6 +428,7 @@ fn open_impl(
     properties.set_halign(gtk::Align::Fill);
     properties.set_hexpand(true);
     let refresh_cb: Refresh = Rc::new(RefCell::new(None));
+    let updating_controls = Rc::new(Cell::new(false));
 
     let canvas_toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 3);
     canvas_toolbar.style_context().add_class("canvas-toolbar");
@@ -911,19 +912,21 @@ fn open_impl(
         false,
         0,
     );
-    disclosure_text.pack_start(
-        &ui::label(
-            &format!(
-                "PNG · {} × {}",
-                state.borrow().doc.width,
-                state.borrow().doc.height
-            ),
-            "export-summary",
-        ),
-        false,
-        false,
-        0,
-    );
+    let export_summary = ui::label("", "export-summary");
+    let update_export_summary: Rc<dyn Fn(&gtk::ComboBoxText)> = {
+        let summary = export_summary.clone();
+        let state = state.clone();
+        Rc::new(move |format| {
+            let state = state.borrow();
+            summary.set_text(&format!(
+                "{} · {} × {}",
+                format.active_text().as_deref().unwrap_or("PNG"),
+                state.doc.width,
+                state.doc.height
+            ));
+        })
+    };
+    disclosure_text.pack_start(&export_summary, false, false, 0);
     disclosure_content.pack_start(&disclosure_text, true, true, 0);
     disclosure_content.pack_end(&ui::icon("chevron-down", 15), false, false, 0);
     disclosure.add(&disclosure_content);
@@ -994,7 +997,11 @@ fn open_impl(
         let swatch = background_swatch.clone();
         let refresh_cb = refresh_cb.clone();
         let hex = background_hex.clone();
+        let updating_controls = updating_controls.clone();
         background_toggle.connect_active_notify(move |toggle| {
+            if updating_controls.get() {
+                return;
+            }
             let mut state = s.borrow_mut();
             checkpoint(&mut state);
             state.doc.background = if toggle.is_active() {
@@ -1024,6 +1031,9 @@ fn open_impl(
                 toggle.set_active(true);
             } else {
                 let mut state = s.borrow_mut();
+                if state.doc.background == Some(value) {
+                    return;
+                }
                 checkpoint(&mut state);
                 state.doc.background = Some(value);
                 changed(&mut state);
@@ -1112,6 +1122,10 @@ fn open_impl(
         control.connect_changed(move |_| update());
     }
     {
+        let update = update_export_summary.clone();
+        format.connect_changed(move |format| update(format));
+    }
+    {
         let update = update_comparison.clone();
         maximum_size.connect_value_changed(move |_| update());
     }
@@ -1123,11 +1137,15 @@ fn open_impl(
             area.queue_draw();
         });
     }
-    for (dimension, width) in [(canvas_width, true), (canvas_height, false)] {
+    for (dimension, width) in [(&canvas_width, true), (&canvas_height, false)] {
         let s = state.clone();
         let a = area.clone();
         let r = refresh_cb.clone();
+        let updating_controls = updating_controls.clone();
         dimension.connect_value_changed(move |input| {
+            if updating_controls.get() {
+                return;
+            }
             let value = input.value().round().clamp(1., 16_384.) as u32;
             let mut state = s.borrow_mut();
             let current = if width {
@@ -1232,6 +1250,7 @@ fn open_impl(
         let refresh_sidebar = refresh_cb.borrow_mut().take().expect("sidebar refresh");
         let state = state.clone();
         let expand = expand.clone();
+        let format = format.clone();
         *refresh_cb.borrow_mut() = Some(Box::new(move || {
             refresh_sidebar();
             let state = state.borrow();
@@ -1244,6 +1263,20 @@ fn open_impl(
                     || bounds.x + bounds.w > f64::from(state.doc.width)
                     || bounds.y + bounds.h > f64::from(state.doc.height)
             }));
+            // Undo/crop/trim restore the document, not just the canvas. GTK
+            // setters emit synchronous signals; these must not become edits.
+            updating_controls.set(true);
+            canvas_width.set_value(f64::from(state.doc.width));
+            canvas_height.set_value(f64::from(state.doc.height));
+            background_toggle.set_active(state.doc.background.is_some());
+            if let Some(color) = state.doc.background {
+                background_hex.set_text(&color_hex(color));
+                background_hex.remove_css_class("error");
+            }
+            background_swatch.queue_draw();
+            updating_controls.set(false);
+            drop(state);
+            update_export_summary(&format);
         }));
     }
     {
