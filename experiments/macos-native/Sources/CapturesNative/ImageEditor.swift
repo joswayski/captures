@@ -44,6 +44,8 @@ enum EditorViewportMath {
     }
 
     static func isMostlyOffscreen(viewportSize: CGSize, canvasFrame: CGRect) -> Bool {
+        guard viewportSize.width > 0, viewportSize.height > 0,
+              canvasFrame.width > 0, canvasFrame.height > 0 else { return false }
         let viewport = CGRect(origin: .zero, size: viewportSize)
         let intersection = viewport.intersection(canvasFrame)
         guard !intersection.isNull, intersection.width > 0, intersection.height > 0 else { return true }
@@ -54,6 +56,11 @@ enum EditorViewportMath {
 }
 
 private struct EditorCanvasFramePreference: PreferenceKey {
+    static var defaultValue = CGRect.zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
+}
+
+private struct EditorCombineFramePreference: PreferenceKey {
     static var defaultValue = CGRect.zero
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
 }
@@ -308,6 +315,9 @@ struct ImageEditorView: View {
 private struct ImageEditorSurface: View {
     let artifact: Artifact
     @ObservedObject var model: EditorModel
+    let initialPropertiesAnchor: String?
+    let onCombineControlsVisibilityChanged: ((Bool) -> Void)?
+    let onViewportOffscreenChanged: ((Bool) -> Void)?
     @ObservedObject private var store = AppStore.shared
     @Environment(\.colorScheme) private var colorScheme
     @State private var tool: ImageEditorTool = .select
@@ -367,10 +377,16 @@ private struct ImageEditorSurface: View {
         shapeFlyoutOpen: Bool = false,
         initialAlignmentGuides: [EditorAlignmentGuide] = [],
         initialZoom: CGFloat? = nil,
-        initialViewPan: CGSize = .zero
+        initialViewPan: CGSize = .zero,
+        initialPropertiesAnchor: String? = nil,
+        onCombineControlsVisibilityChanged: ((Bool) -> Void)? = nil,
+        onViewportOffscreenChanged: ((Bool) -> Void)? = nil
     ) {
         self.artifact = artifact
         self.model = model
+        self.initialPropertiesAnchor = initialPropertiesAnchor
+        self.onCombineControlsVisibilityChanged = onCombineControlsVisibilityChanged
+        self.onViewportOffscreenChanged = onViewportOffscreenChanged
         _tool = State(initialValue: initialTool)
         _shapeFlyoutOpen = State(initialValue: shapeFlyoutOpen)
         _alignmentGuides = State(initialValue: initialAlignmentGuides)
@@ -893,7 +909,26 @@ private struct ImageEditorSurface: View {
                 }.padding(.horizontal, 10)
             }.frame(minHeight: 150, maxHeight: 280)
             Divider().padding(.top, 10)
-            ScrollView { properties.padding(NativeTheme.metric("s-5")) }
+            GeometryReader { viewport in
+                ScrollViewReader { proxy in
+                    ScrollView { properties.padding(NativeTheme.metric("s-5")) }
+                        .coordinateSpace(name: "image-editor-properties")
+                        .onAppear {
+                            guard let initialPropertiesAnchor else { return }
+                            DispatchQueue.main.async {
+                                proxy.scrollTo(initialPropertiesAnchor, anchor: .bottom)
+                            }
+                        }
+                        .onPreferenceChange(EditorCombineFramePreference.self) { frame in
+                            guard onCombineControlsVisibilityChanged != nil else { return }
+                            onCombineControlsVisibilityChanged?(
+                                frame.width > 0 && frame.height > 0
+                                    && frame.minY >= -0.5
+                                    && frame.maxY <= viewport.size.height + 0.5
+                            )
+                        }
+                }
+            }
         }
         .frame(minWidth: 320, maxWidth: 320, maxHeight: .infinity)
         .background(NativeTheme.raised(colorScheme))
@@ -1080,20 +1115,29 @@ private struct ImageEditorSurface: View {
                     Button { model.duplicateSelected() } label: { Image(systemName: "plus.square.on.square") }.buttonStyle(CaptureButtonStyle()).help("Duplicate layer")
                     Button { model.deleteSelected() } label: { Image(systemName: "trash") }.buttonStyle(CaptureButtonStyle(destructive: true)).disabled(layer.locked).help("Delete layer")
                 }
-                Divider()
-                Text("Combine").font(.headline)
-                HStack {
-                    Button("Merge down") { perform { try model.mergeSelectedDown() } }
+                VStack(alignment: .leading, spacing: 12) {
+                    Divider()
+                    Text("Combine").font(.headline)
+                    HStack {
+                        Button("Merge down") { perform { try model.mergeSelectedDown() } }
+                            .buttonStyle(CaptureButtonStyle())
+                            .disabled(!model.canMergeSelectedDown)
+                        Button("Merge visible") { perform { try model.mergeVisible() } }
+                            .buttonStyle(CaptureButtonStyle())
+                            .disabled(!model.canMergeVisible)
+                    }
+                    Button("Flatten image") { perform { try model.flatten() } }
                         .buttonStyle(CaptureButtonStyle())
-                        .disabled(!model.canMergeSelectedDown)
-                    Button("Merge visible") { perform { try model.mergeVisible() } }
-                        .buttonStyle(CaptureButtonStyle())
-                        .disabled(!model.canMergeVisible)
+                        .disabled(!model.canFlatten)
+                        .help("Bake the canvas background and visible layers into one locked layer; discard hidden layers")
                 }
-                Button("Flatten image") { perform { try model.flatten() } }
-                    .buttonStyle(CaptureButtonStyle())
-                    .disabled(!model.canFlatten)
-                    .help("Bake the canvas background and visible layers into one locked layer; discard hidden layers")
+                .id("layer-combine-controls")
+                .background(GeometryReader { geometry in
+                    Color.clear.preference(
+                        key: EditorCombineFramePreference.self,
+                        value: geometry.frame(in: .named("image-editor-properties"))
+                    )
+                })
             }.padding(.top, 14)
         } else if tool == .crop {
             SectionTitle("Crop", subtitle: "Drag on the canvas")
@@ -1429,6 +1473,7 @@ private struct ImageEditorSurface: View {
     private func updateViewport(_ size: CGSize) {
         viewportSize = size
         if zoomMode == "fit" { applyZoomMode("fit") }
+        refreshCanvasOffscreen(viewport: size, frame: canvasViewportFrame)
     }
 
     private func applyZoomMode(_ mode: String) {
@@ -1473,10 +1518,7 @@ private struct ImageEditorSurface: View {
 
     private func updateCanvasFrame(_ frame: CGRect) {
         canvasViewportFrame = frame
-        canvasOffscreen = EditorViewportMath.isMostlyOffscreen(
-            viewportSize: viewportSize,
-            canvasFrame: frame
-        )
+        refreshCanvasOffscreen(viewport: viewportSize, frame: frame)
         guard let anchor = pendingZoomAnchor,
               abs(anchor.zoom - zoom) < 0.0001,
               EditorViewportMath.frame(
@@ -1496,6 +1538,12 @@ private struct ImageEditorSurface: View {
                 height: viewPan.height + correction.height
             )
         }
+    }
+
+    private func refreshCanvasOffscreen(viewport: CGSize, frame: CGRect) {
+        let offscreen = EditorViewportMath.isMostlyOffscreen(viewportSize: viewport, canvasFrame: frame)
+        canvasOffscreen = offscreen
+        onViewportOffscreenChanged?(offscreen)
     }
 
     private func syncEditorColor() {
@@ -1841,7 +1889,7 @@ func imageEditorReferenceView(artifact: Artifact, state: String) -> AnyView {
                 // keeping the moon, blue scene, and selected ellipse visible.
                 initialViewPan: CGSize(width: -500, height: -90)
             ))
-        case "layers":
+        case "layers", "layer-combine":
             model.updateLayer(id: model.document.layers[0].id) { $0.locked = false }
             model.addShape(.rectangle, at: CGPoint(x: 260, y: 180))
             model.updateSelected {
@@ -1849,7 +1897,17 @@ func imageEditorReferenceView(artifact: Artifact, state: String) -> AnyView {
                 $0.fill = $0.color
                 $0.opacity = 0.82
             }
-            return AnyView(ImageEditorSurface(artifact: artifact, model: model))
+            return AnyView(ImageEditorSurface(
+                artifact: artifact,
+                model: model,
+                initialPropertiesAnchor: state == "layer-combine" ? "layer-combine-controls" : nil,
+                onCombineControlsVisibilityChanged: state == "layer-combine" ? {
+                    recordNativeReferenceCombineControlsVisible($0)
+                } : nil,
+                onViewportOffscreenChanged: state == "layers" ? {
+                    recordNativeReferenceLayerCanvasOffscreen($0)
+                } : nil
+            ))
         case "erase":
             return AnyView(ImageEditorSurface(artifact: artifact, model: model, initialTool: .erase))
         case "wand":

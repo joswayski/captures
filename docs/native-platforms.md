@@ -94,8 +94,11 @@ These are implemented experiments, not drop-in replacements. In particular:
   Review caught double-applied crop origins during Flatten and shifted inspector
   hit targets after consuming the source; asymmetric pixel/undo tests and a shared
   source-aware layout calculation now cover those cases. All 70 portable tests,
-  fmt and host strict Clippy pass; the new native menu/property smoke fixtures
-  remain pending. Richer layer controls and persistent editable screenshot drafts
+  fmt and host strict Clippy pass. The [native merge run](https://github.com/joswayski/captures/actions/runs/34728600522)
+  passed 71 library plus two worker MSVC tests and 58 hardware captures, all within
+  desktop/monitor bounds. Inspected input states show the consumed source row gone,
+  merged opacity at 90%, preserved shapes, and one locked Flattened source. A narrow
+  Delete button still wraps and needs a visual correction. Richer layer controls and persistent editable screenshot drafts
   remain incomplete. Imported image layers use the shared raster renderer
   with native multi-select file picking, asynchronous decode, transformed hit
   testing, and batch undo/redo. The model supports locking, independent opacity,
@@ -167,8 +170,15 @@ These are implemented experiments, not drop-in replacements. In particular:
   erroneous Recenter button over a fully fitted canvas; focused corrections remain
   open. Its compositor rerender passed video/filmstrip checks, then failed waiting
   for a successful recording estimate within 30 seconds, before reaching dust.
-  This is not a fully green native run. Diagnostic uploads now retain ordinary
-  failed-reference PNGs as well as compositor captures. Richer text styling remains open.
+  A [subsequent run](https://github.com/joswayski/captures/actions/runs/34728600546)
+  passed the same tests and both estimate/compositor stages, confirming the estimate
+  timeout is intermittent, not establishing its cause. The next correction backfills
+  estimates when probing finishes before view appearance, coalesces duplicate initial
+  notifications, and retains explicit pending/error diagnostics. It also recomputes
+  Recenter after either geometry callback and adds a scrolled combine-controls
+  reference with a visibility assertion. Native verification of these corrections
+  remains pending. Diagnostic uploads now retain ordinary failed-reference PNGs as
+  well as compositor captures. Richer text styling remains open.
 
 ## Feature parity acceptance
 

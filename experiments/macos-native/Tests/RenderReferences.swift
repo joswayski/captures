@@ -154,11 +154,21 @@ enum RenderReferences {
                     "image-editor", "image-editor-shapes", "image-editor-properties",
                     "image-editor-overflow", "image-editor-snap-guides",
                     "image-editor-viewport-pan-zoom",
-                    "image-editor-layer-compositing",
+                    "image-editor-layer-compositing", "image-editor-layer-combine-controls",
                     "image-editor-erase", "image-editor-wand",
                 ].contains(fixture.name),
                    !hasSharedFixtureFeature(bitmap) {
                     fputs("Native \(fixture.name) reference omitted the shared source fixture's distinctive media content; diagnostic PNG saved.\n", stderr)
+                    exit(1)
+                }
+                if fixture.name == "image-editor-layer-compositing",
+                   resolvedNativeReferenceLayerCanvasOffscreen() != false {
+                    fputs("Native image-editor-layer-compositing incorrectly offered Recenter for a fitted visible canvas; diagnostic PNG saved.\n", stderr)
+                    exit(1)
+                }
+                if fixture.name == "image-editor-layer-combine-controls",
+                   resolvedNativeReferenceCombineControlsVisible() != true {
+                    fputs("Native image-editor-layer-combine-controls did not fully expose its combine controls; diagnostic PNG saved.\n", stderr)
                     exit(1)
                 }
                 if fixture.name == "recording-editor-layout", !hasTimelineFilmstrip(bitmap) {
@@ -168,7 +178,8 @@ enum RenderReferences {
                 if fixture.name == "recording-editor-quality-estimate" {
                     guard let label = resolvedNativeReferenceEstimateLabel(),
                           label != "—", label != "Estimating…" else {
-                        fputs("Native recording quality reference did not complete a successful media estimate within 30 seconds; diagnostic PNG saved.\n", stderr)
+                        let state = resolvedNativeReferenceEstimateState() ?? "no lifecycle notification"
+                        fputs("Native recording quality reference did not complete a successful media estimate within 30 seconds (\(state)); diagnostic PNG saved.\n", stderr)
                         exit(1)
                     }
                     print("Completed native recording estimate: \(label)")

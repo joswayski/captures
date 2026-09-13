@@ -9,9 +9,31 @@ struct NativeReferenceFixture {
 }
 
 @MainActor private var nativeReferenceEstimateLabel: String?
+@MainActor private var nativeReferenceEstimateState: String?
+@MainActor private var nativeReferenceCombineControlsVisible: Bool?
+@MainActor private var nativeReferenceLayerCanvasOffscreen: Bool?
 
 @MainActor
 func resolvedNativeReferenceEstimateLabel() -> String? { nativeReferenceEstimateLabel }
+
+@MainActor
+func resolvedNativeReferenceEstimateState() -> String? { nativeReferenceEstimateState }
+
+@MainActor
+func resolvedNativeReferenceCombineControlsVisible() -> Bool? { nativeReferenceCombineControlsVisible }
+
+@MainActor
+func resolvedNativeReferenceLayerCanvasOffscreen() -> Bool? { nativeReferenceLayerCanvasOffscreen }
+
+@MainActor
+func recordNativeReferenceCombineControlsVisible(_ visible: Bool) {
+    nativeReferenceCombineControlsVisible = visible
+}
+
+@MainActor
+func recordNativeReferenceLayerCanvasOffscreen(_ offscreen: Bool) {
+    nativeReferenceLayerCanvasOffscreen = offscreen
+}
 
 @MainActor
 func nativeReferenceFixtures(
@@ -19,6 +41,10 @@ func nativeReferenceFixtures(
     recordingURL: URL,
     includeAnimationCapture: Bool
 ) -> [NativeReferenceFixture] {
+    nativeReferenceEstimateLabel = nil
+    nativeReferenceEstimateState = nil
+    nativeReferenceCombineControlsVisible = nil
+    nativeReferenceLayerCanvasOffscreen = nil
     let image = NSImage(contentsOf: imageURL)!
     let imageArtifacts = (0..<4).map { _ in
         Artifact(path: imageURL.path, kind: "image", width: 960, height: 540)
@@ -71,6 +97,8 @@ func nativeReferenceFixtures(
                                makeView: { imageEditorReferenceView(artifact: imageArtifacts[0], state: "viewport") }),
         NativeReferenceFixture(name: "image-editor-layer-compositing", size: CGSize(width: 1280, height: 900), scheme: .dark,
                                makeView: { imageEditorReferenceView(artifact: imageArtifacts[0], state: "layers") }),
+        NativeReferenceFixture(name: "image-editor-layer-combine-controls", size: CGSize(width: 1280, height: 900), scheme: .dark,
+                               makeView: { imageEditorReferenceView(artifact: imageArtifacts[0], state: "layer-combine") }),
         NativeReferenceFixture(name: "image-editor-erase", size: CGSize(width: 1280, height: 760), scheme: .dark,
                                makeView: { imageEditorReferenceView(artifact: imageArtifacts[0], state: "erase") }),
         NativeReferenceFixture(name: "image-editor-wand", size: CGSize(width: 1280, height: 760), scheme: .dark,
@@ -81,7 +109,8 @@ func nativeReferenceFixtures(
                                makeView: {
                                    AnyView(RecordingEditorView(
                                        artifact: recording, referenceQualityOnly: true,
-                                       onEstimateReady: { nativeReferenceEstimateLabel = $0 }
+                                       onEstimateReady: { nativeReferenceEstimateLabel = $0 },
+                                       onEstimateStateChanged: { nativeReferenceEstimateState = $0 }
                                    ))
                                }),
         NativeReferenceFixture(name: "history", size: CGSize(width: 980, height: 720), scheme: .light,

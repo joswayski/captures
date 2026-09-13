@@ -4,6 +4,21 @@ import XCTest
 
 @MainActor
 final class EditorModelTests: XCTestCase {
+    func testRecordingEstimateLifecycleSchedulesForEitherProbeAndAppearanceOrder() {
+        var probeFirst = RecordingEstimateLifecycle()
+        XCTAssertFalse(probeFirst.probeChanged(isReady: true))
+        XCTAssertTrue(probeFirst.viewAppeared(probeReady: true))
+        XCTAssertFalse(probeFirst.probeChanged(isReady: true))
+
+        var appearanceFirst = RecordingEstimateLifecycle()
+        XCTAssertFalse(appearanceFirst.viewAppeared(probeReady: false))
+        XCTAssertTrue(appearanceFirst.probeChanged(isReady: true))
+        XCTAssertFalse(appearanceFirst.probeChanged(isReady: true))
+
+        appearanceFirst.viewDisappeared()
+        XCTAssertTrue(appearanceFirst.viewAppeared(probeReady: true))
+    }
+
     func testViewportEventRoutingConsumesHandledEventAndPreservesUnhandledEvent() throws {
         let event = try XCTUnwrap(NSEvent.otherEvent(
             with: .applicationDefined,
@@ -161,6 +176,14 @@ final class EditorModelTests: XCTestCase {
 
     func testViewportRecenterThresholdDistinguishesAreaFromThinSliver() {
         let viewport = CGSize(width: 800, height: 600)
+        XCTAssertFalse(EditorViewportMath.isMostlyOffscreen(
+            viewportSize: .zero,
+            canvasFrame: CGRect(x: 901, y: -200, width: 400, height: 300)
+        ))
+        XCTAssertFalse(EditorViewportMath.isMostlyOffscreen(
+            viewportSize: viewport,
+            canvasFrame: .zero
+        ))
         XCTAssertFalse(EditorViewportMath.isMostlyOffscreen(
             viewportSize: viewport,
             canvasFrame: CGRect(x: -317, y: 71, width: 400, height: 300)

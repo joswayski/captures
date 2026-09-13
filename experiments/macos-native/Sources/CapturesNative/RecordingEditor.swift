@@ -27,6 +27,32 @@ private enum RecordingTimelineTarget: Equatable {
     case start, end, playhead
 }
 
+struct RecordingEstimateLifecycle {
+    private(set) var appeared = false
+    private var scheduledForReadyProbe = false
+
+    mutating func viewAppeared(probeReady: Bool) -> Bool {
+        appeared = true
+        return scheduleIfNeeded(probeReady: probeReady)
+    }
+
+    mutating func probeChanged(isReady: Bool) -> Bool {
+        if !isReady { scheduledForReadyProbe = false }
+        return scheduleIfNeeded(probeReady: isReady)
+    }
+
+    mutating func viewDisappeared() {
+        appeared = false
+        scheduledForReadyProbe = false
+    }
+
+    private mutating func scheduleIfNeeded(probeReady: Bool) -> Bool {
+        guard appeared, probeReady, !scheduledForReadyProbe else { return false }
+        scheduledForReadyProbe = true
+        return true
+    }
+}
+
 private struct RecordingPlayerSurface: NSViewRepresentable {
     let player: AVPlayer
 
@@ -60,6 +86,7 @@ private final class RecordingEditorModel: ObservableObject {
     @Published var estimatedBytes: Double?
     @Published var estimateExact = false
     @Published var estimatePending = false
+    @Published var estimateError = ""
     @Published var timelineFrames: [NSImage] = []
     var loopEnabled = false
 
@@ -280,6 +307,7 @@ private final class RecordingEditorModel: ObservableObject {
         estimateGeneration += 1
         let generation = estimateGeneration
         estimatePending = true
+        estimateError = ""
         let fields = exportFields(
             output: nil, format: format, width: width, quality: quality, maxBytes: maxBytes,
             systemVolume: systemVolume, microphoneVolume: microphoneVolume, mono: mono, gifFPS: gifFPS,
@@ -290,11 +318,18 @@ private final class RecordingEditorModel: ObservableObject {
             self.estimatePending = false
             switch result {
             case let .success(response):
-                self.estimatedBytes = Self.number(response["size_bytes"])
-                self.estimateExact = response["exact"] as? Bool ?? false
-            case .failure:
+                if let bytes = Self.number(response["size_bytes"]) {
+                    self.estimatedBytes = bytes
+                    self.estimateExact = response["exact"] as? Bool ?? false
+                } else {
+                    self.estimatedBytes = nil
+                    self.estimateExact = false
+                    self.estimateError = "media_estimate returned no file size."
+                }
+            case let .failure(error):
                 self.estimatedBytes = nil
                 self.estimateExact = false
+                self.estimateError = error.localizedDescription
             }
         }
     }
@@ -304,6 +339,7 @@ private final class RecordingEditorModel: ObservableObject {
         estimatePending = true
         estimatedBytes = nil
         estimateExact = false
+        estimateError = ""
     }
 
     func dismissEstimate() {
@@ -311,6 +347,7 @@ private final class RecordingEditorModel: ObservableObject {
         estimatePending = false
         estimatedBytes = nil
         estimateExact = false
+        estimateError = ""
     }
 
     private func loadTimelineFrames(durationMS: Double) {
@@ -379,6 +416,7 @@ struct RecordingEditorView: View {
     let artifact: Artifact
     private let referenceQualityOnly: Bool
     private let onEstimateReady: ((String) -> Void)?
+    private let onEstimateStateChanged: ((String) -> Void)?
     @StateObject private var model: RecordingEditorModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var previewActualSize = false
@@ -396,6 +434,7 @@ struct RecordingEditorView: View {
     @State private var comparisonExpanded = true
     @State private var comparisonWork: DispatchWorkItem?
     @State private var estimateWork: DispatchWorkItem?
+    @State private var estimateLifecycle = RecordingEstimateLifecycle()
     @State private var gifFPS = 15
     @State private var comparisonSplit: CGFloat = 0.5
     @State private var systemVolume = 1.0
@@ -411,11 +450,13 @@ struct RecordingEditorView: View {
     init(
         artifact: Artifact,
         referenceQualityOnly: Bool = false,
-        onEstimateReady: ((String) -> Void)? = nil
+        onEstimateReady: ((String) -> Void)? = nil,
+        onEstimateStateChanged: ((String) -> Void)? = nil
     ) {
         self.artifact = artifact
         self.referenceQualityOnly = referenceQualityOnly
         self.onEstimateReady = onEstimateReady
+        self.onEstimateStateChanged = onEstimateStateChanged
         _model = StateObject(wrappedValue: RecordingEditorModel(artifact: artifact))
         let format = artifact.kind == "gif" ? "gif" : "mp4"
         _outputFormat = State(initialValue: format)
@@ -462,10 +503,20 @@ struct RecordingEditorView: View {
         .background(NativeTheme.canvas(colorScheme))
         .foregroundStyle(NativeTheme.text(colorScheme))
         .onChange(of: loop) { value in model.loopEnabled = value }
-        .onChange(of: model.probe) { _ in scheduleComparison() }
+        .onAppear {
+            if estimateLifecycle.viewAppeared(probeReady: model.probe != nil) { scheduleComparison() }
+            reportEstimateState()
+        }
+        .onChange(of: model.probe) { probe in
+            if estimateLifecycle.probeChanged(isReady: probe != nil) { scheduleComparison() }
+            reportEstimateState()
+        }
         .onChange(of: model.estimatedBytes) { bytes in
             if bytes != nil, !model.estimatePending { onEstimateReady?(estimatedSizeLabel) }
+            reportEstimateState()
         }
+        .onChange(of: model.estimatePending) { _ in reportEstimateState() }
+        .onChange(of: model.estimateError) { _ in reportEstimateState() }
         .onChange(of: qualityMode) { _ in scheduleComparison() }
         .onChange(of: quality) { _ in scheduleComparison() }
         .onChange(of: maximumSizeMB) { _ in scheduleComparison() }
@@ -501,6 +552,7 @@ struct RecordingEditorView: View {
             }
         }
         .onDisappear {
+            estimateLifecycle.viewDisappeared()
             comparisonWork?.cancel()
             estimateWork?.cancel()
             model.dismissComparison()
@@ -1125,6 +1177,22 @@ struct RecordingEditorView: View {
         }
         estimateWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+
+    private func reportEstimateState() {
+        let state: String
+        if model.probe == nil {
+            state = "waiting for probe"
+        } else if model.estimatePending {
+            state = "pending"
+        } else if model.estimatedBytes != nil {
+            state = "ready"
+        } else if !model.estimateError.isEmpty {
+            state = "failed: \(model.estimateError)"
+        } else {
+            state = "idle after probe"
+        }
+        onEstimateStateChanged?(state)
     }
 
     private func formatBytes(_ bytes: Double) -> String {
