@@ -44,7 +44,7 @@ test("detects Windows and Linux, preferring .deb on Debian-family user agents", 
       userAgentDataPlatform: "Linux",
       maxTouchPoints: 0,
     }),
-    "linux-appimage",
+    "linux-archive",
   );
   assert.equal(
     detectPreviewDownloadId({
@@ -82,7 +82,7 @@ test("detects desktop installers from request headers", () => {
       userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
       secChUaPlatform: '"Linux"',
     }),
-    "linux-appimage",
+    "linux-archive",
   );
 });
 

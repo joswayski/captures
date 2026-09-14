@@ -4347,7 +4347,7 @@ fn publish_segments(segments: &[RecordingSegmentInfo], output: &Path) -> Result<
                 duration_ms: s.duration_ms,
             })
             .collect::<Vec<_>>();
-        captures_media::MediaToolchain::from_command_names()
+        captures_windows_native::media_tools::toolchain()
             .assemble_recording_segments(
                 &inputs,
                 output,

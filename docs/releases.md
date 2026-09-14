@@ -1,5 +1,47 @@
 # Captures releases
 
+## Native Preview is the default manual download
+
+`.github/workflows/native-release.yml` builds native app changes on `main`, using
+the event's exact commit and a separate `native-vYYYY.MM.DD.N` tag namespace (New
+York build date). A non-cancelling queue coalesces pending pushes. It runs the
+repository gate and each native workspace's tests/Clippy, then packages a signed,
+notarized macOS DMG, a per-user Windows NSIS setup, and Linux .deb/.tar.gz files.
+PRs test Linux/Windows packaging without publishing; macOS Developer ID packaging
+needs the existing `release` environment's Apple credentials and runs only on main.
+The macOS ad-hoc build/test workflow still checks PRs.
+
+All four packages must be present and nonempty before checksums are generated.
+`publish-native-release.sh` syncs and verifies assets through the existing GitHub
+asset helper, publishes the dated prerelease, then advances `native-preview`.
+No stable release or `latest.json` is created. The legacy Tauri updater ignores
+native tags and continues to use `preview`; never put a native binary into a
+Tauri updater payload. Both channels retain their own profiles and install paths.
+
+The website and README use these native assets:
+
+- `Captures-macOS-Apple-Silicon.dmg`
+- `Captures-Windows-x64-setup.exe`
+- `Captures-Linux-x64.deb`
+- `Captures-Linux-x64.tar.gz`
+
+Linux is X11-only. Official builds use Ubuntu 24.04; the .deb installs runtime
+dependencies including FFmpeg, and the archive explicitly requires system GTK4,
+glibc 2.39+ and FFmpeg/ffprobe/ffplay. It is not an AppImage. Windows/macOS include
+their pinned FFmpeg binaries, corresponding source and license notices. Windows
+setup is not Authenticode-signed. Native updates are manual; no profile migration
+or Windows/Linux Open With registration is performed.
+
+**First rollout:** download links become available only after the first successful
+main build; the website may deploy earlier. Until then, use the clearly labelled
+legacy download link if needed. A failed platform build leaves `native-preview`
+unchanged. For recovery, dispatch `native-release.yml` on main to build a new dated
+release; it refuses to overwrite a dated release, including an unfinished draft.
+Do not dispatch `release.yml` expecting native packages. Review platform failures
+before advancing the channel; publishing does not establish native feature parity.
+
+## Legacy Tauri Preview and updater
+
 Pushes to `main` request a Preview in `.github/workflows/release.yml`. One release
 runs at a time; GitHub's default single pending slot replaces older requests while
 `cancel-in-progress: false` lets the active release finish. When the next run

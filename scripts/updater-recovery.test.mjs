@@ -5,6 +5,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { PREVIEW_CHANNEL_ASSET_NAMES } from "./preview-release-assets.mjs";
+import { NATIVE_ASSETS } from "./native-release-assets.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -43,24 +44,23 @@ test("published builds keep a signed in-app updater and a public installer page"
   assert.match(preferences, /open_update_download_page/u);
 });
 
-test("README, website, and Preview channel share stable installer names", () => {
+test("default downloads use native packages while Tauri recovery stays available", () => {
   const readme = read("README.md");
   const home = read("apps/web/src/pages/Home.tsx");
   const releases = read("docs/releases.md");
 
-  for (const name of INSTALLER_NAMES) {
-    const url = `https://github.com/joswayski/captures/releases/download/preview/${name}`;
+  for (const name of NATIVE_ASSETS) {
+    const url = `https://github.com/joswayski/captures/releases/download/native-preview/${name}`;
     assert.ok(readme.includes(url), `README is missing ${url}`);
     assert.ok(home.includes(name), `website is missing ${name}`);
     assert.ok(releases.includes(name), `docs/releases.md is missing ${name}`);
   }
 
-  assert.match(
-    readme,
-    /If Captures will not open or cannot install an update/u,
-  );
-  assert.match(readme, /~\/\.local\/bin\/Captures\.AppImage/u);
-  assert.match(home, /replaces the current app/u);
-  assert.match(home, /~\/\.local\/bin\/Captures\.AppImage/u);
+  for (const name of INSTALLER_NAMES) assert.ok(releases.includes(name));
+  assert.match(readme, /releases\/tag\/preview/u);
+  assert.match(home, /releases\/tag\/preview/u);
+  assert.match(home, /releases\/download\/native-preview/u);
+  assert.match(readme, /Updates are manual/u);
+  assert.match(home, /Updates are manual/u);
   assert.match(releases, /~\/\.local\/bin\/Captures\.AppImage/u);
 });

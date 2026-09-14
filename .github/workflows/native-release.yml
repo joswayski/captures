@@ -1,0 +1,240 @@
+name: Captures Native Preview
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "experiments/linux-native/**"
+      - "experiments/windows-native/**"
+      - "experiments/macos-native/**"
+      - "experiments/native-ui/src/native/editor/encoder.rs"
+      - "crates/**"
+      - "shared/**"
+      - ".cargo/**"
+      - "Cargo.*"
+      - "rust-toolchain.toml"
+      - "scripts/package-native-*"
+      - "scripts/native-*"
+      - "scripts/publish-native-release.sh"
+      - "scripts/*ffmpeg*"
+      - "apps/desktop/src-tauri/ffmpeg/**"
+      - "apps/desktop/src-tauri/openh264/**"
+      - "apps/desktop/src-tauri/icons/**"
+      - ".github/actions/prepare-media/**"
+      - ".github/workflows/native-release.yml"
+  pull_request:
+    paths:
+      - "scripts/package-native-*"
+      - "scripts/native-*"
+      - "scripts/publish-native-release.sh"
+      - ".github/workflows/native-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Do not cancel an upload halfway through; coalesce pending pushes instead.
+concurrency:
+  group: captures-native-preview-${{ github.event.pull_request.number || 'main' }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      app_version: ${{ steps.version.outputs.app_version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - id: version
+        name: Version the separate native channel
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync } from 'node:fs';
+          import { nextReleaseVersion, releaseDate } from './scripts/release-version.mjs';
+          const tags = execFileSync('git', ['tag', '--list', 'native-v*'], {encoding: 'utf8'})
+            .trim().split('\n').map(tag => tag.replace(/^native-/, ''));
+          const version = nextReleaseVersion(releaseDate(), tags);
+          appendFileSync(process.env.GITHUB_OUTPUT, `app_version=${version.appVersion}\ntag=native-${version.tag}\n`);
+          NODE
+
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  linux:
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GTK4 build, media and packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libgtk-4-dev libclang-dev libssl-dev \
+            libasound2-dev libdbus-1-dev libegl-dev libgbm-dev \
+            libpipewire-0.3-dev libspa-0.2-dev libwayland-dev \
+            libxcb1-dev libxrandr-dev ffmpeg dpkg-dev
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.94.0
+          components: rustfmt, clippy
+          cache-workspaces: experiments/linux-native -> target
+      - run: cargo fmt --manifest-path experiments/linux-native/Cargo.toml -- --check
+      - run: cargo test --locked --manifest-path experiments/linux-native/Cargo.toml
+      - run: cargo clippy --locked --manifest-path experiments/linux-native/Cargo.toml --all-targets -- -D warnings
+      - run: cargo build --locked --release --manifest-path experiments/linux-native/Cargo.toml
+      - run: bash scripts/package-native-linux.sh '${{ needs.version.outputs.app_version }}'
+      - name: Inspect packages
+        run: |
+          dpkg-deb --info native-dist/Captures-Linux-x64.deb
+          dpkg-deb --contents native-dist/Captures-Linux-x64.deb
+          tar -tzf native-dist/Captures-Linux-x64.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-linux-packages
+          path: native-dist/*
+          if-no-files-found: error
+
+  windows:
+    needs: version
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.94.0
+          components: rustfmt, clippy
+          cache-workspaces: experiments/windows-native -> target
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          path-type: inherit
+          install: >-
+            base-devel diffutils make mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-nasm mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-yasm mingw-w64-ucrt-x86_64-zlib
+      - name: Install NSIS and test-only FFmpeg
+        shell: pwsh
+        run: |
+          choco install nsis ffmpeg --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Tool installation failed' }
+          "${env:ProgramFiles(x86)}\NSIS" >> $env:GITHUB_PATH
+      - run: cargo fmt --manifest-path experiments/windows-native/Cargo.toml -- --check
+      - run: cargo test --locked --manifest-path experiments/windows-native/Cargo.toml
+      - run: cargo clippy --locked --manifest-path experiments/windows-native/Cargo.toml --all-targets -- -D warnings
+      - run: cargo build --locked --release --target x86_64-pc-windows-msvc --manifest-path experiments/windows-native/Cargo.toml
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+      - uses: ./.github/actions/prepare-media
+      - run: ./scripts/package-native-windows.ps1 -Version '${{ needs.version.outputs.app_version }}'
+      - name: Verify native installation and bundled media without launching Captures
+        shell: pwsh
+        run: |
+          $installer = Resolve-Path native-dist/Captures-Windows-x64-setup.exe
+          $process = Start-Process $installer -ArgumentList '/S' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'Native installer failed' }
+          $install = Join-Path $env:LOCALAPPDATA 'Programs/Captures Native Preview'
+          foreach ($name in @('captures-windows-native.exe', 'ffmpeg.exe', 'ffprobe.exe', 'Uninstall.exe', 'licenses/ffmpeg/COPYING.LGPLv2.1')) {
+            if (-not (Test-Path (Join-Path $install $name))) { throw "Missing installed file: $name" }
+          }
+          foreach ($tool in @('ffmpeg.exe', 'ffprobe.exe')) {
+            & (Join-Path $install $tool) -version
+            if ($LASTEXITCODE -ne 0) { throw "Installed media tool failed: $tool" }
+          }
+          $uninstall = Get-ItemProperty 'HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall/CapturesNativePreview'
+          if ($uninstall.UninstallString -ne ('"' + (Join-Path $install 'Uninstall.exe') + '"')) {
+            throw 'Invalid quoted uninstall command'
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-windows-packages
+          path: native-dist/*
+          if-no-files-found: error
+
+  macos:
+    needs: version
+    # Fork/PR jobs have no release secrets. Existing native-macos checks compile
+    # and render the ad-hoc test app; Developer ID packaging runs on main only.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    environment: release
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.94.0
+          components: rustfmt, clippy
+          cache-workspaces: experiments/macos-native/bridge -> ../build/rust
+      - name: Install test-only media tools
+        run: command -v ffmpeg >/dev/null || brew install ffmpeg
+      - run: bash experiments/macos-native/check.sh
+      - uses: ./.github/actions/prepare-media
+      - name: Build signed and notarized native DMG
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: bash scripts/package-native-macos.sh '${{ needs.version.outputs.app_version }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-macos-packages
+          path: native-dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [version, checks, linux, windows, macos]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*-packages
+          merge-multiple: true
+          path: native-dist
+      - run: node scripts/native-release-assets.mjs native-dist
+      - name: Publish native archive and advance manual-download channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NATIVE_TAG: ${{ needs.version.outputs.tag }}
+        run: bash scripts/publish-native-release.sh

@@ -112,7 +112,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ### Platform-native migration
 
-The new presentation work is separate from the shipping Tauri app and from the
+The native default downloads are separate from the legacy Tauri app and from the
 older GTK3 baseline below: `experiments/linux-native` uses GTK4,
 `experiments/windows-native` uses Win32/DirectComposition, and
 `experiments/macos-native` uses Swift/AppKit. See the
@@ -120,6 +120,19 @@ older GTK3 baseline below: `experiments/linux-native` uses GTK4,
 Each standalone Cargo workspace needs its own tests; the root gate alone does
 not validate these apps. Native PR checks compile on their respective OS runners.
 That is not physical-desktop capture, audio, or performance certification.
+
+Native packaging runs in `.github/workflows/native-release.yml`. Local entry points
+are `bash scripts/package-native-linux.sh <version>`,
+`./scripts/package-native-windows.ps1 -Version <version>`, and
+`bash scripts/package-native-macos.sh <version>`, with a three-part version such as
+`2026.9.1401`. Linux/Windows require their standalone release binary first; Windows
+uses the explicit `x86_64-pc-windows-msvc` target and needs NSIS. Linux needs
+`dpkg-dev`; its .deb declares dependencies from the binary and system FFmpeg.
+macOS builds its app and requires the release Apple secrets, Xcode and arm64 hardware.
+macOS/Windows require prepared LGPL media sidecars and their source/compliance files.
+All output goes to `native-dist/`; no script installs or launches the app.
+`npm run dev`, `npm run build`, and `npm run install:preview` remain **legacy Tauri**
+developer commands; they do not select or overwrite the separate native app.
 
 The GTK4 X11 suite (`experiments/linux-native/check-x11.sh`) also runs
 `feedback_check.py` against a loopback server. It holds a response to verify

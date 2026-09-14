@@ -1,4 +1,4 @@
-export type PreviewDownloadId = "macos" | "windows" | "linux-deb" | "linux-appimage";
+export type PreviewDownloadId = "macos" | "windows" | "linux-deb" | "linux-archive";
 
 export type NavigatorHints = {
   userAgent: string;
@@ -27,7 +27,7 @@ export function detectPreviewDownloadId(hints: NavigatorHints): PreviewDownloadI
     return "windows";
   }
   if (/^linux/i.test(ch) || /linux/i.test(platform) || (/linux/i.test(ua) && !/android/i.test(ua))) {
-    return /ubuntu|debian|linux mint|pop!_os|elementary/i.test(ua) ? "linux-deb" : "linux-appimage";
+    return /ubuntu|debian|linux mint|pop!_os|elementary/i.test(ua) ? "linux-deb" : "linux-archive";
   }
   return null;
 }
