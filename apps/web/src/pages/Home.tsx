@@ -117,8 +117,8 @@ export default function Home({
                 </h2>
                 <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
                   Builds are available after every merge and may contain bugs or incomplete
-                  features. {installRecoveryCopy(detectedDownload)} Please give feedback in the
-                  app, on{" "}
+                  features. {linuxInstallCopy(detectedDownload)} Please give feedback in the app,
+                  on{" "}
                   <a
                     href={X_URL}
                     target="_blank"
@@ -250,11 +250,9 @@ function linuxAlternativeLabel(download: PreviewDownload) {
   return download.id === "linux-deb" ? ".deb for Ubuntu / Debian" : ".tar.gz archive";
 }
 
-function installRecoveryCopy(download: PreviewDownload) {
-  if (download.family === "linux") {
-    return "Linux needs X11. Install the .deb with your package manager, or extract the archive and install GTK4, glibc 2.39+ and FFmpeg (including ffprobe and ffplay). The archive is not self-contained.";
-  }
-  return "Installing a download replaces the current app without deleting settings or captures.";
+function linuxInstallCopy(download: PreviewDownload) {
+  if (download.family !== "linux") return null;
+  return "Linux needs X11. Install the .deb with your package manager, or extract the archive and install GTK4, glibc 2.39+ and FFmpeg (including ffprobe and ffplay). The archive is not self-contained.";
 }
 
 function availabilityLabel(download: PreviewDownload | null) {
