@@ -783,13 +783,21 @@ fn encoded_len(bytes: &[u8]) -> u64 {
 /// Select export bytes when saving also needs a lossless history PNG.
 fn encode_save_export<'a>(
     image: &RgbaImage,
-    _history_png: &'a [u8],
+    history_png: &'a [u8],
     format: ScreenshotEditFormat,
     quality_mode: ScreenshotExportQualityMode,
     jpeg_quality: u8,
     max_size_bytes: Option<u64>,
     png_max_colors: Option<u16>,
 ) -> Result<Cow<'a, [u8]>, AppError> {
+    if matches!(format, ScreenshotEditFormat::Png)
+        && matches!(quality_mode, ScreenshotExportQualityMode::Preserve)
+        && max_size_bytes.is_none()
+    {
+        // The history PNG uses the same encoder as Preserve export. Borrow
+        // those canonical bytes, avoiding both a second encode and its buffer.
+        return Ok(Cow::Borrowed(history_png));
+    }
     encode_export_with_limit(
         image,
         format,
@@ -1137,6 +1145,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(image::load_from_memory(&output).unwrap().to_rgba8(), image);
+        assert!(matches!(output, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(output.as_ptr(), history.as_ptr());
     }
 
     #[test]
