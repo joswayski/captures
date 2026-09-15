@@ -223,6 +223,15 @@ Earlier Linux GTK3 and Windows GTK/Cairo reports are historical baselines, not t
 current GTK4 and Win32 packages. Linux measurements do not establish macOS or Windows
 performance. The legacy Tauri app remains available in `apps/desktop`.
 
+An isolated [GPUI implementation](docs/gpui-implementation.md) uses shared custom
+GPU-rendered Rust windows for capture, previews, image editing, recording,
+preferences, and history, with native adapters for Linux/X11, macOS, and Windows.
+It keeps its profile separate and is not shipped in Preview. Linux/X11 has
+rendered workflow checks; macOS and Windows still need native runtime validation.
+Wayland, external file dragging, and full interaction/animation parity remain
+incomplete; the linked notes separate implemented behavior, measurements, and
+remaining work.
+
 ## License and trademarks
 
 The source code is licensed under the [Apache License 2.0](LICENSE).

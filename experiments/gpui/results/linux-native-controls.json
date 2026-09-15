@@ -1,0 +1,628 @@
+{
+  "recorded_at": "2026-09-12T02:24:25.803417+00:00",
+  "scope": "Linux X11 release-source whole-process-tree comparison of the supplied Tauri, GPUI and/or full GTK implementations. Preferences and media editors use their production entry paths; screenshot and recording selectors use each app's real configured global shortcut. Matched client size and appearance; feature/interaction parity is assessed separately.",
+  "caveats": "First mapped window is not readiness. No FPS or energy measurement, and no extrapolation to macOS, Windows, or other Linux environments. Overlay resource samples retain the Preferences used to enter them. Native means the full GTK/Cairo experiment, not a minimal native window or AppKit/Win32. Native captures publish files while the other implementations keep private copies; these are settled-state costs, not capture throughput. Preview/HUD timing includes multi-step fixture setup and deliberate waits; do not compare it as startup latency. The idle_cpu field measures active capture CPU for recording-hud.",
+  "environment": {
+    "lab": "native_desktop.py disposable Xvfb/Openbox/xcompmgr/DBus fixture",
+    "platform": "Linux-6.1.158+-x86_64-with-glibc2.36",
+    "machine": "x86_64",
+    "cpu_count": 2,
+    "display": ":99",
+    "software_gl": true,
+    "vulkan": "==========\nVULKANINFO\n==========\n\nVulkan Instance Version: 1.3.239\n\n\nInstance Extensions: count = 23\n-------------------------------\nVK_EXT_acquire_drm_display             : extension revision 1\nVK_EXT_acquire_xlib_display            : extension revision 1\nVK_EXT_debug_report                    : extension revision 10\nVK_EXT_debug_utils                     : extension revision 2\nVK_EXT_direct_mode_display             : extension revision 1\nVK_EXT_display_surface_counter         : extension revision 1\nVK_EXT_headless_surface                : extension revision 1\nVK_EXT_surface_maintenance1            : extension revision 1\nVK_EXT_swapchain_colorspace            : extension revision 5\nVK_KHR_device_group_creation           : extension revision 1\nVK_KHR_display                         : extension revision 23\nVK_KHR_external_fence_capabilities     : extension revision 1\nVK_KHR_external_memory_capabilities    : extension revision 1\nVK_KHR_external_semaphore_capabilities : extension revision 1\nVK_KHR_get_display_properties2         : extension revision 1\nVK_KHR_get_physical_device_properties2 : extension revision 2\nVK_KHR_get_surface_capabilities2       : extension revision 1\nVK_KHR_portability_enumeration         : extension revision 1\nVK_KHR_surface                         : extension revision 25\nVK_KHR_surface_protected_capabilities  : extension revision 1\nVK_KHR_wayland_surface                 : extension revision 6\nVK_KHR_xcb_surface                     : extension revision 6\nVK_KHR_xlib_surface                    : extension revision 6\n\nInstance Layers: count = 3\n--------------------------\nVK_LAYER_INTEL_nullhw       INTEL NULL HW                1.1.73   version 1\nVK_LAYER_MESA_device_select Linux device selection layer 1.4.303  version 1\nVK_LAYER_MESA_overlay       Mesa Overlay layer           1.4.303  version 1\n\nDevices:\n========\nGPU0:\n\tapiVersion         = 1.4.305\n\tdriverVersion      = 0.0.1\n\tvendorID           = 0x10005\n\tdeviceID           = 0x0000\n\tdeviceType         = PHYSICAL_DEVICE_TYPE_CPU\n\tdeviceName         = llvmpipe (LLVM 15.0.6, 256 bits)\n\tdriverID           = DRIVER_ID_MESA_LLVMPIPE\n\tdriverName         = llvmpipe\n\tdriverInfo         = Mesa 25.0.7-2~bpo12+1 (LLVM 15.0.6)\n\tconformanceVersion = 1.3.1.1\n\tdeviceUUID         = 6d657361-3235-2e30-2e37-2d327e627000\n\tdriverUUID         = 6c6c766d-7069-7065-5555-494400000000\n",
+    "mesa_packages": "libgl1-mesa-dri:amd64\t25.0.7-2~bpo12+1\nlibvulkan1:amd64\t1.3.239.0-1\nmesa-vulkan-drivers:amd64\t25.0.7-2~bpo12+1\n",
+    "display_geometry": "1600 1000"
+  },
+  "configuration": {
+    "runs": 5,
+    "settle_seconds": 5,
+    "idle_seconds": 2,
+    "appearance": "dark",
+    "implementations": [
+      "native"
+    ],
+    "client_viewports": {
+      "preferences": [
+        980,
+        720
+      ],
+      "image": [
+        1280,
+        760
+      ],
+      "screenshot-selection": [
+        1600,
+        1000
+      ],
+      "recording-selection": [
+        1600,
+        1000
+      ],
+      "previews-collapsed": "native",
+      "previews-expanded": "native",
+      "recording-hud": "native"
+    }
+  },
+  "source_base": "c8dd70dc50528ee25b62e0019bc85c9cc3cf6c53",
+  "binaries": {
+    "native": {
+      "path": "/home/user/workspace/captures-gpui/experiments/gpui/target/release/captures-linux-native",
+      "bytes": 12144120,
+      "sha256": "78b5e8d09b0143039dbb5f0900b35faa7b31517cb2282275d44c9207ab719563"
+    }
+  },
+  "inputs": {
+    "image": {
+      "path": "/tmp/captures-gpui-lab/fixture.png",
+      "bytes": 45328,
+      "sha256": "1c82e95f98641cd40087b24b14fb1db24ad9536fdbd5e8e6955b9447b977e7c5"
+    },
+    "video": null
+  },
+  "coverage": {
+    "matched": [
+      "preferences",
+      "image",
+      "screenshot-selection",
+      "recording-selection",
+      "previews-collapsed",
+      "previews-expanded",
+      "recording-hud"
+    ],
+    "unmatched": {
+      "history": "Symmetric production tray activation was not verified in this X11 fixture; no history benchmark is claimed.",
+      "export-timings": "Exports require editor IPC/UI interaction and completion signaling; the apps do not expose a symmetric production CLI workflow.",
+      "video-editor": "Not run: supply --video-fixture only after verifying actual playback in every supplied app."
+    }
+  },
+  "samples": {
+    "preferences": {
+      "native": [
+        {
+          "rss_mib": 50.10546875,
+          "pss_mib": 39.916015625,
+          "private_mib": 35.8828125,
+          "processes": 1,
+          "first_window_mapped_ms": 608.0752740017488,
+          "idle_cpu_percent_one_core": 0.49997009703789075
+        },
+        {
+          "rss_mib": 50.4296875,
+          "pss_mib": 40.2998046875,
+          "private_mib": 36.2890625,
+          "processes": 1,
+          "first_window_mapped_ms": 535.4737930028932,
+          "idle_cpu_percent_one_core": 0.49995913409085785
+        },
+        {
+          "rss_mib": 50.35546875,
+          "pss_mib": 40.26171875,
+          "private_mib": 36.265625,
+          "processes": 1,
+          "first_window_mapped_ms": 590.5861159990309,
+          "idle_cpu_percent_one_core": 0.0
+        },
+        {
+          "rss_mib": 50.234375,
+          "pss_mib": 40.05859375,
+          "private_mib": 36.0234375,
+          "processes": 1,
+          "first_window_mapped_ms": 604.638401997363,
+          "idle_cpu_percent_one_core": 0.0
+        },
+        {
+          "rss_mib": 50.33984375,
+          "pss_mib": 40.1845703125,
+          "private_mib": 36.13671875,
+          "processes": 1,
+          "first_window_mapped_ms": 585.9291660017334,
+          "idle_cpu_percent_one_core": 0.49997293896506656
+        }
+      ]
+    },
+    "image": {
+      "native": [
+        {
+          "rss_mib": 48.8671875,
+          "pss_mib": 37.8212890625,
+          "private_mib": 32.37109375,
+          "processes": 1,
+          "first_window_mapped_ms": 555.93854199833,
+          "idle_cpu_percent_one_core": 0.9999447315556198
+        },
+        {
+          "rss_mib": 50.19140625,
+          "pss_mib": 38.6328125,
+          "private_mib": 32.76953125,
+          "processes": 1,
+          "first_window_mapped_ms": 567.3291009989043,
+          "idle_cpu_percent_one_core": 0.0
+        },
+        {
+          "rss_mib": 50.27734375,
+          "pss_mib": 38.71875,
+          "private_mib": 32.76953125,
+          "processes": 1,
+          "first_window_mapped_ms": 544.2778959986754,
+          "idle_cpu_percent_one_core": 0.4999648039777219
+        },
+        {
+          "rss_mib": 50.05859375,
+          "pss_mib": 38.4296875,
+          "private_mib": 32.4921875,
+          "processes": 1,
+          "first_window_mapped_ms": 539.9504699998943,
+          "idle_cpu_percent_one_core": 0.49997262149867244
+        },
+        {
+          "rss_mib": 50.1796875,
+          "pss_mib": 38.62890625,
+          "private_mib": 32.671875,
+          "processes": 1,
+          "first_window_mapped_ms": 508.74196799850324,
+          "idle_cpu_percent_one_core": 0.0
+        }
+      ]
+    },
+    "screenshot-selection": {
+      "native": [
+        {
+          "rss_mib": 76.984375,
+          "pss_mib": 63.5087890625,
+          "private_mib": 56.13671875,
+          "processes": 1,
+          "first_window_mapped_ms": 299.3210189997626,
+          "idle_cpu_percent_one_core": 0.0
+        },
+        {
+          "rss_mib": 77.32421875,
+          "pss_mib": 63.8740234375,
+          "private_mib": 56.484375,
+          "processes": 1,
+          "first_window_mapped_ms": 330.69088000047486,
+          "idle_cpu_percent_one_core": 0.49996794130512434
+        },
+        {
+          "rss_mib": 77.30078125,
+          "pss_mib": 63.7392578125,
+          "private_mib": 56.34765625,
+          "processes": 1,
+          "first_window_mapped_ms": 253.01129199942807,
+          "idle_cpu_percent_one_core": 0.4999685909738509
+        },
+        {
+          "rss_mib": 77.296875,
+          "pss_mib": 63.8369140625,
+          "private_mib": 56.48046875,
+          "processes": 1,
+          "first_window_mapped_ms": 305.12130799979786,
+          "idle_cpu_percent_one_core": 0.0
+        },
+        {
+          "rss_mib": 77.15625,
+          "pss_mib": 63.80078125,
+          "private_mib": 56.484375,
+          "processes": 1,
+          "first_window_mapped_ms": 289.5005959981063,
+          "idle_cpu_percent_one_core": 0.4999679103098839
+        }
+      ]
+    },
+    "recording-selection": {
+      "native": [
+        {
+          "rss_mib": 77.3828125,
+          "pss_mib": 63.9248046875,
+          "private_mib": 56.52734375,
+          "processes": 1,
+          "first_window_mapped_ms": 330.6955949992698,
+          "idle_cpu_percent_one_core": 0.9999249796297384
+        },
+        {
+          "rss_mib": 77.7109375,
+          "pss_mib": 64.1669921875,
+          "private_mib": 56.7265625,
+          "processes": 1,
+          "first_window_mapped_ms": 343.72305299984873,
+          "idle_cpu_percent_one_core": 0.4999591365906501
+        },
+        {
+          "rss_mib": 77.7109375,
+          "pss_mib": 64.1650390625,
+          "private_mib": 56.73046875,
+          "processes": 1,
+          "first_window_mapped_ms": 365.93203699885635,
+          "idle_cpu_percent_one_core": 0.49996833775517685
+        },
+        {
+          "rss_mib": 77.76171875,
+          "pss_mib": 64.2177734375,
+          "private_mib": 56.78125,
+          "processes": 1,
+          "first_window_mapped_ms": 362.78691600091406,
+          "idle_cpu_percent_one_core": 0.4999614732189821
+        },
+        {
+          "rss_mib": 77.6875,
+          "pss_mib": 64.1806640625,
+          "private_mib": 56.734375,
+          "processes": 1,
+          "first_window_mapped_ms": 350.230003001343,
+          "idle_cpu_percent_one_core": 0.49996031664998275
+        }
+      ]
+    },
+    "previews-collapsed": {
+      "native": [
+        {
+          "rss_mib": 79.453125,
+          "pss_mib": 65.8564453125,
+          "private_mib": 58.375,
+          "processes": 1,
+          "first_window_mapped_ms": 15012.413349999406,
+          "idle_cpu_percent_one_core": 0.9999339538612623
+        },
+        {
+          "rss_mib": 66.890625,
+          "pss_mib": 53.44921875,
+          "private_mib": 46.0625,
+          "processes": 1,
+          "first_window_mapped_ms": 15076.93477200155,
+          "idle_cpu_percent_one_core": 0.4999708819464783
+        },
+        {
+          "rss_mib": 67.0859375,
+          "pss_mib": 53.5771484375,
+          "private_mib": 46.12109375,
+          "processes": 1,
+          "first_window_mapped_ms": 15127.689375000045,
+          "idle_cpu_percent_one_core": 0.49997291621652024
+        },
+        {
+          "rss_mib": 67.28125,
+          "pss_mib": 53.7099609375,
+          "private_mib": 46.234375,
+          "processes": 1,
+          "first_window_mapped_ms": 15043.716702999518,
+          "idle_cpu_percent_one_core": 1.4998969210855058
+        },
+        {
+          "rss_mib": 67.28515625,
+          "pss_mib": 53.7978515625,
+          "private_mib": 46.33203125,
+          "processes": 1,
+          "first_window_mapped_ms": 15076.554913001019,
+          "idle_cpu_percent_one_core": 0.9999421788417702
+        }
+      ]
+    },
+    "previews-expanded": {
+      "native": [
+        {
+          "rss_mib": 67.38671875,
+          "pss_mib": 53.708984375,
+          "private_mib": 46.1484375,
+          "processes": 1,
+          "first_window_mapped_ms": 16147.217268000531,
+          "idle_cpu_percent_one_core": 0.9999417398941876
+        },
+        {
+          "rss_mib": 79.46875,
+          "pss_mib": 65.8466796875,
+          "private_mib": 58.33203125,
+          "processes": 1,
+          "first_window_mapped_ms": 16178.265020000254,
+          "idle_cpu_percent_one_core": 0.9999348497433336
+        },
+        {
+          "rss_mib": 67.09375,
+          "pss_mib": 53.458984375,
+          "private_mib": 45.9375,
+          "processes": 1,
+          "first_window_mapped_ms": 16207.707145000313,
+          "idle_cpu_percent_one_core": 0.4999708174535442
+        },
+        {
+          "rss_mib": 67.1875,
+          "pss_mib": 53.5458984375,
+          "private_mib": 46.0078125,
+          "processes": 1,
+          "first_window_mapped_ms": 16140.130417003093,
+          "idle_cpu_percent_one_core": 0.9999401610796239
+        },
+        {
+          "rss_mib": 67.359375,
+          "pss_mib": 53.7431640625,
+          "private_mib": 46.17578125,
+          "processes": 1,
+          "first_window_mapped_ms": 16178.442917000211,
+          "idle_cpu_percent_one_core": 0.9999412339542046
+        }
+      ]
+    },
+    "recording-hud": {
+      "native": [
+        {
+          "rss_mib": 107.63671875,
+          "pss_mib": 93.990234375,
+          "private_mib": 86.39453125,
+          "processes": 1,
+          "first_window_mapped_ms": 6247.556751000957,
+          "idle_cpu_percent_one_core": 98.49429826362339
+        },
+        {
+          "rss_mib": 107.77734375,
+          "pss_mib": 94.08984375,
+          "private_mib": 86.515625,
+          "processes": 1,
+          "first_window_mapped_ms": 6246.294152999326,
+          "idle_cpu_percent_one_core": 98.4951699939616
+        },
+        {
+          "rss_mib": 113.85546875,
+          "pss_mib": 100.1376953125,
+          "private_mib": 92.53515625,
+          "processes": 1,
+          "first_window_mapped_ms": 6215.562946999853,
+          "idle_cpu_percent_one_core": 101.49473303236203
+        },
+        {
+          "rss_mib": 107.4609375,
+          "pss_mib": 93.7880859375,
+          "private_mib": 86.22265625,
+          "processes": 1,
+          "first_window_mapped_ms": 6217.936778997682,
+          "idle_cpu_percent_one_core": 100.4944994334772
+        },
+        {
+          "rss_mib": 95.40625,
+          "pss_mib": 81.62109375,
+          "private_mib": 73.9375,
+          "processes": 1,
+          "first_window_mapped_ms": 6244.911419998971,
+          "idle_cpu_percent_one_core": 101.49499340434069
+        }
+      ]
+    }
+  },
+  "summary": {
+    "preferences": {
+      "native": {
+        "rss_mib": {
+          "median": 50.33984375,
+          "min": 50.10546875,
+          "max": 50.4296875
+        },
+        "pss_mib": {
+          "median": 40.1845703125,
+          "min": 39.916015625,
+          "max": 40.2998046875
+        },
+        "private_mib": {
+          "median": 36.13671875,
+          "min": 35.8828125,
+          "max": 36.2890625
+        },
+        "processes": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        },
+        "first_window_mapped_ms": {
+          "median": 590.5861159990309,
+          "min": 535.4737930028932,
+          "max": 608.0752740017488
+        },
+        "idle_cpu_percent_one_core": {
+          "median": 0.49995913409085785,
+          "min": 0.0,
+          "max": 0.49997293896506656
+        }
+      }
+    },
+    "image": {
+      "native": {
+        "rss_mib": {
+          "median": 50.1796875,
+          "min": 48.8671875,
+          "max": 50.27734375
+        },
+        "pss_mib": {
+          "median": 38.62890625,
+          "min": 37.8212890625,
+          "max": 38.71875
+        },
+        "private_mib": {
+          "median": 32.671875,
+          "min": 32.37109375,
+          "max": 32.76953125
+        },
+        "processes": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        },
+        "first_window_mapped_ms": {
+          "median": 544.2778959986754,
+          "min": 508.74196799850324,
+          "max": 567.3291009989043
+        },
+        "idle_cpu_percent_one_core": {
+          "median": 0.4999648039777219,
+          "min": 0.0,
+          "max": 0.9999447315556198
+        }
+      }
+    },
+    "screenshot-selection": {
+      "native": {
+        "rss_mib": {
+          "median": 77.296875,
+          "min": 76.984375,
+          "max": 77.32421875
+        },
+        "pss_mib": {
+          "median": 63.80078125,
+          "min": 63.5087890625,
+          "max": 63.8740234375
+        },
+        "private_mib": {
+          "median": 56.48046875,
+          "min": 56.13671875,
+          "max": 56.484375
+        },
+        "processes": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        },
+        "first_window_mapped_ms": {
+          "median": 299.3210189997626,
+          "min": 253.01129199942807,
+          "max": 330.69088000047486
+        },
+        "idle_cpu_percent_one_core": {
+          "median": 0.4999679103098839,
+          "min": 0.0,
+          "max": 0.4999685909738509
+        }
+      }
+    },
+    "recording-selection": {
+      "native": {
+        "rss_mib": {
+          "median": 77.7109375,
+          "min": 77.3828125,
+          "max": 77.76171875
+        },
+        "pss_mib": {
+          "median": 64.1669921875,
+          "min": 63.9248046875,
+          "max": 64.2177734375
+        },
+        "private_mib": {
+          "median": 56.73046875,
+          "min": 56.52734375,
+          "max": 56.78125
+        },
+        "processes": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        },
+        "first_window_mapped_ms": {
+          "median": 350.230003001343,
+          "min": 330.6955949992698,
+          "max": 365.93203699885635
+        },
+        "idle_cpu_percent_one_core": {
+          "median": 0.4999614732189821,
+          "min": 0.4999591365906501,
+          "max": 0.9999249796297384
+        }
+      }
+    },
+    "previews-collapsed": {
+      "native": {
+        "rss_mib": {
+          "median": 67.28125,
+          "min": 66.890625,
+          "max": 79.453125
+        },
+        "pss_mib": {
+          "median": 53.7099609375,
+          "min": 53.44921875,
+          "max": 65.8564453125
+        },
+        "private_mib": {
+          "median": 46.234375,
+          "min": 46.0625,
+          "max": 58.375
+        },
+        "processes": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        },
+        "first_window_mapped_ms": {
+          "median": 15076.554913001019,
+          "min": 15012.413349999406,
+          "max": 15127.689375000045
+        },
+        "idle_cpu_percent_one_core": {
+          "median": 0.9999339538612623,
+          "min": 0.4999708819464783,
+          "max": 1.4998969210855058
+        }
+      }
+    },
+    "previews-expanded": {
+      "native": {
+        "rss_mib": {
+          "median": 67.359375,
+          "min": 67.09375,
+          "max": 79.46875
+        },
+        "pss_mib": {
+          "median": 53.708984375,
+          "min": 53.458984375,
+          "max": 65.8466796875
+        },
+        "private_mib": {
+          "median": 46.1484375,
+          "min": 45.9375,
+          "max": 58.33203125
+        },
+        "processes": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        },
+        "first_window_mapped_ms": {
+          "median": 16178.265020000254,
+          "min": 16140.130417003093,
+          "max": 16207.707145000313
+        },
+        "idle_cpu_percent_one_core": {
+          "median": 0.9999401610796239,
+          "min": 0.4999708174535442,
+          "max": 0.9999417398941876
+        }
+      }
+    },
+    "recording-hud": {
+      "native": {
+        "rss_mib": {
+          "median": 107.63671875,
+          "min": 95.40625,
+          "max": 113.85546875
+        },
+        "pss_mib": {
+          "median": 93.990234375,
+          "min": 81.62109375,
+          "max": 100.1376953125
+        },
+        "private_mib": {
+          "median": 86.39453125,
+          "min": 73.9375,
+          "max": 92.53515625
+        },
+        "processes": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        },
+        "first_window_mapped_ms": {
+          "median": 6244.911419998971,
+          "min": 6215.562946999853,
+          "max": 6247.556751000957
+        },
+        "idle_cpu_percent_one_core": {
+          "median": 100.4944994334772,
+          "min": 98.49429826362339,
+          "max": 101.49499340434069
+        }
+      }
+    }
+  }
+}

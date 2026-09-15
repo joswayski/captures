@@ -1,0 +1,134 @@
+{
+  "recorded_at": "2026-09-11T16:02:46.285053+00:00",
+  "implementation": "gpui",
+  "binary": {
+    "path": "/home/user/workspace/captures-gpui/experiments/gpui/target/release/captures-gpui",
+    "bytes": 38784600,
+    "sha256": "f93e23379dd7098c7af0c6e79661a99bef6e341a0bd8e91529b7d490534972e7"
+  },
+  "fixture": {
+    "display": ":99",
+    "root_size": [
+      1600,
+      1000
+    ],
+    "lab": "/tmp/captures-gpui-lab",
+    "software_gl": true,
+    "patch": {
+      "x": 494,
+      "y": 176,
+      "width": 13,
+      "height": 9
+    },
+    "drag": {
+      "start": [
+        320,
+        180
+      ],
+      "end": [
+        1050,
+        630
+      ],
+      "selection_size": [
+        730,
+        450
+      ]
+    },
+    "expected_border_rgb": [
+      255,
+      202,
+      40
+    ]
+  },
+  "configuration": {
+    "samples": 10,
+    "warmups": 2
+  },
+  "samples": [
+    {
+      "status": "success",
+      "latency_ms": 122.185154,
+      "polls": 448,
+      "sample": 1
+    },
+    {
+      "status": "success",
+      "latency_ms": 77.606635,
+      "polls": 137,
+      "sample": 2
+    },
+    {
+      "status": "success",
+      "latency_ms": 142.276219,
+      "polls": 482,
+      "sample": 3
+    },
+    {
+      "status": "success",
+      "latency_ms": 108.65446,
+      "polls": 185,
+      "sample": 4
+    },
+    {
+      "status": "success",
+      "latency_ms": 127.414074,
+      "polls": 274,
+      "sample": 5
+    },
+    {
+      "status": "success",
+      "latency_ms": 124.378981,
+      "polls": 210,
+      "sample": 6
+    },
+    {
+      "status": "success",
+      "latency_ms": 119.526971,
+      "polls": 223,
+      "sample": 7
+    },
+    {
+      "status": "success",
+      "latency_ms": 122.808677,
+      "polls": 313,
+      "sample": 8
+    },
+    {
+      "status": "success",
+      "latency_ms": 123.274089,
+      "polls": 477,
+      "sample": 9
+    },
+    {
+      "status": "success",
+      "latency_ms": 134.30265,
+      "polls": 469,
+      "sample": 10
+    }
+  ],
+  "summary": {
+    "trials": 10,
+    "successful_trials": 10,
+    "status_counts": {
+      "success": 10,
+      "no_change": 0,
+      "timeout": 0
+    },
+    "median_ms": 123.041383,
+    "p95_ms": 142.276219,
+    "min_ms": 77.606635,
+    "max_ms": 142.276219
+  },
+  "polling_overhead_estimate": {
+    "calls": 50,
+    "median_ms": 0.136375,
+    "min_ms": 0.127102,
+    "max_ms": 0.195732
+  },
+  "methodology": "Fresh real selector per trial; timestamp immediately before XTestFakeMotionEvent+XFlush, then poll the compositor's ROOT-window pixels until the mustard selection border appears.",
+  "caveats": "Linux X11 software Mesa 25/Xvfb/Openbox/xcompmgr event-to-observed-compositor-pixel only; not physical display latency and must not be extrapolated to hardware or other platforms. Runs made while builds or integration work are active are not final benchmark results.",
+  "host": {
+    "platform": "Linux-6.1.158+-x86_64-with-glibc2.36",
+    "machine": "x86_64"
+  }
+}

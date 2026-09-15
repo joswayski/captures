@@ -1,0 +1,129 @@
+name: GPUI native experiment
+
+on:
+  pull_request:
+    paths:
+      - "experiments/gpui/**"
+      - "crates/captures-capture/**"
+      - "crates/captures-media/**"
+      - "crates/captures-recording/**"
+      - "crates/captures-recording-macos/**"
+      - "crates/captures-recording-xcap/**"
+      - "crates/captures-session/**"
+      - "shared/**"
+      - "rust-toolchain.toml"
+      - ".github/workflows/gpui.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpui-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    name: Platform helper policy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 experiments/gpui/platform/check.py
+
+  linux:
+    name: Linux x64 (compile, package, X11 window)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang ffmpeg libasound2-dev libcairo2-dev libfontconfig1-dev \
+            libdbus-1-dev libegl-dev libgbm-dev \
+            libpipewire-0.3-dev libspa-0.2-dev libvulkan-dev libwayland-dev libx11-dev \
+            libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev libxrandr-dev openbox \
+            pkg-config xdotool xvfb
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.94.0
+      - run: bash experiments/gpui/platform/linux/build-package.sh
+      - name: Check a GPUI window maps under Xvfb
+        run: xvfb-run -a bash experiments/gpui/platform/linux/smoke-render.sh experiments/gpui/platform/dist/linux-x86_64/captures-gpui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: captures-gpui-linux-private-test
+          path: experiments/gpui/platform/dist/linux-x86_64.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    name: ${{ matrix.name }} (compile and private-test app)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS ARM64
+            os: macos-26
+            target: aarch64-apple-darwin
+          - name: macOS Intel
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select full Xcode and verify shader tools
+        run: |
+          sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+          xcrun --sdk macosx --find metal
+          xcrun --sdk macosx --find metallib
+          xcrun swiftc --version
+      - run: brew install cairo ffmpeg pkg-config
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.94.0
+          target: ${{ matrix.target }}
+      - run: bash experiments/gpui/platform/macos/build-package.sh '${{ matrix.target }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: captures-gpui-${{ matrix.target }}-private-test
+          path: experiments/gpui/platform/dist/macos-${{ matrix.target }}/Captures-GPUI-Experiment-${{ matrix.target }}.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    name: Windows x64 MSVC (compile and private-test package)
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.94.0
+          target: x86_64-pc-windows-msvc
+      - uses: actions/cache@v4
+        with:
+          path: C:\gtk-build
+          key: gvsbuild-cairo-2026.8.0-x64-release-v1
+      - name: Build or restore MSVC Cairo and discover Windows SDK FXC
+        shell: pwsh
+        run: |
+          python -m pip install gvsbuild==2026.8.0
+          ./experiments/gpui/platform/windows/prepare-msvc.ps1
+      - name: Install private-test FFmpeg runtime
+        shell: pwsh
+        run: choco install ffmpeg -y --no-progress
+      - name: Build and package with MSVC dependencies only
+        shell: pwsh
+        run: ./experiments/gpui/platform/windows/build-package.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: captures-gpui-windows-x86_64-msvc-private-test
+          path: experiments/gpui/platform/dist/windows-x86_64-msvc.zip
+          if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,150 @@
+{
+  "recorded_at": "2026-09-12T03:29:41.549476+00:00",
+  "scope": "Exercise actual GTK/GPUI preview effects on disposable files in the X11 lab.\n\nResource trials have no screen recorder. Video passes are separate, visual\nevidence only: recorder frame rate is not application frame rate. The existing\neffects differ in duration/rendering, so this compares implementations, not\nidentical renderer workloads. No production files or capture-session bypass.\n",
+  "results": {
+    "expand": {
+      "native": [
+        {
+          "window_seconds": 4.004406658001244,
+          "cpu_seconds": 0.19,
+          "cpu_percent_one_core": 4.744772852186706,
+          "max_sampled_pss_mib": 37.103515625,
+          "collapsed_idle_baseline": {
+            "window_seconds": 4.004001879002317,
+            "cpu_seconds": 0.04,
+            "cpu_percent_one_core": 0.9990005301887336,
+            "max_sampled_pss_mib": 29.802734375
+          }
+        },
+        {
+          "window_seconds": 4.003562149999198,
+          "cpu_seconds": 0.15,
+          "cpu_percent_one_core": 3.746663455693577,
+          "max_sampled_pss_mib": 36.9287109375,
+          "collapsed_idle_baseline": {
+            "window_seconds": 4.003518639998219,
+            "cpu_seconds": 0.03,
+            "cpu_percent_one_core": 0.7493408348415569,
+            "max_sampled_pss_mib": 29.3251953125
+          }
+        },
+        {
+          "window_seconds": 4.003567829997337,
+          "cpu_seconds": 0.17,
+          "cpu_percent_one_core": 4.246212558864354,
+          "max_sampled_pss_mib": 36.8046875,
+          "collapsed_idle_baseline": {
+            "window_seconds": 4.003531107002345,
+            "cpu_seconds": 0.03,
+            "cpu_percent_one_core": 0.7493385013926513,
+            "max_sampled_pss_mib": 29.142578125
+          }
+        },
+        {
+          "window_seconds": 4.006591622994165,
+          "cpu_seconds": 0.17,
+          "cpu_percent_one_core": 4.243007922852825,
+          "max_sampled_pss_mib": 37.0751953125,
+          "collapsed_idle_baseline": {
+            "window_seconds": 4.003992031000962,
+            "cpu_seconds": 0.04,
+            "cpu_percent_one_core": 0.999002987276185,
+            "max_sampled_pss_mib": 29.4736328125
+          }
+        },
+        {
+          "window_seconds": 4.00371696199727,
+          "cpu_seconds": 0.15,
+          "cpu_percent_one_core": 3.746518583201044,
+          "max_sampled_pss_mib": 38.8466796875,
+          "collapsed_idle_baseline": {
+            "window_seconds": 4.003428291005548,
+            "cpu_seconds": 0.04,
+            "cpu_percent_one_core": 0.9991436611932701,
+            "max_sampled_pss_mib": 31.2646484375
+          }
+        }
+      ],
+      "gpui": [
+        {
+          "window_seconds": 4.005531720002182,
+          "cpu_seconds": 1.99,
+          "cpu_percent_one_core": 49.6812942477189,
+          "max_sampled_pss_mib": 162.9443359375,
+          "collapsed_idle_baseline": {
+            "window_seconds": 4.006109444999311,
+            "cpu_seconds": 0.09,
+            "cpu_percent_one_core": 2.2465686780560605,
+            "max_sampled_pss_mib": 160.095703125
+          }
+        },
+        {
+          "window_seconds": 4.005346734003979,
+          "cpu_seconds": 1.98,
+          "cpu_percent_one_core": 49.433922491416276,
+          "max_sampled_pss_mib": 162.95703125,
+          "collapsed_idle_baseline": {
+            "window_seconds": 4.0053393509952,
+            "cpu_seconds": 0.06,
+            "cpu_percent_one_core": 1.4980004125016748,
+            "max_sampled_pss_mib": 160.1767578125
+          }
+        },
+        {
+          "window_seconds": 4.006236868000997,
+          "cpu_seconds": 1.98,
+          "cpu_percent_one_core": 49.42293891344388,
+          "max_sampled_pss_mib": 162.4404296875,
+          "collapsed_idle_baseline": {
+            "window_seconds": 4.005318110997905,
+            "cpu_seconds": 0.06,
+            "cpu_percent_one_core": 1.4980083563213236,
+            "max_sampled_pss_mib": 159.55078125
+          }
+        },
+        {
+          "window_seconds": 4.006143749997136,
+          "cpu_seconds": 1.99,
+          "cpu_percent_one_core": 49.6737042948452,
+          "max_sampled_pss_mib": 163.875,
+          "collapsed_idle_baseline": {
+            "window_seconds": 4.006060512001568,
+            "cpu_seconds": 0.09,
+            "cpu_percent_one_core": 2.2465961193140553,
+            "max_sampled_pss_mib": 159.8486328125
+          }
+        },
+        {
+          "window_seconds": 4.006197695998708,
+          "cpu_seconds": 1.95,
+          "cpu_percent_one_core": 48.67458243380281,
+          "max_sampled_pss_mib": 162.544921875,
+          "collapsed_idle_baseline": {
+            "window_seconds": 4.005222945001151,
+            "cpu_seconds": 0.06,
+            "cpu_percent_one_core": 1.498043949710339,
+            "max_sampled_pss_mib": 159.7353515625
+          }
+        }
+      ]
+    }
+  },
+  "environment": {
+    "platform": "Linux-6.1.158+-x86_64-with-glibc2.36",
+    "cpu_count": 2,
+    "display_geometry": "1600 1000",
+    "cpu_clock_tick_hz": 100
+  },
+  "fixture_sha256": "1c82e95f98641cd40087b24b14fb1db24ad9536fdbd5e8e6955b9447b977e7c5",
+  "binaries": {
+    "native": {
+      "sha256": "78b5e8d09b0143039dbb5f0900b35faa7b31517cb2282275d44c9207ab719563",
+      "path": "/home/user/workspace/captures-gpui/experiments/gpui/target/release/captures-linux-native"
+    },
+    "gpui": {
+      "sha256": "0d834f772e1faa8a9fb8317962c8934123d9a608869fe12fc9eab1351ee12834",
+      "path": "/home/user/workspace/captures-gpui/experiments/gpui/target/release/captures-gpui"
+    }
+  },
+  "caveats": "Linux Mesa25 software X11. Native delete 2200ms, GPUI 2900ms; not identical effects. CPU is application process-tree cost across a fixed 4s window including settled tail. PSS maximum is sampled at 0.5s intervals, not a true peak. No FPS measurement."
+}
