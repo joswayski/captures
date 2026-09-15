@@ -1,0 +1,48 @@
+{
+  "recorded_at": "2026-09-15T23:34:59.653977+00:00",
+  "state": "GPUI release; screenshot editor light; 1280x760 client; original960x540 fixture; custom602x339 export completed; idle with export panel closed; native integration; Xvfb/Openbox software rendering; partial port, no matched Tauri editor sample",
+  "sampling": "Repeated intervals in one warm process, not independent launches",
+  "environment": {
+    "kernel": "6.1.158+",
+    "architecture": "x86_64",
+    "logical_cpus": 2,
+    "display": ":100"
+  },
+  "executable_sha256": "e20e87ea4bf98234bccde6d406fe4da85ff73f3a5fc77a299073fecd113f440c",
+  "executable_bytes": 42135272,
+  "screenshot_sha256": "63fce275534fc9ad750d6c7b06d67012e224ac45780d6f8ad1f18daf9300a54a",
+  "samples": [
+    {
+      "rss_mib": 211.2109375,
+      "pss_mib": 202.1572265625,
+      "private_mib": 199.5546875,
+      "processes": 1,
+      "cpu_percent_one_core": 1.1999732537964425,
+      "interval_seconds": 5.000111444998765
+    },
+    {
+      "rss_mib": 211.2109375,
+      "pss_mib": 202.1572265625,
+      "private_mib": 199.5546875,
+      "processes": 1,
+      "cpu_percent_one_core": 1.3999618367599245,
+      "interval_seconds": 5.000136301001476
+    },
+    {
+      "rss_mib": 211.2109375,
+      "pss_mib": 202.1572265625,
+      "private_mib": 199.5546875,
+      "processes": 1,
+      "cpu_percent_one_core": 1.3999690382857168,
+      "interval_seconds": 5.000110579996544
+    }
+  ],
+  "median": {
+    "rss_mib": 211.2109375,
+    "pss_mib": 202.1572265625,
+    "private_mib": 199.5546875,
+    "processes": 1,
+    "cpu_percent_one_core": 1.3999618367599245,
+    "interval_seconds": 5.000111444998765
+  }
+}

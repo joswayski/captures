@@ -163,6 +163,11 @@ fn main() -> anyhow::Result<()> {
     {
         eprintln!("Could not prune Capture History: {error:#}");
     }
+    if !launch.mock
+        && let Err(error) = recording::recovery::prune_gif_sources(&launch.profile)
+    {
+        eprintln!("Could not prune retained GIF sources: {error:#}");
+    }
     Application::new().run(move |cx| {
         let settings = preferences::settings::load(&launch.profile).ok();
         if let Some(settings) = settings.clone() {

@@ -1,8 +1,4 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{fs, path::Path};
 
 use captures_media::{AudioEdit, CropRect, EditSpec, ExportFormat, ExportSpec, QualityPreset};
 use captures_recording::{
@@ -234,14 +230,6 @@ impl Settings {
             },
         }
     }
-}
-
-pub fn timestamped(captures: &Path, extension: &str) -> PathBuf {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    captures.join(format!("Captures_{millis}.{extension}"))
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

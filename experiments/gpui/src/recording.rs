@@ -6,6 +6,7 @@ mod countdown;
 mod editor;
 mod indicator;
 mod model;
+pub mod recovery;
 mod screenshot;
 
 use crate::{
@@ -16,10 +17,11 @@ use anyhow::Context as _;
 use captures_capture::{
     DisplayDescriptor, DisplayFrame, PointerCursor, WindowDescriptor, XcapBackend,
 };
-use captures_media::{CancelToken, MediaToolchain};
-use captures_recording::{RecordingKind, RecordingOptions, RecordingSegmentInfo, RecordingTarget};
+use captures_recording::{
+    RecordingKind, RecordingOptions, RecordingSegmentInfo, RecordingState, RecordingTarget,
+};
 use gpui::{prelude::*, *};
-use model::{ActionMode, Lifecycle, Rect, Settings, TargetMode, timestamped};
+use model::{ActionMode, Lifecycle, Rect, Settings, TargetMode};
 use std::{
     path::PathBuf,
     sync::Arc,
@@ -31,6 +33,15 @@ struct RecordingRegistry {
     window: WindowHandle<Selector>,
 }
 impl Global for RecordingRegistry {}
+
+pub struct RecoveryInProgress(pub String);
+impl Global for RecoveryInProgress {}
+
+pub fn active_session(cx: &App) -> Option<String> {
+    cx.try_global::<RecordingRegistry>()
+        .and_then(|registry| registry.controller.read(cx).journal.as_ref())
+        .map(|journal| journal.manifest.session_id.clone())
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HudConfirmation {
@@ -146,7 +157,7 @@ struct Selector {
     windows: Vec<WindowDescriptor>,
     display: usize,
     segment: Option<NativeSegment>,
-    output: Option<PathBuf>,
+    journal: Option<recovery::Journal>,
     completed: Vec<RecordingSegmentInfo>,
     selection: Option<Rect>,
     drag_start: Option<(f32, f32)>,
@@ -234,7 +245,7 @@ impl Selector {
             windows,
             display,
             segment: None,
-            output: None,
+            journal: None,
             completed: Vec::new(),
             selection: None,
             drag_start: None,
@@ -439,14 +450,20 @@ impl Selector {
         if self.launch.mock {
             return;
         }
+        if cx.has_global::<RecoveryInProgress>() {
+            self.lifecycle.cancel();
+            self.status = "Finish recording recovery first.".into();
+            cx.notify();
+            return;
+        }
         if self.segment.is_some() || !self.lifecycle.begin_start(token) {
             return;
         }
-        let result = (|| -> anyhow::Result<(NativeSegment, PathBuf)> {
+        let result = (|| -> anyhow::Result<NativeSegment> {
             if !captures_session::capture_session_available() {
                 anyhow::bail!("desktop session is unavailable")
             };
-            let display = self.chosen_display().context("no capture target")?;
+            let display = self.chosen_display().context("no capture target")?.clone();
             let kind = if self.gif {
                 RecordingKind::Gif
             } else {
@@ -456,35 +473,28 @@ impl Selector {
                 .settings
                 .options(kind, self.target().context("no capture target")?);
             options.audio.microphone_muted = self.microphone_muted;
-            let drafts = self.launch.profile.join("recording-drafts");
-            std::fs::create_dir_all(&drafts)?;
-            let destination = self
-                .output
-                .clone()
-                .unwrap_or_else(|| timestamped(&drafts, "mp4"));
-            let path = destination.with_file_name(format!(
-                "{}.segment-{:03}.mp4",
-                destination
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy(),
-                self.completed.len() + 1
-            ));
-            Ok((
-                start_segment(
-                    &options,
-                    &path,
-                    display,
-                    !self.preferences.include_recording_controls_in_captures,
-                )?,
-                destination,
-            ))
+            if self.journal.is_none() {
+                self.journal = Some(recovery::Journal::create(
+                    &self.launch.profile,
+                    options.clone(),
+                )?);
+            }
+            let path = self
+                .journal
+                .as_mut()
+                .context("no recording journal")?
+                .begin_segment(&options)?;
+            start_segment(
+                &options,
+                &path,
+                &display,
+                !self.preferences.include_recording_controls_in_captures,
+            )
         })();
         match result {
-            Ok((segment, path)) => {
+            Ok(segment) => {
                 self.segment = Some(segment);
                 self.lifecycle.started(token);
-                self.output = Some(path);
                 self.mode = ActionMode::Recording;
                 self.paused = false;
                 self.clock.start(Instant::now());
@@ -493,6 +503,9 @@ impl Selector {
             }
             Err(e) => {
                 self.lifecycle.cancel();
+                if let Some(journal) = &mut self.journal {
+                    journal.fail(&e);
+                }
                 self.status = format!("Recording failed: {e:#}")
             }
         }
@@ -745,6 +758,13 @@ impl Selector {
             self.lifecycle.finalized();
             return;
         };
+        if let Some(journal) = &mut self.journal
+            && let Err(error) = journal.state(RecordingState::Finalizing)
+        {
+            // Still stop the native writer; never leave it running because a
+            // journal write failed. The pending entry remains recoverable.
+            eprintln!("Could not journal recording stop: {error:#}");
+        }
         self.busy = true;
         self.clock.pause(Instant::now());
         self.status = if then_resume {
@@ -763,7 +783,28 @@ impl Selector {
                 s.lifecycle.finalized();
                 match result {
                     Ok(info) => {
+                        let persisted =
+                            s.journal.as_mut().context("no recording journal").and_then(
+                                |journal| {
+                                    journal.complete_segment(&info)?;
+                                    journal.state(if then_resume {
+                                        RecordingState::Paused
+                                    } else {
+                                        RecordingState::Finalizing
+                                    })
+                                },
+                            );
                         s.completed.push(info);
+                        if let Err(error) = persisted {
+                            if let Some(journal) = &mut s.journal {
+                                journal.fail(&error);
+                            }
+                            s.paused = true;
+                            s.status =
+                                format!("Media retained, but could not journal it: {error:#}");
+                            cx.notify();
+                            return;
+                        }
                         if then_resume {
                             s.paused = true;
                             s.status = "Paused".into();
@@ -775,7 +816,12 @@ impl Selector {
                             s.assemble(cx);
                         }
                     }
-                    Err(e) => s.status = format!("Finalizing failed: {e:#}"),
+                    Err(e) => {
+                        if let Some(journal) = &mut s.journal {
+                            journal.fail(&e);
+                        }
+                        s.status = format!("Finalizing failed: {e:#}");
+                    }
                 }
                 cx.notify();
             });
@@ -784,78 +830,22 @@ impl Selector {
         cx.notify()
     }
     fn assemble(&mut self, cx: &mut Context<Self>) {
-        let segments = self.completed.clone();
-        let directory = self.launch.profile.join("captures");
-        let gif = self.gif;
-        let settings = self.settings.clone();
+        let Some(journal) = &self.journal else {
+            return;
+        };
+        let id = journal.manifest.session_id.clone();
+        let profile = self.launch.profile.clone();
         self.busy = true;
-        let task = cx.background_executor().spawn(async move {
-            std::fs::create_dir_all(&directory)?;
-            let destination = directory.join(format!(
-                "Captures_{}.{}",
-                uuid::Uuid::new_v4(),
-                if gif { "gif" } else { "mp4" }
-            ));
-            let tools = MediaToolchain::from_command_names();
-            let cancel = CancelToken::default();
-            let inputs = segments
-                .iter()
-                .map(|s| captures_media::RecordingSegmentInput {
-                    video_path: s.path.clone(),
-                    system_audio_path: s.system_audio_path.clone(),
-                    system_audio_offset_ms: s.system_audio_offset_ms,
-                    microphone_path: s.microphone_path.clone(),
-                    microphone_offset_ms: s.microphone_offset_ms,
-                    duration_ms: s.duration_ms,
-                })
-                .collect::<Vec<_>>();
-            if gif {
-                let master = tempfile::Builder::new()
-                    .suffix(".mp4")
-                    .tempfile_in(&directory)?;
-                tools.concatenate_segments(
-                    &segments.iter().map(|s| s.path.clone()).collect::<Vec<_>>(),
-                    master.path(),
-                    &cancel,
-                )?;
-                tools.create_gif(
-                    master.path(),
-                    &destination,
-                    settings.gif_fps,
-                    settings.gif_max_width,
-                    settings.gif_max_colors,
-                    &cancel,
-                )?;
-            } else {
-                tools.assemble_recording_segments(
-                    &inputs,
-                    &destination,
-                    captures_media::RecordingAudioLayout {
-                        system_audio: settings.capture_system_audio,
-                        microphone_audio: segments.iter().any(|s| s.microphone_path.is_some()),
-                    },
-                    &cancel,
-                )?;
-            }
-            // Only retire this recording's temporary segments after the durable
-            // history artifact has been assembled and successfully probed.
-            tools.probe(&destination)?;
-            for s in segments {
-                for path in [Some(s.path), s.system_audio_path, s.microphone_path]
-                    .into_iter()
-                    .flatten()
-                {
-                    let _ = std::fs::remove_file(path);
-                }
-            }
-            Ok::<_, anyhow::Error>(destination)
-        });
+        let task = cx
+            .background_executor()
+            .spawn(async move { recovery::recover(&profile, &id) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |s, cx| {
                 s.busy = false;
                 match result {
                     Ok(path) => {
+                        s.journal = None;
                         let mut l = s.launch.clone();
                         l.path = Some(path.clone());
                         s.status = format!("Recording ready: {}", path.display());
@@ -974,7 +964,14 @@ impl Selector {
             return;
         }
         self.remove_completed_drafts();
-        self.output = None;
+        if let Some(journal) = &self.journal
+            && let Err(error) = journal.discard()
+        {
+            self.status = format!("Could not discard recording journal: {error:#}");
+            cx.notify();
+            return;
+        }
+        self.journal = None;
         self.paused = false;
         self.clock.reset(Instant::now());
         self.clock.pause(Instant::now());
@@ -1360,7 +1357,18 @@ impl Drop for Selector {
         if let Some(segment) = self.segment.take() {
             // Native segment Drop is not the recording contract: explicitly
             // stop so writers and audio sidecars are finalized on window close.
-            let _ = stop_segment(segment);
+            let result = stop_segment(segment).and_then(|info| {
+                if let Some(journal) = &mut self.journal {
+                    journal.complete_segment(&info)?;
+                    journal.state(RecordingState::Paused)?;
+                }
+                Ok(())
+            });
+            if let Err(error) = result
+                && let Some(journal) = &mut self.journal
+            {
+                journal.fail(&error);
+            }
         }
     }
 }
@@ -2123,7 +2131,14 @@ fn show_ready_notice(
                 let profile = profile.clone();
                 Box::pin(save_executor.spawn(async move {
                     let settings = crate::preferences::settings::load(&profile)?;
-                    media::save(&media::PreviewMedia::load(source, &profile)?, &settings)
+                    let media = media::PreviewMedia::load(source, &profile)?;
+                    let path = media::save(&media, &settings)?;
+                    if let Err(error) =
+                        crate::preferences::history::link_saved(&profile, &media.source, &path)
+                    {
+                        eprintln!("Recording saved, but history link failed: {error}");
+                    }
+                    Ok(path)
                 }))
             }),
             reveal: Arc::new(move |path| {

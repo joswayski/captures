@@ -40,6 +40,15 @@ enum EditorSlider {
     Zoom,
     Stroke,
     Opacity,
+    LayerOpacity,
+}
+
+#[derive(Clone, Copy)]
+enum ImageNumber {
+    Width,
+    Height,
+    X,
+    Y,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -65,9 +74,24 @@ enum EditorIcon {
     Image,
     Eye,
     Lock,
+    Unlock,
     More,
     Copy,
     Save,
+    AlignLeft,
+    AlignCenter,
+    AlignRight,
+    RotateLeft,
+    RotateRight,
+    FlipHorizontal,
+    FlipVertical,
+    BringFront,
+    SendBack,
+    MergeDown,
+    MergeVisible,
+    Flatten,
+    Duplicate,
+    Trash,
 }
 
 fn editor_icon(icon: EditorIcon, color: &'static str) -> Img {
@@ -109,11 +133,42 @@ fn editor_icon(icon: EditorIcon, color: &'static str) -> Img {
         EditorIcon::Lock => {
             r#"<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V6a4 4 0 0 1 8 0v4"/>"#
         }
+        EditorIcon::Unlock => {
+            r#"<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V6a4 4 0 0 1 8 0"/>"#
+        }
         EditorIcon::More => r#"<path d="M12 5h.01M12 12h.01M12 19h.01" stroke-width="3"/>"#,
         EditorIcon::Copy => {
             r#"<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V3H3v13h5"/>"#
         }
         EditorIcon::Save => r#"<path d="M4 3h13l4 4v14H3V3Z"/><path d="M7 3v6h9V3M7 21v-8h10v8"/>"#,
+        EditorIcon::AlignLeft => r#"<path d="M4 5h16M4 10h10M4 15h16M4 20h10"/>"#,
+        EditorIcon::AlignCenter => r#"<path d="M4 5h16M7 10h10M4 15h16M7 20h10"/>"#,
+        EditorIcon::AlignRight => r#"<path d="M4 5h16M10 10h10M4 15h16M10 20h10"/>"#,
+        EditorIcon::RotateLeft => r#"<path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/>"#,
+        EditorIcon::RotateRight => r#"<path d="M21 10a9 9 0 1 0-2 8m2-14v6h-6"/>"#,
+        EditorIcon::FlipHorizontal => {
+            r#"<path d="M12 3v3m0 3v3m0 3v3m0 3v1M3 7l6 5-6 5Zm18 0-6 5 6 5Z"/>"#
+        }
+        EditorIcon::FlipVertical => {
+            r#"<path d="M3 12h3m3 0h3m3 0h3m3 0h1M7 3l5 6 5-6Zm0 18 5-6 5 6Z"/>"#
+        }
+        EditorIcon::BringFront => {
+            r#"<rect x="5" y="12" width="10" height="8" rx="1.2" opacity=".55"/><rect x="9" y="4" width="10" height="8" rx="1.2"/>"#
+        }
+        EditorIcon::SendBack => {
+            r#"<rect x="9" y="4" width="10" height="8" rx="1.2" opacity=".55"/><rect x="5" y="12" width="10" height="8" rx="1.2"/>"#
+        }
+        EditorIcon::MergeDown => r#"<path d="M7 4h10v4H7zM12 9v5m-3-2 3 3 3-3M5 17h14v3H5z"/>"#,
+        EditorIcon::MergeVisible => {
+            r#"<path d="M7 3h10v3H7zM7 8h10v3H7zM12 12v3m-3-1.5 3 3 3-3M5 18h14v3H5z"/>"#
+        }
+        EditorIcon::Flatten => {
+            r#"<path d="M6 4h12v2.5H6zM6 8.5h12v2.5H6zM6 13h12v2.5H6zM4 18h16v2.5H4z"/>"#
+        }
+        EditorIcon::Duplicate => {
+            r#"<rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3M13.5 11v5M11 13.5h5"/>"#
+        }
+        EditorIcon::Trash => r#"<path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/>"#,
     };
     let svg = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">{body}</svg>"#
@@ -130,10 +185,25 @@ enum Format {
     Webp,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum ExportQualityMode {
+    Preserve,
+    Compress,
+    Maximum,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum FileSizeUnit {
+    Kb,
+    Mb,
+    Gb,
+}
+
 #[derive(Clone, Copy)]
 struct ExportSpec {
     format: Format,
     quality: u8,
+    export_quality_mode: ExportQualityMode,
     max_bytes: Option<u64>,
     width: u32,
     height: u32,
@@ -187,7 +257,14 @@ pub struct ScreenshotEditor {
     shadow_y_input: Option<Entity<crate::preferences::input::TextInput>>,
     shadow_color_input: Option<Entity<crate::preferences::input::TextInput>>,
     shadow_opacity_input: Option<Entity<crate::preferences::input::TextInput>>,
+    image_width_input: Option<Entity<crate::preferences::input::TextInput>>,
+    image_height_input: Option<Entity<crate::preferences::input::TextInput>>,
+    image_x_input: Option<Entity<crate::preferences::input::TextInput>>,
+    image_y_input: Option<Entity<crate::preferences::input::TextInput>>,
+    background_color_input: Option<Entity<crate::preferences::input::TextInput>>,
     synced_text_layer: Option<(u64, u64)>,
+    synced_image_layer: Option<(u64, u64)>,
+    text_menu: Option<&'static str>,
     text_font_family: &'static str,
     text_font: Option<Arc<[u8]>>,
     document: Document,
@@ -198,6 +275,10 @@ pub struct ScreenshotEditor {
     canvas_bounds: Rc<Cell<Bounds<Pixels>>>,
     drag: Option<Drag>,
     tool: Tool,
+    crop_selection: Option<Rect>,
+    crop_aspect: Option<f32>,
+    crop_shift_aspect: Option<f32>,
+    crop_aspect_open: bool,
     shapes_open: bool,
     zoom_open: bool,
     custom_style_open: bool,
@@ -205,18 +286,22 @@ pub struct ScreenshotEditor {
     background_open: bool,
     source_menu_open: bool,
     layer_menu: Option<u64>,
+    layer_menu_origin: gpui::Point<Pixels>,
     format_open: bool,
     selected: Option<u64>,
     zoom: u16,
     fit: bool,
     format: Format,
     quality: u8,
+    export_quality_mode: ExportQualityMode,
     export_open: bool,
+    export_menu: Option<&'static str>,
     export_scale: u8,
     export_width: u32,
     export_height: u32,
     export_max_bytes: Option<u64>,
     export_aspect_locked: bool,
+    export_size_unit: FileSizeUnit,
     destination: PathBuf,
     make_copy: bool,
     compression_preview: Option<CompressionPreview>,
@@ -226,6 +311,8 @@ pub struct ScreenshotEditor {
     compression_preview_revision: u64,
     document_revision: u64,
     compression_split: u8,
+    compression_compare_dismissed: bool,
+    compression_drag: bool,
     pan: gpui::Point<Pixels>,
     last_canvas_point: Option<Point>,
     space_down: bool,
@@ -234,6 +321,7 @@ pub struct ScreenshotEditor {
     style_stroke: f32,
     style_opacity: u8,
     style_font_size: f32,
+    default_text_style: captures_image::TextStyleSettings,
     status: String,
 }
 
@@ -314,10 +402,11 @@ impl ScreenshotEditor {
         };
         let source_thumbnail = render_image(&image::imageops::thumbnail(&pixels, 84, 60));
         let store = DraftStore::new(&launch.profile.join("drafts"));
-        let document = store
+        let mut document = store
             .load(&identity, source_path.as_deref())
             .map_err(anyhow::Error::msg)?
             .unwrap_or_else(|| Document::new(pixels));
+        document.materialize_source(true);
         let rendered = render_image(&document.render().map_err(anyhow::Error::msg)?);
         let settings = crate::preferences::settings::load(&launch.profile).unwrap_or_default();
         let format = Format::from_preference(&settings.screenshot_format);
@@ -346,8 +435,15 @@ impl ScreenshotEditor {
             shadow_y_input: None,
             shadow_color_input: None,
             shadow_opacity_input: None,
+            image_width_input: None,
+            image_height_input: None,
+            image_x_input: None,
+            image_y_input: None,
+            background_color_input: None,
             synced_text_layer: None,
-            text_font_family: "system",
+            synced_image_layer: None,
+            text_menu: None,
+            text_font_family: "rounded",
             text_font: None,
             launch,
             document,
@@ -365,18 +461,26 @@ impl ScreenshotEditor {
             background_open: false,
             source_menu_open: false,
             layer_menu: None,
+            layer_menu_origin: point(px(8.), px(8.)),
+            crop_selection: None,
+            crop_aspect: None,
+            crop_shift_aspect: None,
+            crop_aspect_open: false,
             format_open: false,
             selected: None,
             zoom: 100,
             fit: true,
             format,
-            quality: 92,
+            quality: 100,
+            export_quality_mode: ExportQualityMode::Preserve,
             export_open: false,
+            export_menu: None,
             export_scale: 100,
             export_width,
             export_height,
             export_max_bytes: None,
             export_aspect_locked: true,
+            export_size_unit: FileSizeUnit::Mb,
             destination,
             make_copy: true,
             compression_preview: None,
@@ -386,6 +490,8 @@ impl ScreenshotEditor {
             compression_preview_revision: u64::MAX,
             document_revision: 0,
             compression_split: 50,
+            compression_compare_dismissed: false,
+            compression_drag: false,
             pan: point(px(0.), px(0.)),
             last_canvas_point: None,
             space_down: false,
@@ -393,12 +499,20 @@ impl ScreenshotEditor {
             style_fill: None,
             style_stroke: 8.,
             style_opacity: 255,
-            style_font_size: 48.,
+            style_font_size: (export_width.min(export_height) as f32 * 0.055)
+                .round()
+                .clamp(24., 72.),
+            default_text_style: captures_image::TextStyleSettings {
+                background: Some([17, 19, 24, 255]),
+                rounded_background: true,
+                ..Default::default()
+            },
             status: "Ready".into(),
         })
     }
 
     fn refresh(&mut self) {
+        self.document.materialize_source(true);
         self.document_revision = self.document_revision.wrapping_add(1);
         self.compression_preview_request = self.compression_preview_request.wrapping_add(1);
         self.compression_preview_pending = false;
@@ -423,19 +537,29 @@ impl ScreenshotEditor {
     }
 
     fn choose_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
+        if tool == Tool::Text
+            && !self
+                .selected
+                .and_then(|id| self.document.layers.iter().find(|l| l.id == id))
+                .is_some_and(|l| matches!(l.shape, Shape::Text { .. }))
+        {
+            self.selected = None;
+        }
         self.tool = tool;
         cx.notify();
     }
 
     fn document_point(&self, p: gpui::Point<Pixels>) -> Option<Point> {
         let b = self.canvas_bounds.get();
-        if !b.contains(&p) {
+        if !b.contains(&p) && self.tool != Tool::Crop {
             return None;
         }
         Some(Point {
-            x: (p.x - b.origin.x) / b.size.width * self.document.canvas_width as f32
+            x: ((p.x - b.origin.x) / b.size.width).clamp(0., 1.)
+                * self.document.canvas_width as f32
                 + self.document.crop.x,
-            y: (p.y - b.origin.y) / b.size.height * self.document.canvas_height as f32
+            y: ((p.y - b.origin.y) / b.size.height).clamp(0., 1.)
+                * self.document.canvas_height as f32
                 + self.document.crop.y,
         })
     }
@@ -453,17 +577,45 @@ impl ScreenshotEditor {
             cx.notify();
             return;
         }
+        if self.comparison_visible() {
+            let bounds = self.canvas_bounds.get();
+            if comparison_hide_bounds(bounds).contains(&ev.position) {
+                self.compression_compare_dismissed = true;
+                cx.notify();
+                return;
+            }
+            let divider =
+                bounds.left() + bounds.size.width * (f32::from(self.compression_split) / 100.);
+            if (ev.position.x - divider).abs() <= px(20.)
+                && (ev.position.y - bounds.center().y).abs() <= px(20.)
+            {
+                self.compression_drag = true;
+                self.set_compression_split(ev.position.x);
+                cx.notify();
+                return;
+            }
+        }
         let Some(p) = self.document_point(ev.position) else {
             return;
         };
+        if self.tool == Tool::Crop {
+            self.crop_selection = None;
+            self.crop_shift_aspect = None;
+        }
         if self.tool == Tool::Text {
             let result = (|| -> anyhow::Result<()> {
                 if self.text_font.is_none() {
                     use font_kit::{
                         family_name::FamilyName, properties::Properties, source::SystemSource,
                     };
+                    let family = match self.text_font_family {
+                        "rounded" => FamilyName::Title("Arial Rounded MT Bold".into()),
+                        "mono" => FamilyName::Monospace,
+                        "serif" => FamilyName::Serif,
+                        _ => FamilyName::SansSerif,
+                    };
                     let font = SystemSource::new()
-                        .select_best_match(&[FamilyName::SansSerif], &Properties::new())?
+                        .select_best_match(&[family, FamilyName::SansSerif], &Properties::new())?
                         .load()?;
                     let bytes = font.copy_font_data().ok_or_else(|| {
                         anyhow::anyhow!("System font cannot be embedded in the draft")
@@ -482,7 +634,7 @@ impl ScreenshotEditor {
                             value,
                             font_size: self.style_font_size,
                             font_data: self.text_font.clone().unwrap(),
-                            style: captures_image::TextStyleSettings::default(),
+                            style: self.default_text_style.clone(),
                         },
                         self.style_color,
                         0.,
@@ -561,6 +713,11 @@ impl ScreenshotEditor {
     }
 
     fn mouse_move(&mut self, ev: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.compression_drag {
+            self.set_compression_split(ev.position.x);
+            cx.notify();
+            return;
+        }
         if let Some(Drag::Pan { start, original }) = &self.drag {
             self.pan = point(
                 original.x + ev.position.x - start.x,
@@ -576,6 +733,25 @@ impl ScreenshotEditor {
         match &mut self.drag {
             Some(Drag::Draw { start, points }) => {
                 points.push(p);
+                if self.tool == Tool::Crop {
+                    if !ev.modifiers.shift {
+                        self.crop_shift_aspect = None;
+                    } else if self.crop_shift_aspect.is_none() {
+                        self.crop_shift_aspect = Some(
+                            self.crop_selection
+                                .filter(|r| r.width >= 8. && r.height >= 8.)
+                                .map_or(1., |r| r.width / r.height),
+                        );
+                    }
+                    self.crop_selection = Some(bounded_crop(
+                        *start,
+                        p,
+                        self.document.crop,
+                        self.crop_aspect.or(self.crop_shift_aspect),
+                    ));
+                    cx.notify();
+                    return;
+                }
                 if let Some(shape) =
                     gesture_shape(self.tool, *start, p, points.clone(), ev.modifiers.shift)
                 {
@@ -627,6 +803,11 @@ impl ScreenshotEditor {
     }
 
     fn mouse_up(&mut self, ev: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.compression_drag {
+            self.compression_drag = false;
+            cx.notify();
+            return;
+        }
         let end = self.document_point(ev.position);
         let Some(drag) = self.drag.take() else { return };
         match drag {
@@ -655,7 +836,14 @@ impl ScreenshotEditor {
                 if let Some(end) = end {
                     points.push(end);
                     if self.tool == Tool::Crop {
-                        self.document.set_crop(normalized_rect(start, end, false));
+                        self.crop_selection = Some(bounded_crop(
+                            start,
+                            end,
+                            self.document.crop,
+                            self.crop_aspect.or(self.crop_shift_aspect),
+                        ));
+                        cx.notify();
+                        return;
                     } else if let Some(shape) =
                         gesture_shape(self.tool, start, end, points, ev.modifiers.shift)
                     {
@@ -675,6 +863,20 @@ impl ScreenshotEditor {
         cx.notify();
     }
 
+    fn comparison_visible(&self) -> bool {
+        self.export_open
+            && self.export_quality_mode != ExportQualityMode::Preserve
+            && !self.compression_compare_dismissed
+            && self.compression_preview.is_some()
+            && self.drag.is_none()
+    }
+
+    fn set_compression_split(&mut self, pointer_x: Pixels) {
+        let bounds = self.canvas_bounds.get();
+        let fraction = ((pointer_x - bounds.left()) / bounds.size.width).clamp(0.06, 0.94);
+        self.compression_split = (fraction * 100.).round() as u8;
+    }
+
     fn undo(&mut self, cx: &mut Context<Self>) {
         if self.document.undo() {
             self.refresh();
@@ -689,6 +891,11 @@ impl ScreenshotEditor {
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if event.keystroke.key == "escape" && self.export_menu.take().is_some() {
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         if self
             .focus
             .as_ref()
@@ -726,6 +933,10 @@ impl ScreenshotEditor {
                 self.background_open = false;
                 self.format_open = false;
                 self.zoom_open = false;
+                self.export_open = false;
+                self.text_menu = None;
+                self.crop_selection = None;
+                self.crop_shift_aspect = None;
                 if let Some(Drag::Move { original, .. }) = self.drag.take() {
                     self.document.preview_layer(original);
                 }
@@ -781,19 +992,17 @@ impl ScreenshotEditor {
 
     fn apply_export_fields(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
         let width = parse_dimension("Export width", input_value(&self.export_width_input, cx))?;
-        let entered_height =
-            parse_dimension("Export height", input_value(&self.export_height_input, cx))?;
-        let height = if self.export_aspect_locked {
-            proportional_height(
-                width,
-                self.document.canvas_width,
-                self.document.canvas_height,
-            )?
+        let height = parse_dimension("Export height", input_value(&self.export_height_input, cx))?;
+        let quality = if self.export_quality_mode == ExportQualityMode::Preserve {
+            100
         } else {
-            entered_height
+            parse_bounded_u8("Quality", input_value(&self.quality_input, cx), 1, 100)?
         };
-        let quality = parse_bounded_u8("Quality", input_value(&self.quality_input, cx), 1, 100)?;
-        let max_bytes = parse_max_size(input_value(&self.max_size_input, cx))?;
+        let max_bytes = if self.export_quality_mode == ExportQualityMode::Maximum {
+            parse_maximum_size(input_value(&self.max_size_input, cx), self.export_size_unit)?
+        } else {
+            None
+        };
         self.export_width = width;
         self.export_height = height;
         self.quality = quality;
@@ -804,11 +1013,384 @@ impl ScreenshotEditor {
         Ok(())
     }
 
+    fn choose_export_scale(&mut self, scale: u8, cx: &mut Context<Self>) {
+        self.export_scale = scale;
+        (self.export_width, self.export_height) = preset_output_size(
+            (self.document.canvas_width, self.document.canvas_height),
+            if scale == 0 { 100 } else { scale },
+        );
+        replace_input(
+            &mut self.export_width_input,
+            self.export_width.to_string(),
+            cx,
+        );
+        replace_input(
+            &mut self.export_height_input,
+            self.export_height.to_string(),
+            cx,
+        );
+        self.invalidate_compression_preview();
+    }
+
+    fn change_custom_export_dimension(&mut self, width_changed: bool, cx: &mut Context<Self>) {
+        let result = (|| {
+            if self.export_aspect_locked {
+                let (input, source, other) = if width_changed {
+                    (
+                        &self.export_width_input,
+                        self.document.canvas_width,
+                        self.document.canvas_height,
+                    )
+                } else {
+                    (
+                        &self.export_height_input,
+                        self.document.canvas_height,
+                        self.document.canvas_width,
+                    )
+                };
+                let value = parse_dimension("Output dimension", input_value(input, cx))?;
+                let linked = proportional_height(value, source, other);
+                replace_input(
+                    if width_changed {
+                        &mut self.export_height_input
+                    } else {
+                        &mut self.export_width_input
+                    },
+                    linked.to_string(),
+                    cx,
+                );
+            }
+            self.apply_export_fields(cx)
+        })();
+        if result.is_ok() {
+            self.invalidate_compression_preview();
+        }
+        cx.notify();
+    }
+
+    fn nudge_custom_export_dimension(
+        &mut self,
+        width_changed: bool,
+        delta: i32,
+        cx: &mut Context<Self>,
+    ) {
+        let input = if width_changed {
+            &self.export_width_input
+        } else {
+            &self.export_height_input
+        };
+        let fallback = if width_changed {
+            self.export_width
+        } else {
+            self.export_height
+        };
+        let current = input_value(input, cx)
+            .trim()
+            .parse::<u32>()
+            .unwrap_or(fallback);
+        let next = current.saturating_add_signed(delta).clamp(1, 16_384);
+        replace_input(
+            if width_changed {
+                &mut self.export_width_input
+            } else {
+                &mut self.export_height_input
+            },
+            next.to_string(),
+            cx,
+        );
+        self.change_custom_export_dimension(width_changed, cx);
+    }
+
+    fn export_select(
+        &self,
+        id: &'static str,
+        current: &'static str,
+        options: &[(&'static str, &'static str)],
+        cx: &Context<Self>,
+    ) -> Div {
+        let t = self.theme;
+        let label = options
+            .iter()
+            .find(|(v, _)| *v == current)
+            .map_or(current, |(_, label)| *label);
+        div()
+            .relative()
+            .child(
+                self.button(id, "", false)
+                    .min_w(px(if id == "size-unit" { 70. } else { 130. }))
+                    .when(id == "blend-mode", |d| d.w_full())
+                    .justify_between()
+                    .gap_3()
+                    .child(label)
+                    .child("⌄")
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        s.export_menu = if s.export_menu == Some(id) {
+                            None
+                        } else {
+                            Some(id)
+                        };
+                        cx.notify();
+                    })),
+            )
+            .when(self.export_menu == Some(id), |d| {
+                d.child(
+                    deferred(
+                        div()
+                            .id(SharedString::from(format!("{id}-options")))
+                            .occlude()
+                            .absolute()
+                            .when(id == "blend-mode", |d| d.top(px(36.)))
+                            .when(id != "blend-mode", |d| d.bottom(px(36.)))
+                            .left_0()
+                            .min_w(px(180.))
+                            .p_1()
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(t.border)
+                            .bg(t.raised)
+                            .shadow_lg()
+                            .on_mouse_down_out(cx.listener(move |s, _, _, cx| {
+                                if s.export_menu == Some(id) {
+                                    s.export_menu = None;
+                                    cx.notify();
+                                }
+                            }))
+                            .children(options.iter().map(|&(value, label)| {
+                                self.button(
+                                    SharedString::from(format!("{id}-{value}")),
+                                    label,
+                                    false,
+                                )
+                                .w_full()
+                                .justify_start()
+                                .border_0()
+                                .bg(if value == current { t.hover } else { t.raised })
+                                .on_click(cx.listener(
+                                    move |s, _, _, cx| {
+                                        match id {
+                                            "output-size" => s.choose_export_scale(
+                                                value.parse().unwrap_or(0),
+                                                cx,
+                                            ),
+                                            "quality-mode" => s.choose_quality_mode(
+                                                match value {
+                                                    "compress" => ExportQualityMode::Compress,
+                                                    "maximum" => ExportQualityMode::Maximum,
+                                                    _ => ExportQualityMode::Preserve,
+                                                },
+                                                cx,
+                                            ),
+                                            "compression-quality" => {
+                                                s.quality =
+                                                    value.parse().expect("fixed quality preset");
+                                                replace_input(
+                                                    &mut s.quality_input,
+                                                    value.into(),
+                                                    cx,
+                                                );
+                                                s.invalidate_compression_preview();
+                                            }
+                                            "size-unit" => {
+                                                let bytes = parse_maximum_size(
+                                                    input_value(&s.max_size_input, cx),
+                                                    s.export_size_unit,
+                                                )
+                                                .ok()
+                                                .flatten();
+                                                s.export_size_unit = match value {
+                                                    "kb" => FileSizeUnit::Kb,
+                                                    "gb" => FileSizeUnit::Gb,
+                                                    _ => FileSizeUnit::Mb,
+                                                };
+                                                if let Some(bytes) = bytes {
+                                                    let unit = match s.export_size_unit {
+                                                        FileSizeUnit::Kb => 1_000.,
+                                                        FileSizeUnit::Mb => 1_000_000.,
+                                                        FileSizeUnit::Gb => 1_000_000_000.,
+                                                    };
+                                                    replace_input(
+                                                        &mut s.max_size_input,
+                                                        (bytes as f64 / unit).to_string(),
+                                                        cx,
+                                                    );
+                                                }
+                                                if s.apply_export_fields(cx).is_ok() {
+                                                    s.invalidate_compression_preview();
+                                                }
+                                            }
+                                            "blend-mode" => {
+                                                if let Some(id) = s.layer_menu {
+                                                    let mode = match value {
+                                                        "Multiply" => BlendMode::Multiply,
+                                                        "Screen" => BlendMode::Screen,
+                                                        "Overlay" => BlendMode::Overlay,
+                                                        "Darken" => BlendMode::Darken,
+                                                        "Lighten" => BlendMode::Lighten,
+                                                        _ => BlendMode::Normal,
+                                                    };
+                                                    if let Some(original) = s
+                                                        .document
+                                                        .layers
+                                                        .iter()
+                                                        .find(|l| l.id == id)
+                                                        .cloned()
+                                                    {
+                                                        let mut layer = original.clone();
+                                                        layer.blend_mode = mode;
+                                                        s.document.preview_layer(layer);
+                                                        s.document.commit_layer_preview(original);
+                                                    }
+                                                    s.refresh();
+                                                }
+                                            }
+                                            _ => unreachable!("unknown screenshot select"),
+                                        }
+                                        s.export_menu = None;
+                                        cx.notify();
+                                    },
+                                ))
+                            })),
+                    )
+                    .with_priority(4),
+                )
+            })
+    }
+
+    fn choose_quality_mode(&mut self, mode: ExportQualityMode, cx: &mut Context<Self>) {
+        self.export_quality_mode = mode;
+        self.export_max_bytes = None;
+        match mode {
+            ExportQualityMode::Preserve => self.quality = 100,
+            ExportQualityMode::Compress => {
+                self.quality = input_value(&self.quality_input, cx).parse().unwrap_or(98);
+                self.compression_compare_dismissed = false;
+            }
+            ExportQualityMode::Maximum => {
+                self.compression_compare_dismissed = false;
+                if input_value(&self.max_size_input, cx).trim().is_empty() {
+                    replace_input(&mut self.max_size_input, "10".to_string(), cx);
+                }
+                self.export_max_bytes = parse_maximum_size(
+                    input_value(&self.max_size_input, cx),
+                    self.export_size_unit,
+                )
+                .ok()
+                .flatten();
+            }
+        }
+        self.invalidate_compression_preview();
+    }
+
     fn apply_canvas_fields(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
         let width = parse_dimension("Canvas width", input_value(&self.canvas_width_input, cx))?;
         let height = parse_dimension("Canvas height", input_value(&self.canvas_height_input, cx))?;
         self.document.set_canvas_size(width, height)?;
         self.refresh();
+        Ok(())
+    }
+
+    fn update_image_number(
+        &mut self,
+        field: ImageNumber,
+        requested: f32,
+        typed: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let id = self
+            .selected
+            .ok_or_else(|| "No image layer selected".to_string())?;
+        let layer = self
+            .document
+            .layers
+            .iter()
+            .find(|layer| layer.id == id)
+            .ok_or_else(|| "No image layer selected".to_string())?;
+        if layer.locked {
+            return Err("Unlock this layer to change size and position.".into());
+        }
+        let Shape::Image {
+            origin,
+            width,
+            height,
+            ..
+        } = &layer.shape
+        else {
+            return Err("Selected layer is not an image".into());
+        };
+        let (mut x, mut y, mut next_width, mut next_height) = (origin.x, origin.y, *width, *height);
+        match field {
+            ImageNumber::Width => {
+                (next_width, next_height) =
+                    proportional_image_size(*width, *height, requested, true)
+            }
+            ImageNumber::Height => {
+                (next_width, next_height) =
+                    proportional_image_size(*width, *height, requested, false)
+            }
+            ImageNumber::X => x = requested.clamp(-16_384., 16_384.),
+            ImageNumber::Y => y = requested.clamp(-16_384., 16_384.),
+        }
+        self.edit_selected(
+            |layer| {
+                if let Shape::Image {
+                    origin,
+                    width,
+                    height,
+                    ..
+                } = &mut layer.shape
+                {
+                    *origin = Point { x, y };
+                    *width = next_width;
+                    *height = next_height;
+                }
+            },
+            cx,
+        );
+        replace_input(
+            &mut self.image_width_input,
+            next_width.round().to_string(),
+            cx,
+        );
+        replace_input(
+            &mut self.image_height_input,
+            next_height.round().to_string(),
+            cx,
+        );
+        replace_input(&mut self.image_x_input, x.round().to_string(), cx);
+        replace_input(&mut self.image_y_input, y.round().to_string(), cx);
+        if let Some(typed) = typed {
+            let slot = match field {
+                ImageNumber::Width => &mut self.image_width_input,
+                ImageNumber::Height => &mut self.image_height_input,
+                ImageNumber::X => &mut self.image_x_input,
+                ImageNumber::Y => &mut self.image_y_input,
+            };
+            replace_input(slot, typed, cx);
+        }
+        self.synced_image_layer = Some((id, self.document_revision));
+        Ok(())
+    }
+
+    fn nudge_image_number(&mut self, field: ImageNumber, direction: f32, cx: &mut Context<Self>) {
+        let slot = match field {
+            ImageNumber::Width => &self.image_width_input,
+            ImageNumber::Height => &self.image_height_input,
+            ImageNumber::X => &self.image_x_input,
+            ImageNumber::Y => &self.image_y_input,
+        };
+        let current = input_value(slot, cx).trim().parse::<f32>().unwrap_or(0.);
+        if let Err(error) = self.update_image_number(field, current + direction, None, cx) {
+            self.status = error;
+        }
+        cx.notify();
+    }
+
+    fn apply_background_color(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        let color = parse_color("Background", input_value(&self.background_color_input, cx))?;
+        self.document.set_background(Some(color));
+        self.background_open = false;
+        self.refresh();
+        cx.notify();
         Ok(())
     }
 
@@ -855,12 +1437,19 @@ impl ScreenshotEditor {
     }
 
     fn apply_text_fields(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        if self
+            .selected
+            .and_then(|id| self.document.layers.iter().find(|l| l.id == id))
+            .is_some_and(|l| l.locked)
+        {
+            return Err("Unlock this layer before editing it".into());
+        }
         let value = input_value(&self.text, cx);
         let font_size = parse_f32(
             "Text size",
             input_value(&self.text_size_input, cx),
             8.,
-            240.,
+            512.,
         )?;
         let width = parse_f32(
             "Wrap width",
@@ -896,33 +1485,65 @@ impl ScreenshotEditor {
             parse_color("Shadow color", input_value(&self.shadow_color_input, cx))?;
         shadow_color[3] = (opacity * 2.55).round() as u8;
         self.style_font_size = font_size;
-        self.edit_selected(
-            |layer| {
-                if let Shape::Text {
-                    value: text,
-                    font_size: size,
-                    style,
-                    ..
-                } = &mut layer.shape
-                {
-                    *text = value;
-                    *size = font_size;
-                    if let Some(shadow) = &mut style.shadow {
-                        shadow.blur = blur;
-                        shadow.offset = captures_image::Point {
-                            x: offset_x,
-                            y: offset_y,
-                        };
-                        shadow.color = shadow_color;
+        if self.selected.is_some() {
+            self.edit_selected(
+                |layer| {
+                    if let Shape::Text {
+                        value: text,
+                        font_size: size,
+                        style,
+                        ..
+                    } = &mut layer.shape
+                    {
+                        *text = value;
+                        *size = font_size;
+                        update_text_effect_fields(
+                            style,
+                            width,
+                            blur,
+                            offset_x,
+                            offset_y,
+                            shadow_color,
+                        );
                     }
-                    if style.width.is_some() {
-                        style.width = Some(width);
-                    }
-                }
-            },
-            cx,
-        );
+                },
+                cx,
+            );
+            // The fields already contain this edit. Do not reset the caret or
+            // partially entered numbers when render synchronizes another layer.
+            self.synced_text_layer = self.selected.map(|id| (id, self.document_revision));
+        } else {
+            update_text_effect_fields(
+                &mut self.default_text_style,
+                width,
+                blur,
+                offset_x,
+                offset_y,
+                shadow_color,
+            );
+            cx.notify();
+        }
         Ok(())
+    }
+
+    /// Applies inspector changes to the selected text layer, or to the typed
+    /// defaults used by the next placement when no text layer is selected.
+    fn edit_text_settings(
+        &mut self,
+        edit: impl FnOnce(&mut captures_image::TextStyleSettings),
+        cx: &mut Context<Self>,
+    ) {
+        match edit_text_style_state(
+            &mut self.document,
+            self.selected,
+            &mut self.default_text_style,
+            edit,
+        ) {
+            Ok(true) => self.refresh(),
+            Ok(false) => {}
+            Err(message) => self.status = message.into(),
+        }
+        cx.notify();
     }
 
     fn choose_text_font(&mut self, family: &'static str, cx: &mut Context<Self>) {
@@ -971,6 +1592,178 @@ impl ScreenshotEditor {
         }
     }
 
+    fn text_picker(
+        &self,
+        id: &'static str,
+        style: &captures_image::TextStyleSettings,
+        cx: &Context<Self>,
+    ) -> Div {
+        let t = self.theme;
+        let options: &[(&str, &str)] = if id == "text-font" {
+            &[
+                ("system", "Sans serif"),
+                ("serif", "Serif"),
+                ("mono", "Monospace"),
+                ("rounded", "Rounded"),
+            ]
+        } else {
+            &[
+                ("standard", "Standard"),
+                ("rounded", "Rounded"),
+                ("outlined", "Outlined"),
+                ("mono", "Mono"),
+                ("box", "Box"),
+                ("mono-box", "Mono Box"),
+                ("rounded-box", "Rounded Box"),
+            ]
+        };
+        let selected = if id == "text-font" {
+            self.text_font_family
+        } else if style.outlined {
+            "outlined"
+        } else if style.background.is_some() {
+            if style.rounded_background {
+                "rounded-box"
+            } else if self.text_font_family == "mono" {
+                "mono-box"
+            } else {
+                "box"
+            }
+        } else {
+            match self.text_font_family {
+                "rounded" => "rounded",
+                "mono" => "mono",
+                _ => "standard",
+            }
+        };
+        let label = options
+            .iter()
+            .find(|(value, _)| *value == selected)
+            .map_or("Standard", |(_, label)| *label);
+        let sample = |value: &str| {
+            div()
+                .w(px(54.))
+                .h(px(26.))
+                .rounded(px(if value == "rounded-box" { 7. } else { 0. }))
+                .flex()
+                .items_center()
+                .justify_center()
+                .font_weight(FontWeight::SEMIBOLD)
+                .font_family(if value.starts_with("mono") {
+                    "monospace"
+                } else {
+                    font()
+                })
+                .bg(if value.ends_with("box") {
+                    t.text
+                } else {
+                    rgba(0)
+                })
+                .text_color(if value.ends_with("box") {
+                    t.raised
+                } else {
+                    t.text
+                })
+                .child("Text")
+        };
+        div()
+            .relative()
+            .w_full()
+            .flex_shrink_0()
+            .child(
+                div()
+                    .id(id)
+                    .w_full()
+                    .min_h(px(if id == "text-font" { 32. } else { 40. }))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .bg(t.field)
+                    .border_1()
+                    .border_color(t.border)
+                    .rounded(px(7.))
+                    .cursor_pointer()
+                    .when(id != "text-font", |d| d.child(sample(selected)))
+                    .child(div().flex_1().child(label))
+                    .child("⌄")
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        s.text_menu = if s.text_menu == Some(id) {
+                            None
+                        } else {
+                            Some(id)
+                        };
+                        cx.notify();
+                    })),
+            )
+            .when(self.text_menu == Some(id), |d| {
+                d.child(
+                    deferred(
+                        div()
+                            .occlude()
+                            .absolute()
+                            .top(px(if id == "text-font" { 36. } else { 44. }))
+                            .left_0()
+                            .w_full()
+                            .p_1()
+                            .bg(t.raised)
+                            .border_1()
+                            .border_color(t.border)
+                            .rounded(px(8.))
+                            .shadow_lg()
+                            .children(options.iter().map(|&(value, label)| {
+                                div()
+                                    .id(SharedString::from(format!("{id}-{value}")))
+                                    .h(px(38.))
+                                    .px_2()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .rounded(px(5.))
+                                    .bg(if value == selected { t.hover } else { t.raised })
+                                    .hover(|d| d.bg(t.hover))
+                                    .cursor_pointer()
+                                    .when(id != "text-font", |d| d.child(sample(value)))
+                                    .child(label)
+                                    .on_click(cx.listener(move |s, _, _, cx| {
+                                        if id == "text-font" {
+                                            s.choose_text_font(value, cx);
+                                        } else {
+                                            s.edit_text_settings(
+                                                |style| {
+                                                    style.background =
+                                                        value.ends_with("box").then_some(
+                                                            style
+                                                                .background
+                                                                .unwrap_or([17, 19, 24, 255]),
+                                                        );
+                                                    style.rounded_background =
+                                                        value == "rounded-box";
+                                                    style.outlined = value == "outlined";
+                                                },
+                                                cx,
+                                            );
+                                            s.choose_text_font(
+                                                if value.starts_with("mono") {
+                                                    "mono"
+                                                } else if value.starts_with("rounded") {
+                                                    "rounded"
+                                                } else {
+                                                    "system"
+                                                },
+                                                cx,
+                                            );
+                                        }
+                                        s.text_menu = None;
+                                        cx.notify();
+                                    }))
+                            })),
+                    )
+                    .with_priority(3),
+                )
+            })
+    }
+
     fn export(&mut self, cx: &mut Context<Self>) {
         if let Err(error) = self.apply_export_fields(cx) {
             self.status = error;
@@ -1009,9 +1802,15 @@ impl ScreenshotEditor {
             (Format::Png, Some(limit)) => encode_png_with_limit(&image, limit),
             (Format::Jpeg, Some(limit)) => encode_jpeg_with_limit(&image, limit),
             (Format::Webp, Some(limit)) => encode_webp_with_limit(&image, limit),
-            (Format::Png, None) => encode_png(&image, Some(self.quality)),
+            (Format::Png, None) => encode_png(
+                &image,
+                (self.export_quality_mode != ExportQualityMode::Preserve).then_some(self.quality),
+            ),
             (Format::Jpeg, None) => encode_jpeg(&image, self.quality),
-            (Format::Webp, None) => encode_webp(&image, Some(self.quality)),
+            (Format::Webp, None) => encode_webp(
+                &image,
+                (self.export_quality_mode != ExportQualityMode::Preserve).then_some(self.quality),
+            ),
         };
         let bytes = match bytes {
             Ok(v) => v,
@@ -1041,7 +1840,18 @@ impl ScreenshotEditor {
             return;
         }
         self.status = match write_export(&path, &bytes, self.make_copy) {
-            Ok(()) => format!("Saved {} ({} KB)", path.display(), bytes.len() / 1024),
+            Ok(()) => {
+                let saved = format!("Saved {} ({} KB)", path.display(), bytes.len() / 1024);
+                match crate::preferences::history::record_export(
+                    &self.launch.profile,
+                    self.source_path.as_deref(),
+                    &path,
+                    self.make_copy,
+                ) {
+                    Ok(_) => saved,
+                    Err(error) => format!("{saved}; history copy failed: {error}"),
+                }
+            }
             Err(e) => format!("Save failed: {e}"),
         };
         cx.notify();
@@ -1058,6 +1868,7 @@ impl ScreenshotEditor {
         let spec = ExportSpec {
             format: self.format,
             quality: self.quality,
+            export_quality_mode: self.export_quality_mode,
             max_bytes: self.export_max_bytes,
             width: self.export_width,
             height: self.export_height,
@@ -1190,6 +2001,9 @@ impl ScreenshotEditor {
         }
         let original = layer.clone();
         edit(&mut layer);
+        if layer == original {
+            return;
+        }
         self.document.preview_layer(layer);
         self.document.commit_layer_preview(original);
         self.refresh();
@@ -1227,6 +2041,201 @@ impl ScreenshotEditor {
             .cursor_pointer()
             .hover(|button| button.bg(self.theme.hover))
             .when(!label.is_empty(), |button| button.child(label))
+    }
+
+    fn image_number_field(
+        &self,
+        label: &'static str,
+        id: &'static str,
+        input: Entity<crate::preferences::input::TextInput>,
+        field: ImageNumber,
+        disabled: bool,
+        cx: &Context<Self>,
+    ) -> Div {
+        let t = self.theme;
+        field_container(label, t)
+            .opacity(if disabled { 0.5 } else { 1. })
+            .child(
+                div()
+                    .id(id)
+                    .h(px(34.))
+                    .flex()
+                    .overflow_hidden()
+                    .rounded(px(7.))
+                    .border_1()
+                    .border_color(t.border)
+                    .bg(t.field)
+                    .child(div().flex_1().min_w_0().child(input))
+                    .when(!disabled, |control| {
+                        control.child(
+                            div()
+                                .w(px(26.))
+                                .flex_shrink_0()
+                                .grid()
+                                .grid_rows(2)
+                                .border_l_1()
+                                .border_color(t.border)
+                                .bg(t.hover)
+                                .child(
+                                    div()
+                                        .id(SharedString::from(format!("{id}-up")))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor_pointer()
+                                        .text_size(px(11.))
+                                        .child("⌃")
+                                        .on_click(cx.listener(move |s, _, _, cx| {
+                                            s.nudge_image_number(field, 1., cx)
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .id(SharedString::from(format!("{id}-down")))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor_pointer()
+                                        .text_size(px(11.))
+                                        .border_t_1()
+                                        .border_color(t.border)
+                                        .child("⌄")
+                                        .on_click(cx.listener(move |s, _, _, cx| {
+                                            s.nudge_image_number(field, -1., cx)
+                                        })),
+                                ),
+                        )
+                    })
+                    .on_key_down(cx.listener(move |s, event: &KeyDownEvent, _, cx| {
+                        match event.keystroke.key.as_str() {
+                            "up" => {
+                                cx.stop_propagation();
+                                s.nudge_image_number(field, 1., cx);
+                            }
+                            "down" => {
+                                cx.stop_propagation();
+                                s.nudge_image_number(field, -1., cx);
+                            }
+                            "enter" => {
+                                cx.stop_propagation();
+                                let slot = match field {
+                                    ImageNumber::Width => &s.image_width_input,
+                                    ImageNumber::Height => &s.image_height_input,
+                                    ImageNumber::X => &s.image_x_input,
+                                    ImageNumber::Y => &s.image_y_input,
+                                };
+                                let value = input_value(slot, cx).trim().parse::<f32>();
+                                match value {
+                                    Ok(value) if value.is_finite() => {
+                                        if let Err(error) =
+                                            s.update_image_number(field, value, None, cx)
+                                        {
+                                            s.status = error;
+                                        }
+                                    }
+                                    _ => s.status = format!("{label} must be a number"),
+                                }
+                                cx.notify();
+                            }
+                            _ => {}
+                        }
+                    }))
+                    .on_key_up(cx.listener(move |s, _, _, cx| {
+                        let slot = match field {
+                            ImageNumber::Width => &s.image_width_input,
+                            ImageNumber::Height => &s.image_height_input,
+                            ImageNumber::X => &s.image_x_input,
+                            ImageNumber::Y => &s.image_y_input,
+                        };
+                        let typed = input_value(slot, cx);
+                        if let Ok(value) = typed.trim().parse::<f32>()
+                            && value.is_finite()
+                        {
+                            let _ = s.update_image_number(field, value, Some(typed), cx);
+                        }
+                    })),
+            )
+    }
+
+    fn custom_export_number_field(
+        &self,
+        label: &'static str,
+        id: &'static str,
+        input: Entity<crate::preferences::input::TextInput>,
+        width_changed: bool,
+        cx: &Context<Self>,
+    ) -> Div {
+        let t = self.theme;
+        field_container(label, t).w(px(100.)).child(
+            div()
+                .id(id)
+                .h(px(34.))
+                .flex()
+                .overflow_hidden()
+                .rounded(px(7.))
+                .border_1()
+                .border_color(t.border)
+                .bg(t.field)
+                .child(div().flex_1().min_w_0().child(input))
+                .child(
+                    div()
+                        .w(px(26.))
+                        .flex_shrink_0()
+                        .grid()
+                        .grid_rows(2)
+                        .border_l_1()
+                        .border_color(t.border)
+                        .bg(t.hover)
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("{id}-up")))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .text_size(px(11.))
+                                .child("⌃")
+                                .on_click(cx.listener(move |s, _, _, cx| {
+                                    cx.stop_propagation();
+                                    s.nudge_custom_export_dimension(width_changed, 1, cx)
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("{id}-down")))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .text_size(px(11.))
+                                .border_t_1()
+                                .border_color(t.border)
+                                .child("⌄")
+                                .on_click(cx.listener(move |s, _, _, cx| {
+                                    cx.stop_propagation();
+                                    s.nudge_custom_export_dimension(width_changed, -1, cx)
+                                })),
+                        ),
+                )
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_key_down(cx.listener(move |s, event: &KeyDownEvent, _, cx| {
+                    match event.keystroke.key.as_str() {
+                        "up" => {
+                            cx.stop_propagation();
+                            s.nudge_custom_export_dimension(width_changed, 1, cx);
+                        }
+                        "down" => {
+                            cx.stop_propagation();
+                            s.nudge_custom_export_dimension(width_changed, -1, cx);
+                        }
+                        _ => {}
+                    }
+                }))
+                .on_key_up(cx.listener(move |s, _, _, cx| {
+                    cx.stop_propagation();
+                    s.change_custom_export_dimension(width_changed, cx);
+                })),
+        )
     }
 
     fn icon_button(&self, id: impl Into<ElementId>, icon: EditorIcon) -> Stateful<Div> {
@@ -1267,12 +2276,7 @@ impl ScreenshotEditor {
         .detach();
     }
 
-    fn slider(
-        &self,
-        id: &'static str,
-        control: EditorSlider,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    fn slider(&self, id: &'static str, control: EditorSlider, cx: &Context<Self>) -> Stateful<Div> {
         let bounds = Rc::new(Cell::new(Bounds::<Pixels>::default()));
         let recorded = bounds.clone();
         let pressed = bounds.clone();
@@ -1281,6 +2285,10 @@ impl ScreenshotEditor {
             EditorSlider::Zoom => (f32::from(self.zoom) - 10.) / 190.,
             EditorSlider::Stroke => (self.style_stroke - 1.) / 47.,
             EditorSlider::Opacity => f32::from(self.style_opacity) / 255.,
+            EditorSlider::LayerOpacity => self
+                .selected
+                .and_then(|id| self.document.layers.iter().find(|l| l.id == id))
+                .map_or(1., |l| f32::from(l.opacity) / 255.),
         }
         .clamp(0., 1.);
         div()
@@ -1364,15 +2372,364 @@ impl ScreenshotEditor {
                     self.refresh();
                 }
             }
-            EditorSlider::Opacity => {
+            EditorSlider::Opacity | EditorSlider::LayerOpacity => {
                 self.style_opacity = (ratio * 255.).round() as u8;
                 if let Some(id) = self.selected {
-                    self.document.set_layer_opacity(id, self.style_opacity);
+                    if control == EditorSlider::LayerOpacity {
+                        if let Some(original) =
+                            self.document.layers.iter().find(|l| l.id == id).cloned()
+                        {
+                            let mut layer = original.clone();
+                            layer.opacity = self.style_opacity;
+                            self.document.preview_layer(layer);
+                            self.document.commit_layer_preview(original);
+                        }
+                    } else {
+                        self.document.set_layer_opacity(id, self.style_opacity);
+                    }
                     self.refresh();
                 }
             }
         }
         cx.notify();
+    }
+
+    fn layer_settings(&self, id: u64, viewport: Size<Pixels>, cx: &mut Context<Self>) -> Div {
+        let Some((index, layer)) = self
+            .document
+            .layers
+            .iter()
+            .enumerate()
+            .find(|(_, l)| l.id == id)
+        else {
+            return div();
+        };
+        let t = self.theme;
+        let locked = layer.locked;
+        let image = matches!(layer.shape, Shape::Image { .. });
+        let mode = match layer.blend_mode {
+            BlendMode::Normal => "Normal",
+            BlendMode::Multiply => "Multiply",
+            BlendMode::Screen => "Screen",
+            BlendMode::Overlay => "Overlay",
+            BlendMode::Darken => "Darken",
+            BlendMode::Lighten => "Lighten",
+        };
+        let section = |title| {
+            div()
+                .flex()
+                .flex_col()
+                .flex_shrink_0()
+                .p(px(12.))
+                .gap(px(8.))
+                .border_b_1()
+                .border_color(t.border)
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .line_height(relative(1.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(t.subtle)
+                        .child(title),
+                )
+        };
+        let action = |label: &'static str, enabled: bool| {
+            let icon = match label {
+                "Bring to front" => EditorIcon::BringFront,
+                "Send to back" => EditorIcon::SendBack,
+                "Merge down" => EditorIcon::MergeDown,
+                "Merge visible" => EditorIcon::MergeVisible,
+                "Flatten image" => EditorIcon::Flatten,
+                "Duplicate" => EditorIcon::Duplicate,
+                _ => EditorIcon::Trash,
+            };
+            self.button(label, "", false)
+                .w_full()
+                .h(px(34.))
+                .justify_start()
+                .gap(px(10.))
+                .border_0()
+                .bg(t.raised)
+                .child(
+                    editor_icon(
+                        icon,
+                        if label == "Delete" {
+                            "#d13450"
+                        } else if t.text == rgb(0x131318) {
+                            "#65656f"
+                        } else {
+                            "#b8b8c0"
+                        },
+                    )
+                    .size(px(15.)),
+                )
+                .child(label)
+                .when(!enabled, |d| d.opacity(0.4).cursor_default())
+                .on_click(cx.listener(move |s, _, _, cx| {
+                    if !enabled {
+                        return;
+                    }
+                    match label {
+                        "Bring to front" => {
+                            s.document.move_layer(id, isize::MAX);
+                        }
+                        "Send to back" => {
+                            s.document.move_layer(id, isize::MIN);
+                        }
+                        "Merge down" => match s.document.merge_layer_down(id) {
+                            Ok(next) => {
+                                s.selected = next;
+                                s.layer_menu = next;
+                            }
+                            Err(e) => s.status = e,
+                        },
+                        "Merge visible" => match s.document.merge_visible_layers() {
+                            Ok(next) => {
+                                s.selected = next;
+                                s.layer_menu = next;
+                            }
+                            Err(e) => s.status = e,
+                        },
+                        "Flatten image" => {
+                            if let Err(e) = s.document.flatten_layers() {
+                                s.status = e;
+                            }
+                            s.selected = None;
+                            s.layer_menu = None;
+                        }
+                        "Duplicate" => {
+                            s.selected = s.document.duplicate(id);
+                            s.layer_menu = None;
+                        }
+                        "Delete" => {
+                            if s.document.delete(id) {
+                                s.selected = None;
+                                s.layer_menu = None;
+                            }
+                        }
+                        _ => unreachable!("fixed layer action"),
+                    }
+                    s.refresh();
+                    cx.notify();
+                }))
+        };
+        div()
+            .absolute()
+            .inset_0()
+            .child(div().absolute().inset_0().on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|s, _, _, cx| {
+                    s.layer_menu = None;
+                    s.export_menu = None;
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            ))
+            .child(
+                div()
+                    .id("layer-settings-panel")
+                    .occlude()
+                    .absolute()
+                    .left(
+                        self.layer_menu_origin
+                            .x
+                            .max(px(8.))
+                            .min((viewport.width - px(288.)).max(px(8.))),
+                    )
+                    .top(
+                        self.layer_menu_origin
+                            .y
+                            .max(px(8.))
+                            .min((viewport.height - px(568.)).max(px(8.))),
+                    )
+                    .h((viewport.height
+                        - self
+                            .layer_menu_origin
+                            .y
+                            .max(px(8.))
+                            .min((viewport.height - px(568.)).max(px(8.)))
+                        - px(8.))
+                    .min(px(640.)))
+                    .w(px(280.))
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(t.border)
+                    .bg(t.raised)
+                    .shadow_lg()
+                    .flex()
+                    .flex_col()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        section("APPEARANCE")
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(t.muted)
+                                    .child("Blend mode"),
+                            )
+                            .child(self.export_select(
+                                "blend-mode",
+                                mode,
+                                &[
+                                    ("Normal", "Normal"),
+                                    ("Multiply", "Multiply"),
+                                    ("Screen", "Screen"),
+                                    ("Overlay", "Overlay"),
+                                    ("Darken", "Darken"),
+                                    ("Lighten", "Lighten"),
+                                ],
+                                cx,
+                            ))
+                            .child(
+                                div()
+                                    .flex()
+                                    .justify_between()
+                                    .text_size(px(12.))
+                                    .text_color(t.muted)
+                                    .child("Opacity")
+                                    .child(format!(
+                                        "{}%",
+                                        (f32::from(layer.opacity) * 100. / 255.).round()
+                                    )),
+                            )
+                            .child(self.slider("layer-opacity", EditorSlider::LayerOpacity, cx)),
+                    )
+                    .child(
+                        div()
+                            .id("layer-settings-scroll")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .when(image, |d| {
+                                d.child(
+                                    section("TRANSFORM").child(
+                                        div().grid().grid_cols(2).gap(px(8.)).children(
+                                            [
+                                                (
+                                                    "Rotate left",
+                                                    EditorIcon::RotateLeft,
+                                                    -1,
+                                                    false,
+                                                    false,
+                                                ),
+                                                (
+                                                    "Rotate right",
+                                                    EditorIcon::RotateRight,
+                                                    1,
+                                                    false,
+                                                    false,
+                                                ),
+                                                (
+                                                    "Flip horizontal",
+                                                    EditorIcon::FlipHorizontal,
+                                                    0,
+                                                    true,
+                                                    false,
+                                                ),
+                                                (
+                                                    "Flip vertical",
+                                                    EditorIcon::FlipVertical,
+                                                    0,
+                                                    false,
+                                                    true,
+                                                ),
+                                            ]
+                                            .into_iter()
+                                            .map(
+                                                |(label, icon, turns, horizontal, vertical)| {
+                                                    self.button(label, "", false)
+                                                        .h(px(36.))
+                                                        .px(px(8.))
+                                                        .justify_start()
+                                                        .gap(px(6.))
+                                                        .text_size(px(11.))
+                                                        .child(
+                                                            editor_icon(
+                                                                icon,
+                                                                if t.text == rgb(0x131318) {
+                                                                    "#65656f"
+                                                                } else {
+                                                                    "#b8b8c0"
+                                                                },
+                                                            )
+                                                            .size(px(15.)),
+                                                        )
+                                                        .child(label)
+                                                        .on_click(cx.listener(
+                                                            move |s, _, _, cx| {
+                                                                if s.document.transform_image(
+                                                                    id, turns, horizontal, vertical,
+                                                                ) {
+                                                                    s.refresh();
+                                                                }
+                                                                cx.notify();
+                                                            },
+                                                        ))
+                                                },
+                                            ),
+                                        ),
+                                    ),
+                                )
+                            })
+                            .child(
+                                section("ARRANGE").child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(2.))
+                                        .child(action(
+                                            "Bring to front",
+                                            !locked && index + 1 < self.document.layers.len(),
+                                        ))
+                                        .child(action("Send to back", !locked && index > 0)),
+                                ),
+                            )
+                            .child(
+                                section("COMBINE").child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(2.))
+                                        .child(action(
+                                            "Merge down",
+                                            self.document.can_merge_layer_down(id),
+                                        ))
+                                        .child(action(
+                                            "Merge visible",
+                                            self.document.can_merge_visible_layers(),
+                                        ))
+                                        .child(action(
+                                            "Flatten image",
+                                            self.document.can_flatten_layers(),
+                                        )),
+                                ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_shrink_0()
+                            .p(px(10.))
+                            .gap(px(4.))
+                            .border_t_1()
+                            .border_color(t.border)
+                            .bg(t.sunken)
+                            .child(
+                                action("Duplicate", true)
+                                    .border_1()
+                                    .border_color(t.border)
+                                    .bg(t.field),
+                            )
+                            .child(
+                                action("Delete", !locked)
+                                    .border_1()
+                                    .border_color(t.border)
+                                    .text_color(t.signal)
+                                    .bg(t.field),
+                            ),
+                    ),
+            )
     }
 
     fn style_controls(&self, cx: &mut Context<Self>) -> Div {
@@ -1569,6 +2926,27 @@ impl Render for ScreenshotEditor {
         self.theme = Theme::for_window(&self.launch, window, cx);
         let canvas_size = (self.document.canvas_width, self.document.canvas_height);
         if self.synced_canvas_size != canvas_size {
+            // Original / preset-size exports follow a crop or canvas resize.
+            // A separately chosen output size remains an explicit override.
+            let output = follow_canvas_export_size(
+                self.synced_canvas_size,
+                canvas_size,
+                (self.export_width, self.export_height),
+                self.export_scale,
+            );
+            if output != (self.export_width, self.export_height) {
+                (self.export_width, self.export_height) = output;
+                replace_input(
+                    &mut self.export_width_input,
+                    self.export_width.to_string(),
+                    cx,
+                );
+                replace_input(
+                    &mut self.export_height_input,
+                    self.export_height.to_string(),
+                    cx,
+                );
+            }
             for (field, value) in [
                 (&self.canvas_width_input, canvas_size.0),
                 (&self.canvas_height_input, canvas_size.1),
@@ -1598,6 +2976,8 @@ impl Render for ScreenshotEditor {
             .get_or_insert_with(|| {
                 cx.new(|cx| {
                     crate::preferences::input::TextInput::new("Text", "Annotation text", cx)
+                        .multiline(16_384)
+                        .height(px(88.))
                 })
             })
             .clone();
@@ -1620,9 +3000,48 @@ impl Render for ScreenshotEditor {
                     }
                 })
         });
+        let selected_image = self.selected.and_then(|id| {
+            self.document
+                .layers
+                .iter()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| {
+                    if let Shape::Image {
+                        origin,
+                        width,
+                        height,
+                        ..
+                    } = &layer.shape
+                    {
+                        Some((origin.x, origin.y, *width, *height, layer.locked))
+                    } else {
+                        None
+                    }
+                })
+        });
+        if let Some((x, y, width, height, _)) = selected_image {
+            let key = self.selected.map(|id| (id, self.document_revision));
+            if self.synced_image_layer != key {
+                replace_input(&mut self.image_x_input, x.round().to_string(), cx);
+                replace_input(&mut self.image_y_input, y.round().to_string(), cx);
+                replace_input(&mut self.image_width_input, width.round().to_string(), cx);
+                replace_input(&mut self.image_height_input, height.round().to_string(), cx);
+                self.synced_image_layer = key;
+            }
+        } else {
+            self.synced_image_layer = None;
+        }
         if let Some((id, value, font_size, style)) = &selected_text
             && self.synced_text_layer != Some((*id, self.document_revision))
         {
+            if let Some(layer) = self.document.layers.iter().find(|layer| layer.id == *id) {
+                replace_input(&mut self.stroke_color_input, color_hex(layer.color), cx);
+            }
+            replace_input(
+                &mut self.fill_color_input,
+                style.background.map(color_hex).unwrap_or_default(),
+                cx,
+            );
             replace_input(&mut self.text, value.clone(), cx);
             replace_input(&mut self.text_size_input, font_size.to_string(), cx);
             replace_input(
@@ -1660,7 +3079,7 @@ impl Render for ScreenshotEditor {
             "Height",
             cx,
         );
-        let quality_input = ensure_input(&mut self.quality_input, self.quality, "1–100", cx);
+        let _quality_input = ensure_input(&mut self.quality_input, 98, "1–100", cx);
         let max_size_input = ensure_input(&mut self.max_size_input, "", "Optional bytes (1MB)", cx);
         let filename_input = ensure_chrome_input(
             &mut self.filename_input,
@@ -1702,6 +3121,48 @@ impl Render for ScreenshotEditor {
         let shadow_color_input =
             ensure_input(&mut self.shadow_color_input, "#000000", "#RRGGBB", cx);
         let shadow_opacity_input = ensure_input(&mut self.shadow_opacity_input, 45, "0–100", cx);
+        let image_width_input = ensure_input(
+            &mut self.image_width_input,
+            selected_image.map_or(1., |v| v.2).round(),
+            "Width",
+            cx,
+        );
+        let image_height_input = ensure_input(
+            &mut self.image_height_input,
+            selected_image.map_or(1., |v| v.3).round(),
+            "Height",
+            cx,
+        );
+        let image_x_input = ensure_input(
+            &mut self.image_x_input,
+            selected_image.map_or(0., |v| v.0).round(),
+            "X",
+            cx,
+        );
+        let image_y_input = ensure_input(
+            &mut self.image_y_input,
+            selected_image.map_or(0., |v| v.1).round(),
+            "Y",
+            cx,
+        );
+        let image_locked = selected_image.is_some_and(|value| value.4);
+        for input in [
+            &image_width_input,
+            &image_height_input,
+            &image_x_input,
+            &image_y_input,
+        ] {
+            input.update(cx, |input, cx| input.set_disabled(image_locked, cx));
+        }
+        let background_color_input = ensure_input(
+            &mut self.background_color_input,
+            self.document
+                .background
+                .map(color_hex)
+                .unwrap_or_else(|| "#F7F7F5FF".into()),
+            "#RRGGBB",
+            cx,
+        );
         let rendered = self.rendered.clone();
         let recorded_bounds = self.canvas_bounds.clone();
         let paint_bounds = recorded_bounds.clone();
@@ -1713,6 +3174,9 @@ impl Render for ScreenshotEditor {
         let zoom = self.zoom;
         let pan = self.pan;
         let crop = self.document.crop;
+        let crop_selection = (self.tool == Tool::Crop)
+            .then_some(self.crop_selection)
+            .flatten();
         let selected_handles = self
             .selected
             .and_then(|id| {
@@ -1836,9 +3300,10 @@ impl Render for ScreenshotEditor {
                     .child(
                         self.icon_button(("layer-menu", id as usize), EditorIcon::More)
                             .w(px(24.))
-                            .on_click(cx.listener(move |s, _, _, cx| {
+                            .on_click(cx.listener(move |s, event: &ClickEvent, _, cx| {
                                 cx.stop_propagation();
                                 s.selected = Some(id);
+                                s.layer_menu_origin = event.position() - point(px(302.), px(12.));
                                 s.layer_menu = if s.layer_menu == Some(id) {
                                     None
                                 } else {
@@ -1852,12 +3317,13 @@ impl Render for ScreenshotEditor {
         let selected = self.selected;
         let compression_before = self.compression_preview.as_ref().map(|p| p.before.clone());
         let compression_after = self.compression_preview.as_ref().map(|p| p.after.clone());
-        let compression_label = self.compression_preview.as_ref().map(|p| {
-            format!(
-                "Original {}  •  Export {}  •  {}%",
-                human_bytes(p.before_bytes),
-                human_bytes(p.after_bytes),
-                p.after_bytes.saturating_mul(100) / p.before_bytes.max(1)
+        let comparison = self.comparison_visible().then(|| {
+            (
+                compression_before.clone().unwrap(),
+                compression_after.clone().unwrap(),
+                f32::from(self.compression_split) / 100.,
+                self.compression_preview.as_ref().unwrap().before_bytes,
+                self.compression_preview.as_ref().unwrap().after_bytes,
             )
         });
         div()
@@ -2086,7 +3552,7 @@ impl Render for ScreenshotEditor {
                                                     size,
                                                 });
                                             },
-                                            move |_, _, window, _| {
+                                            move |_, _, window, cx| {
                                                 let image = paint_bounds.get();
                                                 window.paint_shadows(image, Corners::default(), &[BoxShadow {
                                                     color: rgba(0x1313181f).into(),
@@ -2103,6 +3569,22 @@ impl Render for ScreenshotEditor {
                                                     false,
                                                 );
                                                 let image = paint_bounds.get();
+                                                if let Some(selection) = crop_selection {
+                                                    let sx = image.size.width / image_size.width;
+                                                    let sy = image.size.height / image_size.height;
+                                                    let selected = Bounds::new(
+                                                        point(image.origin.x + sx * (selection.x - crop.x), image.origin.y + sy * (selection.y - crop.y)),
+                                                        size(sx * selection.width, sy * selection.height));
+                                                    for bounds in [
+                                                        Bounds::new(image.origin, size(image.size.width, selected.top() - image.top())),
+                                                        Bounds::new(point(image.left(), selected.top()), size(selected.left() - image.left(), selected.size.height)),
+                                                        Bounds::new(point(selected.right(), selected.top()), size(image.right() - selected.right(), selected.size.height)),
+                                                        Bounds::new(point(image.left(), selected.bottom()), size(image.size.width, image.bottom() - selected.bottom())),
+                                                    ] {
+                                                        window.paint_quad(fill(bounds, rgba(0x00000066)));
+                                                    }
+                                                    window.paint_quad(quad(selected, Corners::default(), transparent_black(), Edges::all(px(1.)), white(), BorderStyle::Solid));
+                                                }
                                                 for (_, handle) in &selected_handles {
                                                     let center = point(
                                                         image.origin.x
@@ -2155,65 +3637,28 @@ impl Render for ScreenshotEditor {
                                                         BorderStyle::Solid,
                                                     ));
                                                 }
+                                                if let Some((before, after, split, before_bytes, after_bytes)) = &comparison {
+                                                    let _ = window.paint_image(image, Corners::default(), before.clone(), 0, false);
+                                                    let right = comparison_clip(image, *split);
+                                                    window.with_content_mask(Some(ContentMask { bounds: right }), |window| {
+                                                        let _ = window.paint_image(image, Corners::default(), after.clone(), 0, false);
+                                                    });
+                                                    let x = image.left() + image.size.width * *split;
+                                                    window.paint_quad(fill(
+                                                        Bounds::new(point(x - px(1.), image.top()), size(px(2.), image.size.height)),
+                                                        t.glass_text,
+                                                    ));
+                                                    comparison_badge("↔", Bounds::new(point(x - px(18.), image.center().y - px(18.)), size(px(36.), px(36.))), t, window, cx);
+                                                    window.with_content_mask(Some(ContentMask { bounds: image }), |window| {
+                                                        comparison_badge("Hide", comparison_hide_bounds(image), t, window, cx);
+                                                        comparison_badge(&format!("Before · {}", human_bytes(*before_bytes)), Bounds::new(point(image.left() + px(12.), image.bottom() - px(36.)), size(px(120.), px(24.))), t, window, cx);
+                                                        comparison_badge(&format!("After · {}", human_bytes(*after_bytes)), Bounds::new(point(image.right() - px(132.), image.bottom() - px(36.)), size(px(120.), px(24.))), t, window, cx);
+                                                    });
+                                                }
                                             },
                                         )
                                         .size_full(),
-                                    )
-                                    .when(self.export_open, |surface| {
-                                        surface.child(
-                                            div()
-                                                .absolute()
-                                                .left_3()
-                                                .right_3()
-                                                .bottom_3()
-                                                .h(px(190.))
-                                                .p_2()
-                                                .rounded(px(10.))
-                                                .border_1()
-                                                .border_color(t.border)
-                                                .bg(t.raised)
-                                                .flex()
-                                                .flex_col()
-                                                .gap_2()
-                                                .child(
-                                                    div().flex().items_center().gap_2()
-                                                        .child("Compression preview")
-                                                        .child(div().flex_1())
-                                                        .child(
-                                                            compression_label.clone().unwrap_or_else(|| {
-                                                                if self.compression_preview_pending {
-                                                                    "Encoding…".into()
-                                                                } else {
-                                                                    self.compression_preview_error.clone().unwrap_or_else(|| "Waiting…".into())
-                                                                }
-                                                            })
-                                                        ),
-                                                )
-                                                .child(
-                                                    div().flex_1().min_h_0().flex().gap_1()
-                                                        .when_some(compression_before.clone(), |row, image| {
-                                                            row.child(compression_image(image, self.compression_split, true, t))
-                                                        })
-                                                        .when_some(compression_after.clone(), |row, image| {
-                                                            row.child(compression_image(image, self.compression_split, false, t))
-                                                        }),
-                                                )
-                                                .child(
-                                                    div().flex().items_center().gap_2()
-                                                        .child("Before")
-                                                        .child(self.button("compare-less", "◀", false).on_click(cx.listener(|s, _, _, cx| {
-                                                            s.compression_split = s.compression_split.saturating_sub(5).max(10);
-                                                            cx.notify();
-                                                        })))
-                                                        .child(format!("{}%", self.compression_split))
-                                                        .child(self.button("compare-more", "▶", false).on_click(cx.listener(|s, _, _, cx| {
-                                                            s.compression_split = s.compression_split.saturating_add(5).min(90);
-                                                            cx.notify();
-                                                        })))
-                                                        .child("After"),
-                                                ),
-                                        )
-                                    }),
+                                    ),
                             ),
                     )
                     .child(
@@ -2244,7 +3689,8 @@ impl Render for ScreenshotEditor {
                                                 .child(div().text_size(px(11.)).text_color(t.subtle).child("Locked background")))
                                             .child(self.icon_button("source-visible", EditorIcon::Eye).w(px(24.)).opacity(if self.document.source_visible { 1. } else { 0.35 })
                                                 .on_click(cx.listener(|s, _, _, cx| { s.document.toggle_source_visibility(); s.refresh(); cx.notify(); })))
-                                            .child(div().w(px(24.)).h(px(30.)).rounded(px(6.)).bg(t.hover).flex().items_center().justify_center().child(editor_icon(EditorIcon::Lock, "#8b730a").size(px(14.))))
+                                            .child(div().id("source-unlock").w(px(24.)).h(px(30.)).rounded(px(6.)).bg(t.hover).flex().items_center().justify_center().cursor_pointer().child(editor_icon(EditorIcon::Lock, "#8b730a").size(px(14.)))
+                                                .on_click(cx.listener(|s, _, _, cx| { s.selected = s.document.unlock_source(); s.tool = Tool::Select; s.refresh(); cx.notify(); })))
                                             .child(self.icon_button("source-menu", EditorIcon::More).w(px(24.))
                                                 .on_click(cx.listener(|s, _, _, cx| { s.source_menu_open = !s.source_menu_open; cx.notify(); })))
                                     ))))
@@ -2254,10 +3700,36 @@ impl Render for ScreenshotEditor {
                                         Tool::Select => "Selection", Tool::Crop => "Crop", Tool::Text => "Text", Tool::Pen => "Freehand", Tool::Arrow => "Arrow", Tool::Rectangle => "Rectangle", Tool::Ellipse => "Ellipse", Tool::Line => "Line", Tool::Triangle => "Triangle", Tool::Diamond => "Diamond", Tool::Star => "Star", Tool::Eraser => "Eraser",
                                     }, t)
                                         .id("tool-properties").flex_1().min_h_0().overflow_y_scroll()
-                                        .when(!matches!(self.tool, Tool::Crop | Tool::Text | Tool::Eraser) && selected_text.is_none(), |panel| panel.child(self.style_controls(cx)))
-                                        .when(self.tool == Tool::Crop, |panel| panel.child(div().text_size(px(12.)).text_color(t.muted).child("Drag on the canvas to crop. Press Escape to cancel.")))
+                                        .when(!matches!(self.tool, Tool::Crop | Tool::Text | Tool::Eraser) && selected_text.is_none() && selected_image.is_none(), |panel| panel.child(self.style_controls(cx)))
+                                        .when(self.tool == Tool::Crop, |panel| panel.child(
+                                            div().flex().flex_col().gap_3()
+                                                .child(field_container("Aspect ratio", t).child(
+                                                    div().relative().child(
+                                                        div().id("crop-aspect").h(px(34.)).px_3().flex().items_center().rounded(px(7.)).border_1().border_color(t.border).bg(t.field).cursor_pointer()
+                                                            .child(div().flex_1().child(crop_aspect_label(self.crop_aspect))).child("⌄")
+                                                            .on_click(cx.listener(|s, _, _, cx| { s.crop_aspect_open = !s.crop_aspect_open; cx.notify(); })))
+                                                        .when(self.crop_aspect_open, |menu| menu.child(deferred(
+                                                            div().occlude().absolute().top(px(38.)).left_0().w_full().p_1().bg(t.raised).border_1().border_color(t.border).rounded(px(8.)).shadow_lg()
+                                                                .children([(None, "Free"), (Some(1.), "1 : 1"), (Some(4./3.), "4 : 3"), (Some(1.5), "3 : 2"), (Some(16./9.), "16 : 9")].into_iter().enumerate().map(|(index, (aspect, label))|
+                                                                    div().id(SharedString::from(format!("crop-aspect-{index}"))).h(px(34.)).px_2().flex().items_center().rounded(px(5.)).cursor_pointer().bg(if self.crop_aspect == aspect { t.hover } else { t.raised }).hover(|item| item.bg(t.hover)).child(label)
+                                                                        .on_click(cx.listener(move |s, _, _, cx| { s.crop_aspect = aspect; s.crop_aspect_open = false; cx.notify(); }))))
+                                                        )))
+                                                    )
+                                                )
+                                                .when_some(self.crop_selection, |panel, selection| panel
+                                                    .child(div().flex().gap_2()
+                                                        .child(value_field("WIDTH", selection.width.round().to_string(), t).flex_1())
+                                                        .child(value_field("HEIGHT", selection.height.round().to_string(), t).flex_1()))
+                                                    .child(div().flex().gap_2()
+                                                        .child(self.button("crop-clear", "Clear", false).on_click(cx.listener(|s, _, _, cx| { s.crop_selection = None; cx.notify(); })))
+                                                        .child(self.button("crop-apply", "Apply crop", true).on_click(cx.listener(|s, _, _, cx| {
+                                                            if let Some(selection) = s.crop_selection.take() { s.document.set_crop(selection); s.refresh(); }
+                                                            cx.notify();
+                                                        })))))
+                                                .child(div().text_size(px(12.)).text_color(t.muted).child(if self.crop_selection.is_some() { "Hold Shift while dragging to keep this aspect ratio." } else { "Drag over the area you want to keep. Start from outside the canvas to crop to an edge. Hold Shift to lock the current aspect ratio." }))
+                                        ))
                                         .when(self.tool == Tool::Eraser, |panel| panel.child(div().text_size(px(12.)).text_color(t.muted).child("Drag over an image to remove its background.")))
-                                        .when(self.custom_style_open || self.tool == Tool::Text || selected_text.is_some(), |panel| panel.child(
+                                        .when(self.custom_style_open && self.tool != Tool::Text && selected_text.is_none(), |panel| panel.child(
                                             div()
                                                 .flex()
                                                 .flex_col()
@@ -2265,12 +3737,12 @@ impl Render for ScreenshotEditor {
                                                 .child(field("LINE WIDTH", stroke_input, t))
                                                 .child(field(
                                                     "STROKE · HEX OR RGBA",
-                                                    stroke_color_input,
+                                                    stroke_color_input.clone(),
                                                     t,
                                                 ))
                                                 .child(field(
                                                     "FILL · NONE, HEX OR RGBA",
-                                                    fill_color_input,
+                                                    fill_color_input.clone(),
                                                     t,
                                                 ))
                                                 .child(
@@ -2290,44 +3762,51 @@ impl Render for ScreenshotEditor {
                                             let style = selected_text
                                                 .as_ref()
                                                 .map(|(_, _, _, style)| style.clone())
-                                                .unwrap_or_default();
+                                                .unwrap_or_else(|| self.default_text_style.clone());
                                             panel
-                                            .child(text_input)
+                                            .on_key_up(cx.listener(|s, _, _, cx| {
+                                                if let Err(error) = s.apply_text_fields(cx) { s.status = error; }
+                                            }))
+                                            .child(div().text_size(px(12.)).text_color(t.muted).child(if selected_text.is_some() { "Text style" } else { "New text style" }))
+                                            .child(self.text_picker("text-preset", &style, cx))
+                                            .when(selected_text.is_none(), |panel| panel.child(field("New text size", text_size_input.clone(), t)))
+                                            .when(selected_text.is_some(), |panel| panel
+                                            .child(field("Text", text_input, t))
                                             .child(
-                                                div()
-                                                    .flex()
-                                                    .flex_wrap()
+                                                div().grid().grid_cols(2).flex_shrink_0()
                                                     .gap_2()
-                                                    .child(field("SIZE", text_size_input, t))
-                                                    .child(self.button("font-system", "System", self.text_font_family == "system").on_click(cx.listener(|s, _, _, cx| s.choose_text_font("system", cx))))
-                                                    .child(self.button("font-serif", "Serif", self.text_font_family == "serif").on_click(cx.listener(|s, _, _, cx| s.choose_text_font("serif", cx))))
-                                                    .child(self.button("font-mono", "Mono", self.text_font_family == "mono").on_click(cx.listener(|s, _, _, cx| s.choose_text_font("mono", cx))))
-                                                    .child(self.button("font-rounded", "Rounded", self.text_font_family == "rounded").on_click(cx.listener(|s, _, _, cx| s.choose_text_font("rounded", cx)))),
+                                                    .child(div().flex().flex_col().gap_1()
+                                                        .child(div().text_size(px(10.)).text_color(t.subtle).child("Font"))
+                                                        .child(self.text_picker("text-font", &style, cx)))
+                                                    .child(field("Size", text_size_input, t)),
                                             )
                                             .child(
-                                                div().flex().flex_wrap().gap_2()
-                                                    .child(self.button("text-bold", "Bold", style.bold).on_click(cx.listener(|s, _, _, cx| s.edit_selected(|layer| if let Shape::Text { style, .. } = &mut layer.shape { style.bold = !style.bold }, cx))))
-                                                    .child(self.button("text-italic", "Italic", style.italic).on_click(cx.listener(|s, _, _, cx| s.edit_selected(|layer| if let Shape::Text { style, .. } = &mut layer.shape { style.italic = !style.italic }, cx))))
-                                                    .child(self.button("text-outline", "Outline", style.outlined).on_click(cx.listener(|s, _, _, cx| s.edit_selected(|layer| if let Shape::Text { style, .. } = &mut layer.shape { style.outlined = !style.outlined }, cx)))),
+                                                div().grid().grid_cols(5).gap_1().flex_shrink_0()
+                                                    .child(self.button("text-bold", "B", style.bold).on_click(cx.listener(|s, _, _, cx| s.edit_text_settings(|style| style.bold = !style.bold, cx))))
+                                                    .child(self.button("text-italic", "I", style.italic).on_click(cx.listener(|s, _, _, cx| s.edit_text_settings(|style| style.italic = !style.italic, cx))))
+                                                    .child(self.button("text-left", "", style.align == captures_image::TextAlign::Left).child(editor_icon(EditorIcon::AlignLeft, icon_color)).on_click(cx.listener(|s, _, _, cx| s.edit_text_settings(|style| style.align = captures_image::TextAlign::Left, cx))))
+                                                    .child(self.button("text-center", "", style.align == captures_image::TextAlign::Center).child(editor_icon(EditorIcon::AlignCenter, icon_color)).on_click(cx.listener(|s, _, _, cx| s.edit_text_settings(|style| style.align = captures_image::TextAlign::Center, cx))))
+                                                    .child(self.button("text-right", "", style.align == captures_image::TextAlign::Right).child(editor_icon(EditorIcon::AlignRight, icon_color)).on_click(cx.listener(|s, _, _, cx| s.edit_text_settings(|style| style.align = captures_image::TextAlign::Right, cx)))),
                                             )
-                                            .child(
-                                                div().flex().flex_wrap().gap_2()
-                                                    .child(self.button("text-left", "Left", style.align == captures_image::TextAlign::Left).on_click(cx.listener(|s, _, _, cx| s.edit_selected(|layer| if let Shape::Text { style, .. } = &mut layer.shape { style.align = captures_image::TextAlign::Left }, cx))))
-                                                    .child(self.button("text-center", "Center", style.align == captures_image::TextAlign::Center).on_click(cx.listener(|s, _, _, cx| s.edit_selected(|layer| if let Shape::Text { style, .. } = &mut layer.shape { style.align = captures_image::TextAlign::Center }, cx))))
-                                                    .child(self.button("text-right", "Right", style.align == captures_image::TextAlign::Right).on_click(cx.listener(|s, _, _, cx| s.edit_selected(|layer| if let Shape::Text { style, .. } = &mut layer.shape { style.align = captures_image::TextAlign::Right }, cx))))
-                                                    .child(self.button("text-auto", "Auto width", style.width.is_none()).on_click(cx.listener(|s, _, _, cx| s.edit_selected(|layer| if let Shape::Text { style, .. } = &mut layer.shape { style.width = None }, cx))))
+                                            .child(div().flex().flex_wrap().gap_2().flex_shrink_0()
+                                                    .child(self.button("text-auto", "Auto width", style.width.is_none()).on_click(cx.listener(|s, _, _, cx| s.edit_text_settings(|style| style.width = None, cx))))
                                                     .child(self.button("text-fixed", "Fixed width", style.width.is_some()).on_click(cx.listener(|s, _, _, cx| {
                                                         let width = input_value(&s.text_wrap_input, cx).trim().parse::<f32>().unwrap_or(240.).clamp(20., 4000.);
-                                                        s.edit_selected(|layer| if let Shape::Text { style, .. } = &mut layer.shape { style.width = Some(width) }, cx)
+                                                        s.edit_text_settings(|style| style.width = Some(width), cx)
                                                     })))
                                                     .child(field("WRAP WIDTH", text_wrap_input, t)),
                                             )
-                                            .child(
-                                                div().flex().flex_wrap().gap_2()
-                                                    .child(self.button("text-plate", "Plate", style.background.is_some() && !style.rounded_background).on_click(cx.listener(|s, _, _, cx| s.edit_selected(|layer| if let Shape::Text { style, .. } = &mut layer.shape { style.background = if style.background.is_some() && !style.rounded_background { None } else { Some([17, 19, 24, 230]) }; style.rounded_background = false }, cx))))
-                                                    .child(self.button("text-rounded", "Rounded", style.background.is_some() && style.rounded_background).on_click(cx.listener(|s, _, _, cx| s.edit_selected(|layer| if let Shape::Text { style, .. } = &mut layer.shape { let active = style.background.is_some() && style.rounded_background; style.background = if active { None } else { Some([17, 19, 24, 230]) }; style.rounded_background = !active }, cx))))
-                                                    .child(self.button("text-shadow", "Shadow", style.shadow.is_some()).on_click(cx.listener(|s, _, _, cx| s.edit_selected(|layer| if let Shape::Text { style, .. } = &mut layer.shape { style.shadow = if style.shadow.is_some() { None } else { Some(captures_image::TextShadow { color: [0, 0, 0, 115], blur: 6., offset: captures_image::Point { x: 0., y: 3. } }) } }, cx)))),
+                                            .child(field("Text color", stroke_color_input, t).on_key_up(cx.listener(|s, _, _, cx| {
+                                                if let Ok(color) = parse_color("Text color", input_value(&s.stroke_color_input, cx)) {
+                                                    s.edit_selected(|layer| layer.color = color, cx);
+                                                }
+                                            })))
+                                            .child(self.button("text-background", "Text background", style.background.is_some()).on_click(cx.listener(|s, _, _, cx| s.edit_text_settings(|style| { style.background = if style.background.is_some() { None } else { Some([17,19,24,255]) }; style.outlined = false; }, cx))))
+                                            .when(style.background.is_some(), |panel| panel.child(field("Background color", fill_color_input, t).on_key_up(cx.listener(|s, _, _, cx| {
+                                                if let Ok(color) = parse_color("Background color", input_value(&s.fill_color_input, cx)) { s.edit_text_settings(|style| style.background = Some(color), cx); }
+                                            }))))
                                             )
+                                            .child(self.button("text-shadow", "Drop shadow", style.shadow.is_some()).on_click(cx.listener(|s, _, _, cx| s.edit_text_settings(|style| { style.shadow = if style.shadow.is_some() { None } else { Some(captures_image::TextShadow { color: [0, 0, 0, 115], blur: 6., offset: captures_image::Point { x: 0., y: 3. } }) } }, cx))))
                                             .when(style.shadow.is_some(), |panel| panel.child(
                                                 div().flex().flex_wrap().gap_2()
                                                     .child(field("BLUR", shadow_blur_input, t))
@@ -2336,147 +3815,21 @@ impl Render for ScreenshotEditor {
                                                     .child(field("COLOR", shadow_color_input, t))
                                                     .child(field("OPACITY %", shadow_opacity_input, t)),
                                             ))
-                                            .child(self.button("apply-text", "Apply text", true).on_click(cx.listener(|s, _, _, cx| {
-                                                s.status = match s.apply_text_fields(cx) { Ok(()) => "Text updated".into(), Err(error) => error };
-                                                cx.notify();
-                                            })))
                                             .child(
                                                 div().text_size(px(12.)).text_color(t.muted).child(
-                                                    if selected_text.is_some() { "Editing selected text layer." } else { "Enter text, then click the image to place it." },
+                                                    if selected_text.is_some() { "Editing selected text layer." } else { "Click the image to place text." },
                                                 ),
                                             )
                                         })
-                                        .when_some(selected.filter(|id| self.layer_menu == Some(*id)), |panel, id| {
-                                            panel.child(
-                                                div()
-                                                    .flex()
-                                                    .flex_wrap()
-                                                    .gap_1()
-                                                    .child(
-                                                        self.button("visible", "Visible", false)
-                                                            .on_click(cx.listener(
-                                                                move |s, _, _, cx| {
-                                                                    s.document
-                                                                        .toggle_visibility(id);
-                                                                    s.refresh();
-                                                                    cx.notify();
-                                                                },
-                                                            )),
-                                                    )
-                                                    .child(
-                                                        self.button("lock", "Lock", false)
-                                                            .on_click(cx.listener(
-                                                                move |s, _, _, cx| {
-                                                                    s.document.toggle_locked(id);
-                                                                    s.refresh();
-                                                                    cx.notify();
-                                                                },
-                                                            )),
-                                                    )
-                                                    .child(
-                                                        self.button(
-                                                            "duplicate",
-                                                            "Duplicate",
-                                                            false,
-                                                        )
-                                                        .on_click(cx.listener(
-                                                            move |s, _, _, cx| {
-                                                                s.selected =
-                                                                    s.document.duplicate(id);
-                                                                s.refresh();
-                                                                cx.notify();
-                                                            },
-                                                        )),
-                                                    )
-                                                    .child(
-                                                        self.button("raise", "Raise", false)
-                                                            .on_click(cx.listener(
-                                                                move |s, _, _, cx| {
-                                                                    s.document.move_layer(id, 1);
-                                                                    s.refresh();
-                                                                    cx.notify();
-                                                                },
-                                                            )),
-                                                    )
-                                                    .child(
-                                                        self.button("lower", "Lower", false)
-                                                            .on_click(cx.listener(
-                                                                move |s, _, _, cx| {
-                                                                    s.document.move_layer(id, -1);
-                                                                    s.refresh();
-                                                                    cx.notify();
-                                                                },
-                                                            )),
-                                                    )
-                                                    .child(
-                                                        self.button("rotate", "Rotate 15°", false)
-                                                            .on_click(cx.listener(
-                                                                move |s, _, _, cx| {
-                                                                    let angle = s
-                                                                        .document
-                                                                        .layers
-                                                                        .iter()
-                                                                        .find(|l| l.id == id)
-                                                                        .map_or(15., |l| {
-                                                                            l.rotation_degrees + 15.
-                                                                        });
-                                                                    s.document.set_layer_rotation(
-                                                                        id, angle,
-                                                                    );
-                                                                    s.refresh();
-                                                                    cx.notify();
-                                                                },
-                                                            )),
-                                                    )
-                                                    .child(
-                                                        self.button("opacity", "Opacity −", false)
-                                                            .on_click(cx.listener(
-                                                                move |s, _, _, cx| {
-                                                                    let opacity = s
-                                                                        .document
-                                                                        .layers
-                                                                        .iter()
-                                                                        .find(|l| l.id == id)
-                                                                        .map_or(255, |l| {
-                                                                            l.opacity
-                                                                                .saturating_sub(26)
-                                                                        });
-                                                                    s.document.set_layer_opacity(
-                                                                        id, opacity,
-                                                                    );
-                                                                    s.refresh();
-                                                                    cx.notify();
-                                                                },
-                                                            )),
-                                                    )
-                                                    .child(
-                                                        self.button("blend", "Multiply", false)
-                                                            .on_click(cx.listener(
-                                                                move |s, _, _, cx| {
-                                                                    s.document
-                                                                        .set_layer_blend_mode(
-                                                                            id,
-                                                                            BlendMode::Multiply,
-                                                                        );
-                                                                    s.refresh();
-                                                                    cx.notify();
-                                                                },
-                                                            )),
-                                                    )
-                                                    .child(
-                                                        self.button("delete", "Delete", false)
-                                                            .on_click(cx.listener(
-                                                                move |s, _, _, cx| {
-                                                                    if s.document.delete(id) {
-                                                                        s.selected = None;
-                                                                        s.refresh();
-                                                                    }
-                                                                    cx.notify();
-                                                                },
-                                                            )),
-                                                    ),
-                                            )
-                                        }),
+                                        .when_some(selected_image, |panel, (_, _, _, _, locked)| panel.child(
+                                            div().flex().flex_col().gap_3()
+                                                .child(div().grid().grid_cols(2).gap_2()
+                                                    .child(self.image_number_field("Width", "image-width", image_width_input, ImageNumber::Width, locked, cx))
+                                                    .child(self.image_number_field("Height", "image-height", image_height_input, ImageNumber::Height, locked, cx))
+                                                    .child(self.image_number_field("X", "image-x", image_x_input, ImageNumber::X, locked, cx))
+                                                    .child(self.image_number_field("Y", "image-y", image_y_input, ImageNumber::Y, locked, cx)))
+                                                .child(div().text_size(px(12.)).text_color(t.muted).child(if locked { "Unlock this layer to change size and position." } else { "Width and height stay proportional to the image." }))
+                                        )),
                                 )
                             }),
                     ),
@@ -2498,38 +3851,35 @@ impl Render for ScreenshotEditor {
                     .when(self.export_open, |bar| {
                         bar.child(
                             div()
-                                .absolute().bottom(px(76.)).left_3().w(px(420.)).p_3().rounded(px(10.)).border_1().border_color(t.border).bg(t.raised).shadow_lg()
+                                .absolute().bottom(px(76.)).left_3().right_3().p_3().rounded(px(12.)).border_1().border_color(t.border).bg(t.sunken).shadow_lg()
+                                .occlude()
                                 .flex()
                                 .flex_wrap()
+                                .items_end()
                                 .gap_2()
-                                .child(field("WIDTH", export_width_input, t).w(px(112.)))
-                                .child(field("HEIGHT", export_height_input, t).w(px(112.)))
-                                .child(field("QUALITY", quality_input, t).w(px(92.)))
-                                .child(field("MAX SIZE", max_size_input, t).w(px(140.)))
-                                .child(
-                                    self.button(
-                                        "aspect-lock",
-                                        "Lock aspect",
-                                        self.export_aspect_locked,
-                                    )
-                                    .on_click(cx.listener(
-                                        |s, _, _, cx| {
-                                            s.export_aspect_locked = !s.export_aspect_locked;
-                                            cx.notify();
-                                        },
-                                    )),
-                                )
-                                .child(self.button("apply-export", "Apply", true).on_click(
-                                    cx.listener(|s, _, _, cx| {
-                                        s.status = match s.apply_export_fields(cx) {
-                                            Ok(()) => {
-                                                s.invalidate_compression_preview();
-                                                "Export settings applied".into()
-                                            }
-                                            Err(error) => error,
-                                        };
-                                        cx.notify();
-                                    }),
+                                .child(field_container("Output size", t).child(
+                                    div().flex().items_center().gap_2()
+                                        .child(self.export_select("output-size", match self.export_scale { 100 => "100", 75 => "75", 50 => "50", _ => "custom" }, &[("100", "Original"), ("75", "75%"), ("50", "50%"), ("custom", "Custom")], cx))
+                                        .child(div().text_size(px(10.)).text_color(t.subtle).child(format!("{} × {}", self.export_width, self.export_height)))
+                                ))
+                                .when(self.export_scale == 0, |settings| settings
+                                    .child(self.custom_export_number_field("Width × height", "export-width", export_width_input, true, cx))
+                                    .child(div().pb(px(9.)).text_color(t.subtle).child("×"))
+                                    .child(self.custom_export_number_field("", "export-height", export_height_input, false, cx))
+                                    .child(self.icon_button("aspect-lock", if self.export_aspect_locked { EditorIcon::Lock } else { EditorIcon::Unlock })
+                                        .on_click(cx.listener(|s, _, _, cx| { s.export_aspect_locked = !s.export_aspect_locked; cx.notify(); }))))
+                                .child(field_container("Save quality", t).child(
+                                    self.export_select("quality-mode", match self.export_quality_mode { ExportQualityMode::Preserve => "preserve", ExportQualityMode::Compress => "compress", ExportQualityMode::Maximum => "maximum" }, &[("preserve", "Preserve quality"), ("compress", "Compress"), ("maximum", "Maximum file size")], cx)
+                                ))
+                                .when(self.export_quality_mode == ExportQualityMode::Compress, |settings| settings.child(field_container("Quality", t).child(
+                                    self.export_select("compression-quality", match self.quality { 55 => "55", 70 => "70", 85 => "85", 92 => "92", _ => "98" }, &[("55", "Tiny"), ("70", "Smaller"), ("85", "Balanced"), ("92", "High"), ("98", "Highest")], cx)
+                                )))
+                                .when(self.export_quality_mode == ExportQualityMode::Maximum, |settings| settings
+                                    .child(field("Maximum file size", max_size_input, t).w(px(110.)).on_key_up(cx.listener(|s, _, _, cx| { if s.apply_export_fields(cx).is_ok() { s.invalidate_compression_preview(); } cx.notify(); })))
+                                    .child(self.export_select("size-unit", match self.export_size_unit { FileSizeUnit::Kb => "kb", FileSizeUnit::Mb => "mb", FileSizeUnit::Gb => "gb" }, &[("kb", "KB"), ("mb", "MB"), ("gb", "GB")], cx)))
+                                .child(field_container("Est. size", t).min_w(px(105.)).h(px(52.)).justify_between().child(div().h(px(32.)).flex().items_center().font_family("monospace").child(self.compression_preview.as_ref().map(|p| human_bytes(p.after_bytes)).unwrap_or_else(|| if self.compression_preview_pending { "Estimating…".into() } else { "—".into() }))))
+                                .when(self.export_quality_mode != ExportQualityMode::Preserve && self.compression_compare_dismissed, |settings| settings.child(
+                                    self.button("show-comparison", "Show before / after", false).on_click(cx.listener(|s, _, _, cx| { s.compression_compare_dismissed = false; cx.notify(); }))
                                 )),
                         )
                     })
@@ -2643,13 +3993,18 @@ impl Render for ScreenshotEditor {
                     }))
             ))
             .when(self.background_open, |root| root.child(
-                div().occlude().absolute().left(px(365.)).top(px(46.)).w(px(210.)).p_3().rounded(px(10.)).border_1().border_color(t.border).bg(t.raised).shadow_lg().flex().flex_col().gap_2()
+                div().occlude().absolute().left(px(365.)).top(px(46.)).w(px(248.)).p_3().rounded(px(10.)).border_1().border_color(t.border).bg(t.raised).shadow_lg().flex().flex_col().gap_2()
                     .child("Background color")
                     .children([("Transparent", None), ("Off-white", Some([247,247,245,255])), ("White", Some([255,255,255,255])), ("Black", Some([0,0,0,255]))].into_iter().map(|(name, color)| {
                         self.button(name, name, self.document.background == color).on_click(cx.listener(move |s, _, _, cx| {
                             s.document.set_background(color); s.background_open = false; s.refresh(); cx.notify();
                         }))
                     }))
+                    .child(div().pt_2().border_t_1().border_color(t.border).text_size(px(10.)).text_color(t.subtle).child("CUSTOM COLOR · HEX OR RGBA"))
+                    .child(background_color_input)
+                    .child(self.button("apply-background-color", "Use custom color", true).on_click(cx.listener(|s, _, _, cx| {
+                        s.status = match s.apply_background_color(cx) { Ok(()) => "Background updated".into(), Err(error) => error }; cx.notify();
+                    })))
             ))
             .when(self.format_open, |root| root.child(
                 div().occlude().absolute().left(px(475.)).bottom(px(47.)).w(px(135.)).p_2().rounded(px(10.)).border_1().border_color(t.border).bg(t.raised).shadow_lg()
@@ -2659,6 +4014,7 @@ impl Render for ScreenshotEditor {
                         }))
                     }))
             ))
+            .when_some(self.layer_menu, |root, id| root.child(self.layer_settings(id, window.viewport_size(), cx)))
     }
 }
 
@@ -2694,9 +4050,9 @@ fn replace_input(
     cx: &mut Context<ScreenshotEditor>,
 ) {
     if let Some(input) = slot {
-        input.update(cx, |input, cx| {
-            input.set_value(value, cx);
-        });
+        if input.read(cx).value() != value {
+            input.update(cx, |input, cx| input.set_value(value, cx));
+        }
     } else {
         *slot = Some(cx.new(|cx| crate::preferences::input::TextInput::new(value, "", cx)));
     }
@@ -2714,6 +4070,25 @@ fn field(
     input: Entity<crate::preferences::input::TextInput>,
     theme: Theme,
 ) -> Div {
+    field_container(label, theme).child(input)
+}
+
+fn field_container(label: &'static str, theme: Theme) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .gap_1()
+        .min_w(px(72.))
+        .child(
+            div()
+                .text_size(px(10.))
+                .text_color(theme.subtle)
+                .child(label),
+        )
+}
+
+fn value_field(label: &'static str, value: String, theme: Theme) -> Div {
     div()
         .flex()
         .flex_col()
@@ -2725,7 +4100,19 @@ fn field(
                 .text_color(theme.subtle)
                 .child(label),
         )
-        .child(input)
+        .child(
+            div()
+                .h(px(34.))
+                .px_3()
+                .flex()
+                .items_center()
+                .rounded(px(7.))
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.field)
+                .text_size(px(12.))
+                .child(value),
+        )
 }
 
 fn parse_dimension(label: &str, value: String) -> Result<u32, String> {
@@ -2761,39 +4148,63 @@ fn parse_f32(label: &str, value: String, min: f32, max: f32) -> Result<f32, Stri
     Ok(parsed)
 }
 
-fn parse_max_size(value: String) -> Result<Option<u64>, String> {
-    let value = value.trim().to_ascii_lowercase();
-    if value.is_empty() || value == "none" {
-        return Ok(None);
-    }
-    let (number, multiplier) = if let Some(number) = value.strip_suffix("mb") {
-        (number, 1_000_000)
-    } else if let Some(number) = value.strip_suffix("kb") {
-        (number, 1_000)
-    } else {
-        (value.as_str(), 1)
-    };
-    let number = number
+fn parse_maximum_size(value: String, unit: FileSizeUnit) -> Result<Option<u64>, String> {
+    let number = value
         .trim()
-        .parse::<u64>()
-        .map_err(|_| "Max size must be bytes, KB, or MB (for example 750KB)".to_string())?;
-    let bytes = number
-        .checked_mul(multiplier)
-        .ok_or_else(|| "Max size is too large".to_string())?;
-    if bytes == 0 {
-        return Err("Max size must be greater than zero, or blank for no limit".into());
+        .parse::<f64>()
+        .map_err(|_| "Maximum file size must be a positive number".to_string())?;
+    if !number.is_finite() || number <= 0. {
+        return Err("Maximum file size must be greater than zero".into());
     }
-    Ok(Some(bytes))
+    let multiplier = match unit {
+        FileSizeUnit::Kb => 1_000.,
+        FileSizeUnit::Mb => 1_000_000.,
+        FileSizeUnit::Gb => 1_000_000_000.,
+    };
+    let bytes = number * multiplier;
+    if bytes > u64::MAX as f64 {
+        return Err("Maximum file size is too large".into());
+    }
+    Ok(Some(bytes.round() as u64))
 }
 
-fn proportional_height(width: u32, source_width: u32, source_height: u32) -> Result<u32, String> {
-    let height = u64::from(width) * u64::from(source_height) / u64::from(source_width.max(1));
-    u32::try_from(height.max(1))
-        .ok()
-        .filter(|height| *height <= 16_384)
-        .ok_or_else(|| {
-            "Locked export height exceeds 16384; reduce the width or unlock aspect ratio".into()
-        })
+fn proportional_height(width: u32, source_width: u32, source_height: u32) -> u32 {
+    let denominator = u64::from(source_width.max(1));
+    let height = (u64::from(width) * u64::from(source_height) + denominator / 2) / denominator;
+    height.clamp(1, 16_384) as u32
+}
+
+fn proportional_image_size(
+    width: f32,
+    height: f32,
+    requested: f32,
+    width_changed: bool,
+) -> (f32, f32) {
+    let ratio = if width.is_finite() && height.is_finite() && width > 0. && height > 0. {
+        width / height
+    } else {
+        1.
+    };
+    if width_changed {
+        let next_width = requested.round().clamp(1., 16_384.).min(16_384. * ratio);
+        (next_width, (next_width / ratio).round().clamp(1., 16_384.))
+    } else {
+        let next_height = requested.round().clamp(1., 16_384.).min(16_384. / ratio);
+        (
+            (next_height * ratio).round().clamp(1., 16_384.),
+            next_height,
+        )
+    }
+}
+
+fn crop_aspect_label(aspect: Option<f32>) -> &'static str {
+    match aspect {
+        None => "Free",
+        Some(1.) => "1 : 1",
+        Some(value) if value == 4. / 3. => "4 : 3",
+        Some(1.5) => "3 : 2",
+        Some(_) => "16 : 9",
+    }
 }
 
 fn parse_color(label: &str, value: String) -> Result<[u8; 4], String> {
@@ -2847,6 +4258,7 @@ fn section(title: &'static str, t: Theme) -> Div {
         .child(
             div()
                 .h(px(48.))
+                .flex_shrink_0()
                 .mx(-px(12.))
                 .px_3()
                 .flex()
@@ -2861,7 +4273,7 @@ fn section(title: &'static str, t: Theme) -> Div {
 }
 /// GPUI 0.2.2's SVG decoder returns tiny-skia premultiplied RGBA, unlike
 /// its raster decoders and RenderImage's straight-alpha BGRA contract.
-fn svg_render_image(svg: String) -> Arc<RenderImage> {
+pub(crate) fn svg_render_image(svg: String) -> Arc<RenderImage> {
     let tree = resvg::usvg::Tree::from_data(svg.as_bytes(), &resvg::usvg::Options::default())
         .expect("valid editor SVG");
     let size = tree.size().to_int_size();
@@ -2896,6 +4308,46 @@ fn render_image(image: &RgbaImage) -> Arc<RenderImage> {
         pixel.0.swap(0, 2);
     }
     Arc::new(RenderImage::new([image::Frame::new(bgra)]))
+}
+
+/// ScreenshotEditor.ts's boundedCropRect, with the document crop origin retained.
+fn bounded_crop(start: Point, end: Point, bounds: Rect, aspect: Option<f32>) -> Rect {
+    let start = Point {
+        x: start.x.clamp(bounds.x, bounds.x + bounds.width),
+        y: start.y.clamp(bounds.y, bounds.y + bounds.height),
+    };
+    let mut end = Point {
+        x: end.x.clamp(bounds.x, bounds.x + bounds.width),
+        y: end.y.clamp(bounds.y, bounds.y + bounds.height),
+    };
+    if let Some(aspect) = aspect.filter(|r| r.is_finite() && *r > 0.) {
+        let dx = if end.x < start.x { -1. } else { 1. };
+        let dy = if end.y < start.y { -1. } else { 1. };
+        let mut width = (end.x - start.x)
+            .abs()
+            .max((end.y - start.y).abs() * aspect);
+        width = width.min(if dx > 0. {
+            bounds.x + bounds.width - start.x
+        } else {
+            start.x - bounds.x
+        });
+        let height = (width / aspect).min(if dy > 0. {
+            bounds.y + bounds.height - start.y
+        } else {
+            start.y - bounds.y
+        });
+        end = Point {
+            x: start.x + height * aspect * dx,
+            y: start.y + height * dy,
+        };
+    }
+    let rect = normalized_rect(start, end, false);
+    Rect {
+        x: rect.x.round(),
+        y: rect.y.round(),
+        width: rect.width.round().max(1.),
+        height: rect.height.round().max(1.),
+    }
 }
 
 fn normalized_rect(start: Point, end: Point, square: bool) -> Rect {
@@ -3043,9 +4495,15 @@ fn encode_compression_preview(
         (Format::Png, Some(limit)) => encode_png_with_limit(&output, limit),
         (Format::Jpeg, Some(limit)) => encode_jpeg_with_limit(&output, limit),
         (Format::Webp, Some(limit)) => encode_webp_with_limit(&output, limit),
-        (Format::Png, None) => encode_png(&output, Some(spec.quality)),
+        (Format::Png, None) => encode_png(
+            &output,
+            (spec.export_quality_mode != ExportQualityMode::Preserve).then_some(spec.quality),
+        ),
         (Format::Jpeg, None) => encode_jpeg(&output, spec.quality),
-        (Format::Webp, None) => encode_webp(&output, Some(spec.quality)),
+        (Format::Webp, None) => encode_webp(
+            &output,
+            (spec.export_quality_mode != ExportQualityMode::Preserve).then_some(spec.quality),
+        ),
     }?;
     let after = image::load_from_memory(&encoded)
         .map_err(|error| format!("Could not decode export preview: {error}"))?
@@ -3075,24 +4533,84 @@ fn human_bytes(bytes: usize) -> String {
     }
 }
 
-fn compression_image(image: Arc<RenderImage>, split: u8, before: bool, theme: Theme) -> Div {
-    let width = if before { split } else { 100 - split };
-    div()
-        .h_full()
-        .w(relative(width as f32 / 100.))
-        .overflow_hidden()
-        .rounded(px(5.))
-        .border_1()
-        .border_color(theme.border)
-        .child(
-            canvas(
-                |_, _, _| {},
-                move |bounds, _, window, _| {
-                    let _ = window.paint_image(bounds, Corners::default(), image.clone(), 0, false);
-                },
-            )
-            .size_full(),
+fn follow_canvas_export_size(
+    previous: (u32, u32),
+    canvas: (u32, u32),
+    output: (u32, u32),
+    percent: u8,
+) -> (u32, u32) {
+    let scaled = |(width, height): (u32, u32)| {
+        (
+            (width * u32::from(percent) / 100).max(1),
+            (height * u32::from(percent) / 100).max(1),
         )
+    };
+    if output == scaled(previous) {
+        scaled(canvas)
+    } else {
+        output
+    }
+}
+
+fn preset_output_size(canvas: (u32, u32), percent: u8) -> (u32, u32) {
+    (
+        (canvas.0 * u32::from(percent) / 100).max(1),
+        (canvas.1 * u32::from(percent) / 100).max(1),
+    )
+}
+
+fn comparison_clip(bounds: Bounds<Pixels>, split: f32) -> Bounds<Pixels> {
+    let split = split.clamp(0., 1.);
+    Bounds::new(
+        point(bounds.left() + bounds.size.width * split, bounds.top()),
+        size(bounds.size.width * (1. - split), bounds.size.height),
+    )
+}
+
+fn comparison_hide_bounds(image: Bounds<Pixels>) -> Bounds<Pixels> {
+    Bounds::new(
+        point(image.right() - px(64.), image.top() + px(12.)),
+        size(px(52.), px(24.)),
+    )
+}
+
+fn comparison_badge(
+    text: &str,
+    bounds: Bounds<Pixels>,
+    t: Theme,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    window.paint_quad(quad(
+        bounds,
+        Corners::all(bounds.size.height / 2.),
+        t.glass,
+        Edges::all(px(1.)),
+        t.glass_border,
+        BorderStyle::Solid,
+    ));
+    let line = window.text_system().shape_line(
+        text.to_owned().into(),
+        px(11.),
+        &[TextRun {
+            len: text.len(),
+            font: gpui::font(font()),
+            color: t.glass_text.into(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }],
+        None,
+    );
+    let _ = line.paint(
+        point(
+            bounds.left() + (bounds.size.width - line.width) / 2.,
+            bounds.top() + (bounds.size.height - px(16.)) / 2.,
+        ),
+        px(16.),
+        window,
+        cx,
+    );
 }
 
 fn decode(path: &Path) -> anyhow::Result<RgbaImage> {
@@ -3131,6 +4649,56 @@ fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
             _ => false,
         }
 }
+
+fn edit_text_style_state(
+    document: &mut Document,
+    selected: Option<u64>,
+    defaults: &mut captures_image::TextStyleSettings,
+    edit: impl FnOnce(&mut captures_image::TextStyleSettings),
+) -> Result<bool, &'static str> {
+    let Some(id) = selected else {
+        edit(defaults);
+        return Ok(false);
+    };
+    let Some(mut layer) = document.layers.iter().find(|layer| layer.id == id).cloned() else {
+        return Ok(false);
+    };
+    if layer.locked {
+        return Err("Unlock this layer before editing it");
+    }
+    if !matches!(&layer.shape, Shape::Text { .. }) {
+        return Ok(false);
+    }
+    let original = layer.clone();
+    if let Shape::Text { style, .. } = &mut layer.shape {
+        edit(style);
+    }
+    document.preview_layer(layer);
+    document.commit_layer_preview(original);
+    Ok(true)
+}
+
+fn update_text_effect_fields(
+    style: &mut captures_image::TextStyleSettings,
+    width: f32,
+    blur: f32,
+    offset_x: f32,
+    offset_y: f32,
+    shadow_color: [u8; 4],
+) {
+    if let Some(shadow) = &mut style.shadow {
+        shadow.blur = blur;
+        shadow.offset = captures_image::Point {
+            x: offset_x,
+            y: offset_y,
+        };
+        shadow.color = shadow_color;
+    }
+    if style.width.is_some() {
+        style.width = Some(width);
+    }
+}
+
 fn mock_artwork() -> RgbaImage {
     let mut out = RgbaImage::new(960, 600);
     for (x, y, p) in out.enumerate_pixels_mut() {
@@ -3151,6 +4719,197 @@ fn mock_artwork() -> RgbaImage {
 mod tests {
     use super::*;
     use core::prelude::v1::test;
+
+    fn text_document() -> (Document, u64) {
+        let mut document = Document::new(RgbaImage::new(320, 200));
+        let id = document.add(
+            Shape::Text {
+                origin: Point { x: 12., y: 18. },
+                value: "Text".into(),
+                font_size: 32.,
+                font_data: Arc::from([]),
+                style: Default::default(),
+            },
+            [255, 255, 255, 255],
+            0.,
+        );
+        (document, id)
+    }
+
+    #[test]
+    fn preplacement_text_settings_become_new_layer_style() {
+        let mut document = Document::new(RgbaImage::new(320, 200));
+        let mut defaults = captures_image::TextStyleSettings::default();
+        assert!(
+            !edit_text_style_state(&mut document, None, &mut defaults, |style| {
+                style.bold = true;
+                style.align = captures_image::TextAlign::Center;
+                style.width = Some(280.);
+            })
+            .unwrap()
+        );
+        let id = document.add(
+            Shape::Text {
+                origin: Point { x: 5., y: 7. },
+                value: "Placed".into(),
+                font_size: 40.,
+                font_data: Arc::from([]),
+                style: defaults,
+            },
+            [255, 255, 255, 255],
+            0.,
+        );
+        let Shape::Text { style, .. } = &document.layers.iter().find(|l| l.id == id).unwrap().shape
+        else {
+            panic!()
+        };
+        assert!(style.bold);
+        assert_eq!(style.align, captures_image::TextAlign::Center);
+        assert_eq!(style.width, Some(280.));
+    }
+
+    #[test]
+    fn selected_text_style_edits_are_undoable_and_locked_text_is_unchanged() {
+        let (mut document, id) = text_document();
+        let mut defaults = captures_image::TextStyleSettings::default();
+        assert!(
+            edit_text_style_state(&mut document, Some(id), &mut defaults, |style| style
+                .italic =
+                true)
+            .unwrap()
+        );
+        assert!(matches!(&document.layers[0].shape, Shape::Text { style, .. } if style.italic));
+        assert!(document.undo());
+        assert!(matches!(&document.layers[0].shape, Shape::Text { style, .. } if !style.italic));
+        document.toggle_locked(id);
+        assert!(
+            edit_text_style_state(&mut document, Some(id), &mut defaults, |style| style.bold =
+                true)
+            .is_err()
+        );
+        assert!(matches!(&document.layers[0].shape, Shape::Text { style, .. } if !style.bold));
+        assert!(
+            !defaults.bold,
+            "locked selected text must not redirect edits to defaults"
+        );
+    }
+
+    #[test]
+    fn unlocking_source_preserves_cropped_pixels_layers_and_single_undo() {
+        let mut source = RgbaImage::from_pixel(12, 8, image::Rgba([31, 81, 142, 255]));
+        source.put_pixel(6, 5, image::Rgba([255, 10, 79, 255]));
+        let mut document = Document::new(source);
+        let top = document.add(
+            Shape::Rectangle(Rect {
+                x: 3.,
+                y: 2.,
+                width: 4.,
+                height: 3.,
+            }),
+            [230, 130, 40, 255],
+            1.,
+        );
+        document.set_crop(Rect {
+            x: 2.,
+            y: 1.,
+            width: 9.,
+            height: 6.,
+        });
+        let before = document.render().unwrap();
+        let id = document.unlock_source().unwrap();
+        assert_eq!(document.layers[0].id, id);
+        assert_eq!(document.layers[1].id, top);
+        assert!(!document.layers[0].locked);
+        assert!(!document.source_present);
+        assert_eq!(document.render().unwrap(), before);
+        assert!(document.undo());
+        assert!(document.source_present);
+        assert_eq!(document.layers.len(), 1);
+        assert_eq!(document.render().unwrap(), before);
+        document.toggle_source_visibility();
+        let id = document.unlock_source().unwrap();
+        assert!(!document.layers.iter().find(|l| l.id == id).unwrap().visible);
+    }
+
+    #[test]
+    fn crop_presets_clamp_both_directions_and_keep_document_origin() {
+        let bounds = Rect {
+            x: 30.,
+            y: 20.,
+            width: 600.,
+            height: 300.,
+        };
+        let start = Point { x: 130., y: 70. };
+        assert_eq!(
+            bounded_crop(start, Point { x: 900., y: 400. }, bounds, Some(2.)),
+            Rect {
+                x: 130.,
+                y: 70.,
+                width: 500.,
+                height: 250.
+            }
+        );
+        assert_eq!(
+            bounded_crop(start, Point { x: -10., y: -20. }, bounds, Some(1.)),
+            Rect {
+                x: 80.,
+                y: 20.,
+                width: 50.,
+                height: 50.
+            }
+        );
+        assert_eq!(
+            bounded_crop(start, Point { x: 401., y: 173. }, bounds, None),
+            Rect {
+                x: 130.,
+                y: 70.,
+                width: 271.,
+                height: 103.
+            }
+        );
+    }
+
+    #[test]
+    fn export_follows_cropped_canvas_at_percentage_scale_but_preserves_override() {
+        assert_eq!(
+            follow_canvas_export_size((960, 540), (554, 351), (960, 540), 100),
+            (554, 351)
+        );
+        assert_eq!(
+            follow_canvas_export_size((960, 540), (554, 351), (480, 270), 50),
+            (277, 175)
+        );
+        assert_eq!(
+            follow_canvas_export_size((960, 540), (554, 351), (800, 600), 100),
+            (800, 600)
+        );
+    }
+
+    #[test]
+    fn image_numeric_updates_keep_aspect_and_round_pixels() {
+        assert_eq!(
+            proportional_image_size(400., 200., 333., true),
+            (333., 167.)
+        );
+        assert_eq!(
+            proportional_image_size(400., 200., 333., false),
+            (666., 333.)
+        );
+        assert_eq!(proportional_image_size(0., 0., 42., true), (42., 42.));
+    }
+
+    #[test]
+    fn image_aspect_constraints_clamp_the_derived_asymmetric_dimension() {
+        assert_eq!(
+            proportional_image_size(1., 4., 16_384., true),
+            (4096., 16_384.)
+        );
+        assert_eq!(
+            proportional_image_size(4., 1., 16_384., false),
+            (16_384., 4096.)
+        );
+        assert_eq!(proportional_image_size(4., 1., -20., true), (1., 1.));
+    }
 
     #[test]
     fn svg_conversion_preserves_asymmetric_colors_and_unpremultiplies_edges() {
@@ -3336,7 +5095,48 @@ mod tests {
         let width = parse_dimension("Export width", "317".into()).unwrap();
         let height = parse_dimension("Export height", "149".into()).unwrap();
         assert_eq!((width, height), (317, 149));
-        assert_eq!(proportional_height(width, 960, 600).unwrap(), 198);
+        assert_eq!(proportional_height(width, 960, 600), 198);
+        assert_eq!(proportional_height(600, 960, 540), 338);
+        assert_eq!(proportional_height(599, 960, 540), 337);
+        assert_eq!(proportional_height(16_384, 1, 16_384), 16_384);
+    }
+
+    #[test]
+    fn output_presets_and_custom_dimensions_are_independent() {
+        assert_eq!(preset_output_size((1001, 777), 100), (1001, 777));
+        assert_eq!(preset_output_size((1001, 777), 75), (750, 582));
+        assert_eq!(preset_output_size((1001, 777), 50), (500, 388));
+        let custom = (
+            parse_dimension("Width", "317".into()).unwrap(),
+            parse_dimension("Height", "149".into()).unwrap(),
+        );
+        assert_eq!(custom, (317, 149));
+    }
+
+    #[test]
+    fn quality_presets_and_size_units_produce_distinct_bytes() {
+        assert_eq!(
+            parse_maximum_size("1.5".into(), FileSizeUnit::Kb).unwrap(),
+            Some(1_500)
+        );
+        assert_eq!(
+            parse_maximum_size("1.5".into(), FileSizeUnit::Gb).unwrap(),
+            Some(1_500_000_000)
+        );
+        let image = mock_artwork();
+        let preserve = encode_png(&image, None).unwrap();
+        let compressed = encode_png(&image, Some(55)).unwrap();
+        assert_ne!(preserve, compressed);
+    }
+
+    #[test]
+    fn comparison_clip_uses_the_full_canvas_coordinate_space() {
+        let canvas = Bounds::new(point(px(37.), px(19.)), size(px(800.), px(450.)));
+        let right = comparison_clip(canvas, 0.35);
+        assert_eq!(right.origin, point(px(317.), px(19.)));
+        assert_eq!(right.size, size(px(520.), px(450.)));
+        assert_eq!(comparison_clip(canvas, -1.), canvas);
+        assert_eq!(comparison_clip(canvas, 2.).size.width, px(0.));
     }
 
     #[test]
@@ -3351,11 +5151,14 @@ mod tests {
                 .unwrap_err()
                 .contains("1 to 100")
         );
-        assert_eq!(parse_max_size("750KB".into()).unwrap(), Some(750_000));
+        assert_eq!(
+            parse_maximum_size("750".into(), FileSizeUnit::Kb).unwrap(),
+            Some(750_000)
+        );
         assert!(
-            parse_max_size("large".into())
+            parse_maximum_size("large".into(), FileSizeUnit::Mb)
                 .unwrap_err()
-                .contains("for example 750KB")
+                .contains("positive number")
         );
         assert_eq!(
             parse_color("Stroke", "12,34,56,78".into()).unwrap(),
@@ -3382,6 +5185,7 @@ mod tests {
             ExportSpec {
                 format: Format::Jpeg,
                 quality: 37,
+                export_quality_mode: ExportQualityMode::Compress,
                 max_bytes: None,
                 width: 123,
                 height: 79,

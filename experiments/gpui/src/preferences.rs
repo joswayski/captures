@@ -8,11 +8,49 @@ use std::{collections::HashSet, fs, path::PathBuf};
 
 pub mod history;
 pub mod input;
+mod onboarding;
 pub mod settings;
 use input::TextInput;
 use settings::Settings;
 
+static FEEDBACK_CLIENT: std::sync::OnceLock<
+    std::result::Result<captures_feedback::FeedbackClient, String>,
+> = std::sync::OnceLock::new();
+
 actions!(preferences, [OpenFind, CloseFind]);
+
+fn feedback_os_version() -> &'static str {
+    static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    VERSION.get_or_init(|| {
+        #[cfg(target_os = "linux")]
+        {
+            fs::read_to_string("/etc/os-release")
+                .ok()
+                .and_then(|contents| {
+                    contents.lines().find_map(|line| {
+                        line.strip_prefix("PRETTY_NAME=")
+                            .map(|v| v.trim().trim_matches('"').to_owned())
+                    })
+                })
+                .unwrap_or_else(|| "Linux".into())
+        }
+        #[cfg(target_os = "macos")]
+        {
+            std::process::Command::new("sw_vers")
+                .arg("-productVersion")
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_owned())
+                .unwrap_or_else(|| "macOS".into())
+        }
+        #[cfg(target_os = "windows")]
+        {
+            std::env::var("OS").unwrap_or_else(|_| "Windows".into())
+        }
+    })
+}
 
 fn is_image_path(path: &std::path::Path) -> bool {
     matches!(
@@ -115,10 +153,14 @@ struct Surface {
     poster_pending: HashSet<PathBuf>,
     history_filter: &'static str,
     confirm: Option<PathBuf>,
+    confirm_draft: Option<String>,
     message: Entity<TextInput>,
     contact: Entity<TextInput>,
     feedback_busy: bool,
     feedback_category: &'static str,
+    feedback_last_message: String,
+    permissions: onboarding::Permissions,
+    permission_polling: bool,
     custom_accent: Entity<TextInput>,
     custom_signal: Entity<TextInput>,
 }
@@ -135,6 +177,22 @@ impl Surface {
         };
         let find = cx.new(|cx| TextInput::new("", "Find settings", cx));
         cx.observe(&find, |_, _, cx| cx.notify()).detach();
+        let message = cx.new(|cx| {
+            TextInput::new("", "What happened? What did you expect?", cx)
+                .multiline(8_000)
+                .height(px(148.))
+        });
+        cx.observe(&message, |s, input, cx| {
+            let value = input.read(cx).value();
+            if value != s.feedback_last_message {
+                s.feedback_last_message = value;
+                if !s.feedback_busy {
+                    s.status.clear();
+                }
+            }
+            cx.notify();
+        })
+        .detach();
         let custom_accent = settings.custom_theme.accent.to_uppercase();
         let custom_signal = settings.custom_theme.signal.to_uppercase();
         Self {
@@ -156,12 +214,15 @@ impl Surface {
             poster_pending: HashSet::new(),
             history_filter: "all",
             confirm: None,
-            message: cx.new(|cx| {
-                TextInput::new("", "What happened? What did you expect?", cx).multiline(8_000)
-            }),
-            contact: cx.new(|cx| TextInput::new("", "X handle, GitHub username, email…", cx)),
+            confirm_draft: None,
+            message,
+            contact: cx
+                .new(|cx| TextInput::new("", "X handle, GitHub username, email…", cx).max_len(200)),
             feedback_busy: false,
             feedback_category: "bug",
+            feedback_last_message: String::new(),
+            permissions: onboarding::Permissions::default(),
+            permission_polling: false,
             custom_accent: cx.new(|cx| TextInput::new(custom_accent, "#32D3FF", cx)),
             custom_signal: cx.new(|cx| TextInput::new(custom_signal, "#FF4FC3", cx)),
         }
@@ -483,15 +544,6 @@ impl Surface {
                     .when(index > 0, |row| row.border_t_1().border_color(t.border))
                     .child(child)
             }))
-    }
-    fn row(&self, label: &str, value: &str, t: Theme) -> Div {
-        div()
-            .flex()
-            .justify_between()
-            .items_center()
-            .gap_3()
-            .child(div().child(label.to_string()))
-            .child(div().text_color(t.muted).child(value.to_string()))
     }
     fn setting_row(
         &self,
@@ -1270,7 +1322,7 @@ impl Surface {
         }
         d
     }
-    fn history_files(&mut self) -> Vec<PathBuf> {
+    fn history_files(&mut self) -> Vec<history::Entry> {
         let entries = match history::load(&self.launch.profile) {
             Ok(entries) => entries,
             Err(error) => {
@@ -1280,9 +1332,9 @@ impl Surface {
         };
         entries
             .into_iter()
-            .map(|entry| entry.path)
-            .filter(|path| {
-                let extension = path
+            .filter(|entry| {
+                let extension = entry
+                    .path
                     .extension()
                     .and_then(|v| v.to_str())
                     .unwrap_or("")
@@ -1307,7 +1359,8 @@ impl Surface {
                 t,
             ))
         }
-        for p in files {
+        for entry in files {
+            let p = entry.path;
             let name = p
                 .file_name()
                 .unwrap_or_default()
@@ -1317,10 +1370,21 @@ impl Surface {
             let del = p.clone();
             let confirmed = self.confirm.as_ref() == Some(&p);
             let metadata = fs::metadata(&p).ok();
+            let displayed_path = entry.saved_path.as_ref().unwrap_or(&p);
+            let display_name = displayed_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy();
             let detail = metadata
                 .as_ref()
-                .map(|m| format!("{} · {:.1} KB", p.display(), m.len() as f64 / 1024.))
-                .unwrap_or_else(|| p.display().to_string());
+                .map(|m| {
+                    format!(
+                        "{} · {:.1} KB",
+                        displayed_path.display(),
+                        m.len() as f64 / 1024.
+                    )
+                })
+                .unwrap_or_else(|| displayed_path.display().to_string());
             let extension = p
                 .extension()
                 .and_then(|value| value.to_str())
@@ -1401,7 +1465,7 @@ impl Surface {
                 })),
             );
             list = list.child(self.card(
-                &name,
+                &display_name,
                 &detail,
                 vec![
                     if is_image_path(&p) || extension == "gif" {
@@ -1497,60 +1561,150 @@ impl Surface {
         let Ok(drafts) = store.list() else {
             return vec![];
         };
+        let active = crate::recording::active_session(cx);
+        let drafts = drafts
+            .into_iter()
+            .filter(|draft| {
+                crate::recording::recovery::recoverable(draft.state)
+                    && active.as_deref() != Some(draft.session_id.as_str())
+            })
+            .collect::<Vec<_>>();
         if drafts.is_empty() {
             return vec![];
         }
-        let mut rows = div().flex().flex_col().gap_3();
+        let busy_id = cx
+            .try_global::<crate::recording::RecoveryInProgress>()
+            .map(|busy| busy.0.clone());
+        let mut rows = div().flex().flex_col().gap(px(8.));
         for draft in drafts {
             let id = draft.session_id.clone();
             let discard = id.clone();
-            let segment_count = draft
+            let confirmed = self.confirm_draft.as_ref() == Some(&id);
+            let duration = draft
                 .segments
                 .iter()
                 .filter(|segment| segment.complete)
-                .count();
+                .map(|segment| segment.duration_ms)
+                .sum::<u64>()
+                / 1000;
+            let created = i64::try_from(draft.created_at_ms)
+                .ok()
+                .and_then(|ms| jiff::Timestamp::from_millisecond(ms).ok())
+                .map(|time| {
+                    time.to_zoned(jiff::tz::TimeZone::system())
+                        .strftime("%m/%d/%Y, %I:%M:%S %p")
+                        .to_string()
+                })
+                .unwrap_or_else(|| "Unknown date".into());
             let copy = div()
                 .flex()
                 .flex_col()
-                .gap_1()
-                .child(div().font_weight(FontWeight::MEDIUM).child(
-                    if draft.options.kind == captures_recording::RecordingKind::Gif {
-                        "Interrupted GIF recording"
-                    } else {
-                        "Interrupted video recording"
-                    },
-                ))
+                .flex_1()
+                .min_w_0()
+                .gap(px(2.))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(
+                            if draft.options.kind == captures_recording::RecordingKind::Gif {
+                                "GIF recording"
+                            } else {
+                                "Video recording"
+                            },
+                        ),
+                )
                 .child(div().text_size(px(12.)).text_color(t.subtle).child(format!(
-                    "{segment_count} playable segment{} · recover in the recording editor",
-                    if segment_count == 1 { "" } else { "s" }
-                )));
+                    "{created} · {}:{:02} recovered so far",
+                    duration / 60,
+                    duration % 60
+                )))
+                .when_some(draft.last_error, |copy, error| {
+                    copy.child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(t.caution_text)
+                            .child(error),
+                    )
+                });
             let actions = div()
                 .flex()
-                .gap_2()
+                .flex_shrink_0()
+                .gap(px(6.))
                 .child(
                     self.button(
                         SharedString::from(format!("recover-{id}")),
-                        "Recover",
-                        true,
+                        if busy_id.as_ref() == Some(&id) { "Recovering…" } else { "Recover" },
+                        false,
                         t,
                     )
+                    .h(px(32.)).py_0().flex().items_center().text_size(px(12.)).font_weight(FontWeight::MEDIUM)
+                    .when(busy_id.is_some(), |button| button.opacity(0.45).cursor_default())
                     .on_click(cx.listener(move |s, _, _, cx| {
-                        let mut launch = s.launch.clone();
-                        launch.path = Some(s.launch.profile.join("recording-drafts").join(&id));
-                        if let Err(e) = crate::open_view("recording-editor", launch, cx) {
-                            s.status = format!("Couldn’t recover recording: {e:#}");
-                            cx.notify()
+                        if crate::recording::active_session(cx).is_some()
+                            || cx.has_global::<crate::recording::RecoveryInProgress>()
+                        {
+                            s.status = "Finish the current recording or recovery first.".into();
+                            cx.notify();
+                            return;
                         }
+                        cx.set_global(crate::recording::RecoveryInProgress(id.clone()));
+                        cx.refresh_windows();
+                        s.status = "Recovering playable recording segments…".into();
+                        s.confirm_draft = None;
+                        let profile = s.launch.profile.clone();
+                        let id = id.clone();
+                        let task = cx.background_executor().spawn(async move {
+                            crate::recording::recovery::recover(&profile, &id)
+                        });
+                        cx.spawn(async move |this, cx| {
+                            let result = task.await;
+                            let _ = cx.update(|cx| {
+                                cx.remove_global::<crate::recording::RecoveryInProgress>();
+                                cx.refresh_windows();
+                            });
+                            let _ = this.update(cx, |s, cx| {
+                                s.status = match result {
+                                    Ok(path) => {
+                                        let mut launch = s.launch.clone();
+                                        launch.path = Some(path);
+                                        match crate::open_view("recording-editor", launch, cx) {
+                                            Ok(()) => "Recording recovered to Capture History.".into(),
+                                            Err(e) => format!("Recovered to History, but couldn’t open editor: {e:#}"),
+                                        }
+                                    }
+                                    Err(e) => format!("Couldn’t recover recording: {e:#}. Source segments were retained."),
+                                };
+                                cx.notify();
+                            });
+                        }).detach();
+                        cx.notify();
                     })),
                 )
                 .child(
                     self.button(
                         SharedString::from(format!("discard-{discard}")),
-                        "Discard",
-                        false,
+                        if confirmed { "Discard permanently?" } else { "Discard" },
+                        confirmed,
                         t,
                     )
+                    .h(px(32.)).py_0().flex().items_center().text_size(px(12.)).font_weight(FontWeight::MEDIUM)
+                    .when(confirmed, |button| button.text_color(t.signal))
+                    .when(busy_id.is_some(), |button| button.opacity(0.45).cursor_default())
                     .on_click(cx.listener(move |s, _, _, cx| {
+                        if crate::recording::active_session(cx).as_deref() == Some(discard.as_str())
+                            || cx.has_global::<crate::recording::RecoveryInProgress>()
+                        {
+                            s.status = "This recording is still in use.".into();
+                            cx.notify();
+                            return;
+                        }
+                        if s.confirm_draft.as_ref() != Some(&discard) {
+                            s.confirm_draft = Some(discard.clone());
+                            s.status = "Permanently discard this interrupted recording? This cannot be undone.".into();
+                            cx.notify();
+                            return;
+                        }
                         let store = captures_recording::DraftStore::new(
                             s.launch.profile.join("recording-drafts"),
                         );
@@ -1558,27 +1712,31 @@ impl Surface {
                             Ok(_) => "Interrupted recording discarded.".into(),
                             Err(e) => format!("Couldn’t discard recording: {e}"),
                         };
+                        s.confirm_draft = None;
                         cx.notify()
                     })),
                 );
             rows = rows.child(
                 div()
-                    .p_4()
-                    .rounded(px(10.))
-                    .border_1()
+                    .pt(px(8.))
+                    .border_t_1()
                     .border_color(t.border)
-                    .bg(t.raised)
                     .flex()
+                    .gap(px(16.))
                     .items_center()
                     .justify_between()
                     .child(copy)
                     .child(actions),
             );
         }
-        vec![self.card("Recording recovery","These recordings stopped before Captures could finish saving them. Recover one to add its playable segments to Capture History, or discard it.",vec![rows.into_any_element()],t).into_any_element()]
+        vec![div().p(px(16.)).flex().flex_col().gap(px(8.)).border_1().border_color(t.caution_surface).rounded(px(14.)).bg(t.raised).shadow_sm()
+            .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child("Interrupted recordings"))
+            .child(div().text_size(px(12.)).text_color(t.subtle).child("These recordings stopped before Captures could finish saving them. Recover one to add its playable segments to Capture History, or discard it."))
+            .child(rows).into_any_element()]
     }
     fn feedback(&mut self, cx: &mut Context<Self>, t: Theme) -> Stateful<Div> {
-        let mut categories = div().grid().grid_cols(3).gap_3();
+        let can_submit = !self.feedback_busy && !self.message.read(cx).value().trim().is_empty();
+        let mut categories = div().grid().grid_cols(3).gap(px(6.));
         for (id, label, description) in [
             ("bug", "Bug", "Something is broken or unexpected"),
             ("idea", "Idea", "A feature or improvement"),
@@ -1588,7 +1746,7 @@ impl Surface {
                 div()
                     .id(SharedString::from(format!("feedback-{id}")))
                     .min_h(px(62.))
-                    .p_3()
+                    .p_2()
                     .rounded(px(8.))
                     .border_1()
                     .border_color(if self.feedback_category == id {
@@ -1597,14 +1755,17 @@ impl Surface {
                         t.border
                     })
                     .bg(if self.feedback_category == id {
-                        t.hover
+                        Rgba {
+                            a: 0.13,
+                            ..t.accent
+                        }
                     } else {
-                        t.raised
+                        t.canvas
                     })
                     .cursor_pointer()
                     .flex()
                     .flex_col()
-                    .gap_1()
+                    .gap(px(3.))
                     .child(div().font_weight(FontWeight::MEDIUM).child(label))
                     .child(
                         div()
@@ -1636,6 +1797,13 @@ impl Surface {
                 true,
                 t,
             )
+            .h(px(36.))
+            .px_4()
+            .bg(t.accent)
+            .text_color(rgb(0x131318))
+            .border_0()
+            .font_weight(FontWeight::SEMIBOLD)
+            .opacity(if can_submit { 1. } else { 0.4 })
             .on_click(cx.listener(|s, _, _, cx| {
                 if s.feedback_busy {
                     return;
@@ -1643,38 +1811,52 @@ impl Surface {
                 let message = s.message.read(cx).value();
                 let contact = s.contact.read(cx).value();
                 if message.trim().is_empty() {
-                    s.status = "Please enter a message.".into();
-                    cx.notify();
                     return;
                 }
                 s.feedback_busy = true;
+                s.message
+                    .update(cx, |input, cx| input.set_disabled(true, cx));
+                s.contact
+                    .update(cx, |input, cx| input.set_disabled(true, cx));
                 let category = s.feedback_category.to_owned();
                 let endpoint = std::env::var("CAPTURES_FEEDBACK_URL")
                     .unwrap_or_else(|_| captures_feedback::DEFAULT_FEEDBACK_URL.into());
                 let task = cx.background_executor().spawn(async move {
-                    captures_feedback::FeedbackClient::new(&endpoint).and_then(|c| {
-                        c.submit(
-                            captures_feedback::FeedbackDraft {
-                                message: message.trim().into(),
-                                contact: (!contact.trim().is_empty())
-                                    .then(|| contact.trim().into()),
-                                category,
-                            },
-                            captures_feedback::FeedbackContext {
-                                app_version: env!("CARGO_PKG_VERSION").into(),
-                                os: std::env::consts::OS.into(),
-                                os_version: "unknown".into(),
-                                arch: std::env::consts::ARCH.into(),
-                            },
-                        )
-                    })
+                    FEEDBACK_CLIENT
+                        .get_or_init(|| captures_feedback::FeedbackClient::new(&endpoint))
+                        .as_ref()
+                        .map_err(Clone::clone)
+                        .and_then(|c| {
+                            c.submit(
+                                captures_feedback::FeedbackDraft {
+                                    message: message.trim().into(),
+                                    contact: (!contact.trim().is_empty())
+                                        .then(|| contact.trim().into()),
+                                    category,
+                                },
+                                captures_feedback::FeedbackContext {
+                                    app_version: env!("CARGO_PKG_VERSION").into(),
+                                    os: std::env::consts::OS.into(),
+                                    os_version: feedback_os_version().into(),
+                                    arch: std::env::consts::ARCH.into(),
+                                },
+                            )
+                        })
                 });
                 cx.spawn(async move |this, cx| {
                     let result = task.await;
                     let _ = this.update(cx, |s, cx| {
                         s.feedback_busy = false;
+                        s.message
+                            .update(cx, |input, cx| input.set_disabled(false, cx));
+                        s.contact
+                            .update(cx, |input, cx| input.set_disabled(false, cx));
                         s.status = match result {
-                            Ok(_) => "Thanks — feedback sent.".into(),
+                            Ok(_) => {
+                                s.feedback_last_message.clear();
+                                s.message.update(cx, |input, cx| input.set_value("", cx));
+                                "Thanks — feedback sent.".into()
+                            }
                             Err(e) => e,
                         };
                         cx.notify()
@@ -1684,96 +1866,27 @@ impl Surface {
                 s.status = "Sending…".into();
                 cx.notify()
             }));
-        div().id("feedback-scroll").size_full().overflow_y_scroll().bg(t.canvas).child(div().max_w(px(640.)).mx_auto().p_8().flex().flex_col().gap_5()
-            .child(div().text_size(px(11.)).text_color(t.subtle).child("CAPTURES"))
-            .child(div().text_size(px(28.)).font_weight(FontWeight::BOLD).child("Send feedback"))
-            .child(div().text_color(t.subtle).line_height(px(19.)).child("Tell us what broke, what is missing, or what you wish worked better. Captures sends what you type here plus the app and system details listed below."))
-            .child(self.card("Category","Choose the closest match.",vec![categories.into_any_element(),div().flex().flex_col().gap_2().child("Message").child(div().h(px(150.)).child(self.message.clone())).into_any_element(),div().flex().flex_col().gap_2().child("Contact  ·  OPTIONAL").child(self.contact.clone()).child(div().text_size(px(11.)).text_color(t.subtle).child("Optional — we may use this if we need to ask a follow-up question.")).into_any_element()],t))
-            .child(self.card("Included automatically","",vec![self.row("App version",env!("CARGO_PKG_VERSION"),t).into_any_element(),self.row("System",&format!("{} · {}",std::env::consts::OS,std::env::consts::ARCH),t).into_any_element()],t))
-            .child(div().flex().items_center().justify_between().child(div().text_color(if self.status.starts_with("Thanks"){t.positive}else{t.signal}).child(self.status.clone())).child(submit)))
-    }
-    fn onboarding(&mut self, cx: &mut Context<Self>, t: Theme) -> Div {
-        let screen_ready = captures_capture::XcapBackend
-            .ensure_permission(false)
-            .is_ok();
-        let platform = std::env::consts::OS;
-        let description = match platform {
-            "macos" => {
-                "This allows Captures to read the pixels you choose to capture. macOS keeps everything else hidden."
-            }
-            "windows" => {
-                "Windows provides screen capture access without a separate permission prompt. Secure and protected windows remain private."
-            }
-            _ => {
-                "Your desktop may show its own screen-sharing picker when a capture starts. There is nothing to approve ahead of time."
-            }
-        };
-        let permission_action = if screen_ready {
-            self.button("screen-ready", "✓  Ready", false, t)
-        } else {
-            self.button(
-                "screen-permission",
-                if cfg!(target_os = "macos") {
-                    "Allow access"
-                } else {
-                    "Check again"
-                },
-                false,
-                t,
-            )
-            .on_click(cx.listener(|s, _, _, cx| {
-                s.status = match captures_capture::XcapBackend.ensure_permission(true) {
-                    Ok(_) => "Screen capture access is ready.".into(),
-                    Err(e) => format!("Screen access still needs approval: {e}"),
-                };
-                cx.notify()
-            }))
-        };
-        let permission = div()
-            .p_5()
-            .grid()
-            .grid_cols(3)
-            .gap_4()
-            .items_start()
-            .child(div().text_size(px(20.)).child("▣"))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(
-                        div()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Screen capture"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .line_height(px(17.))
-                            .text_color(t.subtle)
-                            .child(description),
-                    ),
-            )
-            .child(permission_action);
-        let permissions = div()
-            .rounded(px(14.))
-            .border_1()
-            .border_color(t.border)
-            .bg(t.raised)
-            .child(permission);
-        #[cfg(target_os = "macos")]
-        let permissions = {
-            let mic_ready = captures_recording_macos::microphone_authorized();
-            permissions.child(div().border_t_1().border_color(t.border).p_5().grid().grid_cols(3).gap_4().child("♩").child(div().child("Microphone  ·  Optional").child(div().text_size(px(12.)).text_color(t.subtle).child("Allow it now so a recording does not pause to ask, or wait until you pick a mic."))).child(self.button("mic-permission",if mic_ready{"✓  Granted"}else{"Allow microphone"},false,t).on_click(cx.listener(|s,_,_,cx|{if !captures_recording_macos::microphone_authorized(){captures_recording_macos::request_microphone_access();}s.status="Microphone permission status refreshed.".into();cx.notify()}))))
-        };
-        let stage = div().max_w(px(620.)).h_full().mx_auto().p_8().flex().flex_col().justify_center().gap_6()
-            .child(div().size(px(40.)).rounded(px(10.)).bg(t.accent).flex().items_center().justify_center().text_size(px(22.)).child("⌖"))
-            .child(div().text_size(px(11.)).text_color(t.subtle).child("WELCOME TO CAPTURES"))
-            .child(div().text_size(px(28.)).font_weight(FontWeight::BOLD).child(if cfg!(target_os="macos"){"Required permissions"}else{"You’re ready to capture"}))
-            .child(div().text_color(t.subtle).line_height(px(19.)).child("Captures only reads the pixels you choose to capture. Nothing is uploaded, and nothing leaves this computer unless you send it somewhere."))
-            .child(permissions).child(div().text_color(t.signal).child(self.status.clone()))
-            .child(div().flex().justify_end().child(self.button("finish","Start capturing",true,t).on_click(cx.listener(|s,_,_,cx|{s.settings.onboarding_completed=true;s.persist(cx);s.nav(Page::Preferences,cx)}))));
-        div().size_full().bg(t.canvas).child(stage)
+        div().id("feedback-scroll").size_full().overflow_y_scroll().bg(t.canvas).px_6().pt_8().pb_12()
+            .child(div().w_full().max_w(px(640.)).mx_auto().flex().flex_col().gap_4()
+                .child(div().flex().flex_col().gap_1()
+                    .child(div().text_size(px(10.)).font_weight(FontWeight::SEMIBOLD).text_color(t.subtle).child("CAPTURES"))
+                    .child(div().text_size(px(22.)).font_weight(FontWeight::BOLD).child("Send feedback"))
+                    .child(div().mt_1().text_size(px(12.)).text_color(t.subtle).line_height(px(16.2)).child("Tell us what broke, what is missing, or what you wish worked better. Captures sends what you type here plus the app and system details listed below.")))
+                .child(div().p_4().border_1().border_color(t.border).rounded(px(14.)).bg(t.raised).flex().flex_col().gap_3()
+                    .child(div().flex().flex_col().gap(px(6.)).child("Category").child(categories))
+                    .child(div().pt_3().border_t_1().border_color(t.border).flex().flex_col().gap(px(6.)).child("Message").child(self.message.clone()))
+                    .child(div().pt_3().border_t_1().border_color(t.border).flex().flex_col().gap(px(6.))
+                        .child(div().flex().items_center().gap_1().child("Contact").child(div().px(px(6.)).py(px(1.)).rounded_full().bg(t.sunken).text_size(px(10.)).text_color(t.subtle).child("OPTIONAL")))
+                        .child(self.contact.clone()).child(div().text_size(px(12.)).line_height(px(16.2)).text_color(t.subtle).child("Optional — we may use this if we need to ask a follow-up question."))))
+                .child(div().p_4().border_1().border_color(t.border).rounded(px(14.)).bg(t.raised).flex().flex_col().gap_2()
+                    .child(div().font_weight(FontWeight::MEDIUM).child("Included automatically"))
+                    .child(div().pt_3().border_t_1().border_color(t.border).flex().flex_col().gap(px(6.)).children([
+                        ("App version", env!("CARGO_PKG_VERSION").to_owned()),
+                        ("System", format!("{} · {} · {}", std::env::consts::OS, feedback_os_version(), std::env::consts::ARCH)),
+                    ].into_iter().map(|(label, value)| div().flex().gap_2().text_size(px(12.)).child(div().w(px(112.)).text_color(t.subtle).child(label)).child(div().font_family("monospace").child(value)))) ))
+                .child(div().flex().items_center().justify_end().gap_3()
+                    .when(!self.status.is_empty() && !self.feedback_busy, |d| d.child(div().flex_1().px_2().py(px(6.)).rounded(px(8.)).text_size(px(12.)).text_color(if self.status.starts_with("Thanks"){t.positive}else{t.signal}).child(self.status.clone())))
+                    .child(submit)))
     }
 }
 impl Render for Surface {
@@ -1802,7 +1915,7 @@ impl Render for Surface {
                 Page::Preferences => self.preferences(cx, t).into_any_element(),
                 Page::History => self.history(cx, t).into_any_element(),
                 Page::Feedback => self.feedback(cx, t).into_any_element(),
-                Page::Onboarding => self.onboarding(cx, t).into_any_element(),
+                Page::Onboarding => self.onboarding(window, cx, t).into_any_element(),
             })
     }
 }

@@ -453,21 +453,29 @@ impl Preview {
         let profile = self.launch.profile.clone();
         self.saving = Some(id);
         let task = cx.background_executor().spawn(async move {
-            settings::load(&profile).and_then(|settings| media::save(&media, &settings))
+            let settings = settings::load(&profile)?;
+            let path = media::save(&media, &settings)?;
+            let history_error =
+                crate::preferences::history::link_saved(&profile, &media.source, &path)
+                    .err()
+                    .map(|e| e.to_string());
+            anyhow::Ok((path, history_error))
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |s, cx| {
                 s.saving = None;
                 match result {
-                    Ok(path) => {
+                    Ok((path, history_error)) => {
                         if let Some(artifact) =
                             s.artifacts.iter_mut().find(|artifact| artifact.id == id)
                         {
                             artifact.saved_path = Some(path);
                         }
                         s.saved_feedback = Some((id, Instant::now()));
-                        s.status.clear();
+                        s.status = history_error
+                            .map(|e| format!("File saved; history link failed: {e}"))
+                            .unwrap_or_default();
                     }
                     Err(error) => s.status = format!("Save failed: {error}"),
                 }

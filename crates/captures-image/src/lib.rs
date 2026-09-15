@@ -267,7 +267,27 @@ fn text_layout(
             ..LayoutSettings::default()
         });
         layout.append(&[&font], &TextStyle::new(text, size, 0));
-        Some(longest_line_width(&layout).max(size * 0.5) + 0.01)
+        // Wrapping uses ceil(advance_width), not the ink rectangle. In
+        // particular the last glyph's side bearing and trailing spaces must
+        // fit too, or this second layout pass would wrap auto-width text.
+        Some(
+            layout
+                .lines()
+                .into_iter()
+                .flatten()
+                .map(|line| {
+                    layout.glyphs()[line.glyph_start..=line.glyph_end]
+                        .iter()
+                        .filter(|glyph| !glyph.char_data.is_control())
+                        .map(|glyph| {
+                            font.metrics_indexed(glyph.key.glyph_index, glyph.key.px)
+                                .advance_width
+                                .ceil()
+                        })
+                        .sum::<f32>()
+                })
+                .fold(size * 0.5, f32::max),
+        )
     } else {
         style.width
     };
@@ -1135,6 +1155,66 @@ mod tests {
         text.clear();
         assert!(document.layers[0].bounds().is_some());
         assert_eq!(render(&document).unwrap(), *document.source);
+    }
+
+    #[test]
+    fn auto_width_uses_advances_without_wrapping_ink_or_spaces() {
+        let font = include_bytes!("../tests/test-font.ttf");
+        // Fixture L has a 700-unit advance but only 600 units of ink.
+        // At 10px, four Ls need 28px, not the 27px ink bounding box.
+        let (_, single) = text_layout(
+            Point { x: 30., y: 17. },
+            "LLLL",
+            10.,
+            font,
+            &TextStyleSettings::default(),
+        )
+        .unwrap();
+        assert_eq!(single.lines().unwrap().len(), 1);
+        for (align, short_line_x) in [
+            (TextAlign::Left, 30.),
+            (TextAlign::Center, 40.),
+            (TextAlign::Right, 51.),
+        ] {
+            let (_, layout) = text_layout(
+                Point { x: 30., y: 17. },
+                "LLLL\nL",
+                10.,
+                font,
+                &TextStyleSettings {
+                    align,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(layout.lines().unwrap().len(), 2);
+            assert_eq!(layout.glyphs().last().unwrap().x, short_line_x);
+        }
+        let (_, layout) = text_layout(
+            Point { x: 30., y: 17. },
+            "L  ",
+            10.,
+            font,
+            &TextStyleSettings::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            layout.lines().unwrap().len(),
+            1,
+            "trailing spaces are advances too"
+        );
+        let (_, fixed) = text_layout(
+            Point { x: 30., y: 17. },
+            "LLLL",
+            10.,
+            font,
+            &TextStyleSettings {
+                width: Some(14.),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(fixed.lines().unwrap().len(), 2, "fixed width still wraps");
     }
 
     #[test]

@@ -585,6 +585,87 @@ impl Document {
         })
     }
 
+    /// Quarter turns and mirrors preserve source pixels and the displayed center.
+    pub fn transform_image(
+        &mut self,
+        id: u64,
+        quarter_turns: i32,
+        horizontal: bool,
+        vertical: bool,
+    ) -> bool {
+        let Some(index) = self.layers.iter().position(|l| l.id == id) else {
+            return false;
+        };
+        let mut layer = self.layers[index].clone();
+        let Shape::Image {
+            origin,
+            width,
+            height,
+            pixels,
+        } = &mut layer.shape
+        else {
+            return false;
+        };
+        let turns_canvas = quarter_turns.rem_euclid(2) == 1
+            && layer.visible
+            && !(self.source_present && self.source_visible)
+            && self.layers.iter().filter(|l| l.visible).count() == 1
+            && (origin.x - self.crop.x).abs() < 0.01
+            && (origin.y - self.crop.y).abs() < 0.01
+            && (*width - self.crop.width).abs() < 0.01
+            && (*height - self.crop.height).abs() < 0.01;
+        let center = Point {
+            x: origin.x + *width / 2.,
+            y: origin.y + *height / 2.,
+        };
+        let transform = |pixels: &RgbaImage| {
+            let mut image = match quarter_turns.rem_euclid(4) {
+                1 => image::imageops::rotate90(pixels),
+                2 => image::imageops::rotate180(pixels),
+                3 => image::imageops::rotate270(pixels),
+                _ => pixels.clone(),
+            };
+            if horizontal {
+                image::imageops::flip_horizontal_in_place(&mut image);
+            }
+            if vertical {
+                image::imageops::flip_vertical_in_place(&mut image);
+            }
+            Arc::new(image)
+        };
+        *pixels = transform(pixels);
+        layer.original_pixels = layer
+            .original_pixels
+            .as_ref()
+            .map(|pixels| transform(pixels));
+        if quarter_turns.rem_euclid(2) == 1 {
+            std::mem::swap(width, height);
+        }
+        *origin = Point {
+            x: center.x - *width / 2.,
+            y: center.y - *height / 2.,
+        };
+        if layer == self.layers[index] {
+            return false;
+        }
+        self.checkpoint();
+        if turns_canvas {
+            let bounds = to_raster_layer(&layer)
+                .bounds()
+                .expect("finite image bounds");
+            self.crop = Rect {
+                x: bounds.x,
+                y: bounds.y,
+                width: bounds.width,
+                height: bounds.height,
+            };
+            self.canvas_width = bounds.width.round() as u32;
+            self.canvas_height = bounds.height.round() as u32;
+        }
+        self.layers[index] = layer;
+        true
+    }
+
     fn edit_layer(&mut self, id: u64, edit: impl FnOnce(&mut Layer)) -> bool {
         let Some(index) = self.layers.iter().position(|layer| layer.id == id) else {
             return false;
@@ -689,6 +770,42 @@ impl Document {
         self.checkpoint();
         self.source_visible = !self.source_visible;
         self.source_visible
+    }
+
+    /// Turn the original background into a normal editable bottom layer without
+    /// rasterizing annotations or changing its pixels, visibility, or placement.
+    pub fn unlock_source(&mut self) -> Option<u64> {
+        if !self.source_present {
+            return None;
+        }
+        self.checkpoint();
+        self.materialize_source(false)
+    }
+
+    /// Normalize a freshly loaded document to image layers without adding an
+    /// undo step. Call before editing; unlocking during editing uses unlock_source.
+    pub fn materialize_source(&mut self, locked: bool) -> Option<u64> {
+        if !self.source_present {
+            return None;
+        }
+        let id = self.push_layer(
+            Shape::Image {
+                origin: Point { x: 0., y: 0. },
+                width: self.source.width() as f32,
+                height: self.source.height() as f32,
+                pixels: self.source.clone(),
+            },
+            [255; 4],
+            1.,
+        );
+        let mut layer = self.layers.pop().expect("source layer was just added");
+        layer.name = self.source_name.clone();
+        layer.visible = self.source_visible;
+        layer.locked = locked;
+        layer.original_pixels = Some(self.original.clone());
+        self.layers.insert(0, layer);
+        self.source_present = false;
+        Some(id)
     }
 
     pub fn can_trim_to_visible_content(&self) -> bool {
@@ -1023,6 +1140,35 @@ impl Document {
             let destination_y = (crop_y as f32 - self.crop.y).round().max(0.0) as i64;
             image::imageops::overlay(&mut source, &original, destination_x, destination_y);
         }
+        // An untransformed bottom image is the raster backdrop, just as the
+        // locked source is. Keep it out of the annotation pixmap: grouping it
+        // with vectors would change source-over rounding when it is unlocked.
+        let layers = if !include_source
+            && let Some((base, remaining)) = layers.split_first()
+            && base.opacity == 255
+            && base.rotation_degrees == 0.0
+            && base.blend_mode == BlendMode::Normal
+            && let Shape::Image {
+                origin,
+                width,
+                height,
+                pixels,
+            } = &base.shape
+            && *width == pixels.width() as f32
+            && *height == pixels.height() as f32
+            && (origin.x - self.crop.x).fract() == 0.0
+            && (origin.y - self.crop.y).fract() == 0.0
+        {
+            image::imageops::overlay(
+                &mut source,
+                pixels.as_ref(),
+                (origin.x - self.crop.x) as i64,
+                (origin.y - self.crop.y) as i64,
+            );
+            remaining
+        } else {
+            layers
+        };
         let offset = captures_image::Point {
             x: -self.crop.x,
             y: -self.crop.y,
@@ -1634,6 +1780,108 @@ mod tests {
         assert_eq!(document.layers[0].id, first);
         assert!(document.redo());
         assert_eq!(document.layers.len(), 2);
+    }
+
+    #[test]
+    fn image_quarter_turns_and_mirrors_preserve_pixels_center_and_undo() {
+        let pixels =
+            RgbaImage::from_fn(3, 2, |x, y| image::Rgba([1 + (x + 3 * y) as u8, 0, 0, 255]));
+        let mut document = Document::new(RgbaImage::new(160, 90));
+        let id = document.add(
+            Shape::Image {
+                origin: Point { x: 11., y: 17. },
+                width: 30.,
+                height: 20.,
+                pixels: Arc::new(pixels),
+            },
+            [255; 4],
+            1.,
+        );
+        let original = document.layers[0].clone();
+        assert!(document.transform_image(id, 1, false, false));
+        let Shape::Image {
+            origin,
+            width,
+            height,
+            pixels,
+        } = &document.layers[0].shape
+        else {
+            panic!("image expected")
+        };
+        assert_eq!(
+            (*origin, *width, *height),
+            (Point { x: 16., y: 12. }, 20., 30.)
+        );
+        assert_eq!(
+            pixels.pixels().map(|p| p[0]).collect::<Vec<_>>(),
+            [4, 1, 5, 2, 6, 3]
+        );
+        assert!(document.undo());
+        assert_eq!(document.layers[0], original);
+        assert!(document.transform_image(id, -1, false, false));
+        let Shape::Image { pixels, .. } = &document.layers[0].shape else {
+            panic!("image expected")
+        };
+        assert_eq!(
+            pixels.pixels().map(|p| p[0]).collect::<Vec<_>>(),
+            [3, 6, 2, 5, 1, 4]
+        );
+        assert!(document.transform_image(id, 1, false, false));
+        assert_eq!(document.layers[0], original);
+        assert!(document.transform_image(id, 0, true, false));
+        let Shape::Image { pixels, .. } = &document.layers[0].shape else {
+            panic!("image expected")
+        };
+        assert_eq!(
+            pixels.pixels().map(|p| p[0]).collect::<Vec<_>>(),
+            [3, 2, 1, 6, 5, 4]
+        );
+        assert!(document.transform_image(id, 0, true, false));
+        assert_eq!(document.layers[0], original);
+        assert!(document.transform_image(id, 0, false, true));
+        let Shape::Image { pixels, .. } = &document.layers[0].shape else {
+            panic!("image expected")
+        };
+        assert_eq!(
+            pixels.pixels().map(|p| p[0]).collect::<Vec<_>>(),
+            [4, 5, 6, 1, 2, 3]
+        );
+        document.toggle_locked(id);
+        let locked = document.layers[0].clone();
+        assert!(document.transform_image(id, 1, false, false));
+        assert!(document.layers[0].locked);
+        assert!(document.undo());
+        assert_eq!(document.layers[0], locked);
+    }
+
+    #[test]
+    fn locked_original_turns_canvas_and_restore_pixels_in_one_undo() {
+        let pixels = RgbaImage::from_fn(6, 4, |x, y| image::Rgba([x as u8, y as u8, 99, 255]));
+        let mut document = Document::new(pixels.clone());
+        let id = document.materialize_source(true).unwrap();
+        assert_eq!(document.render().unwrap(), pixels);
+        assert!(
+            !document.undo(),
+            "loading a layer representation must not add undo"
+        );
+        assert!(document.transform_image(id, 1, false, false));
+        assert_eq!((document.canvas_width, document.canvas_height), (4, 6));
+        let output = document.render().unwrap();
+        assert_eq!(output.get_pixel(0, 0).0, [0, 3, 99, 255]);
+        assert_eq!(output.get_pixel(3, 5).0, [5, 0, 99, 255]);
+        assert_eq!(
+            document.layers[0]
+                .original_pixels
+                .as_ref()
+                .unwrap()
+                .get_pixel(0, 0)
+                .0,
+            [0, 3, 99, 255]
+        );
+        assert!(document.undo());
+        assert_eq!((document.canvas_width, document.canvas_height), (6, 4));
+        assert_eq!(document.render().unwrap(), pixels);
+        assert!(!document.undo());
     }
 
     #[test]

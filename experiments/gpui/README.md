@@ -52,18 +52,19 @@ does not change the shipping app's startup registration.
 “Implemented” below describes code, **not cross-platform certification**. The
 source UI remains the reference: `apps/desktop/ui/src/App.tsx`, its routed
 components, `shared/design.css`, `shared/themes.css`, and
-`docs/reference/main-2026-09-13`. The GPUI editor chrome is visibly different.
+`docs/reference/main-2026-09-13`. Editor dimensions and the inspected controls now
+follow those sources; complete visual and interaction acceptance is still pending.
 
 | Area | Implemented | Still missing or different |
 | --- | --- | --- |
 | Preferences | Live appearance/accent settings, custom colors, selects, shortcut recording and conflict rollback, microphone picker, search/navigation, persisted settings | Complete keyboard/accessibility parity and native permission flows remain unverified |
-| Screenshot editor | Drawing tools, transform handles, pan/zoom, editable header dimensions, grouped Shapes flyout, layers-first sidebar with image thumbnails, color/size/opacity controls, multi-image import, blend/rotation, clipboard, undo/redo, drafts, filename/format/save controls, PNG/JPEG/WebP export, real encoded before/after comparison, text wrapping/alignment/plates/outlines/shadows | Exact text/image/crop inspectors and export popover; original background cannot be unlocked; vector thumbnails use tool icons; numeric steppers and arbitrary background colors; bold/italic use synthetic raster treatments, not native font variants; CPU raster work can block interaction on large documents |
+| Screenshot editor | Drawing/transform/pan/zoom, staged crop with aspect presets, original-image unlock, text presets/font selection/wrapping/alignment/plates/shadows, image size/position steppers, layer appearance/arrange/combine panel, pixel-preserving quarter-turn/flip with fresh-photo canvas rotation, custom background colors, clipboard/undo/drafts, output scale/custom dimensions and aspect lock, quality presets/size limits, draggable encoded comparison and PNG/JPEG/WebP export | Vector thumbnails use tool icons; some numeric controls and keyboard/accessibility behavior differ; bold/italic use synthetic raster treatments, not native font variants; font-family metadata is not durable; CPU raster work can block large-document interaction; exhaustive visual acceptance pending |
 | Screenshot capture | Region/window/display targets, frozen/live frames, scaled crops, cursor/format/countdown settings, auto-start, copy/save/preview routing, session gate | Exact selector/menu rendering and in-place cross-monitor transitions; mixed-DPI acceptance; capture exclusion outside tested X11 regions |
-| Recording | Native recording, pause/resume segments, countdown/restart cancellation, stop/delete, mic controls, session clock, screenshot during recording, hide/restore, 430×102 bottom-center HUD, passive region guide | Crash recovery; full-display controls exclusion on Linux; exact pulse/compositor equivalence; native macOS/Windows acceptance |
-| Recording editor | Cancellable background preparation, video/audio preview, filmstrip/waveforms, trim/crop/resize, track edits, export settings/progress/cancellation | Exact timeline/interaction equivalence, hardware audio acceptance and recovery of interrupted native sessions |
+| Recording | Native recording, durable session/segment journal, interrupted-recording recovery, pause/resume segments, countdown/restart cancellation, stop/delete, mic controls, session clock, screenshot during recording, hide/restore, 430×102 bottom-center HUD, passive region guide | Full-display controls exclusion on Linux; exact pulse/compositor equivalence; native macOS/Windows acceptance |
+| Recording editor | Cancellable preparation, video/audio preview, filmstrip/waveforms, keyboard trim, crop numeric fields/steppers and aspect-locked handles, output presets/custom dimensions, independent track gain/mute/mono, quality/size-limit modes, sampled encoded estimates and draggable comparison, save-new/replace/progress/cancellation | Exhaustive timeline/interaction equivalence and hardware audio acceptance |
 | Mini previews | Four-corner stacks, mixed images/GIF/video posters, real image-fragment dissolve, rejection shake, reduced motion, edit/copy/save/dismiss/delete, native X11 file drag | macOS/Windows outbound drag is implemented but unverified; Wayland outbound drag unavailable; hovered animated GIF uses a blurred first frame; exact compositor/blur/frame-pacing parity |
-| History | Durable chronological index, type filters, image/video previews, retention, confirmed file deletion, correct editor routing | Durable linkage of permanent exports to history; native recording crash recovery; exact grid/metadata parity |
-| Feedback/onboarding | Text input, explicit feedback submission through shared client, persistence | Shipping multi-step onboarding, real permission actions/status, feedback categories/complete UX |
+| History | Durable chronological index, type filters, image/video previews, private recovery copies for editor exports, saved-path linkage for preview/ready-notice saves, retention, confirmed private-file deletion that preserves permanent saves, interrupted recording recovery/confirmed discard, correct editor routing | Exact grid/metadata parity; date layout currently uses a fixed format in the local timezone rather than OS locale formatting |
+| Feedback/onboarding | Original single-screen permissions layout, native macOS screen/microphone request/settings/restart paths and status polling, completion persistence; feedback categories/contact/metadata, submit/pending/success/cooldown states through shared client | Native macOS permission prompts/restart and cross-platform visual acceptance remain unverified |
 | Native integration/notices | Tray, shortcuts, zero-window keepalive, profile-isolated startup, launch notice, recording-ready/save/error and controls-hidden notices | Linux global shortcuts require X11; Linux launch notice has no tray anchor; updater/package/file-association integration and a GPUI release channel are not implemented |
 
 The dissolve's grid, radial delays, cubic easing, and poses follow
@@ -98,7 +99,7 @@ persistence and malformed input, and preserving the source when saving onto
 itself/a hard link. Missing FFmpeg fails the playback test rather than silently
 skipping it.
 
-All commands above passed in the evaluation orb (77 standalone tests; the root
+All commands above passed in the evaluation orb (105 standalone tests; the root
 desktop suite contains 830 tests). The root release-version tests required
 per-command `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign
 GIT_CONFIG_VALUE_0=false`: they create temporary commits, and the orb has no
@@ -127,6 +128,30 @@ Executed UI checks, not just code inspection:
   New Capture opened a new selector rather than restoring a stopped controller.
 - Screenshot text outline, rounded plate/shadow, scrollable shadow inspector,
   and actual encoded compression comparison with byte estimates.
+- Cropped screenshot export decoded as 400 × 260. Locked original-image rotation
+  changed both canvas and output from 960 × 540 to 540 × 960; Undo restored them.
+  Unit tests also check asymmetric source pixels, both flip directions, restored
+  eraser pixels, and one-step canvas undo (80 portable document/encoder tests).
+- Custom screenshot output decoded as 600 × 338 with aspect lock and 600 × 150
+  without it. Typing/stepper/focused ArrowUp produced a 602 × 339 PNG. Maximum
+  size conversion preserved 0.05 MB = 50 KB; the saved PNG was 15,335 bytes.
+- Screenshot and recording exports appeared in persisted history with saved
+  locations. Deleting the screenshot's private copy through History left its
+  permanent export intact. Tests cover legacy metadata, unindexed sources,
+  format changes, retention boundaries, and non-regular/private path rejection.
+- A native 620 × 320 recording was paused, the app process terminated, and
+  History reopened. Recover assembled a 24.083-second MP4, indexed it, opened
+  the editor, and retired the draft. The first Discard click preserved media
+  and showed confirmation. A separate native pause/resume/stop session also
+  saved through the same journal/assembly path. Recover probes unfinished
+  segments; an unplayable final partial segment cannot be reconstructed.
+  GIF recovery retains its source segments for the shared 30-day retention.
+- A five-second H.264 fixture trimmed to 1.000–4.000 seconds exported as a
+  960 × 540, 3.018-second MP4. Crop fields were exercised by typing, steppers,
+  and arrow keys. Comparison displays actual decoded encoded frames.
+- Feedback submitted to a local test receiver; Linux onboarding completion
+  persisted and closed the window. These checks do not exercise the production
+  feedback service or native macOS permissions.
 - Native X11 preview drag into a GTK file-drop receiver, Escape cancellation,
   clipboard file transfer, and source preservation. Recording-ready Save wrote
   a distinct MP4; save errors remained actionable instead of auto-dismissing.
@@ -188,6 +213,16 @@ The [dissolve CPU microbenchmark](results/linux-effects.json) measured 0.0891ms
 median and 0.6472ms p95 across 765 samples, excluding texture upload/presentation.
 These refreshed samples include the GPUI native integration; they supersede the
 earlier 115 MiB result. Memory was lower, but idle CPU was higher in this run.
+
+After the editor/export/history corrections, the release screenshot editor at
+1280 × 760 measured **202.16 MiB PSS**, **199.55 MiB private resident memory**,
+**211.21 MiB RSS**, and **1.40% idle CPU** (one process; the same three warm
+five-second intervals). The 960 × 540 fixture had just been exported at
+602 × 339 and the export panel was closed. No build/encoder ran during sampling.
+[Raw editor sample](results/linux-gpui-screenshot-editor.json) records exact
+binary and inspected screenshot hashes. This sample predates recording-journal
+integration and has no matched Tauri editor workload; do not compare it to the
+Preferences figures as if they measured the same state.
 
 The Tauri reference is the source at
 [`d4d2016`](https://github.com/joswayski/captures/commit/d4d2016d29ea1f882d6b98fc9656d02d5638fbb0),

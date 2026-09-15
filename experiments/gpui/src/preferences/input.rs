@@ -45,6 +45,8 @@ pub struct TextInput {
     multiline: bool,
     max_len: Option<usize>,
     chrome: bool,
+    disabled: bool,
+    height: Option<Pixels>,
 }
 
 impl TextInput {
@@ -69,6 +71,8 @@ impl TextInput {
             multiline: false,
             max_len: None,
             chrome: false,
+            disabled: false,
+            height: None,
         }
     }
 
@@ -84,6 +88,23 @@ impl TextInput {
         self.multiline = true;
         self.max_len = Some(max_len);
         self
+    }
+
+    pub fn max_len(mut self, max_len: usize) -> Self {
+        self.max_len = Some(max_len);
+        self
+    }
+
+    pub fn height(mut self, height: Pixels) -> Self {
+        self.height = Some(height);
+        self
+    }
+
+    pub fn set_disabled(&mut self, disabled: bool, cx: &mut Context<Self>) {
+        if self.disabled != disabled {
+            self.disabled = disabled;
+            cx.notify();
+        }
     }
 
     pub fn set_placeholder(
@@ -189,6 +210,12 @@ impl TextInput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Editor surfaces focus their canvas on background clicks. A field
+        // must own this click rather than immediately losing focus to it.
+        cx.stop_propagation();
+        if self.disabled {
+            return;
+        }
         self.is_selecting = true;
         window.focus(&self.focus_handle);
 
@@ -458,6 +485,9 @@ impl EntityInputHandler for TextInput {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.disabled {
+            return;
+        }
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
@@ -491,6 +521,9 @@ impl EntityInputHandler for TextInput {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.disabled {
+            return;
+        }
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
@@ -824,6 +857,7 @@ impl Render for TextInput {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
+            .flex_shrink_0()
             .key_context("TextInput")
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)
@@ -859,13 +893,13 @@ impl Render for TextInput {
             .text_size(px(if self.chrome { 12. } else { 13. }))
             .child(
                 div()
-                    .h(px(if self.multiline {
+                    .h(self.height.unwrap_or(px(if self.multiline {
                         100.
                     } else if self.chrome {
                         26.
                     } else {
                         30.
-                    }))
+                    })))
                     .w_full()
                     .px(px(4.))
                     .py(px(if self.chrome { 3. } else { 4. }))
