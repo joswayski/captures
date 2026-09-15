@@ -1,7 +1,7 @@
 # Captures website
 
 Minimal work-in-progress page with a Preview download for the visitor's OS
-(same stable `preview` release assets as the root README), a short product
+(same `/download/preview/*` links as the root README), a short product
 screenshot gallery (the stills in `docs/images/`, shared with the README; each
 shot shows in full; swipe or use Previous/Next to change stills — those buttons
 hide at the first and last shot — pinch to zoom in place, or tap for a larger
@@ -12,6 +12,12 @@ Phones, tablets, Chrome OS, and other systems without a matching installer see a
 desktop-app note and View on GitHub — not download copy or a GitHub Releases
 link. Other desktop platforms are mentioned with a link to GitHub Releases rather
 than listed as installers.
+
+Default downloads are the native apps: DMG, Windows setup, Linux .deb or .tar.gz.
+Linux is X11-only; its archive needs system GTK4 and FFmpeg, not AppImage support.
+Native downloads have no automatic updater or Tauri settings/history migration.
+The cooking indicator tracks `native-release.yml` and `native-v*` releases;
+the `/api/updates` compatibility service continues to serve only Tauri metadata.
 
 ## Stack
 
@@ -65,7 +71,12 @@ The Node process serves the site:
    request headers.
 3. Hashed `/assets/*` files and other public files are served as static assets
    with long-lived cache headers.
-4. Unknown paths return the in-app 404 page.
+4. `/download/preview/<filename>` redirects the four native package filenames to
+   the immutable release selected by the `native-preview` release-body pointer.
+   The server caches that pointer for five minutes and redirects for one minute.
+   Failed refreshes retain the prior set and retry after one minute; before the
+   first publication the route returns 503 with `Cache-Control: no-store`.
+5. Unknown paths return the in-app 404 page.
 
 Nitro is the Node adapter. The Rust API owns `captur.es/api/*`; the frontend
 does not define API routes.

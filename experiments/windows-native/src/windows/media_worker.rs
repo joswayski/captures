@@ -1,7 +1,8 @@
 use captures_media::{
-    AudioEdit, CancelToken, EditSpec, ExportFormat, ExportOutcome, ExportSpec, MediaToolchain,
-    ProbeResult, QualityPreset, extrapolate_sampled_size,
+    AudioEdit, CancelToken, EditSpec, ExportFormat, ExportOutcome, ExportSpec, ProbeResult,
+    QualityPreset, extrapolate_sampled_size,
 };
+use captures_windows_native::media_tools;
 use image::RgbaImage;
 use std::{
     io::Read,
@@ -89,9 +90,9 @@ impl MediaWorker {
     pub fn probe(&self, epoch: u64, source: PathBuf) {
         let sender = self.sender.clone();
         thread::spawn(move || {
-            let result = MediaToolchain::from_command_names()
+            let result = media_tools::toolchain()
                 .verify()
-                .and_then(|()| MediaToolchain::from_command_names().probe(&source))
+                .and_then(|()| media_tools::toolchain().probe(&source))
                 .map_err(|error| error.to_string());
             let _ = sender.send(Event::Probe {
                 epoch,
@@ -114,7 +115,7 @@ impl MediaWorker {
                 std::process::id(),
                 uuid::Uuid::new_v4()
             ));
-            let result = MediaToolchain::from_command_names()
+            let result = media_tools::toolchain()
                 .extract_frame(&source, at_ms, &scratch, &token)
                 .map_err(|error| error.to_string())
                 .and_then(|()| image::open(&scratch).map_err(|error| error.to_string()))
@@ -185,7 +186,7 @@ impl MediaWorker {
         self.export_cancel = Some(token.clone());
         let sender = self.sender.clone();
         thread::spawn(move || {
-            let result = MediaToolchain::from_command_names()
+            let result = media_tools::toolchain()
                 .export(
                     &spec.source,
                     &spec.destination,
@@ -280,7 +281,7 @@ fn build_comparison(spec: ComparisonSpec, token: &CancelToken) -> Result<(RgbaIm
     let id = uuid::Uuid::new_v4();
     let sample = scratch.join(format!("captures-compare-{id}.{extension}"));
     let after_path = scratch.join(format!("captures-compare-{id}.png"));
-    let tools = MediaToolchain::from_command_names();
+    let tools = media_tools::toolchain();
     let result = (|| {
         let outcome = tools
             .export(
@@ -348,7 +349,8 @@ fn build_comparison(spec: ComparisonSpec, token: &CancelToken) -> Result<(RgbaIm
 
 fn decode_playback(spec: PlaybackSpec, cancelled: Arc<AtomicBool>, sender: SyncSender<Event>) {
     let duration_ms = spec.end_ms.saturating_sub(spec.start_ms);
-    let mut child = match Command::new("ffmpeg")
+    let (ffmpeg, _) = media_tools::paths();
+    let mut child = match Command::new(ffmpeg)
         .args(["-hide_banner", "-loglevel", "error", "-ss"])
         .arg(format!("{:.3}", spec.start_ms as f64 / 1_000.0))
         .args(["-re", "-i"])

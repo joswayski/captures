@@ -70,9 +70,22 @@ enum RenderReferences {
             application.activate(ignoringOtherApps: true)
             let filmstripDeadline = Date().addingTimeInterval(10)
             let estimateDeadline = Date().addingTimeInterval(30)
+            var dustFrozen = false
             func captureWhenReady() {
                 view.layoutSubtreeIfNeeded()
                 view.displayIfNeeded()
+                if dustCapture && !dustFrozen {
+                    // Layout and filter setup can consume most of this short
+                    // animation on a busy runner. Sample animation-local time,
+                    // not elapsed wall time; still read the real compositor.
+                    dustFrozen = holdDustPresentation(in: view)
+                    guard dustFrozen || Date() < filmstripDeadline else {
+                        fputs("No dust animation layers appeared within 10 seconds.\n", stderr)
+                        exit(1)
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { captureWhenReady() }
+                    return
+                }
                 if fixture.name == "recording-editor-layout",
                    let readiness = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
                     // These are ordinary SwiftUI thumbnail images. This read
@@ -97,10 +110,8 @@ enum RenderReferences {
                     do {
                         let image: NSImage
                         if dustCapture {
-                            // Process startup made the short dust sequence reach
-                            // its nearly-empty tail before `screencapture` sampled
-                            // it. Read this window directly from WindowServer at
-                            // the scheduled approximately 0.42 s presentation phase instead.
+                            // Read WindowServer after the held animation phase
+                            // has had a chance to reach the compositor.
                             guard let captured = CGWindowListCreateImage(
                                 .null, .optionIncludingWindow,
                                 CGWindowID(window.windowNumber), [.boundsIgnoreFraming]
@@ -194,6 +205,35 @@ enum RenderReferences {
         }
         DispatchQueue.main.async { render(0) }
         application.run()
+    }
+
+    private static func holdDustPresentation(in view: NSView) -> Bool {
+        var chips: [(CALayer, CAAnimation)] = []
+        var visited = Set<ObjectIdentifier>()
+        func visit(_ layer: CALayer) {
+            guard visited.insert(ObjectIdentifier(layer)).inserted else { return }
+            if let animation = layer.animation(forKey: "captures-dust") {
+                chips.append((layer, animation))
+            }
+            for child in layer.sublayers ?? [] { visit(child) }
+        }
+        func visitView(_ view: NSView) {
+            if let layer = view.layer { visit(layer) }
+            for child in view.subviews { visitView(child) }
+        }
+        visitView(view)
+        guard let firstStart = chips.map({ $0.1.beginTime }).min() else { return false }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (chip, _) in chips {
+            // Production groups share a timeline origin plus each chip's
+            // stagger. Preserve those offsets while holding a mid-wave phase.
+            chip.speed = 0
+            chip.timeOffset = firstStart + 0.42
+        }
+        CATransaction.commit()
+        CATransaction.flush()
+        return true
     }
 
     private static func hasVisibleContent(_ image: NSImage) -> Bool {

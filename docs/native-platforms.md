@@ -1,11 +1,13 @@
 # Native platform migration
 
-Captures is moving toward platform-specific native presentation around the
-existing Rust capture, recording, media, and session engines. The shipping Tauri
-Preview remains the comparison baseline and distributed app until the native
-frontends pass their replacement checks. This work does not change installers,
-update channels or production profiles. Native setup requests its own OS
-permissions; existing Tauri permission grants are not migrated.
+The default manual downloads now use platform-specific native presentation around
+the existing Rust capture, recording, media, and session engines. They publish as
+experimental `native-preview` packages, not feature-equivalent replacements.
+Tauri remains the comparison baseline and legacy `preview` updater channel.
+Native settings/history and OS permissions stay separate; no production profile
+migration or native automatic updater is provided. See [release packaging](releases.md).
+The historical verification record below does not certify installer, physical
+desktop, or performance parity simply because native downloads are the default.
 
 ## Presentation choices
 
@@ -304,10 +306,10 @@ WER and Linux Apport. macOS now integrates shutdown tracking and review/Send/
 Dismiss UI, with native layout evidence but physical lifecycle verification still
 pending; other platform integrations remain ongoing. An unclean marker alone is
 not a proven crash.
-Native installer/Open With registration,
-signed updater/channel, and production-profile migration are separate rollout
-gates, not satisfied by local command-line routing. Never install a Tauri update
-over a native frontend. Publishing a replacement remains a maintainer decision.
+Native DMG, Windows setup and Linux .deb/archive packaging now feed the default
+manual-download channel. Windows/Linux Open With registration, a native signed
+updater, and production-profile migration remain separate work. Never install a
+Tauri update over a native frontend. Default distribution does not certify parity.
 
 Source review also corrected three misleading parity targets: shipping has no
 recording split action (the split slider compares compression), no persisted
