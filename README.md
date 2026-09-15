@@ -201,6 +201,12 @@ The [cross-platform native parity audit](docs/native-parity-audit.md) consolidat
 confirmed defects, follow-up fixes, missing features, and OS testing requirements.
 The experiments are not feature-equivalent to the Tauri app described above.
 
+An isolated [GPUI evaluation](experiments/gpui/README.md) explores a Rust frontend
+using the shared capture and media engines and the existing animation model.
+It is an incomplete port with visible and functional differences, not a replacement
+release. Its parity inventory, Linux-only validation limits, and resource measurement
+procedure are documented separately; macOS and Windows behavior remain unverified.
+
 ## License and trademarks
 
 The source code is licensed under the [Apache License 2.0](LICENSE).

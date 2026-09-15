@@ -1,0 +1,1 @@
+{"workload":"284x160 source-fragment dissolve, CPU rasterization only; not displayed FPS","samples":765,"warmup_frames":153,"median_ms":0.095115,"p95_ms":0.737644,"max_ms":1.0524550000000001}
