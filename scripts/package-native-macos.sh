@@ -70,7 +70,7 @@ export CAPTURES_NATIVE_APP_NAME="$app_name"
 export CAPTURES_NATIVE_APP_VERSION="$version"
 export CAPTURES_NATIVE_REQUIRE_MEDIA=1
 export CAPTURES_NATIVE_SIGN_IDENTITY="$identity"
-"$root/experiments/macos-native/build.sh"
+bash "$root/experiments/macos-native/build.sh"
 app="$root/experiments/macos-native/build/$app_name.app"
 
 # Keep the experiment's bundle identifier so Screen Recording and microphone

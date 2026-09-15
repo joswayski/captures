@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -37,4 +38,20 @@ test("Tauri update selection ignores newer native releases", () => {
   const legacy = { id: 1, tag_name: "v2026.09.13.1", draft: false, prerelease: true };
   const native = { id: 2, tag_name: "native-v2026.09.14.1", draft: false, prerelease: true };
   assert.equal(latestPreviewRelease([native, legacy]), legacy);
+});
+
+test("macOS packaging invokes the non-executable build script through Bash", (t) => {
+  const root = join(fixture(t), "checkout with spaces");
+  const directory = join(root, "experiments/macos-native");
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, "build.sh"), '#!/usr/bin/env bash\nprintf "native build invoked"\n', { mode: 0o644 });
+  const script = readFileSync(new URL("./package-native-macos.sh", import.meta.url), "utf8");
+  const invocation = script.split("\n").find((line) => line.includes('$root/experiments/macos-native/build.sh"'));
+  assert.ok(invocation, "the packager must invoke the native build");
+  const result = spawnSync("bash", ["-c", invocation], {
+    env: { ...process.env, root },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "native build invoked");
 });
