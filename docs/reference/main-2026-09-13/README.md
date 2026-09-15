@@ -2,8 +2,7 @@
 
 This set records the shipping Captures React UI from exact remote `main` commit
 [`4fd828f4af58d6b3b389e7955d84640222c58411`](https://github.com/joswayski/captures/commit/4fd828f4af58d6b3b389e7955d84640222c58411), captured on 2026-09-13. The source was the detached checkout at
-`/home/user/workspace/captures-main-reference`, not the uncommitted
-`amp/native-platforms` integration checkout where these reference files live.
+`/home/user/workspace/captures-main-reference`.
 
 ## Reference images
 
@@ -76,7 +75,7 @@ attempt: `CARGO_BUILD_JOBS=2 cargo build --release --locked -p captures-desktop
 --features tauri/custom-protocol`, using the shared Rust target cache. The build
 used the pinned checkout's production frontend, not the Vite harness.
 
-`experiments/linux-native/native_comparison.py::trial` launched the built binary
+The now-retired comparison harness launched the built binary
 in a fresh temporary HOME/XDG profile for each state, with onboarding completed,
 launch-at-login disabled and proxies pointed at a closed local port. It passed
 the fixture path as a positional argument for each editor. Xvfb/Openbox provided
@@ -101,5 +100,5 @@ does not resolve the Tauri/WebKit limitation.
 
 These references make no physical macOS/Windows, mixed-DPI, Wayland, system-theme,
 capture-permission or real recording/audio claims. They document shipping-main
-React/Tauri UI, not the experimental GTK4, AppKit or Win32 frontends. All data
-and media are disposable fixtures; no production profile or user data was used.
+React/Tauri UI. All data and media are disposable fixtures; no production profile
+or user data was used.
