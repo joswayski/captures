@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::HashSet,
     fs,
     io::Write,
@@ -303,8 +304,9 @@ pub async fn save_screenshot_edit(
             let height = image.height();
             let image_png = storage::encode_png(&image)?;
             let preview_png = storage::encode_thumbnail_png(&image)?;
-            let output = encode_export_with_limit(
+            let output = encode_save_export(
                 &image,
+                &image_png,
                 format,
                 quality_mode,
                 jpeg_quality,
@@ -778,6 +780,35 @@ fn encoded_len(bytes: &[u8]) -> u64 {
     u64::try_from(bytes.len()).unwrap_or(u64::MAX)
 }
 
+/// Select export bytes when saving also needs a lossless history PNG.
+fn encode_save_export<'a>(
+    image: &RgbaImage,
+    history_png: &'a [u8],
+    format: ScreenshotEditFormat,
+    quality_mode: ScreenshotExportQualityMode,
+    jpeg_quality: u8,
+    max_size_bytes: Option<u64>,
+    png_max_colors: Option<u16>,
+) -> Result<Cow<'a, [u8]>, AppError> {
+    if matches!(format, ScreenshotEditFormat::Png)
+        && matches!(quality_mode, ScreenshotExportQualityMode::Preserve)
+        && max_size_bytes.is_none()
+    {
+        // The history PNG uses the same encoder as Preserve export. Borrow
+        // those canonical bytes, avoiding both a second encode and its buffer.
+        return Ok(Cow::Borrowed(history_png));
+    }
+    encode_export_with_limit(
+        image,
+        format,
+        quality_mode,
+        jpeg_quality,
+        max_size_bytes,
+        png_max_colors,
+    )
+    .map(Cow::Owned)
+}
+
 fn encode_export_with_limit(
     image: &RgbaImage,
     format: ScreenshotEditFormat,
@@ -1038,8 +1069,8 @@ mod tests {
 
     use super::{
         ScreenshotEditFormat, ScreenshotExportQualityMode, composite_onto_white,
-        decode_still_image_file, encode_export, encode_export_with_limit, encoded_len,
-        ensure_editor_image_limits, resolve_editor_draft_asset, unique_export_path,
+        decode_still_image_file, encode_export, encode_export_with_limit, encode_save_export,
+        encoded_len, ensure_editor_image_limits, resolve_editor_draft_asset, unique_export_path,
         validate_draft_component_id, validated_destination, write_export_atomically,
     };
 
@@ -1063,6 +1094,114 @@ mod tests {
                 255,
             ])
         })
+    }
+
+    #[test]
+    fn save_export_matches_uncached_formats_quality_and_size_limits() {
+        let image = RgbaImage::from_fn(17, 11, |x, y| {
+            Rgba([(x * 13) as u8, (y * 23) as u8, 173, (x * y) as u8])
+        });
+        let history = crate::storage::encode_png(&image).unwrap();
+        let size = encoded_len(&history);
+        for format in [
+            ScreenshotEditFormat::Png,
+            ScreenshotEditFormat::Jpeg,
+            ScreenshotEditFormat::Webp,
+        ] {
+            for quality in [
+                ScreenshotExportQualityMode::Preserve,
+                ScreenshotExportQualityMode::Compress,
+                ScreenshotExportQualityMode::Maximum,
+            ] {
+                for limit in [None, Some(size), Some(size - 1), Some(0)] {
+                    let expected =
+                        encode_export_with_limit(&image, format, quality, 70, limit, Some(8));
+                    let actual =
+                        encode_save_export(&image, &history, format, quality, 70, limit, Some(8));
+                    match (actual, expected) {
+                        (Ok(actual), Ok(expected)) => assert_eq!(
+                            actual.as_ref(),
+                            expected,
+                            "{format:?} {quality:?} {limit:?}"
+                        ),
+                        (Err(actual), Err(expected)) => {
+                            assert_eq!(actual.to_string(), expected.to_string())
+                        }
+                        (actual, expected) => {
+                            panic!("{format:?} {quality:?} {limit:?}: {actual:?} != {expected:?}")
+                        }
+                    }
+                }
+            }
+        }
+        let output = encode_save_export(
+            &image,
+            &history,
+            ScreenshotEditFormat::Png,
+            ScreenshotExportQualityMode::Preserve,
+            1,
+            None,
+            Some(8),
+        )
+        .unwrap();
+        assert_eq!(image::load_from_memory(&output).unwrap().to_rgba8(), image);
+        assert!(matches!(output, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(output.as_ptr(), history.as_ptr());
+    }
+
+    #[test]
+    #[ignore = "manual release benchmark: --release --ignored --nocapture"]
+    fn benchmark_png_save_encoding() {
+        use std::{hint::black_box, time::Instant};
+
+        // Timing includes history + thumbnail + export encoding, not input
+        // decode, IPC, filesystem writes, or UI. Input creation is untimed.
+        for (name, width, height, detailed) in [
+            ("1080p-ui", 1920, 1080, false),
+            ("4k-ui", 3840, 2160, false),
+            ("4k-detail-alpha", 3840, 2160, true),
+        ] {
+            let image = RgbaImage::from_fn(width, height, |x, y| {
+                if detailed {
+                    let mixed = x.wrapping_mul(73) ^ y.wrapping_mul(151) ^ (x * y);
+                    Rgba([
+                        mixed as u8,
+                        (mixed >> 5) as u8,
+                        (mixed >> 11) as u8,
+                        x as u8,
+                    ])
+                } else if x % 240 < 2 || y % 80 < 2 {
+                    Rgba([37, 61, 93, 255])
+                } else {
+                    Rgba([245, 243, 240, 255])
+                }
+            });
+            let mut samples = Vec::new();
+            for iteration in 0..8 {
+                let start = Instant::now();
+                let history = crate::storage::encode_png(black_box(&image)).unwrap();
+                let thumbnail = crate::storage::encode_thumbnail_png(&image).unwrap();
+                let output = encode_save_export(
+                    &image,
+                    &history,
+                    ScreenshotEditFormat::Png,
+                    ScreenshotExportQualityMode::Preserve,
+                    92,
+                    None,
+                    None,
+                )
+                .unwrap();
+                black_box((&history, &thumbnail, &output));
+                let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+                assert_eq!(output.as_ref(), history);
+                if iteration > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            eprintln!("{name}: samples_ms={samples:?}");
+            samples.sort_by(f64::total_cmp);
+            eprintln!("{name}: median_ms={:.3}", samples[samples.len() / 2]);
+        }
     }
 
     #[test]
