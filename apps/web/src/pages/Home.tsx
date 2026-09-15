@@ -7,7 +7,7 @@ const REPO_URL = "https://github.com/joswayski/captures";
 const RELEASES_URL = `${REPO_URL}/releases/tag/native-preview`;
 const X_URL = "https://x.com/josevalerio";
 const CONTACT_EMAIL = "contact@josevalerio.com";
-const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/native-preview`;
+const PREVIEW_DOWNLOAD_BASE = "/download/preview";
 const COOKING_TOOLTIP =
   "Preview builds are still publishing this change. Downloads may not include it yet.";
 
@@ -35,7 +35,7 @@ const PREVIEW_DOWNLOADS = [
   {
     id: "linux-deb",
     family: "linux",
-    platform: "Ubuntu 24.04+ / Debian 13+ (X11)",
+    platform: "Ubuntu / Debian",
     arch: "x64",
     format: "deb",
     label: "Download for Linux",
@@ -45,7 +45,7 @@ const PREVIEW_DOWNLOADS = [
   {
     id: "linux-archive",
     family: "linux",
-    platform: "Other Linux (X11)",
+    platform: "Other Linux",
     arch: "x64",
     format: "tar.gz",
     label: "Download for Linux",
@@ -112,13 +112,12 @@ export default function Home({
             {detectedDownload ? (
               <>
                 <h2 className="text-base font-medium tracking-tight text-ink sm:text-lg">
-                  Download Captures Native Preview{" "}
+                  Download Captures{" "}
                   <span className="text-xs font-normal text-ink-soft">(experimental)</span>
                 </h2>
                 <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
-                  Native builds publish after app changes and may have missing features.
-                  Updates are manual; settings and history are separate from Tauri.
-                  Quit Tauri before launching the native app. {installRecoveryCopy(detectedDownload)} Please give feedback in the
+                  Builds are available after every merge and may contain bugs or incomplete
+                  features. {installRecoveryCopy(detectedDownload)} Please give feedback in the
                   app, on{" "}
                   <a
                     href={X_URL}
@@ -181,21 +180,6 @@ export default function Home({
           </div>
         </section>
 
-        <p className="mt-10 text-xs leading-relaxed text-ink-soft">
-          The gallery below shows the earlier Tauri app; native appearance and features vary.
-          See the{" "}
-          <a href={`${REPO_URL}/blob/main/docs/native-platforms.md`} className="underline underline-offset-2">
-            native platform limitations
-          </a>
-          {detectedDownload ? (
-            <>
-              {" "}or download the{" "}
-              <a href={`${REPO_URL}/releases/tag/preview`} className="underline underline-offset-2">
-                legacy Tauri Preview
-              </a>
-            </>
-          ) : null}.
-        </p>
         <ProductGallery />
 
         <section aria-labelledby="latest-changes-heading" className="mt-14 border-t border-border pt-10">
@@ -263,14 +247,14 @@ function linuxAlternativeDownload(download: PreviewDownload) {
 }
 
 function linuxAlternativeLabel(download: PreviewDownload) {
-  return download.id === "linux-deb" ? ".deb for Ubuntu 24.04+ / Debian 13+" : ".tar.gz archive";
+  return download.id === "linux-deb" ? ".deb for Ubuntu / Debian" : ".tar.gz archive";
 }
 
 function installRecoveryCopy(download: PreviewDownload) {
   if (download.family === "linux") {
     return "Linux needs X11. Install the .deb with your package manager, or extract the archive and install GTK4, glibc 2.39+ and FFmpeg (including ffprobe and ffplay). The archive is not self-contained.";
   }
-  return "Install Captures Native Preview separately; existing Tauri captures stay in Tauri.";
+  return "Installing a download replaces the current app without deleting settings or captures.";
 }
 
 function availabilityLabel(download: PreviewDownload | null) {

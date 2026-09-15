@@ -50,7 +50,7 @@ test("default downloads use native packages while Tauri recovery stays available
   const releases = read("docs/releases.md");
 
   for (const name of NATIVE_ASSETS) {
-    const url = `https://github.com/joswayski/captures/releases/download/native-preview/${name}`;
+    const url = `https://captur.es/download/preview/${name}`;
     assert.ok(readme.includes(url), `README is missing ${url}`);
     assert.ok(home.includes(name), `website is missing ${name}`);
     assert.ok(releases.includes(name), `docs/releases.md is missing ${name}`);
@@ -58,9 +58,9 @@ test("default downloads use native packages while Tauri recovery stays available
 
   for (const name of INSTALLER_NAMES) assert.ok(releases.includes(name));
   assert.match(readme, /releases\/tag\/preview/u);
-  assert.match(home, /releases\/tag\/preview/u);
-  assert.match(home, /releases\/download\/native-preview/u);
+  assert.match(home, /const PREVIEW_DOWNLOAD_BASE = "\/download\/preview"/u);
+  assert.match(home, /Download Captures\{" "\}/u);
+  assert.doesNotMatch(home, /The gallery below shows|Download Captures Native Preview/u);
   assert.match(readme, /Updates are manual/u);
-  assert.match(home, /Updates are manual/u);
   assert.match(releases, /~\/\.local\/bin\/Captures\.AppImage/u);
 });

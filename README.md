@@ -53,10 +53,10 @@ complete native Preview after all three platforms build successfully:
 
 | Platform | Download |
 | --- | --- |
-| macOS 13+ (Apple silicon) | [DMG](https://github.com/joswayski/captures/releases/download/native-preview/Captures-macOS-Apple-Silicon.dmg) |
-| Windows 11 (x64) | [Setup](https://github.com/joswayski/captures/releases/download/native-preview/Captures-Windows-x64-setup.exe) |
-| Ubuntu 24.04+ / Debian 13+ (x64, X11) | [.deb](https://github.com/joswayski/captures/releases/download/native-preview/Captures-Linux-x64.deb) |
-| Other Linux (x64, X11, glibc 2.39+) | [.tar.gz archive](https://github.com/joswayski/captures/releases/download/native-preview/Captures-Linux-x64.tar.gz) |
+| macOS 13+ (Apple silicon) | [DMG](https://captur.es/download/preview/Captures-macOS-Apple-Silicon.dmg) |
+| Windows 11 (x64) | [Setup](https://captur.es/download/preview/Captures-Windows-x64-setup.exe) |
+| Ubuntu 24.04+ / Debian 13+ (x64, X11) | [.deb](https://captur.es/download/preview/Captures-Linux-x64.deb) |
+| Other Linux (x64, X11, glibc 2.39+) | [.tar.gz archive](https://captur.es/download/preview/Captures-Linux-x64.tar.gz) |
 
 Native Previews publish automatically after native app changes on `main`. They are
 experimental, not stable releases. Install **Captures Native Preview** separately
