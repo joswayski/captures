@@ -7,9 +7,6 @@ Captures is a cross-platform screen capture utility built for quick captures and
 
 ## A quick look
 
-These screenshots show the earlier Tauri app. The default native Preview has
-different presentation and incomplete feature parity; see platform status below.
-
 <table>
   <tr>
     <td width="50%">
@@ -45,60 +42,20 @@ different presentation and incomplete feature parity; see platform status below.
   </tr>
 </table>
 
-## Download Captures Native Preview
+## Download Captures Preview
 
-Default downloads are the **native** apps: Swift/AppKit on macOS,
-Win32/DirectComposition on Windows, and GTK4 on Linux. These links track the latest
-complete native Preview after all three platforms build successfully:
+These links always download the **latest** validated Preview:
 
 | Platform | Download |
 | --- | --- |
-| macOS 13+ (Apple silicon) | [DMG](https://captur.es/download/preview/Captures-macOS-Apple-Silicon.dmg) |
-| Windows 11 (x64) | [Setup](https://captur.es/download/preview/Captures-Windows-x64-setup.exe) |
-| Ubuntu 24.04+ / Debian 13+ (x64, X11) | [.deb](https://captur.es/download/preview/Captures-Linux-x64.deb) |
-| Other Linux (x64, X11, glibc 2.39+) | [.tar.gz archive](https://captur.es/download/preview/Captures-Linux-x64.tar.gz) |
+| macOS 13+ (Apple silicon) | [Captures-macOS-Apple-Silicon.dmg](https://github.com/joswayski/captures/releases/download/preview/Captures-macOS-Apple-Silicon.dmg) |
+| Windows 11 (x64) | [Captures-Windows-x64-setup.exe](https://github.com/joswayski/captures/releases/download/preview/Captures-Windows-x64-setup.exe) |
+| Ubuntu / Debian (x64) | [Captures-Linux-x64.deb](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.deb) |
+| Other Linux (x64 AppImage) | [Captures-Linux-x64.AppImage](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.AppImage) |
 
-Native Previews publish automatically after native app changes on `main`. They are
-experimental, not stable releases. Install **Captures Native Preview** separately
-and quit Tauri before launching it to avoid competing shortcuts. Existing Tauri
-settings/history stay untouched; they are **not migrated**. macOS requests its own
-Screen Recording and microphone permissions.
+Preview builds automatically publish installed-app changes from `main`, and may contain bugs or incomplete features. Changes arriving during a build are grouped into the next Preview instead of waiting for an installer for every merge. Installed copies check captur.es for a new Preview shortly after launch and about every five minutes; the site caches GitHub's updater note so those checks stay off GitHub. The notice lists every Preview published since the version you have, then installs the latest. Turn **Show what’s new on update notices** off in Preferences for a compact Update now prompt. Installing still downloads the signed archive from GitHub and closes open captures; unsaved edits are kept as drafts and stay in Capture History. The update notice stays on screen during a capture so you can screenshot the changelog or an error. GitHub 403s are often a short rate limit, and Try again usually works. If the download is missing (404), use **download from captur.es** on the error, or the installer links above. You can also check from Preferences → Updates, or the tray **Check for Updates…** item. If Captures will not open or cannot install an update, download the installer for your OS from the table above. The macOS disk image, Windows setup, and Debian package replace the installed app. For the AppImage, copy it over `~/.local/bin/Captures.AppImage` and make it executable (`chmod +x`); running it from Downloads starts a second copy. Settings, capture history, and OS permissions stay. Older dated builds stay in the [build archive](https://github.com/joswayski/captures/releases).
 
-**Updates are manual:** download a newer native package and replace the native app.
-On macOS, drag the app from the DMG into Applications; Windows setup installs for
-the current user. On Linux, use `sudo apt install ./Captures-Linux-x64.deb` to install
-runtime dependencies, including FFmpeg. The archive is **not a self-contained
-AppImage**: install GTK4 4.8+, ALSA, D-Bus, PipeWire, X11/XCB/XRandR, OpenSSL and
-FFmpeg (including `ffprobe` and `ffplay`), extract it, then run `captures-linux-native`.
-Quit the native app before replacing it. Native profiles remain in place.
-
-The [legacy Tauri Preview](https://github.com/joswayski/captures/releases/tag/preview)
-remains available for its existing features and Wayland support. Its installed
-copies continue receiving only Tauri updates; native installers are never sent
-through that updater. Use the legacy release page to repair a Tauri installation.
-Older builds stay in the [build archive](https://github.com/joswayski/captures/releases).
-
-## Native platform status
-
-All native frontends include capture, recording, image/video editors, previews,
-history and preferences, but **they are not feature-equivalent to Tauri**.
-
-| Platform | Current limitations |
-| --- | --- |
-| macOS 13+ | Experimental; capture permissions, physical audio, multi-display and some editor interactions still need verification |
-| Windows 11 | Experimental; playback audio, video crop, microphone/countdown and some preferences remain incomplete |
-| Linux X11 | Experimental; runtime fixtures verified under Openbox/software rendering; physical audio, mixed DPI and other window managers remain unverified |
-| Linux Wayland | Not supported by the native frontend; use the legacy Tauri Preview |
-
-Native profiles are separate, no automatic updater is implemented, and Windows/
-Linux installer file associations are not registered. Feedback is explicit;
-native apps do not automatically upload crash reports. macOS offers local crash
-review with Send/Dismiss. See the [native verification and remaining gaps](docs/native-platforms.md).
-
-## Legacy Tauri features
-
-The following detailed features and shortcuts describe the **legacy Tauri Preview**,
-not a promise of native parity.
+## Features
 
 - Capture regions, windows, or full displays. Window mode treats the menu bar, taskbar, and desktop backdrop as a full-display capture instead of a window.
 - Draw a region from an empty screen (no pre-sized outline); lock to common aspect ratios, or hold Shift for a square
@@ -144,7 +101,7 @@ not implemented yet.
 - Hosted sharing with shareable `captur.es/<id>` links
 - Faster recording on Windows and Linux
 
-## Legacy Tauri platform status
+## Platform status
 
 | Platform | Status |
 | --- | --- |
@@ -153,9 +110,13 @@ not implemented yet.
 | Linux X11 | Supported; hide recording controls manually when needed |
 | Linux Wayland | Experimental; no window targeting, cursor capture, or click highlights. Mini previews cannot poll the pointer, so the stack stays interactive and may cover apps underneath |
 
-These statuses describe only the legacy Tauri Preview, not the default native downloads.
+These statuses describe the downloadable Tauri Preview. Separate native frontends
+are in development using GTK4 on Linux, Win32/DirectComposition on Windows, and
+Swift/AppKit on macOS. They retain Captures' custom design and shared Rust engines
+as their target; they are not yet replacement releases. See the
+[native migration and verification notes](docs/native-platforms.md).
 
-## Legacy Tauri shortcuts
+## Shortcuts
 
 Defaults follow each platform’s built-in screenshot keys. Captures-only actions keep extra shortcuts.
 
@@ -216,12 +177,29 @@ and height stay proportional.
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for local setup, validation, and packaging.
-The native source directories retain their `experiments/` names; they now supply
-the default manual downloads. The [native migration notes](docs/native-platforms.md)
-record verified runtime captures, remaining gaps and matched benchmark procedures.
-Earlier Linux GTK3 and Windows GTK/Cairo reports are historical baselines, not the
-current GTK4 and Win32 packages. Linux measurements do not establish macOS or Windows
-performance. The legacy Tauri app remains available in `apps/desktop`.
+An isolated [Linux-native experiment](docs/linux-native-implementation.md) implements
+capture, animated mini previews, layered image/canvas editing, recording and video
+editing with GTK instead of a webview. It also has native history, preferences,
+shortcuts and recording-draft recovery. Before/after comparisons, benchmarks, and
+remaining parity gaps are documented separately. It is X11-only, stores data separately,
+and is not part of Preview or a replacement for the cross-platform app above.
+An earlier [Windows GTK/Cairo prototype](docs/windows-native-implementation.md)
+remains a historical baseline. Current Windows-native work uses
+Win32/DirectComposition; see the [native migration notes](docs/native-platforms.md)
+for verified runtime captures and remaining gaps. Neither experiment ships in
+Preview, and Linux benchmark numbers do not establish Windows performance.
+
+An isolated [macOS-native experiment](docs/macos-native-implementation.md) uses
+SwiftUI/AppKit and the existing Rust capture/media engines without a webview.
+It includes native capture, recording, editors, previews, history, and preferences,
+with shared design tokens. It is a separate local-test app, not a Preview replacement;
+exact visual/animation parity and macOS performance remain unverified. The linked
+notes list functional gaps and the procedure for collecting matched screenshots
+and measurements on a Mac.
+
+The [cross-platform native parity audit](docs/native-parity-audit.md) consolidates
+confirmed defects, follow-up fixes, missing features, and OS testing requirements.
+The experiments are not feature-equivalent to the Tauri app described above.
 
 ## License and trademarks
 

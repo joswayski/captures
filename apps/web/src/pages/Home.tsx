@@ -4,10 +4,10 @@ import type { PreviewDownloadId } from "../detectPreviewDownload";
 import ProductGallery from "../ProductGallery";
 
 const REPO_URL = "https://github.com/joswayski/captures";
-const RELEASES_URL = `${REPO_URL}/releases/tag/native-preview`;
+const RELEASES_URL = `${REPO_URL}/releases`;
 const X_URL = "https://x.com/josevalerio";
 const CONTACT_EMAIL = "contact@josevalerio.com";
-const PREVIEW_DOWNLOAD_BASE = "/download/preview";
+const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/preview`;
 const COOKING_TOOLTIP =
   "Preview builds are still publishing this change. Downloads may not include it yet.";
 
@@ -43,14 +43,14 @@ const PREVIEW_DOWNLOADS = [
     fileName: "Captures-Linux-x64.deb",
   },
   {
-    id: "linux-archive",
+    id: "linux-appimage",
     family: "linux",
     platform: "Other Linux",
     arch: "x64",
-    format: "tar.gz",
+    format: "AppImage",
     label: "Download for Linux",
-    href: `${PREVIEW_DOWNLOAD_BASE}/Captures-Linux-x64.tar.gz`,
-    fileName: "Captures-Linux-x64.tar.gz",
+    href: `${PREVIEW_DOWNLOAD_BASE}/Captures-Linux-x64.AppImage`,
+    fileName: "Captures-Linux-x64.AppImage",
   },
 ] as const;
 
@@ -247,12 +247,12 @@ function linuxAlternativeDownload(download: PreviewDownload) {
 }
 
 function linuxAlternativeLabel(download: PreviewDownload) {
-  return download.id === "linux-deb" ? ".deb for Ubuntu / Debian" : ".tar.gz archive";
+  return download.id === "linux-deb" ? ".deb for Ubuntu / Debian" : "AppImage";
 }
 
 function linuxInstallCopy(download: PreviewDownload) {
   if (download.family !== "linux") return null;
-  return "Linux needs X11. Install the .deb with your package manager, or extract the archive and install GTK4, glibc 2.39+ and FFmpeg (including ffprobe and ffplay). The archive is not self-contained.";
+  return "For the AppImage, copy it over ~/.local/bin/Captures.AppImage and make it executable; running it from Downloads starts a second copy. Settings and captures stay.";
 }
 
 function availabilityLabel(download: PreviewDownload | null) {

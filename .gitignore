@@ -1,5 +1,4 @@
 /target/
-/native-dist/
 .amp/portals/
 apps/desktop/src-tauri/binaries/
 apps/desktop/src-tauri/ffmpeg/COPYING.LGPLv2.1

@@ -16,10 +16,8 @@ case "$arch" in
   *) printf 'Unsupported architecture: %s\n' "$arch" >&2; exit 1 ;;
 esac
 out="$experiment/build"
-app_name="${CAPTURES_NATIVE_APP_NAME:-Captures Native Experiment}"
-app="$out/$app_name.app"
+app="$out/Captures Native Experiment.app"
 mkdir -p "$out"
-rm -rf "$app"
 # Ask rustc for the platform/link dependencies of the whole static library,
 # including the existing ScreenCaptureKit/Swift media writer, not a guessed list.
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo rustc --color never --release --locked \
@@ -33,12 +31,6 @@ if ((${#native_links[@]} == 0)); then
 fi
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$experiment/Info.plist" "$app/Contents/Info.plist"
-if [[ -n "${CAPTURES_NATIVE_APP_VERSION:-}" ]]; then
-  /usr/libexec/PlistBuddy -c "Set :CFBundleName $app_name" "$app/Contents/Info.plist"
-  /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $app_name" "$app/Contents/Info.plist"
-  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $CAPTURES_NATIVE_APP_VERSION" "$app/Contents/Info.plist"
-  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $CAPTURES_NATIVE_APP_VERSION" "$app/Contents/Info.plist"
-fi
 python3 "$experiment/tokens.py" "$app/Contents/Resources/tokens.json"
 xcrun swiftc -swift-version 5 -parse-as-library -O -whole-module-optimization \
   -module-name CapturesNative -target "$arch-apple-macosx13.0" -sdk "$sdk" \
@@ -50,8 +42,8 @@ xcrun swiftc -swift-version 5 -parse-as-library -O -whole-module-optimization \
   -framework ServiceManagement -framework UniformTypeIdentifiers -framework ImageIO \
   -o "$app/Contents/MacOS/captures-native"
 
-# Preview packages require self-contained media. Local experiment builds may
-# continue to discover FFmpeg/ffprobe on PATH when sidecars have not been prepared.
+# Prefer the repository's self-contained media sidecars when prepared. Otherwise
+# the experiment discovers FFmpeg/ffprobe on PATH at runtime, not at build time.
 for tool in ffmpeg ffprobe; do
   sidecar="$root/apps/desktop/src-tauri/binaries/$tool-$rust_target"
   if [[ -f "$sidecar" ]]; then
@@ -64,10 +56,7 @@ for tool in ffmpeg ffprobe; do
     mkdir -p "$app/Contents/Resources/media"
     cp "$sidecar" "$app/Contents/Resources/media/$tool"
     chmod +x "$app/Contents/Resources/media/$tool"
-    codesign --force --options runtime --sign "${CAPTURES_NATIVE_SIGN_IDENTITY:--}" "$app/Contents/Resources/media/$tool"
-  elif [[ "${CAPTURES_NATIVE_REQUIRE_MEDIA:-0}" == 1 ]]; then
-    printf 'Required prepared media sidecar is missing: %s\n' "$sidecar" >&2
-    exit 1
+    codesign --force --sign "${CAPTURES_NATIVE_SIGN_IDENTITY:--}" "$app/Contents/Resources/media/$tool"
   fi
 done
 codesign --force --options runtime --entitlements "$experiment/entitlements.plist" \
