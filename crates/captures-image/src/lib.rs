@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle};
+use fontdue::layout::{CoordinateSystem, HorizontalAlign, Layout, LayoutSettings, TextStyle};
 use image::{Pixel, Rgba, RgbaImage};
 use tiny_skia::{FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
@@ -107,6 +107,7 @@ pub enum Shape {
         text: String,
         font_size: f32,
         font_data: Arc<[u8]>,
+        style: TextStyleSettings,
     },
     /// Straight-alpha pixels fitted to document-space bounds. Layer color's
     /// alpha controls opacity; its RGB, stroke width and fill are ignored.
@@ -116,6 +117,49 @@ pub enum Shape {
         height: f32,
         pixels: Arc<RgbaImage>,
     },
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextShadow {
+    pub color: [u8; 4],
+    pub blur: f32,
+    pub offset: Point,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextStyleSettings {
+    pub bold: bool,
+    pub italic: bool,
+    pub align: TextAlign,
+    /// None grows to the longest line; Some wraps into a fixed layout box.
+    pub width: Option<f32>,
+    pub background: Option<[u8; 4]>,
+    pub rounded_background: bool,
+    pub outlined: bool,
+    pub shadow: Option<TextShadow>,
+}
+
+impl Default for TextStyleSettings {
+    fn default() -> Self {
+        Self {
+            bold: false,
+            italic: false,
+            align: TextAlign::Left,
+            width: None,
+            background: None,
+            rounded_background: false,
+            outlined: false,
+            shadow: None,
+        }
+    }
 }
 
 /// The six compositing choices exposed by the shipping image editor.
@@ -208,20 +252,124 @@ fn text_layout(
     text: &str,
     size: f32,
     bytes: &[u8],
+    style: &TextStyleSettings,
 ) -> Result<(fontdue::Font, Layout), String> {
     let font = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default())
         .map_err(str::to_owned)?;
     let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
+    // fontdue needs a layout width to establish center/right anchors. Measure
+    // unwrapped first so auto-width multiline text aligns against its longest line.
+    let measured_width = if style.width.is_none() {
+        layout.reset(&LayoutSettings {
+            x: origin.x,
+            y: origin.y,
+            line_height: 1.2,
+            ..LayoutSettings::default()
+        });
+        layout.append(&[&font], &TextStyle::new(text, size, 0));
+        Some(longest_line_width(&layout).max(size * 0.5) + 0.01)
+    } else {
+        style.width
+    };
     layout.reset(&LayoutSettings {
         x: origin.x,
         y: origin.y,
+        max_width: measured_width,
+        horizontal_align: match style.align {
+            TextAlign::Left => HorizontalAlign::Left,
+            TextAlign::Center => HorizontalAlign::Center,
+            TextAlign::Right => HorizontalAlign::Right,
+        },
+        line_height: 1.2,
         ..LayoutSettings::default()
     });
     layout.append(&[&font], &TextStyle::new(text, size, 0));
     Ok((font, layout))
 }
 
+fn longest_line_width(layout: &Layout) -> f32 {
+    layout.lines().map_or(0.0, |lines| {
+        lines
+            .iter()
+            .map(|line| {
+                let glyphs = &layout.glyphs()[line.glyph_start..=line.glyph_end];
+                let left = glyphs.first().map_or(0.0, |glyph| glyph.x);
+                glyphs
+                    .last()
+                    .map_or(0.0, |glyph| glyph.x + glyph.width as f32 - left)
+            })
+            .fold(0.0, f32::max)
+    })
+}
+
+fn text_glyph_bounds(layout: &Layout) -> Option<Bounds> {
+    Bounds::from_points(
+        layout
+            .glyphs()
+            .iter()
+            .filter(|glyph| glyph.width > 0 && glyph.height > 0)
+            .flat_map(|glyph| {
+                [
+                    Point {
+                        x: glyph.x,
+                        y: glyph.y,
+                    },
+                    Point {
+                        x: glyph.x + glyph.width as f32,
+                        y: glyph.y + glyph.height as f32,
+                    },
+                ]
+            }),
+    )
+}
+
+fn text_layout_bounds(
+    origin: Point,
+    font_size: f32,
+    style: &TextStyleSettings,
+    layout: &Layout,
+) -> Bounds {
+    let width = style
+        .width
+        .unwrap_or_else(|| longest_line_width(layout).max(font_size * 0.5));
+    Bounds {
+        x: origin.x,
+        y: origin.y,
+        width,
+        height: layout.height().max(font_size * 1.2),
+    }
+}
+
+fn expand_bounds(mut bounds: Bounds, left: f32, top: f32, right: f32, bottom: f32) -> Bounds {
+    bounds.x -= left;
+    bounds.y -= top;
+    bounds.width += left + right;
+    bounds.height += top + bottom;
+    bounds
+}
+
 impl Layer {
+    fn rotation_center(&self, fallback: Bounds) -> Point {
+        if let Shape::Text {
+            origin,
+            text,
+            font_size,
+            font_data,
+            style,
+        } = &self.shape
+            && let Ok((_, layout)) = text_layout(*origin, text, *font_size, font_data, style)
+        {
+            return if style.background.is_some() || text.is_empty() {
+                text_layout_bounds(*origin, *font_size, style, &layout).center()
+            } else {
+                text_glyph_bounds(&layout)
+                    .unwrap_or_else(|| text_layout_bounds(*origin, *font_size, style, &layout))
+                    .center()
+            };
+        }
+        fallback.center()
+    }
+
     fn validate(&self) -> Result<(), String> {
         let point_ok = |p: &Point| p.x.is_finite() && p.y.is_finite();
         let valid_shape = match &self.shape {
@@ -247,8 +395,21 @@ impl Layer {
                     && *height > 0.0
             }
             Shape::Text {
-                origin, font_size, ..
-            } => point_ok(origin) && font_size.is_finite() && *font_size > 0.0,
+                origin,
+                font_size,
+                style,
+                ..
+            } => {
+                point_ok(origin)
+                    && font_size.is_finite()
+                    && *font_size > 0.0
+                    && style
+                        .width
+                        .is_none_or(|width| width.is_finite() && width > 0.0)
+                    && style.shadow.as_ref().is_none_or(|shadow| {
+                        shadow.blur.is_finite() && shadow.blur >= 0.0 && point_ok(&shadow.offset)
+                    })
+            }
             Shape::Image {
                 origin,
                 width,
@@ -311,23 +472,39 @@ impl Layer {
                 text,
                 font_size,
                 font_data,
+                style,
             } => {
-                let (_, layout) = text_layout(*origin, text, *font_size, font_data)?;
-                Bounds::from_points(
-                    layout
-                        .glyphs()
-                        .iter()
-                        .filter(|g| g.width > 0 && g.height > 0)
-                        .flat_map(|g| {
-                            [
-                                Point { x: g.x, y: g.y },
-                                Point {
-                                    x: g.x + g.width as f32,
-                                    y: g.y + g.height as f32,
-                                },
-                            ]
-                        }),
-                )
+                let (_, layout) = text_layout(*origin, text, *font_size, font_data, style)?;
+                let mut bounds = text_layout_bounds(*origin, *font_size, style, &layout);
+                if style.background.is_some() {
+                    let pad_x = font_size * 0.28;
+                    let pad_y = font_size * 0.18;
+                    bounds = expand_bounds(bounds, pad_x, pad_y, pad_x, pad_y);
+                } else if text.is_empty() {
+                    // Empty text remains an editable one-line layout box.
+                } else if let Some(glyphs) = text_glyph_bounds(&layout) {
+                    bounds = glyphs;
+                }
+                let outline = if style.outlined {
+                    (font_size * 0.08).max(1.5)
+                } else {
+                    0.0
+                };
+                bounds = expand_bounds(bounds, outline, outline, outline, outline);
+                if style.italic {
+                    bounds = expand_bounds(bounds, font_size * 0.2, 0.0, font_size * 0.2, 0.0);
+                }
+                if let Some(shadow) = &style.shadow {
+                    let spread = shadow.blur * 2.0;
+                    bounds = expand_bounds(
+                        bounds,
+                        (spread - shadow.offset.x).max(0.0),
+                        (spread - shadow.offset.y).max(0.0),
+                        (spread + shadow.offset.x).max(0.0),
+                        (spread + shadow.offset.y).max(0.0),
+                    );
+                }
+                Some(bounds)
             }
         })
     }
@@ -336,7 +513,7 @@ impl Layer {
     /// geometry (including an invalid font) has no bounds.
     pub fn bounds(&self) -> Option<Bounds> {
         let mut bounds = self.geometry_bounds().ok()??;
-        let center = bounds.center();
+        let center = self.rotation_center(bounds);
         if !matches!(self.shape, Shape::Text { .. } | Shape::Image { .. }) {
             bounds.x -= self.stroke_width / 2.0;
             bounds.y -= self.stroke_width / 2.0;
@@ -360,7 +537,7 @@ impl Layer {
         let Ok(Some(bounds)) = self.geometry_bounds() else {
             return false;
         };
-        let point = rotate(point, bounds.center(), -self.rotation_degrees);
+        let point = rotate(point, self.rotation_center(bounds), -self.rotation_degrees);
         let radius = self.stroke_width / 2.0 + tolerance;
         let near = |a, b| segment_distance(point, a, b) <= radius;
         match &self.shape {
@@ -430,11 +607,82 @@ fn paint(color: [u8; 4], blend_mode: BlendMode) -> Paint<'static> {
     paint
 }
 
+fn colorized_mask(mask: &[u8], width: u32, height: u32, color: [u8; 4]) -> Result<Pixmap, String> {
+    let mut pixmap = Pixmap::new(width, height).ok_or("Text mask is too large")?;
+    for (pixel, &coverage) in pixmap.pixels_mut().iter_mut().zip(mask) {
+        let alpha = ((u16::from(coverage) * u16::from(color[3]) + 127) / 255) as u8;
+        *pixel = tiny_skia::ColorU8::from_rgba(color[0], color[1], color[2], alpha).premultiply();
+    }
+    Ok(pixmap)
+}
+
+fn gaussian_blur(mask: &[u8], width: usize, height: usize, blur: f32) -> Vec<u8> {
+    let sigma = (blur / 2.0).max(0.01);
+    let radius = (sigma * 3.0).ceil().min(48.0) as isize;
+    if radius == 0 {
+        return mask.to_vec();
+    }
+    let mut kernel = (-radius..=radius)
+        .map(|offset| (-0.5 * (offset as f32 / sigma).powi(2)).exp())
+        .collect::<Vec<_>>();
+    let sum: f32 = kernel.iter().sum();
+    for value in &mut kernel {
+        *value /= sum;
+    }
+    let mut horizontal = vec![0.0; mask.len()];
+    for y in 0..height {
+        for x in 0..width {
+            horizontal[y * width + x] = (-radius..=radius)
+                .map(|offset| {
+                    let sx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
+                    f32::from(mask[y * width + sx]) * kernel[(offset + radius) as usize]
+                })
+                .sum();
+        }
+    }
+    let mut output = vec![0; mask.len()];
+    for y in 0..height {
+        for x in 0..width {
+            let value: f32 = (-radius..=radius)
+                .map(|offset| {
+                    let sy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
+                    horizontal[sy * width + x] * kernel[(offset + radius) as usize]
+                })
+                .sum();
+            output[y * width + x] = value.round().clamp(0.0, 255.0) as u8;
+        }
+    }
+    output
+}
+
+fn dilated_ring(mask: &[u8], width: usize, height: usize, radius: usize) -> Vec<u8> {
+    let mut output = vec![0; mask.len()];
+    for y in 0..height {
+        for x in 0..width {
+            let mut maximum = 0;
+            for oy in -(radius as isize)..=radius as isize {
+                for ox in -(radius as isize)..=radius as isize {
+                    if ox * ox + oy * oy > (radius * radius) as isize {
+                        continue;
+                    }
+                    let sx = x as isize + ox;
+                    let sy = y as isize + oy;
+                    if sx >= 0 && sy >= 0 && sx < width as isize && sy < height as isize {
+                        maximum = maximum.max(mask[sy as usize * width + sx as usize]);
+                    }
+                }
+            }
+            output[y * width + x] = maximum.saturating_sub(mask[y * width + x]);
+        }
+    }
+    output
+}
+
 fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
     let Some(bounds) = layer.geometry_bounds()? else {
         return Ok(());
     };
-    let center = bounds.center();
+    let center = layer.rotation_center(bounds);
     let transform = Transform::from_rotate_at(layer.rotation_degrees, center.x, center.y);
     if let Shape::Image {
         origin,
@@ -474,9 +722,76 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
         text,
         font_size,
         font_data,
+        style,
     } = &layer.shape
     {
-        let (font, layout) = text_layout(*origin, text, *font_size, font_data)?;
+        let (font, layout) = text_layout(*origin, text, *font_size, font_data, style)?;
+        let layout_bounds = text_layout_bounds(*origin, *font_size, style, &layout);
+        let line_height = font_size * 1.2;
+        let box_width = layout_bounds.width;
+        let box_height = layout.height().max(line_height);
+        let pad_x = font_size * 0.28;
+        let pad_y = font_size * 0.18;
+        let plate = tiny_skia::Rect::from_xywh(
+            origin.x - pad_x,
+            origin.y - pad_y,
+            box_width + pad_x * 2.0,
+            box_height + pad_y * 2.0,
+        );
+        let width = canvas.width();
+        let height = canvas.height();
+        let mut plate_mask = Pixmap::new(width, height).ok_or("Text mask is too large")?;
+        let draw_plate = |canvas: &mut Pixmap| {
+            if let Some(rect) = plate {
+                let mut path = PathBuilder::new();
+                if style.rounded_background {
+                    let radius = (font_size * 0.32)
+                        .min(rect.width() / 2.0)
+                        .min(rect.height() / 2.0);
+                    path.push_rect(
+                        tiny_skia::Rect::from_xywh(
+                            rect.x() + radius,
+                            rect.y(),
+                            (rect.width() - radius * 2.0).max(f32::EPSILON),
+                            rect.height(),
+                        )
+                        .expect("positive rounded plate interior"),
+                    );
+                    path.push_rect(
+                        tiny_skia::Rect::from_xywh(
+                            rect.x(),
+                            rect.y() + radius,
+                            rect.width(),
+                            (rect.height() - radius * 2.0).max(f32::EPSILON),
+                        )
+                        .expect("positive rounded plate interior"),
+                    );
+                    for (x, y) in [
+                        (rect.x() + radius, rect.y() + radius),
+                        (rect.right() - radius, rect.y() + radius),
+                        (rect.x() + radius, rect.bottom() - radius),
+                        (rect.right() - radius, rect.bottom() - radius),
+                    ] {
+                        path.push_circle(x, y, radius);
+                    }
+                } else {
+                    path.push_rect(rect);
+                }
+                if let Some(path) = path.finish() {
+                    canvas.fill_path(
+                        &path,
+                        &paint([255, 255, 255, 255], BlendMode::Normal),
+                        FillRule::Winding,
+                        Transform::identity(),
+                        None,
+                    );
+                }
+            }
+        };
+        if style.background.is_some() {
+            draw_plate(&mut plate_mask);
+        }
+        let mut glyph_mask = Pixmap::new(width, height).ok_or("Text mask is too large")?;
         for glyph in layout
             .glyphs()
             .iter()
@@ -486,27 +801,104 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
             let mut pixels = Pixmap::new(glyph.width as u32, glyph.height as u32)
                 .ok_or("Text glyph is too large")?;
             for (pixel, coverage) in pixels.pixels_mut().iter_mut().zip(coverage) {
-                let alpha = ((u16::from(coverage) * u16::from(layer.color[3]) + 127) / 255) as u8;
-                *pixel = tiny_skia::ColorU8::from_rgba(
-                    layer.color[0],
-                    layer.color[1],
-                    layer.color[2],
-                    alpha,
-                )
-                .premultiply();
+                *pixel = tiny_skia::ColorU8::from_rgba(255, 255, 255, coverage).premultiply();
             }
+            let bold = i32::from(style.bold);
+            for ox in 0..=bold {
+                let glyph_transform = if style.italic {
+                    Transform::from_skew(-0.20, 0.0)
+                        .post_translate(glyph.x + ox as f32 + glyph.height as f32 * 0.20, glyph.y)
+                } else {
+                    Transform::from_translate(glyph.x + ox as f32, glyph.y)
+                };
+                glyph_mask.draw_pixmap(
+                    0,
+                    0,
+                    pixels.as_ref(),
+                    &tiny_skia::PixmapPaint {
+                        blend_mode: tiny_skia::BlendMode::SourceOver,
+                        ..Default::default()
+                    },
+                    glyph_transform,
+                    None,
+                );
+            }
+        }
+        let glyph_alpha = glyph_mask
+            .pixels()
+            .iter()
+            .map(|pixel| pixel.alpha())
+            .collect::<Vec<_>>();
+        let ink_alpha = if style.outlined {
+            dilated_ring(
+                &glyph_alpha,
+                width as usize,
+                height as usize,
+                (font_size * 0.08).max(1.5).round() as usize,
+            )
+        } else {
+            glyph_alpha
+        };
+        let shadow_source = if style.background.is_some() {
+            plate_mask
+                .pixels()
+                .iter()
+                .map(|pixel| pixel.alpha())
+                .collect::<Vec<_>>()
+        } else {
+            ink_alpha.clone()
+        };
+        if let Some(shadow) = &style.shadow {
+            let blurred =
+                gaussian_blur(&shadow_source, width as usize, height as usize, shadow.blur);
+            let mut color = shadow.color;
+            color[3] = ((u16::from(color[3]) * u16::from(layer.color[3]) + 127) / 255) as u8;
+            let pixmap = colorized_mask(&blurred, width, height, color)?;
             canvas.draw_pixmap(
                 0,
                 0,
-                pixels.as_ref(),
+                pixmap.as_ref(),
                 &tiny_skia::PixmapPaint {
                     blend_mode: layer.blend_mode.raster(),
                     ..Default::default()
                 },
-                Transform::from_translate(glyph.x, glyph.y).post_concat(transform),
+                Transform::from_translate(shadow.offset.x, shadow.offset.y).post_concat(transform),
                 None,
             );
         }
+        if let Some(mut background) = style.background {
+            background[3] =
+                ((u16::from(background[3]) * u16::from(layer.color[3]) + 127) / 255) as u8;
+            let alpha = plate_mask
+                .pixels()
+                .iter()
+                .map(|pixel| pixel.alpha())
+                .collect::<Vec<_>>();
+            let pixmap = colorized_mask(&alpha, width, height, background)?;
+            canvas.draw_pixmap(
+                0,
+                0,
+                pixmap.as_ref(),
+                &tiny_skia::PixmapPaint {
+                    blend_mode: layer.blend_mode.raster(),
+                    ..Default::default()
+                },
+                transform,
+                None,
+            );
+        }
+        let pixmap = colorized_mask(&ink_alpha, width, height, layer.color)?;
+        canvas.draw_pixmap(
+            0,
+            0,
+            pixmap.as_ref(),
+            &tiny_skia::PixmapPaint {
+                blend_mode: layer.blend_mode.raster(),
+                ..Default::default()
+            },
+            transform,
+            None,
+        );
         return Ok(());
     }
 
@@ -672,6 +1064,148 @@ mod tests {
     use std::{hint::black_box, sync::Arc, time::Instant};
 
     use super::*;
+
+    fn text_document(style: TextStyleSettings) -> Document {
+        Document {
+            source: Arc::new(RgbaImage::from_pixel(360, 180, Rgba([255, 255, 255, 255]))),
+            crop: None,
+            layers: vec![Layer {
+                id: 1,
+                shape: Shape::Text {
+                    origin: Point { x: 30.0, y: 25.0 },
+                    text: "LLLL LLLL\nL L".into(),
+                    font_size: 26.0,
+                    font_data: Arc::from(include_bytes!("../tests/test-font.ttf").as_slice()),
+                    style,
+                },
+                color: [220, 20, 30, 255],
+                stroke_width: 0.0,
+                fill: None,
+                rotation_degrees: 0.0,
+                blend_mode: BlendMode::Normal,
+            }],
+        }
+    }
+
+    #[test]
+    fn outline_mask_keeps_glyph_interiors_empty_and_only_paints_the_edge() {
+        let mut filled = vec![0; 49];
+        for y in 2..=4 {
+            for x in 2..=4 {
+                filled[y * 7 + x] = 255;
+            }
+        }
+        let outline = dilated_ring(&filled, 7, 7, 1);
+        assert_eq!(outline[3 * 7 + 3], 0, "interior is hollow");
+        assert_eq!(outline[2 * 7 + 2], 0, "original glyph ink is removed");
+        assert_eq!(
+            outline[3 * 7 + 1],
+            255,
+            "edge extends by the requested radius"
+        );
+        assert_eq!(outline[7 + 1], 0, "disk dilation excludes diagonal corners");
+    }
+
+    #[test]
+    fn blur_spreads_alpha_without_multiplying_shadow_opacity() {
+        let mut mask = vec![0; 31 * 31];
+        for y in 14..=16 {
+            for x in 14..=16 {
+                mask[y * 31 + x] = 128;
+            }
+        }
+        let sharp = gaussian_blur(&mask, 31, 31, 0.);
+        let soft = gaussian_blur(&mask, 31, 31, 4.);
+        assert_eq!(sharp, mask);
+        assert!(soft[15 * 31 + 15] < 128);
+        assert!(soft[15 * 31 + 12] > 0);
+        let total: i32 = soft.iter().map(|&alpha| i32::from(alpha)).sum();
+        assert!(
+            (total - 9 * 128).abs() < 50,
+            "alpha changed from 1152 to {total}"
+        );
+    }
+
+    #[test]
+    fn empty_text_is_a_valid_empty_render_with_editable_bounds() {
+        let mut document = text_document(TextStyleSettings::default());
+        let Shape::Text { text, .. } = &mut document.layers[0].shape else {
+            unreachable!()
+        };
+        text.clear();
+        assert!(document.layers[0].bounds().is_some());
+        assert_eq!(render(&document).unwrap(), *document.source);
+    }
+
+    #[test]
+    fn auto_width_plate_adds_background_padding_once() {
+        let document = text_document(TextStyleSettings {
+            background: Some([0, 0, 0, 255]),
+            ..Default::default()
+        });
+        let layer = &document.layers[0];
+        let Shape::Text {
+            origin,
+            text,
+            font_size,
+            font_data,
+            style,
+        } = &layer.shape
+        else {
+            unreachable!()
+        };
+        let (_, layout) = text_layout(*origin, text, *font_size, font_data, style).unwrap();
+        let bounds = layer.geometry_bounds().unwrap().unwrap();
+        assert!((bounds.width - (longest_line_width(&layout) + font_size * 0.56)).abs() < 0.1);
+    }
+
+    #[test]
+    fn styled_text_alignment_wrap_plate_outline_and_shadow_render_pixels() {
+        let base = render(&text_document(TextStyleSettings {
+            width: Some(210.0),
+            ..Default::default()
+        }))
+        .unwrap();
+        let styled = render(&text_document(TextStyleSettings {
+            bold: true,
+            italic: true,
+            align: TextAlign::Right,
+            width: Some(210.0),
+            background: Some([15, 30, 60, 255]),
+            rounded_background: true,
+            outlined: true,
+            shadow: Some(TextShadow {
+                color: [0, 0, 0, 150],
+                blur: 5.0,
+                offset: Point { x: 4.0, y: 6.0 },
+            }),
+        }))
+        .unwrap();
+        assert_ne!(base, styled);
+        assert_eq!(styled.get_pixel(30, 25).0, [15, 30, 60, 255]);
+        // Rounded plate leaves its extreme padded corner untouched.
+        assert_eq!(styled.get_pixel(23, 21).0, [255, 255, 255, 255]);
+        assert!(styled.pixels().any(|pixel| {
+            pixel[0] < 255 && pixel[0] == pixel[1] && pixel[1] == pixel[2] && pixel[3] == 255
+        }));
+
+        let centered = render(&text_document(TextStyleSettings {
+            align: TextAlign::Center,
+            width: Some(210.0),
+            ..Default::default()
+        }))
+        .unwrap();
+        let right = render(&text_document(TextStyleSettings {
+            align: TextAlign::Right,
+            width: Some(210.0),
+            ..Default::default()
+        }))
+        .unwrap();
+        assert_ne!(
+            centered, right,
+            "asymmetric lines must move independently with alignment"
+        );
+    }
 
     fn legacy_render(document: &Document) -> RgbaImage {
         let (width, height) = document.source.dimensions();

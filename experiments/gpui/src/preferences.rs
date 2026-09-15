@@ -6,6 +6,7 @@ use anyhow::Result;
 use gpui::{prelude::*, *};
 use std::{collections::HashSet, fs, path::PathBuf};
 
+pub mod history;
 pub mod input;
 pub mod settings;
 use input::TextInput;
@@ -36,6 +37,25 @@ fn block_changes_after_load_error(settings: &mut Settings, load_failed: bool) ->
         *settings = Settings::default();
     }
     load_failed
+}
+
+fn preference_search_targets() -> [&'static str; 7] {
+    [
+        "appearance interface theme accent color custom recording signal",
+        "capture save clipboard previews position screenshots recording controls freeze cursor format countdown",
+        "shortcuts keyboard new capture region window full screen record",
+        "recording format frames resolution countdown microphone desktop audio mono cursor clicks editor",
+        "gif export frames per second maximum width palette colors",
+        "updates preview changelog show what changed",
+        "about feedback launch sign in",
+    ]
+}
+
+fn normalize_hex(value: &str) -> Option<String> {
+    let value = value.trim();
+    let digits = value.strip_prefix('#').unwrap_or(value);
+    (digits.len() == 6 && digits.chars().all(|c| c.is_ascii_hexdigit()))
+        .then(|| format!("#{}", digits.to_ascii_uppercase()))
 }
 
 pub fn open(launch: Launch, cx: &mut App) -> Result<()> {
@@ -86,13 +106,21 @@ struct Surface {
     preferences_scroll: ScrollHandle,
     find: Entity<TextInput>,
     find_open: bool,
+    find_index: usize,
+    open_select: Option<&'static str>,
+    microphones: Vec<captures_recording::AudioDevice>,
+    editing_shortcut: Option<usize>,
+    shortcut_release_pending: bool,
     status: String,
-    dismissed: HashSet<PathBuf>,
+    poster_pending: HashSet<PathBuf>,
     history_filter: &'static str,
     confirm: Option<PathBuf>,
     message: Entity<TextInput>,
     contact: Entity<TextInput>,
     feedback_busy: bool,
+    feedback_category: &'static str,
+    custom_accent: Entity<TextInput>,
+    custom_signal: Entity<TextInput>,
 }
 impl Surface {
     fn new(launch: Launch, cx: &mut Context<Self>) -> Self {
@@ -107,6 +135,8 @@ impl Surface {
         };
         let find = cx.new(|cx| TextInput::new("", "Find settings", cx));
         cx.observe(&find, |_, _, cx| cx.notify()).detach();
+        let custom_accent = settings.custom_theme.accent.to_uppercase();
+        let custom_signal = settings.custom_theme.signal.to_uppercase();
         Self {
             focus: cx.focus_handle(),
             launch,
@@ -118,13 +148,22 @@ impl Surface {
             preferences_scroll: ScrollHandle::new(),
             find,
             find_open: false,
-            dismissed: HashSet::new(),
+            find_index: 0,
+            open_select: None,
+            microphones: Vec::new(),
+            editing_shortcut: None,
+            shortcut_release_pending: false,
+            poster_pending: HashSet::new(),
             history_filter: "all",
             confirm: None,
-            message: cx
-                .new(|cx| TextInput::new("", "Tell us what happened or what would help…", cx)),
-            contact: cx.new(|cx| TextInput::new("", "Email (optional)", cx)),
+            message: cx.new(|cx| {
+                TextInput::new("", "What happened? What did you expect?", cx).multiline(8_000)
+            }),
+            contact: cx.new(|cx| TextInput::new("", "X handle, GitHub username, email…", cx)),
             feedback_busy: false,
+            feedback_category: "bug",
+            custom_accent: cx.new(|cx| TextInput::new(custom_accent, "#32D3FF", cx)),
+            custom_signal: cx.new(|cx| TextInput::new(custom_signal, "#FF4FC3", cx)),
         }
     }
     fn persist(&mut self, cx: &mut Context<Self>) {
@@ -135,9 +174,36 @@ impl Surface {
             cx.notify();
             return;
         }
-        self.status = match settings::save(&self.launch.profile, &self.settings) {
-            Ok(_) => "Changes saved".into(),
-            Err(e) => format!("Couldn’t save changes: {e:#}"),
+        let previous = match settings::load(&self.launch.profile) {
+            Ok(previous) => previous,
+            Err(error) => {
+                self.status = format!("Couldn’t read previous settings: {error:#}");
+                cx.notify();
+                return;
+            }
+        };
+        self.status = match crate::integration::reconcile_settings(&self.settings, cx) {
+            Err(error) => {
+                self.settings = previous;
+                format!("Couldn’t apply settings: {error:#}")
+            }
+            Ok(()) => match settings::save(&self.launch.profile, &self.settings) {
+                Ok(()) => {
+                    cx.set_global(crate::theme::CurrentSettings(self.settings.clone()));
+                    cx.refresh_windows();
+                    "Changes saved".into()
+                }
+                Err(error) => {
+                    let rollback = crate::integration::reconcile_settings(&previous, cx);
+                    self.settings = previous;
+                    match rollback {
+                        Ok(()) => format!("Couldn’t save changes: {error:#}"),
+                        Err(rollback) => format!(
+                            "Couldn’t save changes: {error:#}. Native rollback failed: {rollback:#}"
+                        ),
+                    }
+                }
+            },
         };
         cx.notify()
     }
@@ -156,10 +222,72 @@ impl Surface {
     fn close_find(&mut self, _: &CloseFind, _: &mut Window, cx: &mut Context<Self>) {
         if self.find_open {
             self.find_open = false;
+            self.find_index = 0;
             cx.notify();
         }
     }
+    fn assign_shortcut(&mut self, index: usize, value: String) {
+        *match index {
+            0 => &mut self.settings.new_capture_shortcut,
+            1 => &mut self.settings.region_shortcut,
+            2 => &mut self.settings.window_shortcut,
+            3 => &mut self.settings.display_shortcut,
+            4 => &mut self.settings.recording.video_shortcut,
+            5 => &mut self.settings.recording.window_shortcut,
+            6 => &mut self.settings.recording.display_shortcut,
+            _ => &mut self.settings.recording.gif_shortcut,
+        } = value;
+    }
+
     fn capture_keys(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(index) = self.editing_shortcut {
+            cx.stop_propagation();
+            let key = event.keystroke.key.as_str();
+            if matches!(
+                key,
+                "shift" | "control" | "alt" | "super" | "command" | "meta"
+            ) {
+                return;
+            }
+            if key != "escape" {
+                let mut parts = Vec::new();
+                let mods = event.keystroke.modifiers;
+                if mods.platform {
+                    parts.push(
+                        if cfg!(target_os = "macos") {
+                            "Command"
+                        } else {
+                            "Super"
+                        }
+                        .to_owned(),
+                    );
+                }
+                if mods.control {
+                    parts.push("Control".into());
+                }
+                if mods.alt {
+                    parts.push("Alt".into());
+                }
+                if mods.shift {
+                    parts.push("Shift".into());
+                }
+                parts.push(match key {
+                    "printscreen" => "PrintScreen".into(),
+                    "space" => "Space".into(),
+                    _ => key.to_uppercase(),
+                });
+                let value = if key == "backspace" {
+                    String::new()
+                } else {
+                    parts.join("+")
+                };
+                self.assign_shortcut(index, value);
+            }
+            self.editing_shortcut = None;
+            self.shortcut_release_pending = true;
+            cx.notify();
+            return;
+        }
         let shortcut = if cfg!(target_os = "macos") {
             event.keystroke.modifiers.platform
         } else {
@@ -168,8 +296,136 @@ impl Surface {
         if shortcut && event.keystroke.key.eq_ignore_ascii_case("f") {
             self.open_find(&OpenFind, window, cx);
         } else if event.keystroke.key == "escape" {
-            self.close_find(&CloseFind, window, cx);
+            if self.open_select.take().is_some() {
+                cx.notify();
+            } else {
+                self.close_find(&CloseFind, window, cx);
+            }
+        } else if self.find_open && event.keystroke.key == "enter" {
+            let count = self.preference_matches(cx).len();
+            if count > 0 {
+                self.find_index = if event.keystroke.modifiers.shift {
+                    (self.find_index + count - 1) % count
+                } else {
+                    (self.find_index + 1) % count
+                };
+                let section = self.preference_matches(cx)[self.find_index];
+                self.preference_section = section;
+                self.preferences_scroll.scroll_to_top_of_item(section);
+                cx.notify();
+            }
         }
+    }
+
+    fn preference_matches(&self, cx: &App) -> Vec<usize> {
+        let query = self.find.read(cx).value().trim().to_ascii_lowercase();
+        if query.is_empty() {
+            return vec![];
+        }
+        preference_search_targets()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, target)| target.contains(&query).then_some(index))
+            .collect()
+    }
+
+    fn choose_select(&mut self, key: &'static str, value: &str, cx: &mut Context<Self>) {
+        match key {
+            "microphone" => {
+                self.settings.recording.microphone_device_id =
+                    (!value.is_empty()).then(|| value.to_owned())
+            }
+            "format" => self.settings.screenshot_format = value.into(),
+            "countdown" => self.settings.screenshot_countdown_seconds = value.parse().unwrap_or(0),
+            "video-format" => self.settings.recording.video_format = value.into(),
+            "video-fps" => self.settings.recording.video_fps = value.parse().unwrap_or(60),
+            "video-resolution" => self.settings.recording.video_max_resolution = value.into(),
+            "recording-countdown" => {
+                self.settings.recording.countdown_seconds = value.parse().unwrap_or(3)
+            }
+            "gif-fps" => self.settings.recording.gif_fps = value.parse().unwrap_or(15),
+            "gif-width" => self.settings.recording.gif_max_width = value.parse().unwrap_or(800),
+            "gif-colors" => self.settings.recording.gif_max_colors = value.parse().unwrap_or(256),
+            _ => return,
+        }
+        self.open_select = None;
+        self.persist(cx);
+    }
+
+    fn menu_select(
+        &self,
+        key: &'static str,
+        label: String,
+        options: &[(&str, &str)],
+        cx: &mut Context<Self>,
+        t: Theme,
+    ) -> Stateful<Div> {
+        let open = self.open_select == Some(key);
+        let mut control = self
+            .select(
+                SharedString::from(format!("select-{key}")),
+                format!("{label}  ▾"),
+                t,
+            )
+            .relative()
+            .on_click(cx.listener(move |s, _, _, cx| {
+                s.open_select = (s.open_select != Some(key)).then_some(key);
+                if key == "microphone" && s.open_select.is_some() {
+                    let task = cx.background_executor().spawn(async {
+                        #[cfg(target_os = "macos")]
+                        {
+                            captures_recording_macos::microphone_devices()
+                        }
+                        #[cfg(any(target_os = "linux", target_os = "windows"))]
+                        {
+                            captures_recording_xcap::microphone_devices()
+                        }
+                    });
+                    cx.spawn(async move |this, cx| {
+                        let devices = task.await;
+                        let _ = this.update(cx, |s, cx| {
+                            s.microphones = devices;
+                            cx.notify();
+                        });
+                    })
+                    .detach();
+                }
+                cx.notify();
+            }));
+        if open {
+            let mut menu = div()
+                .absolute()
+                .top(px(36.))
+                .right_0()
+                .min_w(px(150.))
+                .p_1()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(t.border)
+                .bg(t.raised)
+                .shadow_lg()
+                .flex()
+                .flex_col();
+            for (value, option_label) in options {
+                let value = value.to_string();
+                menu = menu.child(
+                    div()
+                        .id(SharedString::from(format!("{key}-{value}")))
+                        .px_3()
+                        .py_2()
+                        .rounded(px(6.))
+                        .hover(|d| d.bg(t.hover))
+                        .cursor_pointer()
+                        .child(option_label.to_string())
+                        .on_click(cx.listener(move |s, _, _, cx| {
+                            cx.stop_propagation();
+                            s.choose_select(key, &value, cx);
+                        })),
+                );
+            }
+            control = control.child(menu);
+        }
+        control
     }
     fn button(
         &self,
@@ -382,10 +638,32 @@ impl Surface {
                     })),
             );
         }
-        cards.push(self.card("Appearance","One look across every Captures window. Capture overlays stay dark so they read on any desktop.",vec![
+        let mut appearance_children = vec![
             self.setting_row("Interface theme","Follow the system setting, or lock Captures to light or dark.",appearance_controls,t).into_any_element(),
             div().flex().flex_col().gap(px(4.)).child(div().font_weight(FontWeight::MEDIUM).child("Accent color")).child(div().max_w(px(347.)).text_size(px(12.)).line_height(px(16.2)).text_color(t.subtle).child("Used for the capture action, selection, and focus. Status colors keep their meaning.")).child(div().pt(px(4.)).child(swatches)).into_any_element(),
-        ],t));
+        ];
+        if self.settings.theme == "custom" {
+            appearance_children.push(div().flex().flex_col().gap_3().child(div().font_weight(FontWeight::MEDIUM).child("Custom colors")).child(div().text_size(px(12.)).text_color(t.subtle).child("Open either RGB picker or enter a hex value. Supporting shades stay readable.")).children(vec![
+                self.setting_row("Accent", "Capture actions, selections, focus, and editing.", div().w(px(150.)).child(self.custom_accent.clone()), t).into_any_element(),
+                self.setting_row("Recording signal", "Recording indicators, errors, and destructive actions.", div().w(px(150.)).child(self.custom_signal.clone()), t).into_any_element(),
+                div().flex().justify_end().gap_2()
+                    .child(self.button("reset-colors", "Reset colors", false, t).on_click(cx.listener(|s,_,_,cx| {
+                        s.settings.custom_theme = Default::default();
+                        s.custom_accent.update(cx, |input, cx| *input = TextInput::new("#32D3FF", "#32D3FF", cx));
+                        s.custom_signal.update(cx, |input, cx| *input = TextInput::new("#FF4FC3", "#FF4FC3", cx));
+                        s.persist(cx)
+                    })))
+                    .child(self.button("apply-colors", "Apply colors", true, t).on_click(cx.listener(|s,_,_,cx| {
+                        let accent = normalize_hex(&s.custom_accent.read(cx).value());
+                        let signal = normalize_hex(&s.custom_signal.read(cx).value());
+                        match (accent, signal) {
+                            (Some(accent), Some(signal)) => { s.settings.custom_theme.accent = accent; s.settings.custom_theme.signal = signal; s.persist(cx); }
+                            _ => { s.status = "Enter colors as six-digit hex values, such as #32D3FF.".into(); cx.notify(); }
+                        }
+                    }))).into_any_element(),
+            ]).into_any_element());
+        }
+        cards.push(self.card("Appearance","One look across every Captures window. Capture overlays stay dark so they read on any desktop.", appearance_children,t));
         let capture_toggles = [
             (
                 "copy",
@@ -497,38 +775,43 @@ impl Surface {
             )
         }
         capture.push(
-            self.button("format", format!("Screenshot format: {format}"), false, t)
-                .on_click(cx.listener(|s, _, _, cx| {
-                    s.settings.screenshot_format = match s.settings.screenshot_format.as_str() {
-                        "png" => "jpeg",
-                        "jpeg" => "webp",
-                        _ => "png",
-                    }
-                    .into();
-                    s.persist(cx)
-                }))
-                .into_any_element(),
-        );
-        capture.push(
-            self.button(
-                "countdown",
-                format!(
-                    "Screenshot countdown: {} seconds",
-                    self.settings.screenshot_countdown_seconds
+            self.setting_row(
+                "Screenshot format",
+                "Used when you save or export. Capture History keeps a lossless PNG until then.",
+                self.menu_select(
+                    "format",
+                    format.to_uppercase(),
+                    &[("png", "PNG"), ("jpeg", "JPEG"), ("webp", "WebP")],
+                    cx,
+                    t,
                 ),
-                false,
                 t,
             )
-            .on_click(cx.listener(|s, _, _, cx| {
-                s.settings.screenshot_countdown_seconds =
-                    match s.settings.screenshot_countdown_seconds {
-                        0 => 3,
-                        3 => 5,
-                        5 => 10,
-                        _ => 0,
-                    };
-                s.persist(cx)
-            }))
+            .into_any_element(),
+        );
+        capture.push(
+            self.setting_row(
+                "Screenshot countdown",
+                "Wait before capturing so you can open menus or hover states. Press Esc to cancel.",
+                self.menu_select(
+                    "countdown",
+                    if self.settings.screenshot_countdown_seconds == 0 {
+                        "Off".into()
+                    } else {
+                        format!("{} seconds", self.settings.screenshot_countdown_seconds)
+                    },
+                    &[
+                        ("0", "Off"),
+                        ("1", "1 second"),
+                        ("3", "3 seconds"),
+                        ("5", "5 seconds"),
+                        ("10", "10 seconds"),
+                    ],
+                    cx,
+                    t,
+                ),
+                t,
+            )
             .into_any_element(),
         );
         cards.push(self.card(
@@ -538,7 +821,7 @@ impl Surface {
             t,
         ));
         let mut shortcuts = vec![];
-        for (n, v) in [
+        for (index, (n, v)) in [
             ("New Capture", &self.settings.new_capture_shortcut),
             ("Region", &self.settings.region_shortcut),
             ("Window", &self.settings.window_shortcut),
@@ -549,29 +832,96 @@ impl Surface {
                 "Record Full Screen",
                 &self.settings.recording.display_shortcut,
             ),
-        ] {
-            shortcuts.push(self.row(n, v, t).into_any_element())
+            ("Record GIF", &self.settings.recording.gif_shortcut),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let value = if self.editing_shortcut == Some(index) {
+                "Press shortcut…"
+            } else if v.is_empty() {
+                "Not set"
+            } else {
+                v.as_str()
+            };
+            shortcuts.push(
+                self.setting_row(
+                    n,
+                    "",
+                    self.button(
+                        SharedString::from(format!("shortcut-{index}")),
+                        value.to_owned(),
+                        self.editing_shortcut == Some(index),
+                        t,
+                    )
+                    .on_click(cx.listener(move |s, _, window, cx| {
+                        s.editing_shortcut = Some(index);
+                        s.focus.focus(window);
+                        crate::integration::set_shortcut_capture(true, cx);
+                        cx.spawn(async |this, cx| {
+                            loop {
+                                Timer::after(std::time::Duration::from_millis(16)).await;
+                                let active = this
+                                    .update(cx, |s, cx| {
+                                        if let Some(index) = s.editing_shortcut
+                                            && let Some(value) =
+                                                crate::integration::take_captured_shortcut(cx)
+                                        {
+                                            s.assign_shortcut(index, value);
+                                            s.editing_shortcut = None;
+                                            s.persist(cx);
+                                        }
+                                        s.editing_shortcut.is_some() || s.shortcut_release_pending
+                                    })
+                                    .unwrap_or(false);
+                                if !active {
+                                    let _ = cx.update(|cx| {
+                                        crate::integration::set_shortcut_capture(false, cx)
+                                    });
+                                    break;
+                                }
+                            }
+                        })
+                        .detach();
+                        cx.notify();
+                    })),
+                    t,
+                )
+                .into_any_element(),
+            )
         }
-        shortcuts.push(div().text_color(t.subtle).text_size(px(12.)).child("Global shortcut registration is not connected in this GPUI experiment; values shown are persisted settings.").into_any_element());
+        shortcuts.push(div().text_color(t.subtle).text_size(px(12.)).child(if crate::integration::global_shortcuts_supported() { "Click a shortcut to change it. Escape cancels; Backspace clears. Conflicts preserve the previous shortcut." } else { "System-wide shortcuts are unavailable on Wayland. Use the tray or app controls." }).into_any_element());
         cards.push(self.card(
             "Shortcuts",
-            "Shipping shortcut values. OS registration is read-only here.",
+            "Capture from anywhere without opening a window.",
             shortcuts,
             t,
         ));
-        let mut recording = vec![
-            self.button("video-format", format!("Recording format: {vf}"), false, t)
-                .on_click(cx.listener(|s, _, _, cx| {
-                    s.settings.recording.video_format =
-                        match s.settings.recording.video_format.as_str() {
-                            "mp4" => "gif",
-                            "gif" => "webm",
-                            _ => "mp4",
-                        }
-                        .into();
-                    s.persist(cx)
-                }))
-                .into_any_element(),
+        let microphones = std::iter::once(("", "Off"))
+            .chain(
+                self.microphones
+                    .iter()
+                    .map(|device| (device.id.as_str(), device.name.as_str())),
+            )
+            .collect::<Vec<_>>();
+        let microphone_label = self
+            .settings
+            .recording
+            .microphone_device_id
+            .as_ref()
+            .map(|id| {
+                self.microphones
+                    .iter()
+                    .find(|device| &device.id == id)
+                    .map(|device| device.name.clone())
+                    .unwrap_or_else(|| id.clone())
+            })
+            .unwrap_or_else(|| "Off".into());
+        let mut recording = vec![self.setting_row("Recording format", "Recordings are captured as H.264 MP4. GIF and WebM are converted when you save or export.", self.menu_select("video-format", vf.to_uppercase(), &[("mp4","MP4"),("gif","GIF"),("webm","WebM")], cx, t), t).into_any_element(),
+            self.setting_row("Frames per second", "Default recording frame rate.", self.menu_select("video-fps", format!("{} FPS", self.settings.recording.video_fps), &[("60","60 FPS"),("30","30 FPS"),("15","15 FPS")], cx, t), t).into_any_element(),
+            self.setting_row("Maximum resolution", "Scale recordings while preserving aspect ratio.", self.menu_select("video-resolution", match self.settings.recording.video_max_resolution.as_str() {"p1080"=>"1080p", "p720"=>"720p", _=>"Original"}.into(), &[("original","Original"),("p1080","1080p"),("p720","720p")], cx, t), t).into_any_element(),
+            self.setting_row("Countdown", "Delay before a recording starts.", self.menu_select("recording-countdown", if self.settings.recording.countdown_seconds == 0 {"Off".into()} else {format!("{} seconds", self.settings.recording.countdown_seconds)}, &[("0","Off"),("1","1 second"),("3","3 seconds"),("5","5 seconds"),("10","10 seconds")], cx, t), t).into_any_element(),
+            self.setting_row("Default microphone", "Used when a recording starts with microphone audio.", self.menu_select("microphone", microphone_label, &microphones, cx, t), t).into_any_element(),
         ];
         for (id, label, on) in [
             (
@@ -793,9 +1143,17 @@ impl Surface {
                                     )
                                     .child(
                                         div()
-                                            .child("Changes save automatically.")
+                                            .child(if self.status.is_empty() {
+                                                "Changes save automatically.".to_owned()
+                                            } else {
+                                                self.status.clone()
+                                            })
                                             .text_size(px(12.))
-                                            .text_color(t.subtle),
+                                            .text_color(if self.status.starts_with("Couldn’t") {
+                                                t.signal
+                                            } else {
+                                                t.subtle
+                                            }),
                                     ),
                             )
                             .child(
@@ -847,16 +1205,7 @@ impl Surface {
                             .flex()
                             .flex_col()
                             .gap(px(16.))
-                            .children(cards)
-                            .child(
-                                div()
-                                    .text_color(if self.settings_load_error.is_some() {
-                                        t.signal
-                                    } else {
-                                        t.muted
-                                    })
-                                    .child(self.status.clone()),
-                            ),
+                            .children(cards),
                     ),
             )
     }
@@ -872,11 +1221,7 @@ impl Surface {
             .gap(px(1.))
             .border_r_1()
             .border_color(t.border)
-            .bg(if self.launch.light {
-                rgb(0xefeff2)
-            } else {
-                rgb(0x0b0b0e)
-            })
+            .bg(t.canvas)
             .child(
                 div()
                     .mb_4()
@@ -925,34 +1270,35 @@ impl Surface {
         }
         d
     }
-    fn history_files(&self) -> Vec<PathBuf> {
-        let root = self.launch.profile.join("captures");
-        let mut out = vec![];
-        if let Ok(rd) = fs::read_dir(root) {
-            for e in rd.flatten() {
-                let p = e.path();
-                let extension = p
+    fn history_files(&mut self) -> Vec<PathBuf> {
+        let entries = match history::load(&self.launch.profile) {
+            Ok(entries) => entries,
+            Err(error) => {
+                self.status = format!("Couldn’t read Capture History: {error:#}");
+                return Vec::new();
+            }
+        };
+        entries
+            .into_iter()
+            .map(|entry| entry.path)
+            .filter(|path| {
+                let extension = path
                     .extension()
                     .and_then(|v| v.to_str())
                     .unwrap_or("")
                     .to_ascii_lowercase();
-                let matches = self.history_filter == "all"
-                    || (self.history_filter == "screenshots"
+                self.history_filter == "all"
+                    || (self.history_filter == "screenshot"
                         && matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp"))
-                    || (self.history_filter == "recordings"
-                        && matches!(extension.as_str(), "mp4" | "webm" | "gif"));
-                if p.is_file() && matches && !self.dismissed.contains(&p) {
-                    out.push(p)
-                }
-            }
-        }
-        out.sort();
-        out.reverse();
-        out
+                    || (self.history_filter == "video"
+                        && matches!(extension.as_str(), "mp4" | "webm"))
+                    || (self.history_filter == "gif" && extension == "gif")
+            })
+            .collect()
     }
     fn history(&mut self, cx: &mut Context<Self>, t: Theme) -> Stateful<Div> {
         let files = self.history_files();
-        let mut list = div().flex().flex_col().gap_3();
+        let mut list = div().grid().grid_cols(3).gap_4();
         if files.is_empty() {
             list = list.child(self.card(
                 "No captures yet",
@@ -968,7 +1314,6 @@ impl Surface {
                 .to_string_lossy()
                 .to_string();
             let open = p.clone();
-            let dismiss = p.clone();
             let del = p.clone();
             let confirmed = self.confirm.as_ref() == Some(&p);
             let metadata = fs::metadata(&p).ok();
@@ -976,38 +1321,62 @@ impl Surface {
                 .as_ref()
                 .map(|m| format!("{} · {:.1} KB", p.display(), m.len() as f64 / 1024.))
                 .unwrap_or_else(|| p.display().to_string());
-            let mut actions = div()
-                .flex()
-                .gap_2()
-                .child(
-                    self.button(
-                        SharedString::from(format!("open-{name}")),
-                        "Open editor",
-                        false,
-                        t,
-                    )
-                    .on_click(cx.listener(move |s, _, _, cx| {
-                        let mut l = s.launch.clone();
-                        l.path = Some(open.clone());
-                        if let Err(e) = crate::open_view(editor_view_for_path(&open), l, cx) {
-                            s.status = format!("Couldn’t open editor: {e:#}");
-                            cx.notify()
+            let extension = p
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let is_video = matches!(extension.as_str(), "mp4" | "webm");
+            let poster = self
+                .launch
+                .profile
+                .join("history-posters")
+                .join(format!("{name}.png"));
+            if is_video && !poster.is_file() && self.poster_pending.insert(p.clone()) {
+                let source = p.clone();
+                let destination = poster.clone();
+                let task = cx.background_executor().spawn(async move {
+                    fs::create_dir_all(destination.parent().unwrap())?;
+                    captures_media::MediaToolchain::from_command_names().create_poster(
+                        &source,
+                        &destination,
+                        &captures_media::CancelToken::default(),
+                    )?;
+                    anyhow::Ok((source, destination))
+                });
+                cx.spawn(async move |this, cx| {
+                    let result = task.await;
+                    let _ = this.update(cx, |surface, cx| {
+                        match result {
+                            Ok((source, _)) => {
+                                surface.poster_pending.remove(&source);
+                            }
+                            Err(error) => {
+                                surface.status = format!("Couldn’t create video poster: {error:#}")
+                            }
                         }
-                    })),
+                        cx.notify();
+                    });
+                })
+                .detach();
+            }
+            let actions = div().flex().gap_2().child(
+                self.button(
+                    SharedString::from(format!("open-{name}")),
+                    "Open editor",
+                    false,
+                    t,
                 )
-                .child(
-                    self.button(
-                        SharedString::from(format!("dismiss-{name}")),
-                        "Dismiss",
-                        false,
-                        t,
-                    )
-                    .on_click(cx.listener(move |s, _, _, cx| {
-                        s.dismissed.insert(dismiss.clone());
+                .on_click(cx.listener(move |s, _, _, cx| {
+                    let mut l = s.launch.clone();
+                    l.path = Some(open.clone());
+                    if let Err(e) = crate::open_view(editor_view_for_path(&open), l, cx) {
+                        s.status = format!("Couldn’t open editor: {e:#}");
                         cx.notify()
-                    })),
-                );
-            actions = actions.child(
+                    }
+                })),
+            );
+            let actions = actions.child(
                 self.button(
                     SharedString::from(format!("delete-{name}")),
                     if confirmed {
@@ -1020,7 +1389,7 @@ impl Surface {
                 )
                 .on_click(cx.listener(move |s, _, _, cx| {
                     if s.confirm.as_ref() == Some(&del) {
-                        match fs::remove_file(&del) {
+                        match history::delete(&s.launch.profile, &del) {
                             Ok(_) => s.status = "Capture deleted".into(),
                             Err(e) => s.status = format!("Couldn’t delete: {e}"),
                         };
@@ -1035,7 +1404,7 @@ impl Surface {
                 &name,
                 &detail,
                 vec![
-                    if is_image_path(&p) {
+                    if is_image_path(&p) || extension == "gif" {
                         div()
                             .h(px(180.))
                             .w_full()
@@ -1044,9 +1413,18 @@ impl Surface {
                             .bg(t.canvas)
                             .child(img(p.clone()).size_full().object_fit(ObjectFit::Contain))
                             .into_any_element()
+                    } else if poster.is_file() {
+                        div()
+                            .h(px(180.))
+                            .w_full()
+                            .overflow_hidden()
+                            .rounded(px(8.))
+                            .bg(t.canvas)
+                            .child(img(poster).size_full().object_fit(ObjectFit::Contain))
+                            .into_any_element()
                     } else {
                         div()
-                            .h(px(80.))
+                            .h(px(180.))
                             .w_full()
                             .rounded(px(8.))
                             .bg(t.canvas)
@@ -1062,14 +1440,15 @@ impl Surface {
             ))
         }
         let mut filters = div().flex().gap_2();
-        for filter in ["all", "screenshots", "recordings"] {
+        for filter in ["all", "screenshot", "video", "gif"] {
             filters = filters.child(
                 self.button(
                     SharedString::from(format!("history-filter-{filter}")),
                     match filter {
                         "all" => "All",
-                        "screenshots" => "Screenshots",
-                        _ => "Recordings",
+                        "screenshot" => "Screenshots",
+                        "video" => "Video",
+                        _ => "GIF",
                     },
                     self.history_filter == filter,
                     t,
@@ -1104,32 +1483,314 @@ impl Surface {
                             .on_click(cx.listener(|s, _, _, cx| s.nav(Page::Preferences, cx))),
                     ),
             )
+            .child(div().text_size(px(11.)).text_color(t.subtle).child("ON THIS DEVICE"))
+            .child(div().text_color(t.muted).child("Screenshots, videos, GIFs, and interrupted recordings you can recover all appear here for 30 days."))
             .child(filters)
-            .child(div().text_color(t.muted).child(
-                "Dismiss only hides an item for this window. Delete always asks for confirmation.",
-            ))
+            .children(self.recording_drafts(cx, t))
             .child(list)
             .child(self.status.clone())
     }
-    fn feedback(&mut self, cx: &mut Context<Self>, t: Theme) -> Div {
-        div().flex().size_full().child(self.sidebar(Page::Feedback,cx,t)).child(div().flex_1().p_8().flex().flex_col().gap_4().child("Send feedback").text_size(px(16.)).child(div().text_size(px(13.)).text_color(t.muted).child("Nothing is sent automatically. Press Send feedback to contact captur.es explicitly.")).child(self.message.clone()).child(self.contact.clone()).child(self.button("send",if self.feedback_busy{"Sending feedback…"}else{"Send feedback"},false,t).on_click(cx.listener(|s,_,_,cx|{if s.feedback_busy{return}s.feedback_busy=true;let message=s.message.read(cx).value();let contact=s.contact.read(cx).value();if message.trim().is_empty(){s.feedback_busy=false;s.status="Please enter a short description of the issue or idea.".into();cx.notify();return}let endpoint=std::env::var("CAPTURES_FEEDBACK_URL").unwrap_or_else(|_|captures_feedback::DEFAULT_FEEDBACK_URL.into());let task=cx.background_executor().spawn(async move{captures_feedback::FeedbackClient::new(&endpoint).and_then(|c|c.submit(captures_feedback::FeedbackDraft{message,contact:Some(contact),category:"other".into()},captures_feedback::FeedbackContext{app_version:env!("CARGO_PKG_VERSION").into(),os:std::env::consts::OS.into(),os_version:"unknown".into(),arch:std::env::consts::ARCH.into()}))});cx.spawn(async move|this,cx|{let result=task.await;let _=this.update(cx,|s,cx|{s.feedback_busy=false;s.status=match result{Ok(_)=>"Feedback sent. Thank you.".into(),Err(e)=>e};cx.notify()});}).detach();s.status="Sending feedback…".into();cx.notify()}))).child(div().text_color(if self.status.starts_with("Feedback sent"){t.positive}else{t.muted}).child(self.status.clone())))
+
+    fn recording_drafts(&self, cx: &mut Context<Self>, t: Theme) -> Vec<AnyElement> {
+        let store =
+            captures_recording::DraftStore::new(self.launch.profile.join("recording-drafts"));
+        let Ok(drafts) = store.list() else {
+            return vec![];
+        };
+        if drafts.is_empty() {
+            return vec![];
+        }
+        let mut rows = div().flex().flex_col().gap_3();
+        for draft in drafts {
+            let id = draft.session_id.clone();
+            let discard = id.clone();
+            let segment_count = draft
+                .segments
+                .iter()
+                .filter(|segment| segment.complete)
+                .count();
+            let copy = div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(div().font_weight(FontWeight::MEDIUM).child(
+                    if draft.options.kind == captures_recording::RecordingKind::Gif {
+                        "Interrupted GIF recording"
+                    } else {
+                        "Interrupted video recording"
+                    },
+                ))
+                .child(div().text_size(px(12.)).text_color(t.subtle).child(format!(
+                    "{segment_count} playable segment{} · recover in the recording editor",
+                    if segment_count == 1 { "" } else { "s" }
+                )));
+            let actions = div()
+                .flex()
+                .gap_2()
+                .child(
+                    self.button(
+                        SharedString::from(format!("recover-{id}")),
+                        "Recover",
+                        true,
+                        t,
+                    )
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        let mut launch = s.launch.clone();
+                        launch.path = Some(s.launch.profile.join("recording-drafts").join(&id));
+                        if let Err(e) = crate::open_view("recording-editor", launch, cx) {
+                            s.status = format!("Couldn’t recover recording: {e:#}");
+                            cx.notify()
+                        }
+                    })),
+                )
+                .child(
+                    self.button(
+                        SharedString::from(format!("discard-{discard}")),
+                        "Discard",
+                        false,
+                        t,
+                    )
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        let store = captures_recording::DraftStore::new(
+                            s.launch.profile.join("recording-drafts"),
+                        );
+                        s.status = match store.remove(&discard) {
+                            Ok(_) => "Interrupted recording discarded.".into(),
+                            Err(e) => format!("Couldn’t discard recording: {e}"),
+                        };
+                        cx.notify()
+                    })),
+                );
+            rows = rows.child(
+                div()
+                    .p_4()
+                    .rounded(px(10.))
+                    .border_1()
+                    .border_color(t.border)
+                    .bg(t.raised)
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(copy)
+                    .child(actions),
+            );
+        }
+        vec![self.card("Recording recovery","These recordings stopped before Captures could finish saving them. Recover one to add its playable segments to Capture History, or discard it.",vec![rows.into_any_element()],t).into_any_element()]
+    }
+    fn feedback(&mut self, cx: &mut Context<Self>, t: Theme) -> Stateful<Div> {
+        let mut categories = div().grid().grid_cols(3).gap_3();
+        for (id, label, description) in [
+            ("bug", "Bug", "Something is broken or unexpected"),
+            ("idea", "Idea", "A feature or improvement"),
+            ("other", "Other", "Anything else"),
+        ] {
+            categories = categories.child(
+                div()
+                    .id(SharedString::from(format!("feedback-{id}")))
+                    .min_h(px(62.))
+                    .p_3()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(if self.feedback_category == id {
+                        t.accent
+                    } else {
+                        t.border
+                    })
+                    .bg(if self.feedback_category == id {
+                        t.hover
+                    } else {
+                        t.raised
+                    })
+                    .cursor_pointer()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().font_weight(FontWeight::MEDIUM).child(label))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(t.subtle)
+                            .child(description),
+                    )
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        s.feedback_category = id;
+                        let placeholder = match id {
+                            "bug" => "What happened? What did you expect?",
+                            "idea" => "What's the idea? What problem would it solve?",
+                            _ => "What would you like us to know?",
+                        };
+                        s.message
+                            .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
+                        cx.notify();
+                    })),
+            );
+        }
+        let submit = self
+            .button(
+                "send",
+                if self.feedback_busy {
+                    "Sending…"
+                } else {
+                    "Send feedback"
+                },
+                true,
+                t,
+            )
+            .on_click(cx.listener(|s, _, _, cx| {
+                if s.feedback_busy {
+                    return;
+                }
+                let message = s.message.read(cx).value();
+                let contact = s.contact.read(cx).value();
+                if message.trim().is_empty() {
+                    s.status = "Please enter a message.".into();
+                    cx.notify();
+                    return;
+                }
+                s.feedback_busy = true;
+                let category = s.feedback_category.to_owned();
+                let endpoint = std::env::var("CAPTURES_FEEDBACK_URL")
+                    .unwrap_or_else(|_| captures_feedback::DEFAULT_FEEDBACK_URL.into());
+                let task = cx.background_executor().spawn(async move {
+                    captures_feedback::FeedbackClient::new(&endpoint).and_then(|c| {
+                        c.submit(
+                            captures_feedback::FeedbackDraft {
+                                message: message.trim().into(),
+                                contact: (!contact.trim().is_empty())
+                                    .then(|| contact.trim().into()),
+                                category,
+                            },
+                            captures_feedback::FeedbackContext {
+                                app_version: env!("CARGO_PKG_VERSION").into(),
+                                os: std::env::consts::OS.into(),
+                                os_version: "unknown".into(),
+                                arch: std::env::consts::ARCH.into(),
+                            },
+                        )
+                    })
+                });
+                cx.spawn(async move |this, cx| {
+                    let result = task.await;
+                    let _ = this.update(cx, |s, cx| {
+                        s.feedback_busy = false;
+                        s.status = match result {
+                            Ok(_) => "Thanks — feedback sent.".into(),
+                            Err(e) => e,
+                        };
+                        cx.notify()
+                    });
+                })
+                .detach();
+                s.status = "Sending…".into();
+                cx.notify()
+            }));
+        div().id("feedback-scroll").size_full().overflow_y_scroll().bg(t.canvas).child(div().max_w(px(640.)).mx_auto().p_8().flex().flex_col().gap_5()
+            .child(div().text_size(px(11.)).text_color(t.subtle).child("CAPTURES"))
+            .child(div().text_size(px(28.)).font_weight(FontWeight::BOLD).child("Send feedback"))
+            .child(div().text_color(t.subtle).line_height(px(19.)).child("Tell us what broke, what is missing, or what you wish worked better. Captures sends what you type here plus the app and system details listed below."))
+            .child(self.card("Category","Choose the closest match.",vec![categories.into_any_element(),div().flex().flex_col().gap_2().child("Message").child(div().h(px(150.)).child(self.message.clone())).into_any_element(),div().flex().flex_col().gap_2().child("Contact  ·  OPTIONAL").child(self.contact.clone()).child(div().text_size(px(11.)).text_color(t.subtle).child("Optional — we may use this if we need to ask a follow-up question.")).into_any_element()],t))
+            .child(self.card("Included automatically","",vec![self.row("App version",env!("CARGO_PKG_VERSION"),t).into_any_element(),self.row("System",&format!("{} · {}",std::env::consts::OS,std::env::consts::ARCH),t).into_any_element()],t))
+            .child(div().flex().items_center().justify_between().child(div().text_color(if self.status.starts_with("Thanks"){t.positive}else{t.signal}).child(self.status.clone())).child(submit)))
     }
     fn onboarding(&mut self, cx: &mut Context<Self>, t: Theme) -> Div {
-        div().size_full().p_10().flex().flex_col().justify_center().items_center().gap_5().bg(t.canvas).child(div().text_size(px(30.)).font_weight(FontWeight::BOLD).child("Capture what matters")).child(div().max_w(px(520.)).text_color(t.muted).child("Captures keeps screenshots and recordings close at hand. Choose a target, capture it, then refine it in the editor.")).child(self.card("Before your first capture","Screen-recording and microphone permissions are managed by your operating system. This experiment can’t request or verify them yet; no permission is shown as granted here.",vec![],t)).child(self.button("finish","Continue to Preferences",true,t).on_click(cx.listener(|s,_,_,cx|{s.settings.onboarding_completed=true;s.persist(cx);s.nav(Page::Preferences,cx)})))
+        let screen_ready = captures_capture::XcapBackend
+            .ensure_permission(false)
+            .is_ok();
+        let platform = std::env::consts::OS;
+        let description = match platform {
+            "macos" => {
+                "This allows Captures to read the pixels you choose to capture. macOS keeps everything else hidden."
+            }
+            "windows" => {
+                "Windows provides screen capture access without a separate permission prompt. Secure and protected windows remain private."
+            }
+            _ => {
+                "Your desktop may show its own screen-sharing picker when a capture starts. There is nothing to approve ahead of time."
+            }
+        };
+        let permission_action = if screen_ready {
+            self.button("screen-ready", "✓  Ready", false, t)
+        } else {
+            self.button(
+                "screen-permission",
+                if cfg!(target_os = "macos") {
+                    "Allow access"
+                } else {
+                    "Check again"
+                },
+                false,
+                t,
+            )
+            .on_click(cx.listener(|s, _, _, cx| {
+                s.status = match captures_capture::XcapBackend.ensure_permission(true) {
+                    Ok(_) => "Screen capture access is ready.".into(),
+                    Err(e) => format!("Screen access still needs approval: {e}"),
+                };
+                cx.notify()
+            }))
+        };
+        let permission = div()
+            .p_5()
+            .grid()
+            .grid_cols(3)
+            .gap_4()
+            .items_start()
+            .child(div().text_size(px(20.)).child("▣"))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Screen capture"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .line_height(px(17.))
+                            .text_color(t.subtle)
+                            .child(description),
+                    ),
+            )
+            .child(permission_action);
+        let permissions = div()
+            .rounded(px(14.))
+            .border_1()
+            .border_color(t.border)
+            .bg(t.raised)
+            .child(permission);
+        #[cfg(target_os = "macos")]
+        let permissions = {
+            let mic_ready = captures_recording_macos::microphone_authorized();
+            permissions.child(div().border_t_1().border_color(t.border).p_5().grid().grid_cols(3).gap_4().child("♩").child(div().child("Microphone  ·  Optional").child(div().text_size(px(12.)).text_color(t.subtle).child("Allow it now so a recording does not pause to ask, or wait until you pick a mic."))).child(self.button("mic-permission",if mic_ready{"✓  Granted"}else{"Allow microphone"},false,t).on_click(cx.listener(|s,_,_,cx|{if !captures_recording_macos::microphone_authorized(){captures_recording_macos::request_microphone_access();}s.status="Microphone permission status refreshed.".into();cx.notify()}))))
+        };
+        let stage = div().max_w(px(620.)).h_full().mx_auto().p_8().flex().flex_col().justify_center().gap_6()
+            .child(div().size(px(40.)).rounded(px(10.)).bg(t.accent).flex().items_center().justify_center().text_size(px(22.)).child("⌖"))
+            .child(div().text_size(px(11.)).text_color(t.subtle).child("WELCOME TO CAPTURES"))
+            .child(div().text_size(px(28.)).font_weight(FontWeight::BOLD).child(if cfg!(target_os="macos"){"Required permissions"}else{"You’re ready to capture"}))
+            .child(div().text_color(t.subtle).line_height(px(19.)).child("Captures only reads the pixels you choose to capture. Nothing is uploaded, and nothing leaves this computer unless you send it somewhere."))
+            .child(permissions).child(div().text_color(t.signal).child(self.status.clone()))
+            .child(div().flex().justify_end().child(self.button("finish","Start capturing",true,t).on_click(cx.listener(|s,_,_,cx|{s.settings.onboarding_completed=true;s.persist(cx);s.nav(Page::Preferences,cx)}))));
+        div().size_full().bg(t.canvas).child(stage)
     }
 }
 impl Render for Surface {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = Theme::configured(
-            self.launch.light,
-            &self.settings.theme,
-            &self.settings.custom_theme.accent,
-            &self.settings.custom_theme.signal,
-        );
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = Theme::from_settings(&self.settings, &self.launch, window);
         div()
             .key_context("Preferences")
             .track_focus(&self.focus)
             .capture_key_down(cx.listener(Self::capture_keys))
+            .on_key_up(cx.listener(|s, _, _, cx| {
+                if std::mem::take(&mut s.shortcut_release_pending) {
+                    // Register only after release, otherwise the OS steals the
+                    // key-up event and leaves shortcut recording suppressed.
+                    s.persist(cx);
+                    crate::integration::set_shortcut_capture(false, cx);
+                }
+            }))
             .on_action(cx.listener(Self::open_find))
             .on_action(cx.listener(Self::close_find))
             .font_family(font())
@@ -1169,5 +1830,22 @@ mod tests {
         };
         assert!(block_changes_after_load_error(&mut settings, true));
         assert_eq!(settings.theme, Settings::default().theme);
+    }
+
+    #[test]
+    fn custom_colors_require_exact_rgb_hex_and_normalize_case() {
+        assert_eq!(normalize_hex(" ab12ef ").as_deref(), Some("#AB12EF"));
+        assert_eq!(normalize_hex("#32D3FF").as_deref(), Some("#32D3FF"));
+        assert_eq!(normalize_hex("#12345"), None);
+        assert_eq!(normalize_hex("#12zz45"), None);
+    }
+
+    #[test]
+    fn find_index_covers_every_shipping_preferences_section() {
+        let targets = preference_search_targets();
+        assert_eq!(targets.len(), 7);
+        assert!(targets[1].contains("countdown"));
+        assert!(targets[3].contains("microphone"));
+        assert!(targets[6].contains("feedback"));
     }
 }

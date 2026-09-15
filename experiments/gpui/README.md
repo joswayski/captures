@@ -8,8 +8,9 @@ Do not use the resource measurements to justify replacing Tauri yet.
 This standalone Cargo workspace pins GPUI 0.2.2. It uses the existing capture,
 session, recording, image, media, and feedback crates. The portable document,
 draft, and encoder modules come from `experiments/windows-native`; **none of that
-experiment's Win32 UI is used**. Shipping application code, downloads, release
-automation, and Tauri settings are unchanged.
+experiment's Win32 UI is used**. Text rendering and audio-edit filter logic are
+shared with the existing Rust crates. Shipping downloads, release automation,
+and Tauri settings are unchanged.
 
 ## Run
 
@@ -25,6 +26,7 @@ cargo run --release --manifest-path experiments/gpui/Cargo.toml -- --view prefer
 cargo run --release --manifest-path experiments/gpui/Cargo.toml -- --view screenshot-editor --open /path/to/image.png
 cargo run --release --manifest-path experiments/gpui/Cargo.toml -- --view recording-editor --open /path/to/video.mp4
 cargo run --release --manifest-path experiments/gpui/Cargo.toml -- --view thumbnail --open /path/to/image.png --mock
+cargo run --release --manifest-path experiments/gpui/Cargo.toml -- --view background --profile /path/to/experiment-profile
 ```
 
 `--profile DIR` overrides the isolated experiment directory. `CAPTURES_GPUI_DATA`
@@ -37,9 +39,11 @@ only removes the card. Mock preview deletion never deletes the fixture.
 `--mock` enables explicitly synthetic screenshot/preview fixtures and disables
 capture actions; it is not a fallback when real capture fails. `--capture`
 opens the real selector. Real capture still uses the shared fail-closed desktop
-session checks. Closing recording controls stops the native segment, but recovery
-of those segment files is not yet exposed in the UI. Quit the terminal process
-when finished; there is no tray lifecycle integration.
+session checks. Tray and global shortcuts remain available after the last visible
+window closes. Closing/hiding recording controls keeps recording; New Capture
+restores them. Use the tray's Quit action or the app's platform quit shortcut.
+Launch-at-login uses a profile-specific `Captures GPUI <hash>` registration and
+does not change the shipping app's startup registration.
 
 ## Parity inventory
 
@@ -50,15 +54,15 @@ components, `shared/design.css`, `shared/themes.css`, and
 
 | Area | Implemented | Still missing or different |
 | --- | --- | --- |
-| Preferences | Semantic light/dark colors, preset/custom theme parsing, persisted settings, folder picker, Ctrl+F card filtering | Live system appearance/accent propagation across windows; custom color fields; shipping search navigation/highlights and Cmd+F; real select menus; some settings have no consumers |
-| Screenshot editor | Source loading, pen/rectangle/ellipse/arrow gestures with preview, text input with embedded system font, move, crop, undo/redo, layer visibility/lock/duplicate/order/opacity/blend/rotation/delete, flatten/trim, draft persistence, PNG/JPEG/WebP export | Shipping layout/icons; transform handles/pan/canvas resizing; multi-image import, full text styling, clipboard, export settings/destination UI; rendering and autosave still block the UI thread |
-| Screenshot capture | Region/window/display targets, scaled crop, visible region outline, fullscreen selector minimized before capture, session gate | Freeze-frame, cursor and format preference wiring, screenshot countdown, automatic copy/preview/output-folder behavior, exact overlay/menu and selection rendering; selector exclusion unverified outside X11/Openbox |
-| Recording | Shared OS recorder, countdown, separate segments for pause/resume, finalization/assembly, continuous session gate, connected controls window | Shipping HUD and capture exclusion; restart/mic mute/device selection, shortcuts/tray; segment recovery and retention policy; controls may appear in captured media |
-| Recording editor | FFmpeg frame decoding, play/pause/seek, bounded latest-frame storage, generation-fenced seek, trim handles, MP4/GIF export, cancellation/progress | Audio preview, shipping timeline/frame strip/waveforms, crop/resize controls, track edits, full export presets/WebM UI, draft recovery |
-| Mini previews | Image cards, stack expansion/collapse, real image-fragment dissolve, edit/save/dismiss/delete | Exact chrome/geometry, blur/compositing equivalence, all corners, drag-and-drop/clipboard, rejection shake, reduced-motion support, video cards |
-| History | Read profile captures, image previews, type filters, open appropriate editor, confirmed file deletion | Shipping grid/metadata, durable dismissal, retention, recording draft recovery, thumbnails for video |
+| Preferences | Live appearance/accent settings, custom colors, selects, shortcut recording and conflict rollback, microphone picker, search/navigation, persisted settings | Complete keyboard/accessibility parity and native permission flows remain unverified |
+| Screenshot editor | Drawing tools, transform handles, pan/zoom, canvas resize, multi-image import, layers and blend/opacity/rotation, clipboard, undo/redo, drafts, PNG/JPEG/WebP export, real encoded before/after comparison, text wrapping/alignment/plates/outlines/shadows | Exact inspector/chrome and layer thumbnails; bold/italic use synthetic raster treatments, not native font variants; CPU raster work can block interaction on large documents |
+| Screenshot capture | Region/window/display targets, frozen/live frames, scaled crops, cursor/format/countdown settings, auto-start, copy/save/preview routing, session gate | Exact selector/menu rendering and in-place cross-monitor transitions; mixed-DPI acceptance; capture exclusion outside tested X11 regions |
+| Recording | Native recording, pause/resume segments, countdown/restart cancellation, stop/delete, mic controls, session clock, screenshot during recording, hide/restore, 430×102 bottom-center HUD, passive region guide | Crash recovery; full-display controls exclusion on Linux; exact pulse/compositor equivalence; native macOS/Windows acceptance |
+| Recording editor | Cancellable background preparation, video/audio preview, filmstrip/waveforms, trim/crop/resize, track edits, export settings/progress/cancellation | Exact timeline/interaction equivalence, hardware audio acceptance and recovery of interrupted native sessions |
+| Mini previews | Four-corner stacks, mixed images/GIF/video posters, real image-fragment dissolve, rejection shake, reduced motion, edit/copy/save/dismiss/delete, native X11 file drag | macOS/Windows outbound drag is implemented but unverified; Wayland outbound drag unavailable; hovered animated GIF uses a blurred first frame; exact compositor/blur/frame-pacing parity |
+| History | Durable chronological index, type filters, image/video previews, retention, confirmed file deletion, correct editor routing | Durable linkage of permanent exports to history; native recording crash recovery; exact grid/metadata parity |
 | Feedback/onboarding | Text input, explicit feedback submission through shared client, persistence | Shipping multi-step onboarding, real permission actions/status, feedback categories/complete UX |
-| Other surfaces/OS integration | CLI view dispatch; unimplemented views fail explicitly | Tray/global shortcuts/autostart/updater/package/file-association integration; launch/update/saved/hidden notices and region indicator |
+| Native integration/notices | Tray, shortcuts, zero-window keepalive, profile-isolated startup, launch notice, recording-ready/save/error and controls-hidden notices | Linux global shortcuts require X11; Linux launch notice has no tray anchor; updater/package/file-association integration and a GPUI release channel are not implemented |
 
 The dissolve's grid, radial delays, cubic easing, and poses follow
 `thumbnailExit.ts`, with numeric tests derived independently from that TypeScript.
@@ -84,11 +88,15 @@ persistence and malformed input, and preserving the source when saving onto
 itself/a hard link. Missing FFmpeg fails the playback test rather than silently
 skipping it.
 
-All commands above passed in the evaluation orb (20 standalone tests; the root
+All commands above passed in the evaluation orb (74 standalone tests; the root
 desktop suite contains 830 tests). The root release-version tests required
 per-command `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign
 GIT_CONFIG_VALUE_0=false`: they create temporary commits, and the orb has no
 signing key. No global Git configuration was changed.
+
+The GPUI PR workflow runs this standalone workspace's tests, clippy, formatting,
+and release build on native macOS, Windows, and Linux runners. It publishes no
+release and is not a substitute for interactive native rendering checks.
 
 Executed UI checks, not just code inspection:
 
@@ -102,15 +110,25 @@ Executed UI checks, not just code inspection:
   620 × 320. The HUD was outside that region; this does **not** verify capture
   exclusion for whole-display recording.
 - Video fixture playback, paused seek, trim and export: a 3.02–8.42s selection
-  exported a 5.436s H.264/AAC file (frame/container rounding). Audio preview is
-  unavailable even though audio survives export.
+  exported a 5.436s H.264/AAC file (frame/container rounding). Audio-preview
+  filtering is implemented; the orb has no physical audio device for listening.
+- Real recording HUD/guide stacking, Hide → configured New Capture shortcut →
+  restore → Stop → editor. Escape during restart ended the session; a subsequent
+  New Capture opened a new selector rather than restoring a stopped controller.
+- Screenshot text outline, rounded plate/shadow, scrollable shadow inspector,
+  and actual encoded compression comparison with byte estimates.
+- Native X11 preview drag into a GTK file-drop receiver, Escape cancellation,
+  clipboard file transfer, and source preservation. Recording-ready Save wrote
+  a distinct MP4; save errors remained actionable instead of auto-dismissing.
 
 Runtime verification is on Linux x64 in an orb, Xvfb + Openbox, software graphics.
 GPUI 0.2.2 initially presented blank windows until a real resize in this setup;
-the X11 startup path nudges width by one pixel and restores it. That workaround
-needs validation on normal desktop drivers. Adding xcompmgr in the tested lab
+the opt-in `CAPTURES_GPUI_X11_RESIZE_WORKAROUND=1` shrinks then restores the native
+window. It is off on normal desktops. Adding xcompmgr in the tested lab
 produced blank clients, so transparent wallpaper composition is **not verified**.
-Neither macOS nor Windows was built or run here; Wayland, Retina/HiDPI, mixed-DPI
+Windows cross-checking stopped before project code because MinGW GCC was absent;
+macOS cross-checking stopped before project code because the Apple SDK/compiler
+was absent. Neither OS was run here. Wayland, Retina/HiDPI, mixed-DPI
 multi-monitor behavior, accessibility, and native permissions remain unverified.
 The presence of platform-specific recorder code does not prove those platforms
 work. There is no new stable or Preview release.
@@ -147,17 +165,19 @@ Mesa 25.0.7 llvmpipe/LLVM 15 software graphics. Both apps displayed an inspected
 
 | Metric | GPUI incomplete port | Existing Tauri app |
 | --- | ---: | ---: |
-| Proportional resident memory (PSS) | 115.47 MiB | 541.78 MiB |
-| Private resident memory | 114.27 MiB | 396.00 MiB |
-| Summed process RSS (double-counts shared pages) | 120.14 MiB | 1131.34 MiB |
+| Proportional resident memory (PSS) | 149.53 MiB | 543.79 MiB |
+| Private resident memory | 146.91 MiB | 398.23 MiB |
+| Summed process RSS (double-counts shared pages) | 158.89 MiB | 1131.00 MiB |
 | Process count | 1 | 6 |
-| Idle CPU, percentage of one core | 0.40% | 0.60% |
+| Idle CPU, percentage of one core | 1.40% | 0.40% |
 
 Raw samples and executable/screenshot hashes:
 [GPUI](results/linux-gpui-preferences.json),
 [Tauri](results/linux-tauri-preferences.json).
-The [dissolve CPU microbenchmark](results/linux-effects.json) measured 0.0951ms
-median and 0.7376ms p95 across 765 samples, excluding texture upload/presentation.
+The [dissolve CPU microbenchmark](results/linux-effects.json) measured 0.0891ms
+median and 0.6472ms p95 across 765 samples, excluding texture upload/presentation.
+These refreshed samples include the GPUI native integration; they supersede the
+earlier 115 MiB result. Memory was lower, but idle CPU was higher in this run.
 
 The Tauri reference is the source at
 [`d4d2016`](https://github.com/joswayski/captures/commit/d4d2016d29ea1f882d6b98fc9656d02d5638fbb0),
@@ -173,8 +193,9 @@ unavailable proxy and the orb had no audio devices. GPUI used its separate
 `--profile`. No production account, captures, or settings were used. These
 measurements do not characterize normal hardware GPU memory or CPU overhead.
 
-A whole Tauri process has tray/shortcut/update services and pre-created webviews;
-this GPUI app does not. Even with identical window sizes these workloads are not
-feature-equivalent. A useful migration decision still needs matched workflows
+A whole Tauri process has tray/shortcut/update services and pre-created webviews.
+GPUI now has tray/shortcut/startup services and a hidden native keepalive, but no
+updater or pre-created webviews. Identical window sizes still do not make these
+workloads feature-equivalent. A useful migration decision needs matched workflows
 after parity, repeated launches, actual Mac/Windows GPU measurements, animation
 frame pacing, and capture/encoding tests on those machines.

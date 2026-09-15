@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 pub mod editor;
 pub mod effects;
+pub mod integration;
+pub mod notices;
 pub mod preferences;
 pub mod previews;
 pub mod recording;
@@ -86,9 +88,16 @@ pub fn open_view(view: &str, mut launch: Launch, cx: &mut App) -> anyhow::Result
         .map(AnyWindowHandle::window_id)
         .collect::<Vec<_>>();
     match view {
+        "background" => Ok(()),
         "preferences" | "history" | "feedback" | "onboarding" => preferences::open(launch, cx),
         "screenshot-editor" | "viewer" => editor::open(launch, cx),
-        "thumbnail" => previews::open(launch, cx),
+        "thumbnail" => previews::push(launch, cx),
+        "startup"
+        | "launch-notice"
+        | "recording-ready"
+        | "recording-saved"
+        | "recording-save-error"
+        | "recording-controls-hidden" => notices::open_fixture(launch, cx),
         "overlay"
         | "recording-selector"
         | "recording-hud"
@@ -109,21 +118,31 @@ pub fn open_view(view: &str, mut launch: Launch, cx: &mut App) -> anyhow::Result
 pub fn present_window(handle: AnyWindowHandle, cx: &mut App) -> anyhow::Result<()> {
     handle.update(cx, |_, window, _| {
         window.activate_window();
-        window.refresh();
     })?;
+    refresh_window(handle, cx)
+}
+
+/// Refresh passive surfaces without stealing keyboard focus from the desktop.
+pub fn refresh_window(handle: AnyWindowHandle, cx: &mut App) -> anyhow::Result<()> {
+    handle.update(cx, |_, window, _| window.refresh())?;
     #[cfg(target_os = "linux")]
-    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+    if std::env::var_os("WAYLAND_DISPLAY").is_none()
+        && std::env::var_os("CAPTURES_GPUI_X11_RESIZE_WORKAROUND").is_some()
+    {
         // GPUI 0.2.2 + Xvfb presents a blank initial surface until a
-        // real ConfigureNotify resize. Restore the requested size after
-        // one nudge; refresh alone does not initialize this renderer.
+        // real ConfigureNotify resize. Opt in only in that software-rendered
+        // lab. Shrink first: a fullscreen window cannot grow past the screen.
         cx.spawn(async move |cx| {
-            Timer::after(std::time::Duration::from_millis(200)).await;
+            Timer::after(std::time::Duration::from_millis(500)).await;
             if let Ok(original) = handle.update(cx, |_, window, _| {
                 let original = window.viewport_size();
-                window.resize(size(original.width + px(1.), original.height));
+                window.resize(size(
+                    (original.width - px(20.)).max(px(1.)),
+                    (original.height - px(20.)).max(px(1.)),
+                ));
                 original
             }) {
-                Timer::after(std::time::Duration::from_millis(50)).await;
+                Timer::after(std::time::Duration::from_millis(100)).await;
                 let _ = handle.update(cx, |_, window, _| window.resize(original));
             }
         })
@@ -139,10 +158,35 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
     let launch = Launch::parse()?;
+    if !launch.mock
+        && let Err(error) = preferences::history::prune_capture_history(&launch.profile)
+    {
+        eprintln!("Could not prune Capture History: {error:#}");
+    }
     Application::new().run(move |cx| {
-        if let Err(error) = open_view(&launch.view.clone(), launch, cx) {
+        let settings = preferences::settings::load(&launch.profile).ok();
+        if let Some(settings) = settings.clone() {
+            cx.set_global(theme::CurrentSettings(settings));
+        }
+        if let Err(error) = integration::install(launch.clone(), cx) {
+            eprintln!("Could not initialize native integration: {error:#}");
+            cx.defer(move |cx| integration::show_native_error(error, cx));
+        }
+        if let Err(error) = open_view(&launch.view.clone(), launch.clone(), cx) {
             eprintln!("Could not open Captures GPUI: {error:#}");
             cx.quit();
+        }
+        if launch.view == "background"
+            && !launch.mock
+            && settings
+                .as_ref()
+                .is_some_and(|settings| settings.onboarding_completed)
+        {
+            let shortcut = settings
+                .as_ref()
+                .map(|settings| notices::shortcut_tokens(&settings.new_capture_shortcut))
+                .unwrap_or_default();
+            notices::schedule_launch(shortcut, launch.clone(), cx);
         }
         cx.activate(true);
     });

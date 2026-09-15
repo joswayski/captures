@@ -1,12 +1,12 @@
-//! Single-line editor adapted from GPUI 0.2.2's Apache-2.0 `examples/input.rs`.
+//! Text editor adapted from GPUI 0.2.2's Apache-2.0 `examples/input.rs`.
 use std::ops::Range;
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine,
-    SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div, fill, hsla,
-    point, prelude::*, px, relative, rgba, size,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Style,
+    TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine, actions, div, fill,
+    hsla, point, prelude::*, px, relative, rgba, size,
 };
 
 actions!(
@@ -21,6 +21,9 @@ actions!(
         SelectAll,
         Home,
         End,
+        Up,
+        Down,
+        Enter,
         ShowCharacterPalette,
         Paste,
         Cut,
@@ -35,9 +38,12 @@ pub struct TextInput {
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
-    last_layout: Option<ShapedLine>,
+    last_layout: Vec<LaidOutLine>,
     last_bounds: Option<Bounds<Pixels>>,
+    scroll_y: Pixels,
     is_selecting: bool,
+    multiline: bool,
+    max_len: Option<usize>,
 }
 
 impl TextInput {
@@ -55,10 +61,30 @@ impl TextInput {
             selected_range: end..end,
             selection_reversed: false,
             marked_range: None,
-            last_layout: None,
+            last_layout: Vec::new(),
             last_bounds: None,
+            scroll_y: Pixels::ZERO,
             is_selecting: false,
+            multiline: false,
+            max_len: None,
         }
+    }
+
+    /// Configures this editor for paragraph input without changing the public
+    /// constructor/API used by the screenshot and recording editors.
+    pub fn multiline(mut self, max_len: usize) -> Self {
+        self.multiline = true;
+        self.max_len = Some(max_len);
+        self
+    }
+
+    pub fn set_placeholder(
+        &mut self,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        self.placeholder = placeholder.into();
+        cx.notify();
     }
 
     pub fn value(&self) -> String {
@@ -102,6 +128,30 @@ impl TextInput {
         self.move_to(self.content.len(), cx);
     }
 
+    fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
+        if self.multiline {
+            self.move_vertically(-1, cx);
+        } else {
+            cx.propagate();
+        }
+    }
+
+    fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
+        if self.multiline {
+            self.move_vertically(1, cx);
+        } else {
+            cx.propagate();
+        }
+    }
+
+    fn enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
+        if self.multiline {
+            self.replace_text_in_range(None, "\n", window, cx);
+        } else {
+            cx.propagate();
+        }
+    }
+
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected_range.is_empty() {
             self.select_to(self.previous_boundary(self.cursor_offset()), cx)
@@ -119,10 +169,11 @@ impl TextInput {
     fn on_mouse_down(
         &mut self,
         event: &MouseDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.is_selecting = true;
+        window.focus(&self.focus_handle);
 
         if event.modifiers.shift {
             self.select_to(self.index_for_mouse_position(event.position), cx);
@@ -152,7 +203,12 @@ impl TextInput {
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.replace_text_in_range(None, &text.replace("\n", " "), window, cx);
+            let text = if self.multiline {
+                text
+            } else {
+                text.replace('\n', " ")
+            };
+            self.replace_text_in_range(None, &text, window, cx);
         }
     }
 
@@ -174,6 +230,7 @@ impl TextInput {
 
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.selected_range = offset..offset;
+        self.selection_reversed = false;
         cx.notify()
     }
 
@@ -190,8 +247,7 @@ impl TextInput {
             return 0;
         }
 
-        let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref())
-        else {
+        let Some(bounds) = self.last_bounds.as_ref() else {
             return 0;
         };
         if position.y < bounds.top() {
@@ -200,7 +256,20 @@ impl TextInput {
         if position.y > bounds.bottom() {
             return self.content.len();
         }
-        line.closest_index_for_x(position.x - bounds.left())
+        let local = position - bounds.origin;
+        let line = self
+            .last_layout
+            .iter()
+            .find(|line| local.y < line.y + line.height)
+            .or(self.last_layout.last());
+        line.map(|line| {
+            line.start
+                + line
+                    .layout
+                    .closest_index_for_position(point(local.x, local.y - line.y), line.line_height)
+                    .unwrap_or_else(|index| index)
+        })
+        .unwrap_or(0)
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
@@ -217,33 +286,11 @@ impl TextInput {
     }
 
     fn offset_from_utf16(&self, offset: usize) -> usize {
-        let mut utf8_offset = 0;
-        let mut utf16_count = 0;
-
-        for ch in self.content.chars() {
-            if utf16_count >= offset {
-                break;
-            }
-            utf16_count += ch.len_utf16();
-            utf8_offset += ch.len_utf8();
-        }
-
-        utf8_offset
+        utf16_to_byte(&self.content, offset)
     }
 
     fn offset_to_utf16(&self, offset: usize) -> usize {
-        let mut utf16_offset = 0;
-        let mut utf8_count = 0;
-
-        for ch in self.content.chars() {
-            if utf8_count >= offset {
-                break;
-            }
-            utf8_count += ch.len_utf8();
-            utf16_offset += ch.len_utf16();
-        }
-
-        utf16_offset
+        byte_to_utf16(&self.content, offset)
     }
 
     fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
@@ -268,6 +315,84 @@ impl TextInput {
             .find_map(|(idx, _)| (idx > offset).then_some(idx))
             .unwrap_or(self.content.len())
     }
+
+    fn move_vertically(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let cursor = self.cursor_offset();
+        let Some((line_index, position)) = self.position_for_offset(cursor) else {
+            return;
+        };
+        let current = &self.last_layout[line_index];
+        let target_y = position.y + current.line_height * delta as f32;
+        let line = self
+            .last_layout
+            .iter()
+            .find(|line| target_y >= line.y && target_y < line.y + line.height)
+            .unwrap_or(if delta < 0 {
+                &self.last_layout[0]
+            } else {
+                self.last_layout.last().unwrap()
+            });
+        let local_y = (target_y - line.y).clamp(Pixels::ZERO, line.height - px(1.));
+        let index = line
+            .layout
+            .closest_index_for_position(point(position.x, local_y), line.line_height)
+            .unwrap_or_else(|index| index);
+        self.move_to(line.start + index, cx);
+    }
+
+    fn position_for_offset(&self, offset: usize) -> Option<(usize, Point<Pixels>)> {
+        let (index, line) =
+            self.last_layout.iter().enumerate().find(|(_, line)| {
+                offset >= line.start && offset <= line.start + line.layout.len()
+            })?;
+        line.layout
+            .position_for_index(offset - line.start, line.line_height)
+            .map(|position| (index, position + point(Pixels::ZERO, line.y)))
+    }
+}
+
+fn utf16_to_byte(text: &str, offset: usize) -> usize {
+    text.char_indices()
+        .find_map(|(byte, ch)| {
+            (text[..byte].encode_utf16().count() + ch.len_utf16() > offset).then_some(byte)
+        })
+        .unwrap_or(text.len())
+}
+
+fn byte_to_utf16(text: &str, offset: usize) -> usize {
+    text[..offset.min(text.len())]
+        .chars()
+        .map(char::len_utf16)
+        .sum()
+}
+
+fn truncate_to_byte_limit(text: &str, limit: usize) -> &str {
+    let end = text
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain([text.len()])
+        .take_while(|index| *index <= limit)
+        .last()
+        .unwrap_or(0);
+    &text[..end]
+}
+
+#[derive(Clone)]
+struct LaidOutLine {
+    layout: WrappedLine,
+    start: usize,
+    y: Pixels,
+    height: Pixels,
+    line_height: Pixels,
+}
+
+fn position_in_lines(lines: &[LaidOutLine], offset: usize) -> Option<Point<Pixels>> {
+    let line = lines
+        .iter()
+        .find(|line| offset >= line.start && offset <= line.start + line.layout.len())?;
+    line.layout
+        .position_for_index(offset - line.start, line.line_height)
+        .map(|position| position + point(Pixels::ZERO, line.y))
 }
 
 impl EntityInputHandler for TextInput {
@@ -322,6 +447,17 @@ impl EntityInputHandler for TextInput {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
 
+        let new_text = if self.multiline {
+            new_text.to_owned()
+        } else {
+            new_text.replace('\n', " ")
+        };
+        let available = self
+            .max_len
+            .map(|limit| limit.saturating_sub(self.content.len() - (range.end - range.start)));
+        let new_text = available
+            .map(|available| truncate_to_byte_limit(&new_text, available))
+            .unwrap_or(&new_text);
         self.content =
             (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
                 .into();
@@ -344,6 +480,17 @@ impl EntityInputHandler for TextInput {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
 
+        let new_text = if self.multiline {
+            new_text.to_owned()
+        } else {
+            new_text.replace('\n', " ")
+        };
+        let available = self
+            .max_len
+            .map(|limit| limit.saturating_sub(self.content.len() - (range.end - range.start)));
+        let new_text = available
+            .map(|available| truncate_to_byte_limit(&new_text, available))
+            .unwrap_or(&new_text);
         self.content =
             (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
                 .into();
@@ -354,8 +501,10 @@ impl EntityInputHandler for TextInput {
         }
         self.selected_range = new_selected_range_utf16
             .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .map(|new_range| new_range.start + range.start..new_range.end + range.end)
+            .map(|relative| {
+                range.start + utf16_to_byte(new_text, relative.start)
+                    ..range.start + utf16_to_byte(new_text, relative.end)
+            })
             .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
 
         cx.notify();
@@ -365,20 +514,15 @@ impl EntityInputHandler for TextInput {
         &mut self,
         range_utf16: Range<usize>,
         bounds: Bounds<Pixels>,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        let last_layout = self.last_layout.as_ref()?;
         let range = self.range_from_utf16(&range_utf16);
+        let (_, start) = self.position_for_offset(range.start)?;
+        let (_, end) = self.position_for_offset(range.end)?;
         Some(Bounds::from_corners(
-            point(
-                bounds.left() + last_layout.x_for_index(range.start),
-                bounds.top(),
-            ),
-            point(
-                bounds.left() + last_layout.x_for_index(range.end),
-                bounds.bottom(),
-            ),
+            bounds.origin + start,
+            bounds.origin + end + point(px(1.), window.line_height()),
         ))
     }
 
@@ -388,11 +532,7 @@ impl EntityInputHandler for TextInput {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
-        let line_point = self.last_bounds?.localize(&point)?;
-        let last_layout = self.last_layout.as_ref()?;
-
-        assert_eq!(last_layout.text, self.content);
-        let utf8_index = last_layout.index_for_x(point.x - line_point.x)?;
+        let utf8_index = self.index_for_mouse_position(point);
         Some(self.offset_to_utf16(utf8_index))
     }
 }
@@ -402,9 +542,9 @@ struct TextElement {
 }
 
 struct PrepaintState {
-    line: Option<ShapedLine>,
+    lines: Vec<LaidOutLine>,
     cursor: Option<PaintQuad>,
-    selection: Option<PaintQuad>,
+    selection: Vec<PaintQuad>,
 }
 
 impl IntoElement for TextElement {
@@ -436,7 +576,11 @@ impl Element for TextElement {
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        style.size.height = window.line_height().into();
+        style.size.height = if self.input.read(cx).multiline {
+            px(92.).into()
+        } else {
+            window.line_height().into()
+        };
         (window.request_layout(style, [], cx), ())
     }
 
@@ -497,42 +641,118 @@ impl Element for TextElement {
         };
 
         let font_size = style.font_size.to_pixels(window.rem_size());
-        let line = window
+        let shaped = window
             .text_system()
-            .shape_line(display_text, font_size, &runs, None);
+            .shape_text(
+                display_text,
+                font_size,
+                &runs,
+                input.multiline.then_some(bounds.size.width),
+                None,
+            )
+            .unwrap_or_default();
+        let line_height = window.line_height();
+        let mut y = -input.scroll_y;
+        let mut start = 0;
+        let mut lines: Vec<_> = shaped
+            .into_iter()
+            .map(|layout| {
+                let height = layout.size(line_height).height;
+                let line = LaidOutLine {
+                    start,
+                    y,
+                    height,
+                    line_height,
+                    layout,
+                };
+                start += line.layout.text.len() + 1;
+                y += height;
+                line
+            })
+            .collect();
 
-        let cursor_pos = line.x_for_index(cursor);
+        let cursor_position = position_in_lines(&lines, cursor);
+        let shift = cursor_position.map_or(Pixels::ZERO, |p| {
+            if p.y < Pixels::ZERO {
+                p.y
+            } else if p.y + line_height > bounds.size.height {
+                p.y + line_height - bounds.size.height
+            } else {
+                Pixels::ZERO
+            }
+        });
+        let scroll_y = (input.scroll_y + shift).max(Pixels::ZERO);
+        for line in &mut lines {
+            line.y -= shift;
+        }
+        self.input.update(cx, |input, _| input.scroll_y = scroll_y);
+        let cursor_position = cursor_position.map(|p| p - point(Pixels::ZERO, shift));
         let (selection, cursor) = if selected_range.is_empty() {
             (
-                None,
-                Some(fill(
-                    Bounds::new(
-                        point(bounds.left() + cursor_pos, bounds.top()),
-                        size(px(2.), bounds.bottom() - bounds.top()),
-                    ),
-                    gpui::blue(),
-                )),
+                Vec::new(),
+                cursor_position.map(|position| {
+                    fill(
+                        Bounds::new(bounds.origin + position, size(px(2.), line_height)),
+                        gpui::blue(),
+                    )
+                }),
             )
         } else {
-            (
-                Some(fill(
-                    Bounds::from_corners(
-                        point(
-                            bounds.left() + line.x_for_index(selected_range.start),
-                            bounds.top(),
+            let mut quads = Vec::new();
+            for line in &lines {
+                let local_start = selected_range
+                    .start
+                    .saturating_sub(line.start)
+                    .min(line.layout.len());
+                let local_end = selected_range
+                    .end
+                    .saturating_sub(line.start)
+                    .min(line.layout.len());
+                if local_start >= local_end {
+                    continue;
+                }
+                let first_row = line
+                    .layout
+                    .position_for_index(local_start, line_height)
+                    .unwrap_or_default()
+                    .y;
+                let last_row = line
+                    .layout
+                    .position_for_index(local_end, line_height)
+                    .unwrap_or_default()
+                    .y;
+                let mut row = first_row;
+                while row <= last_row {
+                    let row_start = if row == first_row {
+                        line.layout
+                            .position_for_index(local_start, line_height)
+                            .unwrap_or_default()
+                            .x
+                    } else {
+                        Pixels::ZERO
+                    };
+                    let row_end = if row == last_row {
+                        line.layout
+                            .position_for_index(local_end, line_height)
+                            .unwrap_or_default()
+                            .x
+                    } else {
+                        bounds.size.width
+                    };
+                    quads.push(fill(
+                        Bounds::new(
+                            bounds.origin + point(row_start, line.y + row),
+                            size((row_end - row_start).max(px(1.)), line_height),
                         ),
-                        point(
-                            bounds.left() + line.x_for_index(selected_range.end),
-                            bounds.bottom(),
-                        ),
-                    ),
-                    rgba(0x3311ff30),
-                )),
-                None,
-            )
+                        rgba(0x3311ff30),
+                    ));
+                    row += line_height;
+                }
+            }
+            (quads, None)
         };
         PrepaintState {
-            line: Some(line),
+            lines,
             cursor,
             selection,
         }
@@ -554,12 +774,21 @@ impl Element for TextElement {
             ElementInputHandler::new(bounds, self.input.clone()),
             cx,
         );
-        if let Some(selection) = prepaint.selection.take() {
+        for selection in prepaint.selection.drain(..) {
             window.paint_quad(selection)
         }
-        let line = prepaint.line.take().unwrap();
-        line.paint(bounds.origin, window.line_height(), window, cx)
-            .unwrap();
+        for line in &prepaint.lines {
+            line.layout
+                .paint(
+                    bounds.origin + point(Pixels::ZERO, line.y),
+                    line.line_height,
+                    TextAlign::Left,
+                    Some(bounds),
+                    window,
+                    cx,
+                )
+                .unwrap();
+        }
 
         if focus_handle.is_focused(window)
             && let Some(cursor) = prepaint.cursor.take()
@@ -568,7 +797,7 @@ impl Element for TextElement {
         }
 
         self.input.update(cx, |input, _cx| {
-            input.last_layout = Some(line);
+            input.last_layout = std::mem::take(&mut prepaint.lines);
             input.last_bounds = Some(bounds);
         });
     }
@@ -590,6 +819,9 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::home))
             .on_action(cx.listener(Self::end))
+            .on_action(cx.listener(Self::up))
+            .on_action(cx.listener(Self::down))
+            .on_action(cx.listener(Self::enter))
             .on_action(cx.listener(Self::show_character_palette))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::cut))
@@ -607,7 +839,7 @@ impl Render for TextInput {
             .text_size(px(13.))
             .child(
                 div()
-                    .h(px(30.))
+                    .h(if self.multiline { px(100.) } else { px(30.) })
                     .w_full()
                     .p(px(4.))
                     .child(TextElement { input: cx.entity() }),
@@ -631,6 +863,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-right", SelectRight, Some("TextInput")),
         KeyBinding::new("home", Home, Some("TextInput")),
         KeyBinding::new("end", End, Some("TextInput")),
+        KeyBinding::new("up", Up, Some("TextInput")),
+        KeyBinding::new("down", Down, Some("TextInput")),
+        KeyBinding::new("enter", Enter, Some("TextInput")),
     ]);
     let modifier = if cfg!(target_os = "macos") {
         "cmd"
@@ -643,4 +878,28 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(&format!("{modifier}-c"), Copy, Some("TextInput")),
         KeyBinding::new(&format!("{modifier}-x"), Cut, Some("TextInput")),
     ]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{byte_to_utf16, truncate_to_byte_limit, utf16_to_byte};
+
+    #[test]
+    fn converts_between_utf8_and_utf16_boundaries() {
+        let text = "a😀é";
+        assert_eq!(utf16_to_byte(text, 0), 0);
+        assert_eq!(utf16_to_byte(text, 1), 1);
+        // A UTF-16 offset inside a surrogate pair snaps to its character start.
+        assert_eq!(utf16_to_byte(text, 2), 1);
+        assert_eq!(utf16_to_byte(text, 3), 5);
+        assert_eq!(byte_to_utf16(text, 5), 3);
+        assert_eq!(byte_to_utf16(text, text.len()), 4);
+    }
+
+    #[test]
+    fn truncation_never_splits_utf8() {
+        assert_eq!(truncate_to_byte_limit("a😀b", 4), "a");
+        assert_eq!(truncate_to_byte_limit("a😀b", 5), "a😀");
+        assert_eq!(truncate_to_byte_limit("a😀b", 6), "a😀b");
+    }
 }

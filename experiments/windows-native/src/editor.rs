@@ -57,6 +57,7 @@ pub enum Shape {
         value: String,
         font_size: f32,
         font_data: Arc<[u8]>,
+        style: captures_image::TextStyleSettings,
     },
 }
 
@@ -339,6 +340,11 @@ pub fn resize_from_corner(layer: &Layer, corner: usize, pointer: Point) -> Optio
         let scale_x = (destination_dx / source_dx).abs();
         let scale_y = (destination_dy / source_dy).abs();
         *font_size *= scale_x.min(scale_y);
+    }
+    if let Shape::Text { style, .. } = &mut resized.shape
+        && let Some(width) = &mut style.width
+    {
+        *width *= (destination_dx / source_dx).abs();
     }
     Some(resized)
 }
@@ -1521,11 +1527,13 @@ fn to_raster_layer(layer: &Layer) -> captures_image::Layer {
             value,
             font_size,
             font_data,
+            style,
         } => captures_image::Shape::Text {
             origin: to_raster_point(*origin),
             text: value.clone(),
             font_size: *font_size,
             font_data: font_data.clone(),
+            style: style.clone(),
         },
     };
     let apply_opacity = |mut color: [u8; 4]| {

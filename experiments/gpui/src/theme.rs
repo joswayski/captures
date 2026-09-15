@@ -1,5 +1,8 @@
 //! Captures' semantic colors, not a GPUI component library's theme.
-use gpui::{Rgba, rgb, rgba};
+use gpui::{App, Global, Rgba, Window, WindowAppearance, rgb, rgba};
+
+pub struct CurrentSettings(pub crate::preferences::settings::Settings);
+impl Global for CurrentSettings {}
 
 #[derive(Clone, Copy)]
 pub struct Theme {
@@ -23,6 +26,52 @@ pub struct Theme {
 impl Theme {
     pub fn new(light: bool) -> Self {
         Self::configured(light, "mustard", "#32d3ff", "#ff4fc3")
+    }
+
+    /// Floating desktop surfaces keep the dark media palette, but respect the
+    /// configured accent and signal independently of regular-window appearance.
+    pub fn for_media(cx: &App) -> Self {
+        cx.try_global::<CurrentSettings>().map_or_else(
+            || Self::new(false),
+            |settings| {
+                Self::configured(
+                    false,
+                    &settings.0.theme,
+                    &settings.0.custom_theme.accent,
+                    &settings.0.custom_theme.signal,
+                )
+            },
+        )
+    }
+
+    pub fn for_window(launch: &crate::Launch, window: &Window, cx: &App) -> Self {
+        if let Some(settings) = cx.try_global::<CurrentSettings>() {
+            Self::from_settings(&settings.0, launch, window)
+        } else {
+            Self::new(launch.light)
+        }
+    }
+
+    pub fn from_settings(
+        settings: &crate::preferences::settings::Settings,
+        launch: &crate::Launch,
+        window: &Window,
+    ) -> Self {
+        let light = match settings.appearance.as_str() {
+            "light" => true,
+            "dark" => false,
+            _ if launch.mock => launch.light,
+            _ => matches!(
+                window.appearance(),
+                WindowAppearance::Light | WindowAppearance::VibrantLight
+            ),
+        };
+        Self::configured(
+            light,
+            &settings.theme,
+            &settings.custom_theme.accent,
+            &settings.custom_theme.signal,
+        )
     }
 
     pub fn configured(light: bool, name: &str, custom_accent: &str, custom_signal: &str) -> Self {
@@ -59,6 +108,61 @@ impl Theme {
             glass_border: rgba(0xffffff1c),
         }
     }
+}
+
+/// Read on the foreground thread so live OS animation preferences are honored.
+/// The environment override is useful for repeatable visual fixtures.
+pub fn reduced_motion() -> bool {
+    if let Some(value) = std::env::var_os("CAPTURES_REDUCED_MOTION") {
+        return !matches!(value.to_str(), Some("0" | "false"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::GtkSettingsExt;
+        gtk::is_initialized_main_thread()
+            && gtk::Settings::default().is_some_and(|settings| !settings.is_gtk_enable_animations())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW,
+        };
+        let mut enabled = 1_u32;
+        unsafe {
+            SystemParametersInfoW(
+                SPI_GETCLIENTAREAANIMATION,
+                0,
+                (&mut enabled as *mut u32).cast(),
+                0,
+            ) != 0
+                && enabled == 0
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
+    }
+}
+
+/// The shared --ease-out token: cubic-bezier(0.16, 1, 0.3, 1).
+pub fn ease_out(progress: f32) -> f32 {
+    if progress <= 0. {
+        return 0.;
+    }
+    if progress >= 1. {
+        return 1.;
+    }
+    let (mut lo, mut hi) = (0., 1.);
+    for _ in 0..22 {
+        let t = (lo + hi) * 0.5;
+        let x = 3. * (1. - t) * (1. - t) * t * 0.16 + 3. * (1. - t) * t * t * 0.3 + t * t * t;
+        if x < progress {
+            lo = t;
+        } else {
+            hi = t;
+        }
+    }
+    1. - (1. - (lo + hi) * 0.5).powi(3)
 }
 
 fn parse_hex(value: &str) -> Option<u32> {
@@ -98,6 +202,14 @@ pub fn font() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_ease_out_matches_the_parametric_midpoint() {
+        assert_eq!(ease_out(-1.), 0.);
+        assert_eq!(ease_out(1.5), 1.);
+        // At Bezier parameter t=1/2, x=.2975 and y=.875.
+        assert!((ease_out(0.2975) - 0.875).abs() < 0.00001);
+    }
 
     #[test]
     fn configured_theme_uses_shipping_and_valid_custom_colors() {

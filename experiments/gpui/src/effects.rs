@@ -15,7 +15,13 @@ pub struct Particle {
     pub duration: f32,
 }
 
-pub fn particles(width: f32, height: f32, mut random: impl FnMut() -> f32) -> Vec<Particle> {
+pub fn particles_from(
+    width: f32,
+    height: f32,
+    origin_x: f32,
+    origin_y: f32,
+    mut random: impl FnMut() -> f32,
+) -> Vec<Particle> {
     let mut cols = (width / 11.).round().clamp(14., 24.);
     let mut rows = (height / 11.).round().clamp(8., 16.);
     if cols * rows > 220. {
@@ -24,7 +30,7 @@ pub fn particles(width: f32, height: f32, mut random: impl FnMut() -> f32) -> Ve
         rows = (rows * scale).floor().max(6.);
     }
     let (cw, ch) = (width / cols, height / rows);
-    let (ox, oy) = (57.5_f32.min(width * 0.35), 22.5_f32.min(height * 0.3));
+    let (ox, oy) = (origin_x.clamp(0., width), origin_y.clamp(0., height));
     let max_dist = ox.max(width - ox).hypot(oy.max(height - oy)).max(1.);
     let mut result = Vec::new();
     for row in 0..rows as usize {
@@ -56,6 +62,16 @@ pub fn particles(width: f32, height: f32, mut random: impl FnMut() -> f32) -> Ve
         }
     }
     result
+}
+
+pub fn particles(width: f32, height: f32, random: impl FnMut() -> f32) -> Vec<Particle> {
+    particles_from(
+        width,
+        height,
+        57.5_f32.min(width * 0.35),
+        22.5_f32.min(height * 0.3),
+        random,
+    )
 }
 
 fn bezier(x: f32) -> f32 {
@@ -145,6 +161,10 @@ pub struct Dissolve {
 }
 impl Dissolve {
     pub fn new(image: &RgbaImage, seed: u32) -> Self {
+        Self::new_from(image, seed, 57.5, 22.5)
+    }
+
+    pub fn new_from(image: &RgbaImage, seed: u32, origin_x: f32, origin_y: f32) -> Self {
         let source = imageops::resize(
             image,
             ((image.width() as f32
@@ -155,7 +175,7 @@ impl Dissolve {
             .ceil()) as u32,
             imageops::FilterType::Triangle,
         );
-        let mut source = imageops::crop_imm(
+        let source = imageops::crop_imm(
             &source,
             (source.width() - WIDTH) / 2,
             (source.height() - HEIGHT) / 2,
@@ -163,6 +183,15 @@ impl Dissolve {
             HEIGHT,
         )
         .to_image();
+        // Shipping cross-fades from the hovered image into fragments filtered
+        // with blur(2px) brightness(.5). Bake that filter once rather than
+        // blurring every independently moving chip on every frame.
+        let mut source = imageops::blur(&source, 2.);
+        for pixel in source.pixels_mut() {
+            pixel.0[0] = ((u16::from(pixel.0[0]) * 128) / 255) as u8;
+            pixel.0[1] = ((u16::from(pixel.0[1]) * 128) / 255) as u8;
+            pixel.0[2] = ((u16::from(pixel.0[2]) * 128) / 255) as u8;
+        }
         // Keep rounded source corners throughout the flight; no square chips
         // reappear outside the card when fragments separate.
         for (x, y, pixel) in source.enumerate_pixels_mut() {
@@ -173,7 +202,7 @@ impl Dissolve {
             }
         }
         let mut state = seed.max(1);
-        let particles = particles(WIDTH as f32, HEIGHT as f32, || {
+        let particles = particles_from(WIDTH as f32, HEIGHT as f32, origin_x, origin_y, || {
             state ^= state << 13;
             state ^= state >> 17;
             state ^= state << 5;
@@ -238,7 +267,7 @@ mod tests {
         let source = RgbaImage::from_fn(320, 190, |x, y| Rgba([x as u8, y as u8, 17, 255]));
         let effect = Dissolve::new(&source, 83);
         let first = effect.frame(0.);
-        assert_eq!(first.get_pixel(PAD + 100, PAD + 80)[2], 17);
+        assert!(first.get_pixel(PAD + 100, PAD + 80)[2] <= 9);
         assert_eq!(first.get_pixel(PAD, PAD)[3], 0);
         let flying = effect.frame(600.);
         assert!(
@@ -263,5 +292,16 @@ mod tests {
         assert!(chips.iter().all(|p| p.dy == -65. && p.rotate == 0.));
         assert!(chips[0].delay < chips.last().unwrap().delay);
         assert_eq!(pose(&chips[0], chips[0].delay), [1., 0., 0., 0., 1.]);
+    }
+
+    #[test]
+    fn mirrored_delete_control_mirrors_the_asymmetric_wave() {
+        let left = particles_from(284., 160., 22.5, 22.5, || 0.5);
+        let right = particles_from(284., 160., 261.5, 22.5, || 0.5);
+        assert!(left[0].delay < right[0].delay);
+        assert!(left.last().unwrap().delay > right.last().unwrap().delay);
+        // The 220-chip cap resolves this card to 18 columns. Compare mirrored
+        // cells, not two cells on the same side of the card.
+        assert!((left[0].dx + right[17].dx).abs() < 0.001);
     }
 }

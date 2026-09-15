@@ -1,6 +1,6 @@
 {
-  "recorded_at": "2026-09-15T08:42:43.311850+00:00",
-  "state": "GPUI 0.2.2 release; light Preferences 880x660 client; isolated profile; idle; Xvfb/Openbox without compositor; Mesa llvmpipe25.0.7; incomplete frontend",
+  "recorded_at": "2026-09-15T18:02:18.552716+00:00",
+  "state": "GPUI 0.2.2 optimized release, integrated tray/shortcuts/keepalive; actual light Preferences 880x660 client; Appearance; isolated profile; warm idle; Xvfb/Openbox/Mesa software rendering; not full parity",
   "sampling": "Repeated intervals in one warm process, not independent launches",
   "environment": {
     "kernel": "6.1.158+",
@@ -8,41 +8,41 @@
     "logical_cpus": 2,
     "display": ":100"
   },
-  "executable_sha256": "7c1aa4fd30095566851f44c1e49fb24f40bb026f967234528781d8f7cf3d0809",
-  "executable_bytes": 39099464,
-  "screenshot_sha256": "d310357bc68bfa38b3a8263f0b0669d67ca05d02a6528a2127b9abec382680cf",
+  "executable_sha256": "2918be1574330b26c152f14da41c251f228329eee8c24ab23e3f0662c388d543",
+  "executable_bytes": 41573320,
+  "screenshot_sha256": "bbdcd7b74bdebd1e5e4f67be5d1bd30eaa33a484b6aa07d6068e3688f97f8df3",
   "samples": [
     {
-      "rss_mib": 120.140625,
-      "pss_mib": 115.4658203125,
-      "private_mib": 114.26953125,
+      "rss_mib": 158.89453125,
+      "pss_mib": 149.53125,
+      "private_mib": 146.9140625,
       "processes": 1,
-      "cpu_percent_one_core": 0.59998374068068,
-      "interval_seconds": 5.0001354979995085
+      "cpu_percent_one_core": 1.3999517187444985,
+      "interval_seconds": 5.000172439002199
     },
     {
-      "rss_mib": 120.140625,
-      "pss_mib": 115.4658203125,
-      "private_mib": 114.26953125,
+      "rss_mib": 158.89453125,
+      "pss_mib": 149.53125,
+      "private_mib": 146.9140625,
       "processes": 1,
-      "cpu_percent_one_core": 0.3999910351608921,
-      "interval_seconds": 5.000112063000415
+      "cpu_percent_one_core": 1.5999580299012794,
+      "interval_seconds": 5.000131159999
     },
     {
-      "rss_mib": 120.140625,
-      "pss_mib": 115.4658203125,
-      "private_mib": 114.26953125,
+      "rss_mib": 158.89453125,
+      "pss_mib": 149.53125,
+      "private_mib": 146.9140625,
       "processes": 1,
-      "cpu_percent_one_core": 0.19999256695627277,
-      "interval_seconds": 5.000185832999705
+      "cpu_percent_one_core": 1.3999629443814308,
+      "interval_seconds": 5.000132344997837
     }
   ],
   "median": {
-    "rss_mib": 120.140625,
-    "pss_mib": 115.4658203125,
-    "private_mib": 114.26953125,
+    "rss_mib": 158.89453125,
+    "pss_mib": 149.53125,
+    "private_mib": 146.9140625,
     "processes": 1,
-    "cpu_percent_one_core": 0.3999910351608921,
-    "interval_seconds": 5.0001354979995085
+    "cpu_percent_one_core": 1.3999629443814308,
+    "interval_seconds": 5.000132344997837
   }
 }

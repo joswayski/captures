@@ -9,13 +9,17 @@ publish = false
 
 [dependencies]
 anyhow = "1"
+auto-launch = "0.5"
 env_logger = "0.11"
 font-kit = { version = "0.14", features = ["source-fontconfig-dlopen"] }
+global-hotkey = "0.8"
 gpui = "=0.2.2"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "tiff"] }
+raw-window-handle = "0.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
+tray-icon = "0.24"
 uuid = { version = "1", features = ["v4"] }
 captures-capture = { path = "../../crates/captures-capture" }
 captures-image = { path = "../../crates/captures-image" }
@@ -26,8 +30,19 @@ captures-session = { path = "../../crates/captures-session" }
 captures-feedback = { path = "../../crates/captures-feedback" }
 captures-windows-native = { path = "../windows-native" }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+x11rb = { version = "0.13", features = ["shape"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+drag = "=2.1.1"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 captures-recording-macos = { path = "../../crates/captures-recording-macos" }
+core-graphics = "0.24"
+drag = "=2.1.1"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSCursor", "NSImage", "NSWorkspace", "NSAccessibility", "NSView", "NSWindow"] }
 
 [profile.dev]
 debug = 0

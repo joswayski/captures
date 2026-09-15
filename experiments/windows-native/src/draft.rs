@@ -176,7 +176,39 @@ enum ShapeData {
         value: String,
         font_size: f32,
         font_asset: String,
+        #[serde(default)]
+        bold: bool,
+        #[serde(default)]
+        italic: bool,
+        #[serde(default)]
+        align: TextAlignData,
+        #[serde(default)]
+        width: Option<f32>,
+        #[serde(default)]
+        background: Option<[u8; 4]>,
+        #[serde(default)]
+        rounded_background: bool,
+        #[serde(default)]
+        outlined: bool,
+        #[serde(default)]
+        shadow: Option<TextShadowData>,
     },
+}
+
+#[derive(Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TextAlignData {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct TextShadowData {
+    color: [u8; 4],
+    blur: f32,
+    offset: Point,
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
@@ -404,11 +436,31 @@ impl LayerData {
                 value,
                 font_size,
                 font_data,
+                style,
             } => ShapeData::Text {
                 origin: *origin,
                 value: value.clone(),
                 font_size: *font_size,
                 font_asset: assets.font(&format!("layer-{}", layer.id), font_data)?,
+                bold: style.bold,
+                italic: style.italic,
+                align: match style.align {
+                    captures_image::TextAlign::Left => TextAlignData::Left,
+                    captures_image::TextAlign::Center => TextAlignData::Center,
+                    captures_image::TextAlign::Right => TextAlignData::Right,
+                },
+                width: style.width,
+                background: style.background,
+                rounded_background: style.rounded_background,
+                outlined: style.outlined,
+                shadow: style.shadow.as_ref().map(|shadow| TextShadowData {
+                    color: shadow.color,
+                    blur: shadow.blur,
+                    offset: Point {
+                        x: shadow.offset.x,
+                        y: shadow.offset.y,
+                    },
+                }),
             },
         };
         let original_pixels_asset = layer
@@ -456,6 +508,14 @@ impl LayerData {
                 value,
                 font_size,
                 font_asset,
+                bold,
+                italic,
+                align,
+                width,
+                background,
+                rounded_background,
+                outlined,
+                shadow,
             } => Shape::Text {
                 origin,
                 value,
@@ -463,6 +523,27 @@ impl LayerData {
                 font_data: fs::read(asset_path(assets, &font_asset)?)
                     .map_err(|e| e.to_string())?
                     .into(),
+                style: captures_image::TextStyleSettings {
+                    bold,
+                    italic,
+                    align: match align {
+                        TextAlignData::Left => captures_image::TextAlign::Left,
+                        TextAlignData::Center => captures_image::TextAlign::Center,
+                        TextAlignData::Right => captures_image::TextAlign::Right,
+                    },
+                    width,
+                    background,
+                    rounded_background,
+                    outlined,
+                    shadow: shadow.map(|shadow| captures_image::TextShadow {
+                        color: shadow.color,
+                        blur: shadow.blur,
+                        offset: captures_image::Point {
+                            x: shadow.offset.x,
+                            y: shadow.offset.y,
+                        },
+                    }),
+                },
             },
         };
         Ok(Layer {
@@ -736,6 +817,64 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn styled_text_roundtrips_and_old_text_defaults_remain_compatible() {
+        let profile = tempfile::tempdir().unwrap();
+        let identity = DraftIdentity::new_capture();
+        let store = DraftStore::new(profile.path());
+        let mut document = Document::new(RgbaImage::from_pixel(32, 24, Rgba([0, 0, 0, 0])));
+        document.add(
+            Shape::Text {
+                origin: Point { x: 2.0, y: 3.0 },
+                value: "styled".into(),
+                font_size: 14.0,
+                font_data: Arc::from(vec![1, 2, 3]),
+                style: captures_image::TextStyleSettings {
+                    bold: true,
+                    italic: true,
+                    align: captures_image::TextAlign::Right,
+                    width: Some(120.0),
+                    background: Some([4, 5, 6, 220]),
+                    rounded_background: true,
+                    outlined: true,
+                    shadow: Some(captures_image::TextShadow {
+                        color: [1, 2, 3, 100],
+                        blur: 7.0,
+                        offset: captures_image::Point { x: 3.0, y: 5.0 },
+                    }),
+                },
+            },
+            [255, 255, 255, 255],
+            0.0,
+        );
+        store.save(&identity, None, &document).unwrap();
+        let loaded = store.load(&identity, None).unwrap().unwrap();
+        assert_eq!(loaded.layers[0].shape, document.layers[0].shape);
+
+        let manifest_path = store.root.join(identity.key()).join(CURRENT).join(MANIFEST);
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        let shape = &mut manifest["document"]["layers"][0]["shape"];
+        for key in [
+            "bold",
+            "italic",
+            "align",
+            "width",
+            "background",
+            "rounded_background",
+            "outlined",
+            "shadow",
+        ] {
+            shape.as_object_mut().unwrap().remove(key);
+        }
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let old = store.load(&identity, None).unwrap().unwrap();
+        let Shape::Text { style, .. } = &old.layers[0].shape else {
+            panic!("text")
+        };
+        assert_eq!(style, &captures_image::TextStyleSettings::default());
+    }
     use image::Rgba;
 
     fn asymmetric_source() -> RgbaImage {
@@ -919,6 +1058,7 @@ mod tests {
                 value: "later failing asset".into(),
                 font_size: 12.0,
                 font_data: Arc::from(vec![0x5a; 2_048]),
+                style: captures_image::TextStyleSettings::default(),
             },
             [255, 255, 255, 255],
             1.0,

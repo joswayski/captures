@@ -8,7 +8,7 @@ use captures_media::{AudioEdit, CropRect, EditSpec, ExportFormat, ExportSpec, Qu
 use captures_recording::{
     AudioOptions, GifOptions, MaxResolution, RecordingKind, RecordingOptions, RecordingTarget,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActionMode {
@@ -110,6 +110,50 @@ impl Rect {
     pub fn valid(self) -> bool {
         self.width >= 2. && self.height >= 2.
     }
+
+    pub fn handles(self) -> [(f32, f32); 8] {
+        let (x, y, r, b) = (self.x, self.y, self.x + self.width, self.y + self.height);
+        [
+            (x, y),
+            ((x + r) / 2., y),
+            (r, y),
+            (r, (y + b) / 2.),
+            (r, b),
+            ((x + r) / 2., b),
+            (x, b),
+            (x, (y + b) / 2.),
+        ]
+    }
+
+    pub fn adjusted(self, handle: usize, delta: (f32, f32), bounds: (f32, f32)) -> Self {
+        if handle == 8 {
+            return Self {
+                x: (self.x + delta.0).clamp(0., (bounds.0 - self.width).max(0.)),
+                y: (self.y + delta.1).clamp(0., (bounds.1 - self.height).max(0.)),
+                ..self
+            };
+        }
+        let (mut x, mut y, mut r, mut b) =
+            (self.x, self.y, self.x + self.width, self.y + self.height);
+        if matches!(handle, 0 | 6 | 7) {
+            x = (x + delta.0).clamp(0., r - 2.);
+        }
+        if matches!(handle, 0..=2) {
+            y = (y + delta.1).clamp(0., b - 2.);
+        }
+        if matches!(handle, 2..=4) {
+            r = (r + delta.0).clamp(x + 2., bounds.0);
+        }
+        if matches!(handle, 4..=6) {
+            b = (b + delta.1).clamp(y + 2., bounds.1);
+        }
+        Self {
+            x,
+            y,
+            width: r - x,
+            height: b - y,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -200,7 +244,7 @@ pub fn timestamped(captures: &Path, extension: &str) -> PathBuf {
     captures.join(format!("Captures_{millis}.{extension}"))
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct EditorState {
     pub duration_ms: u64,
     pub trim_start_ms: u64,
@@ -210,7 +254,15 @@ pub struct EditorState {
     pub output_height: Option<u32>,
     pub format: ExportFormat,
     pub quality: QualityPreset,
-    pub mute_audio: bool,
+    pub max_size_bytes: Option<u64>,
+    pub gif_fps: u16,
+    pub gif_colors: u16,
+    pub system_volume: f32,
+    pub microphone_volume: f32,
+    pub mute_system_audio: bool,
+    pub mute_microphone: bool,
+    pub mono_audio: bool,
+    pub playback_rate: f32,
 }
 impl EditorState {
     pub fn new(duration_ms: u64, format: ExportFormat) -> Self {
@@ -223,7 +275,15 @@ impl EditorState {
             output_height: None,
             format,
             quality: QualityPreset::Preserve,
-            mute_audio: false,
+            max_size_bytes: None,
+            gif_fps: 15,
+            gif_colors: 256,
+            system_volume: 1.0,
+            microphone_volume: 1.0,
+            mute_system_audio: false,
+            mute_microphone: false,
+            mono_audio: false,
+            playback_rate: 1.0,
         }
     }
     pub fn edit(&self, has_audio: bool) -> EditSpec {
@@ -236,7 +296,11 @@ impl EditorState {
             output_width: self.output_width,
             output_height: self.output_height,
             audio: AudioEdit {
-                mute_system_audio: self.mute_audio,
+                system_volume: self.system_volume.clamp(0., 2.),
+                microphone_volume: self.microphone_volume.clamp(0., 2.),
+                mute_system_audio: self.mute_system_audio,
+                mute_microphone: self.mute_microphone,
+                mono_output: self.mono_audio,
                 source_has_system_audio: has_audio,
                 ..Default::default()
             },
@@ -246,10 +310,23 @@ impl EditorState {
         ExportSpec {
             format: self.format,
             quality: self.quality,
-            max_size_bytes: None,
-            frames_per_second: (self.format == ExportFormat::Gif).then_some(15),
-            gif_max_colors: (self.format == ExportFormat::Gif).then_some(256),
+            max_size_bytes: self.max_size_bytes,
+            frames_per_second: (self.format == ExportFormat::Gif).then_some(self.gif_fps),
+            gif_max_colors: (self.format == ExportFormat::Gif).then_some(self.gif_colors),
         }
+    }
+
+    pub fn set_crop(&mut self, crop: Option<CropRect>, source_width: u32, source_height: u32) {
+        self.crop = crop.map(|crop| {
+            let x = crop.x.min(source_width.saturating_sub(2));
+            let y = crop.y.min(source_height.saturating_sub(2));
+            CropRect {
+                x,
+                y,
+                width: crop.width.max(2).min(source_width.saturating_sub(x)),
+                height: crop.height.max(2).min(source_height.saturating_sub(y)),
+            }
+        });
     }
 }
 

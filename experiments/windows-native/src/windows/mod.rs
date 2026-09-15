@@ -3699,6 +3699,7 @@ impl App {
                     value: std::mem::take(&mut self.editor_text),
                     font_size: 32.0,
                     font_data: bytes.into(),
+                    style: Default::default(),
                 },
                 self.state.editor_color,
                 1.0,
