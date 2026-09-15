@@ -2,6 +2,7 @@ use crate::{
     editor::{Document, RemoveBackgroundMode, Tool},
     geometry::{Point, Rect, SelectionDrag},
     history::Artifact,
+    preview_motion::{Atlas, MEDIA_HEIGHT, MEDIA_WIDTH, Particle, particles},
 };
 use captures_capture::{CaptureMode, DisplayDescriptor, DisplayFrame, WindowDescriptor};
 use captures_media::QualityPreset;
@@ -240,6 +241,67 @@ pub struct Preview {
     pub image: RgbaImage,
     pub appeared: Instant,
     pub dismissing: Option<Instant>,
+    pub deletion: Option<PreviewDeletion>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PreviewDeletion {
+    pub started: Instant,
+    /// Only the isolated visual fixture freezes the clock. Real exits use time.
+    pub fixture_elapsed_ms: Option<f64>,
+    pub particles: Vec<Particle>,
+    pub atlas: Atlas,
+}
+
+impl PreviewDeletion {
+    pub fn elapsed_ms(&self, now: Instant) -> f64 {
+        self.fixture_elapsed_ms
+            .unwrap_or_else(|| now.saturating_duration_since(self.started).as_secs_f64() * 1000.0)
+    }
+
+    pub fn finished(&self, now: Instant) -> bool {
+        let elapsed = self.elapsed_ms(now);
+        self.particles
+            .iter()
+            .all(|p| elapsed >= p.delay_ms + p.duration_ms)
+    }
+}
+
+impl Preview {
+    /// Call only after successful deletion; dismissal never changes saved files.
+    pub fn start_deletion(&mut self, now: Instant, reduced_motion: bool) {
+        if self.deletion.is_some() || self.dismissing.is_some() {
+            return;
+        }
+        if reduced_motion {
+            self.dismissing = Some(now);
+            return;
+        }
+        let mut seed = uuid::Uuid::new_v4().as_u128() as u32;
+        // This candidate still has its delete control in the footer. Start the
+        // wave there, rather than pretending its control layout matches React.
+        let particles = particles(
+            MEDIA_WIDTH.into(),
+            MEDIA_HEIGHT.into(),
+            (297.5, 181.0),
+            || {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                f64::from(seed) / 4294967296.0
+            },
+        );
+        let atlas = Atlas::new(
+            &self.image,
+            MEDIA_WIDTH as u32,
+            MEDIA_HEIGHT as u32,
+            &particles,
+        );
+        self.deletion = Some(PreviewDeletion {
+            started: now,
+            fixture_elapsed_ms: None,
+            particles,
+            atlas,
+        });
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -622,22 +684,30 @@ impl AppState {
                 image,
                 appeared: now,
                 dismissing: None,
+                deletion: None,
             },
         );
         self.previews.truncate(5);
     }
 
-    pub fn tick(&mut self, now: Instant) {
+    pub fn tick(&mut self, now: Instant) -> bool {
+        let count = self.previews.len();
         self.previews.retain(|preview| {
             preview.dismissing.is_none_or(|start| {
                 now.saturating_duration_since(start) < Duration::from_millis(420)
-            })
+            }) && preview
+                .deletion
+                .as_ref()
+                .is_none_or(|deletion| !deletion.finished(now))
         });
+        let mut changed = count != self.previews.len();
         if self.status.as_ref().is_some_and(|(_, start)| {
             now.saturating_duration_since(*start) > Duration::from_secs(4)
         }) {
             self.status = None;
+            changed = true;
         }
+        changed
     }
 
     pub fn hit_window(&self, point: Point) -> Option<usize> {
@@ -658,6 +728,57 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delete_holds_the_card_until_the_last_particle_finishes_and_then_settles() {
+        let now = Instant::now();
+        let mut state = AppState::default();
+        let path = PathBuf::from("test-only.png");
+        state.add_preview(
+            Artifact::from_path(path.clone(), 7, 3),
+            RgbaImage::new(7, 3),
+            now,
+        );
+        assert!(
+            !state.tick(now),
+            "a settled preview must not request repaints"
+        );
+        state.previews[0].start_deletion(now, false);
+        let end_ms = state.previews[0]
+            .deletion
+            .as_ref()
+            .unwrap()
+            .particles
+            .iter()
+            .map(|p| (p.delay_ms + p.duration_ms) as u64)
+            .max()
+            .unwrap();
+        assert!(end_ms > 1000, "the old 420ms removal truncated the wave");
+        assert!(!state.tick(now + Duration::from_millis(end_ms - 1)));
+        assert_eq!(state.previews[0].artifact.path, path);
+        assert!(state.tick(now + Duration::from_millis(end_ms)));
+        assert!(state.previews.is_empty());
+        assert!(!state.tick(now + Duration::from_secs(4)));
+    }
+
+    #[test]
+    fn reduced_motion_allocates_no_particles_and_repeated_dismiss_does_not_restart() {
+        let now = Instant::now();
+        let mut state = AppState::default();
+        state.add_preview(
+            Artifact::from_path(PathBuf::from("test-only.png"), 7, 3),
+            RgbaImage::new(7, 3),
+            now,
+        );
+        state.previews[0].start_deletion(now, true);
+        state.previews[0].start_deletion(now + Duration::from_millis(200), false);
+        assert!(state.previews[0].deletion.is_none());
+        assert_eq!(state.previews[0].dismissing, Some(now));
+        assert!(!state.tick(now + Duration::from_millis(419)));
+        assert!(state.tick(now + Duration::from_millis(420)));
+        assert!(state.previews.is_empty());
+    }
+
     #[test]
     fn recording_cannot_resume_when_fail_closed_session_check_fails() {
         let mut ui = RecordingUi {

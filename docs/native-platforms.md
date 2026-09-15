@@ -477,3 +477,35 @@ viewport, leaving a 5% canvas. Initial Fit now waits for a valid frame allocatio
 and immediately removes its tick callback. No permanent animation loop was added.
 These changes make no new macOS, physical Windows/GPU, FPS, capture-latency or
 whole-app memory claim. Shipping Tauri behavior and root README remain accurate.
+
+### September 15 parity re-evaluation
+
+The Windows regressions are not an unavoidable consequence of native rendering.
+The historical GTK port substituted controls, spacing and editor affordances.
+The current DirectComposition app has a separate hand-authored layout and one
+application HWND whose `Surface` changes between routes; shipping uses multiple
+simultaneous windows. Shared Rust capture/media engines do not carry over React
+interaction state, CSS, native window orchestration, or accessibility semantics.
+This is an architectural parity gap as well as a styling gap.
+
+Source inspection found the Windows preview using 40 tiles over 420 ms instead
+of the shipping fine radial dust wave, with confirmed deletion removing the card
+before the effect could play. It also invalidated unrelated surfaces every 16 ms
+whenever any preview remained. The repair ports the shipping particle/pose math,
+checks it directly against TypeScript, prepares a bounded filtered atlas once,
+retains confirmed-delete visuals to completion, and avoids settled-preview
+repaints. The [Windows notes](../experiments/windows-native/README.md#preview-parity-repair)
+describe the remaining visual/input gaps and precise test scope. This does not
+certify the rest of the app or change the earlier whole-app measurements.
+
+GPUI is another rendering implementation, not a way to reuse the existing CSS.
+Its [element API](https://github.com/zed-industries/zed/blob/main/crates/gpui/README.md)
+uses Rust/Taffy layout, and its public
+[video surface element](https://github.com/zed-industries/zed/blob/main/crates/gpui/src/elements/surface.rs)
+is macOS-only. Custom particles are possible, but browser filters, text/layout,
+multi-window policy, Windows/Linux media presentation and accessibility still
+need implementation and OS verification. Starting another full frontend would
+not by itself fix the parity failures above. Keep Tauri as the distributed
+reference until native satisfies the entire acceptance table, including particles,
+animations, concurrent windows and functional media workflows. Do not promote a
+native replacement on the strength of isolated screenshots or lower idle memory.

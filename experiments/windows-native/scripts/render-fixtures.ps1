@@ -498,6 +498,47 @@ function Save-DraftRestartFixture() {
   Write-Host "draft restart fixture restored editable polygon and preserved source SHA256 $sourceHash"
 }
 
+function Test-PreviewDeleteInput {
+  $presented = Join-Path $profile 'preview-deletion-presented.txt'
+  $finished = Join-Path $profile 'preview-exit-finished.txt'
+  Remove-Item $presented, $finished -Force -ErrorAction SilentlyContinue
+  $arguments = @('--view', 'preview-delete-input', '--fixture-image', ('"{0}"' -f $ImagePath))
+  $process = Start-Process $exe -ArgumentList $arguments -PassThru
+  try {
+    $handle = Wait-FixtureWindow $process 'preview delete'
+    [void][CapturesFixtureNative]::PositionAndValidateWindow($handle)
+    $source = Join-Path $profile 'fixture-captures/delete-input.png'
+    $hash = (Get-FileHash $source -Algorithm SHA256).Hash
+    # Card chrome is offset by the 120-DIP dust padding. Open the actual
+    # confirmation, cancel it, and verify cancellation preserves the file.
+    [CapturesFixtureNative]::ClickLogical($handle, 417, 301)
+    Start-Sleep -Milliseconds 350
+    [CapturesFixtureNative]::ClickLogical($handle, 120, 222)
+    Start-Sleep -Milliseconds 350
+    if (!(Test-Path $source) -or (Get-FileHash $source -Algorithm SHA256).Hash -ne $hash) {
+      throw 'Cancelling preview deletion changed the capture'
+    }
+    [CapturesFixtureNative]::ClickLogical($handle, 417, 301)
+    Start-Sleep -Milliseconds 350
+    [CapturesFixtureNative]::ClickLogical($handle, 360, 222)
+    Wait-FixtureMarker $process $presented 'dust:presented' 'preview delete animation'
+    if (Test-Path $source) { throw 'Confirmed preview deletion did not retire the source' }
+    $history = Get-Content (Join-Path $profile 'history.json') -Raw | ConvertFrom-Json
+    $deleted = @($history | Where-Object { $_.original_path -eq $source })
+    if ($deleted.Count -ne 1 -or (Get-FileHash $deleted[0].path -Algorithm SHA256).Hash -ne $hash) {
+      throw 'Confirmed preview deletion did not retain matching recoverable trash bytes'
+    }
+    Wait-FixtureMarker $process $finished 'empty:hidden' 'preview delete completion'
+    if ([CapturesFixtureNative]::FindWindowForProcess([uint32]$process.Id) -ne [IntPtr]::Zero) {
+      throw 'Completed last-preview deletion left a visible window'
+    }
+    Write-Host 'Preview HWND delete: cancel preserves bytes; confirm presents dust, retains trash, and hides after completion'
+  } finally {
+    if (!$process.HasExited) { Stop-Process -Id $process.Id -Force }
+    if (!$process.WaitForExit(10000)) { throw 'Preview delete fixture did not exit' }
+  }
+}
+
 $previousData = $env:CAPTURES_WINDOWS_NATIVE_DATA
 try {
   # Protect both temporary thread DPI state and the first display-mode side effect.
@@ -510,6 +551,11 @@ try {
     foreach ($view in @("menu", "editor", "editor-image", "editor-shapes", "editor-export", "editor-properties", "editor-line", "editor-merge", "editor-merge-visible", "editor-flatten-source", "editor-eraser", "editor-trim", "recording-selector", "recording-hud", "recording-editor", "preview", "history", "preferences", "preferences-capture", "preferences-recording", "preferences-appearance", "feedback", "delete-confirmation")) {
       Save-View $appearance $view
     }
+    # Freeze the real D2D compositor at representative dust times. These are
+    # visual references, not measured FPS or a substitute for the delete action.
+    foreach ($view in @("preview-dust-start", "preview-dust-wave", "preview-dust-end")) {
+      Save-View $appearance $view
+    }
     Save-View $appearance "editor" "editor-input-smoke" $true
     Save-View $appearance "editor" "editor-eraser-input-smoke" $false $true
     Save-View $appearance "editor-trim" "editor-trim-input-smoke" $false $false $true
@@ -517,6 +563,7 @@ try {
     Save-View $appearance "editor-merge-visible" "editor-source-consumed-input-smoke" $false $false $false $false $true
     Save-View $appearance "editor-flatten-source" "editor-source-only-flatten-smoke" $false $false $false $false $false $true
   }
+  Test-PreviewDeleteInput
   Save-DraftRestartFixture
 } finally {
   $env:CAPTURES_WINDOWS_NATIVE_DATA = $previousData

@@ -17,7 +17,7 @@ From the repository root in Developer PowerShell for VS 2022:
 ./experiments/windows-native/scripts/check.ps1
 ./experiments/windows-native/scripts/build.ps1
 ./experiments/windows-native/scripts/render-fixtures.ps1 -ImagePath <shared-sample.png> -VideoPath <shared-sample.mp4>
-./experiments/windows-native/scripts/benchmark.ps1
+./experiments/windows-native/scripts/benchmark.ps1 -TauriExecutable <captures.exe> -NativeExecutable <captures-windows-native.exe> -EditorInput <shared-sample.png> -DisposableAccount
 ```
 
 `render-fixtures.ps1` launches real custom-rendered app routes and captures them using the Windows
@@ -127,6 +127,66 @@ fixtures are required to assess final pixel-level parity; they cannot be rendere
 
 Preview input uses a combined rounded Win32 window region, with `HTTRANSPARENT` only supplemental;
 cross-process click-through still requires runtime verification on Windows hardware.
+
+### Preview parity repair
+
+The former 40-tile, 420 ms dissolve did not match the shipping radial dust wave,
+and confirmed deletion removed the preview immediately instead of displaying it.
+Successful deletion now retains the image until the last particle finishes.
+Escape only dismisses; Windows reduced motion uses a fade without a particle atlas.
+The motion test executes the actual `thumbnailExit.ts` with Node.js 24 and checks
+every native particle/pose for three asymmetric card/origin configurations.
+The rounded, cover-cropped, blurred/dimmed image atlas is prepared once per delete;
+the D2D frame loop applies only transforms and opacity. The window has transparent
+flight padding and its Win32 region follows the fragments, rather than clipping
+all motion to the original card. Settled previews no longer cause permanent 60 Hz
+repaints, including while a different route is visible. The existing 16 ms worker
+poll remains; this is not a claim of zero idle wakeups.
+
+This is **not full preview or application parity**. Card dimensions, footer
+controls versus hover controls, pile expansion/drag, chrome dissolution, exact
+browser filtering/subpixel sampling, accessibility, and other documented feature
+gaps remain. D2D fixtures freeze the real effect at 0, 650, and 1200 ms; they are
+not FPS measurements. The HWND delete check exercises Cancel, Confirm, retained
+trash bytes, a presented dust frame, and final hiding. Neither replaces physical
+pointer, mixed-DPI, click-through, or high-refresh testing.
+
+For an explicitly limited CPU microbenchmark (no compositor, GPU, bitmap upload,
+window-region work, or whole-app memory measurement):
+
+```sh
+cargo test --release --locked --manifest-path experiments/windows-native/Cargo.toml \
+  benchmark_preview_dust -- --ignored --nocapture
+```
+
+### Matched Windows resource measurements
+
+`benchmark.ps1` now measures actual processes rather than compilation time. Use
+PowerShell 7 in a **fresh disposable Windows account/VM**, with release binaries,
+an identical non-private image, and no concurrent builds or desktop activity.
+It refuses existing shipping profiles/processes, creates disposable settings with
+mini previews disabled in both apps, and retains raw samples plus screenshots.
+Tauri can change screenshot shortcut integration in this disposable account;
+redirecting APPDATA alone does not isolate Windows Known Folders.
+
+One excluded warmup precedes alternating trials for Preferences (980×720) and
+the image editor (1280×760). Whole descendant-process memory/CPU includes WebView
+and FFmpeg children when present. Working-set sums can double-count shared pages;
+private bytes are not Linux PSS or GPU memory. The native run uses actual D2D
+fixture routes, not an installed end-user launch, and the UI workloads remain
+feature-unequal. First visible HWND and `stable_frame_heuristic_ms` are separate;
+**neither is content-ready latency**. Stable errors/empty chrome/wallpaper can
+pass the pixel heuristic. Inspect every capture before interpreting any result.
+Windows must fit the requested client size completely on an existing monitor;
+the benchmark never changes display modes. Failed trials and warmups remain in
+the JSON and make the command fail rather than silently publishing a partial win.
+No Windows whole-app measurements have been collected for this repair.
+
+Run the portable measurement-logic checks with:
+
+```powershell
+pwsh -NoProfile -File experiments/windows-native/scripts/benchmark-core.tests.ps1
+```
 
 ## Hardware verification checklist
 

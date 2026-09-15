@@ -27,6 +27,7 @@ use captures_windows_native::{
         update_selection,
     },
     history::{Artifact, History, move_to_trash, restore_from_trash, safe_delete},
+    preview_motion::{MEDIA_WIDTH, PAD},
     settings::{Settings, data_dir, profile_id},
     state::{
         AppState, EditorExportSize, EditorInputField, EditorQualityMode, PreferencesPage,
@@ -56,8 +57,8 @@ use windows::{
             LPARAM, LRESULT, POINT, RECT, WPARAM,
         },
         Graphics::Gdi::{
-            BeginPaint, CombineRgn, CreateRoundRectRgn, DeleteObject, EndPaint, HGDIOBJ,
-            InvalidateRect, PAINTSTRUCT, RGN_OR, ScreenToClient, SetWindowRgn,
+            BeginPaint, CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, EndPaint,
+            HGDIOBJ, InvalidateRect, PAINTSTRUCT, RGN_OR, ScreenToClient, SetWindowRgn,
         },
         System::{
             Com::{
@@ -297,7 +298,7 @@ pub fn run() -> Result<(), String> {
             settings.validate()?;
         }
         fs::create_dir_all(&settings.output_directory).map_err(|e| e.to_string())?;
-        let history = History::load(&data_dir())?;
+        let mut history = History::load(&data_dir())?;
         let mut state = AppState::default();
         let requested_view = argument_value("--view");
         let draft_fixture_phase = match requested_view.as_deref() {
@@ -328,6 +329,17 @@ pub fn run() -> Result<(), String> {
                 fixture_image,
                 argument_value("--fixture-video").map(PathBuf::from),
             );
+            if view == "preview-delete-input" {
+                settings.output_directory = data_dir().join("fixture-captures");
+                fs::create_dir_all(&settings.output_directory).map_err(|e| e.to_string())?;
+                let preview = &mut state.previews[0];
+                preview.artifact.path = settings.output_directory.join("delete-input.png");
+                preview
+                    .image
+                    .save(&preview.artifact.path)
+                    .map_err(|e| e.to_string())?;
+                history.add(preview.artifact.clone())?;
+            }
         }
         let mut app = Box::new(App {
             hwnd: HWND::default(),
@@ -546,7 +558,7 @@ unsafe extern "system" fn wndproc(
                     }
                 }
                 let had_previews = !app.state.previews.is_empty();
-                app.state.tick(now);
+                let changed = app.state.tick(now);
                 app.tick_recording_editor(now);
                 app.process_media_events();
                 app.process_feedback_events();
@@ -559,8 +571,22 @@ unsafe extern "system" fn wndproc(
                     && app.state.surface == Surface::Preview
                 {
                     let _ = ShowWindow(hwnd, SW_HIDE);
+                    if app.fixture_mode {
+                        let _ =
+                            fs::write(data_dir().join("preview-exit-finished.txt"), "empty:hidden");
+                    }
                 }
-                if app.state.surface == Surface::RecordingHud || !app.state.previews.is_empty() {
+                let animating =
+                    app.state.surface == Surface::Preview
+                        && app.state.previews.iter().any(|preview| {
+                            preview.dismissing.is_some() || preview.deletion.is_some()
+                        });
+                if app.state.surface == Surface::Preview && (changed || animating) {
+                    app.update_preview_region();
+                }
+                // Retained previews must not repaint an unrelated editor or
+                // Preferences at 60Hz; settled cards have no animation work.
+                if changed || app.state.surface == Surface::RecordingHud || animating {
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
                 LRESULT(0)
@@ -662,7 +688,11 @@ impl App {
                 Surface::RecordingSelector => (Surface::RecordingSelector, 460, 450),
                 Surface::RecordingHud => (Surface::RecordingHud, 500, 82),
                 Surface::RecordingEditor => (Surface::RecordingEditor, 1000, 680),
-                Surface::Preview => (Surface::Preview, 340, 200),
+                Surface::Preview => (
+                    Surface::Preview,
+                    (MEDIA_WIDTH + PAD * 2.0) as i32,
+                    200 + PAD as i32 * 2,
+                ),
                 Surface::History => (Surface::History, 720, 430),
                 Surface::Preferences => (Surface::Preferences, 760, 520),
                 Surface::Feedback => (Surface::Feedback, 620, 500),
@@ -706,6 +736,20 @@ impl App {
                     height: self.height as f32 * 96.0 / self.dpi,
                 })
                 .is_ok();
+            if rendered
+                && self.fixture_mode
+                && self.state.surface == Surface::Preview
+                && self
+                    .state
+                    .previews
+                    .iter()
+                    .any(|preview| preview.deletion.is_some())
+            {
+                let _ = fs::write(
+                    data_dir().join("preview-deletion-presented.txt"),
+                    "dust:presented",
+                );
+            }
             if rendered
                 && self.fixture_mode
                 && self.state.surface == Surface::RecordingEditor
@@ -912,7 +956,16 @@ impl App {
                     let _ = InvalidateRect(Some(self.hwnd), None, false);
                 }
                 Surface::Preview => {
-                    if p.y > self.height as f32 * 96.0 / self.dpi - 42.0 {
+                    let p = Point {
+                        x: p.x - PAD,
+                        y: p.y - PAD,
+                    };
+                    if self.state.previews.first().is_none_or(|preview| {
+                        preview.deletion.is_some() || preview.dismissing.is_some()
+                    }) {
+                        return;
+                    }
+                    if p.y > self.height as f32 * 96.0 / self.dpi - PAD * 2.0 - 42.0 {
                         if p.x < 85.0 {
                             if let Some((image, path)) =
                                 self.state.previews.first().map(|preview| {
@@ -3326,7 +3379,10 @@ impl App {
                     self.state.cancel_overlay();
                     self.show_surface(Surface::Menu, 420, 430, false)
                 } else if self.state.surface == Surface::Preview {
-                    if let Some(preview) = self.state.previews.first_mut() {
+                    if let Some(preview) = self.state.previews.first_mut()
+                        && preview.deletion.is_none()
+                        && preview.dismissing.is_none()
+                    {
                         preview.dismissing = Some(Instant::now());
                     }
                 } else if self.state.surface == Surface::RecordingEditor {
@@ -3958,22 +4014,27 @@ impl App {
             let work = work_area();
             let logical_height =
                 200 + self.state.previews.len().saturating_sub(1).min(4) as i32 * 28;
-            let x = work.right - scale(368, self.dpi);
-            let y = work.bottom - scale(logical_height + 28, self.dpi);
-            self.state.surface = Surface::Preview;
+            let x = work.right - scale(368 + PAD as i32, self.dpi);
+            let y = work.bottom - scale(logical_height + 28 + PAD as i32, self.dpi);
+            self.show_surface(
+                Surface::Preview,
+                (MEDIA_WIDTH + PAD * 2.0) as i32,
+                logical_height + PAD as i32 * 2,
+                true,
+            );
             let _ = SetWindowPos(
                 self.hwnd,
                 Some(HWND_TOPMOST),
                 x,
                 y,
-                scale(340, self.dpi),
-                scale(logical_height, self.dpi),
+                scale((MEDIA_WIDTH + PAD * 2.0) as i32, self.dpi),
+                scale(logical_height + PAD as i32 * 2, self.dpi),
                 SWP_SHOWWINDOW | SWP_NOACTIVATE,
             );
             self.update_preview_region();
             let _ = SetWindowDisplayAffinity(
                 self.hwnd,
-                if self.settings.include_mini_previews_in_captures {
+                if self.fixture_mode || self.settings.include_mini_previews_in_captures {
                     WDA_NONE
                 } else {
                     WDA_EXCLUDEFROMCAPTURE
@@ -3986,13 +4047,18 @@ impl App {
     fn preview_contains(&self, point: Point) -> bool {
         let count = self.state.previews.len().min(5);
         (0..count).any(|index| {
-            let y = (count - 1 - index) as f32 * 28.0;
+            if self.state.previews[index].deletion.is_some()
+                || self.state.previews[index].dismissing.is_some()
+            {
+                return false;
+            }
+            let y = PAD + (count - 1 - index) as f32 * 28.0;
             rounded_contains(
                 point,
                 Rect {
-                    x: 0.0,
+                    x: PAD,
                     y,
-                    width: 340.0,
+                    width: MEDIA_WIDTH,
                     height: 200.0,
                 },
                 14.0,
@@ -4002,25 +4068,50 @@ impl App {
 
     unsafe fn update_preview_region(&self) {
         unsafe {
-            let count = self.state.previews.len().clamp(1, 5);
+            let count = self.state.previews.len().min(5);
             let diameter = scale(28, self.dpi);
-            let combined = CreateRoundRectRgn(
-                0,
-                0,
-                scale(340, self.dpi) + 1,
-                scale(200, self.dpi) + 1,
-                diameter,
-                diameter,
-            );
+            let combined = CreateRectRgn(0, 0, 0, 0);
             if combined.is_invalid() {
                 return;
             }
-            for index in 1..count {
-                let y = scale(index as i32 * 28, self.dpi);
+            for (index, preview) in self.state.previews.iter().take(count).enumerate() {
+                let y = PAD + (count - 1 - index) as f32 * 28.0;
+                if let Some(deletion) = &preview.deletion {
+                    let elapsed = deletion.elapsed_ms(Instant::now());
+                    for particle in &deletion.particles {
+                        let pose = particle.visual(elapsed);
+                        if pose.opacity <= 0.0 {
+                            continue;
+                        }
+                        let angle = pose.rotate.to_radians();
+                        let a = deletion.atlas.cell_width as f64 / 2.0;
+                        let b = deletion.atlas.cell_height as f64 / 2.0;
+                        let rx = ((a * angle.cos().abs() + b * angle.sin().abs()) * pose.scale
+                            + 2.0) as f32;
+                        let ry = ((a * angle.sin().abs() + b * angle.cos().abs()) * pose.scale
+                            + 2.0) as f32;
+                        let cx =
+                            PAD + (particle.source_left + particle.width / 2.0 + pose.dx) as f32;
+                        let cy = y + (particle.source_top + particle.height / 2.0 + pose.dy) as f32;
+                        let fragment = CreateRectRgn(
+                            scale((cx - rx).floor() as i32, self.dpi),
+                            scale((cy - ry).floor() as i32, self.dpi),
+                            scale((cx + rx).ceil() as i32, self.dpi),
+                            scale((cy + ry).ceil() as i32, self.dpi),
+                        );
+                        if !fragment.is_invalid() {
+                            let _ =
+                                CombineRgn(Some(combined), Some(combined), Some(fragment), RGN_OR);
+                            let _ = DeleteObject(HGDIOBJ(fragment.0));
+                        }
+                    }
+                    continue;
+                }
+                let y = scale(y as i32, self.dpi);
                 let card = CreateRoundRectRgn(
-                    0,
+                    scale(PAD as i32, self.dpi),
                     y,
-                    scale(340, self.dpi) + 1,
+                    scale((PAD + MEDIA_WIDTH) as i32, self.dpi) + 1,
                     y + scale(200, self.dpi) + 1,
                     diameter,
                     diameter,
@@ -4263,9 +4354,24 @@ impl App {
                             .drafts
                             .discard_and_wait(DraftIdentity::capture(old.clone()));
                         let _ = self.history.replace_entry(&old, trashed);
-                        self.state
+                        let mut enabled = BOOL(1);
+                        let _ = SystemParametersInfoW(
+                            SPI_GETCLIENTAREAANIMATION,
+                            0,
+                            Some((&mut enabled as *mut BOOL).cast()),
+                            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+                        );
+                        if let Some(preview) = self
+                            .state
                             .previews
-                            .retain(|preview| preview.artifact.path != old);
+                            .iter_mut()
+                            .find(|preview| preview.artifact.path == old)
+                        {
+                            preview.start_deletion(
+                                Instant::now(),
+                                !self.fixture_mode && !enabled.as_bool(),
+                            );
+                        }
                         self.show_delete_return()
                     }
                     Ok(None) => {
@@ -4787,13 +4893,26 @@ fn prepare_fixture(
                 source: fixture_video,
             });
         }
-        "preview" => {
+        "preview"
+        | "preview-delete-input"
+        | "preview-dust-start"
+        | "preview-dust-wave"
+        | "preview-dust-end" => {
             let path = data_dir().join("fixture-preview.png");
             state.add_preview(
                 Artifact::from_path(path, image.width(), image.height()),
                 image,
                 Instant::now(),
             );
+            if view.starts_with("preview-dust-") {
+                let preview = &mut state.previews[0];
+                preview.start_deletion(Instant::now(), false);
+                preview.deletion.as_mut().unwrap().fixture_elapsed_ms = Some(match view {
+                    "preview-dust-start" => 0.0,
+                    "preview-dust-wave" => 650.0,
+                    _ => 1200.0,
+                });
+            }
             state.surface = Surface::Preview;
         }
         "history" => state.surface = Surface::History,

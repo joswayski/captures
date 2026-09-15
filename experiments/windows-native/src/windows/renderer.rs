@@ -6,8 +6,9 @@ use captures_windows_native::{
         screenshot_editor_properties_y, screenshot_editor_viewport,
     },
     history::Artifact,
+    preview_motion::{MEDIA_WIDTH, PAD},
     settings::Settings,
-    state::{AppState, PreferencesPage, Surface, can_replace_editor_source},
+    state::{AppState, PreferencesPage, PreviewDeletion, Surface, can_replace_editor_source},
     theme::{Color, Palette},
 };
 use image::RgbaImage;
@@ -59,7 +60,7 @@ use windows::{
     },
     core::{HSTRING, Interface, Result},
 };
-use windows_numerics::Vector2;
+use windows_numerics::{Matrix3x2, Vector2};
 
 pub struct Renderer {
     target: ID2D1DeviceContext,
@@ -187,6 +188,7 @@ impl Renderer {
                 height,
             } = frame;
             self.target.BeginDraw();
+            self.target.SetTransform(&Matrix3x2::identity());
             self.target.Clear(Some(&color(match state.surface {
                 Surface::Preview => Color(0, 0, 0, 0),
                 Surface::Overlay | Surface::RecordingHud => palette.glass,
@@ -2504,30 +2506,48 @@ impl Renderer {
         }
     }
 
-    unsafe fn preview(&mut self, state: &AppState, p: Palette, w: f32, _h: f32) -> Result<()> {
+    unsafe fn preview(&mut self, state: &AppState, p: Palette, _w: f32, _h: f32) -> Result<()> {
         unsafe {
+            let w = MEDIA_WIDTH;
             let count = state.previews.len().min(5);
             for index in (0..count).rev() {
                 let preview = &state.previews[index];
-                let y = (count - 1 - index) as f32 * 28.0;
+                let y = PAD + (count - 1 - index) as f32 * 28.0;
                 let media = Rect {
-                    x: 0.0,
+                    x: PAD,
                     y,
                     width: w,
                     height: 162.0,
                 };
-                if let Some(start) = preview.dismissing {
-                    self.bitmap_fragments(
-                        &preview.image,
+                if let Some(deletion) = &preview.deletion {
+                    self.bitmap_fragments(deletion, media)?;
+                    continue;
+                }
+                // Escape/reduced motion only fade; dust is reserved for Delete.
+                let opacity = preview.dismissing.map_or(1.0, |start| {
+                    (1.0 - start.elapsed().as_secs_f32() / 0.42).clamp(0.0, 1.0)
+                });
+                self.ensure_bitmap(&preview.image)?;
+                self.target
+                    .PushAxisAlignedClip(&to_d2d(media), D2D1_ANTIALIAS_MODE_ALIASED);
+                self.target.DrawBitmap(
+                    self.image.as_ref().unwrap(),
+                    Some(&to_d2d(cover(
+                        (preview.image.width(), preview.image.height()),
                         media,
-                        start.elapsed().as_secs_f32() / 0.42,
-                    )?;
-                } else {
-                    self.bitmap(&preview.image, media)?;
+                    ))),
+                    opacity,
+                    D2D1_INTERPOLATION_MODE_LINEAR,
+                    None,
+                    None,
+                );
+                self.target.PopAxisAlignedClip();
+                if preview.dismissing.is_some() {
+                    continue;
                 }
                 self.panel(
                     Rect {
-                        x: 0.0,
+                        x: PAD,
                         y: y + 162.0,
                         width: w,
                         height: 38.0,
@@ -2543,7 +2563,7 @@ impl Renderer {
                 .iter()
                 .enumerate()
                 {
-                    let action_x = 4.0 + action as f32 * (w - 8.0) / 4.0;
+                    let action_x = PAD + 4.0 + action as f32 * (w - 8.0) / 4.0;
                     self.editor_icon(
                         icon,
                         Rect {
@@ -4161,43 +4181,51 @@ impl Renderer {
 
     unsafe fn bitmap_fragments(
         &mut self,
-        image: &RgbaImage,
+        deletion: &PreviewDeletion,
         destination: Rect,
-        progress: f32,
     ) -> Result<()> {
         unsafe {
-            self.ensure_bitmap(image)?;
-            let progress = progress.clamp(0.0, 1.0);
-            let fitted = cover((image.width(), image.height()), destination);
-            for row in 0..5 {
-                for column in 0..8 {
-                    let source = D2D_RECT_F {
-                        left: image.width() as f32 * column as f32 / 8.0,
-                        top: image.height() as f32 * row as f32 / 5.0,
-                        right: image.width() as f32 * (column + 1) as f32 / 8.0,
-                        bottom: image.height() as f32 * (row + 1) as f32 / 5.0,
-                    };
-                    let phase = (column as f32 * 0.071 + row as f32 * 0.113) % 0.28;
-                    let local = ((progress - phase) / 0.72).clamp(0.0, 1.0);
-                    let fragment = Rect {
-                        x: fitted.x
-                            + fitted.width * column as f32 / 8.0
-                            + (column as f32 - 3.5) * local * 7.0,
-                        y: fitted.y + fitted.height * row as f32 / 5.0
-                            - local * (18.0 + row as f32 * 5.0),
-                        width: fitted.width / 8.0 + 0.5,
-                        height: fitted.height / 5.0 + 0.5,
-                    };
-                    self.target.DrawBitmap(
-                        self.image.as_ref().unwrap(),
-                        Some(&to_d2d(fragment)),
-                        1.0 - local,
-                        D2D1_INTERPOLATION_MODE_LINEAR,
-                        Some(&source),
-                        None,
-                    );
+            let atlas = &deletion.atlas;
+            self.ensure_bitmap(&atlas.image)?;
+            let elapsed = deletion.elapsed_ms(std::time::Instant::now());
+            for (index, particle) in deletion.particles.iter().enumerate() {
+                let pose = particle.visual(elapsed);
+                if pose.opacity <= 0.0 {
+                    continue;
                 }
+                let x = index as u32 % atlas.columns * atlas.cell_width;
+                let y = index as u32 / atlas.columns * atlas.cell_height;
+                let source = D2D_RECT_F {
+                    left: x as f32,
+                    top: y as f32,
+                    right: (x + atlas.cell_width) as f32,
+                    bottom: (y + atlas.cell_height) as f32,
+                };
+                let transform = Matrix3x2::scale(pose.scale as f32, pose.scale as f32)
+                    * Matrix3x2::rotation(pose.rotate as f32)
+                    * Matrix3x2::translation(
+                        destination.x
+                            + (particle.source_left + particle.width / 2.0 + pose.dx) as f32,
+                        destination.y
+                            + (particle.source_top + particle.height / 2.0 + pose.dy) as f32,
+                    );
+                self.target.SetTransform(&transform);
+                let fragment = Rect {
+                    x: -particle.width as f32 / 2.0 - 8.0,
+                    y: -particle.height as f32 / 2.0 - 8.0,
+                    width: atlas.cell_width as f32,
+                    height: atlas.cell_height as f32,
+                };
+                self.target.DrawBitmap(
+                    self.image.as_ref().unwrap(),
+                    Some(&to_d2d(fragment)),
+                    pose.opacity as f32,
+                    D2D1_INTERPOLATION_MODE_LINEAR,
+                    Some(&source),
+                    None,
+                );
             }
+            self.target.SetTransform(&Matrix3x2::identity());
             Ok(())
         }
     }
