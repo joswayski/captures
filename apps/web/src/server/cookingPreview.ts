@@ -6,7 +6,7 @@ import {
 } from "../cookingPreview.ts";
 
 const REPO_API = "https://api.github.com/repos/joswayski/captures";
-const PREVIEW_TAG = /^native-v(\d{4})\.(\d{2})\.(\d{2})\.([1-9]\d?)$/u;
+const PREVIEW_TAG = /^v(\d{4})\.(\d{2})\.(\d{2})\.([1-9]\d?)$/u;
 const GITHUB_TIMEOUT_MS = 5_000;
 /** How long to serve the fallback before retrying GitHub after a failed lookup. */
 const FAILURE_RETRY_MS = 60_000;
@@ -98,7 +98,7 @@ async function latestPublishedPreviewCommit(): Promise<string | null> {
 async function recentReleaseRuns(): Promise<GitHubWorkflowRun[]> {
   try {
     const payload = await githubJson<GitHubWorkflowRuns>(
-      "/actions/workflows/native-release.yml/runs?per_page=30",
+      "/actions/workflows/release.yml/runs?per_page=30",
     );
     return payload.workflow_runs ?? [];
   } catch {

@@ -7,7 +7,6 @@ pub mod editor;
 pub mod encoder;
 pub mod geometry;
 pub mod history;
-pub mod media_tools;
 pub mod settings;
 pub mod state;
 pub mod theme;

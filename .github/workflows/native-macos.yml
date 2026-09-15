@@ -13,8 +13,6 @@ on:
       - "shared/design.css"
       - "shared/themes.css"
       - ".github/workflows/native-macos.yml"
-      - ".github/workflows/native-release.yml"
-      - "scripts/package-native-macos.sh"
 
 permissions:
   contents: read
