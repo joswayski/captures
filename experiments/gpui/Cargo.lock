@@ -989,6 +989,7 @@ dependencies = [
  "image",
  "objc2-app-kit",
  "raw-window-handle",
+ "resvg",
  "serde",
  "serde_json",
  "tempfile",

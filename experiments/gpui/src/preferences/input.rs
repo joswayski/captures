@@ -44,6 +44,7 @@ pub struct TextInput {
     is_selecting: bool,
     multiline: bool,
     max_len: Option<usize>,
+    chrome: bool,
 }
 
 impl TextInput {
@@ -67,7 +68,14 @@ impl TextInput {
             is_selecting: false,
             multiline: false,
             max_len: None,
+            chrome: false,
         }
+    }
+
+    /// Inline field inside an already bordered editor toolbar or filename group.
+    pub fn chrome(mut self) -> Self {
+        self.chrome = true;
+        self
     }
 
     /// Configures this editor for paragraph input without changing the public
@@ -89,6 +97,15 @@ impl TextInput {
 
     pub fn value(&self) -> String {
         self.content.to_string()
+    }
+
+    pub fn set_value(&mut self, value: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.content = value.into();
+        self.selected_range = self.content.len()..self.content.len();
+        self.selection_reversed = false;
+        self.marked_range = None;
+        self.scroll_y = Pixels::ZERO;
+        cx.notify();
     }
 
     fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
@@ -832,16 +849,26 @@ impl Render for TextInput {
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .w_full()
             .overflow_hidden()
-            .border_1()
-            .border_color(rgba(0x88888840))
-            .rounded(px(6.))
+            .when(!self.chrome, |field| {
+                field
+                    .border_1()
+                    .border_color(rgba(0x88888840))
+                    .rounded(px(6.))
+            })
             .line_height(px(20.))
-            .text_size(px(13.))
+            .text_size(px(if self.chrome { 12. } else { 13. }))
             .child(
                 div()
-                    .h(if self.multiline { px(100.) } else { px(30.) })
+                    .h(px(if self.multiline {
+                        100.
+                    } else if self.chrome {
+                        26.
+                    } else {
+                        30.
+                    }))
                     .w_full()
-                    .p(px(4.))
+                    .px(px(4.))
+                    .py(px(if self.chrome { 3. } else { 4. }))
                     .child(TextElement { input: cx.entity() }),
             )
     }

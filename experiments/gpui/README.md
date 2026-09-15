@@ -32,7 +32,9 @@ cargo run --release --manifest-path experiments/gpui/Cargo.toml -- --view backgr
 `--profile DIR` overrides the isolated experiment directory. `CAPTURES_GPUI_DATA`
 does the same. The default is `captures-gpui-experiment` under XDG data, or
 `~/.local/share`, or LOCALAPPDATA when HOME is unavailable. Do not point this at
-a shipping Captures profile. Source images are not overwritten by editor exports.
+a shipping Captures profile. The screenshot editor defaults to **Save as new file**
+and refuses to replace an existing file in that mode. Turning that switch off
+allows Save to replace the chosen file, including the opened source.
 Mini-preview Delete **does delete the source file after confirmation**; Dismiss
 only removes the card. Mock preview deletion never deletes the fixture.
 
@@ -55,7 +57,7 @@ components, `shared/design.css`, `shared/themes.css`, and
 | Area | Implemented | Still missing or different |
 | --- | --- | --- |
 | Preferences | Live appearance/accent settings, custom colors, selects, shortcut recording and conflict rollback, microphone picker, search/navigation, persisted settings | Complete keyboard/accessibility parity and native permission flows remain unverified |
-| Screenshot editor | Drawing tools, transform handles, pan/zoom, canvas resize, multi-image import, layers and blend/opacity/rotation, clipboard, undo/redo, drafts, PNG/JPEG/WebP export, real encoded before/after comparison, text wrapping/alignment/plates/outlines/shadows | Exact inspector/chrome and layer thumbnails; bold/italic use synthetic raster treatments, not native font variants; CPU raster work can block interaction on large documents |
+| Screenshot editor | Drawing tools, transform handles, pan/zoom, editable header dimensions, grouped Shapes flyout, layers-first sidebar with image thumbnails, color/size/opacity controls, multi-image import, blend/rotation, clipboard, undo/redo, drafts, filename/format/save controls, PNG/JPEG/WebP export, real encoded before/after comparison, text wrapping/alignment/plates/outlines/shadows | Exact text/image/crop inspectors and export popover; original background cannot be unlocked; vector thumbnails use tool icons; numeric steppers and arbitrary background colors; bold/italic use synthetic raster treatments, not native font variants; CPU raster work can block interaction on large documents |
 | Screenshot capture | Region/window/display targets, frozen/live frames, scaled crops, cursor/format/countdown settings, auto-start, copy/save/preview routing, session gate | Exact selector/menu rendering and in-place cross-monitor transitions; mixed-DPI acceptance; capture exclusion outside tested X11 regions |
 | Recording | Native recording, pause/resume segments, countdown/restart cancellation, stop/delete, mic controls, session clock, screenshot during recording, hide/restore, 430×102 bottom-center HUD, passive region guide | Crash recovery; full-display controls exclusion on Linux; exact pulse/compositor equivalence; native macOS/Windows acceptance |
 | Recording editor | Cancellable background preparation, video/audio preview, filmstrip/waveforms, trim/crop/resize, track edits, export settings/progress/cancellation | Exact timeline/interaction equivalence, hardware audio acceptance and recovery of interrupted native sessions |
@@ -69,6 +71,14 @@ The dissolve's grid, radial delays, cubic easing, and poses follow
 It currently rasterizes fragments on the CPU and uploads each frame through
 GPUI. This is not evidence of identical blur, antialiasing, GPU cost, or displayed
 frame pacing. No effect is implemented as a screenshot of another UI.
+
+The screenshot-editor visual correction uses the shipping 52px header, 56px rail,
+320px sidebar, deeper light canvas well, and 77px export footer. The Shapes menu
+uses the original 3×2 icon grid; layers and properties scroll independently.
+Its SVGs are rasterized through GPUI's existing resvg version with explicit
+premultiplied-RGBA → straight-BGRA conversion: GPUI 0.2.2's inline SVG decoder
+otherwise swaps red and blue. Tests cover opaque and translucent colored pixels.
+These corrections do not establish whole-app visual or animation parity.
 
 ## Validation and platform limits
 
@@ -88,7 +98,7 @@ persistence and malformed input, and preserving the source when saving onto
 itself/a hard link. Missing FFmpeg fails the playback test rather than silently
 skipping it.
 
-All commands above passed in the evaluation orb (74 standalone tests; the root
+All commands above passed in the evaluation orb (77 standalone tests; the root
 desktop suite contains 830 tests). The root release-version tests required
 per-command `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign
 GIT_CONFIG_VALUE_0=false`: they create temporary commits, and the orb has no

@@ -7,6 +7,8 @@ impl Global for CurrentSettings {}
 #[derive(Clone, Copy)]
 pub struct Theme {
     pub canvas: Rgba,
+    pub sunken: Rgba,
+    pub editor_well: Rgba,
     pub raised: Rgba,
     pub field: Rgba,
     pub text: Rgba,
@@ -92,6 +94,8 @@ impl Theme {
         };
         Self {
             canvas: rgb(if light { 0xf5f5f7 } else { 0x101014 }),
+            sunken: rgb(if light { 0xefeff2 } else { 0x0b0b0e }),
+            editor_well: rgb(if light { 0xe0e0e7 } else { 0x0b0b0e }),
             raised: rgb(if light { 0xffffff } else { 0x16161b }),
             field: rgb(if light { 0xffffff } else { 0x0e0e12 }),
             text: rgb(if light { 0x131318 } else { 0xf2f2f4 }),

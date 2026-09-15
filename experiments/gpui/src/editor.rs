@@ -28,9 +28,21 @@ use crate::{
     theme::{Theme, font},
 };
 
+#[cfg(test)]
 const ACCENT: [u8; 4] = [255, 202, 40, 255];
+// ScreenshotEditor.tsx's annotation palette (independent of the UI accent).
+const COLOR_SWATCHES: [u32; 8] = [
+    0xff3b5c, 0xff8a22, 0xffd22e, 0x36c96b, 0x2d9cff, 0x8b5cf6, 0x111318, 0xffffff,
+];
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
+enum EditorSlider {
+    Zoom,
+    Stroke,
+    Opacity,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum EditorIcon {
     Select,
     Crop,
@@ -44,9 +56,27 @@ enum EditorIcon {
     Diamond,
     Star,
     Eraser,
+    Shapes,
+    Undo,
+    Redo,
+    Fit,
+    Plus,
+    Minus,
+    Image,
+    Eye,
+    Lock,
+    More,
+    Copy,
+    Save,
 }
 
 fn editor_icon(icon: EditorIcon, color: &'static str) -> Img {
+    thread_local! {
+        static ICONS: std::cell::RefCell<std::collections::HashMap<(EditorIcon, &'static str), Arc<RenderImage>>> = Default::default();
+    }
+    if let Some(image) = ICONS.with(|cache| cache.borrow().get(&(icon, color)).cloned()) {
+        return img(image).size(px(18.));
+    }
     let body = match icon {
         EditorIcon::Select => r#"<path d="m5 3 12 9-6 1-3 6Z"/>"#,
         EditorIcon::Crop => r#"<path d="M7 3v14a2 2 0 0 0 2 2h12M3 7h14a2 2 0 0 1 2 2v12"/>"#,
@@ -62,16 +92,35 @@ fn editor_icon(icon: EditorIcon, color: &'static str) -> Img {
             r#"<path d="m12 3 2.7 5.6 6.3.9-4.6 4.4 1.1 6.1-5.5-2.9L6.5 20l1.1-6.1L3 9.5l6.3-.9Z"/>"#
         }
         EditorIcon::Eraser => r#"<path d="m14 4 6 6-9 9H5l-2-2Z"/><path d="m8 12 6 6M11 19h10"/>"#,
+        EditorIcon::Shapes => {
+            r#"<rect x="3" y="9" width="12" height="12" rx="2"/><circle cx="15" cy="9" r="6"/>"#
+        }
+        EditorIcon::Undo => r#"<path d="m9 5-5 5 5 5M4 10h10a5 5 0 0 1 0 10"/>"#,
+        EditorIcon::Redo => r#"<path d="m15 5 5 5-5 5m5-5H10a5 5 0 0 0 0 10"/>"#,
+        EditorIcon::Fit => r#"<path d="M9 4H4v5m11-5h5v5M4 15v5h5m11-5v5h-5"/>"#,
+        EditorIcon::Plus => r#"<path d="M12 5v14M5 12h14"/>"#,
+        EditorIcon::Minus => r#"<path d="M5 12h14"/>"#,
+        EditorIcon::Image => {
+            r#"<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 16 5-5 4 4 3-3 6 6"/>"#
+        }
+        EditorIcon::Eye => {
+            r#"<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>"#
+        }
+        EditorIcon::Lock => {
+            r#"<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V6a4 4 0 0 1 8 0v4"/>"#
+        }
+        EditorIcon::More => r#"<path d="M12 5h.01M12 12h.01M12 19h.01" stroke-width="3"/>"#,
+        EditorIcon::Copy => {
+            r#"<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V3H3v13h5"/>"#
+        }
+        EditorIcon::Save => r#"<path d="M4 3h13l4 4v14H3V3Z"/><path d="M7 3v6h9V3M7 21v-8h10v8"/>"#,
     };
     let svg = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">{body}</svg>"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">{body}</svg>"#
     );
-    img(Arc::new(Image::from_bytes(
-        ImageFormat::Svg,
-        svg.into_bytes(),
-    )))
-    .w(px(18.))
-    .h(px(18.))
+    let image = svg_render_image(svg);
+    ICONS.with(|cache| cache.borrow_mut().insert((icon, color), image.clone()));
+    img(image).size(px(18.))
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -126,6 +175,8 @@ pub struct ScreenshotEditor {
     max_size_input: Option<Entity<crate::preferences::input::TextInput>>,
     canvas_width_input: Option<Entity<crate::preferences::input::TextInput>>,
     canvas_height_input: Option<Entity<crate::preferences::input::TextInput>>,
+    filename_input: Option<Entity<crate::preferences::input::TextInput>>,
+    synced_canvas_size: (u32, u32),
     stroke_input: Option<Entity<crate::preferences::input::TextInput>>,
     stroke_color_input: Option<Entity<crate::preferences::input::TextInput>>,
     fill_color_input: Option<Entity<crate::preferences::input::TextInput>>,
@@ -143,9 +194,18 @@ pub struct ScreenshotEditor {
     identity: DraftIdentity,
     source_path: Option<PathBuf>,
     rendered: Arc<RenderImage>,
+    source_thumbnail: Arc<RenderImage>,
     canvas_bounds: Rc<Cell<Bounds<Pixels>>>,
     drag: Option<Drag>,
     tool: Tool,
+    shapes_open: bool,
+    zoom_open: bool,
+    custom_style_open: bool,
+    slider_drag: Option<EditorSlider>,
+    background_open: bool,
+    source_menu_open: bool,
+    layer_menu: Option<u64>,
+    format_open: bool,
     selected: Option<u64>,
     zoom: u16,
     fit: bool,
@@ -158,6 +218,7 @@ pub struct ScreenshotEditor {
     export_max_bytes: Option<u64>,
     export_aspect_locked: bool,
     destination: PathBuf,
+    make_copy: bool,
     compression_preview: Option<CompressionPreview>,
     compression_preview_pending: bool,
     compression_preview_error: Option<String>,
@@ -171,6 +232,7 @@ pub struct ScreenshotEditor {
     style_color: [u8; 4],
     style_fill: Option<[u8; 4]>,
     style_stroke: f32,
+    style_opacity: u8,
     style_font_size: f32,
     status: String,
 }
@@ -250,6 +312,7 @@ impl ScreenshotEditor {
         } else {
             anyhow::bail!("Screenshot editor requires --open FILE (or --mock)");
         };
+        let source_thumbnail = render_image(&image::imageops::thumbnail(&pixels, 84, 60));
         let store = DraftStore::new(&launch.profile.join("drafts"));
         let document = store
             .load(&identity, source_path.as_deref())
@@ -271,6 +334,8 @@ impl ScreenshotEditor {
             max_size_input: None,
             canvas_width_input: None,
             canvas_height_input: None,
+            filename_input: None,
+            synced_canvas_size: (export_width, export_height),
             stroke_input: None,
             stroke_color_input: None,
             fill_color_input: None,
@@ -289,9 +354,18 @@ impl ScreenshotEditor {
             identity,
             source_path,
             rendered,
+            source_thumbnail,
             canvas_bounds: Rc::new(Cell::new(Bounds::default())),
             drag: None,
             tool: Tool::Select,
+            shapes_open: false,
+            zoom_open: false,
+            custom_style_open: false,
+            slider_drag: None,
+            background_open: false,
+            source_menu_open: false,
+            layer_menu: None,
+            format_open: false,
             selected: None,
             zoom: 100,
             fit: true,
@@ -304,6 +378,7 @@ impl ScreenshotEditor {
             export_max_bytes: None,
             export_aspect_locked: true,
             destination,
+            make_copy: true,
             compression_preview: None,
             compression_preview_pending: false,
             compression_preview_error: None,
@@ -314,10 +389,11 @@ impl ScreenshotEditor {
             pan: point(px(0.), px(0.)),
             last_canvas_point: None,
             space_down: false,
-            style_color: ACCENT,
+            style_color: [255, 59, 92, 255],
             style_fill: None,
-            style_stroke: 6.,
-            style_font_size: 32.,
+            style_stroke: 8.,
+            style_opacity: 255,
+            style_font_size: 48.,
             status: "Ready".into(),
         })
     }
@@ -505,6 +581,7 @@ impl ScreenshotEditor {
                 {
                     let mut preview = self.document.clone();
                     let id = preview.add(shape, self.style_color, self.style_stroke);
+                    preview.set_layer_opacity(id, self.style_opacity);
                     if let Some(fill) = self.style_fill {
                         preview.set_layer_fill(id, Some(fill));
                     }
@@ -585,6 +662,7 @@ impl ScreenshotEditor {
                         let id = self
                             .document
                             .add(shape, self.style_color, self.style_stroke);
+                        self.document.set_layer_opacity(id, self.style_opacity);
                         if self.style_fill.is_some() {
                             self.document.set_layer_fill(id, self.style_fill);
                         }
@@ -643,6 +721,11 @@ impl ScreenshotEditor {
                 }
             }
             "escape" => {
+                self.shapes_open = false;
+                self.source_menu_open = false;
+                self.background_open = false;
+                self.format_open = false;
+                self.zoom_open = false;
                 if let Some(Drag::Move { original, .. }) = self.drag.take() {
                     self.document.preview_layer(original);
                 }
@@ -938,19 +1021,26 @@ impl ScreenshotEditor {
                 return;
             }
         };
-        // Export is always a new capture. The launch source is never overwritten.
-        let mut path = self.destination.clone();
-        path.set_extension(self.format.extension());
-        if self
-            .source_path
-            .as_deref()
-            .is_some_and(|source| paths_refer_to_same_file(source, &path))
+        let name = input_value(&self.filename_input, cx);
+        let path = match export_path(&self.destination, &name, self.format) {
+            Ok(path) => path,
+            Err(error) => {
+                self.status = error.into();
+                cx.notify();
+                return;
+            }
+        };
+        if self.make_copy
+            && self
+                .source_path
+                .as_deref()
+                .is_some_and(|source| paths_refer_to_same_file(source, &path))
         {
-            self.status = "Choose a new file name; the source is never overwritten".into();
+            self.status = "Choose a different filename to save as a new file".into();
             cx.notify();
             return;
         }
-        self.status = match atomic_write(&path, &bytes) {
+        self.status = match write_export(&path, &bytes, self.make_copy) {
             Ok(()) => format!("Saved {} ({} KB)", path.display(), bytes.len() / 1024),
             Err(e) => format!("Save failed: {e}"),
         };
@@ -1112,6 +1202,7 @@ impl ScreenshotEditor {
         label: impl Into<SharedString>,
         active: bool,
     ) -> Stateful<Div> {
+        let label = label.into();
         div()
             .id(id)
             .px_3()
@@ -1132,9 +1223,299 @@ impl ScreenshotEditor {
                 self.theme.field
             })
             .text_color(self.theme.text)
-            .text_sm()
+            .text_size(px(12.))
             .cursor_pointer()
-            .child(label.into())
+            .hover(|button| button.bg(self.theme.hover))
+            .when(!label.is_empty(), |button| button.child(label))
+    }
+
+    fn icon_button(&self, id: impl Into<ElementId>, icon: EditorIcon) -> Stateful<Div> {
+        div()
+            .id(id)
+            .size(px(30.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(6.))
+            .cursor_pointer()
+            .hover(|button| button.bg(self.theme.hover))
+            .child(
+                editor_icon(
+                    icon,
+                    if self.theme.text == rgb(0x131318) {
+                        "#5c5c69"
+                    } else {
+                        "#b9b9c4"
+                    },
+                )
+                .size(px(14.)),
+            )
+    }
+
+    fn prompt_images(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Import images".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = receiver.await {
+                let _ = this.update(cx, |editor, cx| editor.import_images(paths, cx));
+            }
+        })
+        .detach();
+    }
+
+    fn slider(
+        &self,
+        id: &'static str,
+        control: EditorSlider,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let bounds = Rc::new(Cell::new(Bounds::<Pixels>::default()));
+        let recorded = bounds.clone();
+        let pressed = bounds.clone();
+        let t = self.theme;
+        let ratio = match control {
+            EditorSlider::Zoom => (f32::from(self.zoom) - 10.) / 190.,
+            EditorSlider::Stroke => (self.style_stroke - 1.) / 47.,
+            EditorSlider::Opacity => f32::from(self.style_opacity) / 255.,
+        }
+        .clamp(0., 1.);
+        div()
+            .id(id)
+            .w_full()
+            .h(px(24.))
+            .cursor_pointer()
+            .child(
+                canvas(
+                    move |area, _, _| recorded.set(area),
+                    move |area, _, window, _| {
+                        let left = area.left() + px(5.);
+                        let width = area.size.width - px(10.);
+                        let y = area.center().y;
+                        window.paint_quad(fill(
+                            Bounds::new(point(left, y - px(1.5)), size(width, px(3.))),
+                            t.border,
+                        ));
+                        if control != EditorSlider::Zoom {
+                            window.paint_quad(fill(
+                                Bounds::new(point(left, y - px(1.5)), size(width * ratio, px(3.))),
+                                t.accent,
+                            ));
+                        }
+                        window.paint_quad(quad(
+                            Bounds::new(
+                                point(left + width * ratio - px(5.), y - px(5.)),
+                                size(px(10.), px(10.)),
+                            ),
+                            Corners::all(px(5.)),
+                            t.field,
+                            Edges::all(px(1.)),
+                            t.border,
+                            BorderStyle::Solid,
+                        ));
+                    },
+                )
+                .size_full(),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |s, event: &MouseDownEvent, _, cx| {
+                    s.slider_drag = Some(control);
+                    s.change_slider(control, event.position.x, pressed.get(), cx);
+                }),
+            )
+            .on_mouse_move(cx.listener(move |s, event: &MouseMoveEvent, _, cx| {
+                if s.slider_drag == Some(control) {
+                    s.change_slider(control, event.position.x, bounds.get(), cx);
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|s, _, _, _| s.slider_drag = None),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|s, _, _, _| s.slider_drag = None),
+            )
+    }
+
+    fn change_slider(
+        &mut self,
+        control: EditorSlider,
+        x: Pixels,
+        bounds: Bounds<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let ratio = ((x - bounds.left() - px(5.)) / (bounds.size.width - px(10.)).max(px(1.)))
+            .clamp(0., 1.);
+        match control {
+            EditorSlider::Zoom => {
+                self.zoom = (10. + ratio * 190.).round() as u16;
+                self.fit = false;
+            }
+            EditorSlider::Stroke => {
+                self.style_stroke = (1. + ratio * 47.).round();
+                self.stroke_input = None;
+                if let Some(id) = self.selected {
+                    self.document.set_layer_stroke(id, self.style_stroke);
+                    self.refresh();
+                }
+            }
+            EditorSlider::Opacity => {
+                self.style_opacity = (ratio * 255.).round() as u8;
+                if let Some(id) = self.selected {
+                    self.document.set_layer_opacity(id, self.style_opacity);
+                    self.refresh();
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn style_controls(&self, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let color = color_hex(self.style_color);
+        let body = match self.tool {
+            Tool::Arrow => r#"<path d="M88 62 198 27m-18-4h22v22"/>"#,
+            Tool::Line => r#"<path d="M88 62 202 26"/>"#,
+            Tool::Ellipse => r#"<ellipse cx="148" cy="44" rx="57" ry="26"/>"#,
+            Tool::Pen => r#"<path d="M84 60c28-52 35-38 49-14s25 21 77-26"/>"#,
+            Tool::Triangle => r#"<path d="m148 15 55 58H93Z"/>"#,
+            Tool::Diamond => r#"<path d="m148 12 57 32-57 32-57-32Z"/>"#,
+            Tool::Star => {
+                r#"<path d="m148 8 13 23 29 4-21 19 5 27-26-14-26 14 5-27-21-19 29-4Z"/>"#
+            }
+            _ => r#"<rect x="90" y="20" width="116" height="48" rx="3"/>"#,
+        };
+        let (checker_a, checker_b) = if t.text == rgb(0x131318) {
+            ("#f5f5f7", "#e8e8ed")
+        } else {
+            ("#16161b", "#232329")
+        };
+        let preview = format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="592" height="176" viewBox="0 0 296 88"><defs><pattern id="grid" width="16" height="16" patternUnits="userSpaceOnUse"><rect width="16" height="16" fill="{checker_a}"/><path d="M0 0h8v8H0Zm8 8h8v8H8Z" fill="{checker_b}"/></pattern></defs><rect width="296" height="88" fill="url(#grid)"/><g fill="none" stroke="{color}" stroke-width="{}" opacity="{}" stroke-linecap="round" stroke-linejoin="round">{body}</g></svg>"##,
+            self.style_stroke * 0.5,
+            f32::from(self.style_opacity) / 255.
+        );
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .pt_2()
+            .child(
+                img(svg_render_image(preview))
+                    .w_full()
+                    .h(px(88.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(t.border),
+            )
+            .child(div().text_size(px(12.)).text_color(t.muted).child("Color"))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .children(
+                        COLOR_SWATCHES
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, color)| {
+                                let bytes =
+                                    [(color >> 16) as u8, (color >> 8) as u8, color as u8, 255];
+                                div()
+                                    .id(("swatch", index))
+                                    .w(relative(1. / 6.))
+                                    .h(px(32.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_pointer()
+                                    .child(
+                                        div()
+                                            .size(px(30.))
+                                            .rounded_full()
+                                            .border_2()
+                                            .border_color(if self.style_color == bytes {
+                                                t.accent
+                                            } else {
+                                                rgba(0)
+                                            })
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(
+                                                div()
+                                                    .size(px(24.))
+                                                    .rounded_full()
+                                                    .bg(rgb(color))
+                                                    .border_1()
+                                                    .border_color(t.border),
+                                            ),
+                                    )
+                                    .on_click(cx.listener(move |s, _, _, cx| {
+                                        s.style_color = bytes;
+                                        s.stroke_color_input = None;
+                                        if let Some(id) = s.selected {
+                                            s.document.set_layer_color(id, bytes);
+                                            s.refresh();
+                                        }
+                                        cx.notify();
+                                    }))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .w(relative(1. / 6.))
+                            .h(px(32.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                self.button("custom-style", "+", false)
+                                    .size(px(24.))
+                                    .px_0()
+                                    .on_click(cx.listener(|s, _, _, cx| {
+                                        s.custom_style_open = !s.custom_style_open;
+                                        cx.notify();
+                                    })),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .mt_2()
+                    .text_size(px(12.))
+                    .text_color(t.muted)
+                    .child("Size"),
+            )
+            .child(
+                div()
+                    .text_right()
+                    .text_size(px(11.))
+                    .text_color(t.subtle)
+                    .child(format!("{} px", self.style_stroke)),
+            )
+            .child(self.slider("stroke-slider", EditorSlider::Stroke, cx))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(t.muted)
+                    .child("Opacity"),
+            )
+            .child(
+                div()
+                    .text_right()
+                    .text_size(px(11.))
+                    .text_color(t.subtle)
+                    .child(format!(
+                        "{}%",
+                        (f32::from(self.style_opacity) / 2.55).round()
+                    )),
+            )
+            .child(self.slider("opacity-slider", EditorSlider::Opacity, cx))
     }
 
     fn tool_button(
@@ -1159,17 +1540,45 @@ impl ScreenshotEditor {
                 rgba(0x00000000)
             })
             .cursor_pointer()
+            .hover(|button| {
+                button.bg(if active {
+                    self.theme.accent
+                } else {
+                    self.theme.hover
+                })
+            })
             .child(editor_icon(
                 icon,
-                if active { "#17140a" } else { "#8b8b94" },
+                if active {
+                    "#17140a"
+                } else if self.theme.text == rgb(0x131318) {
+                    "#5c5c69"
+                } else {
+                    "#b9b9c4"
+                },
             ))
-            .on_click(cx.listener(move |this, _, _, cx| this.choose_tool(tool, cx)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.shapes_open = false;
+                this.choose_tool(tool, cx)
+            }))
     }
 }
 
 impl Render for ScreenshotEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.theme = Theme::for_window(&self.launch, window, cx);
+        let canvas_size = (self.document.canvas_width, self.document.canvas_height);
+        if self.synced_canvas_size != canvas_size {
+            for (field, value) in [
+                (&self.canvas_width_input, canvas_size.0),
+                (&self.canvas_height_input, canvas_size.1),
+            ] {
+                if let Some(input) = field {
+                    input.update(cx, |input, cx| input.set_value(value.to_string(), cx));
+                }
+            }
+            self.synced_canvas_size = canvas_size;
+        }
         if self.export_open
             && !self.compression_preview_pending
             && self.compression_preview_revision != self.document_revision
@@ -1178,6 +1587,12 @@ impl Render for ScreenshotEditor {
         }
         let t = self.theme;
         let focus = self.focus.get_or_insert_with(|| cx.focus_handle()).clone();
+        let compact = window.viewport_size().width <= px(1040.);
+        let icon_color = if t.text == rgb(0x131318) {
+            "#5c5c69"
+        } else {
+            "#b9b9c4"
+        };
         let _text_input = self
             .text
             .get_or_insert_with(|| {
@@ -1247,13 +1662,22 @@ impl Render for ScreenshotEditor {
         );
         let quality_input = ensure_input(&mut self.quality_input, self.quality, "1–100", cx);
         let max_size_input = ensure_input(&mut self.max_size_input, "", "Optional bytes (1MB)", cx);
-        let canvas_width_input = ensure_input(
+        let filename_input = ensure_chrome_input(
+            &mut self.filename_input,
+            self.destination
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy(),
+            "Filename",
+            cx,
+        );
+        let canvas_width_input = ensure_chrome_input(
             &mut self.canvas_width_input,
             self.document.canvas_width,
             "Width",
             cx,
         );
-        let canvas_height_input = ensure_input(
+        let canvas_height_input = ensure_chrome_input(
             &mut self.canvas_height_input,
             self.document.canvas_height,
             "Height",
@@ -1306,19 +1730,13 @@ impl Render for ScreenshotEditor {
                 .find(|layer| layer.id == id)
                 .and_then(rotation_handle)
         });
-        let tools = [
-            ("Select", EditorIcon::Select, Tool::Select),
-            ("Crop", EditorIcon::Crop, Tool::Crop),
-            ("Text", EditorIcon::Text, Tool::Text),
-            ("Pen", EditorIcon::Pen, Tool::Pen),
-            ("Arrow", EditorIcon::Arrow, Tool::Arrow),
+        let shapes = [
             ("Rectangle", EditorIcon::Rectangle, Tool::Rectangle),
             ("Ellipse", EditorIcon::Ellipse, Tool::Ellipse),
             ("Line", EditorIcon::Line, Tool::Line),
             ("Triangle", EditorIcon::Triangle, Tool::Triangle),
             ("Diamond", EditorIcon::Diamond, Tool::Diamond),
             ("Star", EditorIcon::Star, Tool::Star),
-            ("Eraser", EditorIcon::Eraser, Tool::Eraser),
         ];
         let layers = self
             .document
@@ -1330,21 +1748,105 @@ impl Render for ScreenshotEditor {
                 let active = self.selected == Some(id);
                 div()
                     .id(("layer", id as usize))
-                    .h(px(42.))
+                    .h(px(54.))
                     .px_2()
                     .flex()
                     .items_center()
                     .gap_2()
-                    .rounded(px(6.))
+                    .rounded(px(10.))
+                    .border_1()
+                    .border_color(if active { t.accent } else { rgba(0) })
                     .bg(if active { t.hover } else { t.raised })
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.selected = Some(id);
+                        if let Some(layer) =
+                            this.document.layers.iter().find(|layer| layer.id == id)
+                        {
+                            this.style_color = layer.color;
+                            this.style_stroke = layer.stroke;
+                            this.style_opacity = layer.opacity;
+                            this.stroke_input = None;
+                            this.stroke_color_input = None;
+                        }
                         cx.notify()
                     }))
-                    .child(if layer.visible { "◉" } else { "○" })
-                    .child(div().flex_1().overflow_hidden().child(layer.name.clone()))
-                    .child(if layer.locked { "⌑" } else { "" })
+                    .child(div().text_color(t.subtle).child("⠿"))
+                    .child(
+                        div()
+                            .w(px(42.))
+                            .h(px(30.))
+                            .flex_shrink_0()
+                            .rounded(px(6.))
+                            .bg(t.sunken)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(match &layer.shape {
+                                Shape::Image { pixels, .. } => img(render_image(
+                                    &image::imageops::thumbnail(pixels.as_ref(), 84, 60),
+                                ))
+                                .size_full()
+                                .object_fit(ObjectFit::Contain)
+                                .into_any_element(),
+                                shape => editor_icon(
+                                    match shape {
+                                        Shape::Arrow(..) => EditorIcon::Arrow,
+                                        Shape::Text { .. } => EditorIcon::Text,
+                                        Shape::Ellipse(_) => EditorIcon::Ellipse,
+                                        Shape::Stroke(_) => EditorIcon::Pen,
+                                        Shape::Line(..) => EditorIcon::Line,
+                                        _ => EditorIcon::Rectangle,
+                                    },
+                                    "#5c5c69",
+                                )
+                                .into_any_element(),
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(12.))
+                            .truncate()
+                            .child(layer.name.clone()),
+                    )
+                    .child(
+                        self.icon_button(("layer-visible", id as usize), EditorIcon::Eye)
+                            .w(px(24.))
+                            .opacity(if layer.visible { 1. } else { 0.35 })
+                            .on_click(cx.listener(move |s, _, _, cx| {
+                                cx.stop_propagation();
+                                s.document.toggle_visibility(id);
+                                s.refresh();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        self.icon_button(("layer-lock", id as usize), EditorIcon::Lock)
+                            .w(px(24.))
+                            .opacity(if layer.locked { 1. } else { 0.35 })
+                            .on_click(cx.listener(move |s, _, _, cx| {
+                                cx.stop_propagation();
+                                s.document.toggle_locked(id);
+                                s.refresh();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        self.icon_button(("layer-menu", id as usize), EditorIcon::More)
+                            .w(px(24.))
+                            .on_click(cx.listener(move |s, _, _, cx| {
+                                cx.stop_propagation();
+                                s.selected = Some(id);
+                                s.layer_menu = if s.layer_menu == Some(id) {
+                                    None
+                                } else {
+                                    Some(id)
+                                };
+                                cx.notify();
+                            })),
+                    )
             })
             .collect::<Vec<_>>();
         let selected = self.selected;
@@ -1366,7 +1868,8 @@ impl Render for ScreenshotEditor {
             .font_family(font())
             .text_size(px(13.))
             .size_full()
-            .min_w(px(900.))
+            .relative()
+            .min_w(px(860.))
             .bg(t.canvas)
             .text_color(t.text)
             .flex()
@@ -1374,6 +1877,7 @@ impl Render for ScreenshotEditor {
             .child(
                 div()
                     .h(px(52.))
+                    .flex_shrink_0()
                     .px_3()
                     .flex()
                     .items_center()
@@ -1384,114 +1888,91 @@ impl Render for ScreenshotEditor {
                     .child(
                         div()
                             .h(px(34.))
-                            .px_3()
+                            .px(px(3.))
                             .flex()
                             .items_center()
-                            .gap_2()
-                            .rounded(px(9.))
+                            .gap(px(2.))
+                            .rounded(px(10.))
                             .border_1()
                             .border_color(t.border)
-                            .bg(t.canvas)
+                            .bg(t.sunken)
                             .text_size(px(12.))
                             .text_color(t.muted)
-                            .child("Canvas")
+                            .child(div().px_2().text_size(px(11.)).text_color(t.subtle).child("Canvas"))
                             .child("W")
                             .child(
-                                div()
-                                    .text_color(t.text)
-                                    .child(self.document.canvas_width.to_string()),
+                                div().w(px(64.)).text_color(t.text).child(canvas_width_input)
+                                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                                        if event.keystroke.key == "enter" {
+                                            if let Err(error) = this.apply_canvas_fields(cx) { this.status = error; }
+                                            cx.notify();
+                                        }
+                                    })),
                             )
                             .child("× H")
                             .child(
-                                div()
-                                    .text_color(t.text)
-                                    .child(self.document.canvas_height.to_string()),
+                                div().w(px(64.)).text_color(t.text).child(canvas_height_input)
+                                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                                        if event.keystroke.key == "enter" {
+                                            if let Err(error) = this.apply_canvas_fields(cx) { this.status = error; }
+                                            cx.notify();
+                                        }
+                                    })),
                             )
                             .child(div().w(px(1.)).h(px(16.)).mx_1().bg(t.border))
-                            .child("Trim edges"),
+                            .child(self.button("trim", "Trim edges", false).h(px(26.)).border_0().bg(t.sunken)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    match this.document.trim_to_visible_content() {
+                                        Ok(_) => this.refresh(),
+                                        Err(e) => this.status = e.into(),
+                                    }
+                                    cx.notify();
+                                })))
+                            .child(self.button("background", "Background color ⌄", false).h(px(26.)).border_0().bg(t.sunken)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.background_open = !this.background_open;
+                                    cx.notify();
+                                }))),
                     )
                     .child(div().flex_1())
-                    .child(
-                        self.button("import", "▧  Add images", false)
-                            .on_click(cx.listener(|_this, _, window, cx| {
-                                let receiver = cx.prompt_for_paths(PathPromptOptions {
-                                    files: true,
-                                    directories: false,
-                                    multiple: true,
-                                    prompt: Some("Import images".into()),
-                                });
-                                cx.spawn_in(window, async move |this, cx| {
-                                    if let Ok(Ok(Some(paths))) = receiver.await {
-                                        let _ = this.update(cx, |editor, cx| {
-                                            editor.import_images(paths, cx)
-                                        });
-                                    }
-                                })
-                                .detach();
-                            })),
-                    )
-                    .child(
-                        self.button("undo", "↶", false)
+                    .when(!compact, |row| row.child(
+                        self.icon_button("undo", EditorIcon::Undo)
                             .on_click(cx.listener(|this, _, _, cx| this.undo(cx))),
                     )
                     .child(
-                        self.button("redo", "↷", false)
+                        self.icon_button("redo", EditorIcon::Redo)
                             .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
-                    )
-                    .child(self.button("zoom-out", "−", false).on_click(cx.listener(
+                    ))
+                    .child(div().h(px(34.)).flex().items_center().rounded(px(10.)).border_1().border_color(t.border).bg(t.sunken)
+                    .child(self.icon_button("recenter", EditorIcon::Fit).when(self.fit, |button| button.bg(t.hover))
+                        .on_click(cx.listener(|s, _, _, cx| {
+                            s.pan = point(px(0.), px(0.)); s.fit = true; cx.notify();
+                        })))
+                    .child(self.icon_button("zoom-out", EditorIcon::Minus).on_click(cx.listener(
                         |this, _, _, cx| {
                             this.fit = false;
                             this.zoom = this.zoom.saturating_sub(10).max(10);
                             cx.notify()
                         },
                     )))
-                    .child(div().w(px(58.)).text_center().text_sm().child(if self.fit {
-                        "Fit".into()
-                    } else {
-                        format!("{}%", self.zoom)
-                    }))
-                    .child(self.button("zoom-in", "+", false).on_click(cx.listener(
+                    .child(div().w(px(if compact { 72. } else { 92. })).px_2().child(self.slider("zoom-track", EditorSlider::Zoom, cx)))
+                    .child(self.icon_button("zoom-in", EditorIcon::Plus).on_click(cx.listener(
                         |this, _, _, cx| {
                             this.fit = false;
                             this.zoom = (this.zoom + 10).min(400);
                             cx.notify()
                         },
                     )))
-                    .child(self.button("pan-left", "←", false).on_click(cx.listener(
-                        |s, _, _, cx| {
-                            s.fit = false;
-                            s.pan.x += px(32.);
-                            cx.notify()
-                        },
-                    )))
-                    .child(self.button("pan-up", "↑", false).on_click(cx.listener(
-                        |s, _, _, cx| {
-                            s.fit = false;
-                            s.pan.y += px(32.);
-                            cx.notify()
-                        },
-                    )))
-                    .child(self.button("pan-down", "↓", false).on_click(cx.listener(
-                        |s, _, _, cx| {
-                            s.fit = false;
-                            s.pan.y -= px(32.);
-                            cx.notify()
-                        },
-                    )))
-                    .child(self.button("pan-right", "→", false).on_click(cx.listener(
-                        |s, _, _, cx| {
-                            s.fit = false;
-                            s.pan.x -= px(32.);
-                            cx.notify()
-                        },
-                    )))
-                    .child(
-                        self.button("recenter", "Fit", self.fit)
+                    .child(self.button("zoom-preset", if self.fit { "Fit  ⌄".into() } else { format!("{}%  ⌄", self.zoom) }, false)
+                            .w(px(76.)).border_0().bg(t.sunken)
                             .on_click(cx.listener(|s, _, _, cx| {
-                                s.pan = point(px(0.), px(0.));
-                                s.fit = true;
+                                s.zoom_open = !s.zoom_open;
                                 cx.notify()
-                            })),
+                            }))))
+                    .child(self.button("import", "", false).gap_2().h(px(34.))
+                        .child(editor_icon(EditorIcon::Image, icon_color).size(px(14.)))
+                        .child("Add images")
+                        .on_click(cx.listener(|this, _, window, cx| this.prompt_images(window, cx))),
                     ),
             )
             .child(
@@ -1502,19 +1983,27 @@ impl Render for ScreenshotEditor {
                     .child(
                         div()
                             .w(px(56.))
+                            .flex_shrink_0()
                             .py_2()
                             .flex()
                             .flex_col()
                             .items_center()
-                            .gap_1()
+                            .gap(px(2.))
                             .border_r_1()
                             .border_color(t.border)
                             .bg(t.raised)
-                            .children(
-                                tools
-                                    .into_iter()
-                                    .map(|(n, g, v)| self.tool_button(n, g, v, cx)),
-                            ),
+                            .child(self.tool_button("Select", EditorIcon::Select, Tool::Select, cx))
+                            .child(self.tool_button("Crop", EditorIcon::Crop, Tool::Crop, cx))
+                            .child(self.tool_button("Text", EditorIcon::Text, Tool::Text, cx))
+                            .child(div().id("shapes").size(px(38.)).relative().flex().items_center().justify_center().rounded(px(8.))
+                                .bg(if shapes.iter().any(|(_, _, tool)| *tool == self.tool) { t.accent } else { rgba(0) })
+                                .cursor_pointer().hover(|button| button.bg(t.hover))
+                                .child(editor_icon(EditorIcon::Shapes, icon_color))
+                                .child(div().absolute().right(px(2.)).bottom(px(0.)).text_size(px(8.)).text_color(t.subtle).child("◢"))
+                                .on_click(cx.listener(|s, _, _, cx| { s.shapes_open = !s.shapes_open; cx.notify(); })))
+                            .child(self.tool_button("Arrow", EditorIcon::Arrow, Tool::Arrow, cx))
+                            .child(self.tool_button("Pen", EditorIcon::Pen, Tool::Pen, cx))
+                            .child(self.tool_button("Eraser", EditorIcon::Eraser, Tool::Eraser, cx)),
                     )
                     .child(
                         div()
@@ -1524,7 +2013,8 @@ impl Render for ScreenshotEditor {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .bg(t.canvas)
+                            .overflow_hidden()
+                            .bg(t.editor_well)
                             .child(
                                 div()
                                     .id("canvas")
@@ -1574,8 +2064,8 @@ impl Render for ScreenshotEditor {
                                                 let available_h =
                                                     (bounds.size.height / px(1.)).max(1.);
                                                 let scale = if fit {
-                                                    (available_w / image_size.width)
-                                                        .min(available_h / image_size.height)
+                                                    ((available_w + 8.) / image_size.width)
+                                                        .min((available_h + 8.) / image_size.height).min(1.)
                                                 } else {
                                                     zoom as f32 / 100.
                                                 };
@@ -1586,7 +2076,7 @@ impl Render for ScreenshotEditor {
                                                 recorded_bounds.set(Bounds {
                                                     origin: point(
                                                         bounds.origin.x
-                                                            + (bounds.size.width - size.width) / 2.
+                                                            + ((bounds.size.width - size.width) / 2.).max(px(0.))
                                                             + pan.x,
                                                         bounds.origin.y
                                                             + (bounds.size.height - size.height)
@@ -1597,6 +2087,14 @@ impl Render for ScreenshotEditor {
                                                 });
                                             },
                                             move |_, _, window, _| {
+                                                let image = paint_bounds.get();
+                                                window.paint_shadows(image, Corners::default(), &[BoxShadow {
+                                                    color: rgba(0x1313181f).into(),
+                                                    offset: point(px(0.), px(16.)),
+                                                    blur_radius: px(40.),
+                                                    spread_radius: px(0.),
+                                                }]);
+                                                window.paint_quad(quad(image, Corners::default(), rgb(0xf7f7f5), Edges::all(px(1.)), t.border, BorderStyle::Solid));
                                                 let _ = window.paint_image(
                                                     paint_bounds.get(),
                                                     Corners::default(),
@@ -1721,18 +2219,45 @@ impl Render for ScreenshotEditor {
                     .child(
                         div()
                             .id("screenshot-inspector")
-                            .w(px(320.))
+                            .w(px(if compact { 280. } else { 320. }))
+                            .flex_shrink_0()
                             .min_h_0()
-                            .overflow_y_scroll()
+                            .overflow_hidden()
                             .flex()
                             .flex_col()
                             .border_l_1()
                             .border_color(t.border)
                             .bg(t.raised)
+                            .child(div().h(px(254.)).flex_shrink_0().border_b_1().border_color(t.border)
+                                .child(div().h(px(48.)).px_3().flex().items_center().gap(px(6.)).border_b_1().border_color(t.border)
+                                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Layers"))
+                                    .child(div().min_w(px(19.)).h(px(19.)).rounded_full().bg(t.sunken).text_size(px(10.)).text_color(t.subtle).flex().items_center().justify_center().child((self.document.layers.len() + usize::from(self.document.source_present)).to_string()))
+                                    .child(div().flex_1())
+                                    .child(self.icon_button("add-layer", EditorIcon::Plus).on_click(cx.listener(|s, _, window, cx| s.prompt_images(window, cx)))))
+                                .child(div().id("layer-list").h(px(205.)).overflow_y_scroll().p_2().children(layers)
+                                    .when(self.document.source_present, |list| list.child(
+                                        div().h(px(54.)).px_2().flex().items_center().gap_2()
+                                            .child(div().text_size(px(11.)).text_color(t.subtle).child("⠿"))
+                                            .child(img(self.source_thumbnail.clone()).w(px(42.)).h(px(30.)).object_fit(ObjectFit::Contain).rounded(px(6.)))
+                                            .child(div().flex_1().min_w_0().flex().flex_col().gap_1()
+                                                .child(div().text_size(px(12.)).child(self.document.source_name.clone()))
+                                                .child(div().text_size(px(11.)).text_color(t.subtle).child("Locked background")))
+                                            .child(self.icon_button("source-visible", EditorIcon::Eye).w(px(24.)).opacity(if self.document.source_visible { 1. } else { 0.35 })
+                                                .on_click(cx.listener(|s, _, _, cx| { s.document.toggle_source_visibility(); s.refresh(); cx.notify(); })))
+                                            .child(div().w(px(24.)).h(px(30.)).rounded(px(6.)).bg(t.hover).flex().items_center().justify_center().child(editor_icon(EditorIcon::Lock, "#8b730a").size(px(14.))))
+                                            .child(self.icon_button("source-menu", EditorIcon::More).w(px(24.))
+                                                .on_click(cx.listener(|s, _, _, cx| { s.source_menu_open = !s.source_menu_open; cx.notify(); })))
+                                    ))))
                             .when(self.tool != Tool::Select || selected.is_some(), |sidebar| {
                                 sidebar.child(
-                                    section("Inspector", t)
-                                        .child(
+                                    section(match self.tool {
+                                        Tool::Select => "Selection", Tool::Crop => "Crop", Tool::Text => "Text", Tool::Pen => "Freehand", Tool::Arrow => "Arrow", Tool::Rectangle => "Rectangle", Tool::Ellipse => "Ellipse", Tool::Line => "Line", Tool::Triangle => "Triangle", Tool::Diamond => "Diamond", Tool::Star => "Star", Tool::Eraser => "Eraser",
+                                    }, t)
+                                        .id("tool-properties").flex_1().min_h_0().overflow_y_scroll()
+                                        .when(!matches!(self.tool, Tool::Crop | Tool::Text | Tool::Eraser) && selected_text.is_none(), |panel| panel.child(self.style_controls(cx)))
+                                        .when(self.tool == Tool::Crop, |panel| panel.child(div().text_size(px(12.)).text_color(t.muted).child("Drag on the canvas to crop. Press Escape to cancel.")))
+                                        .when(self.tool == Tool::Eraser, |panel| panel.child(div().text_size(px(12.)).text_color(t.muted).child("Drag over an image to remove its background.")))
+                                        .when(self.custom_style_open || self.tool == Tool::Text || selected_text.is_some(), |panel| panel.child(
                                             div()
                                                 .flex()
                                                 .flex_col()
@@ -1760,7 +2285,7 @@ impl Render for ScreenshotEditor {
                                                             cx.notify();
                                                         })),
                                                 ),
-                                        )
+                                        ))
                                         .when(self.tool == Tool::Text || selected_text.is_some(), |panel| {
                                             let style = selected_text
                                                 .as_ref()
@@ -1821,13 +2346,7 @@ impl Render for ScreenshotEditor {
                                                 ),
                                             )
                                         })
-                                        .child(div().text_sm().text_color(t.muted).child(
-                                            match self.selected {
-                                                Some(id) => format!("Layer {id} · opacity 100%"),
-                                                None => "Select a layer to edit its style".into(),
-                                            },
-                                        ))
-                                        .when_some(selected, |panel, id| {
+                                        .when_some(selected.filter(|id| self.layer_menu == Some(*id)), |panel, id| {
                                             panel.child(
                                                 div()
                                                     .flex()
@@ -1959,75 +2478,19 @@ impl Render for ScreenshotEditor {
                                             )
                                         }),
                                 )
-                            })
-                            .child(
-                                section("Layers", t)
-                                    .flex_1()
-                                    .overflow_hidden()
-                                    .child(
-                                        div()
-                                            .h(px(42.))
-                                            .px_2()
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(if self.document.source_visible {
-                                                "◉"
-                                            } else {
-                                                "○"
-                                            })
-                                            .child(self.document.source_name.clone()),
-                                    )
-                                    .children(layers),
-                            )
-                            .child(
-                                section("Document", t).child(
-                                    div()
-                                        .flex()
-                                        .flex_wrap()
-                                        .gap_2()
-                                        .child(field("WIDTH", canvas_width_input, t).w(px(118.)))
-                                        .child(field("HEIGHT", canvas_height_input, t).w(px(118.)))
-                                        .child(
-                                            self.button("canvas-apply", "Resize canvas", true)
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.status = match this.apply_canvas_fields(cx)
-                                                    {
-                                                        Ok(()) => "Canvas resized".into(),
-                                                        Err(error) => error,
-                                                    };
-                                                    cx.notify();
-                                                })),
-                                        )
-                                        .child(self.button("flatten", "Flatten", false).on_click(
-                                            cx.listener(|this, _, _, cx| {
-                                                match this.document.flatten_layers() {
-                                                    Ok(_) => this.refresh(),
-                                                    Err(e) => this.status = e,
-                                                }
-                                                cx.notify()
-                                            }),
-                                        ))
-                                        .child(self.button("trim", "Trim", false).on_click(
-                                            cx.listener(|this, _, _, cx| {
-                                                match this.document.trim_to_visible_content() {
-                                                    Ok(_) => this.refresh(),
-                                                    Err(e) => this.status = e.into(),
-                                                }
-                                                cx.notify()
-                                            }),
-                                        )),
-                                ),
-                            ),
+                            }),
                     ),
             )
             .child(
                 div()
-                    .min_h(px(72.))
-                    .py_3()
+                    .h(px(if compact { 101. } else { 77. }))
+                    .flex_shrink_0()
+                    .relative()
+                    .py_2()
+                    .when(compact, |bar| bar.pb(px(32.)))
                     .px_3()
                     .flex()
-                    .items_center()
+                    .items_end()
                     .gap_3()
                     .border_t_1()
                     .border_color(t.border)
@@ -2035,6 +2498,7 @@ impl Render for ScreenshotEditor {
                     .when(self.export_open, |bar| {
                         bar.child(
                             div()
+                                .absolute().bottom(px(76.)).left_3().w(px(420.)).p_3().rounded(px(10.)).border_1().border_color(t.border).bg(t.raised).shadow_lg()
                                 .flex()
                                 .flex_wrap()
                                 .gap_2()
@@ -2070,7 +2534,9 @@ impl Render for ScreenshotEditor {
                         )
                     })
                     .child(
-                        self.button("export-options", "Export settings", self.export_open)
+                        self.button("export-options", "", self.export_open).w(px(210.)).h(px(43.)).flex_shrink_0().flex_col().items_start().justify_start().py(px(5.)).gap(px(2.))
+                            .child(div().w_full().flex().justify_between().child("Export settings").child("⌄"))
+                            .child(div().text_size(px(9.)).text_color(t.subtle).child(format!("{} · {} × {}", self.format.extension().to_uppercase(), self.export_width, self.export_height)))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.export_open = !this.export_open;
                                 this.invalidate_compression_preview();
@@ -2078,32 +2544,16 @@ impl Render for ScreenshotEditor {
                             })),
                     )
                     .child(
-                        self.button("copy-image", "Copy image", false)
-                            .on_click(cx.listener(|this, _, _, cx| this.copy_image(cx))),
-                    )
-                    .child(
                         div()
                             .flex_1()
+                            .min_w(px(180.))
+                            .flex().flex_col().gap_2()
                             .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(t.subtle)
-                                    .child("FILE NAME & DESTINATION"),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .child(self.destination.display().to_string()),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(t.muted)
-                                    .child(self.status.clone()),
-                            ),
-                    )
-                    .child(
-                        self.button("destination", "Change…", false)
+                                div().flex().items_center().gap_2().text_size(px(10.)).text_color(t.subtle)
+                                    .child("Filename")
+                                    .child(div().flex_1())
+                                    .child(div().max_w(px(210.)).truncate().child(format!("Saving to {}", self.destination.parent().unwrap_or(Path::new(".")).display())))
+                                    .child(self.button("destination", "Change…", false).h(px(16.)).px_0().border_0().text_size(px(10.)).text_color(t.subtle)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 let parent = this.destination.parent().unwrap_or(Path::new("."));
                                 let name = format!("Capture-edited.{}", this.format.extension());
@@ -2112,6 +2562,7 @@ impl Render for ScreenshotEditor {
                                     if let Ok(Ok(Some(path))) = receiver.await {
                                         let _ = this.update(cx, |editor, cx| {
                                             editor.destination = path;
+                                            editor.filename_input = None;
                                             editor.invalidate_compression_preview();
                                             editor.status = "Destination updated".into();
                                             cx.notify();
@@ -2119,44 +2570,109 @@ impl Render for ScreenshotEditor {
                                     }
                                 })
                                 .detach();
+                            }))))
+                            .child(div().h(px(36.)).flex().items_center().border_1().border_color(t.border).rounded(px(8.)).bg(t.field)
+                                .child(div().flex_1().min_w_0().child(filename_input))
+                                .child(self.button("format", format!(".{}  ⌄", self.format.extension()), false).h(px(34.)).border_0().border_l_1().text_color(t.subtle)
+                                    .on_click(cx.listener(|s, _, _, cx| { s.format_open = !s.format_open; cx.notify(); })))),
+                    )
+                    .child(self.button("copy-image", "", false).h(px(36.)).gap_2().flex_shrink_0()
+                        .child(editor_icon(EditorIcon::Copy, icon_color).size(px(14.))).child("Copy image")
+                        .on_click(cx.listener(|this, _, _, cx| this.copy_image(cx))))
+                    .child(div().w(px(250.)).min_w(px(100.)).text_size(px(10.)).text_color(t.subtle).text_center()
+                        .when(compact, |status| status.absolute().bottom(px(6.)).left_3().w_auto().text_left())
+                        .child(
+                        if !matches!(self.status.as_str(), "Ready" | "Draft autosaved") { self.status.clone() }
+                        else if self.make_copy { "Save creates a new file and leaves the original untouched.".into() }
+                        else { "Save overwrites the chosen file.".into() }
+                    ))
+                    .child(
+                        div().id("make-copy").h(px(36.)).flex_shrink_0().flex().items_center().gap_2().cursor_pointer()
+                            .child(div().w(px(27.)).h(px(15.)).rounded_full().border_1().border_color(t.border).bg(if self.make_copy { t.accent } else { t.field }).px(px(2.)).flex().items_center()
+                                .when(self.make_copy, |toggle| toggle.justify_end())
+                                .child(div().size(px(9.)).rounded_full().bg(t.subtle)))
+                            .child(div().text_size(px(10.)).text_color(t.muted).child("Save as new file"))
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                s.make_copy = !s.make_copy;
+                                if let Some(source) = &s.source_path {
+                                    s.destination = source.clone();
+                                    if s.make_copy {
+                                        s.destination.set_file_name(format!("{}-edited.{}", source.file_stem().unwrap_or_default().to_string_lossy(), s.format.extension()));
+                                    }
+                                    s.filename_input = None;
+                                }
+                                cx.notify();
                             })),
                     )
                     .child(
-                        self.button("png", "PNG", self.format == Format::Png)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.format = Format::Png;
-                                this.invalidate_compression_preview();
-                                cx.notify()
-                            })),
-                    )
-                    .child(
-                        self.button("jpeg", "JPEG", self.format == Format::Jpeg)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.format = Format::Jpeg;
-                                this.invalidate_compression_preview();
-                                cx.notify()
-                            })),
-                    )
-                    .child(
-                        self.button("webp", "WebP", self.format == Format::Webp)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.format = Format::Webp;
-                                this.invalidate_compression_preview();
-                                cx.notify()
-                            })),
-                    )
-                    .child(
-                        self.button("draft", "Save draft", false)
-                            .on_click(cx.listener(|this, _, _, cx| this.save_draft(cx))),
-                    )
-                    .child(
-                        self.button("save", "Save copy", true)
+                        self.button("save", "", true).h(px(36.)).w(px(106.)).flex_shrink_0().gap_2()
                             .bg(t.accent)
                             .text_color(rgb(0x17140a))
+                            .child(editor_icon(EditorIcon::Save, "#17140a").size(px(14.))).child("Save")
                             .on_click(cx.listener(|this, _, _, cx| this.export(cx))),
                     ),
             )
+            .when(self.shapes_open || self.zoom_open || self.background_open || self.format_open || self.source_menu_open, |root| root.child(
+                div().absolute().inset_0().on_mouse_down(MouseButton::Left, cx.listener(|s, _, _, cx| {
+                    cx.stop_propagation(); s.shapes_open = false; s.zoom_open = false; s.background_open = false; s.format_open = false; s.source_menu_open = false; cx.notify();
+                }))
+            ))
+            .when(self.source_menu_open, |root| root.child(
+                div().occlude().absolute().right_3().top(px(155.)).w(px(170.)).p_2().rounded(px(10.)).border_1().border_color(t.border).bg(t.raised).shadow_lg().flex().flex_col()
+                    .child(self.button("flatten", "Flatten", false).border_0().justify_start().on_click(cx.listener(|s, _, _, cx| {
+                        match s.document.flatten_layers() { Ok(_) => s.refresh(), Err(e) => s.status = e }
+                        s.source_menu_open = false; cx.notify();
+                    })))
+                    .child(self.button("draft", "Save draft", false).border_0().justify_start().on_click(cx.listener(|s, _, _, cx| { s.source_menu_open = false; s.save_draft(cx); })))
+            ))
+            .when(self.shapes_open, |root| root.child(
+                div().occlude().absolute().left(px(56.)).top(px(148.)).p(px(6.)).w(px(154.)).flex().flex_wrap().gap(px(4.)).rounded(px(10.)).border_1().border_color(t.border).bg(t.raised).shadow_lg()
+                    .children(shapes.into_iter().map(|(name, icon, tool)| {
+                        self.button(name, "", self.tool == tool).size(px(44.)).px_0().border_0().bg(if self.tool == tool { t.accent } else { t.raised })
+                            .child(editor_icon(icon, if self.tool == tool { "#17140a" } else { icon_color }).size(px(22.)))
+                            .on_click(cx.listener(move |s, _, _, cx| { s.shapes_open = false; s.choose_tool(tool, cx); }))
+                    }))
+            ))
+            .when(self.zoom_open, |root| root.child(
+                div().occlude().absolute().right(px(132.)).top(px(46.)).w(px(100.)).p_2().rounded(px(10.)).border_1().border_color(t.border).bg(t.raised).shadow_lg()
+                    .children([(0, "Fit"), (50, "50%"), (100, "100%"), (200, "200%")].into_iter().map(|(zoom, label)| {
+                        self.button(label, label, if zoom == 0 { self.fit } else { !self.fit && self.zoom == zoom }).w_full().border_0().justify_start()
+                            .on_click(cx.listener(move |s, _, _, cx| {
+                                s.fit = zoom == 0; if zoom > 0 { s.zoom = zoom; } s.pan = point(px(0.), px(0.)); s.zoom_open = false; cx.notify();
+                            }))
+                    }))
+            ))
+            .when(self.background_open, |root| root.child(
+                div().occlude().absolute().left(px(365.)).top(px(46.)).w(px(210.)).p_3().rounded(px(10.)).border_1().border_color(t.border).bg(t.raised).shadow_lg().flex().flex_col().gap_2()
+                    .child("Background color")
+                    .children([("Transparent", None), ("Off-white", Some([247,247,245,255])), ("White", Some([255,255,255,255])), ("Black", Some([0,0,0,255]))].into_iter().map(|(name, color)| {
+                        self.button(name, name, self.document.background == color).on_click(cx.listener(move |s, _, _, cx| {
+                            s.document.set_background(color); s.background_open = false; s.refresh(); cx.notify();
+                        }))
+                    }))
+            ))
+            .when(self.format_open, |root| root.child(
+                div().occlude().absolute().left(px(475.)).bottom(px(47.)).w(px(135.)).p_2().rounded(px(10.)).border_1().border_color(t.border).bg(t.raised).shadow_lg()
+                    .children([(Format::Png, "PNG"), (Format::Jpeg, "JPEG"), (Format::Webp, "WebP")].into_iter().map(|(format, name)| {
+                        self.button(name, name, self.format == format).w_full().border_0().justify_start().on_click(cx.listener(move |s, _, _, cx| {
+                            s.format = format; s.format_open = false; s.invalidate_compression_preview(); cx.notify();
+                        }))
+                    }))
+            ))
     }
+}
+
+fn ensure_chrome_input(
+    slot: &mut Option<Entity<crate::preferences::input::TextInput>>,
+    value: impl ToString,
+    placeholder: &'static str,
+    cx: &mut Context<ScreenshotEditor>,
+) -> Entity<crate::preferences::input::TextInput> {
+    slot.get_or_insert_with(|| {
+        let value = value.to_string();
+        cx.new(|cx| crate::preferences::input::TextInput::new(value, placeholder, cx).chrome())
+    })
+    .clone()
 }
 
 fn ensure_input(
@@ -2179,7 +2695,7 @@ fn replace_input(
 ) {
     if let Some(input) = slot {
         input.update(cx, |input, cx| {
-            *input = crate::preferences::input::TextInput::new(value, "", cx);
+            input.set_value(value, cx);
         });
     } else {
         *slot = Some(cx.new(|cx| crate::preferences::input::TextInput::new(value, "", cx)));
@@ -2321,7 +2837,8 @@ fn color_hex(color: [u8; 4]) -> String {
 
 fn section(title: &'static str, t: Theme) -> Div {
     div()
-        .p_4()
+        .px_3()
+        .pb_3()
         .gap_3()
         .flex()
         .flex_col()
@@ -2329,12 +2846,50 @@ fn section(title: &'static str, t: Theme) -> Div {
         .border_color(t.border)
         .child(
             div()
-                .text_xs()
+                .h(px(48.))
+                .mx(-px(12.))
+                .px_3()
+                .flex()
+                .items_center()
+                .border_b_1()
+                .border_color(t.border)
+                .text_size(px(13.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(t.muted)
+                .text_color(t.text)
                 .child(title),
         )
 }
+/// GPUI 0.2.2's SVG decoder returns tiny-skia premultiplied RGBA, unlike
+/// its raster decoders and RenderImage's straight-alpha BGRA contract.
+fn svg_render_image(svg: String) -> Arc<RenderImage> {
+    let tree = resvg::usvg::Tree::from_data(svg.as_bytes(), &resvg::usvg::Options::default())
+        .expect("valid editor SVG");
+    let size = tree.size().to_int_size();
+    let mut pixmap =
+        resvg::tiny_skia::Pixmap::new(size.width(), size.height()).expect("SVG dimensions");
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::identity(),
+        &mut pixmap.as_mut(),
+    );
+    unpremultiply_svg_bgra(pixmap.data_mut());
+    Arc::new(RenderImage::new([image::Frame::new(
+        RgbaImage::from_raw(size.width(), size.height(), pixmap.take()).expect("SVG dimensions"),
+    )]))
+}
+
+fn unpremultiply_svg_bgra(bytes: &mut [u8]) {
+    for pixel in bytes.chunks_exact_mut(4) {
+        let alpha = u32::from(pixel[3]);
+        if alpha > 0 {
+            for channel in &mut pixel[..3] {
+                *channel = ((u32::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
+            }
+        }
+        pixel.swap(0, 2);
+    }
+}
+
 fn render_image(image: &RgbaImage) -> Arc<RenderImage> {
     let mut bgra = image.clone();
     for pixel in bgra.pixels_mut() {
@@ -2546,7 +3101,14 @@ fn decode(path: &Path) -> anyhow::Result<RgbaImage> {
         .decode()?
         .to_rgba8())
 }
-fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+fn export_path(destination: &Path, name: &str, format: Format) -> Result<PathBuf, &'static str> {
+    if matches!(name.trim(), "" | "." | "..") || name.contains(['/', '\\', '\0']) {
+        return Err("Enter a filename without directory separators");
+    }
+    Ok(destination.with_file_name(format!("{name}.{}", format.extension())))
+}
+
+fn write_export(path: &Path, bytes: &[u8], new_file: bool) -> std::io::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| std::io::Error::other("missing parent"))?;
@@ -2555,7 +3117,11 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     tmp.write_all(bytes)?;
     tmp.as_file_mut().sync_all()?;
-    tmp.persist(path).map_err(|e| e.error)?;
+    if new_file {
+        tmp.persist_noclobber(path).map_err(|e| e.error)?;
+    } else {
+        tmp.persist(path).map_err(|e| e.error)?;
+    }
     Ok(())
 }
 fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
@@ -2585,6 +3151,53 @@ fn mock_artwork() -> RgbaImage {
 mod tests {
     use super::*;
     use core::prelude::v1::test;
+
+    #[test]
+    fn svg_conversion_preserves_asymmetric_colors_and_unpremultiplies_edges() {
+        let mut pixels = [255, 59, 92, 255, 100, 25, 50, 128, 0, 0, 0, 0];
+        unpremultiply_svg_bgra(&mut pixels);
+        assert_eq!(pixels, [92, 59, 255, 255, 100, 50, 199, 128, 0, 0, 0, 0]);
+        let image = svg_render_image(r##"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1"><path d="M0 0h1v1H0Z" fill="#ff3b5c"/><path d="M1 0h1v1H1Z" fill="#c83264" fill-opacity="0.5"/></svg>"##.into());
+        let bytes = image.as_bytes(0).unwrap();
+        assert_eq!(&bytes[..4], &[92, 59, 255, 255]);
+        assert_eq!(bytes[7], 128);
+        assert!((i16::from(bytes[4]) - 100).abs() <= 1);
+        assert!((i16::from(bytes[5]) - 50).abs() <= 1);
+        assert!((i16::from(bytes[6]) - 200).abs() <= 1);
+    }
+
+    #[test]
+    fn filename_field_keeps_dots_and_rejects_paths_or_empty_names() {
+        let destination = Path::new("/captures/old.png");
+        assert_eq!(
+            export_path(destination, "screen.v2", Format::Jpeg).unwrap(),
+            Path::new("/captures/screen.v2.jpg")
+        );
+        for invalid in [
+            "",
+            " ",
+            ".",
+            "..",
+            "../source",
+            "folder/image",
+            "folder\\image",
+            "bad\0name",
+        ] {
+            assert!(export_path(destination, invalid, Format::Png).is_err());
+        }
+    }
+
+    #[test]
+    fn save_as_new_refuses_existing_files_and_explicit_overwrite_replaces_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capture.png");
+        write_export(&path, b"original", true).unwrap();
+        assert!(write_export(&path, b"edited", true).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        write_export(&path, b"edited", false).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"edited");
+    }
+
     #[test]
     fn edit_undo_crop_and_encode_produce_real_bytes() {
         let mut d = Document::new(mock_artwork());
@@ -2619,7 +3232,7 @@ mod tests {
         let bytes = b"immutable source";
         fs::write(&source, bytes).unwrap();
         let output = dir.path().join("captures/copy.png");
-        atomic_write(&output, b"new bytes").unwrap();
+        write_export(&output, b"new bytes", true).unwrap();
         assert_eq!(fs::read(source).unwrap(), bytes);
         assert_eq!(fs::read(output).unwrap(), b"new bytes");
     }
@@ -2711,7 +3324,7 @@ mod tests {
             image::imageops::resize(&rendered, 317, 149, image::imageops::FilterType::Lanczos3);
         let bytes = encode_webp(&scaled, Some(70)).unwrap();
         let destination = dir.path().join("export.webp");
-        atomic_write(&destination, &bytes).unwrap();
+        write_export(&destination, &bytes, true).unwrap();
         let decoded = decode(&destination).unwrap();
         assert_eq!(decoded.dimensions(), (317, 149));
         assert_ne!(decoded.get_pixel(19, 71), decoded.get_pixel(203, 71));
