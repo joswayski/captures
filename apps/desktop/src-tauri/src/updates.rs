@@ -538,11 +538,15 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
     }
 
     tokio::time::sleep(RESTART_FADE_DURATION).await;
+    prepare_update_restart();
+    app.restart();
+}
+
+fn prepare_update_restart() {
     if let Err(error) = mark_update_restart_pending() {
         eprintln!("failed to remember update restart: {error}");
     }
     crate::crash_report::mark_clean_exit();
-    app.restart();
 }
 
 pub fn take_update_restart_pending() -> bool {
@@ -612,7 +616,18 @@ async fn check_for_updates_inner(app: &AppHandle, manual: bool) -> Result<Update
         );
     }
 
-    let checked = match app.updater() {
+    // Windows exits inside download_and_install, before our restart countdown.
+    // This hook runs after verification/extraction, not merely after download.
+    let exit_app = app.clone();
+    let checked = match app
+        .updater_builder()
+        .on_before_exit(move || {
+            prepare_update_restart();
+            // Replacing the updater's default hook must preserve Tauri cleanup.
+            exit_app.cleanup_before_exit();
+        })
+        .build()
+    {
         Ok(updater) => updater.check().await,
         Err(error) => Err(error),
     };
