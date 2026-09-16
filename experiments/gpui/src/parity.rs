@@ -281,7 +281,7 @@ impl Surface {
                 "schema": 1, "pid": std::process::id(), "window_id": native_window_id(window)?,
                 "scale": window.scale_factor(), "scenario": self.config.scenario.name(),
                 "mode": if self.config.mode == Mode::Run { "run" } else { "checkpoint" },
-                "renderer": "gpui-0.2.2-cpu-raster-texture-upload", "checkpointMs": self.config.checkpoint_ms,
+                "renderer": "gpui-0.2.2-subpixel-cpu-raster-texture-upload", "checkpointMs": self.config.checkpoint_ms,
             });
             write_json(
                 &PathBuf::from(format!("{}.ready.json", self.output.display())),
@@ -343,11 +343,13 @@ impl Render for Surface {
             .size_full()
             .bg(rgb(0x20242b))
             .overflow_hidden()
-            .child(
+            .child(motion::translated(
+                178.,
+                survivor_y(self.config.scenario, self.scene_ms),
                 div()
                     .absolute()
-                    .left(px(178.))
-                    .top(px(survivor_y(self.config.scenario, self.scene_ms)))
+                    .left_0()
+                    .top_0()
                     .w(px(284.))
                     .h(px(160.))
                     .rounded(px(12.))
@@ -359,7 +361,7 @@ impl Render for Surface {
                             .rounded(px(12.))
                             .object_fit(ObjectFit::Fill),
                     ),
-            )
+            ))
             .children(self.frame.clone().map(|frame| {
                 div()
                     .absolute()

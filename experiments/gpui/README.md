@@ -5,7 +5,10 @@ The goal is to retain the shipping Tauri app's UI, behavior, and animations whil
 evaluating a Rust/GPUI frontend. That acceptance criterion has not been met.
 Do not use the resource measurements to justify replacing Tauri yet.
 
-This standalone Cargo workspace pins GPUI 0.2.2. It uses the existing capture,
+This standalone Cargo workspace pins GPUI 0.2.2 with an isolated
+[subpixel image-placement patch](vendor/README.md). This is a maintained source
+fork, not an upstream feature; only the manifest and image bounds differ from
+the published package. It uses the existing capture,
 session, recording, image, media, and feedback crates. The portable document,
 draft, and encoder modules come from `experiments/windows-native`; **none of that
 experiment's Win32 UI is used**. Text rendering and audio-edit filter logic are
@@ -55,13 +58,14 @@ each cycle. Callback intervals measure actual main-thread callbacks, **not
 presented FPS**. macOS build/runtime acceptance must come from native CI and the
 on-screen Mac run; Linux/Chromium comparisons cannot establish it.
 
-The 24-checkpoint Linux diagnostic comparison still fails the harness pixel gate:
-20 pass and 4 fail. Image elements now use device-snapped cover bounds, matching
-WebKit's paint geometry; canvas dust retains its separate floating cover bounds.
-The remaining failures are the 290ms survivor slide (also 2090ms after delete):
-GPUI 0.2.2 floors physical image positions instead of retaining CSS-like fractional
-translation. Blur/antialiasing also remain visually different. The gate was not
-relaxed and no comparable performance trial was accepted. See
+All 24 Linux diagnostic checkpoints pass the unchanged harness pixel gate.
+Image elements use device-snapped cover bounds, matching WebKit's paint geometry;
+canvas dust retains separate floating cover bounds. The published GPUI renderer
+also rounded animated image positions: the source patch and shared post-layout
+translation now preserve fractional movement of preview cards and their hitboxes.
+This improves the former 8/24 and 20/24 results without changing the thresholds.
+Blur/antialiasing still differ visually within those tolerances; passing these
+component checkpoints does not establish whole-app or macOS parity. See
 [raw diagnostic results](results/linux-component-checkpoints.json). The harness
 must pass its visual checks on the Mac before its performance results are used.
 
@@ -162,6 +166,9 @@ Executed UI checks, not just code inspection:
   Enter removes exactly one card. Escape still cancels after selecting Delete.
   macOS/Windows keep their native prompts. Software-rendered animation still
   visibly stutters.
+- After the subpixel renderer patch, all 24 frozen dust/settle checkpoints passed.
+  Real preview hover/click targets, keyboard confirmation, dissolve/survivor
+  movement and animated blurred GIF frames were exercised again and inspected.
 - Real display capture: 1600 × 1000 PNG containing only the known desktop color.
   Real region capture: dragging (110,160) to (730,480) saved a 620 × 320 PNG,
   also with no selector pixels; both opened the screenshot editor.

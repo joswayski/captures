@@ -1,6 +1,75 @@
 //! Transitions using the shipping shared/design.css motion curve.
 use std::time::Instant;
 
+/// Apply animation translation after Taffy snaps static layout. Prepaint moves
+/// descendants and hitboxes together; painting uses those same stored bounds.
+pub fn translated(x: f32, y: f32, child: impl gpui::IntoElement) -> Translated {
+    Translated {
+        child: child.into_any_element(),
+        offset: gpui::point(gpui::px(x), gpui::px(y)),
+    }
+}
+
+pub struct Translated {
+    child: gpui::AnyElement,
+    offset: gpui::Point<gpui::Pixels>,
+}
+
+impl gpui::IntoElement for Translated {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl gpui::Element for Translated {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) -> (gpui::LayoutId, ()) {
+        (self.child.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<gpui::Pixels>,
+        _: &mut (),
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) {
+        window.with_element_offset(self.offset, |window| self.child.prepaint(window, cx));
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<gpui::Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) {
+        self.child.paint(window, cx);
+    }
+}
+
 /// Retarget from the currently displayed value, including rapid reversals.
 pub struct Motion {
     pub from: f32,

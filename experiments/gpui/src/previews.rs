@@ -622,14 +622,18 @@ impl Preview {
         }
 
         if let Some(dissolve) = display_dissolve {
-            return div()
-                .absolute()
-                .left(px(left - PAD as f32))
-                .top(px(top - PAD as f32))
-                .w(px((WIDTH + 2 * PAD) as f32))
-                .h(px((HEIGHT + 2 * PAD) as f32))
-                .child(img(dissolve).size_full())
-                .into_any_element();
+            return crate::motion::translated(
+                left - PAD as f32,
+                top - PAD as f32,
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .w(px((WIDTH + 2 * PAD) as f32))
+                    .h(px((HEIGHT + 2 * PAD) as f32))
+                    .child(img(dissolve).size_full()),
+            )
+            .into_any_element();
         }
 
         let is_hovered = self.hovered == Some(id) && collapse < 0.01 && artifact.exit.is_none();
@@ -660,8 +664,8 @@ impl Preview {
         let mut card = div()
             .id(("preview", id as usize))
             .absolute()
-            .left(px(left))
-            .top(px(top))
+            .left_0()
+            .top_0()
             .w(px(CARD_WIDTH))
             .h(px(CARD_HEIGHT))
             .rounded(px(12.))
@@ -869,7 +873,7 @@ impl Preview {
                     }),
             );
         }
-        card.into_any_element()
+        crate::motion::translated(left, top, card).into_any_element()
     }
 }
 

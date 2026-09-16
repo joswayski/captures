@@ -16,13 +16,16 @@
     "harnessCommit": "ab6a31f57e072e31a9447c46e86165f18b827ef1"
   },
   "candidate": {
-    "renderer": "GPUI 0.2.2 CPU raster plus texture upload",
-    "binarySha256": "bb4697e0a0ef7643c0a837ba518489e110722805b76fb48ea1226ecfa3890877",
+    "renderer": "GPUI 0.2.2 + subpixel-images source patch; CPU raster plus texture upload",
+    "binarySha256": "4e8be9424fa4efd9cc5784f1b78e1486799cc8a6fff6463e20553770f32df7c1",
     "sourceSha256": {
-      "experiments/gpui/src/parity.rs": "2958fdfa938d4fb10bf953234d57a962ad88562e80e0763658f7056a1b0d11dc",
+      "experiments/gpui/src/parity.rs": "568cc36fbf860498980097e4d47b9603fdf4db75b8ffeb5a75b1a49357a2185d",
       "experiments/gpui/src/effects.rs": "a65e9362cdb5d54e3fbcbc10134930fe7735be16cb93038776d5907f2a3e995a",
-      "experiments/gpui/src/motion.rs": "353d8b5a520ad2e5e97dbb969f7436c6ae93ffbd6e02d0a6456e2de912e5a797",
-      "experiments/gpui/Cargo.lock": "c39042476443c1c623debfb63dbe63f77165e5e2911738413064c9b47bae8277"
+      "experiments/gpui/src/motion.rs": "20baf78403828b15744ac680ba8c112ea99646140d44af195f7c5ce31602131b",
+      "experiments/gpui/Cargo.lock": "f389896345c32cc2903f7d72b18181ad9e3d5e3165a5a716200dcd38953cefff",
+      "experiments/gpui/Cargo.toml": "258e8bba85b3c0db27fae4b78eb37740322f6ca6a1983f1a071267a6e0cad49d",
+      "experiments/gpui/vendor/gpui/Cargo.toml": "0241c94d35bde286532d21edfe9a81a3d6f9d0529f5c3caf5b5b9e007a773d12",
+      "experiments/gpui/vendor/gpui/src/window.rs": "501941b9c76d086f5f52f9e10a20eca2703d5a1be459f7c81ac49cbb19f89c10"
     }
   },
   "fixtureSha256": "0684f888ef7e41e2d399961acd1ef2096eecb44ef4825186e06a3bb230da0bb1",
@@ -30,9 +33,9 @@
     "meanAbsoluteRGBError": 2,
     "fractionOver16": 0.01
   },
-  "passed": 20,
+  "passed": 24,
   "total": 24,
-  "visualGateAccepted": false,
+  "visualGateAccepted": true,
   "comparablePerformanceAccepted": false,
   "checkpoints": [
     {
@@ -92,11 +95,11 @@
     {
       "scenario": "dust-bottom-left",
       "ms": 2090,
-      "meanAbsoluteRGBError": 0.6729243400236894,
-      "fractionOver16": 0.018437690988842195,
-      "pixelGatePassed": false,
+      "meanAbsoluteRGBError": 0.2672439749532582,
+      "fractionOver16": 0.00333728181911608,
+      "pixelGatePassed": true,
       "referencePngSha256": "183d08a7ccd5f7f58ae4d15f21a6137805e4057ec897e4e640c19f8ddb682391",
-      "candidatePngSha256": "8ecafdc0432d0fb89b5f0fc0f03cc254beb1526c6cf131e238388af5a98ddfe1"
+      "candidatePngSha256": "4a02f6ce3c55a823fc14ff97860659b0b9411e3902707c220a38e00cfa1e3795"
     },
     {
       "scenario": "dust-bottom-left",
@@ -164,11 +167,11 @@
     {
       "scenario": "dust-top-right",
       "ms": 2090,
-      "meanAbsoluteRGBError": 0.49475287775944904,
-      "fractionOver16": 0.015424970929446443,
-      "pixelGatePassed": false,
+      "meanAbsoluteRGBError": 0.31805315159382663,
+      "fractionOver16": 0.0033535266118563394,
+      "pixelGatePassed": true,
       "referencePngSha256": "9c944ba02165275928537544ba5f14e97658038c8a882dff62a87dd859145713",
-      "candidatePngSha256": "c437f755aabdb6e92298b3df2223ffe4de9c3db0b555c03d3bdd97147364d1f0"
+      "candidatePngSha256": "44908411b8f9dba9711ee9f8bb138cd371313dbd3f6b01d410b61494bae9fb53"
     },
     {
       "scenario": "dust-top-right",
@@ -191,20 +194,20 @@
     {
       "scenario": "settle-bottom",
       "ms": 145,
-      "meanAbsoluteRGBError": 0.32082652733756656,
-      "fractionOver16": 0.005944203455102063,
+      "meanAbsoluteRGBError": 0.25708552389606454,
+      "fractionOver16": 0.0005895588585275092,
       "pixelGatePassed": true,
       "referencePngSha256": "9c686d468f725fa05cbec3852d1507f69181dabf7d7fd92fea443739a7614a29",
-      "candidatePngSha256": "6347221e6682190aedc541149bbe530edbb7ef6d6acdb811db9041d5e5d473e5"
+      "candidatePngSha256": "ef586f14fe313b62bbbecf98919ca6245d145c0270a07160c126fa0929214fdd"
     },
     {
       "scenario": "settle-bottom",
       "ms": 290,
-      "meanAbsoluteRGBError": 0.6729243400236894,
-      "fractionOver16": 0.018437690988842195,
-      "pixelGatePassed": false,
+      "meanAbsoluteRGBError": 0.2672439749532582,
+      "fractionOver16": 0.00333728181911608,
+      "pixelGatePassed": true,
       "referencePngSha256": "183d08a7ccd5f7f58ae4d15f21a6137805e4057ec897e4e640c19f8ddb682391",
-      "candidatePngSha256": "8ecafdc0432d0fb89b5f0fc0f03cc254beb1526c6cf131e238388af5a98ddfe1"
+      "candidatePngSha256": "4a02f6ce3c55a823fc14ff97860659b0b9411e3902707c220a38e00cfa1e3795"
     },
     {
       "scenario": "settle-bottom",
@@ -227,20 +230,20 @@
     {
       "scenario": "settle-top",
       "ms": 145,
-      "meanAbsoluteRGBError": 0.16684605745914127,
-      "fractionOver16": 0.0004921978527192579,
+      "meanAbsoluteRGBError": 0.18322497593059356,
+      "fractionOver16": 0.002433984920111206,
       "pixelGatePassed": true,
       "referencePngSha256": "5115741181726578932f20399c1e8150bf684bf83c004224cad36fdec5aad50a",
-      "candidatePngSha256": "694e96a8ba5e64ecda57e3bfd1eeacefff8aa67c44e0d42913685b9d8ccd3ae7"
+      "candidatePngSha256": "d6dc300958972d23901f1fa053b0710e3e27957d96abcd0bbf963ff5eadf0367"
     },
     {
       "scenario": "settle-top",
       "ms": 290,
-      "meanAbsoluteRGBError": 0.49475287775944904,
-      "fractionOver16": 0.015424970929446443,
-      "pixelGatePassed": false,
+      "meanAbsoluteRGBError": 0.31805315159382663,
+      "fractionOver16": 0.0033535266118563394,
+      "pixelGatePassed": true,
       "referencePngSha256": "9c944ba02165275928537544ba5f14e97658038c8a882dff62a87dd859145713",
-      "candidatePngSha256": "c437f755aabdb6e92298b3df2223ffe4de9c3db0b555c03d3bdd97147364d1f0"
+      "candidatePngSha256": "44908411b8f9dba9711ee9f8bb138cd371313dbd3f6b01d410b61494bae9fb53"
     },
     {
       "scenario": "settle-top",

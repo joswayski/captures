@@ -11,6 +11,7 @@ path = "src/parity.rs"
 
 # Evaluation only. The shipping application and release pipeline remain Tauri.
 [workspace]
+exclude = ["vendor/gpui"]
 
 [dependencies]
 anyhow = "1"
@@ -18,7 +19,7 @@ auto-launch = "0.5"
 env_logger = "0.11"
 font-kit = { version = "0.14", features = ["source-fontconfig-dlopen"] }
 global-hotkey = "0.8"
-gpui = "=0.2.2"
+gpui = { version = "=0.2.2", path = "vendor/gpui", features = ["subpixel-images"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "tiff"] }
 jiff = "0.2"
 raw-window-handle = "0.6"
