@@ -420,6 +420,12 @@
   }
   func fail(_ error: Error) -> Never {
     FileHandle.standardError.write(Data("native benchmark: \(error)\n".utf8))
+    let arguments = CommandLine.arguments
+    if arguments.count == 3, arguments[2].hasPrefix("/") {
+      try? encode(
+        ["error": String(describing: error)],
+        to: URL(fileURLWithPath: arguments[2] + ".error.json"))
+    }
     exit(1)
   }
   func tryOrTerminate(_ body: () throws -> Void) { do { try body() } catch { fail(error) } }

@@ -23,6 +23,16 @@ class ProfilingTests(unittest.TestCase):
                 validate_resources(broken, ready, sample)
         with self.assertRaisesRegex(ValueError, "explicit WebKit"):
             validate_resources(sample, {**ready, "webkitProcesses": []})
+        absent = copy.deepcopy(ready)
+        absent["webkitProcesses"][1]["pid"] = 0
+        absent["webkitProcesses"][2]["pid"] = 0
+        local_only = {**sample, "processes": sample["processes"][:2]}
+        validate_resources(local_only, absent)
+        with self.assertRaisesRegex(ValueError, "membership"):
+            validate_resources(sample, absent, local_only)  # a helper started later
+        absent["webkitProcesses"][0]["pid"] = 0
+        with self.assertRaisesRegex(ValueError, "Invalid explicit"):
+            validate_resources(local_only, absent)
 
     def test_cpu_is_time_weighted_and_memory_peak_is_simultaneous(self):
         samples = []

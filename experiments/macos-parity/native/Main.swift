@@ -33,8 +33,12 @@ enum Main {
           userInfo: [NSLocalizedDescriptionKey: "renderer requires macOS; --poses is portable"])
       #endif
     } catch {
-      FileHandle.standardError.write(Data("native benchmark: \(error)\n".utf8))
-      exit(1)
+      #if canImport(AppKit)
+        fail(error)
+      #else
+        FileHandle.standardError.write(Data("native benchmark: \(error)\n".utf8))
+        exit(1)
+      #endif
     }
   }
 }

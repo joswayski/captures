@@ -37,9 +37,13 @@ def validate_resources(sample, ready, baseline=None):
     required = {ready["pid"]}
     if ready["renderer"].startswith("tauri"):
         helpers = ready.get("webkitProcesses", [])
-        if {p["role"] for p in helpers} != {"webContent", "gpu", "network"}:
+        if len(helpers) != 3 or {p["role"] for p in helpers} != {"webContent", "gpu", "network"}:
             raise ValueError("Missing explicit WebKit process ownership; refusing partial totals")
-        required.update(p["pid"] for p in helpers)
+        if any(p["pid"] < 0 or (p["role"] == "webContent" and p["pid"] == 0) for p in helpers):
+            raise ValueError("Invalid explicit WebKit process identity")
+        # Non-launching private getters may report no current GPU/Network PID.
+        # All coalition members still count; new members invalidate the baseline.
+        required.update(p["pid"] for p in helpers if p["pid"] > 0)
     if not required <= identities.keys():
         raise ValueError("A required WebKit/app process is outside the isolated coalition or unreadable")
     allowed_unreadable = (baseline or sample).get("unreadableBeforeLaunch", [])
@@ -179,6 +183,8 @@ def wait_json(path, pid, timeout, sample=None):
         error = Path(str(path).replace(".ready.json", "").replace(".started.json", "") + ".error.json")
         if error.exists():
             raise RuntimeError(error.read_text())
+        if pid <= 0:
+            raise RuntimeError("LaunchServices returned no live process; inspect renderer.json.error.json")
         os.kill(pid, 0)  # Liveness only; never signal an unverified PID here.
         if time.monotonic() > deadline:
             raise TimeoutError(f"Timed out waiting for {path}")
@@ -209,8 +215,8 @@ def profile_trial(executable, config, folder, label, measurement, capture_hz):
                     raise ValueError(f"Ready marker mismatch: {key}")
             baseline = probe(app_pid)
             baseline["unreadableBeforeLaunch"] = before_launch["unreadableSameUidPids"]
-            validate_resources(baseline, ready)
             save(folder / "ownership.json", {"ready": ready, "baseline": baseline})
+            validate_resources(baseline, ready)
             capture = folder / "frames.json"
             if measurement == "frames":
                 with (folder / "observer.log").open("w") as log:
@@ -221,8 +227,8 @@ def profile_trial(executable, config, folder, label, measurement, capture_hz):
 
             def sample():
                 current = probe(app_pid)
-                validate_resources(current, ready, baseline)
                 samples.append(current)
+                validate_resources(current, ready, baseline)
 
             sample()
             Path(config["startGatePath"]).touch()
@@ -266,7 +272,7 @@ def profile_trial(executable, config, folder, label, measurement, capture_hz):
                         observer.kill()
                         observer.wait()
                     cleanup_errors.append("Frame observer required forced termination")
-            if app_pid:
+            if app_pid and app_pid > 0:
                 try:
                     subprocess.run([str(OBSERVER), "terminate", str(app_pid), identifier], check=True, timeout=20)
                 except (OSError, subprocess.SubprocessError) as error:

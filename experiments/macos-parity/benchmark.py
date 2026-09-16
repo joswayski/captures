@@ -322,7 +322,9 @@ def main():
             and not args.visual_only and not report.get("frameCaptureBackpressureDetected"))
         write_json(report_path, report)
         print(f"Results: {args.output}")
-    if not report["complete"] or not report.get("pixelGatePassed"):
+    if report.get("frameCaptureBackpressureDetected"):
+        print("Frame observer backlog detected; raw results retained, performance is not comparable", file=sys.stderr)
+    if not report["complete"] or not report.get("pixelGatePassed") or report.get("frameCaptureBackpressureDetected"):
         raise SystemExit(1)
 
 

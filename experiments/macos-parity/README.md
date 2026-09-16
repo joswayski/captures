@@ -74,7 +74,9 @@ it in System Settings and restart the command with a new output directory if nee
   The sampler enumerates that app's macOS resource coalition, including WebKit
   WebContent, GPU, and Networking processes that are not ordinary child processes.
   Benchmark-only WebKit private APIs provide their PIDs for independent membership
-  checks. Missing ownership, unsupported private APIs, PID reuse, or changing
+  checks, using non-launching getters. A reported zero GPU/Network PID means no
+  completed helper launch at that instant, not an unavailable API; every observed
+  coalition member still counts. Missing ownership, unsupported private APIs, PID reuse, or changing
   process membership fail the run instead of returning partial totals.
   `physicalFootprint*MiB` is summed process physical footprint; `summedRSS*MiB` is
   also retained but can double-count shared pages. Peaks are concurrent **sampled**
@@ -106,6 +108,9 @@ The harness and GPUI branches do not need merging. `report.json` contains
 `profileMedians`, `profileTrials`, completeness, and backpressure flags. Any failure
 preserves raw files and exits nonzero. A pixel failure or observer backlog prevents
 a comparable-performance verdict; neither is silently removed from group medians.
+Temporary bundles are deleted after termination; macOS may retain preferences or
+caches under their unique experimental identifiers. No shipping Captures profile
+is opened or changed.
 
 Results are written to a new directory under `experiments/macos-parity/results/`.
 Send that directory as a zip: `report.json`, raw `measured.json` files, and the
@@ -281,4 +286,5 @@ graphical candidates; acceptance and performance results must come from the Mac
 running the on-screen suite. A Chromium screenshot is only a reference-harness
 check, never evidence of AppKit or WKWebView rendering.
 CI also compiles the observer and executes the resource smoke test. It does not
-grant Screen Recording access or establish 2× frame-capture acceptance.
+grant Screen Recording access; it runs a frame smoke test only when permission is
+already present. A 1× CI frame smoke test does not establish 2× visual acceptance.

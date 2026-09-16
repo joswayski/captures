@@ -20,6 +20,7 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: 1.94.0
+          cache-workspaces: experiments/macos-parity/tauri -> target
       - run: npm ci
       - run: bash experiments/macos-parity/build.sh
       - run: experiments/macos-parity/.build/python/bin/python -m unittest discover -s experiments/macos-parity -p 'test_*.py'
@@ -29,4 +30,5 @@ jobs:
         if: always()
         with:
           name: native-profile-smoke
+          include-hidden-files: true
           path: experiments/macos-parity/.build/native-profile-*/**/*.json

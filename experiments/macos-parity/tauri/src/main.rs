@@ -99,22 +99,25 @@ fn write_profile_ready(
                     if !web.as_bool() || !gpu.as_bool() {
                         return Err("WebKit process PID SPI unavailable".into());
                     }
-                    let configuration: *mut AnyObject = msg_send![view, configuration];
-                    let store: *mut AnyObject = msg_send![configuration, websiteDataStore];
                     let network: Bool =
-                        msg_send![store, respondsToSelector: sel!(_networkProcessIdentifier)];
+                        msg_send![view, respondsToSelector: sel!(_networkProcessIdentifier)];
                     if !network.as_bool() {
                         return Err("WebKit network PID SPI unavailable".into());
                     }
                     let web_pid: i32 = msg_send![view, _webProcessIdentifier];
                     let gpu_pid: i32 = msg_send![view, _gpuProcessIdentifier];
-                    let network_pid: i32 = msg_send![store, _networkProcessIdentifier];
-                    if web_pid <= 0 || gpu_pid <= 0 || network_pid <= 0 {
-                        return Err(
-                            "WebKit returned an unstarted helper; refusing partial accounting"
-                                .into(),
-                        );
+                    // WKWebViewTesting uses networkProcessIfExists(). The same
+                    // selector on WKWebsiteDataStore would launch a helper just
+                    // by reading it, contaminating this local-page workload.
+                    let network_pid: i32 = msg_send![view, _networkProcessIdentifier];
+                    if web_pid <= 0 || gpu_pid < 0 || network_pid < 0 {
+                        return Err(format!(
+                            "Invalid WebKit PIDs: web={web_pid}, gpu={gpu_pid}, network={network_pid}"
+                        ));
                     }
+                    // Zero is an explicit SPI answer: this helper isn't running.
+                    // Local custom-protocol pages needn't start a Network process.
+                    // Never confuse an unavailable selector with confirmed absence.
                     Ok(serde_json::json!([
                         {"role":"webContent", "pid":web_pid},
                         {"role":"gpu", "pid":gpu_pid},

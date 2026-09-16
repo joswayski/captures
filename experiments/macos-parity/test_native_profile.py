@@ -18,6 +18,7 @@ class NativeProfileTests(unittest.TestCase):
         display = json.loads(subprocess.check_output([str(OBSERVER), "display"], text=True))
         folder = LAB / ".build" / f"native-profile-{time.time_ns()}"
         folder.mkdir()
+        save(folder / "display.json", display)
         config = json.loads((LAB / ".build/public/dust-bottom-left.json").read_text())
         config.update(scale=display["scale"], mode="run", checkpointMs=0, durationMs=6400)
         # Retain raw evidence under .build for CI upload, including on failure.
@@ -47,7 +48,8 @@ class NativeProfileTests(unittest.TestCase):
                     print(f"{label}: gate held; isolated coalition={sample['resourceCoalitionId']}, "
                           f"processes={[p['name'] for p in sample['processes']]}", flush=True)
                 finally:
-                    subprocess.run([str(OBSERVER), "terminate", str(pid), identifier], check=True, timeout=20)
+                    if pid > 0:
+                        subprocess.run([str(OBSERVER), "terminate", str(pid), identifier], check=True, timeout=20)
                 measured = profile_trial(executable, config, folder / f"{label}-resources", label, "resources", 120)
                 self.assertTrue(measured["fullCoalitionAttributed"])
                 self.assertGreater(measured["summary"]["cpuSeconds"], 0)
@@ -60,6 +62,7 @@ class NativeProfileTests(unittest.TestCase):
             self.skipTest("Screen Recording not authorized; frame runtime remains unverified")
         folder = LAB / ".build" / f"native-profile-frames-{time.time_ns()}"
         folder.mkdir()
+        save(folder / "display.json", display)
         config = json.loads((LAB / ".build/public/dust-bottom-left.json").read_text())
         config.update(scale=display["scale"], mode="run", checkpointMs=0, durationMs=6400)
         for label, executable in BINARIES.items():
