@@ -985,18 +985,14 @@ fn encode_webp(image: &RgbaImage, quality: Option<u8>) -> Result<Vec<u8>, AppErr
 
 fn composite_onto_white(image: &RgbaImage) -> RgbImage {
     let mut output = RgbImage::new(image.width(), image.height());
-    for (x, y, pixel) in image.enumerate_pixels() {
+    for (pixel, destination) in image.pixels().zip(output.pixels_mut()) {
         let alpha = u16::from(pixel[3]);
         let inverse = 255 - alpha;
-        output.put_pixel(
-            x,
-            y,
-            Rgb([
-                ((u16::from(pixel[0]) * alpha + 255 * inverse) / 255) as u8,
-                ((u16::from(pixel[1]) * alpha + 255 * inverse) / 255) as u8,
-                ((u16::from(pixel[2]) * alpha + 255 * inverse) / 255) as u8,
-            ]),
-        );
+        *destination = Rgb([
+            ((u16::from(pixel[0]) * alpha + 255 * inverse) / 255) as u8,
+            ((u16::from(pixel[1]) * alpha + 255 * inverse) / 255) as u8,
+            ((u16::from(pixel[2]) * alpha + 255 * inverse) / 255) as u8,
+        ]);
     }
     output
 }
