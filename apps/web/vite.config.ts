@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { nitro } from "nitro/vite";
 import { defineConfig, searchForWorkspaceRoot } from "vite";
+import { isDependencyUpdateTitle } from "./src/dependencyUpdates";
 
 const REPOSITORY = "joswayski/captures";
 const CHANGE_COUNT = 10;
@@ -47,7 +48,12 @@ function pullRequestNumber(title: string) {
   );
 }
 
-function isDependabotCommit(entry: GitHubCommit): boolean {
+function isDependencyUpdateCommit(entry: GitHubCommit): boolean {
+  const title = entry.commit.message.split("\n", 1)[0]?.trim() ?? "";
+  if (isDependencyUpdateTitle(title)) {
+    return true;
+  }
+
   const login = entry.author?.login?.toLowerCase() ?? "";
   if (login === "dependabot[bot]" || login.startsWith("dependabot")) {
     return true;
@@ -99,12 +105,12 @@ async function fetchLatestChanges(): Promise<LatestChange[]> {
   }
 
   const productChanges = entries
-    .filter((entry) => !isDependabotCommit(entry))
+    .filter((entry) => !isDependencyUpdateCommit(entry))
     .map(toLatestChange)
     .slice(0, CHANGE_COUNT);
 
   if (productChanges.length === 0) {
-    throw new Error("GitHub returned no non-Dependabot commits for main");
+    throw new Error("GitHub returned no product changes for main");
   }
 
   return productChanges;

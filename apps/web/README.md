@@ -40,7 +40,7 @@ npm run build:web
 ```
 
 Nitro emits a standalone Node server in `apps/web/.output`. The build fetches
-recent `main` commits from the GitHub API, drops Dependabot dependency bumps, and
+recent `main` commits from the GitHub API, drops dependency bumps, and
 embeds the latest ten product changes in the homepage payload. The server picks
 the Preview installer from the request `User-Agent` and `Sec-CH-UA-*` headers,
 and looks up Preview publishing status from the GitHub API (cached in memory for
