@@ -99,6 +99,8 @@ struct Config {
     particles: Vec<Descriptor>,
     #[serde(default)]
     start_gate_path: Option<PathBuf>,
+    #[serde(default)]
+    diagnostic_scale1x: bool,
 }
 
 impl Config {
@@ -111,8 +113,10 @@ impl Config {
             "startGatePath must be absolute"
         );
         ensure!(
-            self.width == 640. && self.height == 720. && self.scale == 2.,
-            "expected 640×720 at 2×"
+            self.width == 640.
+                && self.height == 720.
+                && self.scale == if self.diagnostic_scale1x { 1. } else { 2. },
+            "expected 640×720 at 2× (or explicit diagnosticScale1x with scale 1)"
         );
         ensure!(
             self.cycle_ms == 3200. && self.duration_ms > 0. && self.checkpoint_ms >= 0.,
@@ -226,7 +230,11 @@ impl Surface {
         };
         // Published GPUI 0.2.2 has no source-rectangle cropping in paint_image.
         // Pre-crop instead of relying on its broken rounded ObjectFit::Cover.
-        let media = texture(effects::cover_media(&source, 568, 320));
+        let media = texture(effects::cover_media(
+            &source,
+            (284. * config.scale) as u32,
+            (160. * config.scale) as u32,
+        ));
         let gate_open = config.mode == Mode::Checkpoint || config.start_gate_path.is_none();
         let mut surface = Self {
             config,
@@ -286,7 +294,8 @@ impl Surface {
         if self.metadata.is_none() {
             ensure!(
                 (window.scale_factor() - self.config.scale).abs() < 0.001,
-                "window backing scale must be 2×"
+                "window backing scale must match requested {}×",
+                self.config.scale
             );
             ensure!(
                 (f32::from(window.viewport_size().width) - self.config.width).abs() < 0.5
@@ -297,6 +306,7 @@ impl Surface {
             let metadata = json!({
                 "schema": 1, "pid": std::process::id(), "window_id": native_window_id(window)?,
                 "measurementProtocol": 2, "hostClock": parity_measurement::HOST_CLOCK,
+                "diagnosticOnly": self.config.diagnostic_scale1x,
                 "scale": window.scale_factor(), "scenario": self.config.scenario.name(),
                 "mode": if self.config.mode == Mode::Run { "run" } else { "checkpoint" },
                 "renderer": "gpui-0.2.2-subpixel-cpu-raster-texture-upload", "checkpointMs": self.config.checkpoint_ms,
@@ -324,6 +334,7 @@ impl Surface {
                 &json!({
                     "schema": 1, "pid": std::process::id(), "startHostTimeNs": host_time,
                     "hostClock": parity_measurement::HOST_CLOCK,
+                    "diagnosticOnly": self.config.diagnostic_scale1x,
                 }),
             )?;
             self.started_host_time_ns = Some(host_time);
@@ -579,6 +590,7 @@ mod tests {
             seed: 739,
             particles: Vec::new(),
             start_gate_path: gated.then(|| directory.path().join("start")),
+            diagnostic_scale1x: false,
         };
         let mut surface = Surface::new(config, RgbaImage::new(397, 251), output.clone());
         surface.metadata = Some(json!({"schema": 1}));
@@ -652,6 +664,7 @@ mod tests {
         });
         let legacy: Config = serde_json::from_value(value.clone()).unwrap();
         assert!(legacy.start_gate_path.is_none());
+        assert!(!legacy.diagnostic_scale1x);
         value["startGatePath"] = json!("relative/start");
         let invalid: Config = serde_json::from_value(value).unwrap();
         assert_eq!(
@@ -661,5 +674,74 @@ mod tests {
                 .to_string(),
             "startGatePath must be absolute"
         );
+    }
+
+    #[test]
+    fn diagnostic_scale_is_explicit_and_sizes_media_without_changing_2x_pixels() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = RgbaImage::from_fn(397, 251, |x, y| {
+            image::Rgba([x as u8, y as u8, (x + 2 * y) as u8, 255])
+        });
+        let surface_height = 251. * 284. / 397.;
+        let particles: Vec<_> = (0..198)
+            .map(|id| {
+                json!({
+                    "id": id, "left": 120., "top": 120., "width": 1., "height": 1.,
+                    "cardWidth": 284., "cardHeight": 160., "sourceLeft": 0., "sourceTop": 0.,
+                    "surfaceWidth": 284., "surfaceHeight": surface_height,
+                    "surfaceOffsetX": 0., "surfaceOffsetY": (160. - surface_height) / 2.,
+                    "dx": 3., "dy": -7., "rotate": 11., "delayMs": 0., "durationMs": 1000.,
+                })
+            })
+            .collect();
+        let mut value = json!({
+            "schema": 1, "scenario": "dust-bottom-left", "mode": "checkpoint",
+            "checkpointMs": 420, "durationMs": 9600, "cycleMs": 3200,
+            "width": 640, "height": 720, "scale": 2,
+            "fixturePath": directory.path().join("fixture.png"),
+            "seed": 739, "particles": particles,
+        });
+        // Missing flag is strict too; malformed scales and flag/scale mismatch
+        // must fail instead of quietly changing the comparison's backing size.
+        for (flag, scale, valid) in [
+            (None, 1., false),
+            (Some(false), 1., false),
+            (Some(true), 1., true),
+            (None, 2., true),
+            (Some(false), 2., true),
+            (Some(true), 2., false),
+            (Some(true), 1.5, false),
+            (Some(true), 0., false),
+        ] {
+            value.as_object_mut().unwrap().remove("diagnosticScale1x");
+            if let Some(flag) = flag {
+                value["diagnosticScale1x"] = json!(flag);
+            }
+            value["scale"] = json!(scale);
+            let config: Config = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(config.validate(&source).is_ok(), valid, "{flag:?}, {scale}");
+            if !valid {
+                continue;
+            }
+            let surface =
+                Surface::new(config, source.clone(), directory.path().join("result.json"));
+            let (media_size, dust_size) = if scale == 1. {
+                ((284, 160), (524, 400))
+            } else {
+                ((568, 320), (1048, 800))
+            };
+            assert_eq!(
+                surface.media.size(0),
+                size(media_size.0.into(), media_size.1.into())
+            );
+            assert_eq!(
+                surface.frame.as_ref().unwrap().size(0),
+                size(dust_size.0.into(), dust_size.1.into())
+            );
+            if scale == 2. {
+                let previous_media = texture(effects::cover_media(&source, 568, 320));
+                assert_eq!(surface.media.as_bytes(0), previous_media.as_bytes(0));
+            }
+        }
     }
 }

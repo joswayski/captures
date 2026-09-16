@@ -64,6 +64,15 @@ to integer nanoseconds, not wall time. Linux diagnostics explicitly label their
 process-relative `std::Instant` clock; it cannot synchronize with Mac observers.
 Omitting the gate retains immediate startup; checkpoint mode ignores the gate.
 
+For native CI integration smoke tests only, schema 1 accepts
+`"diagnosticScale1x": true` together with `"scale": 1`. This keeps the 640×720
+logical viewport, uses 284×160 media and 524×400 dust rasters, and labels ready,
+started, and final output `"diagnosticOnly": true`. The actual window must still
+match the requested backing scale. Missing/false keeps the ordinary 2×-only
+contract; true requires exactly 1×. This is not a benchmark comparison scale or
+2× visual acceptance. Ordinary 2× pixels, thresholds, and renderer label are
+unchanged. It does not affect the full application.
+
 The macOS backend uses a borderless nonactivating panel and aligns its initial
 position to integral points without changing its requested content size. A
 half-point origin caused AppKit to expand 640×720 to 640×721; borderless style
