@@ -113,22 +113,27 @@ test("release notes omit skipped website commits from the next desktop update", 
   writeFileSync(join(directory, "apps/desktop/ui/src/App.tsx"), "export const App = true;\n");
   runGit("add", "apps/desktop/ui/src/App.tsx");
   runGit("commit", "-m", "Fix desktop capture (#11)");
-  const head = runGit("rev-parse", "HEAD");
+
+  writeFileSync(join(directory, "apps/desktop/ui/src/App.tsx"), "export const App = 'updated';\n");
+  runGit("add", "apps/desktop/ui/src/App.tsx");
+  runGit("commit", "--author", "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>", "-m", "Bump vitest from 4.1.10 to 4.1.11 (#12)");
+  const dependencyHead = runGit("rev-parse", "HEAD");
 
   try {
     process.chdir(directory);
     const fallback = releaseNotesBetween(base, webHead, "joswayski/captures");
     assert.match(fallback, new RegExp(`Rebuilt desktop installers from commit \\[${webHead.slice(0, 7)}\\]`, "u"));
 
-    const notes = releaseNotesBetween(base, head, "joswayski/captures");
+    const notes = releaseNotesBetween(base, dependencyHead, "joswayski/captures");
     assert.doesNotMatch(notes, /hosted API/u);
     assert.match(notes, /Fix desktop capture \(\[#11\]\(https:\/\/github\.com\/joswayski\/captures\/pull\/11\)\)/u);
+    assert.doesNotMatch(notes, /Bump vitest|#12/u);
 
     rmSync(join(directory, "apps/desktop/ui/src/App.tsx"));
     runGit("add", "apps/desktop/ui/src/App.tsx");
-    runGit("commit", "-m", "Remove obsolete desktop code (#12)");
+    runGit("commit", "-m", "Remove obsolete desktop code (#13)");
     const deletedHead = runGit("rev-parse", "HEAD");
-    assert.deepEqual(releaseImpactBetween(head, deletedHead), {
+    assert.deepEqual(releaseImpactBetween(dependencyHead, deletedHead), {
       shouldRelease: true,
       paths: ["apps/desktop/ui/src/App.tsx"],
     });

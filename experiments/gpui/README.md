@@ -146,7 +146,7 @@ skipping it.
 
 All commands above passed in the evaluation orb (199 app tests and 15 component
 adapter tests, including shared renderer tests in both binaries; the root
-desktop suite contains 830 tests). The root release-version tests required
+desktop suite contains 831 tests). The root release-version tests required
 per-command `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign
 GIT_CONFIG_VALUE_0=false`: they create temporary commits, and the orb has no
 signing key. No global Git configuration was changed.
