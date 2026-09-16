@@ -584,11 +584,18 @@
       do {
         let arguments = CommandLine.arguments.dropFirst()
         guard let mode = arguments.first else {
-          throw ObserverError.usage("usage: observer (display|launch|capture|terminate) ...")
+          throw ObserverError.usage(
+            "usage: observer (display|preflight|launch|capture|terminate) ...")
         }
         switch mode {
         case "display":
           try runDisplay(arguments: arguments.dropFirst())
+        case "preflight":
+          guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
+            throw ObserverError.operation(
+              "Enable Screen Recording for Terminal/parity-observer in System Settings, then restart the terminal and retry. No measurement has started."
+            )
+          }
         case "launch":
           try runLaunch(arguments: arguments.dropFirst())
         case "capture":
@@ -597,7 +604,7 @@
           try terminate(arguments: arguments.dropFirst())
         default:
           throw ObserverError.usage(
-            "unknown mode '\(mode)'; expected display, launch, capture or terminate")
+            "unknown mode '\(mode)'; expected display, preflight, launch, capture or terminate")
         }
       } catch {
         stderr("observer: \(error)")

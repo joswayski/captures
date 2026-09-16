@@ -26,7 +26,7 @@ def probe(pid):
     return json.loads(subprocess.check_output([str(RESOURCES), str(pid)], text=True, timeout=10))
 
 
-def validate_resources(sample, ready, baseline=None):
+def validate_resources(sample, ready, baseline=None, *, stable_membership=True):
     if sample["rootPid"] != ready["pid"] or not sample["rootStartMach"]:
         raise ValueError("Resource sample does not identify the launched application")
     if not sample["resourceCoalitionId"] or sample["resourceCoalitionId"] == sample["samplerCoalitionId"]:
@@ -53,7 +53,10 @@ def validate_resources(sample, ready, baseline=None):
         if (sample["rootStartMach"], sample["resourceCoalitionId"]) != (
                 baseline["rootStartMach"], baseline["resourceCoalitionId"]):
             raise ValueError("Application identity/coalition changed during measurement")
-        if identities != {p["pid"]: p["startMach"] for p in baseline["processes"]}:
+        before = {p["pid"]: p["startMach"] for p in baseline["processes"]}
+        if any(identities[p] != before[p] for p in identities.keys() & before.keys()):
+            raise ValueError("Process identity/membership changed during measurement")
+        if stable_membership and identities != before:
             raise ValueError("Process membership changed; refusing CPU totals with missing lifetimes")
 
 
@@ -230,7 +233,10 @@ def profile_trial(executable, config, folder, label, measurement, capture_hz):
             def sample():
                 current = probe(app_pid)
                 samples.append(current)
-                validate_resources(current, ready, baseline)
+                # SCK may add a system recording-indicator XPC helper to the
+                # target coalition. Frame-pass snapshots are diagnostic only;
+                # they never produce CPU/memory totals. Resource passes remain strict.
+                validate_resources(current, ready, baseline, stable_membership=measurement == "resources")
 
             sample()
             Path(config["startGatePath"]).touch()

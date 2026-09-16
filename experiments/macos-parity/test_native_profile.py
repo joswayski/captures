@@ -10,6 +10,10 @@ from pathlib import Path
 from benchmark import BINARIES, LAB
 from profiling import OBSERVER, package_app, probe, profile_trial, save, validate_resources, wait_json
 
+SMOKE_BINARIES = dict(BINARIES)
+if os.environ.get("GPUI_PARITY_BINARY"):
+    SMOKE_BINARIES["gpui"] = Path(os.environ["GPUI_PARITY_BINARY"]).resolve(strict=True)
+
 
 @unittest.skipUnless(platform.system() == "Darwin" and os.environ.get("CAPTURES_NATIVE_PROFILE_TEST") == "1",
                      "requires opt-in logged-in Mac session and built helpers")
@@ -20,9 +24,10 @@ class NativeProfileTests(unittest.TestCase):
         folder.mkdir()
         save(folder / "display.json", display)
         config = json.loads((LAB / ".build/public/dust-bottom-left.json").read_text())
-        config.update(scale=display["scale"], mode="run", checkpointMs=0, durationMs=6400)
+        config.update(scale=display["scale"], diagnosticScale1x=display["scale"] == 1,
+                      mode="run", checkpointMs=0, durationMs=6400)
         # Retain raw evidence under .build for CI upload, including on failure.
-        for label, executable in BINARIES.items():
+        for label, executable in SMOKE_BINARIES.items():
             with self.subTest(candidate=label):
                 gated = folder / f"{label}-gate"
                 gated.mkdir()
@@ -38,6 +43,8 @@ class NativeProfileTests(unittest.TestCase):
                     ready = wait_json(Path(str(output) + ".ready.json"), pid, 90)
                     self.assertEqual(ready["measurementProtocol"], 2)
                     self.assertEqual(ready["pid"], pid)
+                    if label == "gpui":
+                        self.assertEqual(ready["diagnosticOnly"], display["scale"] == 1)
                     time.sleep(1)
                     self.assertFalse(output.exists(), "workload finished before gate release")
                     self.assertFalse(Path(str(output) + ".started.json").exists(), "workload started before release")
@@ -60,12 +67,14 @@ class NativeProfileTests(unittest.TestCase):
         display = json.loads(subprocess.check_output([str(OBSERVER), "display"], text=True))
         if not display["screenCaptureAllowed"]:
             self.skipTest("Screen Recording not authorized; frame runtime remains unverified")
+        subprocess.run([str(OBSERVER), "preflight"], check=True, timeout=10)
         folder = LAB / ".build" / f"native-profile-frames-{time.time_ns()}"
         folder.mkdir()
         save(folder / "display.json", display)
         config = json.loads((LAB / ".build/public/dust-bottom-left.json").read_text())
-        config.update(scale=display["scale"], mode="run", checkpointMs=0, durationMs=6400)
-        for label, executable in BINARIES.items():
+        config.update(scale=display["scale"], diagnosticScale1x=display["scale"] == 1,
+                      mode="run", checkpointMs=0, durationMs=6400)
+        for label, executable in SMOKE_BINARIES.items():
             with self.subTest(candidate=label):
                 measured = profile_trial(executable, config, folder / label, label, "frames", 120)
                 self.assertGreater(measured["summary"]["observedChangedFrames"], 10)

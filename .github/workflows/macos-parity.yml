@@ -11,8 +11,14 @@ permissions:
 jobs:
   build:
     runs-on: macos-26
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - name: Check out the fixed GPUI adapter without merging experiments
+        uses: actions/checkout@v4
+        with:
+          ref: d3bb388c724c83a4d03f84118d466965f0aa49c7
+          path: .gpui-smoke
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -20,9 +26,15 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: 1.94.0
-          cache-workspaces: experiments/macos-parity/tauri -> target
+          cache-workspaces: |
+            experiments/macos-parity/tauri -> target
+            .gpui-smoke/experiments/gpui -> target
       - run: npm ci
       - run: bash experiments/macos-parity/build.sh
+      - name: Build the isolated optimized GPUI adapter
+        run: cargo build --locked --release --manifest-path .gpui-smoke/experiments/gpui/Cargo.toml --bin captures-gpui-parity
+        env:
+          CARGO_BUILD_JOBS: '2'
       - name: Reserve enough desktop space on the disposable CI Mac
         run: |
           defaults write com.apple.dock autohide -bool true
@@ -31,6 +43,7 @@ jobs:
       - run: experiments/macos-parity/.build/python/bin/python -m unittest discover -s experiments/macos-parity -p 'test_*.py'
         env:
           CAPTURES_NATIVE_PROFILE_TEST: '1'
+          GPUI_PARITY_BINARY: .gpui-smoke/experiments/gpui/target/release/captures-gpui-parity
       - uses: actions/upload-artifact@v4
         if: always()
         with:

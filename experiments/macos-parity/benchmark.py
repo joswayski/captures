@@ -254,6 +254,11 @@ def main():
     binaries = dict(BINARIES)
     if args.gpui:
         binaries["gpui"] = args.gpui.resolve(strict=True)
+    if args.profile:
+        permission = subprocess.run([str(LAB / ".build/parity-observer"), "preflight"],
+                                    text=True, capture_output=True, timeout=60)
+        if permission.returncode:
+            parser.error(permission.stderr.strip())
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
     report = {"schema": 1, "createdUTC": datetime.now(timezone.utc).isoformat(), "environment": {

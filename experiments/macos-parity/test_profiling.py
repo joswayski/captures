@@ -30,6 +30,11 @@ class ProfilingTests(unittest.TestCase):
         validate_resources(local_only, absent)
         with self.assertRaisesRegex(ValueError, "membership"):
             validate_resources(sample, absent, local_only)  # a helper started later
+        validate_resources(sample, absent, local_only, stable_membership=False)
+        reused = copy.deepcopy(sample)
+        reused["processes"][1]["startMach"] = 999
+        with self.assertRaisesRegex(ValueError, "identity/membership"):
+            validate_resources(reused, absent, local_only, stable_membership=False)
         absent["webkitProcesses"][0]["pid"] = 0
         with self.assertRaisesRegex(ValueError, "Invalid explicit"):
             validate_resources(local_only, absent)

@@ -96,6 +96,9 @@ it in System Settings and restart the command with a new output directory if nee
   window changes, not physical-panel FPS, GPU time, or automatic dropped-frame counts.
 - Frame recording overhead is excluded from the resource pass. Neither pass
   attributes shared WindowServer/kernel costs or all GPU residency to an app.
+  ScreenCaptureKit may add a recording-indicator helper to the target coalition;
+  frame-pass resource snapshots are diagnostic only and never enter CPU/memory
+  summaries. Resource-pass membership and identity checks remain strict.
   These remain component windows, not the full Captures application. An app-coalition
   total is substantially more complete than the old root-process number, not
   whole-system accounting.
@@ -288,3 +291,6 @@ check, never evidence of AppKit or WKWebView rendering.
 CI also compiles the observer and executes the resource smoke test. It does not
 grant Screen Recording access; it runs a frame smoke test only when permission is
 already present. A 1× CI frame smoke test does not establish 2× visual acceptance.
+The workflow builds a pinned GPUI adapter in a separate checkout and uses its
+explicit `diagnosticScale1x:true` mode on a 1× runner. That mode reports
+`diagnosticOnly:true`; the actual benchmark remains 2× with unchanged pixel gates.
