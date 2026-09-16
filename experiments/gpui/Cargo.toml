@@ -3,6 +3,11 @@ name = "captures-gpui"
 version = "0.1.0"
 edition = "2024"
 publish = false
+default-run = "captures-gpui"
+
+[[bin]]
+name = "captures-gpui-parity"
+path = "src/parity.rs"
 
 # Evaluation only. The shipping application and release pipeline remain Tauri.
 [workspace]

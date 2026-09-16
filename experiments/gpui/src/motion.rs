@@ -2,7 +2,7 @@
 use std::time::Instant;
 
 /// Retarget from the currently displayed value, including rapid reversals.
-pub(crate) struct Motion {
+pub struct Motion {
     pub from: f32,
     pub to: f32,
     pub started: Instant,
@@ -25,11 +25,22 @@ impl Motion {
 }
 
 // shared/design.css --ease-standard: cubic-bezier(.2,.8,.2,1).
-pub(crate) fn standard_ease(progress: f32) -> f32 {
+pub fn standard_ease(progress: f32) -> f32 {
     cubic_ease(progress, 0.2, 0.8, 0.2, 1.)
 }
 
-pub(crate) fn cubic_ease(progress: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
+/// mini-preview.css stacked translate transition, after its held-layout exit.
+pub fn stack_settle_progress(elapsed_ms: f32, delay_ms: f32) -> f32 {
+    cubic_ease(
+        ((elapsed_ms - delay_ms) / 580.).clamp(0., 1.),
+        0.4,
+        0.,
+        0.2,
+        1.,
+    )
+}
+
+pub fn cubic_ease(progress: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
     if progress <= 0. {
         return 0.;
     }

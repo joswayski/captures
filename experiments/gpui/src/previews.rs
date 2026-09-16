@@ -29,6 +29,7 @@ struct Exit {
     started: Instant,
     delay_ms: u64,
     dissolve: Option<Dissolve>,
+    frozen_top: Option<f32>,
 }
 
 struct Artifact {
@@ -37,6 +38,7 @@ struct Artifact {
     saved_path: Option<PathBuf>,
     arrived: Instant,
     exit: Option<Exit>,
+    last_top: Option<f32>,
 }
 
 #[derive(Clone)]
@@ -248,6 +250,7 @@ impl Preview {
                     saved_path: None,
                     arrived: Instant::now(),
                     exit: None,
+                    last_top: None,
                 })
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
@@ -279,6 +282,7 @@ impl Preview {
                     saved_path: None,
                     arrived: Instant::now(),
                     exit: None,
+                    last_top: None,
                 });
                 self.next_id += 1;
                 self.status.clear();
@@ -370,12 +374,13 @@ impl Preview {
                 started: Instant::now(),
                 delay_ms,
                 dissolve: None,
+                frozen_top: artifact.last_top,
             });
             cx.notify();
         }
     }
 
-    fn delete(&mut self, id: u64, cx: &mut Context<Self>) {
+    fn delete(&mut self, id: u64, scale: f32, cx: &mut Context<Self>) {
         let Some(artifact) = self.artifacts.iter_mut().find(|artifact| artifact.id == id) else {
             return;
         };
@@ -405,12 +410,14 @@ impl Preview {
                     kind: ExitKind::Delete,
                     started: Instant::now(),
                     delay_ms: 0,
+                    frozen_top: artifact.last_top,
                     dissolve: (!self.reduced_motion).then(|| {
-                        Dissolve::new_from(
+                        Dissolve::new_from_scaled(
                             &image.to_rgba8(),
                             artifact.id as u32 + 83,
                             origin_x,
                             22.5,
+                            scale,
                         )
                     }),
                 });
@@ -544,52 +551,35 @@ impl Preview {
         }
     }
 
-    fn stack_settle_index(&self, index: usize) -> usize {
-        let visual_index =
-            layout::expanded_visual_index(index, self.artifacts.len(), self.placement.anchor);
-        let ready_before = match self.placement.anchor {
-            Anchor::Top => self.artifacts[index + 1..]
-                .iter()
-                .filter(|artifact| exit_motion_ready(artifact))
-                .count(),
-            Anchor::Bottom => self.artifacts[..index]
-                .iter()
-                .filter(|artifact| exit_motion_ready(artifact))
-                .count(),
-        };
-        visual_index - ready_before
-    }
-
     fn render_card(
-        &self,
+        &mut self,
         index: usize,
         frame_height: f32,
         collapse: f32,
         t: Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let artifact = &self.artifacts[index];
-        let id = artifact.id;
         let depth = self.artifacts.len() - 1 - index;
-        let settled_index = self.stack_settle_index(index);
-        let expanded_top = layout::expanded_card_top(
-            settled_index,
-            self.artifacts.len()
-                - self
-                    .artifacts
-                    .iter()
-                    .filter(|a| exit_motion_ready(a))
-                    .count(),
-            frame_height,
-            self.placement.anchor,
-        );
+        let progress = self
+            .artifacts
+            .iter()
+            .map(|artifact| exit_settle_progress(artifact, self.reduced_motion))
+            .collect::<Vec<_>>();
+        let expanded_top =
+            layout::settling_card_top(index, &progress, frame_height, self.placement.anchor);
         let collapsed_top = layout::collapsed_card_top(
             depth,
             frame_height,
             self.placement.anchor,
             self.stack_hovered,
         );
-        let mut top = layout::mix(expanded_top, collapsed_top, collapse);
+        let artifact = &mut self.artifacts[index];
+        let id = artifact.id;
+        let mut top = artifact
+            .exit
+            .as_ref()
+            .and_then(|exit| exit.frozen_top)
+            .unwrap_or_else(|| layout::mix(expanded_top, collapsed_top, collapse));
         let mut left = 28. - layout::pose_depth(depth) * 0.8 * collapse;
         let mut opacity = (1. - layout::pose_depth(depth) * 0.08 * collapse).max(0.22);
         let mut display_dissolve = None;
@@ -624,6 +614,7 @@ impl Preview {
             top += 24. * (1. - eased);
             opacity *= eased;
         }
+        artifact.last_top = Some(top);
         if let Some((rejected, started)) = self.rejected
             && rejected == id
         {
@@ -650,7 +641,7 @@ impl Preview {
         {
             img(artifact.media.hovered.clone())
         } else {
-            img(artifact.media.display.clone())
+            img(artifact.media.card.clone())
         };
         let saved = artifact.saved_path.is_some();
         let copied = self.copied == Some(id);
@@ -681,7 +672,11 @@ impl Preview {
             .opacity(opacity)
             .cursor_pointer()
             .on_hover(cx.listener(move |preview, hovered: &bool, _, cx| {
-                preview.hovered = hovered.then_some(id);
+                if *hovered {
+                    preview.hovered = Some(id);
+                } else if preview.hovered == Some(id) {
+                    preview.hovered = None;
+                }
                 if preview.collapsed {
                     preview.stack_hovered = *hovered;
                 }
@@ -694,7 +689,13 @@ impl Preview {
                     cx.notify();
                 }
             }))
-            .child(image.size_full().object_fit(ObjectFit::Cover));
+            .child(
+                image
+                    .size_full()
+                    .rounded(px(11.))
+                    .object_fit(ObjectFit::Fill)
+                    .id(("preview-media", id as usize)),
+            );
 
         if artifact.media.kind == MediaKind::Video && !is_hovered {
             card = card.child(
@@ -768,6 +769,7 @@ impl Preview {
                         Self::glass_button(("delete", id as usize), "⌫", true, t).on_click(
                             cx.listener(move |_, _, window, cx| {
                                 cx.stop_propagation();
+                                let scale = window.scale_factor();
                                 let answer = window.prompt(
                                     PromptLevel::Critical,
                                     "Delete capture?",
@@ -780,7 +782,9 @@ impl Preview {
                                 );
                                 cx.spawn_in(window, async move |this, cx| {
                                     if matches!(answer.await, Ok(1)) {
-                                        let _ = this.update(cx, |preview, cx| preview.delete(id, cx));
+                                        let _ = this.update(cx, |preview, cx| {
+                                            preview.delete(id, scale, cx);
+                                        });
                                     }
                                 })
                                 .detach();
@@ -922,9 +926,7 @@ impl Render for Preview {
         if !self.artifacts.is_empty() && collapse < 0.99 {
             let toolbar_top = match self.placement.anchor {
                 Anchor::Top => 16.,
-                Anchor::Bottom => {
-                    frame_height - layout::expanded_height(self.artifacts.len(), frame_height) + 12.
-                }
+                Anchor::Bottom => frame_height - 16. - 28.,
             };
             body = body.child(
                 div()
@@ -954,7 +956,12 @@ impl Render for Preview {
                                         .map(|artifact| artifact.id)
                                         .collect::<Vec<_>>();
                                     for (index, id) in ids.into_iter().rev().enumerate() {
-                                        preview.dismiss(id, index as u64 * 55, cx);
+                                        let delay = if preview.reduced_motion {
+                                            0
+                                        } else {
+                                            (index as u64 * 36).min(180)
+                                        };
+                                        preview.dismiss(id, delay, cx);
                                     }
                                 }),
                             ),
@@ -1007,16 +1014,20 @@ impl Render for Preview {
     }
 }
 
-fn exit_motion_ready(artifact: &Artifact) -> bool {
-    artifact.exit.as_ref().is_some_and(|exit| {
-        let threshold = exit.delay_ms
-            + match exit.kind {
-                ExitKind::Dismiss => 450,
-                ExitKind::Delete if exit.dissolve.is_some() => 1_800,
-                ExitKind::Delete => 0,
-            };
-        exit.started.elapsed().as_millis() as u64 >= threshold
-    })
+fn exit_settle_progress(artifact: &Artifact, reduced_motion: bool) -> f32 {
+    let Some(exit) = &artifact.exit else {
+        return 0.;
+    };
+    if reduced_motion {
+        return 1.;
+    }
+    let threshold = exit.delay_ms as f32
+        + match exit.kind {
+            ExitKind::Dismiss => 450.,
+            ExitKind::Delete if exit.dissolve.is_some() => 1800.,
+            ExitKind::Delete => 0.,
+        };
+    crate::motion::stack_settle_progress(exit.started.elapsed().as_secs_f32() * 1000., threshold)
 }
 
 fn format_size(bytes: u64) -> String {

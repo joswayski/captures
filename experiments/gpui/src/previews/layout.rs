@@ -56,7 +56,11 @@ pub fn pose_depth(depth: usize) -> f32 {
 }
 
 pub fn expanded_height(count: usize, available: f32) -> f32 {
-    let cards = count.max(1) as f32;
+    expanded_height_at(count as f32, available)
+}
+
+fn expanded_height_at(count: f32, available: f32) -> f32 {
+    let cards = count.max(1.);
     (PADDING + CONTROL_GUTTER + cards * CARD_HEIGHT + (cards - 1.) * GAP)
         .min(available.max(CARD_HEIGHT + CONTROL_GUTTER))
 }
@@ -91,6 +95,29 @@ pub fn expanded_visual_index(index: usize, count: usize, anchor: Anchor) -> usiz
         Anchor::Top => count.saturating_sub(index + 1),
         Anchor::Bottom => index,
     }
+}
+
+/// Continuous held-slot removal, including stacks taller than their window.
+pub fn settling_card_top(index: usize, progress: &[f32], frame_height: f32, anchor: Anchor) -> f32 {
+    let count = progress.len();
+    let original = expanded_card_top(
+        expanded_visual_index(index, count, anchor),
+        count,
+        frame_height,
+        anchor,
+    );
+    let before: f32 = match anchor {
+        Anchor::Top => progress[index + 1..].iter().sum(),
+        Anchor::Bottom => progress[..index].iter().sum(),
+    };
+    let stack_shift = match anchor {
+        Anchor::Top => 0.,
+        Anchor::Bottom => {
+            expanded_height(count, frame_height)
+                - expanded_height_at(count as f32 - progress.iter().sum::<f32>(), frame_height)
+        }
+    };
+    original + stack_shift - before * SLOT
 }
 
 pub fn collapsed_card_top(depth: usize, frame_height: f32, anchor: Anchor, hovered: bool) -> f32 {
@@ -169,6 +196,34 @@ mod tests {
         assert_eq!(collapsed_card_top(0, frame, Anchor::Bottom, false), 588.);
         assert_eq!(expanded_visual_index(2, 3, Anchor::Top), 0);
         assert_eq!(expanded_visual_index(2, 3, Anchor::Bottom), 2);
+    }
+
+    #[test]
+    fn settle_is_continuous_mirrored_and_rebases_without_a_jump() {
+        assert_eq!(
+            settling_card_top(0, &[0., 0., 0.5], 800., Anchor::Bottom),
+            312.
+        );
+        assert_eq!(
+            settling_card_top(0, &[0., 0., 0.5], 800., Anchor::Top),
+            328.
+        );
+        for anchor in [Anchor::Top, Anchor::Bottom] {
+            assert_eq!(
+                settling_card_top(0, &[0., 0., 1.], 800., anchor),
+                settling_card_top(0, &[0., 0.], 800., anchor)
+            );
+            // Removing an older card must not move the newest one.
+            assert_eq!(
+                settling_card_top(2, &[0.5, 0., 0.], 800., anchor),
+                settling_card_top(2, &[0., 0., 0.], 800., anchor)
+            );
+        }
+        // With overflow, the stack height remains clamped until enough space opens.
+        assert_eq!(
+            settling_card_top(0, &[0., 0., 0.25], 400., Anchor::Bottom),
+            28.
+        );
     }
 
     #[test]

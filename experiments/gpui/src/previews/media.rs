@@ -1,10 +1,11 @@
+pub use crate::effects::cover_card;
 use crate::preferences::settings::Settings;
 use anyhow::{Context, Result, bail};
 use captures_media::{
     AudioEdit, CancelToken, EditSpec, ExportFormat, ExportSpec, MediaToolchain, QualityPreset,
 };
 use gpui::{Image, ImageFormat, RenderImage};
-use image::{DynamicImage, Frame, RgbaImage, imageops};
+use image::{AnimationDecoder, DynamicImage, Frame, RgbaImage, imageops};
 use std::{
     collections::hash_map::DefaultHasher,
     fs,
@@ -26,6 +27,7 @@ pub enum MediaKind {
 pub struct PreviewMedia {
     pub source: PathBuf,
     pub display: Arc<Path>,
+    pub card: Arc<RenderImage>,
     pub hovered: Arc<RenderImage>,
     pub width: u32,
     pub height: u32,
@@ -64,11 +66,25 @@ impl PreviewMedia {
             .decode()?
             .to_rgba8();
         let (width, height) = video_dimensions.unwrap_or_else(|| decoded.dimensions());
-        let hovered = render_bgra(hovered_card(&decoded));
+        // The published GPUI 0.2.2 cannot center-crop a rounded image sprite.
+        // Crop every GIF frame too: replacing it with a poster loses animation.
+        let frames = if kind == MediaKind::Gif {
+            card_frames(
+                image::codecs::gif::GifDecoder::new(std::io::BufReader::new(fs::File::open(
+                    display.as_ref(),
+                )?))?
+                .into_frames(),
+            )?
+        } else {
+            card_frames(std::iter::once(Ok(Frame::new(decoded))))?
+        };
+        let card = render_frames(frames.0);
+        let hovered = render_frames(frames.1);
         Ok(Self {
             bytes: fs::metadata(&source)?.len(),
             source,
             display,
+            card,
             hovered,
             width,
             height,
@@ -140,43 +156,45 @@ fn gpui_format(path: &Path) -> Result<ImageFormat> {
     }
 }
 
-fn hovered_card(source: &RgbaImage) -> RgbaImage {
-    let mut covered = cover_card(source, 284, 160);
-    covered = imageops::blur(&covered, 2.);
-    for pixel in covered.pixels_mut() {
-        pixel.0[0] = ((u16::from(pixel.0[0]) * 128) / 255) as u8;
-        pixel.0[1] = ((u16::from(pixel.0[1]) * 128) / 255) as u8;
-        pixel.0[2] = ((u16::from(pixel.0[2]) * 128) / 255) as u8;
+fn card_frames(
+    frames: impl IntoIterator<Item = image::ImageResult<Frame>>,
+) -> Result<(Vec<Frame>, Vec<Frame>)> {
+    let (mut normal, mut hovered) = (Vec::new(), Vec::new());
+    for frame in frames {
+        let frame = frame?;
+        let delay = frame.delay();
+        let covered = cover_card(frame.buffer(), 568, 320);
+        let mut blurred = imageops::blur(&covered, 4.);
+        for pixel in blurred.pixels_mut() {
+            for channel in &mut pixel.0[..3] {
+                *channel = ((u16::from(*channel) * 128) / 255) as u8;
+            }
+        }
+        normal.push(Frame::from_parts(covered, 0, 0, delay));
+        hovered.push(Frame::from_parts(blurred, 0, 0, delay));
     }
-    covered
+    anyhow::ensure!(!normal.is_empty(), "preview contains no frames");
+    Ok((normal, hovered))
 }
 
-pub fn cover_card(source: &RgbaImage, width: u32, height: u32) -> RgbaImage {
-    let scale = (width as f32 / source.width().max(1) as f32)
-        .max(height as f32 / source.height().max(1) as f32);
-    let scaled_width = (source.width() as f32 * scale).ceil() as u32;
-    let scaled_height = (source.height() as f32 * scale).ceil() as u32;
-    let resized = imageops::resize(
-        source,
-        scaled_width.max(width),
-        scaled_height.max(height),
-        imageops::FilterType::Triangle,
-    );
-    imageops::crop_imm(
-        &resized,
-        (resized.width() - width) / 2,
-        (resized.height() - height) / 2,
-        width,
-        height,
-    )
-    .to_image()
+fn render_frames(frames: Vec<Frame>) -> Arc<RenderImage> {
+    Arc::new(RenderImage::new(
+        frames
+            .into_iter()
+            .map(|frame| {
+                let delay = frame.delay();
+                let mut rgba = frame.into_buffer();
+                for pixel in rgba.pixels_mut() {
+                    pixel.0.swap(0, 2);
+                }
+                Frame::from_parts(rgba, 0, 0, delay)
+            })
+            .collect::<Vec<_>>(),
+    ))
 }
 
-pub fn render_bgra(mut rgba: RgbaImage) -> Arc<RenderImage> {
-    for pixel in rgba.pixels_mut() {
-        pixel.0.swap(0, 2);
-    }
-    Arc::new(RenderImage::new([Frame::new(rgba)]))
+pub fn render_bgra(rgba: RgbaImage) -> Arc<RenderImage> {
+    render_frames(vec![Frame::new(rgba)])
 }
 
 pub fn save(media: &PreviewMedia, settings: &Settings) -> Result<PathBuf> {
@@ -512,6 +530,31 @@ mod tests {
                 panic!("video copy must use the media file, not its poster")
             }
         }
+    }
+
+    #[test]
+    fn prepared_gif_frames_preserve_timing_and_change_while_hovered() {
+        let frames = [([220, 30, 10, 255], 70), ([10, 80, 240, 255], 190)]
+            .into_iter()
+            .map(|(color, delay)| {
+                Ok(Frame::from_parts(
+                    RgbaImage::from_pixel(7, 11, Rgba(color)),
+                    0,
+                    0,
+                    image::Delay::from_numer_denom_ms(delay, 1),
+                ))
+            });
+        let (normal, hovered) = card_frames(frames).unwrap();
+        assert_eq!(normal.len(), 2);
+        for (index, delay) in [70, 190].into_iter().enumerate() {
+            assert_eq!(normal[index].delay().numer_denom_ms(), (delay, 1));
+            assert_eq!(hovered[index].delay(), normal[index].delay());
+            assert_eq!(normal[index].buffer().dimensions(), (568, 320));
+        }
+        assert_eq!(normal[0].buffer().get_pixel(284, 160).0, [220, 30, 10, 255]);
+        assert_eq!(normal[1].buffer().get_pixel(284, 160).0, [10, 80, 240, 255]);
+        assert_eq!(hovered[0].buffer().get_pixel(284, 160).0, [110, 15, 5, 255]);
+        assert_eq!(hovered[1].buffer().get_pixel(284, 160).0, [5, 40, 120, 255]);
     }
 
     #[test]
