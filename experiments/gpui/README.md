@@ -88,6 +88,31 @@ component checkpoints does not establish whole-app or macOS parity. See
 [raw diagnostic results](results/linux-component-checkpoints.json). The harness
 must pass its visual checks on the Mac before its performance results are used.
 
+### Transient image resource regression
+
+The adapter and production preview dissolve explicitly evict the previous
+scene's transient images. Keeping only the newest CPU `Arc<RenderImage>` was
+insufficient: every fresh image ID remained in GPUI's texture atlas. Metal and
+Blade now retire evicted allocations after GPU completion, reclaim individual
+atlas regions, and release empty textures. Rasterization, pixels, effect timing
+and the CPU-raster/texture-upload renderer label are unchanged.
+
+```sh
+cargo test --locked --manifest-path experiments/gpui/Cargo.toml --test atlas_retirement
+# Native Mac graphical session; Linux requires DISPLAY and CAPTURES_GPUI_NATIVE_TEST=1.
+cargo test --locked --manifest-path experiments/gpui/Cargo.toml --test atlas_lifetime
+```
+
+The native test renders 512 changing images at 1×/2× dust raster dimensions
+with a pinned static image, verifies duplicate eviction and old CPU-buffer
+release, bounds active allocations, then checks allocator-space reclamation
+with the static image still alive and finally zero owned resources. It keeps
+the last scene valid while idle. Counters measure atlas ownership and nominal
+texture bytes, **not RSS, physical GPU residency, or presented FPS**. Actual
+post-fix Mac memory/CPU and pixel comparison still require the matched harness.
+DirectX retains its existing eviction backend; these counters/native tests are
+not implemented for Windows. Shipping Tauri behavior is unaffected.
+
 ### Full-app profiles and lifecycle
 
 `--profile DIR` overrides the isolated experiment directory. `CAPTURES_GPUI_DATA`

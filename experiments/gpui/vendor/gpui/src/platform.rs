@@ -759,6 +759,28 @@ impl From<RenderImageParams> for AtlasKey {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
+pub(crate) mod atlas_retirement;
+
+/// Experimental atlas ownership counters, not process RSS or physical GPU memory.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AtlasStats {
+    /// Keys still available to scene painting.
+    pub live_keys: usize,
+    /// Evicted tiles awaiting completion of GPU work.
+    pub retired_tiles: usize,
+    /// Textures owned by the atlas, including pending retirements.
+    pub live_textures: usize,
+    /// Nominal bytes of those textures, excluding driver padding and overhead.
+    pub texture_bytes: u64,
+    /// Pixel area still reserved by atlas allocators, including their bucket padding.
+    pub allocated_pixels: u64,
+    /// Total successful tile allocations over the atlas lifetime.
+    pub tile_allocations: u64,
+    /// Total tile allocations physically reclaimed after safe completion.
+    pub tile_reclamations: u64,
+}
+
 pub(crate) trait PlatformAtlas: Send + Sync {
     fn get_or_insert_with<'a>(
         &self,
@@ -766,6 +788,9 @@ pub(crate) trait PlatformAtlas: Send + Sync {
         build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
     ) -> Result<Option<AtlasTile>>;
     fn remove(&self, key: &AtlasKey);
+    fn stats(&self) -> Option<AtlasStats> {
+        None
+    }
 }
 
 struct AtlasTextureList<T> {

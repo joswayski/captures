@@ -13,6 +13,7 @@ pub mod previews;
 mod prompts;
 pub mod recording;
 pub mod theme;
+mod transient_images;
 
 #[derive(Clone, Debug)]
 pub struct Launch {

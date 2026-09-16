@@ -1,6 +1,7 @@
 use crate::{
-    AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTile, Bounds, DevicePixels, PlatformAtlas,
-    Point, Size, platform::AtlasTextureList,
+    AtlasKey, AtlasStats, AtlasTextureId, AtlasTextureKind, AtlasTile, Bounds, DevicePixels,
+    PlatformAtlas, Point, Size,
+    platform::{AtlasTextureList, atlas_retirement::AtlasRetirement},
 };
 use anyhow::Result;
 use blade_graphics as gpu;
@@ -25,6 +26,10 @@ struct BladeAtlasState {
     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
     initializations: Vec<AtlasTextureId>,
     uploads: Vec<PendingUpload>,
+    pending_removals: Vec<AtlasTile>,
+    retirement: AtlasRetirement<AtlasTile>,
+    tile_allocations: u64,
+    tile_reclamations: u64,
 }
 
 #[cfg(gles)]
@@ -54,6 +59,10 @@ impl BladeAtlas {
             tiles_by_key: Default::default(),
             initializations: Vec::new(),
             uploads: Vec::new(),
+            pending_removals: Vec::new(),
+            retirement: Default::default(),
+            tile_allocations: 0,
+            tile_reclamations: 0,
         }))
     }
 
@@ -66,9 +75,22 @@ impl BladeAtlas {
         lock.flush(gpu_encoder);
     }
 
-    pub fn after_frame(&self, sync_point: &gpu::SyncPoint) {
+    pub fn after_frame(&self, sync_point: &gpu::SyncPoint) -> u64 {
         let mut lock = self.0.lock();
         lock.upload_belt.flush(sync_point);
+        let serial = lock.retirement.submit();
+        // A removed tile may still have had an upload queued for this frame.
+        // Retire only after the submission that flushed those uploads completes.
+        for tile in std::mem::take(&mut lock.pending_removals) {
+            lock.retirement.retire(tile);
+        }
+        serial
+    }
+
+    pub fn completed(&self, serial: u64) {
+        let mut lock = self.0.lock();
+        lock.retirement.complete(serial);
+        lock.reclaim_completed();
     }
 
     pub fn get_texture_info(&self, id: AtlasTextureId) -> BladeTextureInfo {
@@ -97,36 +119,66 @@ impl PlatformAtlas for BladeAtlas {
             let tile = lock.allocate(size, key.texture_kind());
             lock.upload_texture(tile.texture_id, tile.bounds, &bytes);
             lock.tiles_by_key.insert(key.clone(), tile.clone());
+            lock.tile_allocations += 1;
             Ok(Some(tile))
         }
     }
 
     fn remove(&self, key: &AtlasKey) {
         let mut lock = self.0.lock();
-
-        let Some(id) = lock.tiles_by_key.remove(key).map(|tile| tile.texture_id) else {
+        let Some(tile) = lock.tiles_by_key.remove(key) else {
             return;
         };
+        lock.pending_removals.push(tile);
+    }
 
-        let Some(texture_slot) = lock.storage[id.kind].textures.get_mut(id.index as usize) else {
-            return;
+    fn stats(&self) -> Option<AtlasStats> {
+        let state = self.0.lock();
+        let mut stats = AtlasStats {
+            live_keys: state.tiles_by_key.len(),
+            retired_tiles: state.retirement.len() + state.pending_removals.len(),
+            tile_allocations: state.tile_allocations,
+            tile_reclamations: state.tile_reclamations,
+            ..Default::default()
         };
-
-        if let Some(mut texture) = texture_slot.take() {
-            texture.decrement_ref_count();
-            if texture.is_unreferenced() {
-                lock.storage[id.kind]
-                    .free_list
-                    .push(texture.id.index as usize);
-                texture.destroy(&lock.gpu);
-            } else {
-                *texture_slot = Some(texture);
-            }
+        for texture in state
+            .storage
+            .monochrome_textures
+            .textures
+            .iter()
+            .chain(&state.storage.polychrome_textures.textures)
+            .flatten()
+        {
+            stats.live_textures += 1;
+            stats.allocated_pixels += texture.allocator.allocated_space() as u64;
+            stats.texture_bytes += u64::from(texture.size.width.0 as u32)
+                * u64::from(texture.size.height.0 as u32)
+                * u64::from(texture.bytes_per_pixel());
         }
+        Some(stats)
     }
 }
 
 impl BladeAtlasState {
+    fn reclaim_completed(&mut self) {
+        for tile in self.retirement.drain_ready() {
+            let id = tile.texture_id;
+            let textures = &mut self.storage[id.kind];
+            let slot = &mut textures.textures[id.index as usize];
+            let texture = slot
+                .as_mut()
+                .expect("retired texture stays alive until completion");
+            texture.allocator.deallocate(tile.tile_id.into());
+            texture.decrement_ref_count();
+            self.tile_reclamations += 1;
+            if texture.is_unreferenced() {
+                texture.destroy(&self.gpu);
+                *slot = None;
+                textures.free_list.push(id.index as usize);
+            }
+        }
+    }
+
     fn allocate(&mut self, size: Size<DevicePixels>, texture_kind: AtlasTextureKind) -> AtlasTile {
         {
             let textures = &mut self.storage[texture_kind];
@@ -197,6 +249,7 @@ impl BladeAtlasState {
         let index = texture_list.free_list.pop();
 
         let atlas_texture = BladeAtlasTexture {
+            size,
             id: AtlasTextureId {
                 index: index.unwrap_or(texture_list.textures.len()) as u32,
                 kind,
@@ -308,6 +361,7 @@ impl BladeAtlasStorage {
 }
 
 struct BladeAtlasTexture {
+    size: Size<DevicePixels>,
     id: AtlasTextureId,
     allocator: BucketedAtlasAllocator,
     raw: gpu::Texture,

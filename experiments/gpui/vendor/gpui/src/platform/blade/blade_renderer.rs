@@ -329,7 +329,7 @@ pub struct BladeRenderer {
     surface: gpu::Surface,
     surface_config: gpu::SurfaceConfig,
     command_encoder: gpu::CommandEncoder,
-    last_sync_point: Option<gpu::SyncPoint>,
+    last_sync_point: Option<(gpu::SyncPoint, u64)>,
     pipelines: BladePipelines,
     instance_belt: BufferBelt,
     atlas: Arc<BladeAtlas>,
@@ -431,9 +431,10 @@ impl BladeRenderer {
     }
 
     fn wait_for_gpu(&mut self) {
-        if let Some(last_sp) = self.last_sync_point.take()
-            && !self.gpu.wait_for(&last_sp, MAX_FRAME_TIME_MS)
-        {
+        let Some((last_sp, atlas_submission)) = self.last_sync_point.take() else {
+            return;
+        };
+        if !self.gpu.wait_for(&last_sp, MAX_FRAME_TIME_MS) {
             log::error!("GPU hung");
             #[cfg(target_os = "linux")]
             if self.gpu.device_information().driver_name == "radv" {
@@ -450,6 +451,7 @@ impl BladeRenderer {
             );
             while !self.gpu.wait_for(&last_sp, MAX_FRAME_TIME_MS) {}
         }
+        self.atlas.completed(atlas_submission);
     }
 
     pub fn update_drawable_size(&mut self, size: Size<DevicePixels>) {
@@ -911,10 +913,10 @@ impl BladeRenderer {
 
         profiling::scope!("finish");
         self.instance_belt.flush(&sync_point);
-        self.atlas.after_frame(&sync_point);
+        let atlas_submission = self.atlas.after_frame(&sync_point);
 
         self.wait_for_gpu();
-        self.last_sync_point = Some(sync_point);
+        self.last_sync_point = Some((sync_point, atlas_submission));
     }
 }
 

@@ -1,6 +1,7 @@
 use crate::{
-    AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTile, Bounds, DevicePixels, PlatformAtlas,
-    Point, Size, platform::AtlasTextureList,
+    AtlasKey, AtlasStats, AtlasTextureId, AtlasTextureKind, AtlasTile, Bounds, DevicePixels,
+    PlatformAtlas, Point, Size,
+    platform::{AtlasTextureList, atlas_retirement::AtlasRetirement},
 };
 use anyhow::{Context as _, Result};
 use collections::FxHashMap;
@@ -19,11 +20,24 @@ impl MetalAtlas {
             monochrome_textures: Default::default(),
             polychrome_textures: Default::default(),
             tiles_by_key: Default::default(),
+            retirement: Default::default(),
+            tile_allocations: 0,
+            tile_reclamations: 0,
         }))
     }
 
     pub(crate) fn metal_texture(&self, id: AtlasTextureId) -> metal::Texture {
         self.0.lock().texture(id).metal_texture.clone()
+    }
+
+    pub(crate) fn submitted(&self) -> u64 {
+        self.0.lock().retirement.submit()
+    }
+
+    pub(crate) fn completed(&self, serial: u64) {
+        let mut state = self.0.lock();
+        state.retirement.complete(serial);
+        state.reclaim_completed();
     }
 }
 
@@ -32,6 +46,9 @@ struct MetalAtlasState {
     monochrome_textures: AtlasTextureList<MetalAtlasTexture>,
     polychrome_textures: AtlasTextureList<MetalAtlasTexture>,
     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
+    retirement: AtlasRetirement<AtlasTile>,
+    tile_allocations: u64,
+    tile_reclamations: u64,
 }
 
 impl PlatformAtlas for MetalAtlas {
@@ -53,43 +70,70 @@ impl PlatformAtlas for MetalAtlas {
             let texture = lock.texture(tile.texture_id);
             texture.upload(tile.bounds, &bytes);
             lock.tiles_by_key.insert(key.clone(), tile.clone());
+            lock.tile_allocations += 1;
             Ok(Some(tile))
         }
     }
 
     fn remove(&self, key: &AtlasKey) {
         let mut lock = self.0.lock();
-        let Some(id) = lock.tiles_by_key.get(key).map(|v| v.texture_id) else {
+        let Some(tile) = lock.tiles_by_key.remove(key) else {
             return;
         };
+        // Eviction is immediate/idempotent, but replace_region must not reuse
+        // these texels until all previously submitted GPU readers have finished.
+        lock.retirement.retire(tile);
+        lock.reclaim_completed();
+    }
 
-        let textures = match id.kind {
-            AtlasTextureKind::Monochrome => &mut lock.monochrome_textures,
-            AtlasTextureKind::Polychrome => &mut lock.polychrome_textures,
+    fn stats(&self) -> Option<AtlasStats> {
+        let state = self.0.lock();
+        let mut stats = AtlasStats {
+            live_keys: state.tiles_by_key.len(),
+            retired_tiles: state.retirement.len(),
+            tile_allocations: state.tile_allocations,
+            tile_reclamations: state.tile_reclamations,
+            ..Default::default()
         };
-
-        let Some(texture_slot) = textures
+        for texture in state
+            .monochrome_textures
             .textures
-            .iter_mut()
-            .find(|texture| texture.as_ref().is_some_and(|v| v.id == id))
-        else {
-            return;
-        };
-
-        if let Some(mut texture) = texture_slot.take() {
-            texture.decrement_ref_count();
-
-            if texture.is_unreferenced() {
-                textures.free_list.push(id.index as usize);
-                lock.tiles_by_key.remove(key);
-            } else {
-                *texture_slot = Some(texture);
-            }
+            .iter()
+            .chain(&state.polychrome_textures.textures)
+            .flatten()
+        {
+            stats.live_textures += 1;
+            stats.allocated_pixels += texture.allocator.allocated_space() as u64;
+            stats.texture_bytes += texture.metal_texture.width()
+                * texture.metal_texture.height()
+                * u64::from(texture.bytes_per_pixel());
         }
+        Some(stats)
     }
 }
 
 impl MetalAtlasState {
+    fn reclaim_completed(&mut self) {
+        for tile in self.retirement.drain_ready() {
+            let id = tile.texture_id;
+            let textures = match id.kind {
+                AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
+                AtlasTextureKind::Polychrome => &mut self.polychrome_textures,
+            };
+            let slot = &mut textures.textures[id.index as usize];
+            let texture = slot
+                .as_mut()
+                .expect("retired texture stays alive until completion");
+            texture.allocator.deallocate(tile.tile_id.into());
+            texture.decrement_ref_count();
+            self.tile_reclamations += 1;
+            if texture.is_unreferenced() {
+                *slot = None;
+                textures.free_list.push(id.index as usize);
+            }
+        }
+    }
+
     fn allocate(
         &mut self,
         size: Size<DevicePixels>,

@@ -9,6 +9,7 @@ use std::{path::PathBuf, sync::Arc, time::Instant};
 
 pub mod effects;
 pub mod motion;
+mod transient_images;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
@@ -193,6 +194,7 @@ struct Surface {
     media: Arc<RenderImage>,
     effect: Option<effects::Dissolve>,
     frame: Option<Arc<RenderImage>>,
+    frame_images: transient_images::TransientImages,
     scene_ms: f32,
     cycle: u64,
     started: Option<Instant>,
@@ -221,6 +223,7 @@ impl Surface {
             source,
             effect: None,
             frame: None,
+            frame_images: Default::default(),
             scene_ms,
             cycle: 0,
             started: None,
@@ -332,6 +335,7 @@ impl Surface {
 
 impl Render for Surface {
     fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        self.frame_images.begin_scene(window);
         if let Err(error) = self.advance(window) {
             eprintln!("GPUI parity adapter: {error:#}");
             std::process::exit(1);
@@ -363,6 +367,7 @@ impl Render for Surface {
                     ),
             ))
             .children(self.frame.clone().map(|frame| {
+                let frame = self.frame_images.retain(frame);
                 div()
                     .absolute()
                     .left(px(58.))

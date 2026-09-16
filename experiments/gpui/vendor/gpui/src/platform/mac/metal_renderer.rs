@@ -377,10 +377,13 @@ impl MetalRenderer {
                 Ok(command_buffer) => {
                     let instance_buffer_pool = self.instance_buffer_pool.clone();
                     let instance_buffer = Cell::new(Some(instance_buffer));
+                    let atlas = self.sprite_atlas.clone();
+                    let submission = atlas.submitted();
                     let block = ConcreteBlock::new(move |_| {
                         if let Some(instance_buffer) = instance_buffer.take() {
                             instance_buffer_pool.lock().release(instance_buffer);
                         }
+                        atlas.completed(submission);
                     });
                     let block = block.copy();
                     command_buffer.add_completed_handler(&block);

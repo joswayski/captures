@@ -3212,6 +3212,12 @@ impl Window {
         Ok(())
     }
 
+    /// Atlas ownership diagnostics when supported by the renderer. Texture byte
+    /// counts are nominal allocations, not RSS or measured physical GPU memory.
+    pub fn atlas_stats(&self) -> Option<crate::AtlasStats> {
+        self.sprite_atlas.stats()
+    }
+
     /// Add a node to the layout tree for the current frame. Takes the `Style` of the element for which
     /// layout is being requested, along with the layout ids of any children. This method is called during
     /// calls to the [`Element::request_layout`] trait method and enables any element to participate in layout.

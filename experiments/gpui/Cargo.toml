@@ -14,6 +14,10 @@ name = "macos_popup_geometry"
 # AppKit must run on the process main thread, not a libtest worker.
 harness = false
 
+[[test]]
+name = "atlas_lifetime"
+harness = false
+
 # Evaluation only. The shipping application and release pipeline remain Tauri.
 [workspace]
 exclude = ["vendor/gpui"]

@@ -122,6 +122,7 @@ fn button_content(label: &'static str) -> (Option<LineIcon>, &'static str) {
 struct Preview {
     launch: Launch,
     artifacts: Vec<Artifact>,
+    frame_images: crate::transient_images::TransientImages,
     placement: Placement,
     collapsed: bool,
     transition: Option<Instant>,
@@ -270,6 +271,7 @@ impl Preview {
             status: String::new(),
             next_id,
             reduced_motion: crate::theme::reduced_motion(),
+            frame_images: Default::default(),
         })
     }
 
@@ -622,6 +624,7 @@ impl Preview {
         }
 
         if let Some(dissolve) = display_dissolve {
+            let dissolve = self.frame_images.retain(dissolve);
             return crate::motion::translated(
                 left - PAD as f32,
                 top - PAD as f32,
@@ -879,6 +882,7 @@ impl Preview {
 
 impl Render for Preview {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.frame_images.begin_scene(window);
         self.reduced_motion = crate::theme::reduced_motion();
         self.finish_animations();
         let frame_height = f32::from(window.viewport_size().height);

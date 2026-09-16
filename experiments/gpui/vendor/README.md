@@ -6,14 +6,14 @@ Registry archive SHA-256:
 `979b45cfa6ec723b6f42330915a1b3769b930d02b2d505f9697f8ca602bee707`.
 The registry extraction marker `.cargo-ok` is omitted.
 
-There are three upstream-file changes:
+The maintained upstream changes are:
 
 - `Cargo.toml` declares the opt-in `subpixel-images` feature and a standalone
   workspace so Cargo formatting/metadata does not attach it to the root app.
 - `src/window.rs`, `Window::paint_image`, preserves floating device-pixel bounds
   when that feature is enabled. Without it, upstream's floor-origin/ceil-size
-  behavior remains unchanged. Layout, texture allocation, shaders and sampling
-  are unmodified.
+  behavior remains unchanged. Layout, shaders and sampling are unmodified.
+  `Window::atlas_stats` exposes optional ownership diagnostics (not RSS).
 - `src/platform/mac/window.rs` creates titlebar-less `PopUp` panels with the
   borderless style, retaining their nonactivating-panel behavior. Upstream used
   `Titled | FullSizeContentView` even with `titlebar: None`. Ordinary document
@@ -24,6 +24,17 @@ There are three upstream-file changes:
   this; native Mac CI reproduced 641×721 with both origin axes fractional. The
   aligned origin is used for creation and initial placement. No content-size
   subtraction, viewport clipping or weakened validation is involved.
+- `src/platform.rs` and `src/platform/atlas_retirement.rs` add atlas ownership
+  counters and completion-ordered retirement. Metal's atlas/renderer remove
+  keys immediately and idempotently, then reclaim their allocator regions and
+  empty textures only after all prior submitted GPU readers finish. An older
+  command-buffer completion cannot release a newer frame's allocation.
+- Blade's atlas/renderer use the same retirement queue, including pending
+  uploads, and reclaim at the existing completed-sync-point boundary. No new
+  GPU wait or frame-rate cap is added. Idle Blade retirement may retain its
+  last batch until the next existing completion wait or window teardown.
+  DirectX keeps its existing eviction backend and reports no atlas counters;
+  native Windows resource-lifetime validation remains outstanding.
 
 Captures enables this feature and uses `motion::translated` to move complete
 preview subtrees, including hitboxes, after static layout. Otherwise Taffy's
