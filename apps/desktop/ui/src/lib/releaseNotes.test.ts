@@ -47,6 +47,20 @@ describe("releaseNoteItems", () => {
       },
     }]);
   });
+
+  it("omits dependency updates from product-facing release notes", () => {
+    expect(releaseNoteItems([
+      "* Fix false crash reports during Windows updates ([#520](https://github.com/joswayski/captures/pull/520))",
+      "* Bump @vitest/mocker and vitest ([#511](https://github.com/joswayski/captures/pull/511))",
+      "* Bump js-yaml from 4.3.1 to 4.3.2 ([#513](https://github.com/joswayski/captures/pull/513))",
+    ].join("\n"))).toEqual([{
+      text: "Fix false crash reports during Windows updates",
+      pullRequest: {
+        number: 520,
+        url: "https://github.com/joswayski/captures/pull/520",
+      },
+    }]);
+  });
 });
 
 describe("stackedReleaseNotes", () => {
@@ -61,6 +75,11 @@ describe("stackedReleaseNotes", () => {
         {
           version: "2026.8.2704",
           display_version: "2026.08.27.4",
+          notes: "* Bump vitest from 4.1.10 to 4.1.11 (#511)",
+        },
+        {
+          version: "2026.8.2703",
+          display_version: "2026.08.27.3",
           notes: "* Fix capture menu switching",
         },
       ],
@@ -73,8 +92,8 @@ describe("stackedReleaseNotes", () => {
         items: [{ text: "Fix the update notice", pullRequest: null }],
       },
       {
-        version: "2026.8.2704",
-        displayVersion: "2026.08.27.4",
+        version: "2026.8.2703",
+        displayVersion: "2026.08.27.3",
         items: [{ text: "Fix capture menu switching", pullRequest: null }],
       },
     ]);
@@ -93,5 +112,11 @@ describe("stackedReleaseNotes", () => {
         { text: "Fix the region selector", pullRequest: null },
       ],
     }]);
+
+    expect(stackedReleaseNotes(
+      [],
+      "* Bump js-yaml from 4.3.1 to 4.3.2 (#513)",
+      "2026.09.14.1",
+    )).toEqual([]);
   });
 });

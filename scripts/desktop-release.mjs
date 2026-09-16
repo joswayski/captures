@@ -122,8 +122,13 @@ export function releaseImpactBetween(before, after) {
 }
 
 function commitMessage(commit) {
-  const [subject, ...body] = git(["show", "-s", "--format=%s%n%b", commit]).split(/\r?\n/u);
-  return { subject, body: body.join("\n").trim() };
+  const [authorName, authorEmail, subject, ...body] = git([
+    "show",
+    "-s",
+    "--format=%an%n%ae%n%s%n%b",
+    commit,
+  ]).split(/\r?\n/u);
+  return { authorName, authorEmail, subject, body: body.join("\n").trim() };
 }
 
 function firstParent(commit) {
@@ -135,7 +140,13 @@ function firstParent(commit) {
 }
 
 function noteForCommit(commit, repository) {
-  const { subject, body } = commitMessage(commit);
+  const { authorName, authorEmail, subject, body } = commitMessage(commit);
+  if (
+    /^dependabot(?:\[bot\])?$/iu.test(authorName)
+    || /(?:^|\+)dependabot(?:\[bot\])?@/iu.test(authorEmail)
+    || /^Bump\b/iu.test(subject)
+  ) return null;
+
   const squash = /^(.*?) \(#(\d+)\)$/u.exec(subject);
   if (squash) {
     const [, title, number] = squash;
@@ -158,6 +169,7 @@ export function releaseNotes(commits, repository, fallbackCommit = "") {
   const notes = [];
   for (const commit of commits) {
     const note = noteForCommit(commit, repository);
+    if (!note) continue;
     if (seen.has(note.key)) continue;
     seen.add(note.key);
     notes.push(note.text);

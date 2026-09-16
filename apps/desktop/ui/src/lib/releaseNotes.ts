@@ -49,6 +49,11 @@ function isFirstContributionLine(text: string) {
   return /\bmade their first contribution\b/iu.test(text);
 }
 
+/** Dependency maintenance is useful in GitHub history, but not as product-facing copy. */
+function isDependencyUpdateLine(text: string) {
+  return /^Bump\b/iu.test(text);
+}
+
 /** Turn GitHub's generated release Markdown into concise, safe toast copy. */
 export function releaseNoteItems(markdown: string): ReleaseNoteItem[] {
   const items: ReleaseNoteItem[] = [];
@@ -73,7 +78,12 @@ export function releaseNoteItems(markdown: string): ReleaseNoteItem[] {
 
     const body = line.replace(/^(?:[-*+]\s+|\d+[.)]\s+)/u, "").replace(/^>\s?/u, "");
     const text = plainText(body);
-    if (!text || isFirstContributionLine(text) || isFirstContributionLine(body)) continue;
+    if (
+      !text
+      || isFirstContributionLine(text)
+      || isFirstContributionLine(body)
+      || isDependencyUpdateLine(text)
+    ) continue;
     items.push({ text, pullRequest: pullRequestFromLine(body) });
   }
 
@@ -92,16 +102,21 @@ export function stackedReleaseNotes(
   fallbackDisplayVersion: string,
 ): ReleaseNoteGroup[] {
   if (changelog && changelog.length > 0) {
-    return changelog.map((entry) => ({
-      version: entry.version,
-      displayVersion: entry.display_version,
-      items: entry.notes ? releaseNoteItems(entry.notes) : [],
-    }));
+    return changelog.flatMap((entry) => {
+      const items = entry.notes ? releaseNoteItems(entry.notes) : [];
+      return items.length > 0 ? [{
+        version: entry.version,
+        displayVersion: entry.display_version,
+        items,
+      }] : [];
+    });
   }
   if (!fallbackNotes) return [];
+  const items = releaseNoteItems(fallbackNotes);
+  if (items.length === 0) return [];
   return [{
     version: "",
     displayVersion: fallbackDisplayVersion,
-    items: releaseNoteItems(fallbackNotes),
+    items,
   }];
 }

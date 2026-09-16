@@ -464,6 +464,7 @@ function previewNotes(summary: string, pull: number): string {
     "",
     "## What's Changed",
     `* ${summary} by @joswayski in https://github.com/joswayski/captures/pull/${pull}`,
+    "* Bump js-yaml from 4.3.1 to 4.3.2 ([#513](https://github.com/joswayski/captures/pull/513))",
     `* @devin-ai-integration[bot] made their first contribution in https://github.com/joswayski/captures/pull/${pull}`,
     "",
     "## New Contributors",
@@ -524,7 +525,7 @@ function updateStatus(): UpdateStatus {
       {
         version: "2026.8.2704",
         display_version: "2026.08.27.4",
-        notes: previewNotes("Fix capture menu display switching and the Record CTA", 263),
+        notes: "* Bump @vitest/mocker and vitest ([#511](https://github.com/joswayski/captures/pull/511))",
       },
       {
         version: "2026.8.2703",
