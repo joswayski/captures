@@ -234,6 +234,7 @@
     }
 
     private func begin() {
+      stderr("observer: enumerating window \(windowID) for PID \(targetPID)")
       guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
         fail(
           "Screen Recording permission was denied. Enable this observer in System Settings > Privacy & Security > Screen Recording, then run it again."
@@ -270,6 +271,7 @@
     }
 
     private func start(window: SCWindow) {
+      stderr("observer: starting \(width)x\(height) capture")
       let configuration = SCStreamConfiguration()
       configuration.width = width
       configuration.height = height
@@ -298,6 +300,8 @@
           guard let self = self, !self.finishing else { return }
           if let error = error {
             self.fail("ScreenCaptureKit could not start capture: \(error.localizedDescription)")
+          } else {
+            stderr("observer: capture started")
           }
         }
       }
@@ -341,6 +345,7 @@
       }
 
       let displayNs = (attachment[.displayTime] as? UInt64).map(hostTimeNs)
+      if frames.isEmpty { stderr("observer: first frame status \(statusRaw)") }
       // Started is metadata, not documented image data. Wait for a complete
       // frame before releasing the workload so pixel changes have a baseline.
       if statusRaw == 4 {

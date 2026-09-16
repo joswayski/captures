@@ -177,7 +177,7 @@ def package_app(executable, folder, label):
     return app, identifier
 
 
-def wait_json(path, pid, timeout, sample=None):
+def wait_json(path, pid, timeout, sample=None, process=None):
     deadline = time.monotonic() + timeout
     while not path.exists():
         error = Path(str(path).replace(".ready.json", "").replace(".started.json", "") + ".error.json")
@@ -185,6 +185,8 @@ def wait_json(path, pid, timeout, sample=None):
             raise RuntimeError(error.read_text())
         if pid <= 0:
             raise RuntimeError("LaunchServices returned no live process; inspect renderer.json.error.json")
+        if process is not None and process.poll() is not None:
+            raise RuntimeError(f"Observer exited {process.returncode}; inspect observer.log")
         os.kill(pid, 0)  # Liveness only; never signal an unverified PID here.
         if time.monotonic() > deadline:
             raise TimeoutError(f"Timed out waiting for {path}")
@@ -223,7 +225,7 @@ def profile_trial(executable, config, folder, label, measurement, capture_hz):
                     observer = subprocess.Popen([str(OBSERVER), "capture", str(ready["window_id"]),
                         str(app_pid), str(int(config["width"] * config["scale"])),
                         str(int(config["height"] * config["scale"])), str(capture_hz), str(capture)], stdout=log, stderr=log)
-                wait_json(Path(str(capture) + ".ready.json"), observer.pid, 90)
+                wait_json(Path(str(capture) + ".ready.json"), observer.pid, 90, process=observer)
 
             def sample():
                 current = probe(app_pid)
