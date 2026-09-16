@@ -3,6 +3,7 @@
   import CoreImage
   import CoreVideo
   import Darwin
+  import Metal
   import QuartzCore
 
   struct BenchmarkConfig: Decodable {
@@ -22,6 +23,7 @@
     let window_id: Int
     let scale: Double
     let scenario, mode, renderer: String
+    let gpuDevice: String
     let checkpointMs: Double
   }
 
@@ -29,6 +31,7 @@
     let schema: Int, pid: Int32, window_id: Int
     let scale: Double
     let scenario, mode, renderer: String
+    let gpuDevice: String
     let checkpointMs, elapsedMs: Double
     let callbackIntervalsMs, setupMs: [Double]
     let cycles: Int
@@ -44,11 +47,8 @@
     private let config: BenchmarkConfig
     private let output: URL
     private let image: CIImage
-    // CSS brightness multiplies sRGB components, not linear-light components.
-    private let ci = CIContext(options: [
-      .useSoftwareRenderer: false, .cacheIntermediates: true,
-      .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
-    ])
+    private let ci: CIContext
+    private let gpuName: String
     private let root = CALayer()
     private let survivor = CALayer()
     private let exitingShell = CALayer()
@@ -70,6 +70,16 @@
     init(config: BenchmarkConfig, output: URL) throws {
       self.config = config
       self.output = output
+      guard let device = MTLCreateSystemDefaultDevice() else {
+        throw Failure("No Metal device; refusing a software-only graphical benchmark")
+      }
+      gpuName = device.name
+      // Explicit Metal device: preparation cannot silently choose a CPU context.
+      // CSS brightness multiplies sRGB components, not linear-light components.
+      ci = CIContext(mtlDevice: device, options: [
+        .cacheIntermediates: true,
+        .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+      ])
       guard config.schema == 1, config.width == 640, config.height == 720,
         config.scale > 0, config.cycleMs == 3200,
         config.checkpointMs.isFinite, config.checkpointMs >= 0,
@@ -296,7 +306,7 @@
       Ready(
         pid: getpid(), window_id: window.windowNumber, scale: config.scale,
         scenario: config.scenario, mode: config.mode, renderer: "appkit-core-animation",
-        checkpointMs: config.checkpointMs)
+        gpuDevice: gpuName, checkpointMs: config.checkpointMs)
     }
     private func writeReady() throws {
       try encode(readiness(), to: URL(fileURLWithPath: output.path + ".ready.json"))
@@ -357,7 +367,7 @@
         let result = Result(
           schema: ready.schema, pid: ready.pid, window_id: ready.window_id, scale: ready.scale,
           scenario: ready.scenario, mode: ready.mode, renderer: ready.renderer,
-          checkpointMs: ready.checkpointMs, elapsedMs: elapsed,
+          gpuDevice: ready.gpuDevice, checkpointMs: ready.checkpointMs, elapsedMs: elapsed,
           callbackIntervalsMs: callbackIntervals, setupMs: setupTimes, cycles: setupTimes.count,
           complete: true,
           metric: "main-thread animation callback intervals; not GPU presented frames")

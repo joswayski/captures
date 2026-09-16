@@ -91,6 +91,8 @@ automatic framework recommendation. Fix visible differences before choosing one.
   CSS/WAAPI on their real compositor path and Canvas on its production rAF path.
   Native uses Core Image textures with Core Animation layer composition and a
   display-linked main-thread pose update; it is not a CPU image raster per frame.
+  Its Core Image context explicitly selects a Metal device, records the GPU name,
+  and fails if no Metal device exists rather than silently benchmarking software.
 - Per-cycle setup time includes effect resource creation; images are decoded
   before readiness. Native currently creates filtered chip textures separately;
   shipping Canvas filters an atlas in one pass. That is an implementation cost
