@@ -550,6 +550,11 @@
     guard arguments.count == 6 else {
       throw ObserverError.usage("usage: observer capture WINDOW_ID PID WIDTH HEIGHT HZ OUTPUT_JSON")
     }
+    // A command-line process must establish AppKit's WindowServer connection
+    // before SCContentFilter/SCStream use it (CGS_REQUIRE_INIT otherwise aborts).
+    // No observer window or Dock icon should compete with the measured app.
+    NSApplication.shared.setActivationPolicy(.prohibited)
+    NSApplication.shared.finishLaunching()
     let values = Array(arguments)
     guard let windowID = UInt32(values[0]) else {
       throw ObserverError.invalidArgument("invalid WINDOW_ID")
