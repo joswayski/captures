@@ -26,7 +26,7 @@ def probe(pid):
     return json.loads(subprocess.check_output([str(RESOURCES), str(pid)], text=True, timeout=10))
 
 
-def validate_resources(sample, ready, baseline=None, *, stable_membership=True):
+def validate_resources(sample, ready, baseline=None, *, complete_lifetimes=True):
     if sample["rootPid"] != ready["pid"] or not sample["rootStartMach"]:
         raise ValueError("Resource sample does not identify the launched application")
     if not sample["resourceCoalitionId"] or sample["resourceCoalitionId"] == sample["samplerCoalitionId"]:
@@ -42,7 +42,7 @@ def validate_resources(sample, ready, baseline=None, *, stable_membership=True):
         if any(p["pid"] < 0 or (p["role"] == "webContent" and p["pid"] == 0) for p in helpers):
             raise ValueError("Invalid explicit WebKit process identity")
         # Non-launching private getters may report no current GPU/Network PID.
-        # All coalition members still count; new members invalidate the baseline.
+        # All coalition members still count, including helpers born during the run.
         required.update(p["pid"] for p in helpers if p["pid"] > 0)
     if not required <= identities.keys():
         raise ValueError("A required WebKit/app process is outside the isolated coalition or unreadable")
@@ -56,8 +56,15 @@ def validate_resources(sample, ready, baseline=None, *, stable_membership=True):
         before = {p["pid"]: p["startMach"] for p in baseline["processes"]}
         if any(identities[p] != before[p] for p in identities.keys() & before.keys()):
             raise ValueError("Process identity/membership changed during measurement")
-        if stable_membership and identities != before:
-            raise ValueError("Process membership changed; refusing CPU totals with missing lifetimes")
+        if complete_lifetimes:
+            if before.keys() - identities.keys():
+                raise ValueError("Process disappeared; refusing CPU totals with missing lifetimes")
+            for process in sample["processes"]:
+                if process["pid"] not in before and not (
+                        baseline["hostTimeNs"] <= process["startHostTimeNs"] <= sample["hostTimeNs"]):
+                    raise ValueError("Process membership gained a pre-existing or invalid identity")
+            # A genuinely newborn helper had zero CPU at the previous sample;
+            # its entire lifetime counter therefore belongs in the next delta.
 
 
 def quantile(values, fraction):
@@ -92,7 +99,7 @@ def summarize_resources(samples):
         "physicalFootprintFirstMiB": footprints[0], "physicalFootprintLastMiB": footprints[-1],
         "physicalFootprintTailGrowthMiBPerSecond": (footprints[-1] - footprints[middle]) / tail_seconds,
         "summedRSSMedianMiB": statistics.median(resident), "summedRSSPeakSampledMiB": max(resident),
-        "processCount": len(samples[0]["processes"]),
+        "processCount": max(len(s["processes"]) for s in samples),
         "probeP95Ms": quantile([s["elapsedProbeNs"] / 1e6 for s in samples], .95),
     }
 
@@ -232,11 +239,13 @@ def profile_trial(executable, config, folder, label, measurement, capture_hz):
 
             def sample():
                 current = probe(app_pid)
+                current["unreadableBeforeLaunch"] = baseline["unreadableBeforeLaunch"]
+                previous = samples[-1] if samples else baseline
                 samples.append(current)
                 # SCK may add a system recording-indicator XPC helper to the
                 # target coalition. Frame-pass snapshots are diagnostic only;
                 # they never produce CPU/memory totals. Resource passes remain strict.
-                validate_resources(current, ready, baseline, stable_membership=measurement == "resources")
+                validate_resources(current, ready, previous, complete_lifetimes=measurement == "resources")
 
             sample()
             Path(config["startGatePath"]).touch()

@@ -8,8 +8,9 @@ class ProfilingTests(unittest.TestCase):
         ready = {"pid": 10, "renderer": "tauri-dom-waapi", "webkitProcesses": [
             {"role": "webContent", "pid": 20}, {"role": "gpu", "pid": 30}, {"role": "network", "pid": 40}]}
         sample = {"rootPid": 10, "rootStartMach": 110, "resourceCoalitionId": 99,
-                  "samplerCoalitionId": 3, "unreadableSameUidPids": [],
-                  "processes": [{"pid": p, "parent": 1, "startMach": p + 100} for p in (10, 20, 30, 40)]}
+                  "samplerCoalitionId": 3, "unreadableSameUidPids": [], "hostTimeNs": 500,
+                  "processes": [{"pid": p, "parent": 1, "startMach": p + 100,
+                                 "startHostTimeNs": p + 100} for p in (10, 20, 30, 40)]}
         validate_resources(sample, ready)
         for mutation, message in [
             (lambda s: s.update(resourceCoalitionId=3), "isolated"),
@@ -29,34 +30,46 @@ class ProfilingTests(unittest.TestCase):
         local_only = {**sample, "processes": sample["processes"][:2]}
         validate_resources(local_only, absent)
         with self.assertRaisesRegex(ValueError, "membership"):
-            validate_resources(sample, absent, local_only)  # a helper started later
-        validate_resources(sample, absent, local_only, stable_membership=False)
+            validate_resources(sample, absent, local_only)  # pre-existing helper joined later
+        validate_resources(sample, absent, local_only, complete_lifetimes=False)
+        newborn = copy.deepcopy(sample)
+        newborn["hostTimeNs"] = 600
+        for process in newborn["processes"][2:]:
+            process["startHostTimeNs"] = 550
+        validate_resources(newborn, absent, local_only)
+        with self.assertRaisesRegex(ValueError, "disappeared"):
+            validate_resources({**local_only, "hostTimeNs": 700}, absent, newborn)
+        newborn["processes"][2]["startHostTimeNs"] = 601
+        with self.assertRaisesRegex(ValueError, "invalid identity"):
+            validate_resources(newborn, absent, local_only)
         reused = copy.deepcopy(sample)
         reused["processes"][1]["startMach"] = 999
         with self.assertRaisesRegex(ValueError, "identity/membership"):
-            validate_resources(reused, absent, local_only, stable_membership=False)
+            validate_resources(reused, absent, local_only, complete_lifetimes=False)
         absent["webkitProcesses"][0]["pid"] = 0
         with self.assertRaisesRegex(ValueError, "Invalid explicit"):
             validate_resources(local_only, absent)
 
     def test_cpu_is_time_weighted_and_memory_peak_is_simultaneous(self):
         samples = []
-        # CPU deltas: .6 seconds in 1 second, then 2.7 seconds in 3 seconds.
-        # Average is 82.5%, not the unweighted interval mean/median of75%.
+        # A third helper is born between samples 0 and 1. Include its entire
+        # .4-second CPU lifetime, not only the .2 seconds since first observation.
+        # CPU deltas: .8 seconds in 1 second, then 2.9 seconds in 3 seconds.
         for timestamp, cpu, memory in [(0, (1, .3), (100, 10)),
-                                       (1, (1.1, .8), (20, 120)),
-                                       (4, (1.1, 3.5), (50, 100))]:
+                                       (1, (1.1, .8, .2), (20, 120, 20)),
+                                       (4, (1.1, 3.5, .4), (50, 100, 30))]:
             samples.append({"hostTimeNs": int(timestamp * 1e9), "elapsedProbeNs": 1000,
                 "processes": [{"userCpuNs": round(c * 1e9), "systemCpuNs": 0,
                     "physicalFootprintBytes": m * MIB, "residentBytes": (m + 5) * MIB,
                     "lifetimePeakPhysicalFootprintBytes": 500 * MIB}
                     for c, m in zip(cpu, memory)]})
         summary = summarize_resources(samples)
-        self.assertAlmostEqual(summary["cpuAveragePercentOneCore"], 82.5)
-        self.assertAlmostEqual(summary["cpuSeconds"], 3.3)
-        self.assertEqual(summary["physicalFootprintPeakSampledMiB"], 150)
-        self.assertEqual(summary["summedRSSPeakSampledMiB"], 160)
-        self.assertAlmostEqual(summary["physicalFootprintTailGrowthMiBPerSecond"], 10 / 3)
+        self.assertAlmostEqual(summary["cpuAveragePercentOneCore"], 92.5)
+        self.assertAlmostEqual(summary["cpuSeconds"], 3.7)
+        self.assertEqual(summary["physicalFootprintPeakSampledMiB"], 180)
+        self.assertEqual(summary["summedRSSPeakSampledMiB"], 195)
+        self.assertAlmostEqual(summary["physicalFootprintTailGrowthMiBPerSecond"], 20 / 3)
+        self.assertEqual(summary["processCount"], 3)
 
     def test_frame_timestamps_not_arrivals_idle_or_identical_redraws(self):
         start = 10_000_000_000

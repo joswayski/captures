@@ -303,11 +303,13 @@ static int run_probe(pid_t root) {
         printf("{\"pid\":%d,\"parent\":%d,\"uid\":%u,\"name\":", p->pid, p->parent,
                (unsigned)p->uid);
         json_string(p->name);
-        printf(",\"startMach\":%" PRIu64 ",\"userCpuNs\":%" PRIu64
+        printf(",\"startMach\":%" PRIu64 ",\"startHostTimeNs\":%" PRIu64
+               ",\"userCpuNs\":%" PRIu64
                ",\"systemCpuNs\":%" PRIu64 ",\"residentBytes\":%" PRIu64
                ",\"physicalFootprintBytes\":%" PRIu64
                ",\"lifetimePeakPhysicalFootprintBytes\":%" PRIu64 "}",
-               p->start_mach, p->user_ns, p->system_ns, p->resident, p->footprint,
+               p->start_mach, mach_ticks_to_ns(p->start_mach),
+               p->user_ns, p->system_ns, p->resident, p->footprint,
                p->lifetime_peak_footprint);
     }
     fputs("],\"unreadableSameUidPids\":[", stdout);
@@ -391,7 +393,8 @@ static int self_test(void) {
     struct process_sample sample;
     bool same_uid = false;
     if (sample_pid(self, geteuid(), coalition, &sample, &same_uid) != 1 || !same_uid ||
-        sample.pid != self || sample.start_mach != usage.ri_proc_start_abstime) {
+        sample.pid != self || sample.start_mach != usage.ri_proc_start_abstime ||
+        mach_ticks_to_ns(sample.start_mach) > mach_ticks_to_ns(mach_absolute_time())) {
         fputs("resources self-test: stable self sample failed\n", stderr); return 1;
     }
     puts("resources self-test: ok");

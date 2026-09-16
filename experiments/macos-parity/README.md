@@ -76,8 +76,11 @@ it in System Settings and restart the command with a new output directory if nee
   Benchmark-only WebKit private APIs provide their PIDs for independent membership
   checks, using non-launching getters. A reported zero GPU/Network PID means no
   completed helper launch at that instant, not an unavailable API; every observed
-  coalition member still counts. Missing ownership, unsupported private APIs, PID reuse, or changing
-  process membership fail the run instead of returning partial totals.
+  coalition member still counts. A helper born between samples contributes its
+  complete CPU counter from birth, verified using its Mach start time. Missing
+  ownership, unsupported private APIs, PID reuse, disappearing processes, or a
+  pre-existing process joining later fail the run instead of returning partial totals.
+  Sampling cannot detect an entire process lifetime occurring between polls.
   `physicalFootprint*MiB` is summed process physical footprint; `summedRSS*MiB` is
   also retained but can double-count shared pages. Peaks are concurrent **sampled**
   peaks, not sums of each process's unrelated historical maximum. CPU is the total
@@ -98,7 +101,7 @@ it in System Settings and restart the command with a new output directory if nee
   attributes shared WindowServer/kernel costs or all GPU residency to an app.
   ScreenCaptureKit may add a recording-indicator helper to the target coalition;
   frame-pass resource snapshots are diagnostic only and never enter CPU/memory
-  summaries. Resource-pass membership and identity checks remain strict.
+  summaries. Resource-pass lifetime and identity checks remain strict.
   These remain component windows, not the full Captures application. An app-coalition
   total is substantially more complete than the old root-process number, not
   whole-system accounting.
