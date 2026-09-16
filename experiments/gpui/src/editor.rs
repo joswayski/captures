@@ -4,6 +4,8 @@
 //! Windows experiment.  Pixel/document behavior is delegated to the portable,
 //! tested `captures-windows-native` model.
 
+mod fonts;
+
 use captures_windows_native::{
     draft::{DraftIdentity, DraftStore},
     editor::{BlendMode, Document, Shape, Tool, resize_from_corner},
@@ -49,6 +51,12 @@ enum ImageNumber {
     Height,
     X,
     Y,
+}
+
+enum TextFontChange {
+    Family(&'static str),
+    Bold,
+    Italic,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -265,6 +273,8 @@ pub struct ScreenshotEditor {
     synced_text_layer: Option<(u64, u64)>,
     synced_image_layer: Option<(u64, u64)>,
     text_menu: Option<&'static str>,
+    text_menu_bounds: Bounds<Pixels>,
+    text_menu_above: bool,
     text_font_family: &'static str,
     text_font: Option<Arc<[u8]>>,
     document: Document,
@@ -443,6 +453,8 @@ impl ScreenshotEditor {
             synced_text_layer: None,
             synced_image_layer: None,
             text_menu: None,
+            text_menu_bounds: Bounds::default(),
+            text_menu_above: false,
             text_font_family: "rounded",
             text_font: None,
             launch,
@@ -605,22 +617,13 @@ impl ScreenshotEditor {
         if self.tool == Tool::Text {
             let result = (|| -> anyhow::Result<()> {
                 if self.text_font.is_none() {
-                    use font_kit::{
-                        family_name::FamilyName, properties::Properties, source::SystemSource,
-                    };
-                    let family = match self.text_font_family {
-                        "rounded" => FamilyName::Title("Arial Rounded MT Bold".into()),
-                        "mono" => FamilyName::Monospace,
-                        "serif" => FamilyName::Serif,
-                        _ => FamilyName::SansSerif,
-                    };
-                    let font = SystemSource::new()
-                        .select_best_match(&[family, FamilyName::SansSerif], &Properties::new())?
-                        .load()?;
-                    let bytes = font.copy_font_data().ok_or_else(|| {
-                        anyhow::anyhow!("System font cannot be embedded in the draft")
-                    })?;
-                    self.text_font = Some(Arc::from(bytes.as_slice()));
+                    let (bytes, font) = fonts::resolve(
+                        self.text_font_family,
+                        self.default_text_style.bold,
+                        self.default_text_style.italic,
+                    )?;
+                    self.default_text_style.font = Some(font);
+                    self.text_font = Some(bytes);
                 }
                 let value = self
                     .text
@@ -1546,8 +1549,7 @@ impl ScreenshotEditor {
         cx.notify();
     }
 
-    fn choose_text_font(&mut self, family: &'static str, cx: &mut Context<Self>) {
-        use font_kit::{family_name::FamilyName, properties::Properties, source::SystemSource};
+    fn change_text_font(&mut self, change: TextFontChange, cx: &mut Context<Self>) {
         if self
             .selected
             .and_then(|id| self.document.layers.iter().find(|layer| layer.id == id))
@@ -1557,33 +1559,54 @@ impl ScreenshotEditor {
             cx.notify();
             return;
         }
-        let requested = match family {
-            "serif" => FamilyName::Serif,
-            "mono" => FamilyName::Monospace,
-            "rounded" => FamilyName::Title("Arial Rounded MT Bold".into()),
-            _ => FamilyName::SansSerif,
+        let mut style = self
+            .selected
+            .and_then(|id| self.document.layers.iter().find(|layer| layer.id == id))
+            .and_then(|layer| match &layer.shape {
+                Shape::Text { style, .. } => Some(style.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| self.default_text_style.clone());
+        let family = match change {
+            TextFontChange::Family(family) => family,
+            TextFontChange::Bold => {
+                style.bold = !style.bold;
+                self.text_font_family
+            }
+            TextFontChange::Italic => {
+                style.italic = !style.italic;
+                self.text_font_family
+            }
         };
-        let result = (|| -> anyhow::Result<Arc<[u8]>> {
-            let font = SystemSource::new()
-                .select_best_match(&[requested, FamilyName::SansSerif], &Properties::new())?
-                .load()?;
-            let bytes = font
-                .copy_font_data()
-                .ok_or_else(|| anyhow::anyhow!("font data is not available"))?;
-            Ok(Arc::from(bytes.as_slice()))
-        })();
-        match result {
-            Ok(bytes) => {
+        match fonts::resolve(family, style.bold, style.italic) {
+            Ok((bytes, font)) => {
+                style.font = Some(font);
                 self.text_font = Some(bytes.clone());
                 self.text_font_family = family;
-                self.edit_selected(
-                    |layer| {
-                        if let Shape::Text { font_data, .. } = &mut layer.shape {
-                            *font_data = bytes;
-                        }
-                    },
-                    cx,
-                );
+                self.default_text_style = style.clone();
+                if self.selected.is_some_and(|id| {
+                    self.document
+                        .layers
+                        .iter()
+                        .any(|layer| layer.id == id && matches!(layer.shape, Shape::Text { .. }))
+                }) {
+                    self.edit_selected(
+                        |layer| {
+                            if let Shape::Text {
+                                font_data,
+                                style: current,
+                                ..
+                            } = &mut layer.shape
+                            {
+                                *font_data = bytes;
+                                *current = style;
+                            }
+                        },
+                        cx,
+                    );
+                } else {
+                    cx.notify();
+                }
             }
             Err(error) => {
                 self.status = format!("Could not load {family} font: {error}");
@@ -1640,6 +1663,9 @@ impl ScreenshotEditor {
             .iter()
             .find(|(value, _)| *value == selected)
             .map_or("Standard", |(_, label)| *label);
+        let measured = Rc::new(Cell::new(Bounds::<Pixels>::default()));
+        let recorded = measured.clone();
+        let menu_height = px(options.len() as f32 * 38. + 10.);
         let sample = |value: &str| {
             div()
                 .w(px(54.))
@@ -1673,6 +1699,7 @@ impl ScreenshotEditor {
             .child(
                 div()
                     .id(id)
+                    .relative()
                     .w_full()
                     .min_h(px(if id == "text-font" { 32. } else { 40. }))
                     .px_2()
@@ -1687,7 +1714,16 @@ impl ScreenshotEditor {
                     .when(id != "text-font", |d| d.child(sample(selected)))
                     .child(div().flex_1().child(label))
                     .child("⌄")
-                    .on_click(cx.listener(move |s, _, _, cx| {
+                    .child(
+                        canvas(move |bounds, _, _| recorded.set(bounds), |_, _, _, _| {})
+                            .absolute()
+                            .inset_0()
+                            .size_full(),
+                    )
+                    .on_click(cx.listener(move |s, _, window, cx| {
+                        s.text_menu_bounds = measured.get();
+                        s.text_menu_above = s.text_menu_bounds.bottom() + menu_height + px(4.)
+                            > window.viewport_size().height - px(8.);
                         s.text_menu = if s.text_menu == Some(id) {
                             None
                         } else {
@@ -1699,65 +1735,84 @@ impl ScreenshotEditor {
             .when(self.text_menu == Some(id), |d| {
                 d.child(
                     deferred(
-                        div()
-                            .occlude()
-                            .absolute()
-                            .top(px(if id == "text-font" { 36. } else { 44. }))
-                            .left_0()
-                            .w_full()
-                            .p_1()
-                            .bg(t.raised)
-                            .border_1()
-                            .border_color(t.border)
-                            .rounded(px(8.))
-                            .shadow_lg()
-                            .children(options.iter().map(|&(value, label)| {
+                        anchored()
+                            .anchor(if self.text_menu_above {
+                                Corner::BottomLeft
+                            } else {
+                                Corner::TopLeft
+                            })
+                            .position(point(
+                                self.text_menu_bounds.left(),
+                                if self.text_menu_above {
+                                    self.text_menu_bounds.top() - px(4.)
+                                } else {
+                                    self.text_menu_bounds.bottom() + px(4.)
+                                },
+                            ))
+                            .snap_to_window_with_margin(Edges::all(px(8.)))
+                            .child(
                                 div()
-                                    .id(SharedString::from(format!("{id}-{value}")))
-                                    .h(px(38.))
-                                    .px_2()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .rounded(px(5.))
-                                    .bg(if value == selected { t.hover } else { t.raised })
-                                    .hover(|d| d.bg(t.hover))
-                                    .cursor_pointer()
-                                    .when(id != "text-font", |d| d.child(sample(value)))
-                                    .child(label)
-                                    .on_click(cx.listener(move |s, _, _, cx| {
-                                        if id == "text-font" {
-                                            s.choose_text_font(value, cx);
-                                        } else {
-                                            s.edit_text_settings(
-                                                |style| {
-                                                    style.background =
-                                                        value.ends_with("box").then_some(
-                                                            style
-                                                                .background
-                                                                .unwrap_or([17, 19, 24, 255]),
-                                                        );
-                                                    style.rounded_background =
-                                                        value == "rounded-box";
-                                                    style.outlined = value == "outlined";
-                                                },
-                                                cx,
-                                            );
-                                            s.choose_text_font(
-                                                if value.starts_with("mono") {
-                                                    "mono"
-                                                } else if value.starts_with("rounded") {
-                                                    "rounded"
+                                    .occlude()
+                                    .w(self.text_menu_bounds.size.width)
+                                    .p_1()
+                                    .bg(t.raised)
+                                    .border_1()
+                                    .border_color(t.border)
+                                    .rounded(px(8.))
+                                    .shadow_lg()
+                                    .children(options.iter().map(|&(value, label)| {
+                                        div()
+                                            .id(SharedString::from(format!("{id}-{value}")))
+                                            .h(px(38.))
+                                            .px_2()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .rounded(px(5.))
+                                            .bg(if value == selected { t.hover } else { t.raised })
+                                            .hover(|d| d.bg(t.hover))
+                                            .cursor_pointer()
+                                            .when(id != "text-font", |d| d.child(sample(value)))
+                                            .child(label)
+                                            .on_click(cx.listener(move |s, _, _, cx| {
+                                                if id == "text-font" {
+                                                    s.change_text_font(
+                                                        TextFontChange::Family(value),
+                                                        cx,
+                                                    );
                                                 } else {
-                                                    "system"
-                                                },
-                                                cx,
-                                            );
-                                        }
-                                        s.text_menu = None;
-                                        cx.notify();
-                                    }))
-                            })),
+                                                    s.edit_text_settings(
+                                                        |style| {
+                                                            style.background =
+                                                                value.ends_with("box").then_some(
+                                                                    style.background.unwrap_or([
+                                                                        17, 19, 24, 255,
+                                                                    ]),
+                                                                );
+                                                            style.rounded_background =
+                                                                value == "rounded-box";
+                                                            style.outlined = value == "outlined";
+                                                        },
+                                                        cx,
+                                                    );
+                                                    s.change_text_font(
+                                                        TextFontChange::Family(
+                                                            if value.starts_with("mono") {
+                                                                "mono"
+                                                            } else if value.starts_with("rounded") {
+                                                                "rounded"
+                                                            } else {
+                                                                "system"
+                                                            },
+                                                        ),
+                                                        cx,
+                                                    );
+                                                }
+                                                s.text_menu = None;
+                                                cx.notify();
+                                            }))
+                                    })),
+                            ),
                     )
                     .with_priority(3),
                 )
@@ -3036,6 +3091,20 @@ impl Render for ScreenshotEditor {
         {
             if let Some(layer) = self.document.layers.iter().find(|layer| layer.id == *id) {
                 replace_input(&mut self.stroke_color_input, color_hex(layer.color), cx);
+                if let Shape::Text {
+                    font_data, style, ..
+                } = &layer.shape
+                {
+                    self.text_font = Some(font_data.clone());
+                    self.default_text_style = style.clone();
+                    self.text_font_family =
+                        match style.font.as_ref().map(|font| font.family.as_str()) {
+                            Some("serif") => "serif",
+                            Some("mono") => "mono",
+                            Some("rounded") => "rounded",
+                            _ => "system",
+                        };
+                }
             }
             replace_input(
                 &mut self.fill_color_input,
@@ -3782,8 +3851,8 @@ impl Render for ScreenshotEditor {
                                             )
                                             .child(
                                                 div().grid().grid_cols(5).gap_1().flex_shrink_0()
-                                                    .child(self.button("text-bold", "B", style.bold).on_click(cx.listener(|s, _, _, cx| s.edit_text_settings(|style| style.bold = !style.bold, cx))))
-                                                    .child(self.button("text-italic", "I", style.italic).on_click(cx.listener(|s, _, _, cx| s.edit_text_settings(|style| style.italic = !style.italic, cx))))
+                                                    .child(self.button("text-bold", "B", style.bold).on_click(cx.listener(|s, _, _, cx| s.change_text_font(TextFontChange::Bold, cx))))
+                                                    .child(self.button("text-italic", "I", style.italic).on_click(cx.listener(|s, _, _, cx| s.change_text_font(TextFontChange::Italic, cx))))
                                                     .child(self.button("text-left", "", style.align == captures_image::TextAlign::Left).child(editor_icon(EditorIcon::AlignLeft, icon_color)).on_click(cx.listener(|s, _, _, cx| s.edit_text_settings(|style| style.align = captures_image::TextAlign::Left, cx))))
                                                     .child(self.button("text-center", "", style.align == captures_image::TextAlign::Center).child(editor_icon(EditorIcon::AlignCenter, icon_color)).on_click(cx.listener(|s, _, _, cx| s.edit_text_settings(|style| style.align = captures_image::TextAlign::Center, cx))))
                                                     .child(self.button("text-right", "", style.align == captures_image::TextAlign::Right).child(editor_icon(EditorIcon::AlignRight, icon_color)).on_click(cx.listener(|s, _, _, cx| s.edit_text_settings(|style| style.align = captures_image::TextAlign::Right, cx)))),

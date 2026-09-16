@@ -58,8 +58,8 @@ follow those sources; complete visual and interaction acceptance is still pendin
 | Area | Implemented | Still missing or different |
 | --- | --- | --- |
 | Preferences | Live appearance/accent settings, custom colors, selects, shortcut recording and conflict rollback, microphone picker, search/navigation, persisted settings | Complete keyboard/accessibility parity and native permission flows remain unverified |
-| Screenshot editor | Drawing/transform/pan/zoom, staged crop with aspect presets, original-image unlock, text presets/font selection/wrapping/alignment/plates/shadows, image size/position steppers, layer appearance/arrange/combine panel, pixel-preserving quarter-turn/flip with fresh-photo canvas rotation, custom background colors, clipboard/undo/drafts, output scale/custom dimensions and aspect lock, quality presets/size limits, draggable encoded comparison and PNG/JPEG/WebP export | Vector thumbnails use tool icons; some numeric controls and keyboard/accessibility behavior differ; bold/italic use synthetic raster treatments, not native font variants; font-family metadata is not durable; CPU raster work can block large-document interaction; exhaustive visual acceptance pending |
-| Screenshot capture | Region/window/display targets, frozen/live frames, scaled crops, cursor/format/countdown settings, auto-start, copy/save/preview routing, session gate | Exact selector/menu rendering and in-place cross-monitor transitions; mixed-DPI acceptance; capture exclusion outside tested X11 regions |
+| Screenshot editor | Drawing/transform/pan/zoom, staged crop with aspect presets, original-image unlock, text presets/native font face selection/durable font metadata/wrapping/alignment/plates/shadows, image size/position steppers, layer appearance/arrange/combine panel, pixel-preserving quarter-turn/flip with fresh-photo canvas rotation, custom background colors, clipboard/undo/drafts, output scale/custom dimensions and aspect lock, quality presets/size limits, draggable encoded comparison and PNG/JPEG/WebP export | Vector thumbnails use tool icons; some numeric controls and keyboard/accessibility behavior differ; unavailable font traits still require synthesis; CPU raster work can block large-document interaction; exhaustive visual acceptance pending |
+| Screenshot capture | Region/window/display targets, source-derived glass menu with draggable bounded placement and anchored dropdowns, six aspect choices/centered refit/aspect resize/live Shift snapping, FPS/resolution/audio/microphone controls, animated segmented controls/switches/panel/ready pulse, frozen/live frames, scaled crops, cursor/format/countdown settings, auto-start, copy/save/preview routing, session gate | Cross-monitor transition and mixed-DPI acceptance; selector keyboard/accessibility coverage; exact compositor equivalence; capture exclusion outside tested X11 regions |
 | Recording | Native recording, durable session/segment journal, interrupted-recording recovery, pause/resume segments, countdown/restart cancellation, stop/delete, mic controls, session clock, screenshot during recording, hide/restore, 430×102 bottom-center HUD, passive region guide | Full-display controls exclusion on Linux; exact pulse/compositor equivalence; native macOS/Windows acceptance |
 | Recording editor | Cancellable preparation, video/audio preview, filmstrip/waveforms, keyboard trim, crop numeric fields/steppers and aspect-locked handles, output presets/custom dimensions, independent track gain/mute/mono, quality/size-limit modes, sampled encoded estimates and draggable comparison, save-new/replace/progress/cancellation | Exhaustive timeline/interaction equivalence and hardware audio acceptance |
 | Mini previews | Four-corner stacks, mixed images/GIF/video posters, real image-fragment dissolve, rejection shake, reduced motion, edit/copy/save/dismiss/delete, native X11 file drag | macOS/Windows outbound drag is implemented but unverified; Wayland outbound drag unavailable; hovered animated GIF uses a blurred first frame; exact compositor/blur/frame-pacing parity |
@@ -99,7 +99,7 @@ persistence and malformed input, and preserving the source when saving onto
 itself/a hard link. Missing FFmpeg fails the playback test rather than silently
 skipping it.
 
-All commands above passed in the evaluation orb (105 standalone tests; the root
+All commands above passed in the evaluation orb (113 standalone tests; the root
 desktop suite contains 830 tests). The root release-version tests required
 per-command `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign
 GIT_CONFIG_VALUE_0=false`: they create temporary commits, and the orb has no
@@ -128,6 +128,18 @@ Executed UI checks, not just code inspection:
   New Capture opened a new selector rather than restoring a stopped controller.
 - Screenshot text outline, rounded plate/shadow, scrollable shadow inspector,
   and actual encoded compression comparison with byte estimates.
+- Native font family/face/traits persist in the draft. Reopening the bold/italic
+  monospace fixture retained its label and rendered canvas pixels (zero differing
+  pixels in the restart comparison). Font menus were inspected opening below
+  at 800px client height and above at 760px, with all four choices visible.
+- Selector: a drawn 600 × 400 region refitted to a centered 400 × 400 square.
+  Pressing/releasing Shift without moving the pointer changed a live 600 × 400
+  drag to 600 × 600 and back. The full dragged panel remained inside the screen
+  and the FPS list stayed anchored. A real capture through its recording button
+  produced a 400 × 400, 23.297-second MP4, indexed it, and opened the editor.
+  Inspected motion capture shows panel expansion/collapse, sliding action thumb,
+  switch movement, and ready pulse. Tests cover interrupted motion, aspect
+  resizing across the anchor, and frontmost-window hit testing.
 - Cropped screenshot export decoded as 400 × 260. Locked original-image rotation
   changed both canvas and output from 960 × 540 to 540 × 960; Undo restored them.
   Unit tests also check asymmetric source pixels, both flip directions, restored

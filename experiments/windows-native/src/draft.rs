@@ -177,6 +177,8 @@ enum ShapeData {
         font_size: f32,
         font_asset: String,
         #[serde(default)]
+        font: Option<TextFontData>,
+        #[serde(default)]
         bold: bool,
         #[serde(default)]
         italic: bool,
@@ -193,6 +195,14 @@ enum ShapeData {
         #[serde(default)]
         shadow: Option<TextShadowData>,
     },
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct TextFontData {
+    family: String,
+    collection_index: u32,
+    bold: bool,
+    italic: bool,
 }
 
 #[derive(Clone, Copy, Default, Serialize, Deserialize)]
@@ -442,6 +452,12 @@ impl LayerData {
                 value: value.clone(),
                 font_size: *font_size,
                 font_asset: assets.font(&format!("layer-{}", layer.id), font_data)?,
+                font: style.font.as_ref().map(|font| TextFontData {
+                    family: font.family.clone(),
+                    collection_index: font.collection_index,
+                    bold: font.bold,
+                    italic: font.italic,
+                }),
                 bold: style.bold,
                 italic: style.italic,
                 align: match style.align {
@@ -508,6 +524,7 @@ impl LayerData {
                 value,
                 font_size,
                 font_asset,
+                font,
                 bold,
                 italic,
                 align,
@@ -524,6 +541,12 @@ impl LayerData {
                     .map_err(|e| e.to_string())?
                     .into(),
                 style: captures_image::TextStyleSettings {
+                    font: font.map(|font| captures_image::TextFont {
+                        family: font.family,
+                        collection_index: font.collection_index,
+                        bold: font.bold,
+                        italic: font.italic,
+                    }),
                     bold,
                     italic,
                     align: match align {
@@ -831,6 +854,12 @@ mod tests {
                 font_size: 14.0,
                 font_data: Arc::from(vec![1, 2, 3]),
                 style: captures_image::TextStyleSettings {
+                    font: Some(captures_image::TextFont {
+                        family: "mono".into(),
+                        collection_index: 3,
+                        bold: true,
+                        italic: false,
+                    }),
                     bold: true,
                     italic: true,
                     align: captures_image::TextAlign::Right,
@@ -857,6 +886,7 @@ mod tests {
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
         let shape = &mut manifest["document"]["layers"][0]["shape"];
         for key in [
+            "font",
             "bold",
             "italic",
             "align",

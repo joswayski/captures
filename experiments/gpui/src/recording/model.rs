@@ -19,6 +19,41 @@ pub enum TargetMode {
     Display,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RegionAspect {
+    #[default]
+    Free,
+    Square,
+    Landscape16x9,
+    Landscape4x3,
+    Landscape3x2,
+    Portrait9x16,
+}
+
+impl RegionAspect {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Free => "Free",
+            Self::Square => "1:1",
+            Self::Landscape16x9 => "16:9",
+            Self::Landscape4x3 => "4:3",
+            Self::Landscape3x2 => "3:2",
+            Self::Portrait9x16 => "9:16",
+        }
+    }
+
+    pub fn ratio(self) -> Option<f32> {
+        match self {
+            Self::Free => None,
+            Self::Square => Some(1.),
+            Self::Landscape16x9 => Some(16. / 9.),
+            Self::Landscape4x3 => Some(4. / 3.),
+            Self::Landscape3x2 => Some(3. / 2.),
+            Self::Portrait9x16 => Some(9. / 16.),
+        }
+    }
+}
+
 /// Serializes asynchronous selector work. Tokens make stale countdowns and
 /// delayed starts harmless after cancel, stop, or a newer recording request.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -103,6 +138,68 @@ impl Rect {
             height: bottom - y,
         }
     }
+
+    pub fn from_drag_with_aspect(
+        start: (f32, f32),
+        end: (f32, f32),
+        bounds: (f32, f32),
+        aspect: RegionAspect,
+    ) -> Self {
+        let Some(ratio) = aspect.ratio() else {
+            return Self::from_drag(start, end, bounds, false);
+        };
+        let start = (start.0.clamp(0., bounds.0), start.1.clamp(0., bounds.1));
+        let dx = end.0.clamp(0., bounds.0) - start.0;
+        let dy = end.1.clamp(0., bounds.1) - start.1;
+        let sx = if dx < 0. { -1. } else { 1. };
+        let sy = if dy < 0. { -1. } else { 1. };
+        let max_width = if sx > 0. { bounds.0 - start.0 } else { start.0 };
+        let max_height = if sy > 0. { bounds.1 - start.1 } else { start.1 };
+        let width = dx
+            .abs()
+            .max(dy.abs() * ratio)
+            .min(max_width)
+            .min(max_height * ratio);
+        Self::from_drag(
+            start,
+            (start.0 + width * sx, start.1 + width / ratio * sy),
+            bounds,
+            false,
+        )
+    }
+
+    /// Match the source selector: inscribe the new ratio around the old center.
+    pub fn with_aspect(self, aspect: RegionAspect, bounds: (f32, f32)) -> Self {
+        let Some(ratio) = aspect.ratio().filter(|_| self.valid()) else {
+            return self;
+        };
+        let mut width = self.width.min(self.height * ratio);
+        let mut height = width / ratio;
+        if width < 16. || height < 16. {
+            if ratio >= 1. {
+                width = width.max(16.);
+                height = width / ratio;
+            } else {
+                height = height.max(16.);
+                width = height * ratio;
+            }
+        }
+        if width > bounds.0 {
+            width = bounds.0;
+            height = width / ratio;
+        }
+        if height > bounds.1 {
+            height = bounds.1;
+            width = height * ratio;
+        }
+        Self {
+            x: (self.x + (self.width - width) / 2.).clamp(0., (bounds.0 - width).max(0.)),
+            y: (self.y + (self.height - height) / 2.).clamp(0., (bounds.1 - height).max(0.)),
+            width,
+            height,
+        }
+    }
+
     pub fn valid(self) -> bool {
         self.width >= 2. && self.height >= 2.
     }
@@ -119,6 +216,65 @@ impl Rect {
             (x, b),
             (x, (y + b) / 2.),
         ]
+    }
+
+    pub fn adjusted_with_aspect(
+        self,
+        handle: usize,
+        delta: (f32, f32),
+        bounds: (f32, f32),
+        aspect: RegionAspect,
+    ) -> Self {
+        let Some(ratio) = aspect.ratio().filter(|_| handle != 8) else {
+            return self.adjusted(handle, delta, bounds);
+        };
+        let anchor = (
+            if matches!(handle, 0 | 6 | 7) {
+                self.x + self.width
+            } else {
+                self.x
+            },
+            if matches!(handle, 0..=2) {
+                self.y + self.height
+            } else {
+                self.y
+            },
+        );
+        let moving = self.handles()[handle];
+        let pointer = (
+            (moving.0 + delta.0).clamp(0., bounds.0),
+            (moving.1 + delta.1).clamp(0., bounds.1),
+        );
+        let sx = if pointer.0 >= anchor.0 { 1. } else { -1. };
+        let sy = if pointer.1 >= anchor.1 { 1. } else { -1. };
+        let max_width = if sx > 0. {
+            bounds.0 - anchor.0
+        } else {
+            anchor.0
+        };
+        let max_height = if sy > 0. {
+            bounds.1 - anchor.1
+        } else {
+            anchor.1
+        };
+        let mut width = (pointer.0 - anchor.0)
+            .abs()
+            .max((pointer.1 - anchor.1).abs() * ratio)
+            .min(max_width)
+            .min(max_height * ratio);
+        if max_width >= 16_f32.max(16. * ratio) && max_height >= 16_f32.max(16. / ratio) {
+            width = width.max(16_f32.max(16. * ratio));
+        }
+        Self {
+            x: if sx > 0. { anchor.0 } else { anchor.0 - width },
+            y: if sy > 0. {
+                anchor.1
+            } else {
+                anchor.1 - width / ratio
+            },
+            width,
+            height: width / ratio,
+        }
     }
 
     pub fn adjusted(self, handle: usize, delta: (f32, f32), bounds: (f32, f32)) -> Self {
@@ -348,6 +504,96 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn aspect_presets_preserve_direction_and_fit_drag_extent() {
+        let rect = Rect::from_drag_with_aspect(
+            (500., 400.),
+            (180., 220.),
+            (800., 600.),
+            RegionAspect::Landscape16x9,
+        );
+        assert_eq!((rect.x, rect.y), (180., 220.));
+        assert!((rect.width / rect.height - 16. / 9.).abs() < 0.001);
+        assert!(rect.width <= 320. && rect.height <= 180.);
+    }
+
+    #[test]
+    fn aspect_refit_is_centered_and_drag_clamps_before_constraining() {
+        let old = Rect {
+            x: 100.,
+            y: 80.,
+            width: 600.,
+            height: 400.,
+        };
+        assert_eq!(old.with_aspect(RegionAspect::Free, (800., 600.)), old);
+        assert_eq!(
+            old.with_aspect(RegionAspect::Square, (800., 600.)),
+            Rect {
+                x: 200.,
+                y: 80.,
+                width: 400.,
+                height: 400.
+            }
+        );
+        assert_eq!(
+            old.with_aspect(RegionAspect::Landscape3x2, (800., 600.)),
+            old
+        );
+        let clipped = Rect::from_drag_with_aspect(
+            (500., 400.),
+            (1000., 1000.),
+            (800., 600.),
+            RegionAspect::Landscape16x9,
+        );
+        assert_eq!(clipped.width, 300.);
+        assert_eq!(clipped.height, 168.75);
+        let wide_drag = Rect::from_drag_with_aspect(
+            (100., 100.),
+            (500., 120.),
+            (800., 600.),
+            RegionAspect::Square,
+        );
+        assert_eq!((wide_drag.width, wide_drag.height), (400., 400.));
+    }
+
+    #[test]
+    fn aspect_resize_keeps_opposite_corner_and_can_cross_it() {
+        let rect = Rect {
+            x: 100.,
+            y: 80.,
+            width: 300.,
+            height: 200.,
+        };
+        assert_eq!(
+            rect.adjusted_with_aspect(4, (160., 20.), (800., 600.), RegionAspect::Square),
+            Rect {
+                x: 100.,
+                y: 80.,
+                width: 460.,
+                height: 460.
+            }
+        );
+        assert_eq!(
+            rect.adjusted_with_aspect(0, (500., 300.), (800., 600.), RegionAspect::Square),
+            Rect {
+                x: 400.,
+                y: 280.,
+                width: 200.,
+                height: 200.
+            }
+        );
+        let moved = rect.adjusted_with_aspect(8, (-500., 700.), (800., 600.), RegionAspect::Square);
+        assert_eq!(
+            moved,
+            Rect {
+                x: 0.,
+                y: 400.,
+                ..rect
+            }
+        );
+    }
+
     #[test]
     fn trim_is_always_ordered_and_bounded() {
         let mut s = EditorState::new(1000, ExportFormat::Mp4);

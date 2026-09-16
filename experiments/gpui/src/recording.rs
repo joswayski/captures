@@ -5,6 +5,7 @@
 mod countdown;
 mod editor;
 mod indicator;
+mod menu;
 mod model;
 pub mod recovery;
 mod screenshot;
@@ -21,7 +22,7 @@ use captures_recording::{
     RecordingKind, RecordingOptions, RecordingSegmentInfo, RecordingState, RecordingTarget,
 };
 use gpui::{prelude::*, *};
-use model::{ActionMode, Lifecycle, Rect, Settings, TargetMode};
+use model::{ActionMode, Lifecycle, Rect, RegionAspect, Settings, TargetMode};
 use std::{
     path::PathBuf,
     sync::Arc,
@@ -179,12 +180,31 @@ struct Selector {
     clock: RecordingClock,
     microphone_muted: bool,
     confirmation: Option<HudConfirmation>,
+    region_aspect: RegionAspect,
+    menu_open: Option<menu::MenuPicker>,
+    panel_position: Option<(f32, f32)>,
+    panel_drag: Option<((f32, f32), (f32, f32))>,
+    microphone_devices: Vec<captures_recording::AudioDevice>,
+    menu_anchor: Bounds<Pixels>,
+    panel_bounds: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
+    menu_motion: std::collections::HashMap<&'static str, menu::Motion>,
 }
 impl Selector {
     fn new(launch: Launch) -> anyhow::Result<Self> {
         let preferences = crate::preferences::settings::load(&launch.profile)?;
         let settings = Settings::load(&launch.profile);
-        let displays = if launch.mock || !captures_session::capture_session_available() {
+        let displays = if launch.mock {
+            vec![DisplayDescriptor {
+                id: "mock-display".into(),
+                name: "Built-in display".into(),
+                x: 0,
+                y: 0,
+                width: 1600,
+                height: 1000,
+                scale_factor: 1.,
+                is_primary: true,
+            }]
+        } else if !captures_session::capture_session_available() {
             Vec::new()
         } else {
             XcapBackend.displays().unwrap_or_default()
@@ -267,6 +287,14 @@ impl Selector {
             clock: RecordingClock::default(),
             microphone_muted: false,
             confirmation: None,
+            region_aspect: RegionAspect::Free,
+            menu_open: None,
+            panel_position: None,
+            panel_drag: None,
+            microphone_devices: menu::microphone_devices(),
+            menu_anchor: Bounds::default(),
+            panel_bounds: Default::default(),
+            menu_motion: Default::default(),
         })
     }
     fn chosen_display(&self) -> Option<&DisplayDescriptor> {
@@ -1205,31 +1233,58 @@ impl Selector {
                 }
             }
             self.drag_start = Some(point);
-            self.selection = Some(Rect::from_drag(
+            self.selection = Some(Rect::from_drag_with_aspect(
                 point,
                 point,
                 self.overlay_size(),
-                event.modifiers.shift,
+                if event.modifiers.shift {
+                    RegionAspect::Square
+                } else {
+                    self.region_aspect
+                },
             ));
         } else if self.target == TargetMode::Window {
             self.selected_window = self.window_at(point).map(|w| w.id.clone());
         }
         cx.notify();
     }
-    fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
         let point = (f32::from(event.position.x), f32::from(event.position.y));
+        if let Some((start, origin)) = self.panel_drag {
+            let bounds = self.panel_bounds.get();
+            let viewport = window.viewport_size();
+            self.panel_position = Some(menu::clamp_panel(
+                (origin.0 + point.0 - start.0, origin.1 + point.1 - start.1),
+                (f32::from(bounds.size.width), f32::from(bounds.size.height)),
+                (f32::from(viewport.width), f32::from(viewport.height)),
+            ));
+            if !event.dragging() {
+                self.panel_drag = None;
+            }
+            cx.notify();
+            return;
+        }
         if let Some((original, handle, start)) = self.selection_edit {
-            self.selection = Some(original.adjusted(
+            self.selection = Some(original.adjusted_with_aspect(
                 handle,
                 (point.0 - start.0, point.1 - start.1),
                 self.overlay_size(),
+                if event.modifiers.shift {
+                    RegionAspect::Square
+                } else {
+                    self.region_aspect
+                },
             ));
         } else if let Some(start) = self.drag_start {
-            self.selection = Some(Rect::from_drag(
+            self.selection = Some(Rect::from_drag_with_aspect(
                 start,
                 point,
                 self.overlay_size(),
-                event.modifiers.shift,
+                if event.modifiers.shift {
+                    RegionAspect::Square
+                } else {
+                    self.region_aspect
+                },
             ));
         } else if self.target == TargetMode::Window {
             self.selected_window = self.window_at(point).map(|w| w.id.clone());
@@ -1237,6 +1292,10 @@ impl Selector {
         cx.notify();
     }
     fn mouse_up(&mut self, _: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panel_drag.take().is_some() {
+            cx.notify();
+            return;
+        }
         self.drag_start = None;
         let edited = self.selection_edit.take().is_some();
         if !edited && self.preferences.auto_start_on_selection && self.target().is_some() {
@@ -1274,7 +1333,7 @@ impl Selector {
                     && point.0 < x + w.width as f32 / scale as f32
                     && point.1 < y + w.height as f32 / scale as f32
             })
-            .min_by_key(|w| w.z_order)
+            .max_by_key(|w| w.z_order)
     }
 
     fn selection_rect(&self) -> Option<Rect> {
@@ -1315,6 +1374,10 @@ impl Selector {
     }
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event.keystroke.key.as_str() {
+            "escape" if self.menu_open.is_some() => {
+                self.menu_open = None;
+                cx.notify();
+            }
             "escape" => {
                 self.countdown = None;
                 self.lifecycle.cancel();
@@ -1405,7 +1468,6 @@ impl Render for Selector {
         );
         let selection = self.selection_rect();
         let window_target = self.target == TargetMode::Window;
-        let active = self.segment.is_some() || self.paused;
         let focus = self.focus.get_or_insert_with(|| cx.focus_handle()).clone();
         if let Some(remaining) = self.countdown
             && !self.in_hud
@@ -1685,205 +1747,108 @@ impl Render for Selector {
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_key_down(cx.listener(Self::key_down))
+            .on_modifiers_changed(cx.listener(|s, event: &ModifiersChangedEvent, window, cx| {
+                if s.drag_start.is_some() || s.selection_edit.is_some() {
+                    s.mouse_move(
+                        &MouseMoveEvent {
+                            position: window.mouse_position(),
+                            pressed_button: Some(MouseButton::Left),
+                            modifiers: event.modifiers,
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            }))
             .when(!self.hidden, |root| {
                 root.when_some(self.backdrop.clone(), |root, image| {
                     root.child(div().absolute().inset_0().child(img(image).size_full()))
                 })
             })
-            .when(!self.hidden, |root| root.child(canvas(|_,_,_| {}, move |bounds,_,window,_| {
-                let w = f32::from(bounds.size.width);
-                let h = f32::from(bounds.size.height);
-                let rects = match selection {
-                    Some(r) => vec![Rect{x:0.,y:0.,width:w,height:r.y}, Rect{x:0.,y:r.y+r.height,width:w,height:(h-r.y-r.height).max(0.)}, Rect{x:0.,y:r.y,width:r.x,height:r.height}, Rect{x:r.x+r.width,y:r.y,width:(w-r.x-r.width).max(0.),height:r.height}],
-                    None => vec![Rect{x:0.,y:0.,width:w,height:h}],
-                };
-                for r in rects {
-                    window.paint_quad(fill(Bounds::new(bounds.origin+point(px(r.x),px(r.y)),size(px(r.width),px(r.height))),rgba(if window_target {0x0609106b} else {0x06060a33})));
-                }
-                if let Some(r) = selection {
-                    window.paint_quad(outline(Bounds::new(bounds.origin+point(px(r.x),px(r.y)),size(px(r.width),px(r.height))),t.accent,BorderStyle::Solid));
-                    if !window_target {
-                        for (x,y) in r.handles() {
-                            window.paint_quad(fill(Bounds::new(bounds.origin+point(px(x-4.),px(y-4.)),size(px(8.),px(8.))),t.accent));
-                        }
-                    }
-                }
-            }).absolute().inset_0().size_full()))
             .when(!self.hidden, |root| {
                 root.child(
-                    div().absolute().bottom(px(26.)).left(px(20.)).right(px(20.)).flex().justify_center().child(
-                    div().bg(t.glass).border_1().border_color(t.glass_border).rounded(px(18.)).p_4().flex().flex_col().gap_3().child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .child(
-                            self.chip("screenshot", "Screenshot", t)
-                                .on_click(cx.listener(|s, _, _, cx| {
-                                    s.mode = ActionMode::Screenshot;
-                                    cx.notify()
-                                })),
-                        )
-                        .child(self.chip("recording", "Video", t).on_click(cx.listener(
-                            |s, _, _, cx| {
-                                s.mode = ActionMode::Recording;
-                                s.gif = false;
-                                cx.notify()
-                            },
-                        )))
-                        .child(self.chip("gif", "GIF", t).on_click(cx.listener(|s,_,_,cx| {
-                            s.mode = ActionMode::Recording;
-                            s.gif = true;
-                            cx.notify();
-                        })))
-                        .child(div().w(px(1.)).h(px(24.)).my_auto().bg(t.glass_border))
-                        .child(self.chip("region", "Region", t).on_click(cx.listener(
-                            |s, _, _, cx| {
-                                s.target = TargetMode::Region;
-                                cx.notify()
-                            },
-                        )))
-                        .child(self.chip("window", "Window", t).on_click(cx.listener(
-                            |s, _, _, cx| {
-                                s.target = TargetMode::Window;
-                                s.selected_window = None;
-                                cx.notify()
-                            },
-                        )))
-                        .child(self.chip("display", "Display", t).on_click(cx.listener(
-                            |s, _, _, cx| {
-                                s.target = TargetMode::Display;
-                                cx.notify()
-                            },
-                        ))),
+                    canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, _| {
+                            let w = f32::from(bounds.size.width);
+                            let h = f32::from(bounds.size.height);
+                            let rects = match selection {
+                                Some(r) => vec![
+                                    Rect {
+                                        x: 0.,
+                                        y: 0.,
+                                        width: w,
+                                        height: r.y,
+                                    },
+                                    Rect {
+                                        x: 0.,
+                                        y: r.y + r.height,
+                                        width: w,
+                                        height: (h - r.y - r.height).max(0.),
+                                    },
+                                    Rect {
+                                        x: 0.,
+                                        y: r.y,
+                                        width: r.x,
+                                        height: r.height,
+                                    },
+                                    Rect {
+                                        x: r.x + r.width,
+                                        y: r.y,
+                                        width: (w - r.x - r.width).max(0.),
+                                        height: r.height,
+                                    },
+                                ],
+                                None => vec![Rect {
+                                    x: 0.,
+                                    y: 0.,
+                                    width: w,
+                                    height: h,
+                                }],
+                            };
+                            for r in rects {
+                                window.paint_quad(fill(
+                                    Bounds::new(
+                                        bounds.origin + point(px(r.x), px(r.y)),
+                                        size(px(r.width), px(r.height)),
+                                    ),
+                                    rgba(if window_target {
+                                        0x0609106b
+                                    } else {
+                                        0x06060a33
+                                    }),
+                                ));
+                            }
+                            if let Some(r) = selection {
+                                window.paint_quad(outline(
+                                    Bounds::new(
+                                        bounds.origin + point(px(r.x), px(r.y)),
+                                        size(px(r.width), px(r.height)),
+                                    ),
+                                    t.accent,
+                                    BorderStyle::Solid,
+                                ));
+                                if !window_target {
+                                    for (x, y) in r.handles() {
+                                        window.paint_quad(fill(
+                                            Bounds::new(
+                                                bounds.origin + point(px(x - 4.), px(y - 4.)),
+                                                size(px(8.), px(8.)),
+                                            ),
+                                            t.accent,
+                                        ));
+                                    }
+                                }
+                            }
+                        },
+                    )
+                    .absolute()
+                    .inset_0()
+                    .size_full(),
                 )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .child(self.status.clone())
-                        .child(
-                            div()
-                                .flex()
-                                .gap_2()
-                                .child(
-                                    self.chip(
-                                        "cursor",
-                                        if if self.mode == ActionMode::Screenshot {
-                                            self.preferences.show_cursor_in_screenshots
-                                        } else {
-                                            self.settings.show_cursor
-                                        } {
-                                            "Cursor on"
-                                        } else {
-                                            "Cursor off"
-                                        },
-                                        t,
-                                    )
-                                    .on_click(cx.listener(
-                                        |s, _, _, cx| {
-                                            if s.mode == ActionMode::Screenshot {
-                                                s.preferences.show_cursor_in_screenshots =
-                                                    !s.preferences.show_cursor_in_screenshots;
-                                            } else {
-                                                s.settings.show_cursor = !s.settings.show_cursor;
-                                            }
-                                            cx.notify()
-                                        },
-                                    )),
-                                )
-                                .when(self.mode == ActionMode::Recording, |row| {
-                                    row.child(
-                                        self.chip(
-                                            "audio",
-                                            if self.settings.capture_system_audio {
-                                                "Audio on"
-                                            } else {
-                                                "Audio off"
-                                            },
-                                            t,
-                                        )
-                                        .on_click(
-                                            cx.listener(|s, _, _, cx| {
-                                                s.settings.capture_system_audio =
-                                                    !s.settings.capture_system_audio;
-                                                cx.notify()
-                                            }),
-                                        ),
-                                    )
-                                })
-                                .child(
-                                    self.chip(
-                                        "countdown",
-                                        format!(
-                                            "{}s",
-                                            if self.mode == ActionMode::Screenshot {
-                                                self.preferences.screenshot_countdown_seconds
-                                            } else {
-                                                self.settings.countdown_seconds
-                                            }
-                                        ),
-                                        t,
-                                    )
-                                    .on_click(cx.listener(
-                                        |s, _, _, cx| {
-                                            let seconds = if s.mode == ActionMode::Screenshot {
-                                                &mut s.preferences.screenshot_countdown_seconds
-                                            } else {
-                                                &mut s.settings.countdown_seconds
-                                            };
-                                            *seconds = match *seconds {
-                                                0 => 3,
-                                                3 => 5,
-                                                _ => 0,
-                                            };
-                                            cx.notify()
-                                        },
-                                    )),
-                                )
-                                .when(!active, |d| {
-                                    d.child(if self.mode == ActionMode::Screenshot {
-                                        self.chip("capture", "Capture", t)
-                                            .bg(t.accent)
-                                            .text_color(gpui::black())
-                                            .on_click(cx.listener(Self::capture))
-                                    } else {
-                                        self.chip("start", "Start recording", t)
-                                            .bg(t.signal)
-                                            .on_click(cx.listener(Self::record))
-                                    })
-                                })
-                                .child(self.chip("cancel", "✕", t).on_click(cx.listener(|s,_,window,_| {
-                                    s.lifecycle.cancel();
-                                    window.remove_window();
-                                })))
-                                .when(active, |d| {
-                                    d.child(if self.paused {
-                                        self.chip("resume", "Resume", t)
-                                            .on_click(cx.listener(Self::resume))
-                                    } else {
-                                        self.chip("pause", "Pause", t)
-                                            .on_click(cx.listener(Self::pause))
-                                    })
-                                    .child(self.chip("hide", "Hide (restore: H)", t).on_click(
-                                        cx.listener(|s, _, _, cx| {
-                                            s.hidden = true;
-                                            cx.notify()
-                                        }),
-                                    ))
-                                    .child(
-                                        self.chip("stop", "Stop", t)
-                                            .bg(t.signal)
-                                            .on_click(cx.listener(Self::stop)),
-                                    )
-                                }),
-                        ),
-                )))
-                .child(div().absolute().top(relative(0.16)).left_0().w_full().flex().justify_center().child(
-                    div().px_6().py_4().rounded(px(16.)).bg(t.glass).border_1().border_color(t.glass_border).flex().flex_col().items_center().gap_1()
-                        .child(div().font_weight(FontWeight::SEMIBOLD).text_size(px(if self.countdown.is_some() {64.} else {16.})).child(if let Some(n)=self.countdown {format!("{n}")} else if let Some(r)=selection {format!("{} × {}",r.width.round(),r.height.round())} else {"Select an area to capture".into()}))
-                        .child(div().text_size(px(12.)).text_color(t.glass_muted).child(if self.countdown.is_some() {"Escape to cancel"} else {"Drag to select · Shift for square · Enter to capture · Escape to cancel"}))
-                ))
+            })
+            .when(!self.hidden, |root| {
+                root.child(self.render_capture_menu(t, selection, window, cx))
             })
             .into_any_element()
     }
@@ -2154,6 +2119,42 @@ fn show_ready_notice(
 mod recording_clock_tests {
     use super::*;
     use core::prelude::v1::test;
+
+    #[test]
+    fn window_hit_test_uses_frontmost_z_order_and_half_open_edges() {
+        let profile = tempfile::tempdir().unwrap();
+        let mut selector = Selector::new(Launch {
+            view: "recording-selector".into(),
+            path: None,
+            light: false,
+            profile: profile.path().into(),
+            mock: true,
+        })
+        .unwrap();
+        let rear = WindowDescriptor {
+            id: "rear".into(),
+            title: "Rear".into(),
+            app_name: None,
+            z_order: 3,
+            x: 100,
+            y: 80,
+            width: 300,
+            height: 200,
+            display_id: "mock-display".into(),
+            corner_radius: None,
+        };
+        let front = WindowDescriptor {
+            id: "front".into(),
+            z_order: 9,
+            x: 200,
+            y: 130,
+            ..rear.clone()
+        };
+        selector.windows = vec![rear, front];
+        assert_eq!(selector.window_at((250., 160.)).unwrap().id, "front");
+        assert_eq!(selector.window_at((120., 90.)).unwrap().id, "rear");
+        assert!(selector.window_at((500., 330.)).is_none());
+    }
 
     #[test]
     fn hud_uses_selected_display_origin_and_bottom_margin() {

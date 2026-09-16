@@ -135,7 +135,19 @@ pub struct TextShadow {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct TextFont {
+    /// Logical family chosen by the editor; rendering uses only embedded bytes.
+    pub family: String,
+    /// The selected face within an embedded TrueType/OpenType collection.
+    pub collection_index: u32,
+    /// Traits already present in the embedded face; don't apply them twice.
+    pub bold: bool,
+    pub italic: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct TextStyleSettings {
+    pub font: Option<TextFont>,
     pub bold: bool,
     pub italic: bool,
     pub align: TextAlign,
@@ -150,6 +162,7 @@ pub struct TextStyleSettings {
 impl Default for TextStyleSettings {
     fn default() -> Self {
         Self {
+            font: None,
             bold: false,
             italic: false,
             align: TextAlign::Left,
@@ -159,6 +172,16 @@ impl Default for TextStyleSettings {
             outlined: false,
             shadow: None,
         }
+    }
+}
+
+impl TextStyleSettings {
+    fn synthetic_bold(&self) -> bool {
+        self.bold && !self.font.as_ref().is_some_and(|font| font.bold)
+    }
+
+    fn synthetic_italic(&self) -> bool {
+        self.italic && !self.font.as_ref().is_some_and(|font| font.italic)
     }
 }
 
@@ -254,8 +277,14 @@ fn text_layout(
     bytes: &[u8],
     style: &TextStyleSettings,
 ) -> Result<(fontdue::Font, Layout), String> {
-    let font = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default())
-        .map_err(str::to_owned)?;
+    let font = fontdue::Font::from_bytes(
+        bytes,
+        fontdue::FontSettings {
+            collection_index: style.font.as_ref().map_or(0, |font| font.collection_index),
+            ..fontdue::FontSettings::default()
+        },
+    )
+    .map_err(str::to_owned)?;
     let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
     // fontdue needs a layout width to establish center/right anchors. Measure
     // unwrapped first so auto-width multiline text aligns against its longest line.
@@ -511,7 +540,7 @@ impl Layer {
                     0.0
                 };
                 bounds = expand_bounds(bounds, outline, outline, outline, outline);
-                if style.italic {
+                if style.synthetic_italic() {
                     bounds = expand_bounds(bounds, font_size * 0.2, 0.0, font_size * 0.2, 0.0);
                 }
                 if let Some(shadow) = &style.shadow {
@@ -823,9 +852,9 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
             for (pixel, coverage) in pixels.pixels_mut().iter_mut().zip(coverage) {
                 *pixel = tiny_skia::ColorU8::from_rgba(255, 255, 255, coverage).premultiply();
             }
-            let bold = i32::from(style.bold);
+            let bold = i32::from(style.synthetic_bold());
             for ox in 0..=bold {
-                let glyph_transform = if style.italic {
+                let glyph_transform = if style.synthetic_italic() {
                     Transform::from_skew(-0.20, 0.0)
                         .post_translate(glyph.x + ox as f32 + glyph.height as f32 * 0.20, glyph.y)
                 } else {
@@ -1108,6 +1137,34 @@ mod tests {
     }
 
     #[test]
+    fn embedded_traits_are_not_applied_twice_but_legacy_synthesis_remains() {
+        let plain = render(&text_document(TextStyleSettings::default())).unwrap();
+        let mut style = TextStyleSettings {
+            bold: true,
+            italic: true,
+            font: Some(TextFont {
+                family: "mono".into(),
+                collection_index: 0,
+                bold: true,
+                italic: true,
+            }),
+            ..Default::default()
+        };
+        // The embedded bytes are authoritative; declared native traits must
+        // not make the renderer thicken or skew those pixels again.
+        assert_eq!(render(&text_document(style.clone())).unwrap(), plain);
+        style.font = None;
+        assert_ne!(render(&text_document(style.clone())).unwrap(), plain);
+        style.font = Some(TextFont {
+            family: "mono".into(),
+            collection_index: 1, // the fixture has only face zero
+            bold: false,
+            italic: false,
+        });
+        assert!(render(&text_document(style)).is_err());
+    }
+
+    #[test]
     fn outline_mask_keeps_glyph_interiors_empty_and_only_paints_the_edge() {
         let mut filled = vec![0; 49];
         for y in 2..=4 {
@@ -1247,6 +1304,7 @@ mod tests {
         }))
         .unwrap();
         let styled = render(&text_document(TextStyleSettings {
+            font: None,
             bold: true,
             italic: true,
             align: TextAlign::Right,
