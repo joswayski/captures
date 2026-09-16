@@ -72,6 +72,8 @@ jobs:
       - name: Check native texture lifetimes
         if: runner.os == 'macOS'
         run: cargo test --locked --manifest-path experiments/gpui/Cargo.toml --test atlas_lifetime
+      - name: Check isolated benchmark protocol
+        run: cargo test --locked --manifest-path experiments/gpui/Cargo.toml --bin captures-gpui-parity
       - run: cargo test --locked --manifest-path experiments/gpui/Cargo.toml
       - run: cargo clippy --locked --manifest-path experiments/gpui/Cargo.toml --all-targets -- -D warnings
       - run: cargo build --locked --release --manifest-path experiments/gpui/Cargo.toml

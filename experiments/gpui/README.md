@@ -53,6 +53,17 @@ and completion markers, and the actual macOS WindowServer window number. It stay
 open until terminated. It never opens a capture profile or installs tray/shortcuts.
 The ordinary `cargo run` command still launches the full GPUI experiment.
 
+Schema 1 also accepts optional absolute `startGatePath`. In run mode, it prepares
+the initial pose and writes readiness with `measurementProtocol: 2`, then waits
+asynchronously for that file (90-second timeout, nonzero exit on failure). No
+workload clock or animation advances while waiting. Immediately before starting,
+it atomically writes `OUTPUT_JSON.started.json` with `schema`, `pid`,
+`startHostTimeNs` and `hostClock`; final results include `startedHostTimeNs`.
+On macOS the clock is `mach_absolute_time`, converted with `mach_timebase_info`
+to integer nanoseconds, not wall time. Linux diagnostics explicitly label their
+process-relative `std::Instant` clock; it cannot synchronize with Mac observers.
+Omitting the gate retains immediate startup; checkpoint mode ignores the gate.
+
 The macOS backend uses a borderless nonactivating panel and aligns its initial
 position to integral points without changing its requested content size. A
 half-point origin caused AppKit to expand 640×720 to 640×721; borderless style
@@ -67,8 +78,9 @@ cargo test --locked --manifest-path experiments/gpui/Cargo.toml --test macos_pop
 It checks exact GPUI viewport, NSWindow frame, content-view, renderer-view and
 backing dimensions at creation, after AppKit layout, and after resize/restore,
 including a half-point initial origin. It explicitly skips on Linux/Windows.
-This platform correction still requires a Mac benchmark rerun; a Linux build
-cannot establish native window geometry or visual parity.
+The subsequent Mac 2× run passed all 24 component checkpoints with unchanged
+thresholds. That is captured component acceptance, not whole-app/live animation
+acceptance; resource changes still require fresh matched measurements.
 
 This adapter shares the production fragment renderer, centered cover sampler and
 580ms settle curve. It uses **CPU rasterization plus GPUI texture uploads**, not a
@@ -110,6 +122,10 @@ with the static image still alive and finally zero owned resources. It keeps
 the last scene valid while idle. Counters measure atlas ownership and nominal
 texture bytes, **not RSS, physical GPU residency, or presented FPS**. Actual
 post-fix Mac memory/CPU and pixel comparison still require the matched harness.
+Native Metal CI at the resource-fix commit passed: maximum two active tiles,
+8,486,912 nominal texture bytes, and all 513 allocations reclaimed at cleanup.
+Linux Blade passed with maximum three active tiles and 12,779,520 nominal bytes.
+These tests use both 1×/2× raster sizes; the Mac CI display itself was 1×.
 DirectX retains its existing eviction backend; these counters/native tests are
 not implemented for Windows. Shipping Tauri behavior is unaffected.
 

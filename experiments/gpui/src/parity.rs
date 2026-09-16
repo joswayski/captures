@@ -9,6 +9,7 @@ use std::{path::PathBuf, sync::Arc, time::Instant};
 
 pub mod effects;
 pub mod motion;
+mod parity_measurement;
 mod transient_images;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
@@ -96,11 +97,19 @@ struct Config {
     fixture_path: PathBuf,
     seed: u32,
     particles: Vec<Descriptor>,
+    #[serde(default)]
+    start_gate_path: Option<PathBuf>,
 }
 
 impl Config {
     fn validate(&self, source: &RgbaImage) -> Result<()> {
         ensure!(self.schema == 1, "expected schema 1");
+        ensure!(
+            self.start_gate_path
+                .as_ref()
+                .is_none_or(|path| path.is_absolute()),
+            "startGatePath must be absolute"
+        );
         ensure!(
             self.width == 640. && self.height == 720. && self.scale == 2.,
             "expected 640×720 at 2×"
@@ -198,6 +207,8 @@ struct Surface {
     scene_ms: f32,
     cycle: u64,
     started: Option<Instant>,
+    started_host_time_ns: Option<u64>,
+    gate_open: bool,
     last_callback: Option<Instant>,
     intervals: Vec<f64>,
     setup: Vec<f64>,
@@ -216,6 +227,7 @@ impl Surface {
         // Published GPUI 0.2.2 has no source-rectangle cropping in paint_image.
         // Pre-crop instead of relying on its broken rounded ObjectFit::Cover.
         let media = texture(effects::cover_media(&source, 568, 320));
+        let gate_open = config.mode == Mode::Checkpoint || config.start_gate_path.is_none();
         let mut surface = Self {
             config,
             output,
@@ -227,6 +239,8 @@ impl Surface {
             scene_ms,
             cycle: 0,
             started: None,
+            started_host_time_ns: None,
+            gate_open,
             last_callback: None,
             intervals: Vec::new(),
             setup: Vec::new(),
@@ -282,6 +296,7 @@ impl Surface {
             );
             let metadata = json!({
                 "schema": 1, "pid": std::process::id(), "window_id": native_window_id(window)?,
+                "measurementProtocol": 2, "hostClock": parity_measurement::HOST_CLOCK,
                 "scale": window.scale_factor(), "scenario": self.config.scenario.name(),
                 "mode": if self.config.mode == Mode::Run { "run" } else { "checkpoint" },
                 "renderer": "gpui-0.2.2-subpixel-cpu-raster-texture-upload", "checkpointMs": self.config.checkpoint_ms,
@@ -299,8 +314,19 @@ impl Surface {
     }
 
     fn tick(&mut self, now: Instant) -> Result<()> {
-        if self.complete {
+        if self.complete || !self.gate_open {
             return Ok(());
+        }
+        if self.started.is_none() {
+            let host_time = parity_measurement::host_time_ns()?;
+            write_json(
+                &PathBuf::from(format!("{}.started.json", self.output.display())),
+                &json!({
+                    "schema": 1, "pid": std::process::id(), "startHostTimeNs": host_time,
+                    "hostClock": parity_measurement::HOST_CLOCK,
+                }),
+            )?;
+            self.started_host_time_ns = Some(host_time);
         }
         let elapsed = now
             .duration_since(*self.started.get_or_insert(now))
@@ -316,6 +342,7 @@ impl Surface {
             result.as_object_mut().unwrap().extend(json!({
                 "elapsedMs": elapsed, "callbackIntervalsMs": self.intervals, "setupMs": self.setup,
                 "cycles": self.setup.len(), "complete": true,
+                "startedHostTimeNs": self.started_host_time_ns,
                 "metric": "Actual main-thread render callback intervals; NOT presented frames or GPU timings. CPU rasterization and GPUI texture upload path.",
             }).as_object().unwrap().clone());
             write_json(&self.output, &result)?;
@@ -340,7 +367,7 @@ impl Render for Surface {
             eprintln!("GPUI parity adapter: {error:#}");
             std::process::exit(1);
         }
-        if !self.lab_wait && self.config.mode == Mode::Run && !self.complete {
+        if !self.lab_wait && self.gate_open && self.config.mode == Mode::Run && !self.complete {
             window.request_animation_frame();
         }
         div()
@@ -449,6 +476,10 @@ fn main() -> Result<()> {
     let config: Config = serde_json::from_slice(&std::fs::read(config_path)?)?;
     let source = image::open(&config.fixture_path)?.to_rgba8();
     config.validate(&source)?;
+    let start_gate = config
+        .start_gate_path
+        .clone()
+        .filter(|_| config.mode == Mode::Run);
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     Application::new().run(move |cx| {
         let dimensions = size(px(config.width), px(config.height));
@@ -469,6 +500,19 @@ fn main() -> Result<()> {
                 |_, cx| cx.new(|_| Surface::new(config, source, output)),
             )
             .expect("open benchmark window");
+        if let Some(path) = start_gate {
+            cx.spawn(async move |cx| {
+                if let Err(error) = parity_measurement::wait_for_gate(&path).await {
+                    eprintln!("GPUI parity adapter: {error:#}");
+                    std::process::exit(1);
+                }
+                let _ = handle.update(cx, |surface, _, cx| {
+                    surface.gate_open = true;
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
         #[cfg(target_os = "linux")]
         if std::env::var_os("CAPTURES_GPUI_X11_RESIZE_WORKAROUND").is_some() {
             cx.spawn(async move |cx| {
@@ -510,6 +554,15 @@ mod tests {
 
     #[test]
     fn completion_holds_the_previous_pose_without_preparing_an_extra_cycle() {
+        check_run(false);
+    }
+
+    #[test]
+    fn gated_run_excludes_wait_from_clock_callbacks_and_markers() {
+        check_run(true);
+    }
+
+    fn check_run(gated: bool) {
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("result.json");
         let config = Config {
@@ -525,11 +578,41 @@ mod tests {
             fixture_path: directory.path().join("fixture.png"),
             seed: 739,
             particles: Vec::new(),
+            start_gate_path: gated.then(|| directory.path().join("start")),
         };
         let mut surface = Surface::new(config, RgbaImage::new(397, 251), output.clone());
         surface.metadata = Some(json!({"schema": 1}));
-        let start = Instant::now();
+        let ready = Instant::now();
+        let marker = PathBuf::from(format!("{}.started.json", output.display()));
+        if gated {
+            // Far longer than the run duration: waiting must not complete it,
+            // consume callbacks, rebuild resources, or emit a start marker.
+            surface.tick(ready).unwrap();
+            surface
+                .tick(ready + std::time::Duration::from_secs(30))
+                .unwrap();
+            assert!(surface.started.is_none());
+            assert!(surface.started_host_time_ns.is_none());
+            assert!(surface.last_callback.is_none());
+            assert!(surface.intervals.is_empty());
+            assert_eq!(surface.setup.len(), 1);
+            assert_eq!(surface.scene_ms, 0.);
+            assert!(!surface.complete);
+            assert!(!marker.exists());
+            assert!(!output.exists());
+            surface.gate_open = true;
+        }
+        let start = ready + std::time::Duration::from_secs(30);
         surface.tick(start).unwrap();
+        let started: Value = serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
+        assert_eq!(started["schema"], 1);
+        assert_eq!(started["pid"], std::process::id());
+        assert_eq!(started["hostClock"], parity_measurement::HOST_CLOCK);
+        assert_eq!(
+            started["startHostTimeNs"].as_u64(),
+            surface.started_host_time_ns
+        );
+        assert_eq!(surface.started, Some(start));
         surface
             .tick(start + std::time::Duration::from_millis(3200))
             .unwrap();
@@ -552,5 +635,31 @@ mod tests {
         assert_eq!(result["elapsedMs"], 6400.);
         assert_eq!(result["callbackIntervalsMs"], json!([3200., 203., 2997.]));
         assert_eq!(result["complete"], true);
+        assert_eq!(result["startedHostTimeNs"], started["startHostTimeNs"]);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&std::fs::read(marker).unwrap()).unwrap(),
+            started
+        );
+    }
+
+    #[test]
+    fn legacy_config_omits_gate_and_relative_gate_is_rejected() {
+        let mut value = json!({
+            "schema": 1, "scenario": "settle-top", "mode": "checkpoint",
+            "checkpointMs": 145, "durationMs": 9600, "cycleMs": 3200,
+            "width": 640, "height": 720, "scale": 2,
+            "fixturePath": "/fixture.png", "seed": 739, "particles": [],
+        });
+        let legacy: Config = serde_json::from_value(value.clone()).unwrap();
+        assert!(legacy.start_gate_path.is_none());
+        value["startGatePath"] = json!("relative/start");
+        let invalid: Config = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            invalid
+                .validate(&RgbaImage::new(397, 251))
+                .unwrap_err()
+                .to_string(),
+            "startGatePath must be absolute"
+        );
     }
 }
