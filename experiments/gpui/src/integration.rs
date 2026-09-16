@@ -187,16 +187,17 @@ pub fn install(launch: Launch, cx: &mut App) -> Result<()> {
 pub fn tray_anchor(cx: &mut App) -> Option<TrayAnchor> {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
-        let integration = cx.try_global::<Integration>()?;
-        let rect = integration._tray.rect()?;
+        let (rect, keepalive_window) = {
+            let integration = cx.try_global::<Integration>()?;
+            (integration._tray.rect()?, integration._keepalive_window)
+        };
         if rect.size.width == 0 || rect.size.height == 0 {
             return None;
         }
         // tray-icon reports physical coordinates; GPUI window bounds are logical.
         // The hidden native owner is created on the primary display where status
         // items normally live and gives us GPUI's platform scale conversion.
-        let scale = integration
-            ._keepalive_window
+        let scale = keepalive_window
             .update(cx, |_, window, _| window.scale_factor())
             .ok()?
             .max(1.);
@@ -504,8 +505,12 @@ pub fn set_window_capture_excluded(window: &Window, excluded: bool) -> Result<bo
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
         };
-        let RawWindowHandle::Win32(handle) = HasWindowHandle::window_handle(window)?.as_raw()
-        else {
+        let handle = HasWindowHandle::window_handle(window)
+            .map_err(|error| {
+                anyhow!("could not obtain the GPUI capture-exclusion window handle: {error}")
+            })?
+            .as_raw();
+        let RawWindowHandle::Win32(handle) = handle else {
             bail!("the GPUI window has no Win32 handle");
         };
         // The borrowed handle belongs to this live GPUI window and this process.
@@ -536,7 +541,11 @@ pub fn set_window_capture_excluded(window: &Window, excluded: bool) -> Result<bo
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub fn set_window_mouse_passthrough(window: &Window) -> Result<()> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    let handle = HasWindowHandle::window_handle(window)?.as_raw();
+    let handle = HasWindowHandle::window_handle(window)
+        .map_err(|error| {
+            anyhow!("could not obtain the GPUI mouse-passthrough window handle: {error}")
+        })?
+        .as_raw();
     #[cfg(target_os = "windows")]
     {
         use windows_sys::Win32::{

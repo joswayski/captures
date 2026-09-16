@@ -377,7 +377,12 @@ impl Render for Surface {
 #[cfg(target_os = "macos")]
 fn native_window_id(window: &Window) -> Result<u64> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    let RawWindowHandle::AppKit(handle) = HasWindowHandle::window_handle(window)?.as_raw() else {
+    let handle = HasWindowHandle::window_handle(window)
+        .map_err(|error| {
+            anyhow::anyhow!("could not obtain the GPUI AppKit window handle: {error}")
+        })?
+        .as_raw();
+    let RawWindowHandle::AppKit(handle) = handle else {
         anyhow::bail!("expected AppKit window");
     };
     // Borrowed from a live GPUI window, accessed only on the AppKit main thread.
