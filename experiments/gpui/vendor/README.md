@@ -16,11 +16,14 @@ There are three upstream-file changes:
   are unmodified.
 - `src/platform/mac/window.rs` creates titlebar-less `PopUp` panels with the
   borderless style, retaining their nonactivating-panel behavior. Upstream used
-  `Titled | FullSizeContentView` even with `titlebar: None`; AppKit's frame inset
-  made the matched adapter's requested 640×720 content measure 640×721 on
-  macOS 26. The fix removes that frame decoration rather than subtracting a
-  point, clipping the viewport, or weakening validation. Ordinary document
-  windows and explicitly titled popups keep their upstream styles.
+  `Titled | FullSizeContentView` even with `titlebar: None`. Ordinary document
+  windows and explicitly titled popups keep their upstream styles. The initial
+  native window origin is also rounded to integral **points**, keeping content
+  size unchanged: AppKit's outward rounding expanded the adapter to 640×721 at
+  a half-point Y origin on a 2× Mac display. Borderless style alone did not fix
+  this; native Mac CI reproduced 641×721 with both origin axes fractional. The
+  aligned origin is used for creation and initial placement. No content-size
+  subtraction, viewport clipping or weakened validation is involved.
 
 Captures enables this feature and uses `motion::translated` to move complete
 preview subtrees, including hitboxes, after static layout. Otherwise Taffy's

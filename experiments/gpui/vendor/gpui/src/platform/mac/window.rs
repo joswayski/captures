@@ -613,9 +613,8 @@ impl MacWindow {
                     style_mask |= NSWindowStyleMask::NSFullSizeContentViewWindowMask;
                 }
             } else if kind == WindowKind::PopUp {
-                // A titlebar-less panel must be genuinely borderless. A titled
-                // full-size-content panel still has AppKit frame insets (one
-                // point on macOS 26), which enlarge the requested content size.
+                // A titlebar-less panel must be genuinely borderless, not a
+                // titled window whose content extends under hidden decorations.
                 style_mask = NSWindowStyleMask::NSBorderlessWindowMask;
             } else {
                 style_mask = NSWindowStyleMask::NSTitledWindowMask
@@ -655,11 +654,16 @@ impl MacWindow {
                 NSScreen::frame(screen)
             });
 
+            // AppKit encloses fractional window rectangles in integral points,
+            // expanding a 640x720 rect at (.5, .5) to 641x721, even at 2x backing
+            // scale. Align only the position before creation and reuse it below
+            // for setFrameTopLeftPoint_; never enlarge/shrink the content size.
             let window_rect = NSRect::new(
                 NSPoint::new(
-                    screen_frame.origin.x + bounds.origin.x.0 as f64,
-                    screen_frame.origin.y
-                        + (display.bounds().size.height - bounds.origin.y).0 as f64,
+                    (screen_frame.origin.x + bounds.origin.x.0 as f64).round(),
+                    (screen_frame.origin.y
+                        + (display.bounds().size.height - bounds.origin.y).0 as f64)
+                        .round(),
                 ),
                 NSSize::new(bounds.size.width.0 as f64, bounds.size.height.0 as f64),
             );

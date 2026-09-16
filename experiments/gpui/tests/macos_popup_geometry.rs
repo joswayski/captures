@@ -100,4 +100,8 @@ fn check_geometry(window: &gpui::Window, expected: gpui::Size<gpui::Pixels>) {
         (width * scale, height * scale),
         "native backing size"
     );
+    println!(
+        "macos_popup_geometry: viewport={width}x{height}, native frame/content/view match, backing={}x{}, scale={scale}",
+        backing.width, backing.height
+    );
 }

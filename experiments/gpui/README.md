@@ -53,10 +53,12 @@ and completion markers, and the actual macOS WindowServer window number. It stay
 open until terminated. It never opens a capture profile or installs tray/shortcuts.
 The ordinary `cargo run` command still launches the full GPUI experiment.
 
-The macOS backend uses a borderless nonactivating panel rather than a hidden
-titlebar with full-size content. This addresses the reported 640×721 viewport on
-macOS 26 without cropping or relaxing the adapter's size validation. Run the
-native geometry regression in a logged-in Mac graphical session:
+The macOS backend uses a borderless nonactivating panel and aligns its initial
+position to integral points without changing its requested content size. A
+half-point origin caused AppKit to expand 640×720 to 640×721; borderless style
+alone did not resolve it. The adapter still rejects incorrect viewport sizes,
+without cropping. Run the native geometry regression in a logged-in Mac
+graphical session:
 
 ```sh
 cargo test --locked --manifest-path experiments/gpui/Cargo.toml --test macos_popup_geometry
