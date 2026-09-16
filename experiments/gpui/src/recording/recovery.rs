@@ -211,6 +211,7 @@ fn assemble(profile: &Path, journal: &mut Journal) -> Result<PathBuf> {
     journal.state(RecordingState::Finalizing)?;
     let tools = MediaToolchain::from_command_names();
     let mut inputs = Vec::new();
+    let mut dropped_frames = 0;
     for segment in &mut journal.manifest.segments {
         let video_path = child(&directory, &segment.relative_path)?;
         if !video_path.is_file() {
@@ -232,6 +233,7 @@ fn assemble(profile: &Path, journal: &mut Journal) -> Result<PathBuf> {
         segment.height = probe.metadata.height;
         segment.duration_ms = probe.metadata.duration_ms.unwrap_or(0);
         segment.size_bytes = probe.metadata.size_bytes;
+        dropped_frames += segment.dropped_frames;
         let sidecar = |relative: &Option<String>| -> Result<Option<PathBuf>> {
             Ok(relative
                 .as_deref()
@@ -300,7 +302,7 @@ fn assemble(profile: &Path, journal: &mut Journal) -> Result<PathBuf> {
         .open(&output)?
         .sync_all()?;
     fs::rename(output, &destination)?;
-    crate::preferences::history::load(profile)?;
+    crate::preferences::history::record_dropped_frames(profile, &destination, dropped_frames)?;
     journal.manifest.final_path = Some(destination.to_string_lossy().into_owned());
     journal.manifest.last_error = None;
     journal.state(RecordingState::Ready)?;
@@ -354,6 +356,10 @@ mod tests {
         fixture(&second, "blue", "0.7");
         let broken = journal.begin_segment(&options).unwrap();
         fs::write(&broken, b"interrupted unplayable media").unwrap();
+        journal.manifest.segments[0].dropped_frames = 3;
+        journal.manifest.segments[1].dropped_frames = 7;
+        journal.manifest.segments[2].dropped_frames = 123;
+        journal.save().unwrap();
         let id = journal.manifest.session_id.clone();
         // Reopen the disk journal, as after process loss. No in-memory completed
         // segment list participates in recovery.
@@ -382,6 +388,10 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+        assert_eq!(
+            crate::preferences::history::dropped_frames(profile.path(), &result).unwrap(),
+            10
         );
         assert!(
             !store(profile.path())

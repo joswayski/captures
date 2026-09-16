@@ -21,6 +21,7 @@ pub struct Entry {
     pub path: PathBuf,
     pub source: PathBuf,
     pub created_at: SystemTime,
+    pub dropped_frames: u64,
     pub saved_path: Option<PathBuf>,
     pub missing: bool,
     pub preview: Option<Preview>,
@@ -133,6 +134,8 @@ struct State {
 struct StoredEntry {
     created_at: SystemTime,
     #[serde(default)]
+    dropped_frames: u64,
+    #[serde(default)]
     saved_path: Option<PathBuf>,
     #[serde(default)]
     preview: Option<StoredPreview>,
@@ -214,6 +217,48 @@ pub fn load(profile: &Path) -> Result<Vec<Entry>> {
     load_entries(profile)
 }
 
+/// Store capture telemetry before the completed recording journal is retired.
+pub fn record_dropped_frames(profile: &Path, source: &Path, count: u64) -> Result<()> {
+    let _guard = HISTORY_LOCK.lock().expect("history lock poisoned");
+    let name = checked_capture_name(profile, source)?;
+    if super::is_image_path(source) || !fs::symlink_metadata(source)?.file_type().is_file() {
+        bail!("recording telemetry requires a regular recording in this profile");
+    }
+    load_entries(profile)?;
+    let mut state = read_state(profile)?;
+    state
+        .entries
+        .get_mut(&name)
+        .context("recording is not indexed")?
+        .dropped_frames = count;
+    write_state(profile, &state)
+}
+
+/// Opening a permanent export must preserve the same warning as its recovery copy.
+pub fn dropped_frames(profile: &Path, source: &Path) -> Result<u64> {
+    let _guard = HISTORY_LOCK.lock().expect("history lock poisoned");
+    Ok(source_dropped_frames(
+        &read_state(profile)?,
+        profile,
+        source,
+    ))
+}
+
+fn source_dropped_frames(state: &State, profile: &Path, source: &Path) -> u64 {
+    let private = (source.parent() == Some(profile.join("captures").as_path()))
+        .then(|| source.file_name().and_then(|name| name.to_str()))
+        .flatten()
+        .and_then(|name| state.entries.get(name));
+    private
+        .or_else(|| {
+            state
+                .entries
+                .values()
+                .find(|entry| entry.saved_path.as_deref() == Some(source))
+        })
+        .map_or(0, |entry| entry.dropped_frames)
+}
+
 /// A plain preview/ready-notice save links the permanent copy without replacing
 /// original recovery pixels (the preferred screenshot format may be lossy).
 pub fn link_saved(profile: &Path, source: &Path, destination: &Path) -> Result<()> {
@@ -280,6 +325,7 @@ pub fn record_export(
     // Captures can be exported before the History window has ever been opened.
     load_entries(profile)?;
     let mut state = read_state(profile)?;
+    let dropped_frames = source.map_or(0, |source| source_dropped_frames(&state, profile, source));
     let known = (!new_file)
         .then_some(source)
         .flatten()
@@ -305,6 +351,7 @@ pub fn record_export(
                 name.clone(),
                 StoredEntry {
                     created_at: SystemTime::now(),
+                    dropped_frames,
                     saved_path: Some(destination.to_path_buf()),
                     preview: None,
                 },
@@ -352,6 +399,7 @@ fn load_entries(profile: &Path) -> Result<Vec<Entry>> {
             changed = true;
             StoredEntry {
                 created_at: created,
+                dropped_frames: 0,
                 saved_path: None,
                 preview: None,
             }
@@ -360,6 +408,7 @@ fn load_entries(profile: &Path) -> Result<Vec<Entry>> {
             source: path.clone(),
             path,
             created_at: stored.created_at,
+            dropped_frames: stored.dropped_frames,
             saved_path: stored.saved_path.clone(),
             missing: false,
             preview: cached_preview(profile, stored),
@@ -382,6 +431,7 @@ fn load_entries(profile: &Path) -> Result<Vec<Entry>> {
                 source,
                 path,
                 created_at: stored.created_at,
+                dropped_frames: stored.dropped_frames,
                 saved_path: stored.saved_path.clone(),
                 preview: cached_preview(profile, stored),
             });
@@ -591,6 +641,7 @@ mod tests {
             "../outside.mp4".into(),
             StoredEntry {
                 created_at: SystemTime::now(),
+                dropped_frames: 0,
                 saved_path: None,
                 preview: None,
             },
@@ -651,6 +702,7 @@ mod tests {
             name.into(),
             StoredEntry {
                 created_at: created,
+                dropped_frames: 0,
                 saved_path: None,
                 preview: None,
             },
@@ -764,6 +816,58 @@ mod tests {
     }
 
     #[test]
+    fn recording_drop_counts_survive_export_format_changes_and_missing_recovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let profile = directory.path();
+        let source = seed(profile, "dropped.mp4", SystemTime::now());
+        let clean = seed(profile, "clean.mp4", SystemTime::now());
+        record_dropped_frames(profile, &source, 17).unwrap();
+        assert_eq!(dropped_frames(profile, &clean).unwrap(), 0);
+        let saved = profile.join("saved.mp4");
+        fs::write(&saved, b"saved video").unwrap();
+        link_saved(profile, &source, &saved).unwrap();
+        assert_eq!(dropped_frames(profile, &saved).unwrap(), 17);
+
+        let gif = profile.join("edited.gif");
+        fs::write(&gif, b"edited animation").unwrap();
+        let recovery = record_export(profile, Some(&saved), &gif, true).unwrap();
+        assert_eq!(dropped_frames(profile, &recovery).unwrap(), 17);
+        assert_eq!(dropped_frames(profile, &gif).unwrap(), 17);
+        fs::remove_file(&source).unwrap();
+        let entry = load(profile)
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.path == source)
+            .unwrap();
+        assert_eq!(entry.source, saved);
+        assert_eq!(entry.dropped_frames, 17);
+        fs::remove_file(&saved).unwrap();
+        let entry = load(profile)
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.path == source)
+            .unwrap();
+        assert!(entry.missing);
+        assert_eq!(entry.dropped_frames, 17);
+    }
+
+    #[test]
+    fn telemetry_is_idempotent_and_cannot_attach_to_screenshots_or_external_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let profile = directory.path();
+        let source = seed(profile, "video.mp4", SystemTime::now());
+        record_dropped_frames(profile, &source, 8).unwrap();
+        record_dropped_frames(profile, &source, 8).unwrap();
+        assert_eq!(dropped_frames(profile, &source).unwrap(), 8);
+        let screenshot = seed(profile, "image.png", SystemTime::now());
+        assert!(record_dropped_frames(profile, &screenshot, 8).is_err());
+        let external = profile.join("video.mp4");
+        fs::write(&external, b"external").unwrap();
+        assert!(record_dropped_frames(profile, &external, 8).is_err());
+        assert_eq!(dropped_frames(profile, &external).unwrap(), 0);
+    }
+
+    #[test]
     fn unknown_and_new_file_get_distinct_recoveries_and_prune_preserves_export() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("imported.webp");
@@ -799,6 +903,7 @@ mod tests {
         )
         .unwrap();
         assert!(load(directory.path()).unwrap()[0].saved_path.is_none());
+        assert_eq!(load(directory.path()).unwrap()[0].dropped_frames, 0);
         let private = directory.path().join("captures/private.png");
         fs::write(&private, b"private").unwrap();
         assert!(record_export(directory.path(), None, &private, true).is_err());

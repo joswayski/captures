@@ -1983,6 +1983,19 @@ impl Surface {
                                     .text_color(t.subtle)
                                     .child(detail),
                             )
+                            .when(!screenshot && entry.dropped_frames > 0, |body| {
+                                body.child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .line_height(px(14.))
+                                        .text_color(t.caution_text)
+                                        .child(format!(
+                                            "{} frame{} dropped while recording",
+                                            entry.dropped_frames,
+                                            if entry.dropped_frames == 1 { "" } else { "s" }
+                                        )),
+                                )
+                            })
                             .when(!missing, |body| body.child(actions))
                             .when_some(self.history_errors.get(&p).cloned(), |body, error| {
                                 body.child(

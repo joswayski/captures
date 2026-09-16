@@ -542,6 +542,7 @@ pub struct RecordingEditor {
     launch: Launch,
     focus: Option<FocusHandle>,
     source: PathBuf,
+    dropped_frames: u64,
     poster: Option<Arc<Path>>,
     frame: Option<Arc<RenderImage>>,
     decoder: VideoDecoder,
@@ -612,6 +613,7 @@ impl RecordingEditor {
             .path
             .clone()
             .ok_or_else(|| anyhow::anyhow!("recording-editor requires --open FILE"))?;
+        let dropped_frames = crate::preferences::history::dropped_frames(&launch.profile, &source)?;
         let destination = configured_output_directory(&launch.profile)
             .unwrap_or_else(|| launch.profile.join("captures"));
         let saved_path = (source.parent() != Some(launch.profile.join("captures").as_path()))
@@ -627,6 +629,7 @@ impl RecordingEditor {
             launch,
             focus: None,
             source,
+            dropped_frames,
             poster: None,
             frame: None,
             generation: 0,
@@ -2289,6 +2292,21 @@ impl Render for RecordingEditor {
                                     }),
                             ),
                     )
+                    .when(self.dropped_frames > 0, |body| {
+                        body.child(
+                            div()
+                                .max_w(px(1220.))
+                                .mx_auto()
+                                .mb(px(12.))
+                                .py(px(8.))
+                                .px(px(12.))
+                                .rounded(px(8.))
+                                .bg(t.caution_surface)
+                                .text_color(t.caution_text)
+                                .text_size(px(12.))
+                                .child(format!("This source dropped {} frame{} during capture. The original timing is preserved.", self.dropped_frames, if self.dropped_frames == 1 { "" } else { "s" })),
+                        )
+                    })
                     .child(
                         div()
                             .w_full()
