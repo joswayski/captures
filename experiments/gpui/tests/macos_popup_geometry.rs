@@ -75,7 +75,8 @@ fn check_geometry(window: &gpui::Window, expected: gpui::Size<gpui::Pixels>) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     assert_eq!(window.viewport_size(), expected, "GPUI viewport");
-    let RawWindowHandle::AppKit(handle) = window.window_handle().unwrap().as_raw() else {
+    let RawWindowHandle::AppKit(handle) = HasWindowHandle::window_handle(window).unwrap().as_raw()
+    else {
         panic!("expected AppKit window");
     };
     // The live GPUI window owns this NSView; checks run on AppKit's main thread.
