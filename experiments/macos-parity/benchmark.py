@@ -40,7 +40,8 @@ def manifest():
              and not any(x in p.relative_to(LAB).parts for x in (".build", "target", "gen", "results", "__pycache__"))]
     files += [REPO / "apps/desktop/ui/src/lib/thumbnailExit.ts",
               REPO / "apps/desktop/ui/src/styles/mini-preview.css",
-              LAB / ".build/fixture.png", *BINARIES.values()]
+              LAB / ".build/fixture.png", LAB / ".build/parity-observer",
+              LAB / ".build/parity-resources", *BINARIES.values()]
     files += list((LAB / ".build/public").glob("*.json"))
     files += [p for p in (LAB / ".build/web").rglob("*") if p.is_file()]
     return {str(p.relative_to(REPO)): sha(p) for p in sorted(files)}
@@ -232,15 +233,21 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=LAB / "results" / datetime.now().strftime("%Y%m%d-%H%M%S"))
     parser.add_argument("--trials", type=int, default=3)
-    parser.add_argument("--duration", type=float, default=9.6, help="Seconds per measured scenario/app trial")
+    parser.add_argument("--duration", type=float, help="Seconds per trial (default 9.6; profiling 12.8)")
+    parser.add_argument("--profile", action="store_true", help="Separate full-coalition resource and WindowServer frame passes")
+    parser.add_argument("--capture-hz", type=int, default=120, help="Requested observer ceiling, not a measured FPS value")
     parser.add_argument("--visual-only", action="store_true")
     parser.add_argument("--diagnostic-performance", action="store_true", help="Collect timings despite pixel-gate failures; mark them non-comparable")
     parser.add_argument("--gpui", type=Path, help="Optional optimized GPUI adapter implementing this exact contract")
     args = parser.parse_args()
+    if args.duration is None:
+        args.duration = 12.8 if args.profile else 9.6
     if platform.system() != "Darwin":
         parser.error("Run on the Mac being compared, with Terminal Screen Recording permission")
     if args.trials < 2 or not math.isfinite(args.duration) or args.duration < 6.4:
         parser.error("Use at least two trials and 6.4 seconds")
+    if args.profile and (args.visual_only or args.duration > 60 or not 60 <= args.capture_hz <= 240):
+        parser.error("Profiling requires live trials <=60s and a capture ceiling between60 and240Hz")
     expected = json.loads((LAB / ".build/manifest.json").read_text())
     if expected != manifest():
         parser.error("Source, fixture, or binary changed since build. Run bash experiments/macos-parity/build.sh")
@@ -258,6 +265,9 @@ def main():
         "scope": "Matched media-effect components, not full apps. Callback cadence is not GPU presentation FPS. RSS double-counts shared pages; root+descendants omits unattributed WebKit XPC/WindowServer memory and CPU.",
         "completeAppMemory": False, "visual": [], "trials": [], "failures": []}
     report_path = args.output / "report.json"
+    if args.profile:
+        report["schema"] = 2
+        report["scope"] = "Matched component windows, not full apps. Separate WindowServer frame and isolated app-coalition resource passes. No physical-panel scanout or unassigned WindowServer/kernel/GPU accounting."
     try:
         for scenario in SCENARIOS:
             config = json.loads((LAB / f".build/public/{scenario}.json").read_text())
@@ -275,7 +285,13 @@ def main():
         report["pixelGatePassed"] = all(row["pixelGatePassed"] for row in report["visual"])
         if not report["pixelGatePassed"] and not args.diagnostic_performance:
             raise RuntimeError("Pixel gate failed. Review comparison PNGs; use --diagnostic-performance only for explicitly non-comparable timings")
-        if not args.visual_only:
+        if args.profile:
+            from profiling import run_profiles
+            configs = {scenario: {**json.loads((LAB / f".build/public/{scenario}.json").read_text()),
+                       "mode": "run", "checkpointMs": 0, "durationMs": args.duration * 1000}
+                       for scenario in SCENARIOS}
+            run_profiles(binaries, configs, args.output, args.trials, args.capture_hz, report, report_path)
+        elif not args.visual_only:
             for scenario in SCENARIOS:
                 config = json.loads((LAB / f".build/public/{scenario}.json").read_text())
                 config.update(mode="run", checkpointMs=0, durationMs=args.duration * 1000)
@@ -302,7 +318,8 @@ def main():
         report["failures"].append(str(error))
         print(str(error), file=sys.stderr)
     finally:
-        report["performanceComparable"] = bool(report.get("complete") and report.get("pixelGatePassed") and not args.visual_only)
+        report["performanceComparable"] = bool(report.get("complete") and report.get("pixelGatePassed")
+            and not args.visual_only and not report.get("frameCaptureBackpressureDetected"))
         write_json(report_path, report)
         print(f"Results: {args.output}")
     if not report["complete"] or not report.get("pixelGatePassed"):

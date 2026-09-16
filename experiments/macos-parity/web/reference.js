@@ -126,7 +126,13 @@ try {
       throw new Error(`Viewport mismatch: ${JSON.stringify(info)}`);
     }
     await invoke('record', { kind: 'ready', value: info });
-    if (config.mode === 'run') await run();
+    if (config.mode === 'run') {
+      if (config.startGatePath) {
+        await invoke('wait_for_start');
+        await invoke('record', { kind: 'start', value: { schema: 1 } });
+      }
+      await run();
+    }
   }
 } catch (error) {
   window.parity.error = String(error);

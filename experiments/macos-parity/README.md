@@ -54,6 +54,59 @@ bash experiments/macos-parity/run.sh --trials 5 --duration 19.2
 bash experiments/macos-parity/run.sh --gpui /absolute/path/captures-gpui-parity
 ```
 
+### Full app/helper accounting and observed animation frames
+
+Use the profiling mode for framework comparisons:
+
+```sh
+bash experiments/macos-parity/run.sh --profile --capture-hz 120 \
+  --gpui /absolute/path/captures-gpui-parity --output /absolute/path/new-results
+```
+
+This retains the same 24 visual checkpoints and thresholds, then runs **separate
+resource and frame passes** with one excluded warmup and three measured 12.8-second
+trials per scenario/app/pass. With three candidates, allow roughly 25–35 minutes
+including launches and checkpoints. `--duration 32` extends each trial for a longer
+memory-growth check. The observer may request Screen Recording permission; grant
+it in System Settings and restart the command with a new output directory if needed.
+
+- **Resources:** LaunchServices starts a unique temporary `.app` for each trial.
+  The sampler enumerates that app's macOS resource coalition, including WebKit
+  WebContent, GPU, and Networking processes that are not ordinary child processes.
+  Benchmark-only WebKit private APIs provide their PIDs for independent membership
+  checks. Missing ownership, unsupported private APIs, PID reuse, or changing
+  process membership fail the run instead of returning partial totals.
+  `physicalFootprint*MiB` is summed process physical footprint; `summedRSS*MiB` is
+  also retained but can double-count shared pages. Peaks are concurrent **sampled**
+  peaks, not sums of each process's unrelated historical maximum. CPU is the total
+  user+system CPU-time delta divided by actual sampling duration: 100% is one core.
+  Raw samples, first/last footprint, and second-half growth are retained. Sampling
+  starts immediately before releasing the workload and ends after its result;
+  its small boundary overhead is included in `sampledSeconds`.
+- **Frames:** A separate ScreenCaptureKit process observes only the synthetic
+  benchmark window. It records WindowServer display timestamps, frame statuses,
+  and hashes of visible BGRA pixels, not screenshots of the rest of your desktop.
+  The workload waits until observation is ready. Reports count changed frames and
+  unchanged spans within dust/settle motion phases, excluding intentional idle
+  gaps and identical redraws. Observer latency and hashing time flag backlog.
+  `--capture-hz` requests a capture ceiling; it does **not** set the display refresh
+  rate or certify that every presented frame was observed. These are observed
+  window changes, not physical-panel FPS, GPU time, or automatic dropped-frame counts.
+- Frame recording overhead is excluded from the resource pass. Neither pass
+  attributes shared WindowServer/kernel costs or all GPU residency to an app.
+  These remain component windows, not the full Captures application. An app-coalition
+  total is substantially more complete than the old root-process number, not
+  whole-system accounting.
+
+The GPUI adapter must implement measurement protocol2 and contain the transient
+texture-lifetime fix (PR #527). Its renderer is **CPU raster + texture upload**;
+resource reclamation is tested separately from process RSS. Build it in a sibling
+worktree using full Xcode, including its Metal tools; CLT alone is insufficient.
+The harness and GPUI branches do not need merging. `report.json` contains
+`profileMedians`, `profileTrials`, completeness, and backpressure flags. Any failure
+preserves raw files and exits nonzero. A pixel failure or observer backlog prevents
+a comparable-performance verdict; neither is silently removed from group medians.
+
 Results are written to a new directory under `experiments/macos-parity/results/`.
 Send that directory as a zip: `report.json`, raw `measured.json` files, and the
 `*.comparison.png` / `*.diff.png` images are the useful evidence. It contains only
@@ -83,7 +136,10 @@ bash experiments/macos-parity/run.sh --diagnostic-performance
 That option never changes thresholds or turns a failure into a pass. There is no
 automatic framework recommendation. Fix visible differences before choosing one.
 
-## What the performance numbers mean
+## What the legacy callback-only numbers mean
+
+Without `--profile`, the original lightweight mode remains available. Its partial
+process-tree figures are not the complete app/helper accounting above.
 
 - Main-thread animation callback intervals: p50, p95, max, and count over 25ms.
   These expose application stalls; **they are not presented FPS, GPU execution
@@ -191,6 +247,18 @@ write `OUTPUT_JSON` atomically with those fields plus `elapsedMs`,
 display timestamps. Remain open until the parent terminates the process. Exit
 nonzero on decode/config/scale errors. Never operate on a user's capture profile.
 
+### Additive measurement protocol 2
+
+Schema1 configs may additionally contain an absolute `startGatePath`. After ready,
+the renderer waits asynchronously for that file, with a 90-second deadline. Ready
+includes `measurementProtocol:2`. Before starting the live clock/resource setup,
+write `OUTPUT_JSON.started.json` atomically:
+`{schema:1,pid,startHostTimeNs}`. `startHostTimeNs` is `mach_absolute_time` converted
+with `mach_timebase_info` to nanoseconds; it is not process-relative time or a
+presentation claim. Checkpoints and ungated runs retain their existing behavior.
+The Tauri adapter's `profileResources:true` option adds explicit
+`webkitProcesses:[{role,pid}]` for `webContent`, `gpu`, and `network` to readiness.
+
 ## Local checks
 
 ```sh
@@ -201,6 +269,8 @@ swiftc -O -swift-version 5 experiments/macos-parity/native/*.swift -o /tmp/parit
 /tmp/parity-poses --poses experiments/macos-parity/.build/poses-input.json /tmp/poses.json
 node experiments/macos-parity/verify-poses.mjs /tmp/poses.json
 python3 -m unittest discover -s experiments/macos-parity -p 'test_*.py'
+# Built helpers, logged-in Mac; verifies launch, gate, clocks, and helper ownership:
+CAPTURES_NATIVE_PROFILE_TEST=1 experiments/macos-parity/.build/python/bin/python -m unittest discover -s experiments/macos-parity -p 'test_native_profile.py'
 npm run check
 ```
 
@@ -210,3 +280,5 @@ They test math, not native rasterization or presentation. macOS CI builds both
 graphical candidates; acceptance and performance results must come from the Mac
 running the on-screen suite. A Chromium screenshot is only a reference-harness
 check, never evidence of AppKit or WKWebView rendering.
+CI also compiles the observer and executes the resource smoke test. It does not
+grant Screen Recording access or establish 2× frame-capture acceptance.

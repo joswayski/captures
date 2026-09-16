@@ -15,10 +15,12 @@
     let fixturePath: String
     let particles: [ThumbnailDustParticle]
     let seed: Int
+    let startGatePath: String?
   }
 
   private struct Ready: Encodable {
     let schema = 1
+    let measurementProtocol = 2
     let pid: Int32
     let window_id: Int
     let scale: Double
@@ -138,7 +140,7 @@
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [self] in
           tryOrTerminate {
             try writeReady()
-            try beginDisplayLink()
+            waitForStart(deadline: CACurrentMediaTime() + 90)
           }
         }
       }
@@ -322,7 +324,30 @@
       try encode(readiness(), to: URL(fileURLWithPath: output.path + ".ready.json"))
     }
 
+    private func waitForStart(deadline: Double) {
+      if let path = config.startGatePath {
+        guard path.hasPrefix("/") else { fail(Failure("startGatePath must be absolute")) }
+        if !FileManager.default.fileExists(atPath: path) {
+          guard CACurrentMediaTime() < deadline else { fail(Failure("start gate timed out")) }
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [self] in
+            waitForStart(deadline: deadline)
+          }
+          return
+        }
+      }
+      tryOrTerminate { try beginDisplayLink() }
+    }
+
     private func beginDisplayLink() throws {
+      if config.startGatePath != nil {
+        var timebase = mach_timebase_info_data_t()
+        mach_timebase_info(&timebase)
+        let product = mach_absolute_time().multipliedFullWidth(by: UInt64(timebase.numer))
+        let ns = UInt64(timebase.denom).dividingFullWidth(product).quotient
+        try encode(
+          ["schema": UInt64(1), "pid": UInt64(getpid()), "startHostTimeNs": ns],
+          to: URL(fileURLWithPath: output.path + ".started.json"))
+      }
       started = CACurrentMediaTime()
       var link: CVDisplayLink?
       guard CVDisplayLinkCreateWithActiveCGDisplays(&link) == kCVReturnSuccess, let link else {

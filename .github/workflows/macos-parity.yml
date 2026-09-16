@@ -23,3 +23,10 @@ jobs:
       - run: npm ci
       - run: bash experiments/macos-parity/build.sh
       - run: experiments/macos-parity/.build/python/bin/python -m unittest discover -s experiments/macos-parity -p 'test_*.py'
+        env:
+          CAPTURES_NATIVE_PROFILE_TEST: '1'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-profile-smoke
+          path: experiments/macos-parity/.build/native-profile-*/**/*.json
