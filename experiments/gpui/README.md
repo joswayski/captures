@@ -142,7 +142,7 @@ persistence and malformed input, and preserving the source when saving onto
 itself/a hard link. Missing FFmpeg fails the playback test rather than silently
 skipping it.
 
-All commands above passed in the evaluation orb (138 app tests and 15 component
+All commands above passed in the evaluation orb (139 app tests and 15 component
 adapter tests, including shared renderer tests in both binaries; the root
 desktop suite contains 830 tests). The root release-version tests required
 per-command `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign
@@ -226,6 +226,13 @@ Executed UI checks, not just code inspection:
   and timeout were exercised; deletion preserved permanent exports. Tests
   cover missing-file metadata/posters, saved-file fallback, invalid index paths,
   a removed recovery directory, and same-timestamp directory changes.
+- History's controls now participate in native Tab/Shift+Tab navigation and
+  Enter/Space activation, with keyboard-only focus rings and scroll-to-focus.
+  Native checks exercised Delete all cancellation, saving a GIF with Space,
+  confirmed deletion with Enter (permanent export preserved), focus after
+  deletion, and skipping the disabled zero-count GIF filter in both directions.
+  A clipped bottom focus ring found during that check was corrected and reinspected.
+  These checks do not establish screen-reader accessibility parity.
 - Dropped-frame warnings were inspected in light History with 17, 1, and zero
   drops, and in light/dark recording editors. Zero omits the warning and one uses
   singular text. A real FFmpeg recovery test retains 3 + 7 drops from playable

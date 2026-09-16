@@ -12,6 +12,7 @@ use std::{
 };
 
 pub mod history;
+mod history_controls;
 pub mod input;
 mod onboarding;
 pub mod settings;
@@ -260,6 +261,7 @@ struct Surface {
     history_busy: HashSet<PathBuf>,
     history_restored: HashSet<PathBuf>,
     history_hover: HashMap<PathBuf, crate::motion::Motion>,
+    history_controls: history_controls::HistoryControls,
     history_clearing: bool,
     confirm_clear: Option<Instant>,
     history_filter: &'static str,
@@ -352,6 +354,7 @@ impl Surface {
             history_busy: HashSet::new(),
             history_restored: HashSet::new(),
             history_hover: HashMap::new(),
+            history_controls: Default::default(),
             history_clearing: false,
             confirm_clear: None,
             history_filter: "all",
@@ -1648,6 +1651,7 @@ impl Surface {
     }
 
     fn history(&mut self, window: &mut Window, cx: &mut Context<Self>, t: Theme) -> Stateful<Div> {
+        self.history_controls.begin();
         let files = self.history_files();
         self.history_hover
             .retain(|path, _| files.iter().any(|entry| &entry.path == path));
@@ -1788,7 +1792,17 @@ impl Surface {
                     .when(busy, |button| button.opacity(0.5).cursor_default())
                     .on_click(cx.listener(move |s, _, _, cx| {
                         s.history_open(&open, cx);
-                    })),
+                    }))
+                    .map(|button| {
+                        self.history_controls.decorate(
+                            button,
+                            SharedString::from(format!("open-{name}")),
+                            busy || missing,
+                            Some(7.),
+                            t,
+                            cx,
+                        )
+                    }),
             );
             let secondary = p.clone();
             let saved = entry.saved_path.clone();
@@ -1831,7 +1845,17 @@ impl Surface {
                 .when(busy, |button| button.opacity(0.5).cursor_default())
                 .on_click(cx.listener(move |s, _, _, cx| {
                     s.history_secondary(&secondary, saved.as_deref(), cx);
-                })),
+                }))
+                .map(|button| {
+                    self.history_controls.decorate(
+                        button,
+                        SharedString::from(format!("secondary-{name}")),
+                        busy || missing,
+                        Some(7.),
+                        t,
+                        cx,
+                    )
+                }),
             );
             let open = p.clone();
             let hovered = p.clone();
@@ -1910,7 +1934,17 @@ impl Surface {
                                         if !missing {
                                             s.history_open(&open, cx);
                                         }
-                                    })),
+                                    }))
+                                    .map(|button| {
+                                        self.history_controls.decorate(
+                                            button,
+                                            SharedString::from(format!("preview-{name}")),
+                                            busy || missing,
+                                            None,
+                                            t,
+                                            cx,
+                                        )
+                                    }),
                             )
                             .when(missing, |preview| {
                                 preview.child(
@@ -1958,7 +1992,17 @@ impl Surface {
                                     .when(busy, |button| button.opacity(0.5).cursor_default())
                                     .on_click(cx.listener(move |s, _, _, cx| {
                                         s.history_delete(&del, missing, cx)
-                                    })),
+                                    }))
+                                    .map(|button| {
+                                        self.history_controls.decorate(
+                                            button,
+                                            SharedString::from(format!("delete-{name}")),
+                                            busy,
+                                            Some(8.),
+                                            t,
+                                            cx,
+                                        )
+                                    }),
                             ),
                     )
                     .child(
@@ -2067,14 +2111,30 @@ impl Surface {
                         s.history_filter = filter;
                     }
                     cx.notify()
-                })),
+                }))
+                .map(|button| {
+                    self.history_controls.decorate(
+                        button,
+                        SharedString::from(format!("history-filter-{filter}")),
+                        disabled,
+                        Some(14.),
+                        t,
+                        cx,
+                    )
+                }),
             );
         }
-        div()
+        let content = div()
             .id("history-scroll")
             .size_full()
             .flex().flex_col()
             .overflow_y_scroll()
+            .track_scroll(&self.history_controls.scroll)
+            .tab_group()
+            .capture_any_mouse_down(cx.listener(|s, _, _, cx| {
+                s.history_controls.pointer();
+                cx.notify();
+            }))
             .px(px(24.)).pt(px(32.)).pb(px(48.))
             .child(div().max_w(px(1180.)).w_full().mx_auto().flex().flex_col().flex_shrink_0().gap(px(16.))
                 .child(div().flex().flex_shrink_0().items_end().justify_between().gap(px(24.))
@@ -2084,11 +2144,13 @@ impl Surface {
                         .child(div().max_w(description_width).text_size(px(13.)).line_height(px(17.55)).text_color(t.subtle).child("Screenshots, videos, GIFs, and interrupted recordings you can recover all appear here for 30 days.")))
                     .when(counts[0] > 0, |header| header.child(div().flex().items_center().gap(px(6.)).flex_shrink_0()
                         .when(self.confirm_clear.is_some(), |actions| actions.child(self.button("history-clear-cancel", "Cancel", false, t).h(px(32.)).py_0().border_0().bg(rgba(0)).flex().items_center().text_size(px(12.))
-                            .on_click(cx.listener(|s, _, _, cx| { if !s.history_clearing { s.confirm_clear = None; cx.notify(); } }))))
+                            .on_click(cx.listener(|s, _, _, cx| { if !s.history_clearing { s.confirm_clear = None; cx.notify(); } }))
+                            .map(|button| self.history_controls.decorate(button, "history-clear-cancel", self.history_clearing, Some(7.), t, cx))))
                         .child(self.button("history-clear", "", false, t).h(px(32.)).py_0().border_0().bg(rgba(0)).flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(if self.confirm_clear.is_some() { t.signal } else { t.subtle })
                             .child(history_icon("trash", color)).child(if self.history_clearing { "Deleting…" } else if self.confirm_clear.is_some() { "Delete all forever" } else { "Delete all" })
                             .when(self.history_clearing || !self.history_busy.is_empty(), |button| button.opacity(0.5).cursor_default())
-                            .on_click(cx.listener(|s, _, _, cx| s.history_clear(cx)))))))
+                            .on_click(cx.listener(|s, _, _, cx| s.history_clear(cx)))
+                            .map(|button| self.history_controls.decorate(button, "history-clear", self.history_clearing || !self.history_busy.is_empty(), Some(7.), t, cx))))))
                 .when(counts[0] > 0, |shell| shell.child(filters))
                 .when(!self.status.is_empty(), |shell| shell.child(div().p(px(12.)).rounded(px(8.)).text_size(px(12.)).text_color(t.signal).child(self.status.clone())))
                 .children(drafts)
@@ -2096,10 +2158,12 @@ impl Surface {
                     .child(div().size(px(52.)).mb(px(12.)).rounded(px(14.)).border_1().border_color(t.border).bg(t.raised).flex().items_center().justify_center().child(history_icon("history", color).size(px(26.))))
                     .child(div().text_size(px(15.)).font_weight(FontWeight::BOLD).child("No captures yet"))
                     .child(div().mt(px(6.)).text_size(px(13.)).text_color(t.subtle).child("New screenshots, videos, and GIFs appear here automatically."))))
-                .when(!empty, |shell| shell.child(list)))
+                .when(!empty, |shell| shell.child(list)));
+        self.history_controls.finish(&self.focus, window);
+        content
     }
 
-    fn recording_drafts(&self, cx: &mut Context<Self>, t: Theme) -> Vec<AnyElement> {
+    fn recording_drafts(&mut self, cx: &mut Context<Self>, t: Theme) -> Vec<AnyElement> {
         let store =
             captures_recording::DraftStore::new(self.launch.profile.join("recording-drafts"));
         let Ok(drafts) = store.list() else {
@@ -2123,6 +2187,8 @@ impl Surface {
         for draft in drafts {
             let id = draft.session_id.clone();
             let discard = id.clone();
+            let recover_control = SharedString::from(format!("recover-{id}"));
+            let discard_control = SharedString::from(format!("discard-{id}"));
             let confirmed = self.confirm_draft.as_ref() == Some(&id);
             let duration = draft
                 .segments
@@ -2223,7 +2289,8 @@ impl Surface {
                             });
                         }).detach();
                         cx.notify();
-                    })),
+                    }))
+                    .map(|button| self.history_controls.decorate(button, recover_control, busy_id.is_some(), Some(7.), t, cx)),
                 )
                 .child(
                     self.button(
@@ -2258,7 +2325,8 @@ impl Surface {
                         };
                         s.confirm_draft = None;
                         cx.notify()
-                    })),
+                    }))
+                    .map(|button| self.history_controls.decorate(button, discard_control, busy_id.is_some(), Some(7.), t, cx)),
                 );
             rows = rows.child(
                 div()
@@ -2440,6 +2508,19 @@ impl Render for Surface {
             .key_context("Preferences")
             .track_focus(&self.focus)
             .capture_key_down(cx.listener(Self::capture_keys))
+            .on_key_down(cx.listener(|s, event: &KeyDownEvent, window, cx| {
+                let mods = event.keystroke.modifiers;
+                if s.page == Page::History
+                    && event.keystroke.key == "tab"
+                    && !mods.control
+                    && !mods.alt
+                    && !mods.platform
+                {
+                    s.history_controls.tab(mods.shift, window);
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
             .on_key_up(cx.listener(|s, _, _, cx| {
                 if std::mem::take(&mut s.shortcut_release_pending) {
                     // Register only after release, otherwise the OS steals the
