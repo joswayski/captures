@@ -191,6 +191,7 @@ fn explicit_font_renders_asymmetric_glyphs_with_alpha_and_rotation() {
         text: "L".into(),
         font_size: 20.0,
         font_data: Arc::from(include_bytes!("test-font.ttf").as_slice()),
+        style: Default::default(),
     });
     text.color = [50, 150, 250, 128];
     let rendered = render(&document(vec![text.clone()])).unwrap();
@@ -376,6 +377,7 @@ fn blend_modes_include_source_backdrop_for_images_shapes_text_and_brushes() {
                 text: "L".into(),
                 font_size: 20.0,
                 font_data: Arc::from(include_bytes!("test-font.ttf").as_slice()),
+                style: Default::default(),
             },
             (11, 8),
         ),
@@ -495,6 +497,7 @@ fn invalid_geometry_crop_and_font_fail_without_mutating_source() {
             text: "hello".into(),
             font_size: 16.0,
             font_data: Arc::from([]),
+            style: Default::default(),
         },
         Shape::Image {
             origin: point(0.0, 0.0),

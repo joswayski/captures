@@ -1,0 +1,18 @@
+{
+  "workload": "284x160 source-fragment dissolve, CPU rasterization only; not displayed FPS",
+  "samples": 765,
+  "warmup_frames": 153,
+  "median_ms": 4.087432000000001,
+  "p95_ms": 18.53648,
+  "max_ms": 23.366922,
+  "kind": "CPU-only diagnostic; NOT application FPS or comparative framework evidence",
+  "backing_scale": 1,
+  "binary_sha256": "bb1a2913479b31f5cdf186736ffb26aab914931c617ac23ab2c538b865248b0a",
+  "effects_source_sha256": "a65e9362cdb5d54e3fbcbc10134930fe7735be16cb93038776d5907f2a3e995a",
+  "date": "2026-09-16",
+  "platform": "Linux x64 orb, 2 logical CPUs",
+  "source_dimensions": [
+    960,
+    540
+  ]
+}

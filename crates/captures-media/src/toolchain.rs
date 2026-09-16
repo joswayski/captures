@@ -19,8 +19,8 @@ use std::io;
 use thiserror::Error;
 
 use crate::{
-    EditSpec, ExportFormat, ExportProgress, ExportSpec, ExportStage, MediaKind, MediaMetadata,
-    QualityPreset, SizeBudgetError, calculate_size_budget,
+    AudioEdit, EditSpec, ExportFormat, ExportProgress, ExportSpec, ExportStage, MediaKind,
+    MediaMetadata, QualityPreset, SizeBudgetError, calculate_size_budget,
     export::{MIN_AUDIO_BITRATE, MIN_VIDEO_BITRATE},
 };
 
@@ -1373,9 +1373,29 @@ fn video_filter(edit: &EditSpec, width: u32, height: u32, fps: u16) -> String {
 }
 
 fn audio_filter(edit: &EditSpec, attempt: &VideoAttempt) -> Result<String, MediaToolError> {
-    let audio = &edit.audio;
-    let mono_output = audio.mono_output || attempt.force_mono;
-    if attempt.system_audio && attempt.microphone_audio && attempt.audio_stream_count < 2 {
+    audio_mix_filter(
+        &edit.audio,
+        RecordingAudioLayout {
+            system_audio: attempt.system_audio,
+            microphone_audio: attempt.microphone_audio,
+        },
+        attempt.audio_stream_count,
+        attempt.force_mono,
+    )
+}
+
+/// Builds the same labeled FFmpeg audio graph used by video exports.
+///
+/// The output is always named `[audio_out]`. Recordings with both sources use
+/// streams 1 and 2 when the recorder's mixed playback stream 0 is present.
+pub fn audio_mix_filter(
+    audio: &AudioEdit,
+    layout: RecordingAudioLayout,
+    stream_count: usize,
+    force_mono: bool,
+) -> Result<String, MediaToolError> {
+    let mono_output = audio.mono_output || force_mono;
+    if layout.system_audio && layout.microphone_audio && stream_count < 2 {
         let unchanged = !audio.mute_system_audio
             && !audio.mute_microphone
             && (audio.system_volume - audio.microphone_volume).abs() < f32::EPSILON;
@@ -1388,18 +1408,17 @@ fn audio_filter(edit: &EditSpec, attempt: &VideoAttempt) -> Result<String, Media
 
     let mut filters = Vec::new();
     let mut labels = Vec::new();
-    let separate_track_offset = usize::from(
-        attempt.system_audio && attempt.microphone_audio && attempt.audio_stream_count >= 3,
-    );
-    if attempt.system_audio && !audio.mute_system_audio {
+    let separate_track_offset =
+        usize::from(layout.system_audio && layout.microphone_audio && stream_count >= 3);
+    if layout.system_audio && !audio.mute_system_audio {
         filters.push(format!(
             "[0:a:{separate_track_offset}]volume={:.3},aresample=48000:async=1:first_pts=0[system_edit]",
             audio.system_volume.clamp(0.0, 2.0)
         ));
         labels.push("[system_edit]");
     }
-    if attempt.microphone_audio && !audio.mute_microphone {
-        let index = separate_track_offset + usize::from(attempt.system_audio);
+    if layout.microphone_audio && !audio.mute_microphone {
+        let index = separate_track_offset + usize::from(layout.system_audio);
         filters.push(format!(
             "[0:a:{index}]volume={:.3},aresample=48000:async=1:first_pts=0{}[microphone_edit]",
             audio.microphone_volume.clamp(0.0, 2.0),
@@ -1639,8 +1658,9 @@ mod tests {
     use super::{
         CancelToken, MediaToolchain, RecordingAudioLayout, VideoAttempt,
         aac_centered_stereo_layout_filter, aac_output_layout_filter, audio_edit_is_identity,
-        audio_filter, escape_concat_path, export_attempts, fit_even, gif_export_filter, gif_filter,
-        recording_segment_audio_graph, seconds, validate_edit_spec, visual_edit_is_identity,
+        audio_filter, audio_mix_filter, escape_concat_path, export_attempts, fit_even,
+        gif_export_filter, gif_filter, recording_segment_audio_graph, seconds, validate_edit_spec,
+        visual_edit_is_identity,
     };
     use crate::{
         AudioEdit, CropRect, EditSpec, ExportFormat, ExportSpec, MediaKind, MediaMetadata,
@@ -1800,23 +1820,34 @@ mod tests {
             },
             ..EditSpec::default()
         };
-        let filter = audio_filter(
-            &edit,
-            &VideoAttempt {
-                width: 1_920,
-                height: 1_080,
-                frames_per_second: 30,
-                video_bitrate: None,
-                audio_bitrate: 128_000,
-                has_audio: true,
-                system_audio: true,
-                microphone_audio: true,
-                audio_stream_count: 3,
-                force_mono: false,
-                gif_colors: 256,
-            },
-        )
-        .expect("audio filter");
+        let attempt = VideoAttempt {
+            width: 1_920,
+            height: 1_080,
+            frames_per_second: 30,
+            video_bitrate: None,
+            audio_bitrate: 128_000,
+            has_audio: true,
+            system_audio: true,
+            microphone_audio: true,
+            audio_stream_count: 3,
+            force_mono: false,
+            gif_colors: 256,
+        };
+        let filter = audio_filter(&edit, &attempt).expect("audio filter");
+        assert_eq!(
+            filter,
+            audio_mix_filter(
+                &edit.audio,
+                RecordingAudioLayout {
+                    system_audio: true,
+                    microphone_audio: true,
+                },
+                3,
+                false,
+            )
+            .expect("public preview filter"),
+            "export and preview use the identical graph"
+        );
         assert!(filter.contains("[0:a:1]volume=0.500"));
         assert!(filter.contains("[0:a:2]volume=1.500"));
         assert!(filter.contains("amix=inputs=2"));

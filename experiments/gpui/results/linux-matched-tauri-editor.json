@@ -1,0 +1,48 @@
+{
+  "recorded_at": "2026-09-16T01:39:52.561551+00:00",
+  "state": "Tauri optimized embedded frontend; light screenshot editor; unmodified 960x540 fixture.png; one locked original layer; 1280x760 client; Save as new enabled; no expanded menus or export panel; isolated HOME/XDG; Xvfb/Openbox without compositor, Mesa software graphics; warm idle; precreated notice unmapped and editor repainted; whole process tree including tray/updater; outbound proxy unavailable; no audio devices",
+  "sampling": "Repeated intervals in one warm process, not independent launches",
+  "environment": {
+    "kernel": "6.1.158+",
+    "architecture": "x86_64",
+    "logical_cpus": 2,
+    "display": ":100"
+  },
+  "executable_sha256": "9d93675e8647f9a8afdfc2c59c70cc6f54f37a7baade6b6b032ced5168810584",
+  "executable_bytes": 36106120,
+  "screenshot_sha256": "669d02c2f0dcb6f5d4a018d6852fb718cc2188b574369cf8cf67a487e67becdf",
+  "samples": [
+    {
+      "rss_mib": 1328.26953125,
+      "pss_mib": 711.6181640625,
+      "private_mib": 540.25,
+      "processes": 6,
+      "cpu_percent_one_core": 5.599881680101933,
+      "interval_seconds": 5.000105644998257
+    },
+    {
+      "rss_mib": 1327.28125,
+      "pss_mib": 710.6298828125,
+      "private_mib": 539.26171875,
+      "processes": 6,
+      "cpu_percent_one_core": 5.199892843731609,
+      "interval_seconds": 5.000103036996734
+    },
+    {
+      "rss_mib": 1327.41015625,
+      "pss_mib": 710.7587890625,
+      "private_mib": 539.390625,
+      "processes": 6,
+      "cpu_percent_one_core": 5.599865835050764,
+      "interval_seconds": 5.00011979300325
+    }
+  ],
+  "median": {
+    "rss_mib": 1327.41015625,
+    "pss_mib": 710.7587890625,
+    "private_mib": 539.390625,
+    "processes": 6,
+    "cpu_percent_one_core": 5.599865835050764,
+    "interval_seconds": 5.000105644998257
+  }
+}

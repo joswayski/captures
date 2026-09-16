@@ -1,0 +1,79 @@
+name: GPUI experiment
+
+on:
+  pull_request:
+    paths:
+      - "experiments/gpui/**"
+      - "crates/captures-*/**"
+      - "rust-toolchain.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/gpui.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpui-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: GPUI build and tests (${{ matrix.os }}, not a Preview)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, windows-2025, ubuntu-24.04]
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux build and test dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libayatana-appindicator3-dev \
+            libclang-dev libssl-dev libasound2-dev libdbus-1-dev \
+            libegl-dev libgbm-dev libpipewire-0.3-dev libspa-0.2-dev \
+            libwayland-dev libxcb1-dev libxrandr-dev libxkbcommon-x11-dev \
+            libfontconfig1-dev libfreetype6-dev ffmpeg
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - name: Install macOS test media tools
+        if: runner.os == 'macOS'
+        run: |
+          command -v ffmpeg >/dev/null || brew install ffmpeg
+          command -v ffprobe >/dev/null
+      - name: Install Windows test media tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install ffmpeg --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'FFmpeg installation failed' }
+          foreach ($tool in @('ffmpeg', 'ffprobe')) {
+            if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
+              throw "Missing test tool: $tool"
+            }
+          }
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.94.0
+          components: rustfmt, clippy
+          cache-workspaces: experiments/gpui -> target
+      - run: cargo fmt --manifest-path experiments/gpui/Cargo.toml --all -- --check
+      - name: Check native macOS popup geometry
+        if: runner.os == 'macOS'
+        run: cargo test --locked --manifest-path experiments/gpui/Cargo.toml --test macos_popup_geometry
+      - name: Check native texture lifetimes
+        if: runner.os == 'macOS'
+        run: cargo test --locked --manifest-path experiments/gpui/Cargo.toml --test atlas_lifetime
+      - name: Check isolated benchmark protocol
+        run: cargo test --locked --manifest-path experiments/gpui/Cargo.toml --bin captures-gpui-parity
+      - run: cargo test --locked --manifest-path experiments/gpui/Cargo.toml
+      - run: cargo clippy --locked --manifest-path experiments/gpui/Cargo.toml --all-targets -- -D warnings
+      - run: cargo build --locked --release --manifest-path experiments/gpui/Cargo.toml

@@ -1,0 +1,48 @@
+{
+  "recorded_at": "2026-09-15T18:03:59.473073+00:00",
+  "state": "Tauri optimized release with embedded frontend; actual light Preferences 880x660 client; Appearance; isolated profile; warm idle; tray/shortcut/updater services and pre-created webviews included; Xvfb/Openbox/Mesa software rendering; outbound proxy unavailable; no audio devices",
+  "sampling": "Repeated intervals in one warm process, not independent launches",
+  "environment": {
+    "kernel": "6.1.158+",
+    "architecture": "x86_64",
+    "logical_cpus": 2,
+    "display": ":100"
+  },
+  "executable_sha256": "9d93675e8647f9a8afdfc2c59c70cc6f54f37a7baade6b6b032ced5168810584",
+  "executable_bytes": 36106120,
+  "screenshot_sha256": "38d55747e66c92fa6cd69841f04e4f814f315bd97581d97d3a1102597b6a415c",
+  "samples": [
+    {
+      "rss_mib": 1131.0078125,
+      "pss_mib": 543.7958984375,
+      "private_mib": 398.23828125,
+      "processes": 6,
+      "cpu_percent_one_core": 0.7999705950007183,
+      "interval_seconds": 5.000183788000868
+    },
+    {
+      "rss_mib": 1131.0,
+      "pss_mib": 543.7880859375,
+      "private_mib": 398.23046875,
+      "processes": 6,
+      "cpu_percent_one_core": 0.39998722168839723,
+      "interval_seconds": 5.000159733997862
+    },
+    {
+      "rss_mib": 1130.91796875,
+      "pss_mib": 543.7060546875,
+      "private_mib": 398.1484375,
+      "processes": 6,
+      "cpu_percent_one_core": 0.39998874631678516,
+      "interval_seconds": 5.000140674997965
+    }
+  ],
+  "median": {
+    "rss_mib": 1131.0,
+    "pss_mib": 543.7880859375,
+    "private_mib": 398.23046875,
+    "processes": 6,
+    "cpu_percent_one_core": 0.39998874631678516,
+    "interval_seconds": 5.000159733997862
+  }
+}

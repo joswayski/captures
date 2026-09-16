@@ -1,0 +1,327 @@
+//! Captures' semantic colors, not a GPUI component library's theme.
+use gpui::prelude::*;
+use gpui::{App, BoxShadow, Global, Rgba, Window, WindowAppearance, point, px, rgb, rgba};
+
+/// GPUI does not expose CSS letter-spacing. Keep the font's shaped glyphs and
+/// kerning, then apply tracking between their source-text clusters.
+pub fn tracked_label(
+    text: &'static str,
+    size: f32,
+    height: f32,
+    weight: gpui::FontWeight,
+    tracking: f32,
+    color: Rgba,
+) -> impl gpui::IntoElement {
+    gpui::canvas(
+        move |_, window, _| {
+            let mut font = gpui::font(font());
+            font.weight = weight;
+            let mut line = window.text_system().shape_line(
+                text.into(),
+                px(size),
+                &[gpui::TextRun {
+                    len: text.len(),
+                    font,
+                    color: color.into(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }],
+                None,
+            );
+            let mut runs = line.runs.clone();
+            for run in &mut runs {
+                for glyph in &mut run.glyphs {
+                    glyph.position.x += px(tracking * text[..glyph.index].chars().count() as f32);
+                }
+            }
+            *line = std::sync::Arc::new(gpui::LineLayout {
+                font_size: line.font_size,
+                width: line.width + px(tracking * text.chars().count() as f32),
+                ascent: line.ascent,
+                descent: line.descent,
+                runs,
+                len: line.len(),
+            });
+            line
+        },
+        move |bounds, line, window, cx| {
+            let _ = line.paint(bounds.origin, px(height), window, cx);
+        },
+    )
+    .w_full()
+    .h(px(height))
+    .flex_shrink_0()
+}
+
+pub struct CurrentSettings(pub crate::preferences::settings::Settings);
+impl Global for CurrentSettings {}
+
+#[derive(Clone, Copy)]
+pub struct Theme {
+    pub canvas: Rgba,
+    pub sunken: Rgba,
+    pub editor_well: Rgba,
+    pub raised: Rgba,
+    pub field: Rgba,
+    pub text: Rgba,
+    pub muted: Rgba,
+    pub subtle: Rgba,
+    pub border: Rgba,
+    pub border_subtle: Rgba,
+    pub border_strong: Rgba,
+    pub hover: Rgba,
+    pub accent: Rgba,
+    pub signal: Rgba,
+    pub positive: Rgba,
+    pub caution_surface: Rgba,
+    pub caution_text: Rgba,
+    pub glass: Rgba,
+    pub glass_text: Rgba,
+    pub glass_muted: Rgba,
+    pub glass_border: Rgba,
+}
+
+impl Theme {
+    /// Interpolate the design tokens' small → medium elevation for card hover.
+    pub fn card_shadow(self, hover: f32) -> Vec<BoxShadow> {
+        let light = self.text == rgb(0x131318);
+        let color = |alpha| {
+            let mut color = if light { rgb(0x131318) } else { rgb(0) };
+            color.a = alpha;
+            color.into()
+        };
+        if light {
+            vec![
+                BoxShadow {
+                    color: color(0.08 + 0.01 * hover),
+                    offset: point(px(0.), px(1. + 5. * hover)),
+                    blur_radius: px(3. + 15. * hover),
+                    spread_radius: px(0.),
+                },
+                BoxShadow {
+                    color: color(0.04 + 0.02 * hover),
+                    offset: point(px(0.), px(1.)),
+                    blur_radius: px(2. + hover),
+                    spread_radius: px(0.),
+                },
+            ]
+        } else {
+            vec![BoxShadow {
+                color: color(0.32 + 0.06 * hover),
+                offset: point(px(0.), px(2. + 6. * hover)),
+                blur_radius: px(6. + 14. * hover),
+                spread_radius: px(0.),
+            }]
+        }
+    }
+
+    pub fn new(light: bool) -> Self {
+        Self::configured(light, "mustard", "#32d3ff", "#ff4fc3")
+    }
+
+    /// Floating desktop surfaces keep the dark media palette, but respect the
+    /// configured accent and signal independently of regular-window appearance.
+    pub fn for_media(cx: &App) -> Self {
+        cx.try_global::<CurrentSettings>().map_or_else(
+            || Self::new(false),
+            |settings| {
+                Self::configured(
+                    false,
+                    &settings.0.theme,
+                    &settings.0.custom_theme.accent,
+                    &settings.0.custom_theme.signal,
+                )
+            },
+        )
+    }
+
+    pub fn for_window(launch: &crate::Launch, window: &Window, cx: &App) -> Self {
+        if let Some(settings) = cx.try_global::<CurrentSettings>() {
+            Self::from_settings(&settings.0, launch, window)
+        } else {
+            Self::new(launch.light)
+        }
+    }
+
+    pub fn from_settings(
+        settings: &crate::preferences::settings::Settings,
+        launch: &crate::Launch,
+        window: &Window,
+    ) -> Self {
+        let light = match settings.appearance.as_str() {
+            "light" => true,
+            "dark" => false,
+            _ if launch.mock => launch.light,
+            _ => matches!(
+                window.appearance(),
+                WindowAppearance::Light | WindowAppearance::VibrantLight
+            ),
+        };
+        Self::configured(
+            light,
+            &settings.theme,
+            &settings.custom_theme.accent,
+            &settings.custom_theme.signal,
+        )
+    }
+
+    pub fn configured(light: bool, name: &str, custom_accent: &str, custom_signal: &str) -> Self {
+        let (accent, signal) = match name {
+            "ember" => (0xff7a45, 0xff3d71),
+            "rose" => (0xff5ba7, 0xff6b45),
+            "violet" => (0xc026d3, 0xff4f88),
+            "cobalt" => (0x2563eb, 0xff5a64),
+            "aqua" => (0x31cbd8, 0xff5176),
+            "mint" => (0x67d5a5, 0xf15a48),
+            "lime" => (0xb6db45, 0xf15a48),
+            "mono" => (0xededed, 0xa1a1aa),
+            "custom" => (
+                parse_hex(custom_accent).unwrap_or(0x32d3ff),
+                parse_hex(custom_signal).unwrap_or(0xff4fc3),
+            ),
+            _ => (0xffca28, 0xef4650),
+        };
+        Self {
+            canvas: rgb(if light { 0xf5f5f7 } else { 0x101014 }),
+            sunken: rgb(if light { 0xefeff2 } else { 0x0b0b0e }),
+            editor_well: rgb(if light { 0xe0e0e7 } else { 0x0b0b0e }),
+            raised: rgb(if light { 0xffffff } else { 0x16161b }),
+            field: rgb(if light { 0xffffff } else { 0x0e0e12 }),
+            text: rgb(if light { 0x131318 } else { 0xf2f2f4 }),
+            muted: rgb(if light { 0x5c5c69 } else { 0xb9b9c4 }),
+            subtle: rgb(if light { 0x7d7d8c } else { 0x8b8b98 }),
+            border: rgba(if light { 0x1313181f } else { 0xffffff1a }),
+            border_subtle: rgba(if light { 0x13131812 } else { 0xffffff0f }),
+            border_strong: rgba(if light { 0x13131833 } else { 0xffffff2e }),
+            hover: rgba(if light { 0x1313180b } else { 0xffffff0d }),
+            accent: rgb(accent),
+            signal: rgb(signal),
+            positive: rgb(0x35a35d),
+            caution_surface: rgba(if light { 0xb576141f } else { 0xe0a83e26 }),
+            caution_text: rgb(if light { 0x8a5a0f } else { 0xe6bd6c }),
+            glass: rgba(0x0f0f12ed),
+            glass_text: rgb(0xf6f6f8),
+            glass_muted: rgba(0xf6f6f8a3),
+            glass_border: rgba(0xffffff1c),
+        }
+    }
+}
+
+/// Read on the foreground thread so live OS animation preferences are honored.
+/// The environment override is useful for repeatable visual fixtures.
+pub fn reduced_motion() -> bool {
+    if let Some(value) = std::env::var_os("CAPTURES_REDUCED_MOTION") {
+        return !matches!(value.to_str(), Some("0" | "false"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::GtkSettingsExt;
+        gtk::is_initialized_main_thread()
+            && gtk::Settings::default().is_some_and(|settings| !settings.is_gtk_enable_animations())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW,
+        };
+        let mut enabled = 1_u32;
+        unsafe {
+            SystemParametersInfoW(
+                SPI_GETCLIENTAREAANIMATION,
+                0,
+                (&mut enabled as *mut u32).cast(),
+                0,
+            ) != 0
+                && enabled == 0
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
+    }
+}
+
+/// The shared --ease-out token: cubic-bezier(0.16, 1, 0.3, 1).
+pub fn ease_out(progress: f32) -> f32 {
+    if progress <= 0. {
+        return 0.;
+    }
+    if progress >= 1. {
+        return 1.;
+    }
+    let (mut lo, mut hi) = (0., 1.);
+    for _ in 0..22 {
+        let t = (lo + hi) * 0.5;
+        let x = 3. * (1. - t) * (1. - t) * t * 0.16 + 3. * (1. - t) * t * t * 0.3 + t * t * t;
+        if x < progress {
+            lo = t;
+        } else {
+            hi = t;
+        }
+    }
+    1. - (1. - (lo + hi) * 0.5).powi(3)
+}
+
+fn parse_hex(value: &str) -> Option<u32> {
+    let value = value.strip_prefix('#').unwrap_or(value);
+    (value.len() == 6)
+        .then(|| u32::from_str_radix(value, 16).ok())
+        .flatten()
+}
+
+pub fn font() -> &'static str {
+    if cfg!(target_os = "macos") {
+        ".AppleSystemUIFont"
+    } else if cfg!(target_os = "windows") {
+        "Segoe UI"
+    } else {
+        // GPUI requires an installed family name, not Fontconfig aliases.
+        // Resolve the shipping CSS fallback before handing it to the renderer.
+        static FAMILY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        FAMILY.get_or_init(|| {
+            std::process::Command::new("fc-match")
+                .args([
+                    "--format",
+                    "%{family[0]}",
+                    "Segoe UI Variable Text,Segoe UI,Inter,Roboto,Helvetica Neue,Arial",
+                ])
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .and_then(|output| String::from_utf8(output.stdout).ok())
+                .map(|family| family.trim().to_owned())
+                .filter(|family| !family.is_empty())
+                .unwrap_or_else(|| "Arial".into())
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_ease_out_matches_the_parametric_midpoint() {
+        assert_eq!(ease_out(-1.), 0.);
+        assert_eq!(ease_out(1.5), 1.);
+        // At Bezier parameter t=1/2, x=.2975 and y=.875.
+        assert!((ease_out(0.2975) - 0.875).abs() < 0.00001);
+    }
+
+    #[test]
+    fn configured_theme_uses_shipping_and_valid_custom_colors() {
+        assert_eq!(
+            Theme::configured(true, "cobalt", "", "").accent,
+            rgb(0x2563eb)
+        );
+        assert_eq!(
+            Theme::configured(true, "custom", "#123456", "abcdef").accent,
+            rgb(0x123456)
+        );
+        assert_eq!(
+            Theme::configured(true, "custom", "invalid", "").accent,
+            rgb(0x32d3ff)
+        );
+    }
+}

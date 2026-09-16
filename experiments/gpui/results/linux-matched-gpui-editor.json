@@ -1,0 +1,48 @@
+{
+  "recorded_at": "2026-09-16T01:40:51.621461+00:00",
+  "state": "GPUI optimized release; light screenshot editor; unmodified 960x540 fixture.png; one locked original layer; 1280x760 client; Save as new enabled; no expanded menus or export panel; isolated profile; Xvfb/Openbox without compositor, Mesa software graphics; warm idle; whole process tree with tray/shortcuts and hidden keepalive; native font and layer thumbnail/rename/reorder implementation; no updater",
+  "sampling": "Repeated intervals in one warm process, not independent launches",
+  "environment": {
+    "kernel": "6.1.158+",
+    "architecture": "x86_64",
+    "logical_cpus": 2,
+    "display": ":100"
+  },
+  "executable_sha256": "18bbb4943466fb27f8abb892e420be45437598971e1a0adf58b6e6b2fd9acbc9",
+  "executable_bytes": 42683496,
+  "screenshot_sha256": "988496725697d7021bbab2e86ddc4140277dc6fdf73ebf28222a68de35d77500",
+  "samples": [
+    {
+      "rss_mib": 162.81640625,
+      "pss_mib": 153.4501953125,
+      "private_mib": 150.55078125,
+      "processes": 1,
+      "cpu_percent_one_core": 1.9999546926284357,
+      "interval_seconds": 5.000113270994916
+    },
+    {
+      "rss_mib": 162.81640625,
+      "pss_mib": 153.4501953125,
+      "private_mib": 150.55078125,
+      "processes": 1,
+      "cpu_percent_one_core": 2.199945773536054,
+      "interval_seconds": 5.000123245001305
+    },
+    {
+      "rss_mib": 162.81640625,
+      "pss_mib": 153.4501953125,
+      "private_mib": 150.55078125,
+      "processes": 1,
+      "cpu_percent_one_core": 1.9999587488516366,
+      "interval_seconds": 5.000103129998024
+    }
+  ],
+  "median": {
+    "rss_mib": 162.81640625,
+    "pss_mib": 153.4501953125,
+    "private_mib": 150.55078125,
+    "processes": 1,
+    "cpu_percent_one_core": 1.9999587488516366,
+    "interval_seconds": 5.000113270994916
+  }
+}

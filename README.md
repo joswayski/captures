@@ -176,6 +176,12 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for local setup, validation, and packaging.
 The desktop app uses Tauri and React for its UI, with Rust engines and
 platform-specific integrations for capture, recording, and media processing.
 
+An isolated [GPUI evaluation](experiments/gpui/README.md) explores a Rust frontend
+using the shared capture and media engines and the existing animation model.
+It is an incomplete port with visible and functional differences, not a replacement
+release. Its parity inventory, Linux-only validation limits, and resource measurement
+procedure are documented separately; macOS and Windows behavior remain unverified.
+
 ## License and trademarks
 
 The source code is licensed under the [Apache License 2.0](LICENSE).

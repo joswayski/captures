@@ -1,0 +1,72 @@
+[package]
+name = "captures-gpui"
+version = "0.1.0"
+edition = "2024"
+publish = false
+default-run = "captures-gpui"
+
+[[bin]]
+name = "captures-gpui-parity"
+path = "src/parity.rs"
+
+[[test]]
+name = "macos_popup_geometry"
+# AppKit must run on the process main thread, not a libtest worker.
+harness = false
+
+[[test]]
+name = "atlas_lifetime"
+harness = false
+
+# Evaluation only. The shipping application and release pipeline remain Tauri.
+[workspace]
+exclude = ["vendor/gpui"]
+
+[dependencies]
+anyhow = "1"
+auto-launch = "0.5"
+env_logger = "0.11"
+font-kit = { version = "0.14", features = ["source-fontconfig-dlopen"] }
+global-hotkey = "0.8"
+gpui = { version = "=0.2.2", path = "vendor/gpui", features = ["subpixel-images"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "tiff"] }
+jpeg-encoder = "0.6"
+jiff = "0.2"
+png = "0.17"
+quantette = { version = "0.6", default-features = false, features = ["image", "std", "threads"] }
+raw-window-handle = "0.6"
+resvg = { version = "=0.45.1", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+tray-icon = "0.24"
+uuid = { version = "1", features = ["v4"] }
+webp = { version = "0.3", default-features = false }
+captures-capture = { path = "../../crates/captures-capture" }
+captures-image = { path = "../../crates/captures-image" }
+captures-media = { path = "../../crates/captures-media" }
+captures-recording = { path = "../../crates/captures-recording" }
+captures-recording-xcap = { path = "../../crates/captures-recording-xcap" }
+captures-session = { path = "../../crates/captures-session" }
+captures-feedback = { path = "../../crates/captures-feedback" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+x11rb = { version = "0.13", features = ["shape"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+drag = "=2.1.1"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+captures-recording-macos = { path = "../../crates/captures-recording-macos" }
+core-graphics = "0.24"
+drag = "=2.1.1"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSCursor", "NSImage", "NSWorkspace", "NSAccessibility", "NSView", "NSWindow"] }
+
+[profile.dev]
+debug = 0
+
+[profile.release]
+debug = 0
+strip = true
