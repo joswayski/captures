@@ -773,7 +773,7 @@ impl Preview {
                                 let answer = window.prompt(
                                     PromptLevel::Critical,
                                     "Delete capture?",
-                                    Some("The saved copy will be deleted. Capture History is kept for recovery."),
+                                    Some("The saved copy will be deleted.\nCapture History is kept for recovery."),
                                     &[
                                         PromptButton::Cancel("Cancel".into()),
                                         PromptButton::Ok("Delete".into()),

@@ -56,7 +56,11 @@ presented FPS**. macOS build/runtime acceptance must come from native CI and the
 on-screen Mac run; Linux/Chromium comparisons cannot establish it.
 
 The 24-checkpoint Linux diagnostic comparison still fails the harness pixel gate:
-8 pass and 16 fail, with residual edge/subpixel differences. The gate was not
+20 pass and 4 fail. Image elements now use device-snapped cover bounds, matching
+WebKit's paint geometry; canvas dust retains its separate floating cover bounds.
+The remaining failures are the 290ms survivor slide (also 2090ms after delete):
+GPUI 0.2.2 floors physical image positions instead of retaining CSS-like fractional
+translation. Blur/antialiasing also remain visually different. The gate was not
 relaxed and no comparable performance trial was accepted. See
 [raw diagnostic results](results/linux-component-checkpoints.json). The harness
 must pass its visual checks on the Mac before its performance results are used.
@@ -134,7 +138,7 @@ persistence and malformed input, and preserving the source when saving onto
 itself/a hard link. Missing FFmpeg fails the playback test rather than silently
 skipping it.
 
-All commands above passed in the evaluation orb (132 app tests and 14 component
+All commands above passed in the evaluation orb (136 app tests and 15 component
 adapter tests, including shared renderer tests in both binaries; the root
 desktop suite contains 830 tests). The root release-version tests required
 per-command `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign
@@ -153,8 +157,11 @@ Executed UI checks, not just code inspection:
   with its 310ms/690ms frame delays. A real confirmation/delete produced an
   in-place dissolve and delayed survivor slide, leaving two correctly placed
   cards and the fixture intact. The bottom toolbar no longer overlaps a card.
-  Software-rendered animation still visibly stutters; the Linux fallback prompt
-  can clip its long subtitle inside the narrow preview window.
+  The confirmation now displays its full two-line message in the narrow window;
+  Linux Escape and default Enter cancel, Tab visibly selects Delete, and Tab then
+  Enter removes exactly one card. Escape still cancels after selecting Delete.
+  macOS/Windows keep their native prompts. Software-rendered animation still
+  visibly stutters.
 - Real display capture: 1600 × 1000 PNG containing only the known desktop color.
   Real region capture: dragging (110,160) to (730,480) saved a 620 × 320 PNG,
   also with no selector pixels; both opened the screenshot editor.
@@ -290,7 +297,7 @@ These refreshed samples include the GPUI native integration; they supersede the
 earlier 115 MiB result. Memory was lower, but idle CPU was higher in this run.
 
 The [corrected 1× renderer diagnostic](results/linux-effects-corrected.json)
-measured **4.21ms median, 18.78ms p95, 24.57ms maximum** over the same 765 CPU-only
+measured **4.09ms median, 18.54ms p95, 23.37ms maximum** over the same 765 CPU-only
 samples, after 153 warmup frames. Correct filtering/composition costs substantially
 more than the earlier incomplete effect. These numbers exclude texture upload and
 presentation, do not cover Retina 2×, and do not establish frame-rate parity.

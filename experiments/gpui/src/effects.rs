@@ -216,7 +216,7 @@ impl Dissolve {
         let scaled_width = (WIDTH as f32 * 1.015 * scale as f32).ceil() as u32;
         let scaled_height = (HEIGHT as f32 * 1.015 * scale as f32).ceil() as u32;
         let enlarged = imageops::resize(
-            &covered,
+            &cover_media(image, WIDTH * scale, HEIGHT * scale),
             scaled_width,
             scaled_height,
             imageops::FilterType::Triangle,
@@ -318,15 +318,35 @@ impl Dissolve {
 /// Destination pixel centers map through the floating cover dimensions, avoiding
 /// the subpixel shift caused by rounding an intermediate resize before cropping.
 pub fn cover_card(image: &RgbaImage, width: u32, height: u32) -> RgbaImage {
+    cover(image, width, height, false)
+}
+
+/// Browser image elements snap their fitted destination edges to device pixels
+/// before sampling (WebKit RenderImage::paintReplaced). Canvas drawImage does not;
+/// the dust fragments must keep using `cover_card` instead.
+pub fn cover_media(image: &RgbaImage, width: u32, height: u32) -> RgbaImage {
+    cover(image, width, height, true)
+}
+
+fn cover(image: &RgbaImage, width: u32, height: u32, snap: bool) -> RgbaImage {
     let ratio = (width as f32 / image.width().max(1) as f32)
         .max(height as f32 / image.height().max(1) as f32);
-    let surface_width = image.width() as f32 * ratio;
-    let surface_height = image.height() as f32 * ratio;
-    let offset_x = (width as f32 - surface_width) / 2.;
-    let offset_y = (height as f32 - surface_height) / 2.;
+    let mut surface_width = image.width() as f32 * ratio;
+    let mut surface_height = image.height() as f32 * ratio;
+    let mut offset_x = (width as f32 - surface_width) / 2.;
+    let mut offset_y = (height as f32 - surface_height) / 2.;
+    if snap {
+        // WebKit rounds negative half-pixel origins toward positive infinity,
+        // like positive absolute coordinates, not Rust's away-from-zero round.
+        let round = |value: f32| (value + 0.5).floor();
+        surface_width = round(offset_x + surface_width) - round(offset_x);
+        surface_height = round(offset_y + surface_height) - round(offset_y);
+        offset_x = round(offset_x);
+        offset_y = round(offset_y);
+    }
     RgbaImage::from_fn(width, height, |x, y| {
-        let source_x = (x as f32 + 0.5 - offset_x) / ratio - 0.5;
-        let source_y = (y as f32 + 0.5 - offset_y) / ratio - 0.5;
+        let source_x = (x as f32 + 0.5 - offset_x) * image.width() as f32 / surface_width - 0.5;
+        let source_y = (y as f32 + 0.5 - offset_y) * image.height() as f32 / surface_height - 0.5;
         straight_pixel(sample_premultiplied_clamped(image, source_x, source_y))
     })
 }
@@ -742,6 +762,32 @@ mod tests {
         let covered = cover_card(&source, 4, 4);
         assert_eq!(covered.get_pixel(0, 2).0, [191, 64, 0, 255]);
         assert_eq!(covered.get_pixel(3, 2).0, [0, 64, 191, 255]);
+    }
+
+    #[test]
+    fn image_cover_snaps_both_edges_but_canvas_cover_does_not() {
+        let source = RgbaImage::from_fn(3, 2, |x, _| match x {
+            0 => Rgba([255, 0, 0, 255]),
+            1 => Rgba([0, 255, 0, 255]),
+            _ => Rgba([0, 0, 255, 255]),
+        });
+        // Exact bounds [-1.25, 6.25] snap to [-1, 6], not a centered
+        // integer resize to width 8. Pixel centers sample x=1/7 and 13/7.
+        let media = cover_media(&source, 5, 5);
+        assert_eq!(media.get_pixel(0, 2).0, [219, 36, 0, 255]);
+        assert_eq!(media.get_pixel(4, 2).0, [0, 36, 219, 255]);
+        assert_eq!(
+            cover_card(&source, 5, 5).get_pixel(0, 2).0,
+            [204, 51, 0, 255]
+        );
+        // Negative halfway origins round toward positive infinity: -1.5 → -1.
+        let half = cover_media(&source, 6, 6);
+        assert_eq!(half.get_pixel(0, 2).0, [255, 0, 0, 255]);
+        assert_eq!(half.get_pixel(5, 2).0, [0, 85, 170, 255]);
+        let portrait = imageops::rotate90(&source);
+        let media = cover_media(&portrait, 5, 5);
+        assert_eq!(media.get_pixel(2, 0).0, [219, 36, 0, 255]);
+        assert_eq!(media.get_pixel(2, 4).0, [0, 36, 219, 255]);
     }
 
     #[test]

@@ -8,6 +8,8 @@ mod motion;
 pub mod notices;
 pub mod preferences;
 pub mod previews;
+#[cfg(target_os = "linux")]
+mod prompts;
 pub mod recording;
 pub mod theme;
 
@@ -170,6 +172,8 @@ fn main() -> anyhow::Result<()> {
         eprintln!("Could not prune retained GIF sources: {error:#}");
     }
     Application::new().run(move |cx| {
+        #[cfg(target_os = "linux")]
+        prompts::install(cx);
         let settings = preferences::settings::load(&launch.profile).ok();
         if let Some(settings) = settings.clone() {
             cx.set_global(theme::CurrentSettings(settings));

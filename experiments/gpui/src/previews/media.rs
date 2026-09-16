@@ -1,4 +1,5 @@
 pub use crate::effects::cover_card;
+use crate::effects::cover_media;
 use crate::preferences::settings::Settings;
 use anyhow::{Context, Result, bail};
 use captures_media::{
@@ -163,7 +164,7 @@ fn card_frames(
     for frame in frames {
         let frame = frame?;
         let delay = frame.delay();
-        let covered = cover_card(frame.buffer(), 568, 320);
+        let covered = cover_media(frame.buffer(), 568, 320);
         let mut blurred = imageops::blur(&covered, 4.);
         for pixel in blurred.pixels_mut() {
             for channel in &mut pixel.0[..3] {
@@ -561,8 +562,8 @@ mod tests {
     fn cover_crop_is_centered_for_asymmetric_portrait_and_landscape_sources() {
         let landscape = RgbaImage::from_fn(1000, 200, |x, _| Rgba([(x / 4) as u8, 0, 0, 255]));
         let portrait = RgbaImage::from_fn(200, 1000, |_, y| Rgba([0, (y / 4) as u8, 0, 255]));
-        let a = cover_card(&landscape, 284, 160);
-        let b = cover_card(&portrait, 284, 160);
+        let a = cover_media(&landscape, 284, 160);
+        let b = cover_media(&portrait, 284, 160);
         assert_eq!(a.dimensions(), (284, 160));
         assert_eq!(b.dimensions(), (284, 160));
         assert!(a.get_pixel(0, 80)[0] > 30);

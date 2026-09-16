@@ -213,7 +213,7 @@ impl Surface {
         };
         // Published GPUI 0.2.2 has no source-rectangle cropping in paint_image.
         // Pre-crop instead of relying on its broken rounded ObjectFit::Cover.
-        let media = texture(effects::cover_card(&source, 568, 320));
+        let media = texture(effects::cover_media(&source, 568, 320));
         let mut surface = Self {
             config,
             output,
