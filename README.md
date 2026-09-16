@@ -173,8 +173,13 @@ and height stay proportional.
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for local setup, validation, and packaging.
-The desktop app uses Tauri and React for its UI, with Rust engines and
+The downloadable Preview uses Tauri and React for its UI, with Rust engines and
 platform-specific integrations for capture, recording, and media processing.
+
+A browser-free native replacement is in development, starting with a Swift/AppKit
+workbench on macOS. It is not yet a capture app or a replacement download. The
+[migration checklist](docs/native-rewrite.md) tracks feature parity and the
+Windows/Linux renderer evaluation; existing Preview features remain available.
 
 ## License and trademarks
 

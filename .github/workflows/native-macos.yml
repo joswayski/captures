@@ -1,0 +1,24 @@
+name: Native macOS workbench
+
+on:
+  pull_request:
+    paths:
+      - 'apps/native/**'
+      - 'shared/**'
+      - 'apps/desktop/ui/src/lib/thumbnailExit.ts'
+      - 'apps/desktop/assets/icon.svg'
+      - '.github/workflows/native-macos.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: bash apps/native/macos/build.sh
+      - run: python3 -m unittest discover -s apps/native -p 'test_*.py'

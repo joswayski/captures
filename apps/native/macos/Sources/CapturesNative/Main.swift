@@ -1,0 +1,52 @@
+import AppKit
+
+struct Options {
+    static let themes = ["mustard", "ember", "rose", "violet", "cobalt", "aqua", "mint", "lime", "mono"]
+    var scene = "preferences"
+    var appearance = "dark"
+    var theme = "mustard"
+    var historyCount = 1000
+    var referenceChips = false
+    var exercise = false
+    var quitAfter: Double?
+
+    init(_ arguments: [String]) throws {
+        var iterator = arguments.makeIterator()
+        while let argument = iterator.next() {
+            switch argument {
+            case "--scene": scene = iterator.next() ?? ""
+            case "--appearance": appearance = iterator.next() ?? ""
+            case "--theme": theme = iterator.next() ?? ""
+            case "--history-count":
+                guard let raw = iterator.next(), let count = Int(raw), (0...10000).contains(count) else { throw Usage.invalid }
+                historyCount = count
+            case "--reference-chips": referenceChips = true
+            case "--exercise": exercise = true
+            case "--quit-after":
+                guard let raw = iterator.next(), let seconds = Double(raw), seconds.isFinite, seconds > 0 else { throw Usage.invalid }
+                quitAfter = seconds
+            default: throw Usage.invalid
+            }
+        }
+        guard ["preferences", "history", "hud", "preview", "idle"].contains(scene),
+            ["light", "dark", "system"].contains(appearance), Self.themes.contains(theme)
+        else { throw Usage.invalid }
+    }
+    enum Usage: Error { case invalid }
+}
+
+@main enum Main {
+    static func main() {
+        do {
+            let options = try Options(Array(CommandLine.arguments.dropFirst()))
+            let application = NSApplication.shared
+            application.setActivationPolicy(options.scene == "idle" ? .accessory : .regular)
+            let delegate = Workbench(options: options)
+            application.delegate = delegate
+            withExtendedLifetime(delegate) { application.run() }
+        } catch {
+            FileHandle.standardError.write(Data("Usage: CapturesNative [--scene preferences|history|hud|preview|idle] [--appearance light|dark|system] [--theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono] [--history-count 0..10000] [--reference-chips] [--exercise] [--quit-after SECONDS]\n".utf8))
+            exit(1)
+        }
+    }
+}
