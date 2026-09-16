@@ -6,9 +6,9 @@ evaluating a Rust/GPUI frontend. That acceptance criterion has not been met.
 Do not use the resource measurements to justify replacing Tauri yet.
 
 This standalone Cargo workspace pins GPUI 0.2.2 with an isolated
-[subpixel image-placement patch](vendor/README.md). This is a maintained source
-fork, not an upstream feature; only the manifest and image bounds differ from
-the published package. It uses the existing capture,
+[source patch](vendor/README.md) for subpixel image placement and truly borderless
+macOS popup panels. This is a maintained source fork, not an upstream feature.
+It uses the existing capture,
 session, recording, image, media, and feedback crates. The portable document,
 draft, geometry, and encoder code retained from the retired native experiments
 now lives under `src/document`; **none of their UI or app lifecycle is retained**.
@@ -52,6 +52,21 @@ live cycles, a borderless 640×720-point window at 2× backing scale, atomic rea
 and completion markers, and the actual macOS WindowServer window number. It stays
 open until terminated. It never opens a capture profile or installs tray/shortcuts.
 The ordinary `cargo run` command still launches the full GPUI experiment.
+
+The macOS backend uses a borderless nonactivating panel rather than a hidden
+titlebar with full-size content. This addresses the reported 640×721 viewport on
+macOS 26 without cropping or relaxing the adapter's size validation. Run the
+native geometry regression in a logged-in Mac graphical session:
+
+```sh
+cargo test --locked --manifest-path experiments/gpui/Cargo.toml --test macos_popup_geometry
+```
+
+It checks exact GPUI viewport, NSWindow frame, content-view, renderer-view and
+backing dimensions at creation, after AppKit layout, and after resize/restore,
+including a half-point initial origin. It explicitly skips on Linux/Windows.
+This platform correction still requires a Mac benchmark rerun; a Linux build
+cannot establish native window geometry or visual parity.
 
 This adapter shares the production fragment renderer, centered cover sampler and
 580ms settle curve. It uses **CPU rasterization plus GPUI texture uploads**, not a

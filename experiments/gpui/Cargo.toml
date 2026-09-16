@@ -9,6 +9,11 @@ default-run = "captures-gpui"
 name = "captures-gpui-parity"
 path = "src/parity.rs"
 
+[[test]]
+name = "macos_popup_geometry"
+# AppKit must run on the process main thread, not a libtest worker.
+harness = false
+
 # Evaluation only. The shipping application and release pipeline remain Tauri.
 [workspace]
 exclude = ["vendor/gpui"]

@@ -612,6 +612,11 @@ impl MacWindow {
                 if titlebar.appears_transparent {
                     style_mask |= NSWindowStyleMask::NSFullSizeContentViewWindowMask;
                 }
+            } else if kind == WindowKind::PopUp {
+                // A titlebar-less panel must be genuinely borderless. A titled
+                // full-size-content panel still has AppKit frame insets (one
+                // point on macOS 26), which enlarge the requested content size.
+                style_mask = NSWindowStyleMask::NSBorderlessWindowMask;
             } else {
                 style_mask = NSWindowStyleMask::NSTitledWindowMask
                     | NSWindowStyleMask::NSFullSizeContentViewWindowMask;
