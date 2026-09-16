@@ -1,19 +1,19 @@
 //! Screenshot editor GPUI surface.
 //!
 //! The chrome deliberately follows the shared React editor rather than the
-//! Windows experiment.  Pixel/document behavior is delegated to the portable,
-//! tested `captures-windows-native` model.
+//! retired native UIs. Pixel/document behavior lives in the portable document model.
 
 mod fonts;
 
-use captures_windows_native::{
+use crate::document::{
+    BlendMode, Document, ImageTarget, Layer, Shape, Tool,
     draft::{DraftIdentity, DraftStore},
-    editor::{BlendMode, Document, Shape, Tool, resize_from_corner},
     encoder::{
         encode_jpeg, encode_jpeg_with_limit, encode_png, encode_png_with_limit, encode_webp,
         encode_webp_with_limit,
     },
     geometry::{Point, Rect},
+    resize_from_corner,
 };
 use gpui::{prelude::*, *};
 use image::RgbaImage;
@@ -94,7 +94,7 @@ impl Render for DraggedLayer {
     }
 }
 
-fn layer_title(layer: &captures_windows_native::editor::Layer) -> String {
+fn layer_title(layer: &Layer) -> String {
     if let Shape::Text { value, .. } = &layer.shape {
         let first = value.trim().lines().next().unwrap_or("");
         if first.is_empty() {
@@ -107,7 +107,7 @@ fn layer_title(layer: &captures_windows_native::editor::Layer) -> String {
     }
 }
 
-fn layer_kind(layer: &captures_windows_native::editor::Layer) -> &'static str {
+fn layer_kind(layer: &Layer) -> &'static str {
     match &layer.shape {
         Shape::Image { .. } if layer.background && layer.locked => "Locked background",
         Shape::Image { .. } if layer.background => "Background",
@@ -415,23 +415,23 @@ enum Drag {
     },
     Move {
         start: Point,
-        original: captures_windows_native::editor::Layer,
+        original: Layer,
     },
     Resize {
         corner: usize,
-        original: captures_windows_native::editor::Layer,
+        original: Layer,
     },
     Rotate {
         center: Point,
         pointer_offset: f32,
-        original: captures_windows_native::editor::Layer,
+        original: Layer,
     },
     Pan {
         start: gpui::Point<Pixels>,
         original: gpui::Point<Pixels>,
     },
     Erase {
-        target: captures_windows_native::editor::ImageTarget,
+        target: ImageTarget,
         points: Vec<Point>,
     },
 }
@@ -2164,11 +2164,7 @@ impl ScreenshotEditor {
         cx.notify();
     }
 
-    fn edit_selected(
-        &mut self,
-        edit: impl FnOnce(&mut captures_windows_native::editor::Layer),
-        cx: &mut Context<Self>,
-    ) {
+    fn edit_selected(&mut self, edit: impl FnOnce(&mut Layer), cx: &mut Context<Self>) {
         let Some(mut layer) = self
             .selected
             .and_then(|id| self.document.layers.iter().find(|l| l.id == id).cloned())
@@ -4893,7 +4889,7 @@ fn polygon(rect: Rect, sides: usize) -> Vec<Point> {
         .collect()
 }
 
-fn rotation_handle(layer: &captures_windows_native::editor::Layer) -> Option<Point> {
+fn rotation_handle(layer: &Layer) -> Option<Point> {
     let corners = layer.selection_corners()?;
     let top = Point {
         x: (corners[0].x + corners[1].x) / 2.,

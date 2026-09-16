@@ -10,8 +10,10 @@ This standalone Cargo workspace pins GPUI 0.2.2 with an isolated
 fork, not an upstream feature; only the manifest and image bounds differ from
 the published package. It uses the existing capture,
 session, recording, image, media, and feedback crates. The portable document,
-draft, and encoder modules come from `experiments/windows-native`; **none of that
-experiment's Win32 UI is used**. Text rendering and audio-edit filter logic are
+draft, geometry, and encoder code retained from the retired native experiments
+now lives under `src/document`; **none of their UI or app lifecycle is retained**.
+GPUI has no build or measurement dependency on those removed experiments.
+Text rendering and audio-edit filter logic are
 shared with the existing Rust crates. Shipping downloads, release automation,
 and Tauri settings are unchanged.
 
@@ -142,7 +144,7 @@ persistence and malformed input, and preserving the source when saving onto
 itself/a hard link. Missing FFmpeg fails the playback test rather than silently
 skipping it.
 
-All commands above passed in the evaluation orb (139 app tests and 15 component
+All commands above passed in the evaluation orb (199 app tests and 15 component
 adapter tests, including shared renderer tests in both binaries; the root
 desktop suite contains 830 tests). The root release-version tests required
 per-command `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign
@@ -279,7 +281,7 @@ python3 experiments/gpui/measure.py PID \
 experiments/gpui/target/release/captures-gpui --benchmark-effects
 ```
 
-The Python probe reuses the earlier experiment's `/proc` process-tree sampler.
+The Python probe contains the earlier experiment's `/proc` process-tree sampler.
 It reports RSS, PSS (shared pages apportioned), private resident memory, and CPU
 as a percentage of one core, including children. Tree changes reject a sample.
 Three five-second intervals are repeated observations in **one warm process**,

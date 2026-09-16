@@ -978,7 +978,6 @@ dependencies = [
  "captures-recording-macos",
  "captures-recording-xcap",
  "captures-session",
- "captures-windows-native",
  "core-graphics 0.24.0",
  "drag",
  "env_logger",
@@ -988,7 +987,10 @@ dependencies = [
  "gtk",
  "image",
  "jiff",
+ "jpeg-encoder",
  "objc2-app-kit",
+ "png 0.17.16",
+ "quantette",
  "raw-window-handle",
  "resvg",
  "serde",
@@ -996,6 +998,7 @@ dependencies = [
  "tempfile",
  "tray-icon",
  "uuid",
+ "webp",
  "windows-sys 0.61.2",
  "x11rb",
 ]
@@ -1075,31 +1078,6 @@ dependencies = [
  "mp4",
  "openh264",
  "thiserror 2.0.20",
-]
-
-[[package]]
-name = "captures-windows-native"
-version = "0.1.0"
-dependencies = [
- "captures-capture",
- "captures-feedback",
- "captures-image",
- "captures-media",
- "captures-recording",
- "captures-recording-xcap",
- "captures-session",
- "image",
- "jpeg-encoder",
- "png 0.17.16",
- "quantette",
- "serde",
- "serde_json",
- "tempfile",
- "uuid",
- "webp",
- "windows 0.61.3",
- "windows-core 0.61.2",
- "windows-numerics 0.2.0",
 ]
 
 [[package]]

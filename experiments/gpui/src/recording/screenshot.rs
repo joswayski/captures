@@ -126,8 +126,7 @@ pub fn capture(
         };
         pixels(&frame, &target, windows, cursor)?
     };
-    let png =
-        captures_windows_native::encoder::encode_png(&image, None).map_err(anyhow::Error::msg)?;
+    let png = crate::document::encoder::encode_png(&image, None).map_err(anyhow::Error::msg)?;
     let directory = profile.join("captures");
     std::fs::create_dir_all(&directory)?;
     let path = directory.join(format!("Captures_{}.png", uuid::Uuid::new_v4()));

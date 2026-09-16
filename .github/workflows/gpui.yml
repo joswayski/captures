@@ -4,8 +4,6 @@ on:
   pull_request:
     paths:
       - "experiments/gpui/**"
-      - "experiments/windows-native/**"
-      - "experiments/native-ui/src/native/editor/**"
       - "crates/captures-*/**"
       - "rust-toolchain.toml"
       - "Cargo.toml"
