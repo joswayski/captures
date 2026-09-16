@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(CoreGraphics)
+  import CoreGraphics
+#endif
 
 /// Top-left-origin cover destination in physical pixels. WebKit image elements
 /// snap both fitted edges before sampling; Canvas/background dust stays floating.
