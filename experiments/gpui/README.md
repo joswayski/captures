@@ -58,7 +58,7 @@ follow those sources; complete visual and interaction acceptance is still pendin
 | Area | Implemented | Still missing or different |
 | --- | --- | --- |
 | Preferences | Live appearance/accent settings, custom colors, selects, shortcut recording and conflict rollback, microphone picker, search/navigation, persisted settings | Complete keyboard/accessibility parity and native permission flows remain unverified |
-| Screenshot editor | Drawing/transform/pan/zoom, staged crop with aspect presets, original-image unlock, text presets/native font face selection/durable font metadata/wrapping/alignment/plates/shadows, image size/position steppers, layer appearance/arrange/combine panel, pixel-preserving quarter-turn/flip with fresh-photo canvas rotation, custom background colors, clipboard/undo/drafts, output scale/custom dimensions and aspect lock, quality presets/size limits, draggable encoded comparison and PNG/JPEG/WebP export | Vector thumbnails use tool icons; some numeric controls and keyboard/accessibility behavior differ; unavailable font traits still require synthesis; CPU raster work can block large-document interaction; exhaustive visual acceptance pending |
+| Screenshot editor | Drawing/transform/pan/zoom, staged crop with aspect presets, original-image unlock, text presets/native font face selection/durable font metadata/wrapping/alignment/plates/shadows, image size/position steppers, real annotation thumbnails, layer labels/image rename/drag ordering and appearance/arrange/combine panel, pixel-preserving quarter-turn/flip with fresh-photo canvas rotation, custom background colors, clipboard/undo/drafts, output scale/custom dimensions and aspect lock, quality presets/size limits, draggable encoded comparison and PNG/JPEG/WebP export | Some numeric controls and keyboard/accessibility behavior differ; unavailable font traits still require synthesis; CPU raster work can block large-document interaction; exhaustive visual acceptance pending |
 | Screenshot capture | Region/window/display targets, source-derived glass menu with draggable bounded placement and anchored dropdowns, six aspect choices/centered refit/aspect resize/live Shift snapping, FPS/resolution/audio/microphone controls, animated segmented controls/switches/panel/ready pulse, frozen/live frames, scaled crops, cursor/format/countdown settings, auto-start, copy/save/preview routing, session gate | Cross-monitor transition and mixed-DPI acceptance; selector keyboard/accessibility coverage; exact compositor equivalence; capture exclusion outside tested X11 regions |
 | Recording | Native recording, durable session/segment journal, interrupted-recording recovery, pause/resume segments, countdown/restart cancellation, stop/delete, mic controls, session clock, screenshot during recording, hide/restore, 430×102 bottom-center HUD, passive region guide | Full-display controls exclusion on Linux; exact pulse/compositor equivalence; native macOS/Windows acceptance |
 | Recording editor | Cancellable preparation, video/audio preview, filmstrip/waveforms, keyboard trim, crop numeric fields/steppers and aspect-locked handles, output presets/custom dimensions, independent track gain/mute/mono, quality/size-limit modes, sampled encoded estimates and draggable comparison, save-new/replace/progress/cancellation | Exhaustive timeline/interaction equivalence and hardware audio acceptance |
@@ -99,7 +99,7 @@ persistence and malformed input, and preserving the source when saving onto
 itself/a hard link. Missing FFmpeg fails the playback test rather than silently
 skipping it.
 
-All commands above passed in the evaluation orb (113 standalone tests; the root
+All commands above passed in the evaluation orb (114 standalone tests; the root
 desktop suite contains 830 tests). The root release-version tests required
 per-command `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign
 GIT_CONFIG_VALUE_0=false`: they create temporary commits, and the orb has no
@@ -132,6 +132,13 @@ Executed UI checks, not just code inspection:
   monospace fixture retained its label and rendered canvas pixels (zero differing
   pixels in the restart comparison). Font menus were inspected opening below
   at 800px client height and above at 760px, with all four choices visible.
+- Layer rows use actual colored annotation thumbnails and source-measured row
+  geometry, checkerboards, labels, and hidden/locked states. Native image rename
+  was exercised with Enter, Escape, and click-away, including a locked background
+  and restart persistence. Dragging above/below a row changed persisted paint
+  order; Undo restored it. Hidden annotations disappeared from the canvas while
+  retaining dimmed thumbnails. The portable model's 84 tests include large-coordinate
+  thumbnails, rotated/color/opacity previews, reorder boundaries, metadata and undo.
 - Selector: a drawn 600 × 400 region refitted to a centered 400 × 400 square.
   Pressing/releasing Shift without moving the pointer changed a live 600 × 400
   drag to 600 × 600 and back. The full dragged panel remained inside the screen
@@ -226,7 +233,29 @@ median and 0.6472ms p95 across 765 samples, excluding texture upload/presentatio
 These refreshed samples include the GPUI native integration; they supersede the
 earlier 115 MiB result. Memory was lower, but idle CPU was higher in this run.
 
-After the editor/export/history corrections, the release screenshot editor at
+On September 16, both optimized apps displayed the same unmodified 960 × 540
+fixture in a 1280 × 760 light screenshot editor: one locked original layer,
+Save as new enabled, and no expanded menus or export panel. Both windows were
+captured and inspected; the Tauri pre-created notice was unmapped and the editor
+repainted to remove an X11 obstruction before sampling. No build/encoder ran
+during measurement. Medians of three five-second intervals in one warm process:
+
+| Metric | GPUI incomplete port | Existing Tauri app |
+| --- | ---: | ---: |
+| Proportional resident memory (PSS) | 153.45 MiB | 710.76 MiB |
+| Private resident memory | 150.55 MiB | 539.39 MiB |
+| Summed process RSS | 162.82 MiB | 1327.41 MiB |
+| Process count | 1 | 6 |
+| Idle CPU, percentage of one core | 2.00% | 5.60% |
+
+[GPUI editor samples](results/linux-matched-gpui-editor.json) and
+[Tauri editor samples](results/linux-matched-tauri-editor.json) include exact
+binary/screenshot hashes. These are matched visible editor states, not equivalent
+application services or repeated-launch distributions. Resizing/repainting and
+software-renderer allocation history affect the measurements. They do not prove
+the GPUI port is faster during editing or on a hardware GPU.
+
+An earlier post-export GPUI workload at
 1280 × 760 measured **202.16 MiB PSS**, **199.55 MiB private resident memory**,
 **211.21 MiB RSS**, and **1.40% idle CPU** (one process; the same three warm
 five-second intervals). The 960 × 540 fixture had just been exported at

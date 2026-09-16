@@ -130,6 +130,8 @@ struct DocumentData {
 struct LayerData {
     id: u64,
     name: String,
+    #[serde(default)]
+    background: bool,
     shape: ShapeData,
     original_pixels_asset: Option<String>,
     color: [u8; 4],
@@ -487,6 +489,7 @@ impl LayerData {
         Ok(Self {
             id: layer.id,
             name: layer.name.clone(),
+            background: layer.background,
             shape,
             original_pixels_asset,
             color: layer.color,
@@ -572,6 +575,7 @@ impl LayerData {
         Ok(Layer {
             id: self.id,
             name: self.name,
+            background: self.background,
             shape,
             original_pixels: self
                 .original_pixels_asset
@@ -840,6 +844,34 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renamed_background_metadata_survives_restart_and_old_layers_default() {
+        let profile = tempfile::tempdir().unwrap();
+        let identity = DraftIdentity::new_capture();
+        let store = DraftStore::new(profile.path());
+        let mut document = Document::new(asymmetric_source());
+        let id = document.materialize_source(true).unwrap();
+        document.rename_layer(id, "Reference".into());
+        document.add_image(asymmetric_source(), 0, "Inset".into());
+        store.save(&identity, None, &document).unwrap();
+        let restored = store.load(&identity, None).unwrap().unwrap();
+        assert!(restored.layers[0].background);
+        assert!(restored.layers[0].locked);
+        assert_eq!(restored.layers[0].name, "Reference");
+        assert!(!restored.layers[1].background);
+
+        let path = store.root.join(identity.key()).join(CURRENT).join(MANIFEST);
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        for layer in manifest["document"]["layers"].as_array_mut().unwrap() {
+            layer.as_object_mut().unwrap().remove("background");
+        }
+        fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let legacy = store.load(&identity, None).unwrap().unwrap();
+        assert!(legacy.layers.iter().all(|layer| !layer.background));
+        assert_eq!(legacy.render().unwrap(), restored.render().unwrap());
+    }
 
     #[test]
     fn styled_text_roundtrips_and_old_text_defaults_remain_compatible() {

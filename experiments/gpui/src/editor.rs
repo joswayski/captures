@@ -59,6 +59,65 @@ enum TextFontChange {
     Italic,
 }
 
+#[derive(Clone)]
+struct DraggedLayer {
+    id: u64,
+    name: String,
+    thumbnail: Option<Arc<RenderImage>>,
+    theme: Theme,
+}
+
+impl Render for DraggedLayer {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .w(px(220.))
+            .h(px(54.))
+            .px_2()
+            .flex()
+            .items_center()
+            .gap_2()
+            .rounded(px(10.))
+            .bg(self.theme.raised)
+            .text_color(self.theme.text)
+            .text_size(px(12.))
+            .opacity(0.82)
+            .shadow_md()
+            .when_some(self.thumbnail.clone(), |row, image| {
+                row.child(
+                    img(image)
+                        .w(px(46.))
+                        .h(px(34.))
+                        .object_fit(ObjectFit::Contain),
+                )
+            })
+            .child(self.name.clone())
+    }
+}
+
+fn layer_title(layer: &captures_windows_native::editor::Layer) -> String {
+    if let Shape::Text { value, .. } = &layer.shape {
+        let first = value.trim().lines().next().unwrap_or("");
+        if first.is_empty() {
+            "Text".into()
+        } else {
+            first.chars().take(42).collect()
+        }
+    } else {
+        layer.name.clone()
+    }
+}
+
+fn layer_kind(layer: &captures_windows_native::editor::Layer) -> &'static str {
+    match &layer.shape {
+        Shape::Image { .. } if layer.background && layer.locked => "Locked background",
+        Shape::Image { .. } if layer.background => "Background",
+        Shape::Image { .. } => "Image",
+        Shape::Text { .. } => "Text",
+        Shape::Stroke(_) => "Drawing",
+        _ => "Shape",
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum EditorIcon {
     Select,
@@ -81,6 +140,8 @@ enum EditorIcon {
     Minus,
     Image,
     Eye,
+    EyeOff,
+    Grip,
     Lock,
     Unlock,
     More,
@@ -137,6 +198,12 @@ fn editor_icon(icon: EditorIcon, color: &'static str) -> Img {
         }
         EditorIcon::Eye => {
             r#"<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>"#
+        }
+        EditorIcon::EyeOff => {
+            r#"<path d="m3 3 18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.5 5.3A10 10 0 0 1 12 5c6 0 10 7 10 7a19 19 0 0 1-3.2 3.9M6.2 6.2A21 21 0 0 0 2 12s4 7 10 7a13 13 0 0 0 5.8-1.8"/>"#
+        }
+        EditorIcon::Grip => {
+            r#"<path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01" stroke-width="2.6"/>"#
         }
         EditorIcon::Lock => {
             r#"<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V6a4 4 0 0 1 8 0v4"/>"#
@@ -282,6 +349,8 @@ pub struct ScreenshotEditor {
     source_path: Option<PathBuf>,
     rendered: Arc<RenderImage>,
     source_thumbnail: Arc<RenderImage>,
+    layer_thumbnails: std::collections::HashMap<u64, Arc<RenderImage>>,
+    thumbnail_revision: (u64, u64),
     canvas_bounds: Rc<Cell<Bounds<Pixels>>>,
     drag: Option<Drag>,
     tool: Tool,
@@ -296,6 +365,9 @@ pub struct ScreenshotEditor {
     background_open: bool,
     source_menu_open: bool,
     layer_menu: Option<u64>,
+    layer_rename: Option<(u64, Entity<crate::preferences::input::TextInput>)>,
+    layer_rename_blur: Option<Subscription>,
+    layer_drop: Option<(u64, bool)>,
     layer_menu_origin: gpui::Point<Pixels>,
     format_open: bool,
     selected: Option<u64>,
@@ -410,7 +482,7 @@ impl ScreenshotEditor {
         } else {
             anyhow::bail!("Screenshot editor requires --open FILE (or --mock)");
         };
-        let source_thumbnail = render_image(&image::imageops::thumbnail(&pixels, 84, 60));
+        let source_thumbnail = render_image(&image::imageops::thumbnail(&pixels, 92, 68));
         let store = DraftStore::new(&launch.profile.join("drafts"));
         let mut document = store
             .load(&identity, source_path.as_deref())
@@ -463,6 +535,8 @@ impl ScreenshotEditor {
             source_path,
             rendered,
             source_thumbnail,
+            layer_thumbnails: Default::default(),
+            thumbnail_revision: (0, 0),
             canvas_bounds: Rc::new(Cell::new(Bounds::default())),
             drag: None,
             tool: Tool::Select,
@@ -473,6 +547,9 @@ impl ScreenshotEditor {
             background_open: false,
             source_menu_open: false,
             layer_menu: None,
+            layer_rename: None,
+            layer_rename_blur: None,
+            layer_drop: None,
             layer_menu_origin: point(px(8.), px(8.)),
             crop_selection: None,
             crop_aspect: None,
@@ -521,6 +598,49 @@ impl ScreenshotEditor {
             },
             status: "Ready".into(),
         })
+    }
+
+    fn begin_layer_rename(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(layer) = self
+            .document
+            .layers
+            .iter()
+            .find(|layer| layer.id == id && matches!(layer.shape, Shape::Image { .. }))
+        else {
+            return;
+        };
+        let name = layer.name.clone();
+        let input = cx.new(|cx| {
+            crate::preferences::input::TextInput::new(name, "Layer name", cx)
+                .chrome()
+                .max_len(80)
+                .height(px(25.))
+        });
+        input.update(cx, |input, cx| {
+            input.select_all(&crate::preferences::input::SelectAll, window, cx)
+        });
+        let handle = input.focus_handle(cx);
+        self.layer_rename_blur =
+            Some(cx.on_blur(&handle, window, |s, _, cx| s.finish_layer_rename(true, cx)));
+        self.layer_rename = Some((id, input.clone()));
+        // Register the new input in the window's dispatch tree before focusing it.
+        window.on_next_frame(move |window, cx| input.focus_handle(cx).focus(window));
+        self.layer_menu = None;
+        self.selected = Some(id);
+        self.tool = Tool::Select;
+        self.crop_selection = None;
+        cx.notify();
+    }
+
+    fn finish_layer_rename(&mut self, commit: bool, cx: &mut Context<Self>) {
+        self.layer_rename_blur = None;
+        if let Some((id, input)) = self.layer_rename.take()
+            && commit
+            && self.document.rename_layer(id, input.read(cx).value())
+        {
+            self.refresh();
+        }
+        cx.notify();
     }
 
     fn refresh(&mut self) {
@@ -894,6 +1014,12 @@ impl ScreenshotEditor {
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if event.keystroke.key == "escape" && cx.stop_active_drag(window) {
+            self.layer_drop = None;
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         if event.keystroke.key == "escape" && self.export_menu.take().is_some() {
             cx.stop_propagation();
             cx.notify();
@@ -3271,6 +3397,22 @@ impl Render for ScreenshotEditor {
             ("Diamond", EditorIcon::Diamond, Tool::Diamond),
             ("Star", EditorIcon::Star, Tool::Star),
         ];
+        if self.thumbnail_revision != self.document.render_key() {
+            self.layer_thumbnails.clear();
+            for layer in &self.document.layers {
+                let pixels = match &layer.shape {
+                    Shape::Image { pixels, .. } => {
+                        Ok(image::imageops::thumbnail(pixels.as_ref(), 92, 68))
+                    }
+                    _ => layer.thumbnail(),
+                };
+                if let Ok(pixels) = pixels {
+                    self.layer_thumbnails
+                        .insert(layer.id, render_image(&pixels));
+                }
+            }
+            self.thumbnail_revision = self.document.render_key();
+        }
         let layers = self
             .document
             .layers
@@ -3279,22 +3421,101 @@ impl Render for ScreenshotEditor {
             .map(|layer| {
                 let id = layer.id;
                 let active = self.selected == Some(id);
+                let rename = self
+                    .layer_rename
+                    .as_ref()
+                    .filter(|(renamed, _)| *renamed == id)
+                    .map(|(_, input)| input.clone());
+                let drag = DraggedLayer {
+                    id,
+                    name: layer_title(layer),
+                    thumbnail: self.layer_thumbnails.get(&id).cloned(),
+                    theme: t,
+                };
+                let drop = self
+                    .layer_drop
+                    .filter(|(target, _)| *target == id && cx.has_active_drag());
                 div()
                     .id(("layer", id as usize))
-                    .h(px(54.))
-                    .px_2()
+                    .relative()
+                    .h(px(56.))
+                    .px(px(6.))
+                    .pr(px(88.))
+                    .my(px(2.))
                     .flex()
                     .items_center()
-                    .gap_2()
+                    .gap(px(8.))
                     .rounded(px(10.))
                     .border_1()
-                    .border_color(if active { t.accent } else { rgba(0) })
-                    .bg(if active { t.hover } else { t.raised })
-                    .cursor_pointer()
+                    .border_color(if active {
+                        Rgba { a: 0.4, ..t.accent }
+                    } else {
+                        rgba(0)
+                    })
+                    .bg(if active {
+                        Rgba {
+                            a: 0.13,
+                            ..t.accent
+                        }
+                    } else {
+                        t.raised
+                    })
+                    .hover(|row| row.bg(t.hover))
+                    .when(!layer.locked && rename.is_none(), |row| {
+                        row.cursor(CursorStyle::OpenHand)
+                            .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
+                    })
+                    .on_drag_move(cx.listener(
+                        move |s, event: &DragMoveEvent<DraggedLayer>, _, cx| {
+                            let next = if event.bounds.contains(&event.event.position)
+                                && event.drag(cx).id != id
+                            {
+                                Some((id, event.event.position.y < event.bounds.center().y))
+                            } else if s.layer_drop.is_some_and(|(target, _)| target == id) {
+                                None
+                            } else {
+                                return;
+                            };
+                            if s.layer_drop != next {
+                                s.layer_drop = next;
+                                cx.notify();
+                            }
+                        },
+                    ))
+                    .on_drop(cx.listener(move |s, drag: &DraggedLayer, _, cx| {
+                        let before = s
+                            .layer_drop
+                            .filter(|(target, _)| *target == id)
+                            .is_none_or(|(_, before)| before);
+                        if s.document.reorder_layer(drag.id, id, before) {
+                            s.selected = Some(drag.id);
+                            s.tool = Tool::Select;
+                            s.crop_selection = None;
+                            s.layer_menu = None;
+                            s.refresh();
+                        }
+                        s.layer_drop = None;
+                        cx.notify();
+                    }))
+                    .when_some(drop, |row, (_, before)| {
+                        row.child(
+                            div()
+                                .absolute()
+                                .left(px(3.))
+                                .right(px(3.))
+                                .h(px(2.))
+                                .bg(t.accent)
+                                .when(before, |line| line.top(px(-3.)))
+                                .when(!before, |line| line.bottom(px(-3.))),
+                        )
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.selected = Some(id);
+                        this.tool = Tool::Select;
+                        this.crop_selection = None;
                         if let Some(layer) =
                             this.document.layers.iter().find(|layer| layer.id == id)
+                            && !matches!(layer.shape, Shape::Image { .. })
                         {
                             this.style_color = layer.color;
                             this.style_stroke = layer.stroke;
@@ -3304,71 +3525,218 @@ impl Render for ScreenshotEditor {
                         }
                         cx.notify()
                     }))
-                    .child(div().text_color(t.subtle).child("⠿"))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |s, event: &MouseDownEvent, window, cx| {
+                            if event.click_count == 2 {
+                                s.begin_layer_rename(id, window, cx);
+                            }
+                        }),
+                    )
+                    .child(
+                        editor_icon(
+                            EditorIcon::Grip,
+                            if t.text == rgb(0x131318) {
+                                "#7d7d8c"
+                            } else {
+                                "#8b8b98"
+                            },
+                        )
+                        .w(px(12.))
+                        .h(px(18.))
+                        .flex_shrink_0()
+                        .opacity(if layer.locked { 0.35 } else { 0.5 }),
+                    )
                     .child(
                         div()
-                            .w(px(42.))
-                            .h(px(30.))
+                            .relative()
+                            .w(px(44.))
+                            .h(px(32.))
                             .flex_shrink_0()
                             .rounded(px(6.))
+                            .border_1()
+                            .border_color(t.border)
+                            .overflow_hidden()
+                            .opacity(if layer.visible { 1. } else { 0.42 })
                             .bg(t.sunken)
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(match &layer.shape {
-                                Shape::Image { pixels, .. } => img(render_image(
-                                    &image::imageops::thumbnail(pixels.as_ref(), 84, 60),
-                                ))
-                                .size_full()
-                                .object_fit(ObjectFit::Contain)
-                                .into_any_element(),
-                                shape => editor_icon(
-                                    match shape {
-                                        Shape::Arrow(..) => EditorIcon::Arrow,
-                                        Shape::Text { .. } => EditorIcon::Text,
-                                        Shape::Ellipse(_) => EditorIcon::Ellipse,
-                                        Shape::Stroke(_) => EditorIcon::Pen,
-                                        Shape::Line(..) => EditorIcon::Line,
-                                        _ => EditorIcon::Rectangle,
+                            .child(
+                                canvas(
+                                    |_, _, _| (),
+                                    move |bounds, _, window, _| {
+                                        let light = t.text == rgb(0x131318);
+                                        let a = rgb(if light { 0xeaeaee } else { 0x0f0f13 });
+                                        let b = rgb(if light { 0xf6f6f8 } else { 0x17171c });
+                                        window.paint_quad(fill(bounds, b));
+                                        for row in 0..7 {
+                                            for col in 0..9 {
+                                                if (row + col) % 2 == 0 {
+                                                    window.paint_quad(fill(
+                                                        Bounds::new(
+                                                            bounds.origin
+                                                                + point(
+                                                                    px(col as f32 * 5.),
+                                                                    px(row as f32 * 5.),
+                                                                ),
+                                                            size(px(5.), px(5.)),
+                                                        ),
+                                                        a,
+                                                    ));
+                                                }
+                                            }
+                                        }
                                     },
-                                    "#5c5c69",
                                 )
-                                .into_any_element(),
-                            }),
+                                .absolute()
+                                .size_full(),
+                            )
+                            .when_some(
+                                self.layer_thumbnails.get(&id).cloned(),
+                                |preview, image| {
+                                    preview.child(img(image).relative().size_full().object_fit(
+                                        if matches!(layer.shape, Shape::Image { .. }) {
+                                            ObjectFit::Cover
+                                        } else {
+                                            ObjectFit::Contain
+                                        },
+                                    ))
+                                },
+                            ),
                     )
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .text_size(px(12.))
-                            .truncate()
-                            .child(layer.name.clone()),
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .opacity(if layer.visible { 1. } else { 0.42 })
+                            .when(rename.is_none(), |copy| {
+                                copy.child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .line_height(px(16.2))
+                                        .py(px(1.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .truncate()
+                                        .child(layer_title(layer)),
+                                )
+                            })
+                            .when_some(rename, |copy, input| {
+                                copy.child(
+                                    div()
+                                        .id(("rename-layer", id as usize))
+                                        .border_1()
+                                        .border_color(t.accent)
+                                        .rounded(px(6.))
+                                        .bg(t.field)
+                                        .h(px(25.))
+                                        .child(input)
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation()
+                                        })
+                                        .on_click(|_, _, cx| cx.stop_propagation())
+                                        .on_mouse_down_out(cx.listener(|s, _, _, cx| {
+                                            s.finish_layer_rename(true, cx)
+                                        }))
+                                        .on_key_down(cx.listener(
+                                            |s, event: &KeyDownEvent, window, cx| {
+                                                match event.keystroke.key.as_str() {
+                                                    "enter" | "escape" => {
+                                                        cx.stop_propagation();
+                                                        s.finish_layer_rename(
+                                                            event.keystroke.key == "enter",
+                                                            cx,
+                                                        );
+                                                        if let Some(focus) = &s.focus {
+                                                            focus.focus(window);
+                                                        }
+                                                    }
+                                                    _ => {}
+                                                }
+                                            },
+                                        )),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .line_height(px(14.85))
+                                    .py(px(1.))
+                                    .text_color(t.subtle)
+                                    .truncate()
+                                    .child(layer_kind(layer)),
+                            ),
                     )
                     .child(
-                        self.icon_button(("layer-visible", id as usize), EditorIcon::Eye)
-                            .w(px(24.))
-                            .opacity(if layer.visible { 1. } else { 0.35 })
-                            .on_click(cx.listener(move |s, _, _, cx| {
-                                cx.stop_propagation();
-                                s.document.toggle_visibility(id);
-                                s.refresh();
-                                cx.notify();
-                            })),
+                        self.icon_button(
+                            ("layer-visible", id as usize),
+                            if layer.visible {
+                                EditorIcon::Eye
+                            } else {
+                                EditorIcon::EyeOff
+                            },
+                        )
+                        .absolute()
+                        .right(px(60.))
+                        .w(px(25.))
+                        .h(px(28.))
+                        .flex_shrink_0()
+                        .opacity(if active || !layer.visible { 1. } else { 0.5 })
+                        .when(!layer.visible, |button| {
+                            button.bg(Rgba {
+                                a: 0.13,
+                                ..t.accent
+                            })
+                        })
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |s, _, _, cx| {
+                            cx.stop_propagation();
+                            s.document.toggle_visibility(id);
+                            s.refresh();
+                            cx.notify();
+                        })),
                     )
                     .child(
-                        self.icon_button(("layer-lock", id as usize), EditorIcon::Lock)
-                            .w(px(24.))
-                            .opacity(if layer.locked { 1. } else { 0.35 })
-                            .on_click(cx.listener(move |s, _, _, cx| {
-                                cx.stop_propagation();
-                                s.document.toggle_locked(id);
-                                s.refresh();
-                                cx.notify();
-                            })),
+                        self.icon_button(
+                            ("layer-lock", id as usize),
+                            if layer.locked {
+                                EditorIcon::Lock
+                            } else {
+                                EditorIcon::Unlock
+                            },
+                        )
+                        .absolute()
+                        .right(px(33.))
+                        .w(px(25.))
+                        .h(px(28.))
+                        .flex_shrink_0()
+                        .opacity(if active || layer.locked { 1. } else { 0.5 })
+                        .when(layer.locked, |button| {
+                            button.bg(Rgba {
+                                a: 0.13,
+                                ..t.accent
+                            })
+                        })
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |s, _, _, cx| {
+                            cx.stop_propagation();
+                            s.document.toggle_locked(id);
+                            s.selected = Some(id);
+                            s.refresh();
+                            cx.notify();
+                        })),
                     )
                     .child(
                         self.icon_button(("layer-menu", id as usize), EditorIcon::More)
-                            .w(px(24.))
+                            .absolute()
+                            .right(px(6.))
+                            .w(px(25.))
+                            .h(px(28.))
+                            .flex_shrink_0()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(move |s, event: &ClickEvent, _, cx| {
                                 cx.stop_propagation();
                                 s.selected = Some(id);
@@ -3748,11 +4116,11 @@ impl Render for ScreenshotEditor {
                                     .child(div().min_w(px(19.)).h(px(19.)).rounded_full().bg(t.sunken).text_size(px(10.)).text_color(t.subtle).flex().items_center().justify_center().child((self.document.layers.len() + usize::from(self.document.source_present)).to_string()))
                                     .child(div().flex_1())
                                     .child(self.icon_button("add-layer", EditorIcon::Plus).on_click(cx.listener(|s, _, window, cx| s.prompt_images(window, cx)))))
-                                .child(div().id("layer-list").h(px(205.)).overflow_y_scroll().p_2().children(layers)
+                                .child(div().id("layer-list").h(px(205.)).overflow_y_scroll().px(px(10.)).py(px(7.)).children(layers)
                                     .when(self.document.source_present, |list| list.child(
                                         div().h(px(54.)).px_2().flex().items_center().gap_2()
                                             .child(div().text_size(px(11.)).text_color(t.subtle).child("⠿"))
-                                            .child(img(self.source_thumbnail.clone()).w(px(42.)).h(px(30.)).object_fit(ObjectFit::Contain).rounded(px(6.)))
+                                            .child(img(self.source_thumbnail.clone()).w(px(46.)).h(px(34.)).object_fit(ObjectFit::Contain).rounded(px(6.)))
                                             .child(div().flex_1().min_w_0().flex().flex_col().gap_1()
                                                 .child(div().text_size(px(12.)).child(self.document.source_name.clone()))
                                                 .child(div().text_size(px(11.)).text_color(t.subtle).child("Locked background")))
@@ -4788,6 +5156,24 @@ fn mock_artwork() -> RgbaImage {
 mod tests {
     use super::*;
     use core::prelude::v1::test;
+
+    #[test]
+    fn layer_labels_use_text_content_and_explicit_background_identity() {
+        let (mut doc, _) = text_document();
+        if let Shape::Text { value, .. } = &mut doc.layers[0].shape {
+            *value = "  A first line\nnot the title  ".into();
+        }
+        assert_eq!(layer_title(&doc.layers[0]), "A first line");
+        assert_eq!(layer_kind(&doc.layers[0]), "Text");
+        let background = doc.materialize_source(true).unwrap();
+        doc.rename_layer(background, "Other name".into());
+        assert_eq!(layer_kind(&doc.layers[0]), "Locked background");
+        doc.toggle_locked(background);
+        assert_eq!(layer_kind(&doc.layers[0]), "Background");
+        let id = doc.add_image(RgbaImage::new(2, 1), 0, "Original screenshot".into());
+        let image = doc.layers.iter().find(|layer| layer.id == id).unwrap();
+        assert_eq!(layer_kind(image), "Image");
+    }
 
     fn text_document() -> (Document, u64) {
         let mut document = Document::new(RgbaImage::new(320, 200));

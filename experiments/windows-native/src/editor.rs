@@ -103,6 +103,7 @@ impl FreehandGesture {
 pub struct Layer {
     pub id: u64,
     pub name: String,
+    pub background: bool,
     pub shape: Shape,
     pub original_pixels: Option<Arc<RgbaImage>>,
     pub color: [u8; 4],
@@ -203,6 +204,47 @@ impl Layer {
             y: point.y + delta.y,
         });
         layer
+    }
+
+    /// Paint actual layer content into the source UI's 46×34 preview at 2x.
+    /// Normalize geometry before rasterizing: a huge document must not require
+    /// a huge intermediate bitmap merely to show its Layers panel.
+    pub fn thumbnail(&self) -> Result<RgbaImage, String> {
+        let mut preview = self.clone();
+        let Some(bounds) = to_raster_layer(&preview).bounds() else {
+            return Ok(RgbaImage::new(92, 68));
+        };
+        let scale = (80. / bounds.width.max(1.)).min(56. / bounds.height.max(1.));
+        let offset = Point {
+            x: (92. - bounds.width * scale) / 2. - bounds.x * scale,
+            y: (68. - bounds.height * scale) / 2. - bounds.y * scale,
+        };
+        transform_shape(&mut preview.shape, |p| Point {
+            x: p.x * scale + offset.x,
+            y: p.y * scale + offset.y,
+        });
+        preview.stroke *= scale;
+        if let Shape::Text {
+            font_size, style, ..
+        } = &mut preview.shape
+        {
+            *font_size *= scale;
+            style.width = style.width.map(|width| width * scale);
+            if let Some(shadow) = &mut style.shadow {
+                shadow.blur *= scale;
+                shadow.offset.x *= scale;
+                shadow.offset.y *= scale;
+            }
+        } else if !matches!(preview.shape, Shape::Image { .. }) {
+            // The source UI preserves thin strokes at a 1.35 CSS-pixel floor.
+            preview.stroke = preview.stroke.max(2.7);
+        }
+        preview.blend_mode = BlendMode::Normal;
+        captures_image::render(&captures_image::Document {
+            source: Arc::new(RgbaImage::new(92, 68)),
+            crop: None,
+            layers: vec![to_raster_layer(&preview)],
+        })
     }
 }
 
@@ -429,6 +471,7 @@ impl Document {
         self.layers.push(Layer {
             id,
             name: default_layer_name(&shape).into(),
+            background: false,
             shape,
             original_pixels: None,
             color,
@@ -536,7 +579,16 @@ impl Document {
         if name.is_empty() {
             return false;
         }
-        self.edit_layer(id, move |layer| layer.name = name)
+        let Some(index) = self.layers.iter().position(|layer| layer.id == id) else {
+            return false;
+        };
+        if self.layers[index].name == name {
+            return false;
+        }
+        // Lock protects geometry, not descriptive metadata.
+        self.checkpoint();
+        self.layers[index].name = name;
+        true
     }
 
     pub fn duplicate(&mut self, id: u64) -> Option<u64> {
@@ -565,6 +617,22 @@ impl Document {
         let layer = self.layers.remove(index);
         self.layers.insert(destination, layer);
         true
+    }
+
+    /// `before` refers to the top-to-bottom layer list, opposite paint order.
+    pub fn reorder_layer(&mut self, id: u64, target: u64, before: bool) -> bool {
+        let Some(index) = self.layers.iter().position(|layer| layer.id == id) else {
+            return false;
+        };
+        let Some(target) = self.layers.iter().position(|layer| layer.id == target) else {
+            return false;
+        };
+        if index == target {
+            return false;
+        }
+        let slot = target + usize::from(before);
+        let destination = slot - usize::from(index < slot);
+        self.move_layer(id, destination as isize - index as isize)
     }
 
     pub fn set_layer_color(&mut self, id: u64, color: [u8; 4]) -> bool {
@@ -800,6 +868,7 @@ impl Document {
         );
         let mut layer = self.layers.pop().expect("source layer was just added");
         layer.name = self.source_name.clone();
+        layer.background = true;
         layer.visible = self.source_visible;
         layer.locked = locked;
         layer.original_pixels = Some(self.original.clone());
@@ -1015,6 +1084,7 @@ impl Document {
         Layer {
             id,
             name,
+            background: false,
             shape: Shape::Image {
                 origin: Point {
                     x: self.crop.x,
@@ -1727,6 +1797,91 @@ fn to_raster_point(point: Point) -> captures_image::Point {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layer_drop_uses_visual_order_on_both_sides_and_respects_lock() {
+        let mut document = Document::new(RgbaImage::new(7, 3));
+        let ids: Vec<_> = (0..4)
+            .map(|_| {
+                document.add(
+                    Shape::Rectangle(Rect {
+                        x: 0.,
+                        y: 0.,
+                        width: 2.,
+                        height: 1.,
+                    }),
+                    [20, 40, 60, 255],
+                    1.,
+                )
+            })
+            .collect();
+        let order = |doc: &Document| doc.layers.iter().map(|layer| layer.id).collect::<Vec<_>>();
+        assert!(document.reorder_layer(ids[0], ids[2], true));
+        assert_eq!(order(&document), vec![ids[1], ids[2], ids[0], ids[3]]);
+        assert!(document.undo());
+        assert!(document.reorder_layer(ids[3], ids[1], false));
+        assert_eq!(order(&document), vec![ids[0], ids[3], ids[1], ids[2]]);
+        assert!(!document.reorder_layer(ids[3], ids[1], false));
+        assert!(!document.reorder_layer(ids[3], ids[3], true));
+        assert!(!document.reorder_layer(ids[3], 999, true));
+        document.toggle_locked(ids[3]);
+        assert!(!document.reorder_layer(ids[3], ids[2], true));
+        // A locked target does not prevent placing another layer next to it.
+        assert!(document.reorder_layer(ids[0], ids[3], true));
+        assert_eq!(order(&document), vec![ids[3], ids[0], ids[1], ids[2]]);
+    }
+
+    #[test]
+    fn locked_background_can_be_renamed_without_unlocking_or_moving_it() {
+        let mut document = Document::new(RgbaImage::new(7, 3));
+        let id = document.materialize_source(true).unwrap();
+        assert!(document.layers[0].background);
+        assert!(document.rename_layer(id, "  Design reference  ".into()));
+        assert_eq!(document.layers[0].name, "Design reference");
+        assert!(document.layers[0].locked);
+        assert!(!document.move_layer(id, 1));
+        assert!(document.undo());
+        assert_eq!(document.layers[0].name, "Original screenshot");
+        assert!(document.layers[0].background);
+    }
+
+    #[test]
+    fn layer_thumbnail_paints_real_color_opacity_and_rotation_without_mutation() {
+        let mut doc = Document::new(RgbaImage::new(1, 1));
+        doc.add(
+            Shape::Rectangle(Rect {
+                x: 100_000.,
+                y: -20_000.,
+                width: 400.,
+                height: 200.,
+            }),
+            [0, 0, 255, 255],
+            10.,
+        );
+        let layer = &mut doc.layers[0];
+        layer.fill = Some([255, 0, 0, 255]);
+        layer.opacity = 128;
+        layer.visible = false; // hidden layers still need identifiable previews
+        let original = layer.clone();
+        let pixels = layer.thumbnail().unwrap();
+        assert_eq!(pixels.dimensions(), (92, 68));
+        assert_eq!(pixels.get_pixel(46, 34).0, [255, 0, 0, 128]);
+        assert!(pixels.pixels().any(|p| p[2] > 200 && p[0] < 20 && p[3] > 0));
+        assert_eq!(pixels.get_pixel(0, 0).0, [0, 0, 0, 0]);
+        assert_eq!(*layer, original);
+        layer.rotation_degrees = 90.;
+        let rotated = layer.thumbnail().unwrap();
+        let colored = rotated
+            .enumerate_pixels()
+            .filter(|(_, _, p)| p[3] > 0)
+            .map(|(x, y, _)| (x, y))
+            .collect::<Vec<_>>();
+        let width =
+            colored.iter().map(|p| p.0).max().unwrap() - colored.iter().map(|p| p.0).min().unwrap();
+        let height =
+            colored.iter().map(|p| p.1).max().unwrap() - colored.iter().map(|p| p.1).min().unwrap();
+        assert!(height > width * 3 / 2);
+    }
 
     fn set_image_geometry(document: &mut Document, id: u64, rect: Rect) {
         let layer = document
@@ -2940,6 +3095,7 @@ mod tests {
         let layer = Layer {
             id: 9,
             name: "Line".into(),
+            background: false,
             shape: Shape::Line(Point { x: 10.0, y: 20.0 }, Point { x: 90.0, y: 20.0 }),
             original_pixels: None,
             color: [1, 2, 3, 255],
@@ -2975,6 +3131,7 @@ mod tests {
         let layer = Layer {
             id: 4,
             name: "Rectangle".into(),
+            background: false,
             shape: Shape::Rectangle(Rect {
                 x: 20.0,
                 y: 30.0,
@@ -3175,6 +3332,7 @@ mod tests {
         let layer = Layer {
             id: 9,
             name: "Inset".into(),
+            background: false,
             shape: Shape::Image {
                 origin: Point { x: 10.0, y: 20.0 },
                 width: 80.0,
