@@ -1,5 +1,22 @@
 import Foundation
 
+/// Top-left-origin cover destination in physical pixels. WebKit image elements
+/// snap both fitted edges before sampling; Canvas/background dust stays floating.
+public func thumbnailCoverRect(source: CGSize, target: CGSize, snapToPixels: Bool) -> CGRect {
+  let factor = max(target.width / source.width, target.height / source.height)
+  let width = source.width * factor
+  let height = source.height * factor
+  let x = (target.width - width) / 2
+  let y = (target.height - height) / 2
+  guard snapToPixels else { return CGRect(x: x, y: y, width: width, height: height) }
+  // Negative halfway edges round toward positive infinity, as in WebKit.
+  let left = floor(x + 0.5)
+  let top = floor(y + 0.5)
+  return CGRect(
+    x: left, y: top, width: floor(x + width + 0.5) - left,
+    height: floor(y + height + 0.5) - top)
+}
+
 public struct ThumbnailDustParticle: Codable {
   public let id: Int
   public let left, top, width, height: Double

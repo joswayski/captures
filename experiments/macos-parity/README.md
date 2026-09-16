@@ -169,6 +169,13 @@ applies blur2/brightness.5 with transparent8px padding. Native and web independe
 decode/crop/filter the fixture. The reference chooses Canvas or DOM/WAAPI using
 the real shipping capability probe and records the path it used.
 
+Media image elements (the survivor and fading source) snap both fitted cover edges
+to device pixels before sampling, matching WebKit `RenderImage::paintReplaced`.
+Dust retains floating cover geometry. For the 397×251 fixture at 2×, the media
+destination is (0,−20,568,360) physical pixels, clipped to the 568×320 card;
+the dust destination height remains approximately 359.113 pixels. Negative half
+ties round toward positive infinity; rounding size separately is not equivalent.
+
 Survivor settle: delay1800ms for dust, delay0 for settle-only; translate by the
 signed184px over580ms with cubic(.4,0,.2,1). No survivor fading or blur. In run mode
 repeat the same initial state every3200ms and include resource preparation at each
@@ -188,6 +195,8 @@ nonzero on decode/config/scale errors. Never operate on a user's capture profile
 
 ```sh
 node experiments/macos-parity/generate.mjs
+swiftc -O -swift-version 5 experiments/macos-parity/native/Math.swift experiments/macos-parity/test-cover.swift -o /tmp/parity-cover
+/tmp/parity-cover
 swiftc -O -swift-version 5 experiments/macos-parity/native/*.swift -o /tmp/parity-poses
 /tmp/parity-poses --poses experiments/macos-parity/.build/poses-input.json /tmp/poses.json
 node experiments/macos-parity/verify-poses.mjs /tmp/poses.json

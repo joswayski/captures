@@ -76,10 +76,12 @@
       gpuName = device.name
       // Explicit Metal device: preparation cannot silently choose a CPU context.
       // CSS brightness multiplies sRGB components, not linear-light components.
-      ci = CIContext(mtlDevice: device, options: [
-        .cacheIntermediates: true,
-        .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
-      ])
+      ci = CIContext(
+        mtlDevice: device,
+        options: [
+          .cacheIntermediates: true,
+          .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+        ])
       guard config.schema == 1, config.width == 640, config.height == 720,
         config.scale > 0, config.cycleMs == 3200,
         config.checkpointMs.isFinite, config.checkpointMs >= 0,
@@ -145,16 +147,23 @@
       withExtendedLifetime(self) { NSApplication.shared.run() }
     }
 
-    private func cover(rounded: Bool) throws -> CGImage {
+    private func cover(rounded: Bool, snapToPixels: Bool) throws -> CGImage {
       let scale = CGFloat(config.scale)
       let target = CGRect(x: 0, y: 0, width: 284 * scale, height: 160 * scale)
-      let source = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-      let factor = max(target.width / source.extent.width, target.height / source.extent.height)
-      var cover = source.transformed(by: CGAffineTransform(scaleX: factor, y: factor))
-      cover = cover.transformed(
-        by: CGAffineTransform(
-          translationX: target.midX - cover.extent.midX, y: target.midY - cover.extent.midY)
-      ).cropped(to: target)
+      let fitted = thumbnailCoverRect(
+        source: image.extent.size, target: target.size, snapToPixels: snapToPixels)
+      var cover =
+        image
+        .transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
+        .transformed(
+          by: CGAffineTransform(
+            scaleX: fitted.width / image.extent.width, y: fitted.height / image.extent.height)
+        )
+        // Geometry above uses the browser's top-left origin; Core Image uses bottom-left.
+        .transformed(
+          by: CGAffineTransform(translationX: fitted.minX, y: target.maxY - fitted.maxY)
+        )
+        .cropped(to: target)
       if rounded {
         let mask = CIFilter(
           name: "CIRoundedRectangleGenerator",
@@ -191,14 +200,14 @@
       CATransaction.begin()
       CATransaction.setDisableActions(true)
       defer { CATransaction.commit() }
-      let sharp = try cover(rounded: true)
+      let media = try cover(rounded: true, snapToPixels: true)
       let scale = CGFloat(config.scale)
       root.sublayers?.forEach { $0.removeFromSuperlayer() }
       survivor.transform = CATransform3DIdentity
       exiting.transform = CATransform3DIdentity
       survivor.frame = CGRect(
         x: 178, y: config.scenario.contains("bottom") ? 136 : 504, width: 284, height: 160)
-      survivor.contents = sharp
+      survivor.contents = media
       survivor.contentsScale = scale
       survivor.masksToBounds = true
       survivor.cornerRadius = 12
@@ -210,6 +219,7 @@
       dust.frame = CGRect(x: 58, y: 200, width: 524, height: 400)
       dust.mask = dustMask
       root.addSublayer(dust)
+      let sharp = try cover(rounded: true, snapToPixels: false)
       let sharpImage = CIImage(cgImage: sharp)
       for particle in config.particles {
         let pad = 8.0
@@ -245,7 +255,7 @@
       exiting.frame = exitingShell.bounds
       exiting.contentsScale = scale
       let extent = CGRect(x: 0, y: 0, width: sharp.width, height: sharp.height)
-      let unrounded = CIImage(cgImage: try cover(rounded: false))
+      let unrounded = CIImage(cgImage: try cover(rounded: false, snapToPixels: true))
       guard
         let sourceTexture = ci.createCGImage(
           filtered(unrounded).cropped(to: extent), from: extent, format: .RGBA8,

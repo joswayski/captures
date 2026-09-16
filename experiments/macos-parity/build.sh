@@ -8,6 +8,8 @@ if [[ "$(uname -s)" != Darwin ]]; then
 fi
 node "$LAB/generate.mjs"
 "$ROOT/node_modules/.bin/vite" build --config "$LAB/vite.config.mjs"
+swiftc -O -swift-version 5 "$LAB/native/Math.swift" "$LAB/test-cover.swift" -o "$LAB/.build/test-cover"
+"$LAB/.build/test-cover"
 swiftc -O -swift-version 5 -target "$(uname -m)-apple-macos13.0" "$LAB"/native/*.swift -o "$LAB/.build/captures-parity-native"
 "$LAB/.build/captures-parity-native" --poses "$LAB/.build/poses-input.json" "$LAB/.build/poses-actual.json"
 node "$LAB/verify-poses.mjs" "$LAB/.build/poses-actual.json"
