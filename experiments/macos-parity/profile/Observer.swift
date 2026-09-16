@@ -26,6 +26,7 @@
     let scale: Double
     let width: Double
     let height: Double
+    let screenCaptureAllowed: Bool
   }
 
   private struct ObservedFrame: Encodable {
@@ -102,7 +103,8 @@
     }
     let report = DisplayReport(
       scale: Double(screen.backingScaleFactor), width: Double(screen.visibleFrame.width),
-      height: Double(screen.visibleFrame.height))
+      height: Double(screen.visibleFrame.height),
+      screenCaptureAllowed: CGPreflightScreenCaptureAccess())
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
     FileHandle.standardOutput.write(try encoder.encode(report))

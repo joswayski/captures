@@ -32,6 +32,7 @@ struct captures_proc_pidcoalitioninfo {
     uint64_t coalition_id[2];
     uint64_t reserved1;
     uint64_t reserved2;
+    uint64_t reserved3;
 };
 
 struct process_sample {
@@ -79,11 +80,14 @@ static bool cpu_deltas_close(uint64_t proc_delta, uint64_t rusage_delta) {
 }
 
 static int coalition_for_pid(pid_t pid, uint64_t *coalition) {
-    struct captures_proc_pidcoalitioninfo info;
+    struct captures_proc_pidcoalitioninfo info = {0};
     errno = 0;
     int result = proc_pidinfo(pid, CAPTURES_PROC_PIDCOALITIONINFO, 0, &info,
                               (int)sizeof(info));
-    if (result != (int)sizeof(info)) {
+    /* XNU added reserved3; both known ABI sizes have the same coalition prefix.
+     * https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/proc_info_private.h
+     * Older kernels return 32 bytes even when given a larger buffer. */
+    if (result != 32 && result != (int)sizeof(info)) {
         if (result >= 0 && errno == 0) errno = EIO;
         return -1;
     }

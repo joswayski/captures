@@ -54,6 +54,21 @@ class NativeProfileTests(unittest.TestCase):
                 self.assertGreaterEqual(measured["summary"]["sampledSeconds"], 6.4)
                 print(f"{label}: {json.dumps(measured)}", flush=True)
 
+    def test_frame_observation_when_screen_recording_is_already_allowed(self):
+        display = json.loads(subprocess.check_output([str(OBSERVER), "display"], text=True))
+        if not display["screenCaptureAllowed"]:
+            self.skipTest("Screen Recording not authorized; frame runtime remains unverified")
+        folder = LAB / ".build" / f"native-profile-frames-{time.time_ns()}"
+        folder.mkdir()
+        config = json.loads((LAB / ".build/public/dust-bottom-left.json").read_text())
+        config.update(scale=display["scale"], mode="run", checkpointMs=0, durationMs=6400)
+        for label, executable in BINARIES.items():
+            with self.subTest(candidate=label):
+                measured = profile_trial(executable, config, folder / label, label, "frames", 120)
+                self.assertGreater(measured["summary"]["observedChangedFrames"], 10)
+                self.assertEqual(len(measured["motionWindows"]), 4)
+                print(f"{label} frame smoke at {display['scale']}x: {json.dumps(measured)}", flush=True)
+
 
 if __name__ == "__main__":
     unittest.main()
