@@ -1,0 +1,25 @@
+name: macOS effect comparison build
+on:
+  pull_request:
+    paths:
+      - 'experiments/macos-parity/**'
+      - 'apps/desktop/ui/src/lib/thumbnailExit.ts'
+      - 'apps/desktop/ui/src/styles/mini-preview.css'
+      - '.github/workflows/macos-parity.yml'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.94.0
+      - run: npm ci
+      - run: bash experiments/macos-parity/build.sh
+      - run: experiments/macos-parity/.build/python/bin/python -m unittest discover -s experiments/macos-parity -p 'test_*.py'

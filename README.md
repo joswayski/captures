@@ -175,6 +175,8 @@ and height stay proportional.
 See [DEVELOPMENT.md](DEVELOPMENT.md) for local setup, validation, and packaging.
 The desktop app uses Tauri and React for its UI, with Rust engines and
 platform-specific integrations for capture, recording, and media processing.
+An isolated [macOS effect comparison](experiments/macos-parity/README.md) tests
+matching preview animations in Tauri and AppKit; it is not a replacement app.
 
 ## License and trademarks
 
