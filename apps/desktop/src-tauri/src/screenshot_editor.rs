@@ -985,18 +985,14 @@ fn encode_webp(image: &RgbaImage, quality: Option<u8>) -> Result<Vec<u8>, AppErr
 
 fn composite_onto_white(image: &RgbaImage) -> RgbImage {
     let mut output = RgbImage::new(image.width(), image.height());
-    for (x, y, pixel) in image.enumerate_pixels() {
+    for (pixel, destination) in image.pixels().zip(output.pixels_mut()) {
         let alpha = u16::from(pixel[3]);
         let inverse = 255 - alpha;
-        output.put_pixel(
-            x,
-            y,
-            Rgb([
-                ((u16::from(pixel[0]) * alpha + 255 * inverse) / 255) as u8,
-                ((u16::from(pixel[1]) * alpha + 255 * inverse) / 255) as u8,
-                ((u16::from(pixel[2]) * alpha + 255 * inverse) / 255) as u8,
-            ]),
-        );
+        *destination = Rgb([
+            ((u16::from(pixel[0]) * alpha + 255 * inverse) / 255) as u8,
+            ((u16::from(pixel[1]) * alpha + 255 * inverse) / 255) as u8,
+            ((u16::from(pixel[2]) * alpha + 255 * inverse) / 255) as u8,
+        ]);
     }
     output
 }
@@ -1526,6 +1522,90 @@ mod tests {
         let output = composite_onto_white(&sample());
         assert_eq!(output.get_pixel(0, 0).0, [255, 127, 127]);
         assert_eq!(output.get_pixel(1, 0).0, [20, 80, 160]);
+    }
+
+    #[test]
+    fn white_composite_preserves_every_channel_alpha_pair_and_pixel_position() {
+        for (width, height) in [(256, 256), (7, 3), (0, 5), (5, 0)] {
+            let input = RgbaImage::from_fn(width, height, |x, y| {
+                Rgba([x as u8, (255 - x) as u8, (x * 73 + y * 11) as u8, y as u8])
+            });
+            let output = composite_onto_white(&input);
+            assert_eq!(output.dimensions(), input.dimensions());
+            for (x, y, actual) in output.enumerate_pixels() {
+                let source = input.get_pixel(x, y);
+                for channel in 0..3 {
+                    // Subtract the alpha-weighted distance from white, rounding
+                    // that distance up (equivalent to flooring the final color).
+                    let distance = (255 - u32::from(source[channel])) * u32::from(source[3]);
+                    let expected = 255 - distance.div_ceil(255);
+                    assert_eq!(
+                        u32::from(actual[channel]),
+                        expected,
+                        "({x}, {y}) channel {channel}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "manual release benchmark: --release --ignored --nocapture"]
+    fn benchmark_jpeg_white_composite() {
+        use std::{hint::black_box, time::Instant};
+
+        for (name, width, height, transparent) in [
+            ("1080p-opaque", 1920, 1080, false),
+            ("4k-opaque", 3840, 2160, false),
+            ("4k-alpha", 3840, 2160, true),
+        ] {
+            let input = RgbaImage::from_fn(width, height, |x, y| {
+                let mixed = x.wrapping_mul(73) ^ y.wrapping_mul(151) ^ (x * y);
+                Rgba([
+                    mixed as u8,
+                    (mixed >> 5) as u8,
+                    (mixed >> 11) as u8,
+                    if transparent { (x + y) as u8 } else { 255 },
+                ])
+            });
+            for include_encode in [false, true] {
+                let stage = if include_encode {
+                    "jpeg-export"
+                } else {
+                    "composite"
+                };
+                let mut samples = Vec::new();
+                // Fixture construction and output destruction are untimed.
+                // JPEG export includes compositing + encoding, not PNG decode,
+                // IPC, history/thumbnail generation, disk writes, or UI work.
+                for iteration in 0..8 {
+                    let start = Instant::now();
+                    let output = if include_encode {
+                        encode_export(
+                            black_box(&input),
+                            ScreenshotEditFormat::Jpeg,
+                            ScreenshotExportQualityMode::Compress,
+                            92,
+                            None,
+                        )
+                        .unwrap()
+                    } else {
+                        composite_onto_white(black_box(&input)).into_raw()
+                    };
+                    black_box(&output);
+                    let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+                    if iteration > 0 {
+                        samples.push(elapsed);
+                    }
+                }
+                eprintln!("{name} {stage}: samples_ms={samples:?}");
+                samples.sort_by(f64::total_cmp);
+                eprintln!(
+                    "{name} {stage}: median_ms={:.3}",
+                    samples[samples.len() / 2]
+                );
+            }
+        }
     }
 
     fn mean_saturation_rgb(image: &image::RgbImage) -> f64 {
