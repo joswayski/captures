@@ -90,7 +90,7 @@ impl PreviewMedia {
     }
 }
 
-fn poster_path(source: &Path, directory: &Path) -> Result<PathBuf> {
+pub(crate) fn poster_path(source: &Path, directory: &Path) -> Result<PathBuf> {
     let metadata = fs::metadata(source)?;
     let modified = metadata
         .modified()

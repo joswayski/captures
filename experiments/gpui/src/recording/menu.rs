@@ -1,5 +1,9 @@
 //! Capture menu dimensions and controls follow capture.css and primitives.css.
 use super::*;
+pub(super) use crate::motion::Motion;
+use crate::motion::cubic_ease;
+#[cfg(test)]
+use crate::motion::standard_ease;
 use std::{cell::Cell, rc::Rc};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -9,54 +13,6 @@ pub(super) enum MenuPicker {
     Fps,
     Resolution,
     Microphone,
-}
-
-/// Retarget from the currently displayed value, including rapid reversals.
-pub(super) struct Motion {
-    from: f32,
-    to: f32,
-    started: Instant,
-}
-
-impl Motion {
-    fn value(&self, now: Instant, duration: f32) -> f32 {
-        self.from
-            + (self.to - self.from)
-                * standard_ease((now.duration_since(self.started).as_secs_f32() / duration).min(1.))
-    }
-    fn retarget(&mut self, to: f32, now: Instant, duration: f32) {
-        if self.to != to {
-            self.from = self.value(now, duration);
-            self.to = to;
-            self.started = now;
-        }
-    }
-}
-
-// shared/design.css --ease-standard: cubic-bezier(.2,.8,.2,1).
-fn standard_ease(progress: f32) -> f32 {
-    cubic_ease(progress, 0.2, 0.8, 0.2, 1.)
-}
-
-fn cubic_ease(progress: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
-    if progress <= 0. {
-        return 0.;
-    }
-    if progress >= 1. {
-        return 1.;
-    }
-    let (mut lo, mut hi) = (0., 1.);
-    for _ in 0..20 {
-        let t = (lo + hi) * 0.5;
-        let x = 3. * x1 * (1. - t) * (1. - t) * t + 3. * x2 * (1. - t) * t * t + t * t * t;
-        if x < progress {
-            lo = t;
-        } else {
-            hi = t;
-        }
-    }
-    let t = (lo + hi) * 0.5;
-    3. * y1 * (1. - t) * (1. - t) * t + 3. * y2 * (1. - t) * t * t + t * t * t
 }
 
 const REGION_ICON: &str = r#"<path d="M5 9V6a1 1 0 0 1 1-1h3M15 5h3a1 1 0 0 1 1 1v3M19 15v3a1 1 0 0 1-1 1h-3M9 19H6a1 1 0 0 1-1-1v-3"/><rect x="9" y="9" width="6" height="6" rx="1"/>"#;

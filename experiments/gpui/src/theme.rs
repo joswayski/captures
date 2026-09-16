@@ -1,5 +1,58 @@
 //! Captures' semantic colors, not a GPUI component library's theme.
-use gpui::{App, Global, Rgba, Window, WindowAppearance, rgb, rgba};
+use gpui::prelude::*;
+use gpui::{App, BoxShadow, Global, Rgba, Window, WindowAppearance, point, px, rgb, rgba};
+
+/// GPUI does not expose CSS letter-spacing. Keep the font's shaped glyphs and
+/// kerning, then apply tracking between their source-text clusters.
+pub fn tracked_label(
+    text: &'static str,
+    size: f32,
+    height: f32,
+    weight: gpui::FontWeight,
+    tracking: f32,
+    color: Rgba,
+) -> impl gpui::IntoElement {
+    gpui::canvas(
+        move |_, window, _| {
+            let mut font = gpui::font(font());
+            font.weight = weight;
+            let mut line = window.text_system().shape_line(
+                text.into(),
+                px(size),
+                &[gpui::TextRun {
+                    len: text.len(),
+                    font,
+                    color: color.into(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }],
+                None,
+            );
+            let mut runs = line.runs.clone();
+            for run in &mut runs {
+                for glyph in &mut run.glyphs {
+                    glyph.position.x += px(tracking * text[..glyph.index].chars().count() as f32);
+                }
+            }
+            *line = std::sync::Arc::new(gpui::LineLayout {
+                font_size: line.font_size,
+                width: line.width + px(tracking * text.chars().count() as f32),
+                ascent: line.ascent,
+                descent: line.descent,
+                runs,
+                len: line.len(),
+            });
+            line
+        },
+        move |bounds, line, window, cx| {
+            let _ = line.paint(bounds.origin, px(height), window, cx);
+        },
+    )
+    .w_full()
+    .h(px(height))
+    .flex_shrink_0()
+}
 
 pub struct CurrentSettings(pub crate::preferences::settings::Settings);
 impl Global for CurrentSettings {}
@@ -15,6 +68,8 @@ pub struct Theme {
     pub muted: Rgba,
     pub subtle: Rgba,
     pub border: Rgba,
+    pub border_subtle: Rgba,
+    pub border_strong: Rgba,
     pub hover: Rgba,
     pub accent: Rgba,
     pub signal: Rgba,
@@ -28,6 +83,39 @@ pub struct Theme {
 }
 
 impl Theme {
+    /// Interpolate the design tokens' small → medium elevation for card hover.
+    pub fn card_shadow(self, hover: f32) -> Vec<BoxShadow> {
+        let light = self.text == rgb(0x131318);
+        let color = |alpha| {
+            let mut color = if light { rgb(0x131318) } else { rgb(0) };
+            color.a = alpha;
+            color.into()
+        };
+        if light {
+            vec![
+                BoxShadow {
+                    color: color(0.08 + 0.01 * hover),
+                    offset: point(px(0.), px(1. + 5. * hover)),
+                    blur_radius: px(3. + 15. * hover),
+                    spread_radius: px(0.),
+                },
+                BoxShadow {
+                    color: color(0.04 + 0.02 * hover),
+                    offset: point(px(0.), px(1.)),
+                    blur_radius: px(2. + hover),
+                    spread_radius: px(0.),
+                },
+            ]
+        } else {
+            vec![BoxShadow {
+                color: color(0.32 + 0.06 * hover),
+                offset: point(px(0.), px(2. + 6. * hover)),
+                blur_radius: px(6. + 14. * hover),
+                spread_radius: px(0.),
+            }]
+        }
+    }
+
     pub fn new(light: bool) -> Self {
         Self::configured(light, "mustard", "#32d3ff", "#ff4fc3")
     }
@@ -104,6 +192,8 @@ impl Theme {
             muted: rgb(if light { 0x5c5c69 } else { 0xb9b9c4 }),
             subtle: rgb(if light { 0x7d7d8c } else { 0x8b8b98 }),
             border: rgba(if light { 0x1313181f } else { 0xffffff1a }),
+            border_subtle: rgba(if light { 0x13131812 } else { 0xffffff0f }),
+            border_strong: rgba(if light { 0x13131833 } else { 0xffffff2e }),
             hover: rgba(if light { 0x1313180b } else { 0xffffff0d }),
             accent: rgb(accent),
             signal: rgb(signal),

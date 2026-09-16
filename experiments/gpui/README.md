@@ -63,7 +63,7 @@ follow those sources; complete visual and interaction acceptance is still pendin
 | Recording | Native recording, durable session/segment journal, interrupted-recording recovery, pause/resume segments, countdown/restart cancellation, stop/delete, mic controls, session clock, screenshot during recording, hide/restore, 430×102 bottom-center HUD, passive region guide | Full-display controls exclusion on Linux; exact pulse/compositor equivalence; native macOS/Windows acceptance |
 | Recording editor | Cancellable preparation, video/audio preview, filmstrip/waveforms, keyboard trim, crop numeric fields/steppers and aspect-locked handles, output presets/custom dimensions, independent track gain/mute/mono, quality/size-limit modes, sampled encoded estimates and draggable comparison, save-new/replace/progress/cancellation | Exhaustive timeline/interaction equivalence and hardware audio acceptance |
 | Mini previews | Four-corner stacks, mixed images/GIF/video posters, real image-fragment dissolve, rejection shake, reduced motion, edit/copy/save/dismiss/delete, native X11 file drag | macOS/Windows outbound drag is implemented but unverified; Wayland outbound drag unavailable; hovered animated GIF uses a blurred first frame; exact compositor/blur/frame-pacing parity |
-| History | Durable chronological index, type filters, image/video previews, private recovery copies for editor exports, saved-path linkage for preview/ready-notice saves, retention, confirmed private-file deletion that preserves permanent saves, interrupted recording recovery/confirmed discard, correct editor routing | Exact grid/metadata parity; date layout currently uses a fixed format in the local timezone rather than OS locale formatting |
+| History | Responsive source-sized grid, header typography, hover elevation/motion, contained image/video posters, metadata and filter counts, timed Restore feedback, recording Save/Show in Folder, durable recovery/saved-path linkage, missing-recording posters/direct removal, confirmed Delete all and individual deletion, retention, live refresh, interrupted recording recovery/discard | Dates use a fixed format in the local timezone rather than OS locale formatting; dropped-frame warnings and exhaustive keyboard/accessibility/compositor acceptance remain outstanding |
 | Feedback/onboarding | Original single-screen permissions layout, native macOS screen/microphone request/settings/restart paths and status polling, completion persistence; feedback categories/contact/metadata, submit/pending/success/cooldown states through shared client | Native macOS permission prompts/restart and cross-platform visual acceptance remain unverified |
 | Native integration/notices | Tray, shortcuts, zero-window keepalive, profile-isolated startup, launch notice, recording-ready/save/error and controls-hidden notices | Linux global shortcuts require X11; Linux launch notice has no tray anchor; updater/package/file-association integration and a GPUI release channel are not implemented |
 
@@ -99,7 +99,7 @@ persistence and malformed input, and preserving the source when saving onto
 itself/a hard link. Missing FFmpeg fails the playback test rather than silently
 skipping it.
 
-All commands above passed in the evaluation orb (114 standalone tests; the root
+All commands above passed in the evaluation orb (121 standalone tests; the root
 desktop suite contains 830 tests). The root release-version tests required
 per-command `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign
 GIT_CONFIG_VALUE_0=false`: they create temporary commits, and the orb has no
@@ -158,6 +158,18 @@ Executed UI checks, not just code inspection:
   locations. Deleting the screenshot's private copy through History left its
   permanent export intact. Tests cover legacy metadata, unindexed sources,
   format changes, retention boundaries, and non-regular/private path rejection.
+- History was inspected in light/dark at 620, 880, and 1280px client widths,
+  including portrait/landscape PNGs, GIF/MP4 posters, two/three/four-column grids,
+  missing files, and the empty state. The shipping native Tauri window was also
+  inspected: Chromium's font fallback differed in this orb. The heading retains
+  shaped glyph kerning while applying the source letter spacing; description
+  width uses the actual font's `ch` measurement. Hover uses the source 200ms
+  curve, two-pixel lift, and small/medium elevation tokens, without moving other
+  cards. Restore created a floating preview and showed timed feedback. Save
+  persisted a permanent recording path. Delete all confirmation/cancellation
+  and timeout were exercised; deletion preserved permanent exports. Tests
+  cover missing-file metadata/posters, saved-file fallback, invalid index paths,
+  a removed recovery directory, and same-timestamp directory changes.
 - A native 620 × 320 recording was paused, the app process terminated, and
   History reopened. Recover assembled a 24.083-second MP4, indexed it, opened
   the editor, and retired the draft. The first Discard click preserved media

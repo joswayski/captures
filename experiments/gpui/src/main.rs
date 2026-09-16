@@ -4,6 +4,7 @@ use std::path::PathBuf;
 pub mod editor;
 pub mod effects;
 pub mod integration;
+mod motion;
 pub mod notices;
 pub mod preferences;
 pub mod previews;

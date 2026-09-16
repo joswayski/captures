@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fs,
+    hash::{DefaultHasher, Hash, Hasher},
     path::{Path, PathBuf},
     sync::Mutex,
     time::{Duration, SystemTime},
@@ -18,8 +19,108 @@ static HISTORY_LOCK: Mutex<()> = Mutex::new(());
 #[derive(Clone, Debug)]
 pub struct Entry {
     pub path: PathBuf,
+    pub source: PathBuf,
     pub created_at: SystemTime,
     pub saved_path: Option<PathBuf>,
+    pub missing: bool,
+    pub preview: Option<Preview>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Preview {
+    pub image: PathBuf,
+    pub metadata: captures_media::MediaMetadata,
+    pub modified: SystemTime,
+}
+
+/// Run on a worker: probing/creating posters must not stall the history window.
+pub fn preview(profile: &Path, path: &Path) -> Result<Preview> {
+    let source = {
+        let _guard = HISTORY_LOCK.lock().expect("history lock poisoned");
+        let name = checked_capture_name(profile, path)?;
+        let state = read_state(profile)?;
+        media_source(
+            path,
+            state
+                .entries
+                .get(&name)
+                .and_then(|entry| entry.saved_path.as_deref()),
+        )
+    };
+    let file = fs::symlink_metadata(&source)?;
+    if !file.file_type().is_file() {
+        bail!("capture is not regular media");
+    }
+    let modified = file.modified()?;
+    let (image, metadata) = if super::is_image_path(path) {
+        let (width, height) = image::image_dimensions(path)?;
+        (
+            path.to_path_buf(),
+            captures_media::MediaMetadata {
+                kind: captures_media::MediaKind::Screenshot,
+                mime_type: String::new(),
+                width,
+                height,
+                duration_ms: None,
+                size_bytes: file.len(),
+            },
+        )
+    } else {
+        let tools = captures_media::MediaToolchain::from_command_names();
+        let metadata = tools.probe(&source)?.metadata;
+        let directory = profile.join("preview-posters");
+        fs::create_dir_all(&directory)?;
+        let poster = crate::previews::media::poster_path(&source, &directory)?;
+        if !poster.is_file() {
+            tools.create_poster(&source, &poster, &captures_media::CancelToken::default())?;
+        }
+        (poster, metadata)
+    };
+    let preview = Preview {
+        image,
+        metadata,
+        modified,
+    };
+    let _guard = HISTORY_LOCK.lock().expect("history lock poisoned");
+    let name = checked_capture_name(profile, path)?;
+    let mut state = read_state(profile)?;
+    // A probe may finish after deletion. Never resurrect the removed entry.
+    if let Some(entry) = state.entries.get_mut(&name) {
+        entry.preview = Some(StoredPreview {
+            image: preview.image.file_name().unwrap().to_string_lossy().into(),
+            metadata: preview.metadata.clone(),
+            modified,
+        });
+        write_state(profile, &state)?;
+    }
+    Ok(preview)
+}
+
+/// Cheap change detection for open History windows, including external removal.
+pub fn revision(profile: &Path) -> u64 {
+    let mut hash = DefaultHasher::new();
+    for name in [STATE_FILE, "captures", "recording-drafts"] {
+        let path = profile.join(name);
+        let stamp = |path: &Path| {
+            fs::symlink_metadata(path)
+                .ok()
+                .map(|metadata| (metadata.modified().ok(), metadata.len()))
+        };
+        stamp(&path).hash(&mut hash);
+        // Directory mtimes can coalesce within one filesystem clock tick.
+        // Hash the entries too, without reading or decoding the media itself.
+        if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_dir())
+            && let Ok(directory) = fs::read_dir(&path)
+        {
+            let mut files = directory
+                .filter_map(Result::ok)
+                .map(|entry| (entry.file_name(), stamp(&entry.path())))
+                .collect::<Vec<_>>();
+            files.sort_by(|left, right| left.0.cmp(&right.0));
+            files.hash(&mut hash);
+        }
+    }
+    hash.finish()
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -33,6 +134,58 @@ struct StoredEntry {
     created_at: SystemTime,
     #[serde(default)]
     saved_path: Option<PathBuf>,
+    #[serde(default)]
+    preview: Option<StoredPreview>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct StoredPreview {
+    image: String,
+    metadata: captures_media::MediaMetadata,
+    modified: SystemTime,
+}
+
+fn cached_preview(profile: &Path, stored: &StoredEntry) -> Option<Preview> {
+    let preview = stored.preview.as_ref()?;
+    if !plain_filename(&preview.image) {
+        return None;
+    }
+    let directory = if preview.metadata.kind == captures_media::MediaKind::Screenshot {
+        "captures"
+    } else {
+        "preview-posters"
+    };
+    let root = profile.join(directory);
+    if !fs::symlink_metadata(&root).ok()?.file_type().is_dir() {
+        return None;
+    }
+    let image = root.join(&preview.image);
+    if !fs::symlink_metadata(&image).ok()?.file_type().is_file() {
+        return None;
+    }
+    Some(Preview {
+        image,
+        metadata: preview.metadata.clone(),
+        modified: preview.modified,
+    })
+}
+
+fn plain_filename(name: &str) -> bool {
+    Path::new(name).file_name().and_then(|value| value.to_str()) == Some(name)
+}
+
+// Shipping recording_media_path prefers recovery media, then the permanent save.
+fn media_source(path: &Path, saved: Option<&Path>) -> PathBuf {
+    if !super::is_image_path(path)
+        && fs::symlink_metadata(path)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        && let Some(saved) = saved
+        && is_supported(saved)
+        && fs::symlink_metadata(saved).is_ok_and(|metadata| metadata.file_type().is_file())
+    {
+        return saved.to_path_buf();
+    }
+    path.to_path_buf()
 }
 
 pub fn is_supported(path: &Path) -> bool {
@@ -146,12 +299,14 @@ pub fn record_export(
         fs::rename(&temporary, &recovery)?;
         if let Some(entry) = state.entries.get_mut(&name) {
             entry.saved_path = Some(destination.to_path_buf());
+            entry.preview = None;
         } else {
             state.entries.insert(
                 name.clone(),
                 StoredEntry {
                     created_at: SystemTime::now(),
                     saved_path: Some(destination.to_path_buf()),
+                    preview: None,
                 },
             );
         }
@@ -169,16 +324,17 @@ pub fn record_export(
 
 fn load_entries(profile: &Path) -> Result<Vec<Entry>> {
     let root = profile.join("captures");
-    if !capture_directory(profile)? {
-        return Ok(Vec::new());
-    }
+    let exists = capture_directory(profile)?;
     let mut state = read_state(profile)?;
     let mut present = HashSet::new();
     let mut entries = Vec::new();
     let mut changed = false;
 
-    let directory = fs::read_dir(&root).context("read private capture history")?;
-    for item in directory {
+    let directory = exists
+        .then(|| fs::read_dir(&root))
+        .transpose()
+        .context("read private capture history")?;
+    for item in directory.into_iter().flatten() {
         let item = item?;
         let path = item.path();
         let Ok(metadata) = fs::symlink_metadata(&path) else {
@@ -197,15 +353,40 @@ fn load_entries(profile: &Path) -> Result<Vec<Entry>> {
             StoredEntry {
                 created_at: created,
                 saved_path: None,
+                preview: None,
             }
         });
         entries.push(Entry {
+            source: path.clone(),
             path,
             created_at: stored.created_at,
             saved_path: stored.saved_path.clone(),
+            missing: false,
+            preview: cached_preview(profile, stored),
         });
     }
-    state.entries.retain(|name, _| {
+    state.entries.retain(|name, stored| {
+        let path = root.join(name);
+        // Retain absent recordings, not symlinks, invalid index keys, or missing
+        // screenshot recovery pixels. The poster/metadata survives the media.
+        let missing = !present.contains(name)
+            && plain_filename(name)
+            && is_supported(&path)
+            && !super::is_image_path(&path)
+            && fs::symlink_metadata(&path)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+        if missing {
+            let source = media_source(&path, stored.saved_path.as_deref());
+            entries.push(Entry {
+                missing: source == path,
+                source,
+                path,
+                created_at: stored.created_at,
+                saved_path: stored.saved_path.clone(),
+                preview: cached_preview(profile, stored),
+            });
+            return true;
+        }
         let keep = present.contains(name);
         changed |= !keep;
         keep
@@ -231,14 +412,30 @@ pub fn delete(profile: &Path, path: &Path) -> Result<()> {
     delete_entry(profile, path)
 }
 
+/// Clear private recovery files only; permanent exports and recording journals
+/// are outside this operation, including when the history filter is narrowed.
+pub fn clear(profile: &Path) -> Result<()> {
+    let _guard = HISTORY_LOCK.lock().expect("history lock poisoned");
+    for entry in load_entries(profile)? {
+        delete_entry(profile, &entry.path)?;
+    }
+    Ok(())
+}
+
 fn delete_entry(profile: &Path, path: &Path) -> Result<()> {
     let name = checked_capture_name(profile, path)?;
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata.file_type().is_file() || !is_supported(path) {
+    if !is_supported(path) {
         bail!("refusing to delete a non-regular capture");
     }
     let mut state = read_state(profile)?;
-    fs::remove_file(path)?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => fs::remove_file(path)?,
+        Ok(_) => bail!("refusing to delete a non-regular capture"),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && state.entries.contains_key(&name) => {}
+        Err(error) => return Err(error.into()),
+    }
     state.entries.remove(&name);
     write_state(profile, &state)
 }
@@ -259,9 +456,7 @@ fn prune_at(profile: &Path, now: SystemTime) -> Result<usize> {
 }
 
 fn checked_capture_name(profile: &Path, path: &Path) -> Result<String> {
-    if !capture_directory(profile)? {
-        bail!("private capture directory is missing");
-    }
+    capture_directory(profile)?;
     let root = profile.join("captures");
     if path.parent() != Some(root.as_path()) {
         bail!("capture is outside this profile");
@@ -298,6 +493,154 @@ mod tests {
     use super::*;
     use std::time::UNIX_EPOCH;
 
+    #[test]
+    fn preview_reads_actual_image_dimensions_without_decoding_on_ui_thread() {
+        let directory = tempfile::tempdir().unwrap();
+        let image = seed(directory.path(), "fixture.png", SystemTime::now());
+        image::RgbaImage::new(73, 29).save(&image).unwrap();
+        let preview = preview(directory.path(), &image).unwrap();
+        assert_eq!((preview.metadata.width, preview.metadata.height), (73, 29));
+        assert_eq!(
+            preview.metadata.size_bytes,
+            fs::metadata(&image).unwrap().len()
+        );
+        assert_eq!(preview.image, image);
+        assert_eq!(preview.metadata.kind, captures_media::MediaKind::Screenshot);
+        let reread = load(directory.path())
+            .unwrap()
+            .pop()
+            .unwrap()
+            .preview
+            .unwrap();
+        assert_eq!(reread.metadata, preview.metadata);
+        assert_eq!(reread.image, image);
+        assert_eq!(reread.modified, preview.modified);
+    }
+
+    #[test]
+    fn missing_recording_retains_poster_and_metadata_until_direct_removal() {
+        let directory = tempfile::tempdir().unwrap();
+        let profile = directory.path();
+        let source = seed(profile, "gone.mp4", UNIX_EPOCH + Duration::from_secs(123));
+        let screenshot = seed(profile, "gone.png", SystemTime::now());
+        let saved = profile.join("saved.mp4");
+        fs::write(&saved, b"permanent export").unwrap();
+        link_saved(profile, &source, &saved).unwrap();
+        let poster = profile.join("preview-posters/poster.png");
+        fs::create_dir_all(poster.parent().unwrap()).unwrap();
+        image::RgbaImage::new(64, 36).save(&poster).unwrap();
+        let metadata = captures_media::MediaMetadata {
+            kind: captures_media::MediaKind::Video,
+            mime_type: "video/mp4".into(),
+            width: 640,
+            height: 360,
+            duration_ms: Some(12_345),
+            size_bytes: 123_456,
+        };
+        let mut state = read_state(profile).unwrap();
+        state.entries.get_mut("gone.mp4").unwrap().preview = Some(StoredPreview {
+            image: "poster.png".into(),
+            metadata: metadata.clone(),
+            modified: UNIX_EPOCH,
+        });
+        write_state(profile, &state).unwrap();
+        let before = revision(profile);
+        fs::remove_file(&source).unwrap();
+        fs::remove_file(screenshot).unwrap();
+        assert_ne!(before, revision(profile));
+        let entries = load(profile).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].missing);
+        assert_eq!(entries[0].source, saved);
+        assert_eq!(entries[0].saved_path, Some(saved.clone()));
+        let preview = entries[0].preview.as_ref().unwrap();
+        assert_eq!(preview.image, poster);
+        assert_eq!(preview.metadata, metadata);
+        // Only when both copies disappear is this a missing recording.
+        let moved = profile.join("moved-export.mp4");
+        fs::rename(&saved, &moved).unwrap();
+        assert!(load(profile).unwrap()[0].missing);
+        delete(profile, &source).unwrap();
+        assert!(load(profile).unwrap().is_empty());
+        assert!(read_state(profile).unwrap().entries.is_empty());
+        assert_eq!(fs::read(moved).unwrap(), b"permanent export");
+    }
+
+    #[test]
+    fn removed_capture_directory_keeps_missing_recordings_removable() {
+        let directory = tempfile::tempdir().unwrap();
+        seed(directory.path(), "gone.mp4", SystemTime::now());
+        seed(directory.path(), "gone.png", SystemTime::now());
+        fs::remove_dir_all(directory.path().join("captures")).unwrap();
+        let entries = load(directory.path()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].missing);
+        clear(directory.path()).unwrap();
+        assert!(load(directory.path()).unwrap().is_empty());
+        assert!(delete(directory.path(), &directory.path().join("unknown.mp4")).is_err());
+    }
+
+    #[test]
+    fn missing_index_and_poster_names_cannot_escape_private_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        let profile = directory.path();
+        let source = seed(profile, "gone.gif", SystemTime::now());
+        fs::remove_file(source).unwrap();
+        let mut state = read_state(profile).unwrap();
+        state.entries.insert(
+            "../outside.mp4".into(),
+            StoredEntry {
+                created_at: SystemTime::now(),
+                saved_path: None,
+                preview: None,
+            },
+        );
+        state.entries.get_mut("gone.gif").unwrap().preview = Some(StoredPreview {
+            image: "../outside.png".into(),
+            metadata: captures_media::MediaMetadata {
+                kind: captures_media::MediaKind::Gif,
+                mime_type: "image/gif".into(),
+                width: 34,
+                height: 12,
+                duration_ms: Some(890),
+                size_bytes: 123,
+            },
+            modified: UNIX_EPOCH,
+        });
+        write_state(profile, &state).unwrap();
+        let entries = load(profile).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].missing);
+        assert!(entries[0].preview.is_none());
+        assert!(
+            !read_state(profile)
+                .unwrap()
+                .entries
+                .contains_key("../outside.mp4")
+        );
+        clear(profile).unwrap();
+        assert!(load(profile).unwrap().is_empty());
+    }
+
+    #[test]
+    fn clear_preserves_saved_exports_and_interrupted_recordings() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = seed(directory.path(), "shot.png", SystemTime::now());
+        let video = seed(directory.path(), "video.mp4", SystemTime::now());
+        let saved = directory.path().join("permanent.png");
+        fs::write(&saved, b"permanent export").unwrap();
+        link_saved(directory.path(), &source, &saved).unwrap();
+        let draft = directory.path().join("recording-drafts/pending.mp4");
+        fs::create_dir_all(draft.parent().unwrap()).unwrap();
+        fs::write(&draft, b"unfinished segment").unwrap();
+        clear(directory.path()).unwrap();
+        assert!(!source.exists());
+        assert!(!video.exists());
+        assert!(load(directory.path()).unwrap().is_empty());
+        assert_eq!(fs::read(saved).unwrap(), b"permanent export");
+        assert_eq!(fs::read(draft).unwrap(), b"unfinished segment");
+    }
+
     fn seed(profile: &Path, name: &str, created: SystemTime) -> PathBuf {
         let root = profile.join("captures");
         fs::create_dir_all(&root).unwrap();
@@ -309,6 +652,7 @@ mod tests {
             StoredEntry {
                 created_at: created,
                 saved_path: None,
+                preview: None,
             },
         );
         write_state(profile, &state).unwrap();

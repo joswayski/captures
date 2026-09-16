@@ -4,7 +4,12 @@ use crate::{
 };
 use anyhow::Result;
 use gpui::{prelude::*, *};
-use std::{collections::HashSet, fs, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
+    time::{Duration, Instant, SystemTime},
+};
 
 pub mod history;
 pub mod input;
@@ -70,6 +75,81 @@ fn editor_view_for_path(path: &std::path::Path) -> &'static str {
     }
 }
 
+fn history_kind(path: &Path) -> &'static str {
+    if is_image_path(path) {
+        "screenshot"
+    } else if path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("gif"))
+    {
+        "gif"
+    } else {
+        "video"
+    }
+}
+
+fn history_columns(width: f32) -> u16 {
+    (((width - 48.).min(1180.) + 16.) / 268.).floor().max(1.) as u16
+}
+
+fn history_detail(metadata: &captures_media::MediaMetadata) -> String {
+    let mut value = metadata.size_bytes as f64;
+    let mut unit = 0;
+    while value >= 1000. && unit < 3 {
+        value /= 1000.;
+        unit += 1;
+    }
+    let size = format!(
+        "{:.*} {}",
+        usize::from(unit > 0 && value < 100.),
+        value,
+        ["B", "KB", "MB", "GB"][unit]
+    );
+    let mut detail = format!("{} × {} · {size}", metadata.width, metadata.height);
+    if let Some(duration) = metadata.duration_ms {
+        let seconds = duration / 1000;
+        detail.push_str(&if seconds >= 3600 {
+            format!(
+                " · {}:{:02}:{:02}",
+                seconds / 3600,
+                seconds / 60 % 60,
+                seconds % 60
+            )
+        } else {
+            format!(" · {}:{:02}", seconds / 60, seconds % 60)
+        });
+    }
+    detail
+}
+
+fn history_date(time: SystemTime) -> String {
+    jiff::Timestamp::try_from(time)
+        .map(|time| {
+            time.to_zoned(jiff::tz::TimeZone::system())
+                .strftime("%b %-d, %Y, %-I:%M %p")
+                .to_string()
+        })
+        .unwrap_or_else(|_| "Unknown date".into())
+}
+
+fn history_icon(name: &'static str, color: &'static str) -> Img {
+    thread_local! {
+        static ICONS: std::cell::RefCell<HashMap<(&'static str, &'static str), std::sync::Arc<RenderImage>>> = Default::default();
+    }
+    let image = ICONS.with(|cache| cache.borrow_mut().entry((name, color)).or_insert_with(|| {
+        let body = match name {
+            "trash" => r#"<path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/>"#,
+            "edit" => r#"<path d="m15 4 5 5M4 20l5-1L20 8a3.5 3.5 0 0 0-5-5L4 14Z"/>"#,
+            "restore" => r#"<path d="M4 12a8 8 0 1 0 2.3-5.7L4 8M4 4v4h4"/>"#,
+            "save" => r#"<path d="M4 3h13l4 4v14H3V3ZM7 3v6h9V3M7 21v-8h10v8"/>"#,
+            "check" => r#"<path d="m5 12 4 4L19 6"/>"#,
+            _ => r#"<path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2"/>"#,
+        };
+        crate::editor::svg_render_image(format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">{body}</svg>"#))
+    }).clone());
+    img(image).size(px(16.)).flex_shrink_0()
+}
+
 fn block_changes_after_load_error(settings: &mut Settings, load_failed: bool) -> bool {
     if load_failed {
         *settings = Settings::default();
@@ -96,7 +176,19 @@ fn normalize_hex(value: &str) -> Option<String> {
         .then(|| format!("#{}", digits.to_ascii_uppercase()))
 }
 
+struct HistoryWindow(WindowHandle<Surface>);
+impl Global for HistoryWindow {}
+
 pub fn open(launch: Launch, cx: &mut App) -> Result<()> {
+    let is_history = launch.view == "history";
+    if is_history
+        && let Some(handle) = cx.try_global::<HistoryWindow>().map(|history| history.0)
+        && handle
+            .update(cx, |_, window, _| window.activate_window())
+            .is_ok()
+    {
+        return crate::refresh_window(handle.into(), cx);
+    }
     input::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("ctrl-f", OpenFind, Some("Preferences")),
@@ -108,10 +200,19 @@ pub fn open(launch: Launch, cx: &mut App) -> Result<()> {
         "onboarding" => "Welcome to Captures",
         _ => "Preferences",
     };
-    let bounds = Bounds::centered(None, size(px(880.), px(660.)), cx);
-    cx.open_window(
+    let bounds = Bounds::centered(
+        None,
+        if is_history {
+            size(px(1020.), px(720.))
+        } else {
+            size(px(880.), px(660.))
+        },
+        cx,
+    );
+    let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_min_size: is_history.then(|| size(px(640.), px(440.))),
             titlebar: Some(TitlebarOptions {
                 title: Some(title.into()),
                 ..Default::default()
@@ -124,6 +225,9 @@ pub fn open(launch: Launch, cx: &mut App) -> Result<()> {
             surface
         },
     )?;
+    if is_history {
+        cx.set_global(HistoryWindow(handle));
+    }
     Ok(())
 }
 
@@ -151,8 +255,15 @@ struct Surface {
     shortcut_release_pending: bool,
     status: String,
     poster_pending: HashSet<PathBuf>,
+    history_previews: HashMap<PathBuf, history::Preview>,
+    history_errors: HashMap<PathBuf, String>,
+    history_busy: HashSet<PathBuf>,
+    history_restored: HashSet<PathBuf>,
+    history_hover: HashMap<PathBuf, crate::motion::Motion>,
+    history_clearing: bool,
+    confirm_clear: Option<Instant>,
     history_filter: &'static str,
-    confirm: Option<PathBuf>,
+    confirm: Option<(PathBuf, Instant)>,
     confirm_draft: Option<String>,
     message: Entity<TextInput>,
     contact: Entity<TextInput>,
@@ -195,6 +306,30 @@ impl Surface {
         .detach();
         let custom_accent = settings.custom_theme.accent.to_uppercase();
         let custom_signal = settings.custom_theme.signal.to_uppercase();
+        let profile = launch.profile.clone();
+        cx.spawn(async move |this, cx| {
+            let mut revision = history::revision(&profile);
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
+                if this
+                    .update(cx, |s, cx| {
+                        if s.page == Page::History {
+                            let next = history::revision(&profile);
+                            if next != revision {
+                                revision = next;
+                                cx.notify();
+                            }
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
         Self {
             focus: cx.focus_handle(),
             launch,
@@ -212,6 +347,13 @@ impl Surface {
             editing_shortcut: None,
             shortcut_release_pending: false,
             poster_pending: HashSet::new(),
+            history_previews: HashMap::new(),
+            history_errors: HashMap::new(),
+            history_busy: HashSet::new(),
+            history_restored: HashSet::new(),
+            history_hover: HashMap::new(),
+            history_clearing: false,
+            confirm_clear: None,
             history_filter: "all",
             confirm: None,
             confirm_draft: None,
@@ -1211,9 +1353,16 @@ impl Surface {
                             .child(
                                 div().flex().items_center().gap_3().child(
                                     self.button("history-top", "Capture History…", false, t)
-                                        .on_click(
-                                            cx.listener(|s, _, _, cx| s.nav(Page::History, cx)),
-                                        ),
+                                        .on_click(cx.listener(|s, _, _, cx| {
+                                            if let Err(error) =
+                                                crate::open_view("history", s.launch.clone(), cx)
+                                            {
+                                                s.status = format!(
+                                                    "Couldn’t open Capture History: {error:#}"
+                                                );
+                                                cx.notify();
+                                            }
+                                        })),
                                 ),
                             )
                             .when(self.find_open, |header| {
@@ -1323,43 +1472,235 @@ impl Surface {
         d
     }
     fn history_files(&mut self) -> Vec<history::Entry> {
-        let entries = match history::load(&self.launch.profile) {
+        match history::load(&self.launch.profile) {
             Ok(entries) => entries,
             Err(error) => {
                 self.status = format!("Couldn’t read Capture History: {error:#}");
-                return Vec::new();
+                Vec::new()
             }
-        };
-        entries
-            .into_iter()
-            .filter(|entry| {
-                let extension = entry
-                    .path
-                    .extension()
-                    .and_then(|v| v.to_str())
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
-                self.history_filter == "all"
-                    || (self.history_filter == "screenshot"
-                        && matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp"))
-                    || (self.history_filter == "video"
-                        && matches!(extension.as_str(), "mp4" | "webm"))
-                    || (self.history_filter == "gif" && extension == "gif")
-            })
-            .collect()
-    }
-    fn history(&mut self, cx: &mut Context<Self>, t: Theme) -> Stateful<Div> {
-        let files = self.history_files();
-        let mut list = div().grid().grid_cols(3).gap_4();
-        if files.is_empty() {
-            list = list.child(self.card(
-                "No captures yet",
-                "Screenshots and recordings stored in this profile will appear here.",
-                vec![],
-                t,
-            ))
         }
-        for entry in files {
+    }
+
+    fn history_open(&mut self, path: &Path, cx: &mut Context<Self>) {
+        if self.history_clearing || self.history_busy.contains(path) {
+            return;
+        }
+        self.history_errors.remove(path);
+        let mut launch = self.launch.clone();
+        launch.path = Some(
+            self.history_files()
+                .into_iter()
+                .find(|entry| entry.path == path)
+                .map_or_else(|| path.to_path_buf(), |entry| entry.source),
+        );
+        if let Err(error) = crate::open_view(editor_view_for_path(path), launch, cx) {
+            self.history_errors.insert(
+                path.to_path_buf(),
+                format!("Couldn’t open editor: {error:#}"),
+            );
+        }
+        cx.notify();
+    }
+
+    fn history_secondary(&mut self, path: &Path, saved: Option<&Path>, cx: &mut Context<Self>) {
+        if self.history_clearing || self.history_busy.contains(path) {
+            return;
+        }
+        self.history_errors.remove(path);
+        if is_image_path(path) {
+            let mut launch = self.launch.clone();
+            launch.path = Some(path.to_path_buf());
+            match crate::open_view("thumbnail", launch, cx) {
+                Ok(()) => {
+                    self.history_restored.insert(path.to_path_buf());
+                    let path = path.to_path_buf();
+                    cx.spawn(async move |this, cx| {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(2500))
+                            .await;
+                        let _ = this.update(cx, |s, cx| {
+                            s.history_restored.remove(&path);
+                            cx.notify();
+                        });
+                    })
+                    .detach();
+                }
+                Err(error) => {
+                    self.history_errors
+                        .insert(path.to_path_buf(), format!("Couldn’t restore: {error:#}"));
+                }
+            }
+        } else if let Some(saved) = saved {
+            if let Err(error) = crate::previews::media::reveal(saved) {
+                self.history_errors
+                    .insert(path.to_path_buf(), format!("Couldn’t show file: {error:#}"));
+            }
+        } else {
+            self.history_busy.insert(path.to_path_buf());
+            let profile = self.launch.profile.clone();
+            let source = path.to_path_buf();
+            let task = cx.background_executor().spawn(async move {
+                let media = crate::previews::media::PreviewMedia::load(source.clone(), &profile)?;
+                let settings = settings::load(&profile)?;
+                let destination = crate::previews::media::save(&media, &settings)?;
+                history::link_saved(&profile, &source, &destination)?;
+                anyhow::Ok(())
+            });
+            let path = path.to_path_buf();
+            cx.spawn(async move |this, cx| {
+                let result = task.await;
+                let _ = this.update(cx, |s, cx| {
+                    s.history_busy.remove(&path);
+                    if let Err(error) = result {
+                        s.history_errors
+                            .insert(path, format!("Couldn’t save file: {error:#}"));
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
+    fn history_delete(&mut self, path: &Path, missing: bool, cx: &mut Context<Self>) {
+        if self.history_clearing || self.history_busy.contains(path) {
+            return;
+        }
+        if missing
+            || self
+                .confirm
+                .as_ref()
+                .is_some_and(|(p, since)| p == path && since.elapsed() < Duration::from_secs(4))
+        {
+            self.confirm = None;
+            match history::delete(&self.launch.profile, path) {
+                Ok(()) => {
+                    self.history_previews.remove(path);
+                    self.history_errors.remove(path);
+                }
+                Err(error) => {
+                    self.history_errors
+                        .insert(path.to_path_buf(), format!("Couldn’t delete: {error:#}"));
+                }
+            }
+        } else {
+            let confirmation = (path.to_path_buf(), Instant::now());
+            self.confirm = Some(confirmation.clone());
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(Duration::from_secs(4)).await;
+                let _ = this.update(cx, |s, cx| {
+                    if s.confirm.as_ref() == Some(&confirmation) {
+                        s.confirm = None;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
+    fn history_clear(&mut self, cx: &mut Context<Self>) {
+        if self.history_clearing || !self.history_busy.is_empty() {
+            return;
+        }
+        if self
+            .confirm_clear
+            .is_some_and(|since| since.elapsed() < Duration::from_secs(4))
+        {
+            self.history_clearing = true;
+            self.status.clear();
+            let profile = self.launch.profile.clone();
+            let task = cx
+                .background_executor()
+                .spawn(async move { history::clear(&profile) });
+            cx.spawn(async move |this, cx| {
+                let result = task.await;
+                let _ = this.update(cx, |s, cx| {
+                    s.history_clearing = false;
+                    s.confirm_clear = None;
+                    s.confirm = None;
+                    s.history_previews.clear();
+                    s.history_errors.clear();
+                    if let Err(error) = result {
+                        s.status = format!("Couldn’t delete capture history: {error:#}");
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        } else {
+            let since = Instant::now();
+            self.confirm_clear = Some(since);
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(Duration::from_secs(4)).await;
+                let _ = this.update(cx, |s, cx| {
+                    if s.confirm_clear == Some(since) {
+                        s.confirm_clear = None;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
+    fn history(&mut self, window: &mut Window, cx: &mut Context<Self>, t: Theme) -> Stateful<Div> {
+        let files = self.history_files();
+        self.history_hover
+            .retain(|path, _| files.iter().any(|entry| &entry.path == path));
+        let counts = [
+            files.len(),
+            files
+                .iter()
+                .filter(|entry| history_kind(&entry.path) == "screenshot")
+                .count(),
+            files
+                .iter()
+                .filter(|entry| history_kind(&entry.path) == "video")
+                .count(),
+            files
+                .iter()
+                .filter(|entry| history_kind(&entry.path) == "gif")
+                .count(),
+        ];
+        let drafts = self.recording_drafts(cx, t);
+        let empty = files.is_empty() && drafts.is_empty();
+        let color = if t.text == rgb(0x131318) {
+            "#5c5c69"
+        } else {
+            "#b9b9c4"
+        };
+        let width: f32 = window.viewport_size().width.into();
+        let columns = history_columns(width);
+        let preview_width =
+            ((width - 48.).min(1180.) - 16. * f32::from(columns - 1)) / f32::from(columns) - 2.;
+        let now = Instant::now();
+        let reduced_motion = crate::theme::reduced_motion();
+        let border = t.border_subtle;
+        let description_width = window
+            .text_system()
+            .shape_line(
+                "0".into(),
+                px(13.),
+                &[TextRun {
+                    len: 1,
+                    font: gpui::font(font()),
+                    color: t.subtle.into(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }],
+                None,
+            )
+            .width
+            * 60.;
+        let mut list = div().grid().flex_shrink_0().grid_cols(columns).gap(px(16.));
+        for entry in files.into_iter().filter(|entry| {
+            self.history_filter == "all" || history_kind(&entry.path) == self.history_filter
+        }) {
             let p = entry.path;
             let name = p
                 .file_name()
@@ -1368,55 +1709,41 @@ impl Surface {
                 .to_string();
             let open = p.clone();
             let del = p.clone();
-            let confirmed = self.confirm.as_ref() == Some(&p);
-            let metadata = fs::metadata(&p).ok();
-            let displayed_path = entry.saved_path.as_ref().unwrap_or(&p);
-            let display_name = displayed_path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy();
-            let detail = metadata
-                .as_ref()
-                .map(|m| {
-                    format!(
-                        "{} · {:.1} KB",
-                        displayed_path.display(),
-                        m.len() as f64 / 1024.
-                    )
+            let confirmed = self.confirm.as_ref().is_some_and(|(path, _)| path == &p);
+            let busy = self.history_clearing || self.history_busy.contains(&p);
+            let missing = entry.missing;
+            if let Some(preview) = entry.preview {
+                self.history_previews.entry(p.clone()).or_insert(preview);
+            }
+            let stale = self.history_previews.get(&p).is_none_or(|preview| {
+                fs::metadata(&entry.source).ok().is_none_or(|meta| {
+                    meta.modified().ok() != Some(preview.modified)
+                        || meta.len() != preview.metadata.size_bytes
                 })
-                .unwrap_or_else(|| displayed_path.display().to_string());
-            let extension = p
-                .extension()
-                .and_then(|value| value.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            let is_video = matches!(extension.as_str(), "mp4" | "webm");
-            let poster = self
-                .launch
-                .profile
-                .join("history-posters")
-                .join(format!("{name}.png"));
-            if is_video && !poster.is_file() && self.poster_pending.insert(p.clone()) {
+            });
+            if !missing
+                && stale
+                && !self.history_errors.contains_key(&p)
+                && self.poster_pending.insert(p.clone())
+            {
                 let source = p.clone();
-                let destination = poster.clone();
-                let task = cx.background_executor().spawn(async move {
-                    fs::create_dir_all(destination.parent().unwrap())?;
-                    captures_media::MediaToolchain::from_command_names().create_poster(
-                        &source,
-                        &destination,
-                        &captures_media::CancelToken::default(),
-                    )?;
-                    anyhow::Ok((source, destination))
-                });
+                let profile = self.launch.profile.clone();
+                let task = cx
+                    .background_executor()
+                    .spawn(async move { history::preview(&profile, &source) });
+                let source = p.clone();
                 cx.spawn(async move |this, cx| {
                     let result = task.await;
                     let _ = this.update(cx, |surface, cx| {
+                        surface.poster_pending.remove(&source);
                         match result {
-                            Ok((source, _)) => {
-                                surface.poster_pending.remove(&source);
+                            Ok(preview) => {
+                                surface.history_previews.insert(source, preview);
                             }
                             Err(error) => {
-                                surface.status = format!("Couldn’t create video poster: {error:#}")
+                                surface
+                                    .history_errors
+                                    .insert(source, format!("Couldn’t read capture: {error:#}"));
                             }
                         }
                         cx.notify();
@@ -1424,87 +1751,267 @@ impl Surface {
                 })
                 .detach();
             }
-            let actions = div().flex().gap_2().child(
+            let preview = self.history_previews.get(&p);
+            let detail = preview
+                .map(|preview| history_detail(&preview.metadata))
+                .unwrap_or_else(|| {
+                    if missing {
+                        "File missing"
+                    } else {
+                        "Reading capture…"
+                    }
+                    .into()
+                });
+            let image = preview.map(|preview| {
+                (
+                    preview.image.clone(),
+                    preview.metadata.width,
+                    preview.metadata.height,
+                )
+            });
+            let actions = div().grid().grid_cols(2).gap(px(6.)).mt(px(6.)).child(
+                self.button(SharedString::from(format!("open-{name}")), "", false, t)
+                    .h(px(32.))
+                    .bg(t.accent)
+                    .border_color(t.accent)
+                    .text_color(rgb(0x131318))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .py_0()
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(6.))
+                    .text_size(px(12.))
+                    .child(history_icon("edit", "#131318"))
+                    .child("Edit")
+                    .when(busy, |button| button.opacity(0.5).cursor_default())
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        s.history_open(&open, cx);
+                    })),
+            );
+            let secondary = p.clone();
+            let saved = entry.saved_path.clone();
+            let screenshot = is_image_path(&p);
+            let restored = self.history_restored.contains(&p);
+            let actions = actions.child(
                 self.button(
-                    SharedString::from(format!("open-{name}")),
-                    "Open editor",
+                    SharedString::from(format!("secondary-{name}")),
+                    "",
                     false,
                     t,
                 )
+                .h(px(32.))
+                .py_0()
+                .px(px(8.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(px(6.))
+                .text_size(px(12.))
+                .when(screenshot || saved.is_none(), |button| {
+                    button.child(history_icon(
+                        if screenshot {
+                            if restored { "check" } else { "restore" }
+                        } else {
+                            "save"
+                        },
+                        color,
+                    ))
+                })
+                .child(if screenshot {
+                    if restored { "Restored" } else { "Restore" }
+                } else if busy {
+                    "Saving…"
+                } else if saved.is_some() {
+                    "Show in Folder"
+                } else {
+                    "Save file"
+                })
+                .when(busy, |button| button.opacity(0.5).cursor_default())
                 .on_click(cx.listener(move |s, _, _, cx| {
-                    let mut l = s.launch.clone();
-                    l.path = Some(open.clone());
-                    if let Err(e) = crate::open_view(editor_view_for_path(&open), l, cx) {
-                        s.status = format!("Couldn’t open editor: {e:#}");
-                        cx.notify()
-                    }
+                    s.history_secondary(&secondary, saved.as_deref(), cx);
                 })),
             );
-            let actions = actions.child(
-                self.button(
-                    SharedString::from(format!("delete-{name}")),
-                    if confirmed {
-                        "Confirm delete"
-                    } else {
-                        "Delete…"
-                    },
-                    confirmed,
-                    t,
-                )
-                .on_click(cx.listener(move |s, _, _, cx| {
-                    if s.confirm.as_ref() == Some(&del) {
-                        match history::delete(&s.launch.profile, &del) {
-                            Ok(_) => s.status = "Capture deleted".into(),
-                            Err(e) => s.status = format!("Couldn’t delete: {e}"),
-                        };
-                        s.confirm = None
-                    } else {
-                        s.confirm = Some(del.clone())
-                    }
-                    cx.notify()
-                })),
-            );
-            list = list.child(self.card(
-                &display_name,
-                &detail,
-                vec![
-                    if is_image_path(&p) || extension == "gif" {
+            let open = p.clone();
+            let hovered = p.clone();
+            let hover = self.history_hover.get(&p).map_or(0., |motion| {
+                if reduced_motion {
+                    return motion.to;
+                }
+                if now.duration_since(motion.started).as_secs_f32() < 0.2 {
+                    window.request_animation_frame();
+                }
+                motion.value(now, 0.2)
+            });
+            let mut card_border = border;
+            card_border.a += hover * (t.border_strong.a - border.a);
+            list = list.child(
+                div()
+                    .id(SharedString::from(format!("history-card-{name}")))
+                    .relative()
+                    .top(px(-2. * hover))
+                    .min_w_0()
+                    .min_h(px(274.))
+                    .rounded(px(14.))
+                    .border_1()
+                    .border_color(card_border)
+                    .bg(t.raised)
+                    .shadow(t.card_shadow(hover))
+                    .overflow_hidden()
+                    .flex()
+                    .flex_col()
+                    .on_hover(cx.listener(move |s, active, _, cx| {
+                        s.history_hover
+                            .entry(hovered.clone())
+                            .or_insert(crate::motion::Motion {
+                                from: 0.,
+                                to: 0.,
+                                started: Instant::now(),
+                            })
+                            .retarget(if *active { 1. } else { 0. }, Instant::now(), 0.2);
+                        cx.notify();
+                    }))
+                    .child(
                         div()
-                            .h(px(180.))
+                            .relative()
+                            .h(px(168.))
                             .w_full()
+                            .flex_shrink_0()
                             .overflow_hidden()
-                            .rounded(px(8.))
-                            .bg(t.canvas)
-                            .child(img(p.clone()).size_full().object_fit(ObjectFit::Contain))
-                            .into_any_element()
-                    } else if poster.is_file() {
+                            .border_b_1()
+                            .border_color(border)
+                            .bg(t.sunken)
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("preview-{name}")))
+                                    .w_full()
+                                    .h(px(167.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_pointer()
+                                    .when(missing, |preview| preview.cursor_default())
+                                    .when_some(image, |preview, (path, width, height)| {
+                                        let scale = (preview_width / width.max(1) as f32)
+                                            .min(167. / height.max(1) as f32);
+                                        preview.child(
+                                            img(path)
+                                                .w(px(width as f32 * scale))
+                                                .h(px(height as f32 * scale))
+                                                .flex_shrink_0()
+                                                .when(missing, |image| {
+                                                    image.grayscale(true).opacity(0.3)
+                                                })
+                                                .object_fit(ObjectFit::Contain),
+                                        )
+                                    })
+                                    .on_click(cx.listener(move |s, _, _, cx| {
+                                        if !missing {
+                                            s.history_open(&open, cx);
+                                        }
+                                    })),
+                            )
+                            .when(missing, |preview| {
+                                preview.child(
+                                    div()
+                                        .absolute()
+                                        .inset_0()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(
+                                            div()
+                                                .px(px(8.))
+                                                .py(px(6.))
+                                                .border_1()
+                                                .border_color(t.border)
+                                                .rounded(px(8.))
+                                                .bg(t.raised)
+                                                .text_color(t.muted)
+                                                .text_size(px(12.))
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .child("File missing"),
+                                        ),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("delete-{name}")))
+                                    .absolute()
+                                    .top(px(6.))
+                                    .right(px(6.))
+                                    .size(px(32.))
+                                    .border_1()
+                                    .border_color(t.border)
+                                    .rounded(px(8.))
+                                    .bg(if confirmed { t.signal } else { t.raised })
+                                    .shadow_sm()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_pointer()
+                                    .child(history_icon(
+                                        "trash",
+                                        if confirmed { "#ffffff" } else { color },
+                                    ))
+                                    .when(busy, |button| button.opacity(0.5).cursor_default())
+                                    .on_click(cx.listener(move |s, _, _, cx| {
+                                        s.history_delete(&del, missing, cx)
+                                    })),
+                            ),
+                    )
+                    .child(
                         div()
-                            .h(px(180.))
-                            .w_full()
-                            .overflow_hidden()
-                            .rounded(px(8.))
-                            .bg(t.canvas)
-                            .child(img(poster).size_full().object_fit(ObjectFit::Contain))
-                            .into_any_element()
-                    } else {
-                        div()
-                            .h(px(180.))
-                            .w_full()
-                            .rounded(px(8.))
-                            .bg(t.canvas)
+                            .p(px(12.))
                             .flex()
-                            .items_center()
-                            .justify_center()
-                            .child("Recording")
-                            .into_any_element()
-                    },
-                    actions.into_any_element(),
-                ],
-                t,
-            ))
+                            .flex_col()
+                            .gap(px(4.))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .line_height(px(17.55))
+                                    .py(px(1.))
+                                    .truncate()
+                                    .child(history_date(entry.created_at)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .line_height(px(14.))
+                                    .text_color(t.subtle)
+                                    .child(detail),
+                            )
+                            .when(!missing, |body| body.child(actions))
+                            .when_some(self.history_errors.get(&p).cloned(), |body, error| {
+                                body.child(
+                                    div()
+                                        .mt(px(6.))
+                                        .px(px(8.))
+                                        .py(px(6.))
+                                        .rounded(px(6.))
+                                        .text_size(px(11.))
+                                        .text_color(t.signal)
+                                        .child(error),
+                                )
+                            }),
+                    ),
+            )
         }
-        let mut filters = div().flex().gap_2();
-        for filter in ["all", "screenshot", "video", "gif"] {
+        let mut filters = div()
+            .flex()
+            .flex_shrink_0()
+            .gap(px(4.))
+            .pb(px(12.))
+            .border_b_1()
+            .border_color(t.border);
+        for (index, filter) in ["all", "screenshot", "video", "gif"]
+            .into_iter()
+            .enumerate()
+        {
+            let count = counts[index];
+            let disabled = count == 0 && filter != "all";
             filters = filters.child(
                 self.button(
                     SharedString::from(format!("history-filter-{filter}")),
@@ -1517,8 +2024,35 @@ impl Surface {
                     self.history_filter == filter,
                     t,
                 )
+                .h(px(28.))
+                .py_0()
+                .px(px(8.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .text_size(px(12.))
+                .text_color(if self.history_filter == filter {
+                    t.text
+                } else {
+                    t.subtle
+                })
+                .bg(if self.history_filter == filter {
+                    t.raised
+                } else {
+                    rgba(0)
+                })
+                .border_color(if self.history_filter == filter {
+                    t.border
+                } else {
+                    rgba(0)
+                })
+                .child(div().text_color(t.subtle).child(count.to_string()))
+                .when(disabled, |button| button.opacity(0.4).cursor_default())
                 .on_click(cx.listener(move |s, _, _, cx| {
-                    s.history_filter = filter;
+                    if !disabled {
+                        s.history_filter = filter;
+                    }
                     cx.notify()
                 })),
             );
@@ -1526,33 +2060,30 @@ impl Surface {
         div()
             .id("history-scroll")
             .size_full()
+            .flex().flex_col()
             .overflow_y_scroll()
-            .p_6()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .child(
-                div()
-                    .flex()
-                    .justify_between()
-                    .items_center()
-                    .child(
-                        div()
-                            .text_size(px(28.))
-                            .font_weight(FontWeight::BOLD)
-                            .child("Capture History"),
-                    )
-                    .child(
-                        self.button("back-preferences", "Preferences…", false, t)
-                            .on_click(cx.listener(|s, _, _, cx| s.nav(Page::Preferences, cx))),
-                    ),
-            )
-            .child(div().text_size(px(11.)).text_color(t.subtle).child("ON THIS DEVICE"))
-            .child(div().text_color(t.muted).child("Screenshots, videos, GIFs, and interrupted recordings you can recover all appear here for 30 days."))
-            .child(filters)
-            .children(self.recording_drafts(cx, t))
-            .child(list)
-            .child(self.status.clone())
+            .px(px(24.)).pt(px(32.)).pb(px(48.))
+            .child(div().max_w(px(1180.)).w_full().mx_auto().flex().flex_col().flex_shrink_0().gap(px(16.))
+                .child(div().flex().flex_shrink_0().items_end().justify_between().gap(px(24.))
+                    .child(div().min_w_0().flex_1().flex().flex_col()
+                        .child(crate::theme::tracked_label("ON THIS DEVICE", 10., 11., FontWeight::SEMIBOLD, 0.4, t.subtle))
+                        .child(div().my(px(6.)).child(crate::theme::tracked_label("Capture History", 28., 33.6, FontWeight::SEMIBOLD, -0.616, t.text)))
+                        .child(div().max_w(description_width).text_size(px(13.)).line_height(px(17.55)).text_color(t.subtle).child("Screenshots, videos, GIFs, and interrupted recordings you can recover all appear here for 30 days.")))
+                    .when(counts[0] > 0, |header| header.child(div().flex().items_center().gap(px(6.)).flex_shrink_0()
+                        .when(self.confirm_clear.is_some(), |actions| actions.child(self.button("history-clear-cancel", "Cancel", false, t).h(px(32.)).py_0().border_0().bg(rgba(0)).flex().items_center().text_size(px(12.))
+                            .on_click(cx.listener(|s, _, _, cx| { if !s.history_clearing { s.confirm_clear = None; cx.notify(); } }))))
+                        .child(self.button("history-clear", "", false, t).h(px(32.)).py_0().border_0().bg(rgba(0)).flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(if self.confirm_clear.is_some() { t.signal } else { t.subtle })
+                            .child(history_icon("trash", color)).child(if self.history_clearing { "Deleting…" } else if self.confirm_clear.is_some() { "Delete all forever" } else { "Delete all" })
+                            .when(self.history_clearing || !self.history_busy.is_empty(), |button| button.opacity(0.5).cursor_default())
+                            .on_click(cx.listener(|s, _, _, cx| s.history_clear(cx)))))))
+                .when(counts[0] > 0, |shell| shell.child(filters))
+                .when(!self.status.is_empty(), |shell| shell.child(div().p(px(12.)).rounded(px(8.)).text_size(px(12.)).text_color(t.signal).child(self.status.clone())))
+                .children(drafts)
+                .when(empty, |shell| shell.child(div().min_h(px(320.)).flex().flex_col().items_center().justify_center()
+                    .child(div().size(px(52.)).mb(px(12.)).rounded(px(14.)).border_1().border_color(t.border).bg(t.raised).flex().items_center().justify_center().child(history_icon("history", color).size(px(26.))))
+                    .child(div().text_size(px(15.)).font_weight(FontWeight::BOLD).child("No captures yet"))
+                    .child(div().mt(px(6.)).text_size(px(13.)).text_color(t.subtle).child("New screenshots, videos, and GIFs appear here automatically."))))
+                .when(!empty, |shell| shell.child(list)))
     }
 
     fn recording_drafts(&self, cx: &mut Context<Self>, t: Theme) -> Vec<AnyElement> {
@@ -1913,7 +2444,7 @@ impl Render for Surface {
             .size_full()
             .child(match self.page {
                 Page::Preferences => self.preferences(cx, t).into_any_element(),
-                Page::History => self.history(cx, t).into_any_element(),
+                Page::History => self.history(window, cx, t).into_any_element(),
                 Page::Feedback => self.feedback(cx, t).into_any_element(),
                 Page::Onboarding => self.onboarding(window, cx, t).into_any_element(),
             })
@@ -1924,6 +2455,39 @@ impl Render for Surface {
 mod tests {
     use super::*;
     use core::prelude::v1::test;
+
+    #[test]
+    fn history_grid_obeys_source_minimum_width_gap_and_maximum_shell() {
+        assert_eq!(history_columns(400.), 1);
+        assert_eq!(history_columns(567.), 1);
+        assert_eq!(history_columns(568.), 2);
+        assert_eq!(history_columns(835.), 2);
+        assert_eq!(history_columns(836.), 3);
+        assert_eq!(history_columns(1280.), 4);
+        assert_eq!(history_columns(2400.), 4);
+    }
+
+    #[test]
+    fn history_metadata_uses_decimal_sizes_and_truncated_duration() {
+        let mut metadata = captures_media::MediaMetadata {
+            kind: captures_media::MediaKind::Video,
+            mime_type: "video/mp4".into(),
+            width: 854,
+            height: 480,
+            duration_ms: Some(3_723_999),
+            size_bytes: 1_234_567,
+        };
+        assert_eq!(history_detail(&metadata), "854 × 480 · 1.2 MB · 1:02:03");
+        metadata.size_bytes = 100_000;
+        metadata.duration_ms = Some(61_999);
+        assert_eq!(history_detail(&metadata), "854 × 480 · 100 KB · 1:01");
+        metadata.duration_ms = None;
+        metadata.size_bytes = 999;
+        assert_eq!(history_detail(&metadata), "854 × 480 · 999 B");
+        metadata.size_bytes = 1000;
+        assert_eq!(history_detail(&metadata), "854 × 480 · 1.0 KB");
+    }
+
     #[test]
     fn editor_routes_by_capture_extension() {
         assert_eq!(
