@@ -833,10 +833,11 @@ fn median_cut_rgba(image: &RgbaImage, max_colors: u16, dither: bool) -> (Vec<[u8
         .min(pixel_count.max(1));
     let mut boxes = vec![ColorBox {
         members: (0..u32::try_from(pixel_count).unwrap_or(u32::MAX)).collect(),
+        bounds: None,
     }];
 
     while boxes.len() < target {
-        let Some((split_at, channel)) = next_split(&boxes, image) else {
+        let Some((split_at, channel)) = next_split(&mut boxes, image) else {
             break;
         };
         let mut members = std::mem::take(&mut boxes[split_at].members);
@@ -848,7 +849,11 @@ fn median_cut_rgba(image: &RgbaImage, max_colors: u16, dither: bool) -> (Vec<[u8
         }
         let right = members.split_off(mid);
         boxes[split_at].members = members;
-        boxes.push(ColorBox { members: right });
+        boxes[split_at].bounds = None;
+        boxes.push(ColorBox {
+            members: right,
+            bounds: None,
+        });
     }
 
     let mut palette = Vec::with_capacity(boxes.len());
@@ -868,15 +873,20 @@ fn median_cut_rgba(image: &RgbaImage, max_colors: u16, dither: bool) -> (Vec<[u8
 
 struct ColorBox {
     members: Vec<u32>,
+    // Only a split changes these bounds. Compute lazily so the final split
+    // (including a two-color palette) does not scan children it never selects.
+    bounds: Option<([u8; 4], [u8; 4])>,
 }
 
-fn next_split(boxes: &[ColorBox], image: &RgbaImage) -> Option<(usize, usize)> {
+fn next_split(boxes: &mut [ColorBox], image: &RgbaImage) -> Option<(usize, usize)> {
     let mut best: Option<(usize, usize, u8)> = None;
-    for (box_index, color_box) in boxes.iter().enumerate() {
+    for (box_index, color_box) in boxes.iter_mut().enumerate() {
         if color_box.members.len() < 2 {
             continue;
         }
-        let (min, max) = box_bounds(image, &color_box.members);
+        let (min, max) = *color_box
+            .bounds
+            .get_or_insert_with(|| box_bounds(image, &color_box.members));
         let channel = (0..4)
             .max_by_key(|&channel| max[channel].saturating_sub(min[channel]))
             .unwrap_or(0);
