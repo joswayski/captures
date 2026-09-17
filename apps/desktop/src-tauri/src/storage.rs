@@ -1992,6 +1992,158 @@ mod tests {
         assert!(bytes.len() <= encode_png(&image).expect("preserve PNG").len());
     }
 
+    // Pre-optimization palette construction: deliberately recompute all bounds
+    // each iteration, independently of ColorBox and its cached state.
+    fn uncached_median_cut(
+        image: &RgbaImage,
+        colors: u16,
+        dither: bool,
+    ) -> (Vec<[u8; 4]>, Vec<u8>) {
+        let count = super::rgba_pixel_count(image);
+        let target = usize::from(colors).clamp(2, 256).min(count.max(1));
+        let mut boxes: Vec<Vec<u32>> = vec![(0..count as u32).collect()];
+        while boxes.len() < target {
+            let mut best: Option<(usize, usize, u8)> = None;
+            for (index, members) in boxes.iter().enumerate() {
+                if members.len() < 2 {
+                    continue;
+                }
+                let (min, max) = super::box_bounds(image, members);
+                let channel = (0..4)
+                    .max_by_key(|&channel| max[channel] - min[channel])
+                    .unwrap();
+                let range = max[channel] - min[channel];
+                if range > 0 && best.is_none_or(|(_, _, previous)| range > previous) {
+                    best = Some((index, channel, range));
+                }
+            }
+            let Some((index, channel, _)) = best else {
+                break;
+            };
+            boxes[index].sort_unstable_by_key(|&pixel| super::rgba_at(image, pixel)[channel]);
+            let mid = boxes[index].len() / 2;
+            let right = boxes[index].split_off(mid);
+            boxes.push(right);
+        }
+        let palette: Vec<_> = boxes
+            .iter()
+            .map(|members| super::box_representative(image, members))
+            .collect();
+        let indices = if dither {
+            super::dither_rgba_indices(image, &palette)
+        } else {
+            super::nearest_rgba_indices(image, &palette)
+        };
+        (palette, indices)
+    }
+
+    #[test]
+    fn median_cut_matches_uncached_palette_order_indices_and_png_bytes() {
+        let fixtures = [
+            RgbaImage::new(0, 0),
+            RgbaImage::from_pixel(1, 1, Rgba([13, 47, 99, 128])),
+            RgbaImage::from_pixel(9, 7, Rgba([13, 47, 99, 128])),
+            // Equal ranges exercise last-channel and first-box tie breaking.
+            RgbaImage::from_fn(9, 9, |x, y| {
+                Rgba([
+                    (x * 17) as u8,
+                    (y * 17) as u8,
+                    (255 - x * 17) as u8,
+                    (255 - y * 17) as u8,
+                ])
+            }),
+            RgbaImage::from_fn(23, 17, |x, y| {
+                Rgba([
+                    (x * 11) as u8,
+                    (y * 13) as u8,
+                    (x * 37 + y * 71) as u8,
+                    (x * 7 + y * 3) as u8,
+                ])
+            }),
+        ];
+        for image in &fixtures {
+            for colors in [0, 1, 2, 3, 16, 64, 256, 300] {
+                for dither in [false, true] {
+                    let expected = uncached_median_cut(image, colors, dither);
+                    assert_eq!(
+                        super::median_cut_rgba(image, colors, dither),
+                        expected,
+                        "{:?}, {colors} colors, dither={dither}",
+                        image.dimensions()
+                    );
+                    // This fixture always exceeds the palette budget and has
+                    // partial alpha, so the shipping export must use median cut.
+                    if image.dimensions() == (23, 17) {
+                        let indexed =
+                            super::encode_indexed_png(23, 17, &expected.0, &expected.1).unwrap();
+                        let lossless = encode_png(image).unwrap();
+                        let expected_png = if lossless.len() < indexed.len() {
+                            lossless
+                        } else {
+                            indexed
+                        };
+                        assert_eq!(
+                            encode_png_export_dithered(
+                                image,
+                                true,
+                                Some(colors.clamp(2, 256)),
+                                dither
+                            )
+                            .unwrap(),
+                            expected_png
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "manual release benchmark: --release --ignored --nocapture"]
+    fn benchmark_partial_alpha_png_export() {
+        use std::{hint::black_box, time::Instant};
+
+        for (name, width, height, colors, partial_alpha, dither) in [
+            ("540p-alpha-2", 960, 540, 2, true, true),
+            ("540p-alpha-64", 960, 540, 64, true, true),
+            ("540p-alpha-256", 960, 540, 256, true, true),
+            ("1080p-alpha-256", 1920, 1080, 256, true, true),
+            ("540p-alpha-256-no-dither", 960, 540, 256, true, false),
+            ("540p-opaque-256-control", 960, 540, 256, false, true),
+        ] {
+            let image = RgbaImage::from_fn(width, height, |x, y| {
+                let mixed = x.wrapping_mul(73) ^ y.wrapping_mul(151) ^ (x * y);
+                let alpha = if partial_alpha && x < width / 20 {
+                    (x * 255 / (width / 20)) as u8
+                } else {
+                    255
+                };
+                Rgba([mixed as u8, (mixed >> 5) as u8, (mixed >> 11) as u8, alpha])
+            });
+            let mut samples = Vec::new();
+            for iteration in 0..4 {
+                let start = Instant::now();
+                let bytes =
+                    encode_png_export_dithered(black_box(&image), true, Some(colors), dither)
+                        .unwrap();
+                black_box(&bytes);
+                let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+                if iteration > 0 {
+                    samples.push(elapsed);
+                }
+                if iteration == 0 {
+                    let checksum = bytes.iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
+                        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+                    });
+                    eprintln!("{name}: bytes={} fnv1a={checksum:016x}", bytes.len());
+                }
+            }
+            eprintln!("{name}: samples_ms={samples:?}");
+            samples.sort_by(f64::total_cmp);
+            eprintln!("{name}: median_ms={:.3}", samples[1]);
+        }
+    }
+
     fn png_has_srgb_chunk(bytes: &[u8]) -> bool {
         bytes.windows(4).any(|window| window == b"sRGB")
     }
