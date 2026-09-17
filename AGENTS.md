@@ -48,6 +48,7 @@
 
 - Run `npm run check` for the default repository gate. It includes release-version tests, desktop typechecking/lint/tests, and the production web build.
 - For Rust changes, also run `cargo fmt --all -- --check`, `cargo test --workspace`, and `cargo clippy --workspace --all-targets -- -D warnings`.
+- For performance work, report absolute costs as well as percentages. A small absolute slowdown can be acceptable for a much larger gain elsewhere; disclose the tradeoff for review instead of treating every timing regression as a blocker. Preserve behavior and output.
 - For Docker changes, build the image when Docker is available. If it is unavailable, validate the affected build stages directly and report that limitation.
 - Report exactly which checks ran and any checks that could not run.
 
