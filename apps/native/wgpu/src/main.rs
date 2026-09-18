@@ -21,7 +21,7 @@ fn main() -> eframe::Result {
     let floating = options.floating;
     let idle = options.scene == Scene::Idle;
     let size = if floating {
-        [640., 520.]
+        [640., 620.]
     } else {
         [1000., 720.]
     };

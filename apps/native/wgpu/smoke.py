@@ -11,13 +11,16 @@ import subprocess
 from pathlib import Path
 
 
-def run(binary, output, name, arguments):
+def run(binary, output, name, arguments, allow_unsupported_hidden=False):
     result = subprocess.run([str(binary), *arguments], capture_output=True, timeout=40)
     (output / f"{name}.jsonl").write_bytes(result.stdout)
     (output / f"{name}.stderr.txt").write_bytes(result.stderr)
+    events = [json.loads(line) for line in result.stdout.decode().splitlines() if line.strip()]
+    if (allow_unsupported_hidden and result.returncode == 3 and
+            any(e["event"] == "unsupported" and e["detail"]["capability"] == "hidden-idle" for e in events)):
+        return events
     if result.returncode:
         raise RuntimeError(f"{name} exited {result.returncode}: {result.stderr.decode(errors='replace')}")
-    events = [json.loads(line) for line in result.stdout.decode().splitlines() if line.strip()]
     if not any(e["event"] == "ready" for e in events) or not any(e["event"] == "exit" for e in events):
         raise RuntimeError(f"{name}: missing readiness or clean shutdown")
     return events
@@ -31,9 +34,20 @@ def main():
     binary = args.binary.resolve(strict=True)
     args.output.mkdir(parents=True, exist_ok=False)
 
+    hidden_supported = True
     for scene in ["idle", "preferences"]:
-        events = run(binary, args.output, f"{scene}-idle", ["--scene", scene, "--quit-after", "5"])
+        events = run(binary, args.output, f"{scene}-idle", ["--scene", scene, "--quit-after", "5"],
+                     allow_unsupported_hidden=scene == "idle")
+        if any(e["event"] == "unsupported" for e in events):
+            hidden_supported = False
+            print("UNSUPPORTED: hidden idle; this parity gate remains open", flush=True)
+            continue
         passes = next(e["detail"]["uiPasses"] for e in events if e["event"] == "exit")
+        lifecycle = [e["detail"] for e in events if e["event"] == "lifecycle-check"]
+        if not lifecycle or any(e["nativeVisible"] is not False for e in lifecycle if scene == "idle"):
+            raise RuntimeError(f"{scene}: native visibility is incorrect or unverified: {lifecycle}")
+        if scene != "idle" and any(e["nativeVisible"] is False for e in lifecycle):
+            raise RuntimeError(f"{scene}: expected a visible window")
         if passes > 30:
             raise RuntimeError(f"{scene}: {passes} UI passes while idle; investigate recurring redraw")
 
@@ -75,7 +89,8 @@ def main():
             raise RuntimeError("Editor rotation did not advance")
         if scene == "preview" and len([e for e in events if e["event"] == "first-action-total"]) != 6:
             raise RuntimeError("Preview did not submit six effects")
-    print("PASS: hidden/static idle guard, 11 viewport captures, 30 scripted actions")
+    print("PASS: static redraw guard, 11 viewport captures, 30 scripted actions; "
+          + ("hidden visibility verified" if hidden_supported else "hidden idle UNSUPPORTED, not accepted"))
 
 
 if __name__ == "__main__":

@@ -44,6 +44,17 @@ pub struct Workbench {
 
 impl Workbench {
     pub fn new(cc: &eframe::CreationContext<'_>, options: Options) -> Self {
+        if options.scene == Scene::Idle && cc.winit_window().and_then(|w| w.is_visible()).is_none()
+        {
+            // winit's Wayland root cannot be hidden with set_visible. Do not
+            // report a visible, resident window as a successful hidden workload.
+            emit(
+                "unsupported",
+                json!({"capability": "hidden-idle",
+                "reason": "This window backend cannot hide/query root visibility; hidden idle is not measured"}),
+            );
+            std::process::exit(3);
+        }
         let adapter = cc
             .wgpu_render_state
             .as_ref()
@@ -497,7 +508,7 @@ impl eframe::App for Workbench {
         [0.; 4]
     }
 
-    fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let screenshot = ctx.input(|i| {
             i.raw.events.iter().find_map(|event| {
                 if let egui::Event::Screenshot { image, .. } = event {
@@ -531,6 +542,13 @@ impl eframe::App for Workbench {
                 eprintln!("Screenshot did not finish before quit deadline");
                 std::process::exit(1);
             }
+            emit(
+                "lifecycle-check",
+                json!({
+                    "scene": self.options.scene.name(),
+                    "nativeVisible": frame.winit_window().and_then(|window| window.is_visible())
+                }),
+            );
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         if self.options.exercise
@@ -545,6 +563,16 @@ impl eframe::App for Workbench {
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         let start = Instant::now();
         let ctx = ui.ctx().clone();
+        if self.options.scene == Scene::Idle {
+            // eframe 0.36.2 auto-shows the root after its first paint, even if
+            // the builder requested hidden. Viewport commands run after that
+            // show, so hide once here; deadlines continue through logic().
+            if self.frames == 0 {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
+            self.frames += 1;
+            return;
+        }
         let t = self.tokens(&ctx);
         ui.set_style(ctx.style_of(ctx.theme()));
         if !self.options.floating {

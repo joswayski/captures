@@ -65,6 +65,13 @@ images/canvas layers lack full semantic nodes. Reduce motion is an explicit prob
 switch, not yet connected to each OS setting. Transparency does not imply desktop
 blur, click-through, topmost behavior, or correct Wayland overlay placement.
 
+**Hidden idle is unsupported on this candidate's Wayland backend.** winit cannot
+hide/query the root there; `--scene idle` exits with an explicit unsupported event
+and status 3 rather than measuring a visible window. On X11/Windows the workbench
+re-hides the root after eframe's automatic first paint and verifies visibility at
+the quit deadline. A transient startup map remains possible; this is not a
+production background/tray implementation. Resolving this is a renderer gate.
+
 ## Validate and collect evidence
 
 ```sh
@@ -79,7 +86,9 @@ python apps/native/profile.py --renderer wgpu --binary apps/native/wgpu/target/r
 Add `.exe` to both binary paths on Windows. Output directories must not exist.
 Smoke tests need an interactive desktop or a test compositor. They check two idle
 cases, eleven framebuffer captures, and thirty scheduled actions. Inspect the
-PNGs: their presence alone is not visual acceptance. Capture another state with
+PNGs: their presence alone is not visual acceptance. The Wayland run explicitly
+reports hidden idle as unsupported, not passed; the full resource runner fails
+closed on that unsupported workload. Capture another state with
 `--screenshot capture.png --screenshot-after 3 --exercise`; this reads only the
 workbench's framebuffer, never your desktop. Screenshots stop the app after saving
 and must be collected separately from resource trials.

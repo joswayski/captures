@@ -183,7 +183,9 @@ experimental Rust/wgpu renderer candidate for Windows/Linux. They use synthetic
 data, not real capture workflows, and are not replacement downloads. Windows/Linux
 renderer selection and full feature/design parity remain open. The
 [migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;
-existing Preview features remain available during development.
+existing Preview features remain available during development. The wgpu candidate
+does not yet support hidden-window idle on Wayland; see its
+[evaluation limits](apps/native/wgpu/README.md).
 
 ## License and trademarks
 
