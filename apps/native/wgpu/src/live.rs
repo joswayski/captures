@@ -2,27 +2,58 @@ use std::{
     borrow::Cow,
     path::{Path, PathBuf},
     process::Command,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        Arc, Mutex,
+        mpsc::{self, Receiver, Sender},
+    },
     thread,
     time::{Duration, Instant},
 };
 
-use captures_app::{Artifact, Request, Response, capture_flow::CaptureFlow};
-use captures_capture::DisplayDescriptor;
+use captures_app::{
+    Artifact, Request, Response, capture_flow::CaptureFlow, region::RegionSession,
+    selection::Rect as SelectionRect,
+};
+use captures_capture::{DisplayDescriptor, LogicalRect};
 use captures_settings::AppSettings;
 use eframe::egui::{self, RichText};
 
 use crate::tokens::Tokens;
+use crate::{selector, selector::Selector};
 
 enum Job {
     Execute(Request),
-    Decode { generation: u64, path: PathBuf },
+    PrepareRegion {
+        display_id: String,
+        generation: u64,
+        freeze: bool,
+        include_cursor: bool,
+    },
+    CaptureRegion {
+        root: PathBuf,
+        generation: u64,
+        session: Box<RegionSession>,
+        rect: LogicalRect,
+        after_countdown: bool,
+    },
+    Decode {
+        generation: u64,
+        path: PathBuf,
+    },
     Copy(PathBuf),
     Shutdown,
 }
 
 enum Reply {
     Executed(Result<Box<Response>, String>),
+    RegionPrepared {
+        generation: u64,
+        result: Result<Box<RegionSession>, String>,
+    },
+    RegionCaptured {
+        generation: u64,
+        result: Result<Box<Artifact>, String>,
+    },
     Copied(Result<(), String>),
     Decoded {
         generation: u64,
@@ -33,6 +64,29 @@ enum Reply {
 
 struct Decoded {
     image: egui::ColorImage,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum CapturePhase {
+    DisplayCountdown,
+    DisplayCapturing,
+    RegionPreparing,
+    RegionSelecting,
+    RegionCountdown {
+        rect: SelectionRect,
+        after_countdown: bool,
+    },
+    RegionCapturing,
+}
+
+enum SelectorMessage {
+    Confirm {
+        generation: u64,
+        rect: SelectionRect,
+    },
+    Cancel {
+        generation: u64,
+    },
 }
 
 /// The nonvisual state machine is intentionally independent of egui so stale
@@ -82,7 +136,16 @@ pub struct Live {
     auto_copy_on_capture: bool,
     include_cursor: bool,
     flow: Option<CaptureFlow>,
+    capture_phase: Option<CapturePhase>,
     countdown_target: Option<(usize, egui::Pos2, egui::Vec2)>,
+    region_session: Option<Box<RegionSession>>,
+    region_texture: Option<egui::TextureHandle>,
+    region_selector: Arc<Mutex<Selector>>,
+    selector_tx: Sender<SelectorMessage>,
+    selector_rx: Receiver<SelectorMessage>,
+    region_freeze: bool,
+    region_auto_start: bool,
+    region_countdown_seconds: u8,
     can_hide: Option<bool>,
     confirm_delete: Option<String>,
 }
@@ -92,6 +155,7 @@ impl Live {
         let root = root.unwrap_or_else(captures_app::default_history_root);
         let (tx, jobs) = mpsc::channel();
         let (out, rx) = mpsc::channel();
+        let (selector_tx, selector_rx) = mpsc::channel();
         let worker = thread::spawn(move || {
             // Retain ownership on X11. Disk decode and clipboard encoding never
             // block the UI, and the full uncompressed image is not retained by it.
@@ -104,6 +168,35 @@ impl Live {
                             .map(Box::new)
                             .map_err(|error| error.to_string()),
                     ),
+                    Job::PrepareRegion {
+                        display_id,
+                        generation,
+                        freeze,
+                        include_cursor,
+                    } => Reply::RegionPrepared {
+                        generation,
+                        result: RegionSession::prepare(
+                            &display_id,
+                            generation,
+                            freeze,
+                            include_cursor,
+                        )
+                        .map(Box::new)
+                        .map_err(|error| error.to_string()),
+                    },
+                    Job::CaptureRegion {
+                        root,
+                        generation,
+                        session,
+                        rect,
+                        after_countdown,
+                    } => Reply::RegionCaptured {
+                        generation,
+                        result: session
+                            .capture(&root, rect, after_countdown)
+                            .map(Box::new)
+                            .map_err(|error| error.to_string()),
+                    },
                     Job::Decode { generation, path } => Reply::Decoded {
                         generation,
                         result: decode(&path),
@@ -139,7 +232,16 @@ impl Live {
             auto_copy_on_capture: false,
             include_cursor: false,
             flow: None,
+            capture_phase: None,
             countdown_target: None,
+            region_session: None,
+            region_texture: None,
+            region_selector: Arc::new(Mutex::new(Selector::default())),
+            selector_tx,
+            selector_rx,
+            region_freeze: false,
+            region_auto_start: false,
+            region_countdown_seconds: 0,
             can_hide: None,
             confirm_delete: None,
         };
@@ -155,12 +257,19 @@ impl Live {
     }
 
     pub fn flush(&mut self) {
-        self.flow = None;
+        // Cancel preparation/countdown before draining work. CaptureFlow::cancel
+        // leaves a capture that already crossed its persistence commit point alone.
+        if let Some(flow) = &self.flow {
+            flow.cancel();
+        }
         // Finish accepted capture/export/delete operations before process teardown.
         let _ = self.tx.send(Job::Shutdown);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+        self.flow = None;
+        self.capture_phase = None;
+        self.region_session = None;
     }
 
     fn send(&mut self, request: Request) {
@@ -199,13 +308,52 @@ impl Live {
         self.can_hide = frame
             .winit_window()
             .map(|window| window.is_visible().is_some());
+        while let Ok(message) = self.selector_rx.try_recv() {
+            match message {
+                SelectorMessage::Cancel { generation }
+                    if accepts_selector_action(
+                        self.flow.as_ref().map(CaptureFlow::generation),
+                        generation,
+                        self.flow.as_ref().is_some_and(CaptureFlow::is_current),
+                        self.capture_phase,
+                    ) =>
+                {
+                    let Some(flow) = &self.flow else { continue };
+                    flow.cancel();
+                }
+                SelectorMessage::Confirm { generation, rect }
+                    if accepts_selector_action(
+                        self.flow.as_ref().map(CaptureFlow::generation),
+                        generation,
+                        self.flow.as_ref().is_some_and(CaptureFlow::is_current),
+                        self.capture_phase,
+                    ) =>
+                {
+                    let Some(flow) = &mut self.flow else {
+                        continue;
+                    };
+                    match flow.start_countdown(self.region_countdown_seconds) {
+                        Ok(()) => {
+                            self.capture_phase = Some(CapturePhase::RegionCountdown {
+                                rect,
+                                after_countdown: self.region_countdown_seconds > 0,
+                            });
+                            self.status = "Region confirmed. Press Escape to cancel.".into();
+                            ctx.request_repaint();
+                        }
+                        Err(error) => {
+                            self.error = Some(error);
+                            self.finish_capture(ctx, false);
+                        }
+                    }
+                }
+                SelectorMessage::Confirm { .. } | SelectorMessage::Cancel { .. } => {}
+            }
+        }
         if let Some(flow) = &self.flow {
             if !flow.is_current() {
-                self.flow = None;
-                self.capture_waiting_for_hide = false;
-                self.auto_copy_on_capture = false;
                 self.status = "Capture cancelled (Escape or desktop session unavailable).".into();
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                self.finish_capture(ctx, false);
             } else {
                 // Only active captures poll; settled history/preferences stay event-driven.
                 ctx.request_repaint_after(Duration::from_millis(100));
@@ -230,22 +378,57 @@ impl Live {
                 };
                 let Some(flow) = &self.flow else { return };
                 let generation = flow.generation();
-                self.capture_in_flight = true;
-                self.send(Request::CaptureDisplay {
-                    root: self.root.clone(),
-                    display_id,
-                    generation,
-                    include_cursor: self.include_cursor,
-                });
+                match self.capture_phase {
+                    Some(CapturePhase::DisplayCountdown) => {
+                        self.capture_in_flight = true;
+                        self.capture_phase = Some(CapturePhase::DisplayCapturing);
+                        self.send(Request::CaptureDisplay {
+                            root: self.root.clone(),
+                            display_id,
+                            generation,
+                            include_cursor: self.include_cursor,
+                        });
+                    }
+                    Some(CapturePhase::RegionPreparing) => {
+                        self.pending += 1;
+                        let _ = self.tx.send(Job::PrepareRegion {
+                            display_id,
+                            generation,
+                            freeze: self.region_freeze,
+                            include_cursor: self.include_cursor,
+                        });
+                    }
+                    Some(CapturePhase::RegionCountdown {
+                        rect,
+                        after_countdown,
+                    }) => {
+                        let Some(session) = self.region_session.take() else {
+                            self.error = Some("Region preparation was lost before capture.".into());
+                            self.finish_capture(ctx, false);
+                            return;
+                        };
+                        self.region_texture = None;
+                        self.capture_in_flight = true;
+                        self.capture_phase = Some(CapturePhase::RegionCapturing);
+                        self.pending += 1;
+                        let _ = self.tx.send(Job::CaptureRegion {
+                            root: self.root.clone(),
+                            generation,
+                            session,
+                            rect,
+                            after_countdown,
+                        });
+                    }
+                    _ => {}
+                }
             } else if self
                 .hide_started
                 .is_some_and(|since| since.elapsed() > Duration::from_secs(2))
             {
                 self.capture_waiting_for_hide = false;
-                self.flow = None;
                 self.error =
                     Some("Could not hide the capture window. No screenshot was taken.".into());
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                self.finish_capture(ctx, false);
             } else {
                 ctx.request_repaint_after(Duration::from_millis(16));
             }
@@ -261,14 +444,81 @@ impl Live {
                 }
                 Reply::Executed(result) => {
                     self.pending = self.pending.saturating_sub(1);
-                    if self.capture_in_flight {
+                    if self.capture_phase == Some(CapturePhase::DisplayCapturing) {
                         self.capture_in_flight = false;
-                        self.flow = None;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        let captured = matches!(result.as_deref(), Ok(Response::Captured { .. }));
+                        self.finish_capture(ctx, captured);
                     }
                     match result {
                         Err(error) => self.error = Some(error),
                         Ok(response) => self.apply(*response),
+                    }
+                }
+                Reply::RegionPrepared { generation, result } => {
+                    self.pending = self.pending.saturating_sub(1);
+                    let accepted = accepts_prepare_reply(
+                        self.flow.as_ref().map(CaptureFlow::generation),
+                        generation,
+                        self.flow.as_ref().is_some_and(CaptureFlow::is_current),
+                        self.capture_phase,
+                    );
+                    if !accepted {
+                        continue;
+                    }
+                    match result {
+                        Ok(session) => {
+                            let expected = self
+                                .displays
+                                .iter()
+                                .find(|display| Some(&display.id) == self.display_id.as_ref());
+                            if !expected.is_some_and(|display| {
+                                same_display_geometry(display, session.display())
+                            }) {
+                                self.error = Some(
+                                    "The selected display changed while preparing the region."
+                                        .into(),
+                                );
+                                self.finish_capture(ctx, false);
+                                continue;
+                            }
+                            self.region_texture = session.frozen_image().map(|image| {
+                                ctx.load_texture(
+                                    format!("region-frozen-{generation}"),
+                                    egui::ColorImage::from_rgba_unmultiplied(
+                                        [image.width() as usize, image.height() as usize],
+                                        image.as_raw(),
+                                    ),
+                                    egui::TextureOptions::LINEAR,
+                                )
+                            });
+                            self.region_session = Some(session);
+                            self.region_selector.lock().unwrap().reset();
+                            self.capture_phase = Some(CapturePhase::RegionSelecting);
+                            self.status = "Select a region. Press Escape to cancel.".into();
+                            ctx.request_repaint();
+                        }
+                        Err(error) => {
+                            self.error = Some(error);
+                            self.finish_capture(ctx, false);
+                        }
+                    }
+                }
+                Reply::RegionCaptured { generation, result } => {
+                    self.pending = self.pending.saturating_sub(1);
+                    let accepted = self
+                        .flow
+                        .as_ref()
+                        .is_some_and(|flow| flow.generation() == generation)
+                        && self.capture_phase == Some(CapturePhase::RegionCapturing);
+                    if !accepted {
+                        continue;
+                    }
+                    self.capture_in_flight = false;
+                    let captured = result.is_ok();
+                    self.finish_capture(ctx, captured);
+                    match result {
+                        Ok(artifact) => self.accept_artifact(*artifact, "Region captured as PNG"),
+                        Err(error) => self.error = Some(error),
                     }
                 }
                 Reply::Decoded {
@@ -292,6 +542,35 @@ impl Live {
                 },
                 Reply::Decoded { .. } => {}
             }
+        }
+    }
+
+    fn finish_capture(&mut self, ctx: &egui::Context, preserve_auto_copy: bool) {
+        self.flow = None;
+        self.capture_phase = None;
+        self.capture_waiting_for_hide = false;
+        self.hide_started = None;
+        self.hidden_since = None;
+        self.capture_in_flight = false;
+        if !preserve_auto_copy {
+            self.auto_copy_on_capture = false;
+        }
+        self.region_session = None;
+        self.region_texture = None;
+        self.region_selector.lock().unwrap().reset();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.request_repaint();
+    }
+
+    fn accept_artifact(&mut self, artifact: Artifact, status: &str) {
+        let id = artifact.entry.id.clone();
+        let path = artifact.image_path.clone();
+        self.artifacts.insert(0, artifact);
+        self.select(id);
+        self.status = status.into();
+        if std::mem::take(&mut self.auto_copy_on_capture) {
+            self.pending += 1;
+            let _ = self.tx.send(Job::Copy(path));
         }
     }
 
@@ -324,15 +603,7 @@ impl Live {
                 self.status = "History loaded".into();
             }
             Response::Captured { artifact } => {
-                let id = artifact.entry.id.clone();
-                let path = artifact.image_path.clone();
-                self.artifacts.insert(0, artifact);
-                self.select(id);
-                self.status = "Full display captured as PNG".into();
-                if std::mem::take(&mut self.auto_copy_on_capture) {
-                    self.pending += 1;
-                    let _ = self.tx.send(Job::Copy(path));
-                }
+                self.accept_artifact(artifact, "Full display captured as PNG");
             }
             Response::Saved { artifact, path } => {
                 if let Some(item) = self
@@ -371,9 +642,70 @@ impl Live {
         frame: &eframe::Frame,
         settings: impl Fn() -> Result<AppSettings, String>,
     ) {
+        if self.capture_phase == Some(CapturePhase::RegionSelecting) {
+            let t = t.clone();
+            let generation = self
+                .flow
+                .as_ref()
+                .expect("selection owns flow")
+                .generation();
+            let (monitor, position, size) = self.countdown_target.expect("region target validated");
+            let selector = Arc::clone(&self.region_selector);
+            let sender = self.selector_tx.clone();
+            let texture = self.region_texture.clone();
+            let auto_start = self.region_auto_start;
+            let (overlay_width, overlay_height) = self
+                .region_session
+                .as_ref()
+                .expect("selection owns region session")
+                .display()
+                .overlay_size();
+            let overlay_bounds = captures_app::selection::Bounds {
+                width: overlay_width,
+                height: overlay_height,
+            };
+            ui.ctx().show_viewport_deferred(
+                egui::ViewportId::from_hash_of("region-selector"),
+                capture_viewport("Captures Region Selection", monitor, position, size),
+                move |ui, _| {
+                    if ui.input(|input| input.viewport().close_requested()) {
+                        captures_app::capture_flow::cancel(generation);
+                        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                        return;
+                    }
+                    let action = selector.lock().unwrap().show(
+                        ui,
+                        &t,
+                        texture.as_ref(),
+                        auto_start,
+                        Some(overlay_bounds),
+                    );
+                    if let Some(action) = action {
+                        let message = match action {
+                            selector::Action::Confirm => selector
+                                .lock()
+                                .unwrap()
+                                .rect()
+                                .map(|rect| SelectorMessage::Confirm { generation, rect }),
+                            selector::Action::Cancel => {
+                                Some(SelectorMessage::Cancel { generation })
+                            }
+                        };
+                        if let Some(message) = message {
+                            let _ = sender.send(message);
+                            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                        }
+                    }
+                },
+            );
+        }
         if let Some(flow) = &self.flow
             && !self.capture_waiting_for_hide
             && !self.capture_in_flight
+            && matches!(
+                self.capture_phase,
+                Some(CapturePhase::DisplayCountdown | CapturePhase::RegionCountdown { .. })
+            )
         {
             let clock = flow.countdown();
             if clock.remaining(Instant::now()) > 0 {
@@ -383,19 +715,7 @@ impl Live {
                     self.countdown_target.expect("countdown target validated");
                 ui.ctx().show_viewport_deferred(
                     egui::ViewportId::from_hash_of("screenshot-countdown"),
-                    egui::ViewportBuilder::default()
-                        .with_title("Captures Screenshot Countdown")
-                        .with_visible(true)
-                        .with_monitor(monitor)
-                        .with_position(position)
-                        .with_inner_size(size)
-                        .with_fullscreen(true)
-                        .with_decorations(false)
-                        .with_resizable(false)
-                        .with_transparent(true)
-                        .with_has_shadow(false)
-                        .with_always_on_top()
-                        .with_taskbar(false),
+                    capture_viewport("Captures Screenshot Countdown", monitor, position, size),
                     move |ui, _| {
                         if ui.input(|i| {
                             i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)
@@ -425,7 +745,7 @@ impl Live {
                 ui.heading("Captures");
                 ui.label(RichText::new("Native display capture").color(t.color("text-muted")));
             });
-            ui.label("Full-display capture with countdown, cursor inclusion, automatic copy and save format/folder preferences. Regions, recording, editing, and mini previews are not connected yet.");
+            ui.label("Display and region capture with countdown, cursor inclusion, automatic copy and save format/folder preferences. Recording, editing, and mini previews are not connected yet.");
             ui.horizontal(|ui| {
                 egui::ComboBox::from_label("Display")
                     .selected_text(self.displays.iter().find(|d| Some(&d.id) == self.display_id.as_ref()).map_or("No display", |d| d.name.as_str()))
@@ -437,23 +757,48 @@ impl Live {
                 if capture.clicked() {
                     match settings() {
                         Ok(settings) => {
-                            self.countdown_target = frame.winit_window().and_then(|window| {
-                                let display = self.displays.iter().find(|d| Some(&d.id) == self.display_id.as_ref())?;
-                                let (index, monitor) = window.available_monitors().enumerate().find(|(_, m)| m.position().x == display.x && m.position().y == display.y)?;
-                                let scale = monitor.scale_factor();
-                                let position = monitor.position().to_logical::<f32>(scale);
-                                let size = monitor.size().to_logical::<f32>(scale);
-                                Some((index, egui::pos2(position.x, position.y), egui::vec2(size.width, size.height)))
-                            });
+                            self.countdown_target = capture_target(frame, &self.displays, self.display_id.as_deref());
                             if settings.screenshot_countdown_seconds > 0 && self.countdown_target.is_none() {
                                 self.error = Some("The selected display is no longer available for countdown.".into());
                             } else {
                                 match CaptureFlow::begin(settings.screenshot_countdown_seconds) {
                                     Ok(flow) => {
                                         self.flow = Some(flow);
+                                        self.capture_phase = Some(CapturePhase::DisplayCountdown);
                                         self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
                                         self.include_cursor = settings.show_cursor_in_screenshots;
                                         self.status = "Preparing screenshot… Press Escape to cancel.".into();
+                                        ui.ctx().request_repaint();
+                                    }
+                                    Err(error) => self.error = Some(format!("Could not arm capture Escape: {error}")),
+                                }
+                            }
+                        }
+                        Err(error) => self.error = Some(error),
+                    }
+                }
+                let region = ui.add_enabled(self.pending == 0 && self.display_id.is_some() && self.can_hide == Some(true), egui::Button::new("Capture region"));
+                if region.clicked() {
+                    match settings() {
+                        Ok(settings) => {
+                            self.countdown_target = capture_target(frame, &self.displays, self.display_id.as_deref());
+                            if self.countdown_target.is_none() {
+                                self.error = Some("The selected display is no longer available for region selection.".into());
+                            } else {
+                                match CaptureFlow::begin(0) {
+                                    Ok(flow) => {
+                                        self.flow = Some(flow);
+                                        self.capture_phase = Some(CapturePhase::RegionPreparing);
+                                        self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
+                                        self.include_cursor = settings.show_cursor_in_screenshots;
+                                        self.region_freeze = settings.freeze_screen;
+                                        self.region_auto_start = settings.auto_start_on_selection;
+                                        self.region_countdown_seconds = settings.screenshot_countdown_seconds;
+                                        self.capture_waiting_for_hide = true;
+                                        self.hide_started = Some(Instant::now());
+                                        self.hidden_since = None;
+                                        self.status = "Preparing region selector… Press Escape to cancel.".into();
+                                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
                                         ui.ctx().request_repaint();
                                     }
                                     Err(error) => self.error = Some(format!("Could not arm capture Escape: {error}")),
@@ -617,6 +962,110 @@ impl Live {
     }
 }
 
+fn capture_target(
+    frame: &eframe::Frame,
+    displays: &[DisplayDescriptor],
+    display_id: Option<&str>,
+) -> Option<(usize, egui::Pos2, egui::Vec2)> {
+    let display = displays
+        .iter()
+        .find(|display| Some(display.id.as_str()) == display_id)?;
+    let window = frame.winit_window()?;
+    let (index, monitor) = window
+        .available_monitors()
+        .enumerate()
+        .find(|(_, monitor)| {
+            let position = monitor.position();
+            let size = monitor.size();
+            monitor_matches_overlay(
+                display.overlay_geometry(),
+                (position.x, position.y, size.width, size.height),
+                monitor.scale_factor(),
+                display.scale_factor,
+            )
+        })?;
+    let scale = monitor.scale_factor();
+    let position = monitor.position().to_logical::<f32>(scale);
+    let size = monitor.size().to_logical::<f32>(scale);
+    Some((
+        index,
+        egui::pos2(position.x, position.y),
+        egui::vec2(size.width, size.height),
+    ))
+}
+
+fn monitor_matches_overlay(
+    overlay: (f64, f64, f64, f64),
+    physical: (i32, i32, u32, u32),
+    winit_scale: f64,
+    capture_scale: f64,
+) -> bool {
+    let scale = winit_scale.max(1.);
+    let actual = (
+        f64::from(physical.0) / scale,
+        f64::from(physical.1) / scale,
+        f64::from(physical.2) / scale,
+        f64::from(physical.3) / scale,
+    );
+    (winit_scale - capture_scale).abs() < 0.001
+        && [actual.0, actual.1, actual.2, actual.3]
+            .into_iter()
+            .zip([overlay.0, overlay.1, overlay.2, overlay.3])
+            .all(|(actual, expected)| (actual - expected).abs() <= 1.)
+}
+
+fn capture_viewport(
+    title: &str,
+    monitor: usize,
+    position: egui::Pos2,
+    size: egui::Vec2,
+) -> egui::ViewportBuilder {
+    egui::ViewportBuilder::default()
+        .with_title(title)
+        .with_visible(true)
+        .with_monitor(monitor)
+        .with_position(position)
+        .with_inner_size(size)
+        .with_fullscreen(true)
+        .with_decorations(false)
+        .with_resizable(false)
+        .with_transparent(true)
+        .with_has_shadow(false)
+        .with_always_on_top()
+        .with_taskbar(false)
+}
+
+fn same_display_geometry(left: &DisplayDescriptor, right: &DisplayDescriptor) -> bool {
+    left.id == right.id
+        && left.x == right.x
+        && left.y == right.y
+        && left.width == right.width
+        && left.height == right.height
+        && left.scale_factor == right.scale_factor
+}
+
+fn accepts_prepare_reply(
+    active_generation: Option<u64>,
+    reply_generation: u64,
+    flow_is_current: bool,
+    phase: Option<CapturePhase>,
+) -> bool {
+    active_generation == Some(reply_generation)
+        && flow_is_current
+        && phase == Some(CapturePhase::RegionPreparing)
+}
+
+fn accepts_selector_action(
+    active_generation: Option<u64>,
+    action_generation: u64,
+    flow_is_current: bool,
+    phase: Option<CapturePhase>,
+) -> bool {
+    active_generation == Some(action_generation)
+        && flow_is_current
+        && phase == Some(CapturePhase::RegionSelecting)
+}
+
 fn decode(path: &Path) -> Result<Decoded, String> {
     let rgba = image::open(path)
         .map_err(|error| format!("Could not decode {}: {error}", path.display()))?
@@ -696,5 +1145,63 @@ mod tests {
         selection.clear();
         assert!(!selection.accepts(current));
         assert_eq!(selection.id, None);
+    }
+
+    #[test]
+    fn cancelled_or_stale_prepare_reply_never_opens_the_selector() {
+        let phase = Some(CapturePhase::RegionPreparing);
+        assert!(accepts_prepare_reply(Some(12), 12, true, phase));
+        assert!(!accepts_prepare_reply(Some(12), 10, true, phase));
+        assert!(!accepts_prepare_reply(Some(12), 12, false, phase));
+        assert!(!accepts_prepare_reply(
+            Some(12),
+            12,
+            true,
+            Some(CapturePhase::RegionSelecting)
+        ));
+    }
+
+    #[test]
+    fn stale_selector_action_cannot_change_a_newer_flow() {
+        let phase = Some(CapturePhase::RegionSelecting);
+        assert!(accepts_selector_action(Some(12), 12, true, phase));
+        assert!(!accepts_selector_action(Some(12), 10, true, phase));
+        assert!(!accepts_selector_action(Some(12), 12, false, phase));
+        assert!(!accepts_selector_action(
+            Some(12),
+            12,
+            true,
+            Some(CapturePhase::RegionCountdown {
+                rect: SelectionRect {
+                    x: 1.,
+                    y: 2.,
+                    width: 3.,
+                    height: 4.,
+                },
+                after_countdown: false,
+            })
+        ));
+    }
+
+    #[test]
+    fn monitor_matching_compares_the_backend_overlay_contract_to_winit_dips() {
+        assert!(monitor_matches_overlay(
+            (-100., 50., 1600., 900.),
+            (-200, 100, 3200, 1800),
+            2.,
+            2.,
+        ));
+        assert!(!monitor_matches_overlay(
+            (-100., 50., 1600., 900.),
+            (-200, 100, 3000, 1800),
+            2.,
+            2.,
+        ));
+        assert!(!monitor_matches_overlay(
+            (-100., 50., 1600., 900.),
+            (-200, 100, 3200, 1800),
+            2.,
+            1.5,
+        ));
     }
 }

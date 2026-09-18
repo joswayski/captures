@@ -73,19 +73,21 @@ and hotspot, a synthetic arrow on Windows/X11, and no overlay when the pointer
 is outside the selected display or unavailable. Wayland-only cursor acquisition
 remains unsupported. Exact cursor shapes on Windows/Linux are not claimed.
 
-The AppKit workspace also offers **Capture region** on the selected display.
+Both native hosts offer **Capture region** on the selected display.
 Draw from an empty selection, move it or resize its corners, choose Free/1:1/4:3/
 3:2/16:9/9:16, and hold Shift for a square while dragging. Release Shift to restore
 the chosen aspect. Confirm with Enter/Capture, or enable automatic start on
 selection in Preferences. Escape covers preparation, selection and countdown.
 Freeze follows Preferences; zero countdown uses the retained frame/cursor, while
-any countdown captures fresh pixels. The native panel borrows Rust-owned pixels
+any countdown captures fresh pixels. The AppKit panel borrows Rust-owned pixels
 through an image provider and releases them after closing/worker completion.
 This adds no full-desktop temporary file. `--scene region` provides a synthetic
 selector using the same view without screen access; `--exercise` covers draw,
-move, aspect, resize and Shift release. Windows/Linux selector integration is
-in progress separately; real OS capture, mixed-DPI and VoiceOver acceptance is
-still required. Selector blur, magnifier and the full capture-menu UI remain open.
+move, aspect, resize and Shift release. The Windows/X11 candidate uses the same
+Rust `RegionSession`; its [private-X11 integration test](wgpu/README.md#validate-and-collect-evidence)
+checks repeated captures, exact saved pixels and cancellation with simulated
+session state. Real OS capture, mixed-DPI and accessibility acceptance is still
+required. Selector blur, magnifier and the full capture-menu UI remain open.
 
 This slice has no window capture, recordings, editor or
 mini previews; those stored preferences do not apply yet. Full UI parity remains

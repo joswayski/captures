@@ -80,18 +80,29 @@ def main():
         "preview-reduced": ["--scene", "preview", "--exercise", "--reduced-motion", "--screenshot-after", "3"],
         "preview-floating": ["--scene", "preview", "--floating"],
         "editor-transformed": ["--scene", "editor", "--exercise", "--screenshot-after", "7"],
+        "region-blank": ["--scene", "region"],
+        "region-drawn": ["--scene", "region", "--exercise", "--screenshot-after", "3"],
+        "region-moved": ["--scene", "region", "--exercise", "--screenshot-after", "7"],
+        "region-resized": ["--scene", "region", "--exercise", "--screenshot-after", "11"],
+        "region-aspect": ["--scene", "region", "--exercise", "--screenshot-after", "15"],
+        "region-shift-square": ["--scene", "region", "--exercise", "--screenshot-after", "19"],
+        "region-cancelled": ["--scene", "region", "--exercise", "--screenshot-after", "23"],
     }
     for name, arguments in shots.items():
         screenshot = args.output / f"{name}.png"
         events = run(binary, args.output, name, [*arguments, "--screenshot", str(screenshot)])
         if not any(e["event"] == "screenshot-saved" for e in events):
             raise RuntimeError(f"{name}: missing screenshot acknowledgement")
+        if name.startswith("region-"):
+            texture_sizes = [e["detail"]["pixels"] for e in events if e["event"] == "texture-preparation"]
+            if texture_sizes != [[2048, 1152]]:
+                raise RuntimeError(f"{name}: expected one retained 2048×1152 source texture: {texture_sizes}")
         data = screenshot.read_bytes()
         if data[:8] != b"\x89PNG\r\n\x1a\n" or min(struct.unpack(">II", data[16:24])) < 400:
             raise RuntimeError(f"{name}: invalid or undersized viewport capture")
 
     # Verify all six scheduled actions, not only that the process survived.
-    for scene in ["preferences", "history", "hud", "preview", "editor"]:
+    for scene in ["preferences", "history", "hud", "preview", "editor", "region"]:
         events = run(binary, args.output, f"{scene}-exercise", ["--scene", scene, "--exercise", "--quit-after", "24"])
         actions = [e["detail"] for e in events if e["event"] == "scripted-action"]
         if [e["cycle"] for e in actions] != list(range(6)):
@@ -106,7 +117,17 @@ def main():
             raise RuntimeError("Editor rotation did not advance")
         if scene == "preview" and len([e for e in events if e["event"] == "first-action-total"]) != 6:
             raise RuntimeError("Preview did not submit six effects")
-    print("PASS: static redraw guard, 15 viewport captures, 30 scripted actions; "
+        if scene == "region":
+            regions = [e["regionSelection"] for e in actions]
+            if any(region is None for region in regions[:5]) or regions[5] is not None:
+                raise RuntimeError(f"Region fixture did not exercise selection then cancellation: {regions}")
+            aspect = regions[3]
+            square = regions[4]
+            if abs(aspect["width"] / aspect["height"] - 16 / 9) > 1e-6:
+                raise RuntimeError(f"Region fixture did not apply 16:9: {aspect}")
+            if abs(square["width"] - square["height"]) > 1e-6:
+                raise RuntimeError(f"Region fixture did not apply Shift square: {square}")
+    print("PASS: static redraw guard, 22 viewport captures, 36 scripted actions; "
           + ("hidden visibility verified" if hidden_supported else "hidden idle UNSUPPORTED, not accepted"))
 
 
