@@ -166,7 +166,7 @@ deadlines, generation invalidation, and a cancellation/commit boundary across
 hosts; native countdown windows use the fixed media palette. Real mixed-DPI,
 focus, compositor, accessibility, and animation acceptance remains open.
 Cursor inclusion now shares sampling/compositing with the shipping host (macOS
-system pixels, Windows/X11 synthetic arrow). Regions/windows, recording, editor,
+system pixels, Windows/X11 synthetic arrow). Full region/window parity, recording, editor,
 mini previews and full UI/UX parity are still open; this slice closes no complete
 platform acceptance row. Hardware capture and clipboard tests remain required.
 
@@ -236,10 +236,21 @@ pick may still cover the selected target. These are stricter than the legacy
 host's stale-descriptor fallback and filtered frozen stack; legacy behavior is
 unchanged. Unit tests distinguish frozen/fresh geometry and pixels, small
 occluders, source failures, cursor spaces, output metadata and macOS-only masks.
-Native window selection surfaces and host integration remain **not implemented**
-on macOS, Windows and X11; real-desktop acceptance is unverified. Wayland window
-targeting remains unsupported. Shared-core tests and ABI compilation do not close
-the cross-platform capture gate or select a Windows/Linux renderer.
+Native window selection now connects that session to AppKit and the Windows/X11
+wgpu candidate: hover bounds/name, click selection, Enter/Capture, automatic start,
+freeze/live selection and countdown. Both retain the flow/session through worker
+completion and close native selectors before capturing. Wayland window targeting
+remains unsupported. Shared-core tests and ABI compilation do not close the
+cross-platform capture gate or select a Windows/Linux renderer.
+
+Window-slice acceptance remains explicit: macOS and Windows are implemented but
+real-desktop behavior is unverified; Linux X11 has private-Xvfb pixel/persistence
+and injected-input coverage, not hardware acceptance; Wayland is unsupported.
+The X11 test checks repeated asymmetric window pixels, frozen/fresh countdown,
+live selection, native-surface fallback under occlusion, disappearing targets,
+desktop fallback, manual versus automatic confirmation, cross-app Escape and
+simulated session cancellation. Real permissions, multiple displays/DPI, system
+lock, accessibility and compositor/GPU behavior remain open.
 
 The window session also owns pointer hit testing: native z-order, stable equal-
 level ordering, half-open edges, negative origins and Windows DIP conversion.

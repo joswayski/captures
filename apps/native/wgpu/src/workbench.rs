@@ -42,6 +42,10 @@ pub struct Workbench {
     screenshot_saved: bool,
     preferences_state: Preferences,
     region_selector: crate::selector::Selector,
+    window_selector: crate::window_selector::WindowSelector,
+    window_display: captures_capture::DisplayDescriptor,
+    window_targets: Vec<captures_capture::WindowDescriptor>,
+    window_shell: Vec<captures_capture::WindowDescriptor>,
     _temporary_settings: Option<tempfile::TempDir>,
     live: Option<Live>,
     live_preferences: bool,
@@ -102,6 +106,7 @@ impl Workbench {
         let live = options
             .live
             .then(|| Live::new(cc.egui_ctx.clone(), options.history_root.clone()));
+        let (window_display, window_targets, window_shell) = window_fixture();
         let this = Self {
             options,
             variants: tokens::load(),
@@ -128,6 +133,10 @@ impl Workbench {
             screenshot_saved: false,
             preferences_state,
             region_selector: crate::selector::Selector::default(),
+            window_selector: crate::window_selector::WindowSelector::fixture(),
+            window_display,
+            window_targets,
+            window_shell,
             _temporary_settings: temporary_settings,
             live,
             live_preferences: false,
@@ -201,7 +210,10 @@ impl Workbench {
         }
         if self.texture.is_none() {
             let start = Instant::now();
-            let size = if matches!(self.options.scene, Scene::Editor | Scene::Region) {
+            let size = if matches!(
+                self.options.scene,
+                Scene::Editor | Scene::Region | Scene::Window
+            ) {
                 [2048, 1152]
             } else {
                 [568, 320]
@@ -492,6 +504,14 @@ impl Workbench {
                     height: 720.,
                 },
             ),
+            Scene::Window => {
+                let windows = &self.window_targets;
+                let shell = &self.window_shell;
+                let display = &self.window_display;
+                self.window_selector.exercise(self.cycle, |point| {
+                    fixture_window_hit_test(windows, shell, display, point)
+                });
+            }
             Scene::Idle | Scene::Countdown => unreachable!("exercises rejected by options"),
         }
         emit(
@@ -501,6 +521,7 @@ impl Workbench {
             "appearance": self.options.appearance, "historyEnd": self.history_end,
             "zoom": self.zoom, "rotation": self.rotation,
             "regionSelection": self.region_selector.rect(),
+            "windowSelection": window_selection_name(self.window_selector.hovered(), &self.window_targets),
             "note": "CPU mutation, not presentation or hardware input latency"}),
         );
         self.cycle += 1;
@@ -625,7 +646,7 @@ impl eframe::App for Workbench {
             self.frames += 1;
             return;
         }
-        if !self.options.floating && self.options.scene != Scene::Region {
+        if !self.options.floating && !matches!(self.options.scene, Scene::Region | Scene::Window) {
             egui::Panel::left("navigation")
                 .exact_size(196.)
                 .resizable(false)
@@ -674,14 +695,19 @@ impl eframe::App for Workbench {
             } else {
                 t.color("surface-canvas")
             })
-            .inner_margin(if self.options.scene == Scene::Region {
-                0
-            } else {
-                t.number("s-8") as i8
-            });
+            .inner_margin(
+                if matches!(self.options.scene, Scene::Region | Scene::Window) {
+                    0
+                } else {
+                    t.number("s-8") as i8
+                },
+            );
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             if !self.options.floating
-                && !matches!(self.options.scene, Scene::Preferences | Scene::Region)
+                && !matches!(
+                    self.options.scene,
+                    Scene::Preferences | Scene::Region | Scene::Window
+                )
             {
                 ui.heading(self.options.scene.title());
                 ui.label(
@@ -727,6 +753,38 @@ impl eframe::App for Workbench {
                             }
                             RegionFixtureEvent::Cancel => {
                                 emit("region-cancel", json!({"selectionReset": true}));
+                            }
+                        }
+                    }
+                }
+                Scene::Window => {
+                    let texture = self.texture(ui.ctx(), false);
+                    let texture = self.texture.as_ref().filter(|image| image.id() == texture);
+                    let windows = &self.window_targets;
+                    let shell = &self.window_shell;
+                    let display = &self.window_display;
+                    if let Some(action) = self.window_selector.show(
+                        ui,
+                        &t,
+                        crate::window_selector::View {
+                            frozen: texture,
+                            display,
+                            windows,
+                            auto_start: false,
+                        },
+                        |point| fixture_window_hit_test(windows, shell, display, point),
+                    ) {
+                        match action {
+                            crate::window_selector::Action::Confirm(target) => emit(
+                                "window-confirm",
+                                json!({
+                                    "target": window_selection_name(Some(target), windows),
+                                    "capture": false
+                                }),
+                            ),
+                            crate::window_selector::Action::Cancel => {
+                                self.window_selector.reset();
+                                emit("window-cancel", json!({"selectionReset": true}));
                             }
                         }
                     }
@@ -816,6 +874,111 @@ fn apply_region_fixture_action(
     }
 }
 
+fn window_fixture() -> (
+    captures_capture::DisplayDescriptor,
+    Vec<captures_capture::WindowDescriptor>,
+    Vec<captures_capture::WindowDescriptor>,
+) {
+    let display = captures_capture::DisplayDescriptor {
+        id: "fixture-display".into(),
+        name: "Fixture display".into(),
+        x: -100,
+        y: 50,
+        width: 1000,
+        height: 720,
+        scale_factor: 1.,
+        is_primary: true,
+    };
+    let target = |id: &str, title: &str, app: &str, z_order, x, y, width, height| {
+        captures_capture::WindowDescriptor {
+            id: id.into(),
+            title: title.into(),
+            app_name: Some(app.into()),
+            z_order,
+            x,
+            y,
+            width,
+            height,
+            display_id: display.id.clone(),
+            corner_radius: Some(10.),
+        }
+    };
+    let windows = vec![
+        target(
+            "project",
+            "Project board — Captures",
+            "Browser",
+            10,
+            20,
+            140,
+            620,
+            420,
+        ),
+        target(
+            "export",
+            "Export settings",
+            "Captures",
+            20,
+            380,
+            230,
+            330,
+            240,
+        ),
+        target(
+            "terminal",
+            "Release checklist",
+            "Terminal",
+            5,
+            560,
+            420,
+            280,
+            220,
+        ),
+    ];
+    let shell = vec![target(
+        "shell",
+        "Desktop shell",
+        "System",
+        30,
+        -100,
+        50,
+        1000,
+        42,
+    )];
+    (display, windows, shell)
+}
+
+fn fixture_window_hit_test(
+    windows: &[captures_capture::WindowDescriptor],
+    shell: &[captures_capture::WindowDescriptor],
+    display: &captures_capture::DisplayDescriptor,
+    point: captures_app::selection::Point,
+) -> Option<usize> {
+    captures_app::window::target_index_at_point(
+        windows,
+        shell,
+        point,
+        captures_app::selection::Point {
+            x: f64::from(display.x),
+            y: f64::from(display.y),
+        },
+        1.,
+    )
+}
+
+fn window_selection_name(
+    target: Option<crate::window_selector::SelectionTarget>,
+    windows: &[captures_capture::WindowDescriptor],
+) -> Option<&str> {
+    match target {
+        Some(crate::window_selector::SelectionTarget::Display) => Some("display"),
+        Some(crate::window_selector::SelectionTarget::Window(index)) => {
+            windows.get(index).map(|window| window.id.as_str())
+        }
+        None => None,
+    }
+}
+
 fn fixture_image([width, height]: [usize; 2]) -> egui::ColorImage {
     // Asymmetric synthetic content, same layout as the AppKit fixture. No file
     // reads, screen capture, personal images, or per-frame texture allocation.
@@ -879,5 +1042,59 @@ mod tests {
             Some(RegionFixtureEvent::Cancel)
         );
         assert_eq!(selector.rect(), None);
+    }
+
+    #[test]
+    fn window_fixture_uses_shared_frontmost_and_shell_hit_testing() {
+        let (display, windows, shell) = window_fixture();
+        assert_eq!(
+            fixture_window_hit_test(
+                &windows,
+                &shell,
+                &display,
+                captures_app::selection::Point { x: 210., y: 130. }
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            fixture_window_hit_test(
+                &windows,
+                &shell,
+                &display,
+                captures_app::selection::Point { x: 540., y: 250. }
+            ),
+            Some(1),
+            "overlap must select the frontmost window"
+        );
+        assert_eq!(
+            fixture_window_hit_test(
+                &windows,
+                &shell,
+                &display,
+                captures_app::selection::Point { x: 500., y: 20. }
+            ),
+            None,
+            "shell is an entire-display target"
+        );
+        assert_eq!(
+            fixture_window_hit_test(
+                &windows,
+                &shell,
+                &display,
+                captures_app::selection::Point { x: 920., y: 680. }
+            ),
+            None,
+            "empty desktop is an entire-display target"
+        );
+        assert_eq!(
+            fixture_window_hit_test(
+                &windows,
+                &shell,
+                &display,
+                captures_app::selection::Point { x: 800., y: 550. }
+            ),
+            Some(2),
+            "terminal-only area must avoid the higher-z project window"
+        );
     }
 }

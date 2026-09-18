@@ -54,7 +54,7 @@ jobs:
       - name: Exercise native Linux windows (X11, software Vulkan)
         if: runner.os == 'Linux'
         run: xvfb-run -a python apps/native/wgpu/smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-smoke
-      - name: Capture real region pixels on a private X11 desktop (simulated session state)
+      - name: Capture real region and window pixels on private X11 (simulated session state)
         if: runner.os == 'Linux'
         # Distro dbus/gi bindings belong to system Python, not setup-python.
         run: /usr/bin/python3 apps/native/x11_capture_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-capture
