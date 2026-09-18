@@ -67,8 +67,10 @@ must be explicit, not silently successful.
   does not parse CSS or run a browser at runtime. Share assets and golden fixtures.
   Platform components may differ internally but must meet the same appearance,
   input and accessibility contracts.
-- The workbench reads synthetic fixtures only. It does not touch installed
-  settings/history, register shortcuts, request capture access, or install updates.
+- Default workbench scenes use synthetic capture fixtures; `--live` explicitly
+  enables the current native capture slice. Both use separate development data,
+  never installed settings/history. Fixture launches do not request capture
+  access; neither mode registers global shortcuts or installs updates yet.
   Production data migration requires backup, version checks and rollback tests.
 
 ## Reviewable stages and exit gates

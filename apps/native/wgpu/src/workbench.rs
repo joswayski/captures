@@ -542,7 +542,7 @@ impl eframe::App for Workbench {
             emit(
                 "lifecycle-check",
                 json!({
-                    "scene": self.options.scene.name(),
+                    "scene": if self.options.live { "live" } else { self.options.scene.name() },
                     "nativeVisible": frame.winit_window().and_then(|window| window.is_visible())
                 }),
             );
