@@ -8,7 +8,9 @@ use serde_json::json;
 
 use crate::{
     emit,
-    options::{Options, Scene, THEMES},
+    live::Live,
+    options::{Options, Scene},
+    preferences::Preferences,
     tokens::{self, Tokens},
 };
 
@@ -21,14 +23,12 @@ pub struct Workbench {
     started: Instant,
     cycle: usize,
     frames: u64,
+    settled_frames: u64,
     ui_ms: f64,
     max_ui_ms: f64,
-    search: String,
     history_filter: usize,
     history_end: bool,
     selected_row: Option<usize>,
-    copy: bool,
-    mini_previews: bool,
     paused: bool,
     muted: bool,
     texture: Option<egui::TextureHandle>,
@@ -40,6 +40,11 @@ pub struct Workbench {
     annotation: String,
     screenshot_requested: bool,
     screenshot_saved: bool,
+    preferences_state: Preferences,
+    region_selector: crate::selector::Selector,
+    _temporary_settings: Option<tempfile::TempDir>,
+    live: Option<Live>,
+    live_preferences: bool,
 }
 
 impl Workbench {
@@ -64,7 +69,7 @@ impl Workbench {
         emit(
             "ready",
             json!({
-                "scene": options.scene.name(), "renderer": "eframe-wgpu", "adapter": adapter.name,
+                "scene": if options.live { "live" } else { options.scene.name() }, "renderer": "eframe-wgpu", "adapter": adapter.name,
                 "backend": format!("{:?}", adapter.backend), "deviceType": format!("{:?}", adapter.device_type),
                 "os": std::env::consts::OS, "appearance": options.appearance, "theme": options.theme,
                 "historyCount": options.history_count, "floating": options.floating,
@@ -75,6 +80,28 @@ impl Workbench {
                 }
             }),
         );
+        let temporary_settings = (options.settings_file.is_none()
+            && (options.exercise
+                || options.screenshot.is_some()
+                || options.scene != Scene::Preferences))
+            .then(|| tempfile::tempdir().expect("temporary native settings directory"));
+        let settings_path = options.settings_file.clone().unwrap_or_else(|| {
+            temporary_settings
+                .as_ref()
+                .map(|dir| dir.path().join("settings.json"))
+                .unwrap_or_else(captures_settings::default_native_settings_path)
+        });
+        let preferences_state = Preferences::new(
+            cc.egui_ctx.clone(),
+            settings_path,
+            options
+                .appearance_override
+                .then(|| options.appearance.clone()),
+            options.theme_override.then(|| options.theme.clone()),
+        );
+        let live = options
+            .live
+            .then(|| Live::new(cc.egui_ctx.clone(), options.history_root.clone()));
         let this = Self {
             options,
             variants: tokens::load(),
@@ -82,14 +109,12 @@ impl Workbench {
             started: Instant::now(),
             cycle: 0,
             frames: 0,
+            settled_frames: 0,
             ui_ms: 0.,
             max_ui_ms: 0.,
-            search: String::new(),
             history_filter: 0,
             history_end: false,
             selected_row: None,
-            copy: true,
-            mini_previews: true,
             paused: false,
             muted: false,
             texture: None,
@@ -101,6 +126,11 @@ impl Workbench {
             annotation: "A capture worth keeping".into(),
             screenshot_requested: false,
             screenshot_saved: false,
+            preferences_state,
+            region_selector: crate::selector::Selector::default(),
+            _temporary_settings: temporary_settings,
+            live,
+            live_preferences: false,
         };
         this.schedule(&cc.egui_ctx);
         this
@@ -122,17 +152,32 @@ impl Workbench {
     }
 
     fn tokens(&mut self, ctx: &egui::Context) -> Tokens {
+        if self.options.scene == Scene::Preferences
+            && let Some((appearance, theme)) = self.preferences_state.appearance_theme()
+        {
+            self.options.appearance = appearance;
+            self.options.theme = theme;
+        }
         let light = match self.options.appearance.as_str() {
             "light" => true,
             "system" => ctx.input(|i| i.raw.system_theme) == Some(egui::Theme::Light),
             _ => false,
         };
-        let name = format!(
+        let base = format!(
             "{}-{}",
             if light { "light" } else { "dark" },
-            self.options.theme
+            if self.options.theme == "custom" {
+                "mustard"
+            } else {
+                &self.options.theme
+            }
         );
-        let tokens = self.variants[&name].clone();
+        let mut name = base.clone();
+        let mut tokens = self.variants[&base].clone();
+        if let Some((accent, signal)) = self.preferences_state.custom_colors() {
+            tokens = tokens.with_custom_colors(&accent, &signal, light);
+            name = format!("{base}-{accent}-{signal}");
+        }
         if name != self.applied_variant {
             tokens.apply(ctx, light);
             self.applied_variant = name;
@@ -146,7 +191,6 @@ impl Workbench {
             self.texture = None; // Release image residency when its scene closes.
             self.animation = None;
             self.deleted = false;
-            self.search.clear();
             emit("scene-changed", json!({"scene": scene.name()}));
         }
     }
@@ -157,7 +201,7 @@ impl Workbench {
         }
         if self.texture.is_none() {
             let start = Instant::now();
-            let size = if self.options.scene == Scene::Editor {
+            let size = if matches!(self.options.scene, Scene::Editor | Scene::Region) {
                 [2048, 1152]
             } else {
                 [568, 320]
@@ -178,59 +222,9 @@ impl Workbench {
     }
 
     fn preferences(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        ui.add(
-            egui::TextEdit::singleline(&mut self.search)
-                .hint_text("Find a fixture setting…")
-                .desired_width(f32::INFINITY),
-        );
-        let query = self.search.to_lowercase();
-        if "appearance interface theme accent color".contains(&query) {
-            panel(t).show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                ui.heading("Appearance");
-                ui.label(
-                    RichText::new("Choose the interface appearance and accent color.")
-                        .color(t.color("text-muted")),
-                );
-                ui.horizontal(|ui| {
-                    ui.label("Interface theme");
-                    for (mode, label) in
-                        [("system", "System"), ("light", "Light"), ("dark", "Dark")]
-                    {
-                        ui.selectable_value(&mut self.options.appearance, mode.into(), label);
-                    }
-                });
-                ui.label("Accent color");
-                ui.horizontal_wrapped(|ui| {
-                    for theme in THEMES {
-                        ui.selectable_value(
-                            &mut self.options.theme,
-                            theme.into(),
-                            title_case(theme),
-                        );
-                    }
-                });
-            });
+        if self.preferences_state.ui(ui, t) {
+            self.change_scene(Scene::History);
         }
-        if "capture automatically copy mini previews".contains(&query) {
-            panel(t).show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                ui.heading("Capture");
-                ui.label(
-                    RichText::new("Fixture state only. Your installed app is untouched.")
-                        .color(t.color("text-muted")),
-                );
-                ui.checkbox(&mut self.copy, "Automatically copy captures");
-                ui.checkbox(&mut self.mini_previews, "Show mini previews");
-            });
-        }
-        ui.label(
-            RichText::new(
-                "No settings are saved. Search, theme, focus and text input are renderer probes.",
-            )
-            .small()
-            .color(t.color("text-muted")),
-        );
     }
 
     fn history(&mut self, ui: &mut egui::Ui, t: &Tokens) {
@@ -472,12 +466,13 @@ impl Workbench {
         let start = Instant::now();
         match self.options.scene {
             Scene::Preferences => {
+                self.preferences_state.exercise(self.cycle);
                 self.options.appearance = if self.cycle.is_multiple_of(2) {
                     "light"
                 } else {
                     "dark"
                 }
-                .into()
+                .into();
             }
             Scene::History => self.history_end = !self.history_end,
             Scene::Hud => self.paused = !self.paused,
@@ -490,14 +485,23 @@ impl Workbench {
                 };
                 self.rotation = self.cycle as f32 * 15.;
             }
-            Scene::Idle => unreachable!("idle exercises rejected by options"),
+            Scene::Region => self.region_selector.exercise(
+                self.cycle,
+                captures_app::selection::Bounds {
+                    width: 1000.,
+                    height: 720.,
+                },
+            ),
+            Scene::Idle | Scene::Countdown => unreachable!("exercises rejected by options"),
         }
         emit(
             "scripted-action",
             json!({"scene": self.options.scene.name(), "cycle": self.cycle,
             "milliseconds": start.elapsed().as_secs_f64() * 1000., "paused": self.paused,
             "appearance": self.options.appearance, "historyEnd": self.history_end,
-            "zoom": self.zoom, "rotation": self.rotation, "note": "CPU mutation, not presentation or hardware input latency"}),
+            "zoom": self.zoom, "rotation": self.rotation,
+            "regionSelection": self.region_selector.rect(),
+            "note": "CPU mutation, not presentation or hardware input latency"}),
         );
         self.cycle += 1;
     }
@@ -509,6 +513,10 @@ impl eframe::App for Workbench {
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if let Some(live) = &mut self.live {
+            live.logic(ctx, frame);
+        }
+        self.preferences_state.receive(ctx);
         let screenshot = ctx.input(|i| {
             i.raw.events.iter().find_map(|event| {
                 if let egui::Event::Screenshot { image, .. } = event {
@@ -545,7 +553,7 @@ impl eframe::App for Workbench {
             emit(
                 "lifecycle-check",
                 json!({
-                    "scene": self.options.scene.name(),
+                    "scene": if self.options.live { "live" } else { self.options.scene.name() },
                     "nativeVisible": frame.winit_window().and_then(|window| window.is_visible())
                 }),
             );
@@ -560,9 +568,14 @@ impl eframe::App for Workbench {
         self.schedule(ctx);
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let start = Instant::now();
         let ctx = ui.ctx().clone();
+        // Font/layout initialization and the settings load can require several
+        // initial passes. Count settled work separately, without a sampling timer.
+        if self.started.elapsed() >= Duration::from_secs(2) {
+            self.settled_frames += 1;
+        }
         if self.options.scene == Scene::Idle {
             // eframe 0.36.2 auto-shows the root after its first paint, even if
             // the builder requested hidden. Viewport commands run after that
@@ -575,7 +588,44 @@ impl eframe::App for Workbench {
         }
         let t = self.tokens(&ctx);
         ui.set_style(ctx.style_of(ctx.theme()));
-        if !self.options.floating {
+        if let Some(live) = &mut self.live {
+            egui::Panel::top("live-navigation").show(ui, |ui| {
+                if live.is_capturing() {
+                    ui.disable();
+                }
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.live_preferences, false, "Capture workspace");
+                    ui.selectable_value(&mut self.live_preferences, true, "Preferences");
+                });
+            });
+            if self.live_preferences {
+                egui::Panel::left("live-preferences-sidebar")
+                    .exact_size(196.)
+                    .show(ui, |ui| {
+                        self.preferences_state.sidebar(ui, &t);
+                    });
+                egui::CentralPanel::default().show(ui, |ui| {
+                    if self.preferences_state.ui(ui, &t) {
+                        self.live_preferences = false;
+                    }
+                });
+            } else {
+                live.ui(ui, &t, frame, || self.preferences_state.snapshot());
+            }
+            if self.options.screenshot.is_some()
+                && !self.screenshot_requested
+                && self.started.elapsed() >= self.options.screenshot_after
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+                self.screenshot_requested = true;
+            }
+            let elapsed = start.elapsed().as_secs_f64() * 1000.;
+            self.ui_ms += elapsed;
+            self.max_ui_ms = self.max_ui_ms.max(elapsed);
+            self.frames += 1;
+            return;
+        }
+        if !self.options.floating && self.options.scene != Scene::Region {
             egui::Panel::left("navigation")
                 .exact_size(196.)
                 .resizable(false)
@@ -588,26 +638,30 @@ impl eframe::App for Workbench {
                     ui.add_space(t.number("s-5"));
                     ui.heading("Captures");
                     ui.add_space(t.number("s-8"));
-                    for scene in Scene::VISIBLE {
-                        if ui
-                            .add_sized(
-                                [ui.available_width(), t.number("h-lg")],
-                                egui::Button::new(scene.title())
-                                    .selected(scene == self.options.scene),
-                            )
-                            .clicked()
-                        {
-                            self.change_scene(scene);
+                    if self.options.scene == Scene::Preferences {
+                        self.preferences_state.sidebar(ui, &t);
+                    } else {
+                        for scene in Scene::VISIBLE {
+                            if ui
+                                .add_sized(
+                                    [ui.available_width(), t.number("h-lg")],
+                                    egui::Button::new(scene.title())
+                                        .selected(scene == self.options.scene),
+                                )
+                                .clicked()
+                            {
+                                self.change_scene(scene);
+                            }
                         }
                     }
                     ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                         ui.label(
-                            RichText::new("No capture access")
+                            RichText::new("Capture engine not connected")
                                 .small()
                                 .color(t.color("text-muted")),
                         );
                         ui.label(
-                            RichText::new("wgpu · fixture mode")
+                            RichText::new("Native development build")
                                 .small()
                                 .color(t.color("text-muted")),
                         );
@@ -620,9 +674,15 @@ impl eframe::App for Workbench {
             } else {
                 t.color("surface-canvas")
             })
-            .inner_margin(t.number("s-8") as i8);
+            .inner_margin(if self.options.scene == Scene::Region {
+                0
+            } else {
+                t.number("s-8") as i8
+            });
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
-            if !self.options.floating {
+            if !self.options.floating
+                && !matches!(self.options.scene, Scene::Preferences | Scene::Region)
+            {
                 ui.heading(self.options.scene.title());
                 ui.label(
                     RichText::new(
@@ -632,7 +692,7 @@ impl eframe::App for Workbench {
                     .color(t.color("text-muted")),
                 );
                 ui.add_space(t.number("s-6"));
-            } else {
+            } else if self.options.floating {
                 glass(&t).show(ui, |ui| {
                     t.glass_controls(ui);
                     ui.horizontal(|ui| {
@@ -654,6 +714,24 @@ impl eframe::App for Workbench {
                 Scene::Hud => self.hud(ui, &t),
                 Scene::Preview => self.preview(ui, &t),
                 Scene::Editor => self.editor(ui, &t),
+                Scene::Region => {
+                    let texture = self.texture(ui.ctx(), false);
+                    let texture = self.texture.as_ref().filter(|image| image.id() == texture);
+                    if let Some(action) = self.region_selector.show(ui, &t, texture, false, None)
+                        && let Some(event) =
+                            apply_region_fixture_action(&mut self.region_selector, action)
+                    {
+                        match event {
+                            RegionFixtureEvent::Confirm(rect) => {
+                                emit("region-confirm", json!({"rect": rect, "capture": false}));
+                            }
+                            RegionFixtureEvent::Cancel => {
+                                emit("region-cancel", json!({"selectionReset": true}));
+                            }
+                        }
+                    }
+                }
+                Scene::Countdown => crate::countdown::show(ui, &t, 3),
                 Scene::Idle => {}
             }
         });
@@ -672,22 +750,19 @@ impl eframe::App for Workbench {
     }
 
     fn on_exit(&mut self) {
+        self.preferences_state.flush();
+        if let Some(live) = &mut self.live {
+            live.flush();
+        }
         emit(
             "exit",
             json!({"uiPasses": self.frames, "totalUiConstructionWallMs": self.ui_ms,
+            "uiPassesAfterTwoSeconds": self.settled_frames,
             "maxUiConstructionWallMs": self.max_ui_ms, "scriptedActions": self.cycle,
             "elapsedSeconds": self.started.elapsed().as_secs_f64(),
             "note": "UI construction only; not GPU presentation FPS"}),
         );
     }
-}
-
-fn panel(t: &Tokens) -> egui::Frame {
-    egui::Frame::new()
-        .fill(t.color("surface-raised"))
-        .stroke(Stroke::new(1., t.color("border")))
-        .corner_radius(t.number("r-xl") as u8)
-        .inner_margin(t.number("s-6") as i8)
 }
 
 fn glass(t: &Tokens) -> egui::Frame {
@@ -698,9 +773,6 @@ fn glass(t: &Tokens) -> egui::Frame {
         .inner_margin(t.number("s-6") as i8)
 }
 
-fn title_case(value: &str) -> String {
-    format!("{}{}", value[..1].to_uppercase(), &value[1..])
-}
 fn uv() -> Rect {
     Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.))
 }
@@ -723,6 +795,25 @@ fn history_rows(count: usize, filter: usize) -> Vec<usize> {
             _ => true,
         })
         .collect()
+}
+
+#[derive(Debug, PartialEq)]
+enum RegionFixtureEvent {
+    Confirm(captures_app::selection::Rect),
+    Cancel,
+}
+
+fn apply_region_fixture_action(
+    selector: &mut crate::selector::Selector,
+    action: crate::selector::Action,
+) -> Option<RegionFixtureEvent> {
+    match action {
+        crate::selector::Action::Confirm => selector.rect().map(RegionFixtureEvent::Confirm),
+        crate::selector::Action::Cancel => {
+            selector.reset();
+            Some(RegionFixtureEvent::Cancel)
+        }
+    }
 }
 
 fn fixture_image([width, height]: [usize; 2]) -> egui::ColorImage {
@@ -767,5 +858,26 @@ mod tests {
         assert_eq!(image[(40, 60)], Color32::from_rgb(217, 84, 105));
         assert_eq!(image[(10, 150)], Color32::from_rgb(51, 122, 102));
         assert_eq!(image[(10, 10)], Color32::from_rgb(31, 69, 107));
+    }
+
+    #[test]
+    fn region_fixture_reports_confirmation_and_resets_on_cancel() {
+        let bounds = captures_app::selection::Bounds {
+            width: 1000.,
+            height: 720.,
+        };
+        let mut selector = crate::selector::Selector::default();
+        selector.exercise(0, bounds);
+        let rect = selector.rect().unwrap();
+        assert_eq!(
+            apply_region_fixture_action(&mut selector, crate::selector::Action::Confirm),
+            Some(RegionFixtureEvent::Confirm(rect))
+        );
+        assert_eq!(selector.rect(), Some(rect));
+        assert_eq!(
+            apply_region_fixture_action(&mut selector, crate::selector::Action::Cancel),
+            Some(RegionFixtureEvent::Cancel)
+        );
+        assert_eq!(selector.rect(), None);
     }
 }

@@ -17,6 +17,65 @@ pub struct PointerCursor {
     pub image: Option<CursorImage>,
 }
 
+/// Snapshot before changing the host's cursor or opening a selector. macOS keeps
+/// the system cursor pixels; Windows/X11 retain the shipping synthetic arrow.
+pub fn pointer_cursor() -> Option<PointerCursor> {
+    Some(PointerCursor {
+        position: pointer_position()?,
+        image: native_cursor_image(),
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn pointer_position() -> Option<(i32, i32)> {
+    use mouse_position::mouse_position::Mouse;
+    match Mouse::get_mouse_position() {
+        Mouse::Position { x, y } => Some((x, y)),
+        Mouse::Error => None,
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn pointer_position() -> Option<(i32, i32)> {
+    use x11rb::{connection::Connection, protocol::xproto::ConnectionExt};
+    // A Wayland-only or disconnected X11 session must not enter mouse_position's
+    // unchecked XOpenDisplay path. Coordinates are physical X11 root pixels.
+    std::env::var_os("DISPLAY")?;
+    let (connection, screen) = x11rb::connect(None).ok()?;
+    let root = connection.setup().roots.get(screen)?.root;
+    let pointer = connection.query_pointer(root).ok()?.reply().ok()?;
+    pointer
+        .same_screen
+        .then_some((i32::from(pointer.root_x), i32::from(pointer.root_y)))
+}
+
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn native_cursor_image() -> Option<CursorImage> {
+    // currentCursor describes only this app. The system-wide public accessor
+    // preserves another application's cursor and hotspot for still captures.
+    let cursor = objc2_app_kit::NSCursor::currentSystemCursor()?;
+    let image = cursor.image();
+    let size = image.size();
+    let hot_spot = cursor.hotSpot();
+    let tiff = image.TIFFRepresentation()?.to_vec();
+    if tiff.is_empty() || size.width <= 0.0 || size.height <= 0.0 {
+        return None;
+    }
+    Some(CursorImage {
+        pixels: image::load_from_memory(&tiff).ok()?.to_rgba8(),
+        logical_width: size.width,
+        logical_height: size.height,
+        hot_spot_x: hot_spot.x,
+        hot_spot_y: hot_spot.y,
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+const fn native_cursor_image() -> Option<CursorImage> {
+    None
+}
+
 const CURSOR_OUTLINE: [(i32, i32); 7] = [
     (0, 0),
     (0, 22),
@@ -287,6 +346,44 @@ mod tests {
         overlay_pointer_cursor_in_crop, overlay_pointer_cursor_on_window, screenshot_pointer_scale,
     };
     use crate::model::{DisplayDescriptor, WindowDescriptor};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn unavailable_x11_pointer_is_none_without_crashing() {
+        if std::env::var_os("CAPTURES_POINTER_CHILD").is_some() {
+            assert!(super::pointer_position().is_none());
+            assert!(super::pointer_cursor().is_none());
+            return;
+        }
+        // Subprocesses avoid mutating the environment of parallel Rust tests.
+        for display in [None, Some(":4999")] {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child
+                .args([
+                    "--exact",
+                    "cursor::tests::unavailable_x11_pointer_is_none_without_crashing",
+                ])
+                .env("CAPTURES_POINTER_CHILD", "1")
+                .env_remove("DISPLAY");
+            if let Some(display) = display {
+                child.env("DISPLAY", display);
+            }
+            assert!(child.status().unwrap().success());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires X11 with pointer positioned at physical (423, 317)"]
+    fn live_x11_pointer_preserves_physical_coordinates() {
+        assert_eq!(super::pointer_position(), Some((423, 317)));
+        let cursor = super::pointer_cursor().unwrap();
+        assert_eq!(cursor.position, (423, 317));
+        assert!(
+            cursor.image.is_none(),
+            "X11 retains the shipping synthetic arrow"
+        );
+    }
 
     fn display(x: i32, y: i32, width: u32, height: u32, scale_factor: f64) -> DisplayDescriptor {
         DisplayDescriptor {

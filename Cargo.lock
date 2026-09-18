@@ -633,14 +633,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "captures-app"
+version = "0.1.0"
+dependencies = [
+ "captures-capture",
+ "captures-history",
+ "captures-image",
+ "captures-session",
+ "captures-settings",
+ "chrono",
+ "global-hotkey",
+ "image",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "uuid",
+]
+
+[[package]]
 name = "captures-capture"
 version = "0.1.0"
 dependencies = [
  "core-foundation 0.10.1",
  "core-graphics 0.25.0",
  "image",
+ "mouse_position",
+ "objc2-app-kit",
+ "objc2-foundation",
  "serde",
  "thiserror 2.0.19",
+ "x11rb",
  "xcap",
 ]
 
@@ -651,19 +674,20 @@ dependencies = [
  "anyhow",
  "arboard",
  "captures-capture",
+ "captures-history",
+ "captures-image",
  "captures-macos-window",
  "captures-media",
  "captures-recording",
  "captures-recording-macos",
  "captures-recording-xcap",
  "captures-session",
+ "captures-settings",
  "chrono",
  "clipboard-win",
  "directories",
  "image",
- "jpeg-encoder",
  "libc",
- "mouse_position",
  "parking_lot",
  "png 0.17.16",
  "quantette",
@@ -686,7 +710,6 @@ dependencies = [
  "tracing",
  "trash",
  "uuid",
- "webp",
  "windows-sys 0.61.2",
 ]
 
@@ -701,12 +724,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "captures-history"
+version = "0.1.0"
+dependencies = [
+ "captures-capture",
+ "captures-recording",
+ "chrono",
+ "image",
+ "png 0.17.16",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "uuid",
+]
+
+[[package]]
 name = "captures-image"
 version = "0.1.0"
 dependencies = [
  "fontdue",
  "image",
+ "jpeg-encoder",
  "tiny-skia",
+ "webp",
 ]
 
 [[package]]
@@ -782,6 +823,30 @@ dependencies = [
  "core-foundation 0.10.1",
  "dbus",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "captures-settings"
+version = "0.1.0"
+dependencies = [
+ "captures-capture",
+ "captures-recording",
+ "directories",
+ "global-hotkey",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "captures-settings-ffi"
+version = "0.1.0"
+dependencies = [
+ "captures-app",
+ "captures-settings",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

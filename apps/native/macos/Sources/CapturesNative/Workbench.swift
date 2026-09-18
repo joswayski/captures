@@ -58,16 +58,17 @@ final class CaptureButton: NSButton {
     override func draw(_ dirtyRect: NSRect) {
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
             xRadius: tokens.number("r-md"), yRadius: tokens.number("r-md"))
-        let fill = cell?.isHighlighted == true ? (glass ? "glass-active" : "surface-active")
-            : selected ? "surface-selected" : (glass ? "glass-raised" : "control")
+        let fill = !isEnabled ? (glass ? "glass" : "surface-sunken")
+            : cell?.isHighlighted == true ? (glass ? "glass-active" : "surface-active")
+            : selected ? (glass ? "glass-active" : "surface-selected") : (glass ? "glass-raised" : "control")
         tokens.color(fill).setFill()
         path.fill()
-        tokens.color(selected ? "theme-accent" : (glass ? "glass-border" : "control-border")).setStroke()
+        tokens.color(selected && isEnabled ? "theme-accent" : (glass ? "glass-border" : "control-border")).setStroke()
         path.lineWidth = 1
         path.stroke()
         let font = NSFont.systemFont(ofSize: tokens.number("text-md"), weight: .medium)
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: font, .foregroundColor: tokens.color(glass ? "glass-text" : "text"),
+            .font: font, .foregroundColor: tokens.color(isEnabled ? (glass ? "glass-text" : "text") : (glass ? "glass-text-subtle" : "text-faint")),
         ]
         let size = (title as NSString).size(withAttributes: attributes)
         (title as NSString).draw(at: CGPoint(x: (bounds.width - size.width) / 2,
@@ -86,21 +87,29 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var content: Surface!
     private var preview: PreviewView?
     private var table: NSTableView?
+    private var preferencesController: PreferencesController?
+    private var liveController: LiveCaptureController?
+    private var regionSelector: RegionSelectionView?
     private var scene: String
     private var appearance: String
     private var theme: String
+    private var customTheme: [String: Any] = [:]
     private var paused = false
     private var historyCount: Int
-    private var tokens: Tokens {
+    private lazy var resolvedTokens = makeTokens()
+    private var exerciseDirectory: URL?
+    private var tokens: Tokens { resolvedTokens }
+    private func makeTokens() -> Tokens {
         let mode = appearance == "system"
             ? (NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? "dark" : "light")
             : appearance
-        return Tokens.variants["\(mode)-\(theme)"]!
+        let base = Tokens.variants["\(mode)-\(theme)"] ?? Tokens.variants["\(mode)-mustard"]!
+        return theme == "custom" ? base.applyingCustomTheme(customTheme, light: mode == "light") : base
     }
 
     init(options: Options) {
         self.options = options
-        scene = options.scene
+        scene = options.live ? "live" : options.scene
         appearance = options.appearance
         theme = options.theme
         historyCount = options.historyCount
@@ -114,10 +123,26 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "Quit Captures Native Workbench", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.submenu = appMenu
+        let editItem = NSMenuItem()
+        menu.addItem(editItem)
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(.separator())
+        let find = editMenu.addItem(withTitle: "Find…", action: #selector(showFind), keyEquivalent: "f")
+        find.target = self
+        let next = editMenu.addItem(withTitle: "Find Next", action: #selector(findNext), keyEquivalent: "g")
+        next.target = self
+        let previous = editMenu.addItem(withTitle: "Find Previous", action: #selector(findPrevious), keyEquivalent: "G")
+        previous.keyEquivalentModifierMask = [.command, .shift]
+        previous.target = self
+        editItem.submenu = editMenu
         NSApp.mainMenu = menu
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 720),
             styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = "Captures Native — development fixtures"
+        window.title = options.live ? "Captures Native — capture workspace" : "Captures Native — development fixtures"
         window.isReleasedWhenClosed = false
         window.center()
         render()
@@ -126,6 +151,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         Metrics.write(["event": "ready", "scene": scene, "window": window.windowNumber,
             "scale": window.backingScaleFactor, "appearance": appearance, "theme": theme,
             "historyCount": historyCount, "referenceChips": options.referenceChips])
+        DistributedNotificationCenter.default().addObserver(self, selector: #selector(systemAppearanceChanged),
+            name: NSNotification.Name("AppleInterfaceThemeChangedNotification"), object: nil)
+        if let path = options.screenshot {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.captureWindow(to: path) }
+        }
         if options.exercise {
             for cycle in 0..<6 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2 + Double(cycle) * 4) { [weak self] in
@@ -139,16 +169,78 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        preferencesController?.flush()
+        liveController?.finishCapture(restoreWindow: false)
+        LiveCaptureController.flush()
+        if let exerciseDirectory { try? FileManager.default.removeItem(at: exerciseDirectory) }
+        return .terminateNow
+    }
+
+    @objc private func showFind() { if scene == "preferences" { preferencesController?.showFind() } }
+    @objc private func findNext() { preferencesController?.stepFind(1) }
+    @objc private func findPrevious() { preferencesController?.stepFind(-1) }
+    @objc private func systemAppearanceChanged() {
+        guard appearance == "system" else { return }
+        resolvedTokens = makeTokens()
+        preferencesController?.restyle()
+    }
 
     private func render() {
         let started = CACurrentMediaTime()
         preview = nil
         table = nil
+        regionSelector = nil
+        liveController?.finishCapture(restoreWindow: false)
+        liveController = nil
         content = Surface(frame: NSRect(x: 0, y: 0, width: 1000, height: 720))
         content.wantsLayer = true
         content.layer!.backgroundColor = tokens.color("surface-canvas").cgColor
         window.appearance = NSAppearance(named: tokens.color("text").brightnessComponent > 0.5 ? .darkAqua : .aqua)
         window.contentView = content
+        if scene == "preferences" {
+            do {
+                let path = options.exercise
+                    ? exerciseSettingsPath()
+                    : options.settingsFile
+                let store = try SettingsStore(path: path)
+                preferencesController = PreferencesController(root: content, store: store, tokens: { [weak self] in self?.tokens ?? Tokens.variants["dark-mustard"]! }, appearanceChanged: { [weak self] appearance, theme, customTheme in
+                    guard let self else { return }
+                    let changed = self.appearance != appearance || self.theme != theme || !NSDictionary(dictionary: self.customTheme).isEqual(to: customTheme)
+                    self.appearance = appearance
+                    self.theme = theme
+                    self.customTheme = customTheme
+                    if changed {
+                        self.resolvedTokens = self.makeTokens()
+                    }
+                    self.window.appearance = appearance == "system" ? nil : NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
+                }, showHistory: { [weak self] in self?.scene = self?.options.live == true ? "live" : "history"; self?.render() },
+                   liveCaptureAvailable: options.live,
+                   initialAppearance: options.appearanceOverride ? options.appearance : nil,
+                   initialTheme: options.themeOverride ? options.theme : nil)
+            } catch {
+                label("Preferences unavailable: \(error.localizedDescription)", x: 32, y: 32, width: 900)
+            }
+            Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
+            return
+        }
+        preferencesController = nil
+        if scene == "region" {
+            let selector = RegionSelectionView(frame: content.bounds, image: PreviewView.fixtureImage(scale: 2048.0 / 284.0),
+                tokens: tokens, autoStart: false, confirm: { rect in
+                    Metrics.write(["event": "region-confirm", "x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height, "fixture": true])
+                }, cancel: { [weak self] in self?.scene = "preferences"; self?.render() })
+            regionSelector = selector; content.addSubview(selector); window.makeFirstResponder(selector)
+            label("Region selection fixture · no capture access", x: 24, y: 20, width: 650, glass: true)
+            Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
+            return
+        }
+        if scene == "live" {
+            liveController = LiveCaptureController(root: content, window: window, tokens: tokens,
+                historyRoot: options.historyRoot, settingsPath: options.settingsFile) { [weak self] in self?.scene = "preferences"; self?.render() }
+            Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
+            return
+        }
         let sidebar = Surface(frame: NSRect(x: 0, y: 0, width: 196, height: 720))
         sidebar.wantsLayer = true
         sidebar.layer!.backgroundColor = tokens.color("surface-sunken").cgColor
@@ -161,7 +253,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             sidebar.addSubview(icon)
         }
         label("Captures", x: 58, y: 22, width: 125, size: "text-xl", parent: sidebar)
-        for (i, name) in ["preferences", "history", "hud", "preview"].enumerated() {
+        for (i, name) in ["preferences", "history", "hud", "preview", "region"].enumerated() {
             let button = CaptureButton(name == "hud" ? "Recording controls" : name.capitalized,
                 frame: NSRect(x: 12, y: 70 + i * 44, width: 172, height: 34), tokens: tokens) { [weak self] in
                     self?.scene = name
@@ -177,13 +269,21 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         label("Native rendering workbench · synthetic data, not functional parity",
             x: 220, y: 47, width: 740, size: "text-sm", muted: true)
         switch scene {
-        case "preferences": preferences()
         case "history": history()
         case "hud": hud()
         case "preview": previews()
         default: break
         }
         Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
+    }
+
+    private func exerciseSettingsPath() -> String {
+        if exerciseDirectory == nil {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("captures-native-exercise-\(ProcessInfo.processInfo.processIdentifier)")
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            exerciseDirectory = directory
+        }
+        return exerciseDirectory!.appendingPathComponent("settings.json").path
     }
 
     @discardableResult private func label(_ text: String, x: CGFloat, y: CGFloat, width: CGFloat,
@@ -207,43 +307,16 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         return view
     }
 
-    private func preferences() {
-        let view = panel(NSRect(x: 220, y: 98, width: 752, height: 290))
-        label("Appearance", x: 16, y: 16, width: 700, size: "text-lg", parent: view)
-        label("Choose the interface appearance and accent color.", x: 16, y: 44, width: 700, muted: true, parent: view)
-        label("Interface theme", x: 16, y: 88, width: 230, parent: view)
-        for (i, mode) in ["system", "light", "dark"].enumerated() {
-            let button = CaptureButton(mode.capitalized, frame: NSRect(x: 450 + i * 90, y: 82, width: 86, height: 34), tokens: tokens) { [weak self] in
-                self?.appearance = mode
-                self?.render()
-            }
-            button.selected = mode == appearance
-            view.addSubview(button)
-        }
-        label("Accent color", x: 16, y: 139, width: 700, parent: view)
-        for (i, name) in Options.themes.enumerated() {
-            let button = CaptureButton(name.capitalized,
-                frame: NSRect(x: 16 + (i % 5) * 145, y: 177 + (i / 5) * 46, width: 135, height: 34), tokens: tokens) { [weak self] in
-                    self?.theme = name
-                    self?.render()
-                }
-            button.selected = name == theme
-            view.addSubview(button)
-        }
-        let capture = panel(NSRect(x: 220, y: 404, width: 752, height: 216))
-        label("Capture", x: 16, y: 16, width: 700, size: "text-lg", parent: capture)
-        label("Settings here are local fixture state; nothing is written to your installed app.", x: 16, y: 44, width: 720, muted: true, parent: capture)
-        for (i, name) in ["Automatically copy captures", "Show mini previews"].enumerated() {
-            label(name, x: 16, y: CGFloat(91 + i * 52), width: 560, parent: capture)
-            let button = CaptureButton("On", frame: NSRect(x: 644, y: 85 + i * 52, width: 88, height: 34), tokens: tokens) {}
-            button.actionBlock = { [weak button] in
-                guard let button else { return }
-                button.title = button.title == "On" ? "Off" : "On"
-                button.setAccessibilityValue(button.title)
-                button.needsDisplay = true
-            }
-            capture.addSubview(button)
-        }
+    private func captureWindow(to path: String) {
+        guard let view = window.contentView else { return }
+        let representation = view.bitmapImageRepForCachingDisplay(in: view.bounds)
+        guard let representation else { return }
+        view.cacheDisplay(in: view.bounds, to: representation)
+        guard let data = representation.representation(using: .png, properties: [:]) else { return }
+        do {
+            try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+            Metrics.write(["event": "screenshot", "path": path, "window": window.windowNumber])
+        } catch { Metrics.write(["event": "screenshot-error", "detail": error.localizedDescription]) }
     }
 
     private func history() {
@@ -336,10 +409,25 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private func exercise(_ cycle: Int) {
         let started = CACurrentMediaTime()
         switch scene {
-        case "preferences": appearance = cycle % 2 == 0 ? "light" : "dark"; render()
+        case "preferences": preferencesController?.exerciseAppearance(cycle % 2 == 0 ? "light" : "dark")
         case "history": table?.scrollRowToVisible(cycle % 2 == 0 ? max(0, historyCount - 1) : 0)
         case "hud": paused.toggle(); render()
         case "preview": preview?.reset(); preview?.dissolve(cold: cycle % 2 == 0)
+        case "region":
+            if let view = regionSelector {
+                switch cycle {
+                case 0: view.begin(NSPoint(x: 100, y: 80)); view.drag(NSPoint(x: 520, y: 300)); view.end()
+                case 1:
+                    let center = NSPoint(x: view.selection.nsRect.midX, y: view.selection.nsRect.midY)
+                    view.begin(center); view.drag(NSPoint(x: center.x + 42, y: center.y + 27)); view.end()
+                case 2: view.setAspect(1)
+                case 3:
+                    let corner = view.selection.corners[3]
+                    view.begin(corner); view.drag(NSPoint(x: corner.x + 120, y: corner.y + 70)); view.end()
+                case 4: view.setAspect(16.0 / 9.0); view.begin(NSPoint(x: 800, y: 100)); view.drag(NSPoint(x: 500, y: 400), shift: true)
+                default: view.drag(NSPoint(x: 500, y: 400)); view.end()
+                }
+            }
         default: break
         }
         Metrics.emit("scripted-action", milliseconds: (CACurrentMediaTime() - started) * 1000,

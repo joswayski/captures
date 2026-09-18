@@ -120,6 +120,11 @@
   --glass-veil: rgba(15, 15, 18, 0.38);
   --glass-veil-soft: rgba(15, 15, 18, 0.18);
   --glass-veil-heavy: rgba(15, 15, 18, 0.72);
+  --glass-countdown-scrim: rgba(6, 7, 10, 0.5);
+  --countdown-label-min: 14px;
+  --countdown-label-max: 20px;
+  --countdown-number-min: 150px;
+  --countdown-number-max: 340px;
 
   /* Status hues. Accent/signal come from the selected color theme. */
   --positive: #35a35d;

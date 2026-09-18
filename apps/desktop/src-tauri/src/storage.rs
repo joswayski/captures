@@ -5,7 +5,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use chrono::{DateTime, Duration, Local, Utc};
+use chrono::{DateTime, Local, Utc};
 use image::{
     RgbImage, RgbaImage,
     codecs::png::{CompressionType, FilterType},
@@ -15,15 +15,11 @@ use uuid::Uuid;
 
 use crate::{
     AppError,
-    models::{
-        AppSettings, ArtifactKind, CaptureArtifact, HISTORY_RETENTION_DAYS, HistoryEntry,
-        RecordingArtifactData, find_history_recording_media, history_recording_media_file_name,
-    },
+    models::{AppSettings, CaptureArtifact, HistoryEntry, RecordingArtifactData},
 };
 
 const HISTORY_IMAGE_FILE: &str = "capture.png";
 const HISTORY_PREVIEW_FILE: &str = "preview.png";
-const HISTORY_METADATA_FILE: &str = "metadata.json";
 const DRAG_EXPORT_DIRECTORY: &str = ".drag-exports";
 const DRAG_ICON_FILE: &str = "drag-preview.png";
 const DRAG_ICON_WIDTH: u32 = 284;
@@ -36,17 +32,7 @@ pub struct ArtifactDragFiles {
 
 pub fn load_settings() -> AppSettings {
     let path = crate::models::settings_path();
-    let mut settings = fs::read_to_string(&path)
-        .ok()
-        .and_then(|contents| serde_json::from_str(&contents).ok())
-        .unwrap_or_default();
-    crate::models::migrate_legacy_output_directory(&mut settings);
-    if crate::models::migrate_settings(&mut settings)
-        && let Err(error) = save_settings_to(&path, &settings)
-    {
-        eprintln!("failed to persist migrated settings: {error}");
-    }
-    settings
+    captures_settings::load_shipping(&path)
 }
 
 pub fn save_settings(settings: &AppSettings) -> Result<(), AppError> {
@@ -55,23 +41,8 @@ pub fn save_settings(settings: &AppSettings) -> Result<(), AppError> {
 }
 
 fn save_settings_to(path: &Path, settings: &AppSettings) -> Result<(), AppError> {
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty());
-    if let Some(parent) = parent {
-        fs::create_dir_all(parent)?;
-    }
-
-    let contents = serde_json::to_vec_pretty(settings)?;
-    let mut temporary = match parent {
-        Some(parent) => tempfile::NamedTempFile::new_in(parent)?,
-        None => tempfile::NamedTempFile::new_in(".")?,
-    };
-    temporary.write_all(&contents)?;
-    temporary.as_file().sync_all()?;
-    temporary
-        .persist(path)
-        .map_err(|error| AppError::Io(error.error))?;
+    captures_settings::write_atomic(path, settings)
+        .map_err(|error| AppError::Task(error.to_string()))?;
     Ok(())
 }
 
@@ -310,7 +281,7 @@ fn recording_destination_path_in_mode(
 }
 
 pub fn load_capture_history() -> Result<Vec<HistoryEntry>, AppError> {
-    load_capture_history_from(&crate::models::history_directory(), Utc::now())
+    captures_history::load(&crate::models::history_directory(), Utc::now()).map_err(Into::into)
 }
 
 pub fn save_history_capture(
@@ -319,7 +290,7 @@ pub fn save_history_capture(
     preview_png: &[u8],
 ) -> Result<(), AppError> {
     let directory = crate::models::history_directory();
-    save_history_capture_in(&directory, entry, image_png, preview_png)?;
+    captures_history::save_capture(&directory, entry, image_png, preview_png)?;
     // Expired entries are pruned when history is loaded at launch, not after
     // every save, so capture latency does not grow with history size.
     Ok(())
@@ -328,35 +299,16 @@ pub fn save_history_capture(
 /// Save a recording into private capture history.
 ///
 /// Copies `media_source` into the history entry as recovery media (retained for
-/// [`HISTORY_RETENTION_DAYS`]). `entry.saved_path` should only be set when the
+/// [`captures_history::HISTORY_RETENTION_DAYS`]). `entry.saved_path` should only be set when the
 /// user has also permanently saved a Captures-folder copy.
 pub fn save_history_recording(
     entry: &HistoryEntry,
     poster_png: &[u8],
     media_source: &Path,
 ) -> Result<PathBuf, AppError> {
-    if entry.kind == ArtifactKind::Screenshot || entry.kind.recording_kind().is_none() {
-        return Err(AppError::Task(
-            "recording history metadata is incomplete".to_owned(),
-        ));
-    }
-    if !media_source.is_file() {
-        return Err(AppError::Task(
-            "recording media is no longer available".to_owned(),
-        ));
-    }
-    let media_name = history_recording_media_file_name(entry.kind, media_source)
-        .ok_or_else(|| AppError::Task("recording history metadata is incomplete".to_owned()))?;
     let directory = crate::models::history_directory();
-    let recovery_path = save_history_entry_in(
-        &directory,
-        entry,
-        None,
-        poster_png,
-        Some((media_source, media_name.as_str())),
-    )?;
-    recovery_path
-        .ok_or_else(|| AppError::Task("recording history media was not written".to_owned()))
+    captures_history::save_recording(&directory, entry, poster_png, media_source)
+        .map_err(Into::into)
 }
 
 /// Record an opened recording in capture history without copying the media file.
@@ -365,40 +317,19 @@ pub fn save_history_recording_reference(
     entry: &HistoryEntry,
     poster_png: &[u8],
 ) -> Result<(), AppError> {
-    if entry.kind == ArtifactKind::Screenshot || entry.kind.recording_kind().is_none() {
-        return Err(AppError::Task(
-            "recording history metadata is incomplete".to_owned(),
-        ));
-    }
-    if entry
-        .saved_path
-        .as_deref()
-        .is_none_or(|path| !Path::new(path).is_file())
-    {
-        return Err(AppError::Task(
-            "recording media is no longer available".to_owned(),
-        ));
-    }
     let directory = crate::models::history_directory();
-    save_history_entry_in(&directory, entry, None, poster_png, None).map(|_| ())
+    captures_history::save_recording_reference(&directory, entry, poster_png).map_err(Into::into)
 }
 
 /// Rewrite history metadata in place (for example after a permanent save) without
 /// replacing recovery media already stored in the entry directory.
 pub fn update_history_entry_metadata(entry: &HistoryEntry) -> Result<(), AppError> {
-    let directory = history_entry_directory(&crate::models::history_directory(), &entry.id)?;
-    if !directory.is_dir() {
-        return Err(AppError::HistoryUnavailable);
-    }
-    let temporary = directory.join(format!(".{}.metadata.tmp", Uuid::new_v4()));
-    fs::write(&temporary, serde_json::to_vec_pretty(entry)?)?;
-    let destination = directory.join(HISTORY_METADATA_FILE);
-    fs::rename(temporary, destination)?;
-    Ok(())
+    captures_history::update_metadata(&crate::models::history_directory(), entry)
+        .map_err(Into::into)
 }
 
 pub fn load_recording_artifact(entry: &HistoryEntry) -> Option<RecordingArtifactData> {
-    let summary = entry.recording_artifact()?;
+    let summary = crate::models::history_recording_artifact(entry)?;
     let poster_png = load_history_image(&entry.id, true).ok()?;
     Some(RecordingArtifactData {
         summary,
@@ -407,32 +338,19 @@ pub fn load_recording_artifact(entry: &HistoryEntry) -> Option<RecordingArtifact
 }
 
 pub fn load_history_images(entry_id: &str) -> Result<(Vec<u8>, Vec<u8>), AppError> {
-    let directory = history_entry_directory(&crate::models::history_directory(), entry_id)?;
-    Ok((
-        fs::read(directory.join(HISTORY_IMAGE_FILE))?,
-        fs::read(directory.join(HISTORY_PREVIEW_FILE))?,
-    ))
+    captures_history::read_images(&crate::models::history_directory(), entry_id).map_err(Into::into)
 }
 
 pub fn load_history_image(entry_id: &str, preview: bool) -> Result<Vec<u8>, AppError> {
-    let directory = history_entry_directory(&crate::models::history_directory(), entry_id)?;
-    fs::read(directory.join(if preview {
-        HISTORY_PREVIEW_FILE
-    } else {
-        HISTORY_IMAGE_FILE
-    }))
-    .map_err(Into::into)
+    captures_history::read_image(&crate::models::history_directory(), entry_id, preview)
+        .map_err(Into::into)
 }
 
 pub fn delete_history_capture(entry_id: &str) -> Result<(), AppError> {
-    let directory = history_entry_directory(&crate::models::history_directory(), entry_id)?;
-    match fs::remove_dir_all(directory) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-    }
+    captures_history::delete(&crate::models::history_directory(), entry_id).map_err(Into::into)
 }
 
+#[cfg(test)]
 fn save_history_capture_in(
     root: &Path,
     entry: &HistoryEntry,
@@ -442,6 +360,7 @@ fn save_history_capture_in(
     save_history_entry_in(root, entry, Some(image_png), preview_png, None).map(|_| ())
 }
 
+#[cfg(test)]
 fn save_history_entry_in(
     root: &Path,
     entry: &HistoryEntry,
@@ -449,154 +368,19 @@ fn save_history_entry_in(
     preview_png: &[u8],
     media: Option<(&Path, &str)>,
 ) -> Result<Option<PathBuf>, AppError> {
-    fs::create_dir_all(root)?;
-    let destination = history_entry_directory(root, &entry.id)?;
-    let temporary = root.join(format!(".{}.{}.tmp", entry.id, Uuid::new_v4()));
-    let backup = root.join(format!(".{}.{}.bak", entry.id, Uuid::new_v4()));
-    fs::create_dir(&temporary)?;
-
-    let result = (|| {
-        if let Some(image_png) = image_png {
-            fs::write(temporary.join(HISTORY_IMAGE_FILE), image_png)?;
-        }
-        fs::write(temporary.join(HISTORY_PREVIEW_FILE), preview_png)?;
-        let recovery_media = if let Some((media_source, media_name)) = media {
-            let media_destination = temporary.join(media_name);
-            // Same-path copies are no-ops on some platforms; skip when identical.
-            if media_source != media_destination.as_path() {
-                fs::copy(media_source, &media_destination)?;
-            }
-            Some(media_destination)
-        } else if let Some(existing) = find_history_recording_media(&destination) {
-            // Preserve existing recovery media when only metadata/poster change.
-            let media_name = existing
-                .file_name()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("media.bin"));
-            let preserved = temporary.join(media_name);
-            fs::copy(&existing, &preserved)?;
-            Some(preserved)
-        } else {
-            None
-        };
-        fs::write(
-            temporary.join(HISTORY_METADATA_FILE),
-            serde_json::to_vec_pretty(entry)?,
-        )?;
-        if destination.exists() {
-            fs::rename(&destination, &backup)?;
-            if let Err(error) = fs::rename(&temporary, &destination) {
-                let rollback = fs::rename(&backup, &destination);
-                return Err(match rollback {
-                    Ok(()) => error.into(),
-                    Err(rollback_error) => AppError::Task(format!(
-                        "capture history could not be replaced ({error}), and the previous entry could not be restored ({rollback_error}); its backup remains at {}",
-                        backup.display()
-                    )),
-                });
-            }
-            let _ = fs::remove_dir_all(&backup);
-        } else {
-            fs::rename(&temporary, &destination)?;
-        }
-        let final_media =
-            recovery_media.map(|path| destination.join(path.file_name().expect("media file name")));
-        Ok::<_, AppError>(final_media)
-    })();
-
-    if result.is_err() {
-        let _ = fs::remove_dir_all(temporary);
-    }
-    result
+    captures_history::save_entry(root, entry, image_png, preview_png, media).map_err(Into::into)
 }
 
+#[cfg(test)]
 fn load_capture_history_from(
     root: &Path,
     now: DateTime<Utc>,
 ) -> Result<Vec<HistoryEntry>, AppError> {
-    let entries = match fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error.into()),
-    };
-    let cutoff = now - Duration::days(HISTORY_RETENTION_DAYS);
-    let mut history = Vec::new();
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let directory_name = entry.file_name().to_string_lossy().into_owned();
-        if !path.is_dir() || directory_name.starts_with('.') {
-            continue;
-        }
-        let contents = match fs::read(path.join(HISTORY_METADATA_FILE)) {
-            Ok(contents) => contents,
-            Err(_) => {
-                let _ = fs::remove_dir_all(path);
-                continue;
-            }
-        };
-        let history_entry = match serde_json::from_slice::<HistoryEntry>(&contents) {
-            Ok(history_entry) => history_entry,
-            Err(_) => {
-                let _ = fs::remove_dir_all(path);
-                continue;
-            }
-        };
-        if history_entry.id != directory_name || Uuid::parse_str(&history_entry.id).is_err() {
-            let _ = fs::remove_dir_all(path);
-            continue;
-        }
-        let created_at = match DateTime::parse_from_rfc3339(&history_entry.created_at) {
-            Ok(created_at) => created_at,
-            Err(_) => {
-                let _ = fs::remove_dir_all(path);
-                continue;
-            }
-        };
-        let created_at = created_at.with_timezone(&Utc);
-        // Screenshots and recordings share the same recovery window. Permanent
-        // Captures-folder saves (entry.saved_path) are not deleted by this prune.
-        if created_at < cutoff {
-            let _ = fs::remove_dir_all(path);
-            continue;
-        }
-        let files_are_valid = path.join(HISTORY_PREVIEW_FILE).is_file()
-            && match history_entry.kind {
-                ArtifactKind::Screenshot => {
-                    history_entry.mode.is_some() && path.join(HISTORY_IMAGE_FILE).is_file()
-                }
-                ArtifactKind::Video | ArtifactKind::Gif => {
-                    let has_recovery_media = find_history_recording_media(&path).is_some();
-                    let has_permanent_media = history_entry
-                        .saved_path
-                        .as_ref()
-                        .is_some_and(|saved| Path::new(saved).is_file());
-                    // Keep legacy metadata rows that still point at an external path
-                    // even if that file is currently missing (surface as missing).
-                    history_entry.recording_artifact().is_some()
-                        && (has_recovery_media
-                            || has_permanent_media
-                            || history_entry.saved_path.is_some())
-                }
-            };
-        if !files_are_valid {
-            let _ = fs::remove_dir_all(path);
-            continue;
-        }
-        history.push((created_at, history_entry));
-    }
-
-    history.sort_by(|(left, _), (right, _)| right.cmp(left));
-    Ok(history.into_iter().map(|(_, entry)| entry).collect())
-}
-
-fn history_entry_directory(root: &Path, entry_id: &str) -> Result<PathBuf, AppError> {
-    Uuid::parse_str(entry_id).map_err(|_| AppError::HistoryUnavailable)?;
-    Ok(root.join(entry_id))
+    captures_history::load(root, now).map_err(Into::into)
 }
 
 pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, AppError> {
-    encode_png_with_filter(image, FilterType::Sub)
+    captures_history::encode_png(image).map_err(Into::into)
 }
 
 /// Freeze-frame bytes for the capture overlay / capture menu.
@@ -1157,14 +941,7 @@ fn rgba_at(image: &RgbaImage, index: u32) -> [u8; 4] {
 /// generic RGB (gamma 1.8) on macOS ColorSync, so the compressed `<img>` preview
 /// looks washed out next to the sRGB canvas even when the pixels did not change.
 fn mark_png_as_srgb(encoder: &mut png::Encoder<&mut Vec<u8>>) {
-    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
-    encoder.set_source_gamma(png::ScaledFloat::from_scaled(45_455));
-    encoder.set_source_chromaticities(png::SourceChromaticities::new(
-        (0.3127, 0.3290),
-        (0.6400, 0.3300),
-        (0.3000, 0.6000),
-        (0.1500, 0.0600),
-    ));
+    captures_history::mark_png_as_srgb(encoder);
 }
 
 fn encode_indexed_png(
@@ -1260,20 +1037,7 @@ pub fn encode_preview_png(image: &RgbaImage, scale_factor: f64) -> Result<Vec<u8
 }
 
 pub fn encode_thumbnail_png(image: &RgbaImage) -> Result<Vec<u8>, AppError> {
-    const MAX_WIDTH: u32 = 568;
-    const MAX_HEIGHT: u32 = 320;
-
-    if image.width() > MAX_WIDTH || image.height() > MAX_HEIGHT {
-        let scale = (f64::from(MAX_WIDTH) / f64::from(image.width()))
-            .min(f64::from(MAX_HEIGHT) / f64::from(image.height()));
-        let width = (f64::from(image.width()) * scale).round().max(1.0) as u32;
-        let height = (f64::from(image.height()) * scale).round().max(1.0) as u32;
-        let thumbnail =
-            image::imageops::resize(image, width, height, image::imageops::FilterType::Triangle);
-        return encode_png_with_filter(&thumbnail, FilterType::Sub);
-    }
-
-    encode_png_with_filter(image, FilterType::Sub)
+    captures_history::encode_thumbnail_png(image).map_err(Into::into)
 }
 
 fn encode_drag_icon_png(preview_png: &[u8]) -> Result<Vec<u8>, AppError> {
@@ -1298,37 +1062,7 @@ fn encode_png_with_quality(
     compression: CompressionType,
     filter: FilterType,
 ) -> Result<Vec<u8>, AppError> {
-    let mut bytes = Vec::new();
-    {
-        let mut encoder = png::Encoder::new(&mut bytes, image.width(), image.height());
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.set_compression(match compression {
-            CompressionType::Best => png::Compression::Best,
-            CompressionType::Default => png::Compression::Default,
-            _ => png::Compression::Fast,
-        });
-        match filter {
-            FilterType::Adaptive => {
-                encoder.set_adaptive_filter(png::AdaptiveFilterType::Adaptive);
-                encoder.set_filter(png::FilterType::Paeth);
-            }
-            FilterType::Sub => encoder.set_filter(png::FilterType::Sub),
-            FilterType::NoFilter => encoder.set_filter(png::FilterType::NoFilter),
-            FilterType::Up => encoder.set_filter(png::FilterType::Up),
-            FilterType::Avg => encoder.set_filter(png::FilterType::Avg),
-            FilterType::Paeth => encoder.set_filter(png::FilterType::Paeth),
-            _ => encoder.set_filter(png::FilterType::Paeth),
-        }
-        mark_png_as_srgb(&mut encoder);
-        let mut writer = encoder
-            .write_header()
-            .map_err(|error| AppError::Image(error.to_string()))?;
-        writer
-            .write_image_data(image.as_raw())
-            .map_err(|error| AppError::Image(error.to_string()))?;
-    }
-    Ok(bytes)
+    captures_history::encode_png_with_quality(image, compression, filter).map_err(Into::into)
 }
 
 fn unique_path(directory: &Path, stem: &str, extension: &str) -> PathBuf {
@@ -1736,7 +1470,7 @@ mod tests {
         std::fs::write(&recent_media, b"recent-bytes").expect("recent media");
         std::fs::write(&expired_media, b"expired-bytes").expect("expired media");
 
-        let recent = HistoryEntry::from_recording(&RecordingArtifact {
+        let recent = crate::models::history_entry_from_recording(&RecordingArtifact {
             id: recent_id.clone(),
             kind: RecordingKind::Video,
             path: recent_media.to_string_lossy().into_owned(),
@@ -1757,7 +1491,7 @@ mod tests {
             },
             missing: false,
         });
-        let expired = HistoryEntry::from_recording(&RecordingArtifact {
+        let expired = crate::models::history_entry_from_recording(&RecordingArtifact {
             id: expired_id.clone(),
             kind: RecordingKind::Video,
             path: expired_media.to_string_lossy().into_owned(),
@@ -1824,7 +1558,7 @@ mod tests {
         let id = uuid::Uuid::new_v4().to_string();
         let media_path = directory.path().join("externally-managed.mp4");
         std::fs::write(&media_path, b"legacy").expect("legacy media");
-        let entry = HistoryEntry::from_recording(&RecordingArtifact {
+        let entry = crate::models::history_entry_from_recording(&RecordingArtifact {
             id: id.clone(),
             kind: RecordingKind::Video,
             path: media_path.to_string_lossy().into_owned(),

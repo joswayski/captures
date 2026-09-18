@@ -2,15 +2,12 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use captures_capture::{CaptureMode, DisplayDescriptor, PointerCursor, WindowDescriptor};
-use captures_recording::{MaxResolution, RecordingKind, RecordingTarget};
-use directories::{ProjectDirs, UserDirs};
+pub use captures_history::{ArtifactKind, HISTORY_RETENTION_DAYS, HistoryEntry};
+use captures_recording::{RecordingKind, RecordingTarget};
+use directories::ProjectDirs;
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
-pub const HISTORY_RETENTION_DAYS: i64 = 30;
-const CURRENT_SETTINGS_SCHEMA_VERSION: u8 = 5;
-const SHORTCUT_MODIFIER: &str = "CommandOrControl";
 /// kCGSHotKeyScreenshot — Save picture of screen as a file (⌘⇧3).
 const MACOS_SCREENSHOT_SAVE_SCREEN: u32 = 28;
 /// kCGSHotKeyScreenshotRegion — Save picture of selected area as a file (⌘⇧4).
@@ -25,298 +22,13 @@ const MACOS_SCREENSHOT_SAVE_AREA_PARAMETERS: (u32, u32, u32) = (52, 21, 1_179_64
 #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 const MACOS_SCREENSHOT_OPTIONS_PARAMETERS: (u32, u32, u32) = (53, 23, 1_179_648);
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct AppSettings {
-    #[serde(default)]
-    pub settings_schema_version: u8,
-    #[serde(default)]
-    pub appearance: Appearance,
-    #[serde(default)]
-    pub theme: ColorTheme,
-    #[serde(default)]
-    pub custom_theme: CustomThemeSettings,
-    pub output_directory: String,
-    #[serde(default = "default_new_capture_shortcut")]
-    pub new_capture_shortcut: String,
-    pub region_shortcut: String,
-    pub window_shortcut: String,
-    pub display_shortcut: String,
-    #[serde(default = "default_auto_copy_to_clipboard")]
-    pub auto_copy_to_clipboard: bool,
-    /// When true, selecting a region, window, or full display starts the
-    /// screenshot/recording immediately.
-    #[serde(default)]
-    pub auto_start_on_selection: bool,
-    #[serde(default = "default_true")]
-    pub show_mini_previews: bool,
-    /// Screen corner for the mini-preview stack when it has not been dragged.
-    #[serde(default)]
-    pub mini_preview_placement: MiniPreviewPlacement,
-    /// When true, keep the quick-access mini preview stack visible during
-    /// screenshots and recordings so Captures UI can be captured for feedback.
-    #[serde(default)]
-    pub include_mini_previews_in_captures: bool,
-    /// When true, keep the recording controls bar capturable during screenshots
-    /// and recordings so Captures UI can be captured for feedback or demos.
-    #[serde(default)]
-    pub include_recording_controls_in_captures: bool,
-    pub launch_at_login: bool,
-    #[serde(default)]
-    pub last_screen_permission_request_id: Option<String>,
-    #[serde(default)]
-    pub pending_capture_after_restart: Option<CaptureMode>,
-    /// Internal first-run state. Existing installations are migrated to true;
-    /// only a newly created settings file starts with onboarding incomplete.
-    #[serde(default)]
-    pub onboarding_completed: bool,
-    #[serde(default = "default_screenshot_countdown_seconds")]
-    pub screenshot_countdown_seconds: u8,
-    /// Freeze the desktop while choosing a screenshot region or window so hover
-    /// states, menus, and motion stay put. Off shows the live desktop instead.
-    #[serde(default = "default_true")]
-    pub freeze_screen: bool,
-    /// Composite the pointer into still captures. Freeze screen only holds the
-    /// desktop still; it does not include the cursor by itself.
-    #[serde(default = "default_true")]
-    pub show_cursor_in_screenshots: bool,
-    /// Format used when saving or exporting a screenshot. Capture history stays
-    /// lossless PNG until that save.
-    #[serde(default)]
-    pub screenshot_format: ScreenshotFormat,
-    /// When true, the update notice lists every Preview since the installed
-    /// version. Off keeps a compact Update now prompt.
-    #[serde(default = "default_true")]
-    pub show_update_changelog: bool,
-    #[serde(default)]
-    pub recording: RecordingSettings,
-}
-
-/// Home corner for the mini-preview stack. Dragging the collapsed pile can
-/// still move it for the rest of the session.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MiniPreviewPlacement {
-    #[default]
-    BottomLeft,
-    BottomRight,
-    TopLeft,
-    TopRight,
-}
-
-impl MiniPreviewPlacement {
-    pub const fn is_top(self) -> bool {
-        matches!(self, Self::TopLeft | Self::TopRight)
-    }
-
-    pub const fn is_right(self) -> bool {
-        matches!(self, Self::BottomRight | Self::TopRight)
-    }
-}
-
-/// Light/dark preference for regular Captures windows. Surfaces that float over
-/// the desktop (capture overlay, recording controls, mini previews) stay dark.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Appearance {
-    #[default]
-    System,
-    Light,
-    Dark,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ColorTheme {
-    #[default]
-    Mustard,
-    Ember,
-    Rose,
-    #[serde(alias = "saffron")]
-    Violet,
-    Cobalt,
-    Aqua,
-    Mint,
-    Lime,
-    Mono,
-    Custom,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CustomThemeSettings {
-    #[serde(default = "default_custom_theme_accent")]
-    pub accent: String,
-    #[serde(default = "default_custom_theme_signal")]
-    pub signal: String,
-}
-
-impl CustomThemeSettings {
-    pub fn is_valid(&self) -> bool {
-        is_hex_color(&self.accent) && is_hex_color(&self.signal)
-    }
-}
-
-impl Default for CustomThemeSettings {
-    fn default() -> Self {
-        Self {
-            accent: default_custom_theme_accent(),
-            signal: default_custom_theme_signal(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ScreenshotFormat {
-    #[default]
-    Png,
-    Jpeg,
-    Webp,
-}
-
-impl ScreenshotFormat {
-    pub const fn extension(self) -> &'static str {
-        match self {
-            Self::Png => "png",
-            Self::Jpeg => "jpg",
-            Self::Webp => "webp",
-        }
-    }
-
-    pub fn extension_matches(self, extension: &str) -> bool {
-        match self {
-            Self::Png => extension.eq_ignore_ascii_case("png"),
-            Self::Jpeg => {
-                extension.eq_ignore_ascii_case("jpg") || extension.eq_ignore_ascii_case("jpeg")
-            }
-            Self::Webp => extension.eq_ignore_ascii_case("webp"),
-        }
-    }
-}
-
-/// Preferred container when saving or exporting a recording. Capture itself is
-/// always an H.264 MP4 master; GIF and WebM are converted on save.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum VideoFormat {
-    #[default]
-    Mp4,
-    Gif,
-    #[serde(rename = "webm", alias = "web_m")]
-    WebM,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct RecordingSettings {
-    /// Legacy field name retained so existing Record Screen bindings become
-    /// Record Region bindings without resetting a user's shortcut.
-    #[serde(default = "default_video_shortcut")]
-    pub video_shortcut: String,
-    #[serde(default = "default_record_window_shortcut")]
-    pub window_shortcut: String,
-    #[serde(default = "default_record_display_shortcut")]
-    pub display_shortcut: String,
-    #[serde(default = "default_gif_shortcut")]
-    pub gif_shortcut: String,
-    #[serde(default)]
-    pub video_format: VideoFormat,
-    #[serde(default = "default_video_fps")]
-    pub video_fps: u16,
-    #[serde(default)]
-    pub video_max_resolution: MaxResolution,
-    #[serde(default = "default_gif_fps")]
-    pub gif_fps: u16,
-    #[serde(default = "default_gif_max_width")]
-    pub gif_max_width: u32,
-    #[serde(default = "default_gif_max_colors")]
-    pub gif_max_colors: u16,
-    #[serde(default = "default_countdown_seconds")]
-    pub countdown_seconds: u8,
-    #[serde(default = "default_true")]
-    pub show_cursor: bool,
-    #[serde(default)]
-    pub capture_system_audio: bool,
-    #[serde(default)]
-    pub microphone_device_id: Option<String>,
-    #[serde(default)]
-    pub mono_audio: bool,
-    #[serde(default)]
-    pub highlight_clicks: bool,
-    #[serde(default)]
-    pub show_keystrokes: bool,
-    #[serde(default = "default_true")]
-    pub open_editor_after_recording: bool,
-}
-
-impl Default for RecordingSettings {
-    fn default() -> Self {
-        Self {
-            video_shortcut: default_video_shortcut(),
-            window_shortcut: default_record_window_shortcut(),
-            display_shortcut: default_record_display_shortcut(),
-            gif_shortcut: default_gif_shortcut(),
-            video_format: VideoFormat::default(),
-            video_fps: default_video_fps(),
-            video_max_resolution: MaxResolution::Original,
-            gif_fps: default_gif_fps(),
-            gif_max_width: default_gif_max_width(),
-            gif_max_colors: default_gif_max_colors(),
-            countdown_seconds: default_countdown_seconds(),
-            show_cursor: true,
-            capture_system_audio: false,
-            microphone_device_id: None,
-            mono_audio: false,
-            highlight_clicks: false,
-            show_keystrokes: false,
-            open_editor_after_recording: true,
-        }
-    }
-}
-
-impl Default for AppSettings {
-    fn default() -> Self {
-        Self {
-            settings_schema_version: CURRENT_SETTINGS_SCHEMA_VERSION,
-            appearance: Appearance::default(),
-            theme: ColorTheme::default(),
-            custom_theme: CustomThemeSettings::default(),
-            output_directory: default_output_directory().to_string_lossy().into_owned(),
-            new_capture_shortcut: default_new_capture_shortcut(),
-            region_shortcut: default_region_shortcut(),
-            window_shortcut: default_window_shortcut(),
-            display_shortcut: default_display_shortcut(),
-            auto_copy_to_clipboard: true,
-            auto_start_on_selection: false,
-            show_mini_previews: true,
-            mini_preview_placement: MiniPreviewPlacement::default(),
-            include_mini_previews_in_captures: false,
-            include_recording_controls_in_captures: false,
-            launch_at_login: false,
-            last_screen_permission_request_id: None,
-            pending_capture_after_restart: None,
-            onboarding_completed: false,
-            screenshot_countdown_seconds: default_screenshot_countdown_seconds(),
-            freeze_screen: true,
-            show_cursor_in_screenshots: true,
-            screenshot_format: ScreenshotFormat::default(),
-            show_update_changelog: true,
-            recording: RecordingSettings::default(),
-        }
-    }
-}
-
-fn default_custom_theme_accent() -> String {
-    "#32d3ff".to_owned()
-}
-
-fn default_custom_theme_signal() -> String {
-    "#ff4fc3".to_owned()
-}
-
-fn is_hex_color(value: &str) -> bool {
-    value.len() == 7
-        && value.starts_with('#')
-        && value.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
-}
+pub use captures_settings::{AppSettings, Appearance, MiniPreviewPlacement, ScreenshotFormat};
+#[cfg(test)]
+use captures_settings::{
+    ColorTheme, CustomThemeSettings, VideoFormat, default_display_shortcut, default_gif_shortcut,
+    default_new_capture_shortcut, default_record_display_shortcut, default_record_window_shortcut,
+    default_region_shortcut, default_video_shortcut, default_window_shortcut, migrate_settings,
+};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -451,34 +163,6 @@ pub struct RecordingArtifactData {
     pub poster_png: Vec<u8>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ArtifactKind {
-    #[default]
-    Screenshot,
-    Video,
-    Gif,
-}
-
-impl From<RecordingKind> for ArtifactKind {
-    fn from(kind: RecordingKind) -> Self {
-        match kind {
-            RecordingKind::Video => Self::Video,
-            RecordingKind::Gif => Self::Gif,
-        }
-    }
-}
-
-impl ArtifactKind {
-    pub const fn recording_kind(self) -> Option<RecordingKind> {
-        match self {
-            Self::Screenshot => None,
-            Self::Video => Some(RecordingKind::Video),
-            Self::Gif => Some(RecordingKind::Gif),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CaptureArtifact {
     pub id: String,
@@ -498,182 +182,94 @@ pub struct CaptureArtifact {
     pub preview_png: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct HistoryEntry {
-    pub id: String,
-    #[serde(default)]
-    pub kind: ArtifactKind,
-    pub preview_url: String,
-    pub full_url: String,
-    pub width: u32,
-    pub height: u32,
-    pub size_bytes: u64,
-    pub created_at: String,
-    #[serde(default)]
-    pub mode: Option<CaptureMode>,
-    #[serde(default)]
-    pub saved_path: Option<String>,
-    #[serde(default)]
-    pub mime_type: Option<String>,
-    #[serde(default)]
-    pub duration_ms: Option<u64>,
-    #[serde(default)]
-    pub target: Option<RecordingTarget>,
-    #[serde(default)]
-    pub has_system_audio: bool,
-    #[serde(default)]
-    pub has_microphone_audio: bool,
-    #[serde(default)]
-    pub dropped_frames: u64,
-}
-
-impl HistoryEntry {
-    pub fn from_recording(artifact: &RecordingArtifact) -> Self {
-        Self {
-            id: artifact.id.clone(),
-            kind: artifact.kind.into(),
-            preview_url: recording_poster_url(&artifact.id),
-            full_url: recording_media_url(&artifact.id),
-            width: artifact.width,
-            height: artifact.height,
-            size_bytes: artifact.size_bytes,
-            created_at: artifact.created_at.clone(),
-            mode: None,
-            // Permanent Captures path only. Recovery media lives under history/{id}/.
-            saved_path: artifact.saved_path.clone(),
-            mime_type: Some(artifact.mime_type.clone()),
-            duration_ms: Some(artifact.duration_ms),
-            target: Some(artifact.target.clone()),
-            has_system_audio: artifact.has_system_audio,
-            has_microphone_audio: artifact.has_microphone_audio,
-            dropped_frames: artifact.dropped_frames,
-        }
-    }
-
-    pub fn recording_artifact(&self) -> Option<RecordingArtifact> {
-        let kind = self.kind.recording_kind()?;
-        let path = self.recording_media_path()?;
-        let missing = !Path::new(&path).is_file();
-        Some(RecordingArtifact {
-            id: self.id.clone(),
-            kind,
-            path,
-            saved_path: self.saved_path.clone(),
-            media_url: recording_media_url(&self.id),
-            poster_url: recording_poster_url(&self.id),
-            mime_type: self.mime_type.clone()?,
-            duration_ms: self.duration_ms?,
-            width: self.width,
-            height: self.height,
-            size_bytes: self.size_bytes,
-            dropped_frames: self.dropped_frames,
-            has_system_audio: self.has_system_audio,
-            has_microphone_audio: self.has_microphone_audio,
-            created_at: self.created_at.clone(),
-            target: self.target.clone()?,
-            missing,
-        })
-    }
-
-    /// Prefer private history recovery media; fall back to a permanent saved path
-    /// (legacy entries stored media only in the Captures folder).
-    pub fn recording_media_path(&self) -> Option<String> {
-        let directory = history_directory().join(&self.id);
-        if let Some(path) = find_history_recording_media(&directory) {
-            return Some(path.to_string_lossy().into_owned());
-        }
-        if let Some(saved_path) = self.saved_path.clone() {
-            return Some(saved_path);
-        }
-        history_recording_media_path(&self.id, self.kind)
-            .map(|path| path.to_string_lossy().into_owned())
-    }
-
-    pub fn summary(&self) -> Option<ArtifactSummary> {
-        match self.kind {
-            ArtifactKind::Screenshot => Some(ArtifactSummary::Screenshot {
-                id: self.id.clone(),
-                preview_url: self.preview_url.clone(),
-                full_url: self.full_url.clone(),
-                width: self.width,
-                height: self.height,
-                size_bytes: self.size_bytes,
-                created_at: self.created_at.clone(),
-                mode: self.mode?,
-            }),
-            ArtifactKind::Video | ArtifactKind::Gif => {
-                let artifact = self.recording_artifact()?;
-                let fields = RecordingArtifactSummaryFields {
-                    id: artifact.id,
-                    poster_url: artifact.poster_url,
-                    media_url: artifact.media_url,
-                    saved_path: artifact.saved_path,
-                    mime_type: artifact.mime_type,
-                    duration_ms: artifact.duration_ms,
-                    width: artifact.width,
-                    height: artifact.height,
-                    size_bytes: artifact.size_bytes,
-                    dropped_frames: artifact.dropped_frames,
-                    has_system_audio: artifact.has_system_audio,
-                    has_microphone_audio: artifact.has_microphone_audio,
-                    created_at: artifact.created_at,
-                    target: artifact.target,
-                    missing: artifact.missing,
-                };
-                Some(if self.kind == ArtifactKind::Video {
-                    ArtifactSummary::Video { fields }
-                } else {
-                    ArtifactSummary::Gif { fields }
-                })
-            }
-        }
+pub fn history_entry_from_recording(artifact: &RecordingArtifact) -> HistoryEntry {
+    HistoryEntry {
+        id: artifact.id.clone(),
+        kind: artifact.kind.into(),
+        preview_url: recording_poster_url(&artifact.id),
+        full_url: recording_media_url(&artifact.id),
+        width: artifact.width,
+        height: artifact.height,
+        size_bytes: artifact.size_bytes,
+        created_at: artifact.created_at.clone(),
+        mode: None,
+        // Permanent Captures path only. Recovery media lives under history/{id}/.
+        saved_path: artifact.saved_path.clone(),
+        mime_type: Some(artifact.mime_type.clone()),
+        duration_ms: Some(artifact.duration_ms),
+        target: Some(artifact.target.clone()),
+        has_system_audio: artifact.has_system_audio,
+        has_microphone_audio: artifact.has_microphone_audio,
+        dropped_frames: artifact.dropped_frames,
     }
 }
 
-/// Preferred recovery media file name for a recording kind and source path.
-pub fn history_recording_media_file_name(kind: ArtifactKind, source: &Path) -> Option<String> {
-    kind.recording_kind()?;
-    let extension = source
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or(match kind {
-            ArtifactKind::Gif => "gif",
-            _ => "mp4",
-        });
-    Some(format!("media.{extension}"))
-}
-
-/// Locate private recovery media inside a history entry directory.
-pub fn find_history_recording_media(entry_directory: &Path) -> Option<PathBuf> {
-    const CANDIDATES: &[&str] = &["media.mp4", "media.gif", "media.webm"];
-    CANDIDATES
-        .iter()
-        .map(|name| entry_directory.join(name))
-        .find(|path| path.is_file())
-        .or_else(|| {
-            let entries = std::fs::read_dir(entry_directory).ok()?;
-            entries.flatten().map(|entry| entry.path()).find(|path| {
-                path.is_file()
-                    && path
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .is_some_and(|name| name.starts_with("media."))
-            })
-        })
-}
-
-pub fn history_recording_media_path(entry_id: &str, kind: ArtifactKind) -> Option<PathBuf> {
-    kind.recording_kind()?;
-    Uuid::parse_str(entry_id).ok()?;
-    let directory = history_directory().join(entry_id);
-    find_history_recording_media(&directory).or_else(|| {
-        // Default path used when creating a new recovery entry before the file exists.
-        let fallback = match kind {
-            ArtifactKind::Gif => "media.gif",
-            _ => "media.mp4",
-        };
-        Some(directory.join(fallback))
+pub fn history_recording_artifact(entry: &HistoryEntry) -> Option<RecordingArtifact> {
+    let kind = entry.kind.recording_kind()?;
+    let path = entry
+        .recording_media_path(&history_directory())?
+        .to_string_lossy()
+        .into_owned();
+    let missing = !Path::new(&path).is_file();
+    Some(RecordingArtifact {
+        id: entry.id.clone(),
+        kind,
+        path,
+        saved_path: entry.saved_path.clone(),
+        media_url: recording_media_url(&entry.id),
+        poster_url: recording_poster_url(&entry.id),
+        mime_type: entry.mime_type.clone()?,
+        duration_ms: entry.duration_ms?,
+        width: entry.width,
+        height: entry.height,
+        size_bytes: entry.size_bytes,
+        dropped_frames: entry.dropped_frames,
+        has_system_audio: entry.has_system_audio,
+        has_microphone_audio: entry.has_microphone_audio,
+        created_at: entry.created_at.clone(),
+        target: entry.target.clone()?,
+        missing,
     })
+}
+
+pub fn history_summary(entry: &HistoryEntry) -> Option<ArtifactSummary> {
+    match entry.kind {
+        ArtifactKind::Screenshot => Some(ArtifactSummary::Screenshot {
+            id: entry.id.clone(),
+            preview_url: entry.preview_url.clone(),
+            full_url: entry.full_url.clone(),
+            width: entry.width,
+            height: entry.height,
+            size_bytes: entry.size_bytes,
+            created_at: entry.created_at.clone(),
+            mode: entry.mode?,
+        }),
+        ArtifactKind::Video | ArtifactKind::Gif => {
+            let artifact = history_recording_artifact(entry)?;
+            let fields = RecordingArtifactSummaryFields {
+                id: artifact.id,
+                poster_url: artifact.poster_url,
+                media_url: artifact.media_url,
+                saved_path: artifact.saved_path,
+                mime_type: artifact.mime_type,
+                duration_ms: artifact.duration_ms,
+                width: artifact.width,
+                height: artifact.height,
+                size_bytes: artifact.size_bytes,
+                dropped_frames: artifact.dropped_frames,
+                has_system_audio: artifact.has_system_audio,
+                has_microphone_audio: artifact.has_microphone_audio,
+                created_at: artifact.created_at,
+                target: artifact.target,
+                missing: artifact.missing,
+            };
+            Some(if entry.kind == ArtifactKind::Video {
+                ArtifactSummary::Video { fields }
+            } else {
+                ArtifactSummary::Gif { fields }
+            })
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -734,113 +330,6 @@ pub struct ClipboardState {
     pub artifact_id: Option<String>,
 }
 
-const fn default_auto_copy_to_clipboard() -> bool {
-    true
-}
-
-fn captures_extra_shortcut(key: &str) -> String {
-    format!("{SHORTCUT_MODIFIER}+Shift+{key}")
-}
-
-fn default_new_capture_shortcut() -> String {
-    #[cfg(target_os = "linux")]
-    {
-        "PrintScreen".to_owned()
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        captures_extra_shortcut("Space")
-    }
-}
-
-fn default_region_shortcut() -> String {
-    #[cfg(target_os = "macos")]
-    {
-        captures_extra_shortcut("4")
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        "Super+Shift+S".to_owned()
-    }
-}
-
-fn default_window_shortcut() -> String {
-    #[cfg(target_os = "macos")]
-    {
-        captures_extra_shortcut("W")
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        "Alt+PrintScreen".to_owned()
-    }
-}
-
-fn default_display_shortcut() -> String {
-    #[cfg(target_os = "macos")]
-    {
-        captures_extra_shortcut("3")
-    }
-    #[cfg(target_os = "windows")]
-    {
-        "PrintScreen".to_owned()
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        "Shift+PrintScreen".to_owned()
-    }
-}
-
-fn default_video_shortcut() -> String {
-    #[cfg(target_os = "macos")]
-    {
-        captures_extra_shortcut("5")
-    }
-    #[cfg(target_os = "windows")]
-    {
-        "Super+Alt+R".to_owned()
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        "Control+Shift+Alt+R".to_owned()
-    }
-}
-
-fn default_record_window_shortcut() -> String {
-    format!("{SHORTCUT_MODIFIER}+Shift+Alt+W")
-}
-
-fn default_record_display_shortcut() -> String {
-    format!("{SHORTCUT_MODIFIER}+Shift+Alt+3")
-}
-
-fn default_gif_shortcut() -> String {
-    captures_extra_shortcut("6")
-}
-
-const fn default_video_fps() -> u16 {
-    60
-}
-
-const fn default_gif_fps() -> u16 {
-    15
-}
-
-const fn default_gif_max_width() -> u32 {
-    800
-}
-
-const fn default_gif_max_colors() -> u16 {
-    256
-}
-
-const fn default_countdown_seconds() -> u8 {
-    3
-}
-
-const fn default_screenshot_countdown_seconds() -> u8 {
-    0
-}
-
 const fn default_true() -> bool {
     true
 }
@@ -889,144 +378,10 @@ pub struct CaptureSession {
 }
 
 pub fn default_output_directory() -> PathBuf {
-    UserDirs::new()
-        .map(|dirs| dirs.home_dir().to_path_buf())
-        .unwrap_or_else(|| {
-            ProjectDirs::from("io", "github", "captures")
-                .map(|dirs| dirs.data_dir().to_path_buf())
-                .unwrap_or_else(|| PathBuf::from("."))
-        })
-        .join("Captures")
+    captures_settings::default_output_directory()
 }
 
-pub fn migrate_legacy_output_directory(settings: &mut AppSettings) {
-    let Some(user_dirs) = UserDirs::new() else {
-        return;
-    };
-    let Some(pictures) = user_dirs.picture_dir() else {
-        return;
-    };
-
-    migrate_output_directory(
-        settings,
-        &pictures.join("Captures"),
-        &user_dirs.home_dir().join("Captures"),
-    );
-}
-
-pub fn migrate_settings(settings: &mut AppSettings) -> bool {
-    if settings.settings_schema_version >= CURRENT_SETTINGS_SCHEMA_VERSION {
-        return false;
-    }
-
-    if settings.settings_schema_version < 1 {
-        // Recording originally shipped with 30 FPS / 1080p defaults. Upgrade
-        // only during the v1 migration so later user-owned choices remain
-        // untouched when newer settings migrations run.
-        if settings.recording.video_fps == 30 {
-            settings.recording.video_fps = 60;
-        }
-        if settings.recording.video_max_resolution == MaxResolution::P1080 {
-            settings.recording.video_max_resolution = MaxResolution::Original;
-        }
-    }
-    if settings.settings_schema_version < 2 {
-        // The welcome flow is for genuine first launches. A settings file from
-        // any earlier build proves this installation has already been used.
-        settings.onboarding_completed = true;
-    }
-    if settings.settings_schema_version < 3 {
-        // Previous defaults used Control+Shift on every platform, including
-        // macOS. Move still-factory bindings to CommandOrControl so macOS gets
-        // Command (matching Screenshot) and Windows/Linux keep Control. Custom
-        // shortcuts are left alone.
-        migrate_control_shift_factory_shortcuts(settings);
-    }
-    if settings.settings_schema_version < 4 {
-        // Schema 3 copied macOS Screenshot number keys onto every platform.
-        // Native screenshot keys differ on Windows and Linux; rewrite only
-        // still-factory bindings and leave custom shortcuts alone.
-        migrate_to_platform_native_shortcuts(settings);
-    }
-    settings.settings_schema_version = CURRENT_SETTINGS_SCHEMA_VERSION;
-    true
-}
-
-fn migrate_control_shift_factory_shortcuts(settings: &mut AppSettings) {
-    replace_factory_shortcut(
-        &mut settings.new_capture_shortcut,
-        &["Ctrl+Shift+Space"],
-        "CommandOrControl+Shift+Space",
-    );
-    replace_factory_shortcut(
-        &mut settings.region_shortcut,
-        &["Ctrl+Shift+4"],
-        "CommandOrControl+Shift+4",
-    );
-    replace_factory_shortcut(
-        &mut settings.window_shortcut,
-        &["Ctrl+Shift+W"],
-        "CommandOrControl+Shift+W",
-    );
-    replace_factory_shortcut(
-        &mut settings.display_shortcut,
-        &["Ctrl+Shift+3"],
-        "CommandOrControl+Shift+3",
-    );
-    replace_factory_shortcut(
-        &mut settings.recording.video_shortcut,
-        &["Ctrl+Shift+5"],
-        "CommandOrControl+Shift+5",
-    );
-    replace_factory_shortcut(
-        &mut settings.recording.gif_shortcut,
-        &["Ctrl+Shift+6"],
-        "CommandOrControl+Shift+6",
-    );
-}
-
-fn migrate_to_platform_native_shortcuts(settings: &mut AppSettings) {
-    replace_factory_shortcut(
-        &mut settings.new_capture_shortcut,
-        &["Ctrl+Shift+Space", "CommandOrControl+Shift+Space"],
-        default_new_capture_shortcut(),
-    );
-    replace_factory_shortcut(
-        &mut settings.region_shortcut,
-        &["Ctrl+Shift+4", "CommandOrControl+Shift+4"],
-        default_region_shortcut(),
-    );
-    replace_factory_shortcut(
-        &mut settings.window_shortcut,
-        &["Ctrl+Shift+W", "CommandOrControl+Shift+W"],
-        default_window_shortcut(),
-    );
-    replace_factory_shortcut(
-        &mut settings.display_shortcut,
-        &["Ctrl+Shift+3", "CommandOrControl+Shift+3"],
-        default_display_shortcut(),
-    );
-    replace_factory_shortcut(
-        &mut settings.recording.video_shortcut,
-        &["Ctrl+Shift+5", "CommandOrControl+Shift+5"],
-        default_video_shortcut(),
-    );
-    replace_factory_shortcut(
-        &mut settings.recording.gif_shortcut,
-        &["Ctrl+Shift+6", "CommandOrControl+Shift+6"],
-        default_gif_shortcut(),
-    );
-}
-
-fn replace_factory_shortcut(value: &mut String, factories: &[&str], next: impl Into<String>) {
-    if factories
-        .iter()
-        .any(|factory| shortcuts_equivalent(value, factory))
-    {
-        *value = next.into();
-    }
-}
-
+#[cfg(test)]
 fn shortcuts_equivalent(left: &str, right: &str) -> bool {
     match (
         canonical_shortcut_parts(left),
@@ -1290,6 +645,7 @@ pub fn shortcut_is_super_shift_s(shortcut: &str) -> bool {
     shortcut_matches(shortcut, &["Super", "Shift"], "S")
 }
 
+#[cfg(test)]
 fn migrate_output_directory(settings: &mut AppSettings, legacy: &Path, current: &Path) {
     if Path::new(&settings.output_directory) == legacy {
         settings.output_directory = current.to_string_lossy().into_owned();
@@ -1382,8 +738,9 @@ mod tests {
     use super::{
         AppSettings, Appearance, ArtifactKind, ColorTheme, CustomThemeSettings, HistoryEntry,
         MiniPreviewPlacement, RecordingArtifact, RecordingCapabilities, ScreenshotFormat,
-        VideoFormat, macos_screenshot_hotkeys_conflicting_with, migrate_output_directory,
-        migrate_settings, platform_can_exclude_recording_controls, recording_controls_are_excluded,
+        VideoFormat, history_directory, history_entry_from_recording, history_summary,
+        macos_screenshot_hotkeys_conflicting_with, migrate_output_directory, migrate_settings,
+        platform_can_exclude_recording_controls, recording_controls_are_excluded,
         recording_media_url, recording_poster_url, recording_selection_url, snapshot_url,
     };
 
@@ -1840,8 +1197,7 @@ mod tests {
             },
             missing: false,
         };
-        let summary = HistoryEntry::from_recording(&artifact)
-            .summary()
+        let summary = history_summary(&history_entry_from_recording(&artifact))
             .expect("recording history should produce a summary");
         let json = serde_json::to_value(summary).expect("summary should serialize");
 
@@ -1878,7 +1234,10 @@ mod tests {
             has_microphone_audio: false,
             dropped_frames: 0,
         };
-        assert_eq!(entry.recording_media_path().as_deref(), Some(saved_path));
+        assert_eq!(
+            entry.recording_media_path(&history_directory()).as_deref(),
+            Some(Path::new(saved_path))
+        );
     }
 
     #[test]

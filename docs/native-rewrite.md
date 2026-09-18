@@ -67,8 +67,11 @@ must be explicit, not silently successful.
   does not parse CSS or run a browser at runtime. Share assets and golden fixtures.
   Platform components may differ internally but must meet the same appearance,
   input and accessibility contracts.
-- The workbench reads synthetic fixtures only. It does not touch installed
-  settings/history, register shortcuts, request capture access, or install updates.
+- Default workbench scenes use synthetic capture fixtures; `--live` explicitly
+  enables the current native capture slice. Both use separate development data,
+  never installed settings/history. Fixture launches do not request capture
+  access. Live captures register temporary global Escape for cancellation;
+  capture-launch shortcuts and update installation are not connected yet.
   Production data migration requires backup, version checks and rollback tests.
 
 ## Reviewable stages and exit gates
@@ -134,6 +137,109 @@ visible and cannot justify a renderer selection or performance claim.
 
 No renderer is selected for these platforms yet. The same fixture scenes, token
 resources, resource budgets, visual checkpoints and input scripts are mandatory.
+
+The first domain slice now extracts shipping settings types/defaults/migrations
+and persistence into `captures-settings`, with a versioned `captures-settings-ffi`
+static library for AppKit. Both native Preferences screens edit a separate
+development settings file. Shared custom-theme derivation is checked against
+TypeScript-generated golden values. This advances settings persistence and
+presentation, not lifecycle/capture integration or full Preferences acceptance;
+all checklist gates above remain open until end-to-end verification.
+
+The next shared-core slice moves history metadata, 30-day retention, atomic
+artifact replacement, recording recovery, and basic sRGB PNG/thumbnail encoding
+into `captures-history`. The shipping desktop delegates to it; callers provide
+their own history root and presentation URLs. Native capture integration can use
+the same lifecycle without accessing installed history. This extraction alone
+adds no native capture UI and closes no platform gate.
+
+The opt-in `--live` workspace now connects full-display PNG capture and local
+screenshot history on both native hosts through `captures-app`. It includes
+explicit copy, export, reveal and history deletion while keeping exports and the
+installed Preview's data separate. Image decode and capture/file operations run
+off the UI thread. It preserves permission/session checks and hides its window
+before capture. Wayland capture remains gated by the candidate's missing window
+visibility support. Automatic copy and output folder/format preferences are now
+connected; JPEG/WebP encoding is shared with the legacy host and history remains
+lossless PNG. Screenshot countdown and temporary global Escape now share Rust
+deadlines, generation invalidation, and a cancellation/commit boundary across
+hosts; native countdown windows use the fixed media palette. Real mixed-DPI,
+focus, compositor, accessibility, and animation acceptance remains open.
+Cursor inclusion now shares sampling/compositing with the shipping host (macOS
+system pixels, Windows/X11 synthetic arrow). Regions/windows, recording, editor,
+mini previews and full UI/UX parity are still open; this slice closes no complete
+platform acceptance row. Hardware capture and clipboard tests remain required.
+
+Region preparation starts with `captures-app::selection`: shared create/move/
+corner-resize and settled-aspect geometry, including Shift precedence, fractional
+coordinates and the shipping minimum/clamping rules. A checked, allocation-free
+C ABI exposes the same functions to AppKit without per-pointer-event JSON.
+176 differential vectors execute the shipping TypeScript oracle; Rust compares
+both drag and settled-aspect outputs. Regenerate intentionally with
+`node scripts/native-selection.test.mjs --write`; the normal repository gate
+rejects stale vectors. `captures-app::region` now owns a bounded frozen-frame
+session, or a live-desktop session without a retained frame. Confirmation uses
+fresh pixels/cursor after any countdown, rejects changed display geometry/scale,
+crops using actual buffer edges, and shares the cancellation/commit gate before
+persisting region history. Cursor compositing happens after cropping so an
+outside hotspot cannot leave a clipped arrow fragment. Its opaque C ABI lends
+read-only pixels without a full-desktop temporary file or JSON image transfer;
+hosts must retain the session until every image provider and worker has finished.
+Rust pixel/source-selection tests and Swift ABI tests cover these contracts.
+The AppKit host now connects a native region panel with draw/move/corner resize,
+all six aspect presets, Shift-square override, Enter/Cancel and automatic start.
+Its layer-backed frozen image stays separate from the input-driven scrim canvas
+and native controls. Preparation/selection keep the same Escape generation; the
+countdown starts only after confirmation. The Windows/X11 candidate connects the
+same shared session and selection geometry, with a private-X11 repeated-capture
+pixel/persistence gate. Wayland's host visibility/placement gate remains open.
+Neither this stage nor its synthetic input/render checks close the
+capture-overlay gate: real display/permission/session/VoiceOver verification,
+magnifier, blur and full capture-menu UI parity remain required.
+
+Window capture begins with a behavior-preserving extraction of pixel-source
+policy into `captures-capture`. The shipping host uses the shared stack-occlusion
+check, composited-crop/native fallback and blank-frame heuristic. A failed native
+capture must never fall back to pixels from a covering window; known same-app
+untitled transients retain the existing exception. Error messages/categories and
+the existing shipping tests are preserved. Native-coordinate buffer scaling,
+clipped window rectangles, freeze-frame corner-radius inference and antialiased
+macOS corner masking now use the same shared algorithms. The host still supplies
+the macOS fallback radius and decides where that mask applies; Windows and Linux
+do not gain rounded masks. This extraction alone implements no new native capture
+mode on any OS.
+
+A follow-up shared-core stage moves window target classification into
+`captures-capture`: display membership, empty/minimum-size filtering, Captures'
+internal surfaces, shell edge strips, desktop backdrops and excluded system apps
+now produce shared capturable/shell-chrome groups. The macOS Screenshot and
+Windows NVIDIA overlay exclusions retain their compile-time platform gates. The
+shipping host still owns enumeration failures/logging and applies snapshot chrome
+refinement after classification.
+
+`captures-app::window::WindowSession` now owns native preparation, frozen pixels,
+target descriptors and window/display confirmation. Its versioned C ABI exposes
+the same session to AppKit, including borrowed RGBA storage with the region
+session's lifetime contract. Hosts supply the OS corner-radius fallback, hide and
+settle their windows before capture, and retain the event-loop capture-flow guard.
+No pixels enter JSON or temporary preview files. Safe frozen crops keep their
+original pixels/cursor; countdowns always refresh pixels, window geometry and
+cursor. Unsafe/blank crops use the shared native-surface fallback, never a crop of
+an occluding window. Display/shell selections persist display-mode history;
+window selections persist window-mode history. Cancellation and session checks
+surround capture and use the existing commit gate before persistence.
+
+The native session deliberately fails closed when live target enumeration fails,
+the target disappears or moves to another display, or display geometry changes.
+It retains the **unfiltered** stack for occlusion checks: a window too small to
+pick may still cover the selected target. These are stricter than the legacy
+host's stale-descriptor fallback and filtered frozen stack; legacy behavior is
+unchanged. Unit tests distinguish frozen/fresh geometry and pixels, small
+occluders, source failures, cursor spaces, output metadata and macOS-only masks.
+Native window selection surfaces and host integration remain **not implemented**
+on macOS, Windows and X11; real-desktop acceptance is unverified. Wayland window
+targeting remains unsupported. Shared-core tests and ABI compilation do not close
+the cross-platform capture gate or select a Windows/Linux renderer.
 
 The first [shared wgpu candidate](../apps/native/wgpu/README.md) uses egui/winit
 with retained image textures and event-driven immediate-mode UI, an additional

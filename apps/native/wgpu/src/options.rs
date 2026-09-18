@@ -1,9 +1,11 @@
 use std::{path::PathBuf, time::Duration};
 
-pub const USAGE: &str = "Captures wgpu fixture workbench (no capture access)\n\
-  --scene preferences|history|hud|preview|editor|idle\n\
+pub const USAGE: &str = "Captures wgpu native host\n\
+  --live [--history-root PATH]\n\
+  --scene preferences|history|hud|preview|editor|region|countdown|idle\n\
   --appearance light|dark|system --theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono\n\
   --history-count 0..10000 --exercise --quit-after SECONDS\n\
+  --settings-file PATH\n\
   --floating (HUD/preview only) --reduced-motion\n\
   --screenshot FILE.png --screenshot-after SECONDS";
 
@@ -18,16 +20,19 @@ pub enum Scene {
     Hud,
     Preview,
     Editor,
+    Region,
+    Countdown,
     Idle,
 }
 
 impl Scene {
-    pub const VISIBLE: [Self; 5] = [
+    pub const VISIBLE: [Self; 6] = [
         Self::Preferences,
         Self::History,
         Self::Hud,
         Self::Preview,
         Self::Editor,
+        Self::Region,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -36,6 +41,8 @@ impl Scene {
             Self::Hud => "hud",
             Self::Preview => "preview",
             Self::Editor => "editor",
+            Self::Region => "region",
+            Self::Countdown => "countdown",
             Self::Idle => "idle",
         }
     }
@@ -46,6 +53,8 @@ impl Scene {
             Self::Hud => "Recording controls",
             Self::Preview => "Mini previews",
             Self::Editor => "Editor rendering probe",
+            Self::Region => "Region selector fixture",
+            Self::Countdown => "Screenshot countdown",
             Self::Idle => "Hidden window",
         }
     }
@@ -53,6 +62,8 @@ impl Scene {
 
 #[derive(Debug)]
 pub struct Options {
+    pub live: bool,
+    pub history_root: Option<PathBuf>,
     pub scene: Scene,
     pub appearance: String,
     pub theme: String,
@@ -63,11 +74,16 @@ pub struct Options {
     pub screenshot_after: Duration,
     pub floating: bool,
     pub reduced_motion: bool,
+    pub settings_file: Option<PathBuf>,
+    pub appearance_override: bool,
+    pub theme_override: bool,
 }
 
 impl Options {
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let mut options = Self {
+            live: false,
+            history_root: None,
             scene: Scene::Preferences,
             appearance: "dark".into(),
             theme: "mustard".into(),
@@ -78,10 +94,17 @@ impl Options {
             screenshot_after: Duration::from_secs(1),
             floating: false,
             reduced_motion: false,
+            settings_file: None,
+            appearance_override: false,
+            theme_override: false,
         };
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
+                "--live" => options.live = true,
+                "--history-root" => {
+                    options.history_root = Some(args.next().ok_or("Missing history root")?.into())
+                }
                 "--exercise" => options.exercise = true,
                 "--floating" => options.floating = true,
                 "--reduced-motion" => options.reduced_motion = true,
@@ -89,12 +112,18 @@ impl Options {
                     let value = args.next().ok_or("Missing scene")?;
                     options.scene = Scene::VISIBLE
                         .into_iter()
-                        .chain([Scene::Idle])
+                        .chain([Scene::Idle, Scene::Countdown])
                         .find(|s| s.name() == value)
                         .ok_or("Unknown scene")?;
                 }
-                "--appearance" => options.appearance = args.next().ok_or("Missing appearance")?,
-                "--theme" => options.theme = args.next().ok_or("Missing theme")?,
+                "--appearance" => {
+                    options.appearance = args.next().ok_or("Missing appearance")?;
+                    options.appearance_override = true;
+                }
+                "--theme" => {
+                    options.theme = args.next().ok_or("Missing theme")?;
+                    options.theme_override = true;
+                }
                 "--history-count" => {
                     options.history_count = args
                         .next()
@@ -124,6 +153,9 @@ impl Options {
                 "--screenshot" => {
                     options.screenshot = Some(args.next().ok_or("Missing screenshot path")?.into())
                 }
+                "--settings-file" => {
+                    options.settings_file = Some(args.next().ok_or("Missing settings path")?.into())
+                }
                 _ => return Err(format!("Unknown option {arg}")),
             }
         }
@@ -137,6 +169,23 @@ impl Options {
         }
         if options.scene == Scene::Idle && (options.screenshot.is_some() || options.exercise) {
             return Err("Hidden idle has no screenshot or scripted actions".into());
+        }
+        if options.scene == Scene::Countdown && options.exercise {
+            return Err(
+                "Countdown is a static rendering probe; use --live for timing/cancellation".into(),
+            );
+        }
+        if options.live
+            && (options.exercise
+                || options.floating
+                || options.scene != Scene::Preferences
+                || options.history_count != 1000
+                || options.reduced_motion)
+        {
+            return Err("--live cannot be combined with fixture scenes or exercise options".into());
+        }
+        if options.history_root.is_some() && !options.live {
+            return Err("--history-root requires --live".into());
         }
         if options.screenshot.is_some() {
             let deadline = options
@@ -163,6 +212,20 @@ mod tests {
             parse(&["--history-count", "10000"]).unwrap().history_count,
             10000
         );
+        assert!(parse(&["--live"]).unwrap().history_root.is_none());
+        assert_eq!(
+            parse(&["--live", "--history-root", "/tmp/captures"])
+                .unwrap()
+                .history_root,
+            Some(PathBuf::from("/tmp/captures"))
+        );
+        for args in [
+            vec!["--live", "--exercise"],
+            vec!["--live", "--scene", "history"],
+            vec!["--history-root", "/tmp/captures"],
+        ] {
+            assert!(parse(&args).is_err(), "{args:?}");
+        }
         for args in [
             vec!["--history-count", "10001"],
             vec!["--history-count", "-1"],
@@ -172,6 +235,7 @@ mod tests {
             vec!["--scene"],
             vec!["--floating"],
             vec!["--scene", "idle", "--exercise"],
+            vec!["--scene", "countdown", "--exercise"],
             vec![
                 "--screenshot",
                 "test.png",
@@ -184,6 +248,10 @@ mod tests {
             assert!(parse(&args).is_err(), "{args:?}");
         }
         assert!(parse(&["--scene", "preview", "--floating"]).is_ok());
+        assert_eq!(
+            parse(&["--scene", "countdown"]).unwrap().scene,
+            Scene::Countdown
+        );
         assert_eq!(
             parse(&["--screenshot", "test.png"]).unwrap().quit_after,
             Some(Duration::from_secs(16))

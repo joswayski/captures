@@ -12,7 +12,7 @@ const appearanceTsPath = resolve(root, "shared/appearance.ts");
 const desktopEntryCssPath = resolve(root, "apps/desktop/ui/src/styles.css");
 const desktopStylesDir = resolve(root, "apps/desktop/ui/src/styles");
 const webCssPath = resolve(root, "apps/web/src/index.css");
-const rustModelsPath = resolve(root, "apps/desktop/src-tauri/src/models.rs");
+const rustModelsPath = resolve(root, "crates/captures-settings/src/lib.rs");
 
 async function readDesktopCss() {
   const entry = await readFile(desktopEntryCssPath, "utf8");

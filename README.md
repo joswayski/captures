@@ -179,8 +179,22 @@ platform-specific integrations for capture, recording, and media processing.
 A browser-free native replacement is planned for macOS, Windows, and Linux,
 developed feature by feature across platforms using shared Rust logic and the
 Captures design. Development workbenches include Swift/AppKit on macOS and an
-experimental Rust/wgpu renderer candidate for Windows/Linux. They use synthetic
-data, not real capture workflows, and are not replacement downloads. Windows/Linux
+experimental Rust/wgpu renderer candidate for Windows/Linux. They are not
+replacement downloads. An opt-in native capture workspace connects full-display
+PNG capture, local screenshot history, copy, export, and deletion to
+shared Rust engines. It uses separate development data; Wayland capture is gated
+until the candidate can hide its window reliably. Native Preferences saves
+appearance, custom colors, and capture/media defaults through shared Rust logic
+in a separate development settings file. The native workspace now applies
+automatic copy, output folder, PNG/JPEG/WebP save-format, screenshot countdown,
+and cursor inclusion preferences. Cursor rendering matches the shipping app:
+system cursor pixels on macOS, a synthetic arrow on Windows/X11. Escape cancels
+a pending capture even with another app focused. Both the macOS workspace and
+Windows/X11 candidate connect region draw/move/resize, aspect constraints, freeze,
+and auto-start to shared Rust capture logic.
+Window capture, recording,
+editing, mini previews, global shortcuts, login items, and updates are not
+connected to the native hosts yet. Windows/Linux
 renderer selection and full feature/design parity remain open. The
 [migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;
 existing Preview features remain available during development. The wgpu candidate

@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+// Layout is also used by the versioned native region-geometry C ABI.
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct LogicalRect {
     pub x: f64,

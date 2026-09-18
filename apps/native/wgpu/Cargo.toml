@@ -15,6 +15,13 @@ eframe = { version = "=0.36.2", default-features = false, features = ["wgpu", "x
 image = { version = "0.25", default-features = false, features = ["png"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+chrono = "0.4"
+captures-settings = { path = "../../../crates/captures-settings" }
+captures-app = { path = "../../../crates/captures-app" }
+captures-capture = { path = "../../../crates/captures-capture" }
+arboard = "3.6"
+rfd = "0.15"
+tempfile = "3"
 
 [profile.dev]
 debug = 0
