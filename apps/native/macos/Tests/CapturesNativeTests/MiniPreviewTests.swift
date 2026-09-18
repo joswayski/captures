@@ -67,7 +67,8 @@ final class MiniPreviewTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let png = Data([137, 80, 78, 71, 13, 10, 26, 10])
+        let png = try XCTUnwrap(NSBitmapImageRep(cgImage: PreviewView.fixtureImage(scale: 1))
+            .representation(using: .png, properties: [:]))
         let imagePath = directory.appendingPathComponent("full.png")
         try png.write(to: imagePath)
         let transport = MiniPreviewActionTransport()
