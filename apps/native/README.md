@@ -4,8 +4,11 @@ This is the first implementation stage of the [native rewrite](../../docs/native
 **not a usable capture application**. The existing Tauri Preview is unchanged.
 macOS is Swift/AppKit + Core Animation with Core Image explicitly backed by Metal.
 No WebView, React, JavaScript runtime, Rust sidecar, network service or capture
-permission is used. Rust engine integration is the next stage, not implemented
-here. Windows and Linux renderer choices remain open pending prototypes.
+permission is used. Rust engine integration is not implemented here. Next are
+Windows/Linux renderer prototypes alongside AppKit, before production feature
+slices advance across all three OSes. Those hosts do not exist yet and their
+renderer choices remain open. See the migration plan for per-platform acceptance;
+the macOS workbench is a reference, not a plan to finish macOS before other OSes.
 
 ## Build and try on macOS
 

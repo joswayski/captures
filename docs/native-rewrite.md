@@ -1,8 +1,12 @@
 # Browser-free desktop migration
 
-Status: **stage 1, development workbench, not a replacement release**. The shipping
-Tauri application remains available. No WebView, JavaScript runtime, localhost
-server, or Tauri dependency belongs in the replacement. The website is unaffected.
+Status: **macOS development workbench merged; cross-platform foundations next**.
+This rewrite covers macOS, Windows, and Linux, feature by feature rather than one
+complete OS at a time. Only the AppKit fixture frontend exists today; Windows and
+Linux native frontends are not implemented. No native replacement is released.
+The shipping Tauri application remains available. No WebView, JavaScript runtime,
+localhost server, or Tauri dependency belongs in the replacement. The website is
+unaffected.
 
 ## Inventory and acceptance checklist
 
@@ -69,32 +73,88 @@ must be explicit, not silently successful.
 
 ## Reviewable stages and exit gates
 
-1. **Inventory + macOS workbench (this stage).** Token sharing, independent native
-   build, representative preferences/history/HUD/preview surfaces, cold/warm dust
-   setup instrumentation, idle/resource scripts. Mock screens are not parity.
-   macOS compilation, visual and resource results must be collected on a Mac.
-2. **Shared core + first real capture.** Behavior-preserving extraction first,
-   then bindings and display/region capture → preview → copy/save/history. Both
-   frontends consume the same core. Test errors, ownership, lock/unlock and DPI.
-3. **Native workflow parity.** Onboarding, tray/shortcuts/preferences, all capture
-   modes, preview pile/drag, recording controls/history/notices. Verify each row
-   above using real engines, not successful mock commands.
-4. **Editors.** Port document math and persistence before UI; screenshot editor,
-   then playback/export editor. Differential fixtures, crash recovery and real
-   media exports gate completion.
-5. **Windows/Linux renderer decision and implementations.** Prototype early (in
-   parallel with stages 2–4); do not wait for the complete Mac app to discover an
-   incompatible shared contract. Complete the same checklist per platform.
-6. **Release cutover.** Packaging, updater, accessibility, energy and long-run
-   tests, storage rollback, signed Preview testing. Only then remove Tauri/React
-   desktop dependencies and legacy frontend. The website can still use React.
+The unit of delivery is a **cross-platform feature slice**, not a finished macOS
+app followed by ports. Implement domain behavior once in Rust; implement its
+presentation and OS adapters on each platform. Shared behavior does not require
+identical component implementations or a common UI framework.
 
-Each stage gets a focused PR; no automatic stable release or installer replacement.
+1. **Inventory + AppKit reference (merged in [#531](https://github.com/joswayski/captures/pull/531)).**
+   Shared tokens and fixture preferences/history/HUD/preview screens exist. The
+   workbench runs on the maintainer's Mac and native CI passes; full visual and
+   resource acceptance remains open. Mock screens are not feature parity.
+2. **Cross-platform foundations (next).** Bring Windows and Linux renderer
+   prototypes alongside AppKit using the same fixture scenarios below. Compare
+   candidates before selecting production renderers. Make resources and scenario
+   expectations platform-independent; keep backend measurement adapters separate.
+   Shared-core extraction can proceed in parallel, preserving the legacy host's
+   behavior, but do not build a backlog of Mac-only production features while
+   other hosts lack the ability to render and exercise them.
+3. **First shared feature slices.** Start with persisted appearance/preferences
+   and host lifecycle, then display screenshot → preview → copy/save → history.
+   Add region selection as its own slice. Each slice includes the shared Rust
+   contract, all three native hosts, real engine integration, and platform checks.
+   Test ownership, permission denial, errors, cancellation, session lock and DPI
+   where relevant. A display-capture slice does not close the whole capture gate.
+4. **Remaining workflow slices.** Work through onboarding, shortcuts, remaining
+   capture modes/countdowns, preview pile/drag/effects, recording selector/HUD,
+   history operations and notices. Close one narrowly defined behavior across
+   platforms before treating it as complete; use the inventory for full coverage.
+5. **Editor slices.** Port shared document math/persistence first, then editing
+   actions and their native presentation across platforms. Start with screenshot
+   editing, then recording playback/export. Differential fixtures, crash recovery
+   and real media outputs gate each slice, not a mock editor shell.
+6. **Cross-platform release cutover.** Packaging, updater, accessibility, energy
+   and long-run tests, storage rollback, signed Preview testing. Only after parity
+   is accepted remove Tauri/React desktop dependencies and the legacy frontend.
+   No automatic stable release or installer replacement; the website may use React.
+
+### PR size and platform acceptance
+
+A small slice can fit in one PR covering all platforms. Larger slices may use a
+behavior-preserving Rust extraction PR followed by focused host PRs for that same
+slice. Do not duplicate domain logic in Swift or platform UI code to make one
+host advance faster. Do not force unrelated OS changes into a shared-core-only PR.
+
+Each implementation PR records the slice's behavior/non-default cases and status
+for **macOS, Windows, Linux X11, and Linux Wayland**. Use explicit states:
+`not implemented`, `implemented / unverified`, `verified` (with evidence), or
+`unsupported` (with the existing capability limitation and visible fallback).
+Mocks, stubs, compilation, and missing hardware are not functional acceptance.
+When host work is split across PRs, link the companion work and keep the slice
+open until its platform gates pass. Never silently drop an OS to close a gate.
+
+Run platform compilation/tests in CI where available. Maintainer runs on Mac and
+Windows supply real desktop/input/GPU evidence; Linux evidence must distinguish
+X11 from Wayland and hardware from the orb's graphics environment. Each handoff
+includes exact commands, expected behavior, captures and raw measurement output.
+Hardware results pending need not block unrelated shared work, but must remain
+visible and cannot justify a renderer selection or performance claim.
 
 ## Windows and Linux evaluation plan
 
 No renderer is selected for these platforms yet. The same fixture scenes, token
 resources, resource budgets, visual checkpoints and input scripts are mandatory.
+
+The next implementation milestone is **comparable workbenches on all OSes**, not
+the next Mac-only screen. Exercise each candidate with:
+
+- Preferences: Captures-styled controls, light/dark/themes, editable search text,
+  keyboard focus and scrolling; expose accessibility roles and values.
+- History: empty, 100 and 1,000 image-backed rows, filtering/scrolling, bounded
+  thumbnail residency and release after closing.
+- A transparent desktop preview and HUD: hover/hit regions, running/paused/hidden
+  states, cold/warm dust and survivor settle, cancellation and reduced motion.
+- An editor rendering probe: large image, multiple layers, pan/zoom/rotate and
+  editable text/IME. This tests renderer suitability, not editor feature parity.
+- Lifecycle: hidden/minimized/occluded idle, mixed/fractional DPI, repeated
+  open/close and resource recovery. No recurring redraw loop for static scenes.
+
+Extend the AppKit workbench to these same cases where it is incomplete. Reuse
+tokens/assets and deterministic effect fixtures; do not translate the entire app
+into each candidate just to evaluate it. Preserve custom Captures styling and
+compare equivalent work, including setup costs, rather than native stock widgets
+against fully styled screens. Record missing input/accessibility support as a
+candidate cost, not as a task deferred until after renderer selection.
 
 | Platform | Candidates | Questions the prototype must settle |
 | --- | --- | --- |

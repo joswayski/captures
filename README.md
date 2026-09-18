@@ -176,10 +176,12 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for local setup, validation, and packaging.
 The downloadable Preview uses Tauri and React for its UI, with Rust engines and
 platform-specific integrations for capture, recording, and media processing.
 
-A browser-free native replacement is in development, starting with a Swift/AppKit
-workbench on macOS. It is not yet a capture app or a replacement download. The
-[migration checklist](docs/native-rewrite.md) tracks feature parity and the
-Windows/Linux renderer evaluation; existing Preview features remain available.
+A browser-free native replacement is planned for macOS, Windows, and Linux,
+developed feature by feature across platforms using shared Rust logic and the
+Captures design. Today only a Swift/AppKit workbench exists; it is not yet a
+capture app or a replacement download. Windows/Linux renderer prototypes come
+next. The [migration checklist](docs/native-rewrite.md) tracks the plan and parity
+gates; existing Preview features remain available during development.
 
 ## License and trademarks
 
