@@ -55,6 +55,32 @@ char *captures_region_capture_v1(const CapturesRegionSession *session,
  * Separately finish the main-thread flow guard on success, failure and quit. */
 void captures_region_free_v1(CapturesRegionSession *session);
 
+/* Window sessions share region-session ownership and pixel layout. Prepare on
+ * a worker after hiding capture windows, retaining an event-loop flow guard.
+ * fallback_corner_radius is the finite, nonnegative OS radius (0 outside macOS).
+ * No implicit permission prompt. NULL output refuses preparation; otherwise it
+ * receives owned {ok,result:{display,windows,shell_chrome}} or {ok,error} JSON.
+ * Freeze/cursor preferences remain fixed for the session. */
+typedef struct CapturesWindowSession CapturesWindowSession;
+typedef CapturesRegionPixels CapturesWindowPixels;
+CapturesWindowSession *captures_window_prepare_v1(const char *display_id,
+    uint64_t generation, bool freeze, bool include_cursor,
+    double fallback_corner_radius, char **output);
+/* Same borrowed RGBA8 contract as captures_region_pixels_v1. */
+bool captures_window_pixels_v1(const CapturesWindowSession *session, CapturesWindowPixels *output);
+/* target_json: {"kind":"window","id":"..."} or {"kind":"display"}.
+ * Both strings are readable UTF-8/NUL-terminated for the call. Window IDs must
+ * belong to the prepared picker. Display captures cover desktop/shell targets.
+ * Nonzero countdown requires after_countdown=true: fresh geometry and pixels,
+ * even if frozen. A missing target or target moved off this display fails.
+ * Hide/settle selector/countdown windows first. Free returned JSON with
+ * captures_settings_free_v1. Keep session alive through every worker call. */
+char *captures_window_capture_v1(const CapturesWindowSession *session,
+    const char *root, const char *target_json, bool after_countdown);
+/* Exactly once, after all workers/providers/borrows finish. NULL is permitted.
+ * Separately finish the event-loop capture-flow guard on every exit path. */
+void captures_window_free_v1(CapturesWindowSession *session);
+
 /* Versioned JSON ABI. Operations are load, save, default_path, and theme.
  * Theme accepts {"operation":"theme","accent":"#rgb","signal":"#rrggbb",
  * "light":true} and returns {"ok":true,"colors":{...}}.
