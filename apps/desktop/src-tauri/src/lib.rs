@@ -19,8 +19,6 @@ use tauri::CursorIcon;
 
 #[cfg(target_os = "macos")]
 use captures_capture::capture_buffer_scale;
-#[cfg(all(test, target_os = "macos"))]
-use captures_capture::macos_window_is_capture_overlay;
 #[cfg(any(target_os = "macos", test))]
 use captures_capture::mask_macos_window_corners;
 use captures_capture::{
@@ -8281,6 +8279,8 @@ fn window_visible_corner_radius(window: &captures_capture::WindowDescriptor) -> 
 mod tests {
     use std::sync::atomic::AtomicBool;
 
+    #[cfg(target_os = "macos")]
+    use captures_capture::macos_window_is_capture_overlay;
     use image::{Rgba, RgbaImage};
     use tauri_plugin_global_shortcut::ShortcutState;
 
