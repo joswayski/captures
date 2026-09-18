@@ -124,6 +124,16 @@ active, unlocked desktop session; bare Xvfb normally has no session service and
 must refuse capture. Verify real permission, clipboard ownership, multi-display
 behavior and exported pixels on each OS before accepting the slice.
 
+The preview foundation reuses `captures-app::preview` for corner placement,
+work-area/DPI math and capture/decode visibility generations. AppKit calls this
+policy through the versioned `captures_preview_*_v1` ABI and `NativePreviewPolicy`;
+Windows/Linux can call Rust directly. This bridge does not yet display a live
+mini preview. Hosts must supply actual usable monitor bounds, apply native
+visibility and wait for hidden windows to settle before capture. ABI tests cover
+negative origins, four corners, Retina scale, stale decode/cancellation and the
+include-in-captures override; hardware, compositor and accessibility acceptance
+remain open on macOS, Windows and X11, and Wayland positioning is not supported.
+
 ## Build and try on macOS
 
 Requires macOS 13+, Xcode command-line tools with Swift 5.9+, Rust 1.94, and Node

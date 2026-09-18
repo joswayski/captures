@@ -23,6 +23,57 @@ bool captures_selection_drag_v1(uint32_t mode, CapturesSelectionPoint origin,
 bool captures_selection_constrain_v1(CapturesSelectionRect rect,
     CapturesSelectionBounds bounds, double aspect, CapturesSelectionRect *output);
 
+/* Shared preview placement. Monitor bounds are PHYSICAL pixels in desktop
+ * top-left coordinates (negative origins allowed), including the actual usable
+ * work area. Output/origin are LOGICAL coordinates in that same orientation.
+ * AppKit must convert its bottom-left points at this boundary. Scale must be
+ * finite and positive; shipping policy clamps values below 1 to 1.
+ * Placement: 0 bottom-left, 1 bottom-right, 2 top-left, 3 top-right.
+ * Anchor: 0 bottom, 1 top. NULL origin uses the configured corner.
+ * No allocation or OS access. Borrow pointers only for this call. False leaves
+ * output unchanged (null output, bad enum/nonfinite origin/scale/empty bounds).
+ * Non-null origin/output require aligned readable/writable storage. */
+typedef struct {
+    int32_t work_x, work_y;
+    uint32_t work_width, work_height;
+    int32_t full_x, full_y;
+    uint32_t full_width, full_height;
+    double scale_factor;
+} CapturesPreviewMonitor;
+typedef struct { double x, edge; uint32_t anchor; } CapturesPreviewOrigin;
+typedef struct {
+    double x, y, width, height, card_height, padding, control_gutter;
+    uint32_t anchor;
+} CapturesPreviewGeometry;
+bool captures_preview_geometry_v1(CapturesPreviewMonitor monitor, size_t count,
+    bool collapsed, const CapturesPreviewOrigin *origin, uint32_t placement,
+    CapturesPreviewGeometry *output);
+
+/* Owned shared visibility state, not a native window. Serialize all calls on
+ * one handle (normally the UI thread). Free exactly once after callers stop;
+ * NULL is permitted by free and returns false from every other handle call.
+ * Generation tokens below are preview tokens, NOT capture-flow generations.
+ * Host must apply native visibility and wait for it to settle before capture;
+ * this policy cannot hide a window itself. Include-in-captures intentionally
+ * overrides suppression, but never zero count or disabled previews. */
+typedef struct CapturesPreviewVisibility CapturesPreviewVisibility;
+CapturesPreviewVisibility *captures_preview_visibility_new_v1(void);
+void captures_preview_visibility_free_v1(CapturesPreviewVisibility *handle);
+/* False leaves output untouched; NULL output refuses begin without mutation. */
+bool captures_preview_begin_v1(CapturesPreviewVisibility *handle, uint64_t *output);
+/* artifact strings are readable NUL-terminated UTF-8; NULL/invalid UTF-8 fails.
+ * Wait copies the ID. Ready only accepts the current pending ID. */
+bool captures_preview_wait_v1(CapturesPreviewVisibility *handle, uint64_t generation,
+    const char *artifact);
+bool captures_preview_ready_v1(CapturesPreviewVisibility *handle, const char *artifact);
+bool captures_preview_restore_v1(CapturesPreviewVisibility *handle, uint64_t generation);
+/* Clears a pending decode wait, never an active capture without a pending ID. */
+bool captures_preview_stop_waiting_v1(CapturesPreviewVisibility *handle);
+/* UI suppression is independent of the capture generation/decoded artifact. */
+bool captures_preview_capture_ui_v1(CapturesPreviewVisibility *handle, bool suppressed);
+bool captures_preview_visible_v1(const CapturesPreviewVisibility *handle, size_t count,
+    bool enabled, bool include_in_captures);
+
 /* Owned immutable region session. Prepare/capture may block; use a worker after
  * hiding capture windows. Begin/retain a capture-flow guard on the event-loop
  * thread first. Freeze and cursor settings are fixed at prepare. No pixel data
