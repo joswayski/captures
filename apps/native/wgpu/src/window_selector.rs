@@ -41,6 +41,10 @@ impl WindowSelector {
         self.selected
     }
 
+    fn presentation_target(&self) -> Option<SelectionTarget> {
+        self.hovered.or(self.selected)
+    }
+
     pub fn reset(&mut self) {
         *self = Self::default();
     }
@@ -69,7 +73,7 @@ impl WindowSelector {
             tokens,
             &view,
             coordinates,
-            self.selected.or(self.hovered),
+            self.presentation_target(),
             self.selected.is_some(),
         );
 
@@ -274,20 +278,22 @@ fn paint_surface(
                 Stroke::new(2., tokens.color("theme-accent")),
                 StrokeKind::Inside,
             );
-            let text = painter.layout_no_wrap(
-                "Entire display".into(),
-                FontId::proportional(tokens.number("text-sm")),
-                tokens.color("glass-text"),
-            );
-            let center = surface.center_bottom() - egui::vec2(0., 54.);
-            let background =
-                egui::Rect::from_center_size(center, text.size() + egui::vec2(18., 10.));
-            painter.rect_filled(
-                background,
-                tokens.number("r-md"),
-                tokens.color("glass-strong"),
-            );
-            painter.galley(center - text.size() / 2., text, Color32::WHITE);
+            if view.auto_start {
+                let text = painter.layout_no_wrap(
+                    "Entire display".into(),
+                    FontId::proportional(tokens.number("text-sm")),
+                    tokens.color("glass-text"),
+                );
+                let center = surface.center_bottom() - egui::vec2(0., 54.);
+                let background =
+                    egui::Rect::from_center_size(center, text.size() + egui::vec2(18., 10.));
+                painter.rect_filled(
+                    background,
+                    tokens.number("r-md"),
+                    tokens.color("glass-strong"),
+                );
+                painter.galley(center - text.size() / 2., text, Color32::WHITE);
+            }
         }
     }
 
@@ -520,6 +526,11 @@ mod tests {
             false,
         );
         assert_eq!(selector.hovered(), Some(SelectionTarget::Window(0)));
+        assert_eq!(
+            selector.presentation_target(),
+            Some(SelectionTarget::Window(0)),
+            "hover drives presentation while confirmation stays latched"
+        );
         assert_eq!(
             run_input(&ctx, &mut selector, vec![key(egui::Key::Enter)], false,),
             Some(Action::Confirm(SelectionTarget::Window(1))),
