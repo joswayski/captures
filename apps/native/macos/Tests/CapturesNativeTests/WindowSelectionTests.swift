@@ -113,6 +113,17 @@ final class WindowSelectionTests: XCTestCase {
             XCTAssertTrue(controls.allSatisfy(\.glass))
             XCTAssertTrue(controls.allSatisfy { $0.accessibilityLabel() != nil })
         }
+
+        let window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; defer { window.close() }
+        let view = WindowSelectionView(frame: frame,
+            image: PreviewView.fixtureImage(scale: 2048.0 / 284.0), targets: targets,
+            tokens: Tokens.variants["dark-mustard"]!, autoStart: true,
+            hitTest: { _ in 0 }, confirm: { _ in }, cancel: {})
+        window.contentView = view; view.hover(NSPoint(x: 100, y: 100))
+        XCTAssertTrue(view.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
+            .contains("Point at a window · Click to capture · Esc to cancel"))
+        try render(view, window: window, name: "window-dark-auto-start")
     }
 
     private func keyEvent(window: NSWindow, keyCode: UInt16, characters: String) throws -> NSEvent {

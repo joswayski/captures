@@ -91,7 +91,7 @@ final class WindowSelectionView: NSView {
     private let canvas = WindowSelectionCanvas()
     private let toolbar = NSView()
     private let targetName = NSTextField(labelWithString: "")
-    private let hint = NSTextField(labelWithString: "Point at a window · Click to select · Enter to capture · Esc to cancel")
+    private let hint: NSTextField
     private var captureButton: CaptureButton!
     private(set) var hoveredIndex: Int64 = -1
     private(set) var selectedIndex: Int64?
@@ -105,6 +105,9 @@ final class WindowSelectionView: NSView {
          confirm: @escaping (WindowSelectionChoice) -> Void, cancel: @escaping () -> Void) {
         self.tokens = tokens; self.autoStart = autoStart; self.targets = targets
         self.hitTest = hitTest; self.confirm = confirm; self.cancel = cancel
+        hint = NSTextField(labelWithString: autoStart
+            ? "Point at a window · Click to capture · Esc to cancel"
+            : "Point at a window · Click to select · Enter to capture · Esc to cancel")
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
