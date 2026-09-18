@@ -105,6 +105,8 @@ final class MiniPreviewController {
     var copyArtifact: ArtifactAction = { _ in }
     var saveArtifact: ArtifactAction = { _ in }
     var openArtifact: ArtifactAction = { _ in }
+    var presentedArtifactID: String? { artifact?.id }
+    var isPanelVisible: Bool { panel?.isVisible == true }
 
     init(tokens: Tokens, policy: NativePreviewPolicy = NativePreviewPolicy(),
          screenProvider: @escaping () -> [NSScreen] = { NSScreen.screens },
@@ -243,14 +245,16 @@ final class MiniPreviewController {
         let pixelsWide = CGFloat(CGDisplayPixelsWide(display))
         let scale = full.width > 0 ? max(1, pixelsWide / full.width) : max(1, screen.backingScaleFactor)
         let visible = screen.visibleFrame
-        let workX = full.minX + (visible.minX - screen.frame.minX) * scale
-        let workY = full.minY + (screen.frame.maxY - visible.maxY) * scale
+        let workX = (full.minX + visible.minX - screen.frame.minX) * scale
+        let workY = (full.minY + screen.frame.maxY - visible.maxY) * scale
         return CapturesPreviewMonitor(work_x: Int32(workX.rounded()), work_y: Int32(workY.rounded()),
             work_width: UInt32(max(0, (visible.width * scale).rounded())),
             work_height: UInt32(max(0, (visible.height * scale).rounded())),
-            full_x: Int32(full.minX.rounded()), full_y: Int32(full.minY.rounded()),
-            full_width: UInt32(max(0, full.width.rounded())),
-            full_height: UInt32(max(0, full.height.rounded())), scale_factor: Double(scale))
+            full_x: Int32((full.minX * scale).rounded()),
+            full_y: Int32((full.minY * scale).rounded()),
+            full_width: UInt32(max(0, (full.width * scale).rounded())),
+            full_height: UInt32(max(0, (full.height * scale).rounded())),
+            scale_factor: Double(scale))
     }
 
     static func appKitFrame(geometry: CapturesPreviewGeometry, monitor: CapturesPreviewMonitor,
@@ -263,7 +267,7 @@ final class MiniPreviewController {
             width: geometry.width, height: geometry.height)
     }
 
-    private static func loadImage(path: String) throws -> NSImage {
+    static func loadImage(path: String) throws -> NSImage {
         guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0,
                   [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
