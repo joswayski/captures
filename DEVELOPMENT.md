@@ -121,6 +121,15 @@ cold/warm effects, resource collection and known gaps. The
 cutover and Windows/Linux prototype gates. Do not remove the existing frontend
 or change Preview packaging before those gates pass.
 
+The [Windows/Linux wgpu candidate](apps/native/wgpu/README.md) is an isolated
+Rust 1.95 workspace; the shipping app remains on Rust 1.94. From the root, generate
+its resources with `node apps/native/prepare.mjs --output apps/native/wgpu/resources`,
+then run `cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --release`.
+Its README covers native build prerequisites, viewport smoke tests, hardware
+handoff and resource collection. Root `cargo test --workspace` does not include
+this experiment; run its manifest-specific checks too. It does not select a
+production renderer or integrate capture engines yet.
+
 ## Packaging
 
 Build Captures on the operating system where the package will run:

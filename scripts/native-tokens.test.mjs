@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { declarations, resolveTokens, color, themes, particleFixture } from '../apps/native/prepare.mjs';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { declarations, resolveTokens, color, themes, particleFixture, parseArguments, prepare } from '../apps/native/prepare.mjs';
 
 test('native tokens preserve light overrides, palette overrides and fixed media colors', async () => {
   const design = await readFile(new URL('../shared/design.css', import.meta.url), 'utf8');
@@ -42,4 +44,53 @@ test('shared dust fixtures include asymmetric delay boundaries and complete end 
     assert.equal(end[i].opacity, 0);
     assert.ok(Math.abs(end[i].dx - p.dx) < 1e-8);
   });
+});
+
+test('prepare writes portable app resources without an implicit test oracle', async t => {
+  const temporary = await mkdtemp(join(tmpdir(), 'captures-native-'));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const output = join(temporary, 'resources');
+
+  await prepare(output);
+
+  assert.deepEqual((await readdir(output)).sort(), ['dust.json', 'icon.svg', 'tokens.json']);
+  const tokens = JSON.parse(await readFile(join(output, 'tokens.json'), 'utf8'));
+  const dust = JSON.parse(await readFile(join(output, 'dust.json'), 'utf8'));
+  assert.ok(tokens['light-cobalt']);
+  assert.equal(dust.particles.length, 198);
+  assert.equal((await readdir(temporary)).includes('poses.json'), false);
+});
+
+test('prepare writes poses only to an explicit test output', async t => {
+  const temporary = await mkdtemp(join(tmpdir(), 'captures-native-'));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const output = join(temporary, 'resources');
+  const testOutput = join(temporary, 'tests');
+
+  await prepare(output, testOutput);
+
+  const poses = JSON.parse(await readFile(join(testOutput, 'poses.json'), 'utf8'));
+  assert.equal(poses.particles.length, 198);
+  assert.equal(poses.times.length, poses.poses.length);
+});
+
+test('CLI arguments preserve defaults and select optional portable outputs', () => {
+  const defaults = parseArguments([]);
+  assert.ok(defaults.destination.endsWith(join('apps', 'native', 'macos', 'Sources', 'CapturesNative', 'Resources')));
+  assert.ok(defaults.testDestination.endsWith(join('apps', 'native', 'macos', 'Tests', 'CapturesNativeTests', 'Resources')));
+
+  assert.deepEqual(parseArguments(['--output', 'wgpu/resources']), {
+    destination: resolve('wgpu/resources'), testDestination: undefined,
+  });
+  assert.deepEqual(parseArguments(['--test-output', 'oracle', '--output', 'resources']), {
+    destination: resolve('resources'), testDestination: resolve('oracle'),
+  });
+});
+
+test('CLI arguments reject unknown, missing and duplicate options', () => {
+  assert.throws(() => parseArguments(['--wat', 'somewhere']), /Unknown argument/);
+  assert.throws(() => parseArguments(['--output']), /Missing path/);
+  assert.throws(() => parseArguments(['--output', '--test-output', 'somewhere']), /Missing path/);
+  assert.throws(() => parseArguments(['--test-output', 'somewhere']), /--output is required/);
+  assert.throws(() => parseArguments(['--output', 'one', '--output', 'two']), /Duplicate argument/);
 });

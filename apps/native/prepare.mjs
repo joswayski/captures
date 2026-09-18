@@ -5,7 +5,37 @@ import { fileURLToPath } from 'node:url';
 import { buildThumbnailDustParticles, thumbnailDustVisualAt } from '../desktop/ui/src/lib/thumbnailExit.ts';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
+const defaultOutput = resolve(root, 'apps/native/macos/Sources/CapturesNative/Resources');
+const defaultTestOutput = resolve(root, 'apps/native/macos/Tests/CapturesNativeTests/Resources');
 export const themes = ['mustard', 'ember', 'rose', 'violet', 'cobalt', 'aqua', 'mint', 'lime', 'mono'];
+
+export function parseArguments(args) {
+  if (args.length === 0) {
+    return { destination: defaultOutput, testDestination: defaultTestOutput };
+  }
+
+  let destination;
+  let testDestination;
+  for (let i = 0; i < args.length; i += 2) {
+    const option = args[i];
+    const value = args[i + 1];
+    if (!['--output', '--test-output'].includes(option)) {
+      throw new Error(`Unknown argument ${option}`);
+    }
+    if (!value || value.startsWith('--')) {
+      throw new Error(`Missing path for ${option}`);
+    }
+    if (option === '--output') {
+      if (destination) throw new Error('Duplicate argument --output');
+      destination = resolve(value);
+    } else {
+      if (testDestination) throw new Error('Duplicate argument --test-output');
+      testDestination = resolve(value);
+    }
+  }
+  if (!destination) throw new Error('--output is required when passing arguments');
+  return { destination, testDestination };
+}
 
 // Deliberately constrained to the flat token sheets, not a general CSS parser.
 // Fail on new syntax rather than silently dropping a future design token.
@@ -72,7 +102,7 @@ export function particleFixture() {
   return { particles, times, poses: times.map(t => particles.map(p => thumbnailDustVisualAt(p, t))) };
 }
 
-export async function prepare(destination) {
+export async function prepare(destination, testDestination) {
   const design = await readFile(resolve(root, 'shared/design.css'), 'utf8');
   const palette = await readFile(resolve(root, 'shared/themes.css'), 'utf8');
   const variants = {};
@@ -90,13 +120,15 @@ export async function prepare(destination) {
   await writeFile(resolve(destination, 'tokens.json'), JSON.stringify(variants));
   const fixture = particleFixture();
   await writeFile(resolve(destination, 'dust.json'), JSON.stringify({ particles: fixture.particles }));
-  const testResources = resolve(root, 'apps/native/macos/Tests/CapturesNativeTests/Resources');
-  await mkdir(testResources, { recursive: true });
-  await writeFile(resolve(testResources, 'poses.json'), JSON.stringify(fixture));
+  if (testDestination) {
+    await mkdir(testDestination, { recursive: true });
+    await writeFile(resolve(testDestination, 'poses.json'), JSON.stringify(fixture));
+  }
   // Existing product asset; do not introduce an independent icon design.
   await copyFile(resolve(root, 'apps/desktop/assets/icon.svg'), resolve(destination, 'icon.svg'));
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await prepare(resolve(root, 'apps/native/macos/Sources/CapturesNative/Resources'));
+  const { destination, testDestination } = parseArguments(process.argv.slice(2));
+  await prepare(destination, testDestination);
 }

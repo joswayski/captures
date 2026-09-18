@@ -1,0 +1,740 @@
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
+
+use eframe::egui::{self, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Vec2};
+use serde_json::json;
+
+use crate::{
+    emit,
+    options::{Options, Scene, THEMES},
+    tokens::{self, Tokens},
+};
+
+// All state below is disposable fixture/UI state, not a second implementation
+// of capture, settings persistence, history retention, or editor documents.
+pub struct Workbench {
+    options: Options,
+    variants: BTreeMap<String, Tokens>,
+    applied_variant: String,
+    started: Instant,
+    cycle: usize,
+    frames: u64,
+    ui_ms: f64,
+    max_ui_ms: f64,
+    search: String,
+    history_filter: usize,
+    history_end: bool,
+    selected_row: Option<usize>,
+    copy: bool,
+    mini_previews: bool,
+    paused: bool,
+    muted: bool,
+    texture: Option<egui::TextureHandle>,
+    animation: Option<Instant>,
+    deleted: bool,
+    zoom: f32,
+    rotation: f32,
+    pan: Vec2,
+    annotation: String,
+    screenshot_requested: bool,
+    screenshot_saved: bool,
+}
+
+impl Workbench {
+    pub fn new(cc: &eframe::CreationContext<'_>, options: Options) -> Self {
+        let adapter = cc
+            .wgpu_render_state
+            .as_ref()
+            .expect("wgpu renderer")
+            .adapter
+            .get_info();
+        emit(
+            "ready",
+            json!({
+                "scene": options.scene.name(), "renderer": "eframe-wgpu", "adapter": adapter.name,
+                "backend": format!("{:?}", adapter.backend), "deviceType": format!("{:?}", adapter.device_type),
+                "os": std::env::consts::OS, "appearance": options.appearance, "theme": options.theme,
+                "historyCount": options.history_count, "floating": options.floating,
+                "readiness": "renderer initialized; not first presentation",
+                "displayEnvironment": {
+                    "wayland": std::env::var("WAYLAND_DISPLAY").ok(),
+                    "x11": std::env::var("DISPLAY").ok()
+                }
+            }),
+        );
+        let this = Self {
+            options,
+            variants: tokens::load(),
+            applied_variant: String::new(),
+            started: Instant::now(),
+            cycle: 0,
+            frames: 0,
+            ui_ms: 0.,
+            max_ui_ms: 0.,
+            search: String::new(),
+            history_filter: 0,
+            history_end: false,
+            selected_row: None,
+            copy: true,
+            mini_previews: true,
+            paused: false,
+            muted: false,
+            texture: None,
+            animation: None,
+            deleted: false,
+            zoom: 1.,
+            rotation: 0.,
+            pan: Vec2::ZERO,
+            annotation: "A capture worth keeping".into(),
+            screenshot_requested: false,
+            screenshot_saved: false,
+        };
+        this.schedule(&cc.egui_ctx);
+        this
+    }
+
+    // Only real deadlines cause wakes; the ordinary static/hidden UI does not
+    // own a polling timer, display link, or recurring repaint request.
+    fn schedule(&self, ctx: &egui::Context) {
+        let elapsed = self.started.elapsed();
+        if let Some(quit) = self.options.quit_after {
+            ctx.request_repaint_after(quit.saturating_sub(elapsed));
+        }
+        if self.options.exercise && self.cycle < 6 {
+            ctx.request_repaint_after(exercise_at(self.cycle).saturating_sub(elapsed));
+        }
+        if self.options.screenshot.is_some() && !self.screenshot_requested {
+            ctx.request_repaint_after(self.options.screenshot_after.saturating_sub(elapsed));
+        }
+    }
+
+    fn tokens(&mut self, ctx: &egui::Context) -> Tokens {
+        let light = match self.options.appearance.as_str() {
+            "light" => true,
+            "system" => ctx.input(|i| i.raw.system_theme) == Some(egui::Theme::Light),
+            _ => false,
+        };
+        let name = format!(
+            "{}-{}",
+            if light { "light" } else { "dark" },
+            self.options.theme
+        );
+        let tokens = self.variants[&name].clone();
+        if name != self.applied_variant {
+            tokens.apply(ctx, light);
+            self.applied_variant = name;
+        }
+        tokens
+    }
+
+    fn change_scene(&mut self, scene: Scene) {
+        if self.options.scene != scene {
+            self.options.scene = scene;
+            self.texture = None; // Release image residency when its scene closes.
+            self.animation = None;
+            self.deleted = false;
+            self.search.clear();
+            emit("scene-changed", json!({"scene": scene.name()}));
+        }
+    }
+
+    fn texture(&mut self, ctx: &egui::Context, cold: bool) -> egui::TextureId {
+        if cold {
+            self.texture = None;
+        }
+        if self.texture.is_none() {
+            let start = Instant::now();
+            let size = if self.options.scene == Scene::Editor {
+                [2048, 1152]
+            } else {
+                [568, 320]
+            };
+            let image = fixture_image(size);
+            let raster_ms = start.elapsed().as_secs_f64() * 1000.;
+            let upload = Instant::now();
+            self.texture =
+                Some(ctx.load_texture("synthetic capture", image, egui::TextureOptions::LINEAR));
+            emit(
+                "texture-preparation",
+                json!({"rasterMs": raster_ms,
+                "enqueueMs": upload.elapsed().as_secs_f64() * 1000., "pixels": size,
+                "note": "CPU generation/enqueue; GPU completion is not measured"}),
+            );
+        }
+        self.texture.as_ref().unwrap().id()
+    }
+
+    fn preferences(&mut self, ui: &mut egui::Ui, t: &Tokens) {
+        ui.add(
+            egui::TextEdit::singleline(&mut self.search)
+                .hint_text("Find a fixture setting…")
+                .desired_width(f32::INFINITY),
+        );
+        let query = self.search.to_lowercase();
+        if "appearance interface theme accent color".contains(&query) {
+            panel(t).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.heading("Appearance");
+                ui.label(
+                    RichText::new("Choose the interface appearance and accent color.")
+                        .color(t.color("text-muted")),
+                );
+                ui.horizontal(|ui| {
+                    ui.label("Interface theme");
+                    for (mode, label) in
+                        [("system", "System"), ("light", "Light"), ("dark", "Dark")]
+                    {
+                        ui.selectable_value(&mut self.options.appearance, mode.into(), label);
+                    }
+                });
+                ui.label("Accent color");
+                ui.horizontal_wrapped(|ui| {
+                    for theme in THEMES {
+                        ui.selectable_value(
+                            &mut self.options.theme,
+                            theme.into(),
+                            title_case(theme),
+                        );
+                    }
+                });
+            });
+        }
+        if "capture automatically copy mini previews".contains(&query) {
+            panel(t).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.heading("Capture");
+                ui.label(
+                    RichText::new("Fixture state only. Your installed app is untouched.")
+                        .color(t.color("text-muted")),
+                );
+                ui.checkbox(&mut self.copy, "Automatically copy captures");
+                ui.checkbox(&mut self.mini_previews, "Show mini previews");
+            });
+        }
+        ui.label(
+            RichText::new(
+                "No settings are saved. Search, theme, focus and text input are renderer probes.",
+            )
+            .small()
+            .color(t.color("text-muted")),
+        );
+    }
+
+    fn history(&mut self, ui: &mut egui::Ui, t: &Tokens) {
+        ui.horizontal(|ui| {
+            ui.label(format!("{} synthetic captures", self.options.history_count));
+            for count in [0, 100, 1000] {
+                if ui
+                    .button(if count == 0 {
+                        "Empty".into()
+                    } else {
+                        count.to_string()
+                    })
+                    .clicked()
+                {
+                    self.options.history_count = count;
+                    self.selected_row = None;
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            for (index, title) in ["All", "Screenshots", "Video", "GIF"].iter().enumerate() {
+                ui.selectable_value(&mut self.history_filter, index, *title);
+            }
+        });
+        let rows = history_rows(self.options.history_count, self.history_filter);
+        if rows.is_empty() {
+            self.texture = None;
+            ui.add_space(t.number("s-10"));
+            ui.heading("No captures yet");
+            ui.label("This fixture does not read your capture history.");
+            return;
+        }
+        let texture = self.texture(ui.ctx(), false);
+        let row_height = 68.; // Match the AppKit fixture's logical row geometry.
+        let mut scroll = egui::ScrollArea::vertical().id_salt("history");
+        if self.options.exercise {
+            scroll = scroll.vertical_scroll_offset(if self.history_end {
+                rows.len() as f32 * (row_height + ui.spacing().item_spacing.y)
+            } else {
+                0.
+            });
+        }
+        scroll.show_rows(ui, row_height, rows.len(), |ui, range| {
+            for index in range {
+                let row = rows[index];
+                let kind = history_kind(row);
+                egui::Frame::new()
+                    .fill(t.color("surface-raised"))
+                    .corner_radius(t.number("r-lg") as u8)
+                    .inner_margin(t.number("s-4") as i8)
+                    .show(ui, |ui| {
+                        ui.set_min_size(egui::vec2(ui.available_width(), row_height - 16.));
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::Image::new((texture, egui::vec2(88., 50.)))
+                                    .corner_radius(t.number("r-sm") as u8),
+                            );
+                            ui.vertical(|ui| {
+                                if ui
+                                    .selectable_label(
+                                        self.selected_row == Some(row),
+                                        format!("{kind} {}", row + 1),
+                                    )
+                                    .clicked()
+                                {
+                                    self.selected_row = Some(row);
+                                    emit("history-selection", json!({"row": row}));
+                                }
+                                ui.label(
+                                    RichText::new("Synthetic image · no file on disk")
+                                        .small()
+                                        .color(t.color("text-muted")),
+                                );
+                            });
+                        });
+                    });
+            }
+        });
+    }
+
+    fn hud(&mut self, ui: &mut egui::Ui, t: &Tokens) {
+        glass(t).show(ui, |ui| {
+            ui.set_width(520.);
+            t.glass_controls(ui);
+            ui.horizontal(|ui| {
+                ui.colored_label(t.color("theme-signal"), if self.paused { "Ⅱ" } else { "●" });
+                ui.heading(if self.paused {
+                    "Paused · 00:24"
+                } else {
+                    "Recording · 00:24"
+                });
+                if ui
+                    .button(if self.paused { "Resume" } else { "Pause" })
+                    .clicked()
+                {
+                    self.paused = !self.paused;
+                }
+                ui.checkbox(&mut self.muted, "Muted");
+            });
+            ui.label(
+                RichText::new("Static timer fixture — no recording engine")
+                    .small()
+                    .color(t.color("glass-text-muted")),
+            );
+        });
+    }
+
+    fn dissolve(&mut self, ctx: &egui::Context, cold: bool) {
+        let start = Instant::now();
+        self.texture(ctx, cold);
+        self.deleted = false;
+        self.animation = if self.options.reduced_motion {
+            self.deleted = true;
+            None
+        } else {
+            Some(Instant::now())
+        };
+        emit(
+            "first-action-total",
+            json!({"milliseconds": start.elapsed().as_secs_f64() * 1000.,
+            "effect": "fade/settle probe, NOT dust parity", "cold": cold}),
+        );
+        ctx.request_repaint();
+    }
+
+    fn preview(&mut self, ui: &mut egui::Ui, t: &Tokens) {
+        glass(t).show(ui, |ui| {
+            t.glass_controls(ui);
+            ui.label("Fade / settle probe · dust filtering not implemented");
+            ui.horizontal(|ui| {
+                if ui.button("Cold fade").clicked() {
+                    self.dissolve(ui.ctx(), true);
+                }
+                if ui.button("Warm fade").clicked() {
+                    self.dissolve(ui.ctx(), false);
+                }
+                if ui.button("Reset").clicked() {
+                    self.animation = None;
+                    self.deleted = false;
+                }
+                ui.checkbox(&mut self.options.reduced_motion, "Reduce motion");
+            });
+        });
+        // Cold preparation replaces the handle. Read its ID after the controls
+        // so this frame never paints the old, freed texture.
+        let texture = self.texture(ui.ctx(), false);
+        let progress = self
+            .animation
+            .map_or(if self.deleted { 1. } else { 0. }, |time| {
+                (time.elapsed().as_secs_f32() / 0.7).min(1.)
+            });
+        if self.animation.is_some() {
+            if progress >= 1. || self.options.reduced_motion {
+                self.animation = None;
+                self.deleted = true;
+            } else {
+                ui.ctx().request_repaint();
+            }
+        }
+        let progress = if self.deleted { 1. } else { progress };
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 380.), Sense::hover());
+        let left = rect.center().x - 142.;
+        let top = rect.top() + 12.;
+        let eased = progress * progress * (3. - 2. * progress);
+        let survivor =
+            Rect::from_min_size(Pos2::new(left, top + eased * 184.), egui::vec2(284., 160.));
+        let front = Rect::from_min_size(Pos2::new(left, top + 184.), survivor.size());
+        egui::Image::new((texture, survivor.size()))
+            .corner_radius(t.number("r-lg") as u8)
+            .paint_at(ui, survivor);
+        if progress < 1. {
+            egui::Image::new((texture, front.size()))
+                .corner_radius(t.number("r-lg") as u8)
+                .tint(Color32::WHITE.gamma_multiply(1. - progress))
+                .paint_at(ui, front);
+        }
+    }
+
+    fn editor(&mut self, ui: &mut egui::Ui, t: &Tokens) {
+        ui.horizontal(|ui| {
+            ui.add(egui::Slider::new(&mut self.zoom, 0.25..=3.).text("Zoom"));
+            ui.add(egui::Slider::new(&mut self.rotation, -180.0..=180.0).text("Rotate"));
+            if ui.button("Reset view").clicked() {
+                self.zoom = 1.;
+                self.rotation = 0.;
+                self.pan = Vec2::ZERO;
+            }
+        });
+        ui.add(
+            egui::TextEdit::singleline(&mut self.annotation)
+                .hint_text("Editable text / IME probe")
+                .desired_width(f32::INFINITY),
+        );
+        ui.label(RichText::new("2048 × 1152 synthetic image · drag to pan · scroll to zoom · not an editor document").small().color(t.color("text-muted")));
+        let texture = self.texture(ui.ctx(), false);
+        let (viewport, response) =
+            ui.allocate_exact_size(ui.available_size().max(egui::vec2(1., 1.)), Sense::drag());
+        if response.dragged() {
+            self.pan += response.drag_delta();
+        }
+        if response.hovered() {
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+            self.zoom = (self.zoom * (scroll * 0.002).exp()).clamp(0.25, 3.);
+        }
+        let painter = ui.painter_at(viewport);
+        painter.rect_filled(viewport, t.number("r-lg"), t.color("surface-sunken"));
+        let rect = Rect::from_center_size(
+            viewport.center() + self.pan,
+            egui::vec2(568., 320.) * self.zoom,
+        );
+        let mut mesh = egui::Mesh::with_texture(texture);
+        mesh.add_rect_with_uv(rect, uv(), Color32::WHITE);
+        mesh.rotate(
+            egui::emath::Rot2::from_angle(self.rotation.to_radians()),
+            rect.center(),
+        );
+        painter.add(mesh);
+        // Separate synthetic layers exercise clipping and text over a GPU image.
+        for (i, key) in ["theme-accent", "positive", "info"].iter().enumerate() {
+            let offset = egui::vec2(30. + i as f32 * 70., 40. + i as f32 * 50.) * self.zoom;
+            painter.rect_stroke(
+                Rect::from_min_size(rect.min + offset, egui::vec2(170., 70.) * self.zoom),
+                t.number("r-md"),
+                Stroke::new(2., t.color(key)),
+                egui::StrokeKind::Inside,
+            );
+        }
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            &self.annotation,
+            FontId::proportional(t.number("text-2xl") * self.zoom),
+            t.color("glass-text"),
+        );
+    }
+
+    fn exercise(&mut self, ctx: &egui::Context) {
+        let start = Instant::now();
+        match self.options.scene {
+            Scene::Preferences => {
+                self.options.appearance = if self.cycle.is_multiple_of(2) {
+                    "light"
+                } else {
+                    "dark"
+                }
+                .into()
+            }
+            Scene::History => self.history_end = !self.history_end,
+            Scene::Hud => self.paused = !self.paused,
+            Scene::Preview => self.dissolve(ctx, self.cycle.is_multiple_of(2)),
+            Scene::Editor => {
+                self.zoom = if self.cycle.is_multiple_of(2) {
+                    1.5
+                } else {
+                    0.75
+                };
+                self.rotation = self.cycle as f32 * 15.;
+            }
+            Scene::Idle => unreachable!("idle exercises rejected by options"),
+        }
+        emit(
+            "scripted-action",
+            json!({"scene": self.options.scene.name(), "cycle": self.cycle,
+            "milliseconds": start.elapsed().as_secs_f64() * 1000., "paused": self.paused,
+            "appearance": self.options.appearance, "historyEnd": self.history_end,
+            "zoom": self.zoom, "rotation": self.rotation, "note": "CPU mutation, not presentation or hardware input latency"}),
+        );
+        self.cycle += 1;
+    }
+}
+
+impl eframe::App for Workbench {
+    fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {
+        [0.; 4]
+    }
+
+    fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        let screenshot = ctx.input(|i| {
+            i.raw.events.iter().find_map(|event| {
+                if let egui::Event::Screenshot { image, .. } = event {
+                    Some(image.clone())
+                } else {
+                    None
+                }
+            })
+        });
+        if let (Some(image), Some(path)) = (screenshot, self.options.screenshot.as_ref()) {
+            if let Err(error) = image::save_buffer(
+                path,
+                image.as_raw(),
+                image.width() as u32,
+                image.height() as u32,
+                image::ColorType::Rgba8,
+            ) {
+                eprintln!("Screenshot failed: {error}");
+                std::process::exit(1);
+            }
+            emit("screenshot-saved", json!({"path": self.options.screenshot}));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            self.screenshot_saved = true;
+        }
+        if self
+            .options
+            .quit_after
+            .is_some_and(|quit| self.started.elapsed() >= quit)
+        {
+            if self.options.screenshot.is_some() && !self.screenshot_saved {
+                eprintln!("Screenshot did not finish before quit deadline");
+                std::process::exit(1);
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        if self.options.exercise
+            && self.cycle < 6
+            && self.started.elapsed() >= exercise_at(self.cycle)
+        {
+            self.exercise(ctx);
+        }
+        self.schedule(ctx);
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
+        let start = Instant::now();
+        let ctx = ui.ctx().clone();
+        let t = self.tokens(&ctx);
+        ui.set_style(ctx.style_of(ctx.theme()));
+        if !self.options.floating {
+            egui::Panel::left("navigation")
+                .exact_size(196.)
+                .resizable(false)
+                .frame(
+                    egui::Frame::new()
+                        .fill(t.color("surface-sunken"))
+                        .inner_margin(t.number("s-5") as i8),
+                )
+                .show(ui, |ui| {
+                    ui.add_space(t.number("s-5"));
+                    ui.heading("Captures");
+                    ui.add_space(t.number("s-8"));
+                    for scene in Scene::VISIBLE {
+                        if ui
+                            .add_sized(
+                                [ui.available_width(), t.number("h-lg")],
+                                egui::Button::new(scene.title())
+                                    .selected(scene == self.options.scene),
+                            )
+                            .clicked()
+                        {
+                            self.change_scene(scene);
+                        }
+                    }
+                    ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                        ui.label(
+                            RichText::new("No capture access")
+                                .small()
+                                .color(t.color("text-muted")),
+                        );
+                        ui.label(
+                            RichText::new("wgpu · fixture mode")
+                                .small()
+                                .color(t.color("text-muted")),
+                        );
+                    });
+                });
+        }
+        let frame = egui::Frame::new()
+            .fill(if self.options.floating {
+                Color32::TRANSPARENT
+            } else {
+                t.color("surface-canvas")
+            })
+            .inner_margin(t.number("s-8") as i8);
+        egui::CentralPanel::default().frame(frame).show(ui, |ui| {
+            if !self.options.floating {
+                ui.heading(self.options.scene.title());
+                ui.label(
+                    RichText::new(
+                        "Native rendering workbench · synthetic data, not functional parity",
+                    )
+                    .small()
+                    .color(t.color("text-muted")),
+                );
+                ui.add_space(t.number("s-6"));
+            } else {
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(egui::Button::new("Move window").sense(Sense::drag()))
+                        .drag_started()
+                    {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    }
+                    if ui.button("Close").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+            }
+            match self.options.scene {
+                Scene::Preferences => self.preferences(ui, &t),
+                Scene::History => self.history(ui, &t),
+                Scene::Hud => self.hud(ui, &t),
+                Scene::Preview => self.preview(ui, &t),
+                Scene::Editor => self.editor(ui, &t),
+                Scene::Idle => {}
+            }
+        });
+        // Take only this native viewport's framebuffer; never capture the desktop.
+        if self.options.screenshot.is_some()
+            && !self.screenshot_requested
+            && self.started.elapsed() >= self.options.screenshot_after
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+            self.screenshot_requested = true;
+        }
+        let elapsed = start.elapsed().as_secs_f64() * 1000.;
+        self.frames += 1;
+        self.ui_ms += elapsed;
+        self.max_ui_ms = self.max_ui_ms.max(elapsed);
+    }
+
+    fn on_exit(&mut self) {
+        emit(
+            "exit",
+            json!({"uiPasses": self.frames, "totalUiConstructionWallMs": self.ui_ms,
+            "maxUiConstructionWallMs": self.max_ui_ms, "scriptedActions": self.cycle,
+            "elapsedSeconds": self.started.elapsed().as_secs_f64(),
+            "note": "UI construction only; not GPU presentation FPS"}),
+        );
+    }
+}
+
+fn panel(t: &Tokens) -> egui::Frame {
+    egui::Frame::new()
+        .fill(t.color("surface-raised"))
+        .stroke(Stroke::new(1., t.color("border")))
+        .corner_radius(t.number("r-xl") as u8)
+        .inner_margin(t.number("s-6") as i8)
+}
+
+fn glass(t: &Tokens) -> egui::Frame {
+    egui::Frame::new()
+        .fill(t.color("glass-strong"))
+        .stroke(Stroke::new(1., t.color("glass-border")))
+        .corner_radius(t.number("r-xl") as u8)
+        .inner_margin(t.number("s-6") as i8)
+}
+
+fn title_case(value: &str) -> String {
+    format!("{}{}", value[..1].to_uppercase(), &value[1..])
+}
+fn uv() -> Rect {
+    Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.))
+}
+fn exercise_at(cycle: usize) -> Duration {
+    Duration::from_secs(2 + cycle as u64 * 4)
+}
+fn history_kind(row: usize) -> &'static str {
+    match row % 3 {
+        0 => "Video",
+        1 => "Screenshot",
+        _ => "GIF",
+    }
+}
+fn history_rows(count: usize, filter: usize) -> Vec<usize> {
+    (0..count)
+        .filter(|row| match filter {
+            1 => row % 3 == 1,
+            2 => row % 3 == 0,
+            3 => row % 3 == 2,
+            _ => true,
+        })
+        .collect()
+}
+
+fn fixture_image([width, height]: [usize; 2]) -> egui::ColorImage {
+    // Asymmetric synthetic content, same layout as the AppKit fixture. No file
+    // reads, screen capture, personal images, or per-frame texture allocation.
+    let mut pixels = Vec::with_capacity(width * height);
+    for y in 0..height {
+        for x in 0..width {
+            let x = x as f32 / width as f32 * 284.;
+            let y = (1. - y as f32 / height as f32) * 160.;
+            let rgb = if (x - 233.).powi(2) + (y - 123.).powi(2) < 225. {
+                [245, 189, 74]
+            } else if (38.0..113.).contains(&x) && (50.0..130.).contains(&y) {
+                [217, 84, 105]
+            } else if y < 45. {
+                [51, 122, 102]
+            } else {
+                [31, 69, 107]
+            };
+            pixels.push(Color32::from_rgb(rgb[0], rgb[1], rgb[2]));
+        }
+    }
+    egui::ColorImage::new([width, height], pixels)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn filtered_history_preserves_original_ids_and_boundaries() {
+        assert_eq!(history_rows(8, 1), vec![1, 4, 7]);
+        assert_eq!(history_rows(8, 2), vec![0, 3, 6]);
+        assert_eq!(history_rows(8, 3), vec![2, 5]);
+        assert!(history_rows(0, 0).is_empty());
+        assert_eq!(history_rows(1, 2), vec![0]);
+        assert!(history_rows(1, 1).is_empty());
+    }
+    #[test]
+    fn image_has_top_right_sun_and_bottom_green_strip() {
+        let image = fixture_image([284, 160]);
+        assert_eq!(image[(233, 37)], Color32::from_rgb(245, 189, 74));
+        assert_eq!(image[(40, 60)], Color32::from_rgb(217, 84, 105));
+        assert_eq!(image[(10, 150)], Color32::from_rgb(51, 122, 102));
+        assert_eq!(image[(10, 10)], Color32::from_rgb(31, 69, 107));
+    }
+}

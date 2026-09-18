@@ -178,10 +178,12 @@ platform-specific integrations for capture, recording, and media processing.
 
 A browser-free native replacement is planned for macOS, Windows, and Linux,
 developed feature by feature across platforms using shared Rust logic and the
-Captures design. Today only a Swift/AppKit workbench exists; it is not yet a
-capture app or a replacement download. Windows/Linux renderer prototypes come
-next. The [migration checklist](docs/native-rewrite.md) tracks the plan and parity
-gates; existing Preview features remain available during development.
+Captures design. Development workbenches include Swift/AppKit on macOS and an
+experimental Rust/wgpu renderer candidate for Windows/Linux. They use synthetic
+data, not real capture workflows, and are not replacement downloads. Windows/Linux
+renderer selection and full feature/design parity remain open. The
+[migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;
+existing Preview features remain available during development.
 
 ## License and trademarks
 

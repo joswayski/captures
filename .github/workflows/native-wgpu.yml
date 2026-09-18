@@ -1,0 +1,65 @@
+name: Native wgpu workbench
+
+on:
+  pull_request:
+    paths:
+      - 'apps/native/**'
+      - 'shared/**'
+      - 'scripts/native-tokens.test.mjs'
+      - 'apps/desktop/ui/src/lib/thumbnailExit.ts'
+      - 'apps/desktop/assets/icon.svg'
+      - '.github/workflows/native-wgpu.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  workbench:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
+          cache-workspaces: apps/native/wgpu
+      - name: Install Linux windowing and software Vulkan dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxi-dev libxrandr-dev mesa-vulkan-drivers xvfb
+      - run: node apps/native/prepare.mjs --output apps/native/wgpu/resources
+      - run: node --test scripts/native-tokens.test.mjs
+      - run: python -m unittest discover -s apps/native -p 'test_*.py'
+      - run: cargo +1.95.0 fmt --manifest-path apps/native/wgpu/Cargo.toml --all -- --check
+      - run: cargo +1.95.0 test --manifest-path apps/native/wgpu/Cargo.toml --locked
+      - run: cargo +1.95.0 clippy --manifest-path apps/native/wgpu/Cargo.toml --locked --all-targets -- -D warnings
+      - run: cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --release
+      - name: Exercise native Linux windows (X11, software Vulkan)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python apps/native/wgpu/smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-smoke
+      - name: Exercise native Windows windows
+        if: runner.os == 'Windows'
+        run: python apps/native/wgpu/smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench.exe --output native-smoke
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-wgpu-evidence-${{ matrix.os }}
+          path: native-smoke
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-wgpu-binary-${{ matrix.os }}
+          path: |
+            apps/native/wgpu/target/release/captures-wgpu-workbench
+            apps/native/wgpu/target/release/captures-wgpu-workbench.exe
+          if-no-files-found: error
