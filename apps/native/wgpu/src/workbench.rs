@@ -41,6 +41,7 @@ pub struct Workbench {
     screenshot_requested: bool,
     screenshot_saved: bool,
     preferences_state: Preferences,
+    region_selector: crate::selector::Selector,
     _temporary_settings: Option<tempfile::TempDir>,
     live: Option<Live>,
     live_preferences: bool,
@@ -126,6 +127,7 @@ impl Workbench {
             screenshot_requested: false,
             screenshot_saved: false,
             preferences_state,
+            region_selector: crate::selector::Selector::default(),
             _temporary_settings: temporary_settings,
             live,
             live_preferences: false,
@@ -199,7 +201,7 @@ impl Workbench {
         }
         if self.texture.is_none() {
             let start = Instant::now();
-            let size = if self.options.scene == Scene::Editor {
+            let size = if matches!(self.options.scene, Scene::Editor | Scene::Region) {
                 [2048, 1152]
             } else {
                 [568, 320]
@@ -483,6 +485,13 @@ impl Workbench {
                 };
                 self.rotation = self.cycle as f32 * 15.;
             }
+            Scene::Region => self.region_selector.exercise(
+                self.cycle,
+                captures_app::selection::Bounds {
+                    width: 1000.,
+                    height: 720.,
+                },
+            ),
             Scene::Idle | Scene::Countdown => unreachable!("exercises rejected by options"),
         }
         emit(
@@ -490,7 +499,9 @@ impl Workbench {
             json!({"scene": self.options.scene.name(), "cycle": self.cycle,
             "milliseconds": start.elapsed().as_secs_f64() * 1000., "paused": self.paused,
             "appearance": self.options.appearance, "historyEnd": self.history_end,
-            "zoom": self.zoom, "rotation": self.rotation, "note": "CPU mutation, not presentation or hardware input latency"}),
+            "zoom": self.zoom, "rotation": self.rotation,
+            "regionSelection": self.region_selector.rect(),
+            "note": "CPU mutation, not presentation or hardware input latency"}),
         );
         self.cycle += 1;
     }
@@ -614,7 +625,7 @@ impl eframe::App for Workbench {
             self.frames += 1;
             return;
         }
-        if !self.options.floating {
+        if !self.options.floating && self.options.scene != Scene::Region {
             egui::Panel::left("navigation")
                 .exact_size(196.)
                 .resizable(false)
@@ -663,9 +674,15 @@ impl eframe::App for Workbench {
             } else {
                 t.color("surface-canvas")
             })
-            .inner_margin(t.number("s-8") as i8);
+            .inner_margin(if self.options.scene == Scene::Region {
+                0
+            } else {
+                t.number("s-8") as i8
+            });
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
-            if !self.options.floating && self.options.scene != Scene::Preferences {
+            if !self.options.floating
+                && !matches!(self.options.scene, Scene::Preferences | Scene::Region)
+            {
                 ui.heading(self.options.scene.title());
                 ui.label(
                     RichText::new(
@@ -697,6 +714,23 @@ impl eframe::App for Workbench {
                 Scene::Hud => self.hud(ui, &t),
                 Scene::Preview => self.preview(ui, &t),
                 Scene::Editor => self.editor(ui, &t),
+                Scene::Region => {
+                    let texture = self.texture(ui.ctx(), false);
+                    let texture = self.texture.as_ref().filter(|image| image.id() == texture);
+                    if let Some(action) = self.region_selector.show(ui, &t, texture, false, None)
+                        && let Some(event) =
+                            apply_region_fixture_action(&mut self.region_selector, action)
+                    {
+                        match event {
+                            RegionFixtureEvent::Confirm(rect) => {
+                                emit("region-confirm", json!({"rect": rect, "capture": false}));
+                            }
+                            RegionFixtureEvent::Cancel => {
+                                emit("region-cancel", json!({"selectionReset": true}));
+                            }
+                        }
+                    }
+                }
                 Scene::Countdown => crate::countdown::show(ui, &t, 3),
                 Scene::Idle => {}
             }
@@ -763,6 +797,25 @@ fn history_rows(count: usize, filter: usize) -> Vec<usize> {
         .collect()
 }
 
+#[derive(Debug, PartialEq)]
+enum RegionFixtureEvent {
+    Confirm(captures_app::selection::Rect),
+    Cancel,
+}
+
+fn apply_region_fixture_action(
+    selector: &mut crate::selector::Selector,
+    action: crate::selector::Action,
+) -> Option<RegionFixtureEvent> {
+    match action {
+        crate::selector::Action::Confirm => selector.rect().map(RegionFixtureEvent::Confirm),
+        crate::selector::Action::Cancel => {
+            selector.reset();
+            Some(RegionFixtureEvent::Cancel)
+        }
+    }
+}
+
 fn fixture_image([width, height]: [usize; 2]) -> egui::ColorImage {
     // Asymmetric synthetic content, same layout as the AppKit fixture. No file
     // reads, screen capture, personal images, or per-frame texture allocation.
@@ -805,5 +858,26 @@ mod tests {
         assert_eq!(image[(40, 60)], Color32::from_rgb(217, 84, 105));
         assert_eq!(image[(10, 150)], Color32::from_rgb(51, 122, 102));
         assert_eq!(image[(10, 10)], Color32::from_rgb(31, 69, 107));
+    }
+
+    #[test]
+    fn region_fixture_reports_confirmation_and_resets_on_cancel() {
+        let bounds = captures_app::selection::Bounds {
+            width: 1000.,
+            height: 720.,
+        };
+        let mut selector = crate::selector::Selector::default();
+        selector.exercise(0, bounds);
+        let rect = selector.rect().unwrap();
+        assert_eq!(
+            apply_region_fixture_action(&mut selector, crate::selector::Action::Confirm),
+            Some(RegionFixtureEvent::Confirm(rect))
+        );
+        assert_eq!(selector.rect(), Some(rect));
+        assert_eq!(
+            apply_region_fixture_action(&mut selector, crate::selector::Action::Cancel),
+            Some(RegionFixtureEvent::Cancel)
+        );
+        assert_eq!(selector.rect(), None);
     }
 }
