@@ -202,6 +202,15 @@ do not gain rounded masks. Native window enumeration, selection, frozen/live
 orchestration and host UI integration remain open on macOS, Windows, X11 and
 Wayland; this extraction alone implements no new native capture mode on any OS.
 
+A follow-up shared-core stage moves window target classification into
+`captures-capture`: display membership, empty/minimum-size filtering, Captures'
+internal surfaces, shell edge strips, desktop backdrops and excluded system apps
+now produce shared capturable/shell-chrome groups. The macOS Screenshot and
+Windows NVIDIA overlay exclusions retain their compile-time platform gates. The
+shipping host still owns enumeration failures/logging and applies snapshot chrome
+refinement after classification. Native window sessions, selection surfaces and
+capture integration remain unimplemented and unverified on every native host.
+
 The first [shared wgpu candidate](../apps/native/wgpu/README.md) uses egui/winit
 with retained image textures and event-driven immediate-mode UI, an additional
 approach to evaluate against the retained/native candidates below. It implements

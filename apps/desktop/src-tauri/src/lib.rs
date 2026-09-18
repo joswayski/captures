@@ -19,14 +19,19 @@ use tauri::CursorIcon;
 
 #[cfg(target_os = "macos")]
 use captures_capture::capture_buffer_scale;
+#[cfg(all(test, target_os = "macos"))]
+use captures_capture::macos_window_is_capture_overlay;
 #[cfg(any(target_os = "macos", test))]
 use captures_capture::mask_macos_window_corners;
 use captures_capture::{
     CaptureError, CaptureMode, DisplayFrame, LogicalRect, PhysicalRect, PointerCursor,
-    WindowDescriptor, image_is_effectively_blank, pointer_cursor, pointer_position,
+    WindowDescriptor, WindowSelectionTargets, classify_windows_for_display,
+    image_is_effectively_blank, pointer_cursor, pointer_position,
     refine_window_chrome_from_snapshot, resolve_window_capture, window_display_crop_is_safe,
     window_physical_rect,
 };
+#[cfg(test)]
+use captures_capture::{window_is_capturable, windows_window_is_capture_overlay};
 use chrono::{DateTime, Utc};
 use image::RgbaImage;
 use serde::Serialize;
@@ -1372,40 +1377,18 @@ pub(crate) fn take_ready_or_defer_windows(
     (capturable_windows_for_display(listed, display, image), None)
 }
 
-#[derive(Clone, Debug, Default)]
-pub(crate) struct WindowSelectionTargets {
-    pub windows: Vec<WindowDescriptor>,
-    pub shell_chrome: Vec<WindowDescriptor>,
-}
-
 pub(crate) fn capturable_windows_for_display(
     windows: Result<Vec<WindowDescriptor>, AppError>,
     display: &captures_capture::DisplayDescriptor,
     image: Option<&RgbaImage>,
 ) -> WindowSelectionTargets {
-    classify_windows_for_display(
+    let mut targets = classify_windows_for_display(
         windows.unwrap_or_else(|error| {
             eprintln!("window targets are unavailable for this capture: {error}");
             Vec::new()
         }),
         display,
-        image,
-    )
-}
-
-fn classify_windows_for_display(
-    windows: Vec<WindowDescriptor>,
-    display: &captures_capture::DisplayDescriptor,
-    image: Option<&RgbaImage>,
-) -> WindowSelectionTargets {
-    let mut targets = WindowSelectionTargets::default();
-    for window in windows {
-        match window_pick_role(&window, display) {
-            Some(WindowPickRole::Capturable) => targets.windows.push(window),
-            Some(WindowPickRole::ShellChrome) => targets.shell_chrome.push(window),
-            None => {}
-        }
-    }
+    );
     if let Some(image) = image {
         refine_window_chrome_from_snapshot(
             &mut targets.windows,
@@ -8294,218 +8277,6 @@ fn window_visible_corner_radius(window: &captures_capture::WindowDescriptor) -> 
         .unwrap_or_else(window_corner_radius_points)
 }
 
-enum WindowPickRole {
-    Capturable,
-    ShellChrome,
-}
-
-fn window_pick_role(
-    window: &captures_capture::WindowDescriptor,
-    display: &captures_capture::DisplayDescriptor,
-) -> Option<WindowPickRole> {
-    if window.display_id != display.id {
-        return None;
-    }
-    if window.width == 0 || window.height == 0 {
-        return None;
-    }
-    if captures_window_is_internal(window) {
-        return None;
-    }
-    #[cfg(target_os = "macos")]
-    if macos_window_is_capture_overlay(window) {
-        return None;
-    }
-    #[cfg(target_os = "windows")]
-    if windows_window_is_capture_overlay(window) {
-        return None;
-    }
-    if window_is_screen_edge_chrome(window, display) {
-        return Some(WindowPickRole::ShellChrome);
-    }
-    if window_is_desktop_backdrop(window, display) {
-        return None;
-    }
-    const EXCLUDED_APPS: &[&str] = &[
-        "Dock",
-        "Control Center",
-        "Notification Centre",
-        "Notification Center",
-        "SystemUIServer",
-        "Window Server",
-        "Spotlight",
-        "Wallpaper",
-        "loginwindow",
-    ];
-    if window.app_name.as_deref().is_some_and(|name| {
-        EXCLUDED_APPS
-            .iter()
-            .any(|excluded| name.eq_ignore_ascii_case(excluded))
-    }) {
-        return None;
-    }
-    if window.width < 48 || window.height < 48 {
-        return None;
-    }
-    Some(WindowPickRole::Capturable)
-}
-
-#[cfg_attr(not(test), allow(dead_code))]
-fn window_is_capturable(
-    window: &captures_capture::WindowDescriptor,
-    display: &captures_capture::DisplayDescriptor,
-) -> bool {
-    matches!(
-        window_pick_role(window, display),
-        Some(WindowPickRole::Capturable)
-    )
-}
-
-fn window_overlap_area(
-    window: &captures_capture::WindowDescriptor,
-    display: &captures_capture::DisplayDescriptor,
-) -> u64 {
-    let left = i64::from(window.x).max(i64::from(display.x));
-    let top = i64::from(window.y).max(i64::from(display.y));
-    let right = (i64::from(window.x) + i64::from(window.width))
-        .min(i64::from(display.x) + i64::from(display.width));
-    let bottom = (i64::from(window.y) + i64::from(window.height))
-        .min(i64::from(display.y) + i64::from(display.height));
-    let width = (right - left).max(0);
-    let height = (bottom - top).max(0);
-    u64::try_from(width * height).unwrap_or(0)
-}
-
-fn window_covers_display(
-    window: &captures_capture::WindowDescriptor,
-    display: &captures_capture::DisplayDescriptor,
-) -> bool {
-    let display_area = u64::from(display.width) * u64::from(display.height);
-    if display_area == 0 {
-        return false;
-    }
-    window_overlap_area(window, display) * 100 >= display_area * 95
-}
-
-/// Menu bar, taskbar, and dock/panel strips that span a display edge.
-fn window_is_screen_edge_chrome(
-    window: &captures_capture::WindowDescriptor,
-    display: &captures_capture::DisplayDescriptor,
-) -> bool {
-    const MAX_THICKNESS: i32 = 96;
-    let display_right = i64::from(display.x) + i64::from(display.width);
-    let display_bottom = i64::from(display.y) + i64::from(display.height);
-    let window_left = i64::from(window.x);
-    let window_top = i64::from(window.y);
-    let window_right = window_left + i64::from(window.width);
-    let window_bottom = window_top + i64::from(window.height);
-    let spans_width = window_left <= i64::from(display.x) + 8
-        && window_right >= display_right - 8
-        && i32::try_from(window.width).unwrap_or(i32::MAX)
-            >= display.width.saturating_sub(16) as i32;
-    let spans_height = window_top <= i64::from(display.y) + 8
-        && window_bottom >= display_bottom - 8
-        && i32::try_from(window.height).unwrap_or(i32::MAX)
-            >= display.height.saturating_sub(16) as i32;
-    let thickness_h = i32::try_from(window.height).unwrap_or(i32::MAX);
-    let thickness_w = i32::try_from(window.width).unwrap_or(i32::MAX);
-    let top_bar =
-        spans_width && thickness_h <= MAX_THICKNESS && window_top <= i64::from(display.y) + 8;
-    let bottom_bar =
-        spans_width && thickness_h <= MAX_THICKNESS && window_bottom >= display_bottom - 8;
-    let left_bar =
-        spans_height && thickness_w <= MAX_THICKNESS && window_left <= i64::from(display.x) + 8;
-    let right_bar =
-        spans_height && thickness_w <= MAX_THICKNESS && window_right >= display_right - 8;
-    top_bar || bottom_bar || left_bar || right_bar
-}
-
-/// Wallpaper / desktop windows that fill the display and steal hits under the
-/// menu bar or taskbar. Named document windows from the same apps stay selectable.
-fn window_is_desktop_backdrop(
-    window: &captures_capture::WindowDescriptor,
-    display: &captures_capture::DisplayDescriptor,
-) -> bool {
-    if !window_covers_display(window, display) {
-        return false;
-    }
-    let title = window.title.trim();
-    if title.eq_ignore_ascii_case("Desktop") || title.eq_ignore_ascii_case("Program Manager") {
-        return true;
-    }
-    let Some(app) = window.app_name.as_deref().map(str::trim) else {
-        return false;
-    };
-    const BACKDROP_APPS: &[&str] = &[
-        "Finder",
-        "explorer",
-        "explorer.exe",
-        "Progman",
-        "WorkerW",
-        "Nautilus",
-        "nemo",
-        "caja",
-        "pcmanfm",
-        "pcmanfm-qt",
-        "dolphin",
-        "plasmashell",
-        "gnome-shell",
-    ];
-    if !BACKDROP_APPS
-        .iter()
-        .any(|excluded| app.eq_ignore_ascii_case(excluded))
-    {
-        return false;
-    }
-    title.is_empty() || title.eq_ignore_ascii_case("Desktop")
-}
-
-#[cfg(target_os = "macos")]
-fn macos_window_is_capture_overlay(window: &captures_capture::WindowDescriptor) -> bool {
-    window.app_name.as_deref().is_some_and(|name| {
-        let name = name.trim();
-        name.eq_ignore_ascii_case("Screenshot") || name.eq_ignore_ascii_case("screencaptureui")
-    })
-}
-
-fn captures_window_is_internal(window: &captures_capture::WindowDescriptor) -> bool {
-    let captures_owned = window.app_name.as_deref().is_some_and(|name| {
-        let name = name.trim();
-        name.eq_ignore_ascii_case("Captures")
-            || name.eq_ignore_ascii_case("Captures.app")
-            || name.eq_ignore_ascii_case("captures.exe")
-    });
-    if !captures_owned {
-        return false;
-    }
-
-    const INTERNAL_WINDOW_TITLES: &[&str] = &[
-        "Captures",
-        "Captures is running",
-        "Captures Recording Controls",
-        "Captures Recording Countdown",
-        recording::RECORDING_REGION_INDICATOR_TITLE,
-        "Captures Update",
-        "Recording saved",
-    ];
-    let title = window.title.trim();
-    INTERNAL_WINDOW_TITLES
-        .iter()
-        .any(|internal| title.eq_ignore_ascii_case(internal))
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn windows_window_is_capture_overlay(window: &captures_capture::WindowDescriptor) -> bool {
-    window
-        .app_name
-        .as_deref()
-        .is_some_and(|name| name.eq_ignore_ascii_case("NVIDIA App"))
-        && window
-            .title
-            .to_ascii_lowercase()
-            .starts_with("nvidia geforce overlay")
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicBool;
@@ -8513,8 +8284,6 @@ mod tests {
     use image::{Rgba, RgbaImage};
     use tauri_plugin_global_shortcut::ShortcutState;
 
-    #[cfg(target_os = "macos")]
-    use super::macos_window_is_capture_overlay;
     use super::{
         AppError, AppReactivation, CaptureMode, InteractiveLaunchAction, LogicalRect,
         PreviewFileDropLanding, RECORDING_SAVED_NOTICE_CARD_HEIGHT,

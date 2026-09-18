@@ -8,6 +8,224 @@ use crate::{
 };
 
 const WINDOW_CORNER_MASK_SAMPLES_PER_AXIS: u32 = 4;
+pub const RECORDING_REGION_INDICATOR_TITLE: &str = "Captures Recording Region";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WindowPickRole {
+    Capturable,
+    ShellChrome,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct WindowSelectionTargets {
+    pub windows: Vec<WindowDescriptor>,
+    pub shell_chrome: Vec<WindowDescriptor>,
+}
+
+pub fn classify_windows_for_display(
+    windows: Vec<WindowDescriptor>,
+    display: &DisplayDescriptor,
+) -> WindowSelectionTargets {
+    let mut targets = WindowSelectionTargets::default();
+    for window in windows {
+        match window_pick_role(&window, display) {
+            Some(WindowPickRole::Capturable) => targets.windows.push(window),
+            Some(WindowPickRole::ShellChrome) => targets.shell_chrome.push(window),
+            None => {}
+        }
+    }
+    targets
+}
+
+pub fn window_pick_role(
+    window: &WindowDescriptor,
+    display: &DisplayDescriptor,
+) -> Option<WindowPickRole> {
+    if window.display_id != display.id {
+        return None;
+    }
+    if window.width == 0 || window.height == 0 {
+        return None;
+    }
+    if captures_window_is_internal(window) {
+        return None;
+    }
+    #[cfg(target_os = "macos")]
+    if macos_window_is_capture_overlay(window) {
+        return None;
+    }
+    #[cfg(target_os = "windows")]
+    if windows_window_is_capture_overlay(window) {
+        return None;
+    }
+    if window_is_screen_edge_chrome(window, display) {
+        return Some(WindowPickRole::ShellChrome);
+    }
+    if window_is_desktop_backdrop(window, display) {
+        return None;
+    }
+    const EXCLUDED_APPS: &[&str] = &[
+        "Dock",
+        "Control Center",
+        "Notification Centre",
+        "Notification Center",
+        "SystemUIServer",
+        "Window Server",
+        "Spotlight",
+        "Wallpaper",
+        "loginwindow",
+    ];
+    if window.app_name.as_deref().is_some_and(|name| {
+        EXCLUDED_APPS
+            .iter()
+            .any(|excluded| name.eq_ignore_ascii_case(excluded))
+    }) {
+        return None;
+    }
+    if window.width < 48 || window.height < 48 {
+        return None;
+    }
+    Some(WindowPickRole::Capturable)
+}
+
+pub fn window_is_capturable(window: &WindowDescriptor, display: &DisplayDescriptor) -> bool {
+    matches!(
+        window_pick_role(window, display),
+        Some(WindowPickRole::Capturable)
+    )
+}
+
+fn window_overlap_area(window: &WindowDescriptor, display: &DisplayDescriptor) -> u64 {
+    let left = i64::from(window.x).max(i64::from(display.x));
+    let top = i64::from(window.y).max(i64::from(display.y));
+    let right = (i64::from(window.x) + i64::from(window.width))
+        .min(i64::from(display.x) + i64::from(display.width));
+    let bottom = (i64::from(window.y) + i64::from(window.height))
+        .min(i64::from(display.y) + i64::from(display.height));
+    let width = (right - left).max(0);
+    let height = (bottom - top).max(0);
+    u64::try_from(width * height).unwrap_or(0)
+}
+
+fn window_covers_display(window: &WindowDescriptor, display: &DisplayDescriptor) -> bool {
+    let display_area = u64::from(display.width) * u64::from(display.height);
+    if display_area == 0 {
+        return false;
+    }
+    window_overlap_area(window, display) * 100 >= display_area * 95
+}
+
+/// Menu bar, taskbar, and dock/panel strips that span a display edge.
+fn window_is_screen_edge_chrome(window: &WindowDescriptor, display: &DisplayDescriptor) -> bool {
+    const MAX_THICKNESS: i32 = 96;
+    let display_right = i64::from(display.x) + i64::from(display.width);
+    let display_bottom = i64::from(display.y) + i64::from(display.height);
+    let window_left = i64::from(window.x);
+    let window_top = i64::from(window.y);
+    let window_right = window_left + i64::from(window.width);
+    let window_bottom = window_top + i64::from(window.height);
+    let spans_width = window_left <= i64::from(display.x) + 8
+        && window_right >= display_right - 8
+        && i32::try_from(window.width).unwrap_or(i32::MAX)
+            >= display.width.saturating_sub(16) as i32;
+    let spans_height = window_top <= i64::from(display.y) + 8
+        && window_bottom >= display_bottom - 8
+        && i32::try_from(window.height).unwrap_or(i32::MAX)
+            >= display.height.saturating_sub(16) as i32;
+    let thickness_h = i32::try_from(window.height).unwrap_or(i32::MAX);
+    let thickness_w = i32::try_from(window.width).unwrap_or(i32::MAX);
+    let top_bar =
+        spans_width && thickness_h <= MAX_THICKNESS && window_top <= i64::from(display.y) + 8;
+    let bottom_bar =
+        spans_width && thickness_h <= MAX_THICKNESS && window_bottom >= display_bottom - 8;
+    let left_bar =
+        spans_height && thickness_w <= MAX_THICKNESS && window_left <= i64::from(display.x) + 8;
+    let right_bar =
+        spans_height && thickness_w <= MAX_THICKNESS && window_right >= display_right - 8;
+    top_bar || bottom_bar || left_bar || right_bar
+}
+
+/// Wallpaper / desktop windows that fill the display and steal hits under the
+/// menu bar or taskbar. Named document windows from the same apps stay selectable.
+fn window_is_desktop_backdrop(window: &WindowDescriptor, display: &DisplayDescriptor) -> bool {
+    if !window_covers_display(window, display) {
+        return false;
+    }
+    let title = window.title.trim();
+    if title.eq_ignore_ascii_case("Desktop") || title.eq_ignore_ascii_case("Program Manager") {
+        return true;
+    }
+    let Some(app) = window.app_name.as_deref().map(str::trim) else {
+        return false;
+    };
+    const BACKDROP_APPS: &[&str] = &[
+        "Finder",
+        "explorer",
+        "explorer.exe",
+        "Progman",
+        "WorkerW",
+        "Nautilus",
+        "nemo",
+        "caja",
+        "pcmanfm",
+        "pcmanfm-qt",
+        "dolphin",
+        "plasmashell",
+        "gnome-shell",
+    ];
+    if !BACKDROP_APPS
+        .iter()
+        .any(|excluded| app.eq_ignore_ascii_case(excluded))
+    {
+        return false;
+    }
+    title.is_empty() || title.eq_ignore_ascii_case("Desktop")
+}
+
+#[cfg(target_os = "macos")]
+pub fn macos_window_is_capture_overlay(window: &WindowDescriptor) -> bool {
+    window.app_name.as_deref().is_some_and(|name| {
+        let name = name.trim();
+        name.eq_ignore_ascii_case("Screenshot") || name.eq_ignore_ascii_case("screencaptureui")
+    })
+}
+
+fn captures_window_is_internal(window: &WindowDescriptor) -> bool {
+    let captures_owned = window.app_name.as_deref().is_some_and(|name| {
+        let name = name.trim();
+        name.eq_ignore_ascii_case("Captures")
+            || name.eq_ignore_ascii_case("Captures.app")
+            || name.eq_ignore_ascii_case("captures.exe")
+    });
+    if !captures_owned {
+        return false;
+    }
+
+    const INTERNAL_WINDOW_TITLES: &[&str] = &[
+        "Captures",
+        "Captures is running",
+        "Captures Recording Controls",
+        "Captures Recording Countdown",
+        RECORDING_REGION_INDICATOR_TITLE,
+        "Captures Update",
+        "Recording saved",
+    ];
+    let title = window.title.trim();
+    INTERNAL_WINDOW_TITLES
+        .iter()
+        .any(|internal| title.eq_ignore_ascii_case(internal))
+}
+
+pub fn windows_window_is_capture_overlay(window: &WindowDescriptor) -> bool {
+    window
+        .app_name
+        .as_deref()
+        .is_some_and(|name| name.eq_ignore_ascii_case("NVIDIA App"))
+        && window
+            .title
+            .to_ascii_lowercase()
+            .starts_with("nvidia geforce overlay")
+}
 
 pub fn resolve_window_capture(
     display_crop_is_safe: bool,
@@ -425,6 +643,76 @@ mod tests {
             scale_factor,
             is_primary: true,
         }
+    }
+
+    fn window(display: &DisplayDescriptor) -> WindowDescriptor {
+        WindowDescriptor {
+            id: "window".into(),
+            title: "Document".into(),
+            app_name: Some("App".into()),
+            z_order: 1,
+            x: display.x + 100,
+            y: display.y + 100,
+            width: 640,
+            height: 480,
+            display_id: display.id.clone(),
+            corner_radius: None,
+        }
+    }
+
+    #[test]
+    fn target_roles_keep_shell_strips_before_the_minimum_window_size() {
+        let display = display(-1440, 0, 1440, 900, 1.0);
+        let mut candidate = window(&display);
+        assert_eq!(
+            window_pick_role(&candidate, &display),
+            Some(WindowPickRole::Capturable)
+        );
+
+        candidate.height = 47;
+        assert_eq!(window_pick_role(&candidate, &display), None);
+
+        candidate.x = display.x;
+        candidate.y = display.y;
+        candidate.width = display.width;
+        candidate.height = 24;
+        assert_eq!(
+            window_pick_role(&candidate, &display),
+            Some(WindowPickRole::ShellChrome),
+            "thin edge chrome remains a display target despite the 48px window minimum"
+        );
+
+        candidate.display_id = "other".into();
+        assert_eq!(window_pick_role(&candidate, &display), None);
+        candidate.display_id = display.id.clone();
+        candidate.width = 0;
+        assert_eq!(window_pick_role(&candidate, &display), None);
+    }
+
+    #[test]
+    fn platform_capture_overlay_exclusions_remain_platform_gated() {
+        let display = display(0, 0, 1440, 900, 1.0);
+        let mut overlay = window(&display);
+        overlay.app_name = Some("NVIDIA App".into());
+        overlay.title = "NVIDIA GeForce Overlay DT".into();
+
+        #[cfg(target_os = "windows")]
+        assert_eq!(window_pick_role(&overlay, &display), None);
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(
+            window_pick_role(&overlay, &display),
+            Some(WindowPickRole::Capturable)
+        );
+
+        overlay.app_name = Some("Screenshot".into());
+        overlay.title.clear();
+        #[cfg(target_os = "macos")]
+        assert_eq!(window_pick_role(&overlay, &display), None);
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(
+            window_pick_role(&overlay, &display),
+            Some(WindowPickRole::Capturable)
+        );
     }
 
     #[test]
