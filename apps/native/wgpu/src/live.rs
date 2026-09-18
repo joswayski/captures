@@ -1431,7 +1431,11 @@ impl Live {
         #[cfg(target_os = "windows")]
         let builder = builder.with_active(false);
         #[cfg(target_os = "linux")]
-        let builder = builder.with_window_type(egui::X11WindowType::Notification);
+        let builder = builder
+            .with_window_type(egui::X11WindowType::Notification)
+            // winit does not implement its active hint on X11. Bypass WM
+            // activation while retaining direct pointer input for the card.
+            .with_override_redirect(true);
         ctx.show_viewport_deferred(
             egui::ViewportId::from_hash_of("live-mini-preview"),
             builder,
