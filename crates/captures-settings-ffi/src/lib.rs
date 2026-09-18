@@ -1,3 +1,4 @@
+mod region;
 mod selection;
 
 use captures_settings::AppSettings;

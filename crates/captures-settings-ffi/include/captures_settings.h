@@ -2,6 +2,7 @@
 #define CAPTURES_SETTINGS_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /* Allocation-free region geometry in display-local logical coordinates. These
@@ -21,6 +22,38 @@ bool captures_selection_drag_v1(uint32_t mode, CapturesSelectionPoint origin,
     CapturesSelectionRect *output);
 bool captures_selection_constrain_v1(CapturesSelectionRect rect,
     CapturesSelectionBounds bounds, double aspect, CapturesSelectionRect *output);
+
+/* Owned immutable region session. Prepare/capture may block; use a worker after
+ * hiding capture windows. Begin/retain a capture-flow guard on the event-loop
+ * thread first. Freeze and cursor settings are fixed at prepare. No pixel data
+ * crosses JSON or temporary files. No permissions prompt occurs implicitly.
+ * Prepare returns NULL on failure; non-null output must be writable char-pointer
+ * storage and receives owned {ok,result:{display}} or {ok,error} JSON. It does
+ * not free a previous output value. NULL output refuses preparation entirely.
+ * Free all JSON results with captures_settings_free_v1. */
+typedef struct CapturesRegionSession CapturesRegionSession;
+CapturesRegionSession *captures_region_prepare_v1(const char *display_id,
+    uint64_t generation, bool freeze, bool include_cursor, char **output);
+/* Borrowed straight-alpha RGBA8/sRGB, top-to-bottom, tight rows. Keep the session
+ * alive for every image-provider/worker borrow, including asynchronous draws.
+ * Never mutate/free data. False (nulls or live-desktop mode) leaves output intact.
+ * Non-null output must point to writable, aligned CapturesRegionPixels storage. */
+typedef struct {
+    const uint8_t *data;
+    size_t length;
+    uint32_t width, height;
+    size_t bytes_per_row;
+} CapturesRegionPixels;
+bool captures_region_pixels_v1(const CapturesRegionSession *session, CapturesRegionPixels *output);
+/* Capture after the selector/countdown has closed and settled. A countdown uses
+ * fresh pixels/cursor, even when the selection used frozen pixels. Rect is in
+ * display-local logical coordinates. Returns app-request {ok,result}/{ok,error}.
+ * The session and UTF-8/NUL-terminated root must remain valid through this call. */
+char *captures_region_capture_v1(const CapturesRegionSession *session,
+    const char *root, CapturesSelectionRect rect, bool after_countdown);
+/* Exactly once after all workers/providers stop borrowing; NULL is permitted.
+ * Separately finish the main-thread flow guard on success, failure and quit. */
+void captures_region_free_v1(CapturesRegionSession *session);
 
 /* Versioned JSON ABI. Operations are load, save, default_path, and theme.
  * Theme accepts {"operation":"theme","accent":"#rgb","signal":"#rrggbb",

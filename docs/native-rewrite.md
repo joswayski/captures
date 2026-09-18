@@ -176,9 +176,18 @@ C ABI exposes the same functions to AppKit without per-pointer-event JSON.
 176 differential vectors execute the shipping TypeScript oracle; Rust compares
 both drag and settled-aspect outputs. Regenerate intentionally with
 `node scripts/native-selection.test.mjs --write`; the normal repository gate
-rejects stale vectors. Native selection windows, frozen-frame ownership, target
-revalidation and region capture integration are still pending. This shared-core
-stage changes no shipping behavior and does not close the capture-overlay gate.
+rejects stale vectors. `captures-app::region` now owns a bounded frozen-frame
+session, or a live-desktop session without a retained frame. Confirmation uses
+fresh pixels/cursor after any countdown, rejects changed display geometry/scale,
+crops using actual buffer edges, and shares the cancellation/commit gate before
+persisting region history. Cursor compositing happens after cropping so an
+outside hotspot cannot leave a clipped arrow fragment. Its opaque C ABI lends
+read-only pixels without a full-desktop temporary file or JSON image transfer;
+hosts must retain the session until every image provider and worker has finished.
+Rust pixel/source-selection tests and Swift ABI tests cover these contracts.
+Native selection windows and host capture integration are still pending on all
+OSes. This shared-core stage changes no shipping behavior and does not close the
+capture-overlay gate; real display/permission/session tests remain required.
 
 The first [shared wgpu candidate](../apps/native/wgpu/README.md) uses egui/winit
 with retained image textures and event-driven immediate-mode UI, an additional

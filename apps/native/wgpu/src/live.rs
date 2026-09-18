@@ -665,7 +665,12 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let exports = tempfile::tempdir().unwrap();
         let pixels = image::RgbaImage::from_pixel(7, 3, image::Rgba([21, 96, 177, 255]));
-        let artifact = captures_app::persist_screenshot(root.path(), &pixels).unwrap();
+        let artifact = captures_app::persist_screenshot(
+            root.path(),
+            &pixels,
+            captures_capture::CaptureMode::Display,
+        )
+        .unwrap();
         let mut live = Live::new(egui::Context::default(), Some(root.path().into()));
         live.send(Request::SaveScreenshot {
             root: root.path().into(),
