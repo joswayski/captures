@@ -1148,10 +1148,9 @@ fn add_row_error(row: &mut [[i16; 4]], x: usize, quant_error: [i16; 4], numerato
 }
 
 fn rgba_at(image: &RgbaImage, index: u32) -> [u8; 4] {
-    let width = image.width().max(1);
-    let x = index % width;
-    let y = index / width;
-    image.get_pixel(x, y).0
+    // Quantizer members are already row-major indices into packed RGBA8 pixels.
+    let (pixels, _) = image.as_raw().as_chunks::<4>();
+    pixels[index as usize]
 }
 
 /// Tag PNG output as sRGB with matching gAMA/cHRM. Untagged PNGs are treated as
@@ -2000,6 +1999,31 @@ mod tests {
             image
         );
         assert!(bytes.len() <= encode_png(&image).expect("preserve PNG").len());
+    }
+
+    #[test]
+    fn flat_rgba_lookup_matches_coordinate_access_across_rows() {
+        for width in [1, 3, 17, 257] {
+            for height in [1, 2, 11] {
+                let image = RgbaImage::from_fn(width, height, |x, y| {
+                    Rgba([
+                        (x * 37) as u8,
+                        (y * 71) as u8,
+                        (x / 256 + y * 17) as u8,
+                        (x + y * 11) as u8,
+                    ])
+                });
+                for y in 0..height {
+                    for x in 0..width {
+                        assert_eq!(
+                            super::rgba_at(&image, y * width + x),
+                            image.get_pixel(x, y).0,
+                            "{width}x{height}, pixel ({x}, {y})"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     // Pre-optimization palette construction: deliberately recompute all bounds
