@@ -196,7 +196,8 @@ renderer selection and full feature/design parity remain open. The
 [migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;
 existing Preview features remain available during development. The wgpu candidate
 does not yet support hidden-window idle on Wayland; see its
-[evaluation limits](apps/native/wgpu/README.md).
+[wgpu evaluation limits](apps/native/wgpu/README.md) and the bounded
+[Linux GTK4 custom snapshot comparison](apps/native/gtk/README.md).
 
 ## License and trademarks
 

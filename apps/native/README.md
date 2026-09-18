@@ -7,10 +7,11 @@ No WebView, React, JavaScript runtime, Rust sidecar or network service is used.
 Fixture launches do not request screen access. The opt-in capture workspace below
 connects the existing Rust capture engine in process. The
 [shared wgpu candidate](wgpu/README.md) adds Windows/Linux fixture windows and
-cross-platform resource diagnostics; it is not a production renderer selection.
-Its fade/settle probe is not equivalent to AppKit dust. DirectComposition/GTK
-comparators and full parity gates remain open. The instructions below cover
-AppKit; the candidate README has Windows/Linux build and test commands.
+cross-platform resource diagnostics; the [GTK4 custom snapshot candidate](gtk/README.md)
+adds a bounded Linux comparator. Neither is a production renderer selection.
+Their synthetic effects are not equivalent to AppKit dust. DirectComposition and
+full parity gates remain open. The instructions below cover AppKit; each candidate
+README has its own build, test and limitation details.
 
 ## Persisted native Preferences
 

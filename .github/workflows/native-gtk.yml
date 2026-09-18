@@ -1,0 +1,49 @@
+name: Native GTK4 workbench
+
+on:
+  pull_request:
+    paths:
+      - 'apps/native/gtk/**'
+      - 'apps/native/prepare.mjs'
+      - 'shared/**'
+      - 'scripts/native-tokens.test.mjs'
+      - 'apps/desktop/ui/src/lib/thumbnailExit.ts'
+      - 'apps/desktop/assets/icon.svg'
+      - '.github/workflows/native-gtk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install GTK4 and headless display dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential libgtk-4-dev libjson-glib-dev xvfb xdotool weston
+      - run: node --test scripts/native-tokens.test.mjs
+      - run: bash apps/native/gtk/build.sh
+      - name: Exercise custom GTK snapshots on X11
+        run: xvfb-run -a env GDK_BACKEND=x11 GSK_RENDERER=gl python apps/native/gtk/smoke.py --binary apps/native/gtk/build/captures-gtk-workbench --output native-gtk-x11
+      - name: Exercise custom GTK snapshots on Wayland
+        run: apps/native/gtk/run-headless-wayland.sh python apps/native/gtk/smoke.py --binary apps/native/gtk/build/captures-gtk-workbench --output native-gtk-wayland
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-gtk-evidence
+          path: |
+            native-gtk-x11
+            native-gtk-wayland
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-gtk-binary
+          path: apps/native/gtk/build/captures-gtk-workbench
+          if-no-files-found: error
