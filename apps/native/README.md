@@ -1,10 +1,11 @@
 # Native desktop workbenches
 
 These are implementation stages of the [native rewrite](../../docs/native-rewrite.md),
-**not a usable capture application**. The existing Tauri Preview is unchanged.
+**not replacement downloads**. The existing Tauri Preview is unchanged.
 macOS is Swift/AppKit + Core Animation with Core Image explicitly backed by Metal.
-No WebView, React, JavaScript runtime, Rust sidecar, network service or capture
-permission is used. Rust engine integration is not implemented here. The
+No WebView, React, JavaScript runtime, Rust sidecar or network service is used.
+Fixture launches do not request screen access. The opt-in capture workspace below
+connects the existing Rust capture engine in process. The
 [shared wgpu candidate](wgpu/README.md) adds Windows/Linux fixture windows and
 cross-platform resource diagnostics; it is not a production renderer selection.
 Its fade/settle probe is not equivalent to AppKit dust. DirectComposition/GTK
@@ -21,10 +22,80 @@ directly. Preferences stores appearance and capture/media defaults in a separate
 explicit test file. Malformed/newer files report an error instead of resetting
 them. `--exercise` uses disposable data. No installed Preview settings are imported.
 
-Capture, recording, history, and editor scenes still use fixtures. Saving a
+Without `--live`, capture, recording, history, and editor scenes use fixtures. Saving a
 default is not an engine integration: global shortcuts, microphone discovery,
 login items, feedback and update actions remain visibly unavailable. Full
 Preferences visual/input parity and the other checklist gates remain open.
+
+## Live display-capture slice
+
+Launch with `--live [--history-root PATH]` on either native host. This is an
+explicit opt-in to real desktop capture, not a synthetic benchmark. The default
+history is beside the separate Captures Native settings file, never installed
+Preview history. Choose a display, request screen access if needed, and capture.
+The host hides its window before capture and restores it on success or failure.
+Permission and locked/inactive session checks remain in force.
+
+Both hosts use `captures-app` for display enumeration, PNG/thumbnail persistence,
+history recovery, save and delete. Image files cross the ABI as paths, not base64.
+Capture, file work and preview decode run off the UI thread. **Save image** uses
+the output folder and PNG/JPEG/WebP format selected in Preferences, without
+overwriting an unrelated file. Repeat Save reuses the existing export; a missing
+export can be recreated from history. History always retains the lossless PNG.
+JPEG composites alpha onto white; WebP saves losslessly, using the same encoders
+as the shipping application. Deleting history preserves all exported formats.
+Captures remain available on reopening the workspace.
+
+Automatic copy follows Preferences (enabled by default, like shipping Captures).
+Turn it off to leave the clipboard untouched by a new capture; explicit Copy
+still works. A clipboard failure does not discard the captured image. Only an
+explicit capture action can trigger automatic copy, never loading history or a
+fixture screenshot. Save/capture report settings errors rather than silently
+using different output or clipboard defaults.
+
+Screenshot countdown follows the stored 0–10-second preference. The selected
+display shows a native, fixed-media-palette countdown. Escape is registered only
+for an active capture and cancels even when another app has focus. If registration
+fails, capture is refused rather than losing cancellation. A desktop-session
+watcher invalidates the pending capture on lock/inactivity; unlocking does not
+resume it. Monotonic deadlines and capture generations are shared Rust logic.
+The overlay closes before the host hides/settles and captures. Late worker replies
+cannot restart a cancelled capture. Once the captured pixels commit to saving,
+Escape no longer claims cancellation; accepted history/file work drains at quit.
+Timers stop and Escape is released after completion/cancellation (the Windows
+low-level capture hook stays installed but disarmed). Interactive permission,
+focus, mixed-DPI, compositor, and screen-reader acceptance still needs real OS tests.
+
+Cursor inclusion follows `show_cursor_in_screenshots`: the shared Rust engine
+samples the pointer after countdown/window hiding and composites it before
+history, copy, and export. This preserves shipping behavior: macOS system pixels
+and hotspot, a synthetic arrow on Windows/X11, and no overlay when the pointer
+is outside the selected display or unavailable. Wayland-only cursor acquisition
+remains unsupported. Exact cursor shapes on Windows/Linux are not claimed.
+
+Both native hosts offer **Capture region** on the selected display.
+Draw from an empty selection, move it or resize its corners, choose Free/1:1/4:3/
+3:2/16:9/9:16, and hold Shift for a square while dragging. Release Shift to restore
+the chosen aspect. Confirm with Enter/Capture, or enable automatic start on
+selection in Preferences. Escape covers preparation, selection and countdown.
+Freeze follows Preferences; zero countdown uses the retained frame/cursor, while
+any countdown captures fresh pixels. The AppKit panel borrows Rust-owned pixels
+through an image provider and releases them after closing/worker completion.
+This adds no full-desktop temporary file. `--scene region` provides a synthetic
+selector using the same view without screen access; `--exercise` covers draw,
+move, aspect, resize and Shift release. The Windows/X11 candidate uses the same
+Rust `RegionSession`; its [private-X11 integration test](wgpu/README.md#validate-and-collect-evidence)
+checks repeated captures, exact saved pixels and cancellation with simulated
+session state. Real OS capture, mixed-DPI and accessibility acceptance is still
+required. Selector blur, magnifier and the full capture-menu UI remain open.
+
+This slice has no window capture, recordings, editor or
+mini previews; those stored preferences do not apply yet. Full UI parity remains
+open. The wgpu Wayland backend cannot verify hiding its root window, so capture
+is disabled there rather than photographing the app itself. Linux X11 needs an
+active, unlocked desktop session; bare Xvfb normally has no session service and
+must refuse capture. Verify real permission, clipboard ownership, multi-display
+behavior and exported pixels on each OS before accepting the slice.
 
 ## Build and try on macOS
 
@@ -34,6 +105,7 @@ Requires macOS 13+, Xcode command-line tools with Swift 5.9+, Rust 1.94, and Nod
 ```sh
 bash apps/native/macos/build.sh
 apps/native/macos/.build/release/CapturesNative --scene preferences
+apps/native/macos/.build/release/CapturesNative --live
 apps/native/macos/.build/release/CapturesNative --scene history --history-count 1000
 apps/native/macos/.build/release/CapturesNative --scene history --history-count 0
 apps/native/macos/.build/release/CapturesNative --scene hud --appearance light
@@ -43,7 +115,8 @@ apps/native/macos/.build/release/CapturesNative --scene preview --reference-chip
 ```
 
 Close each instance before starting another. Cmd+Q quits. Nothing installs into
-Applications or changes the installed app's data, permissions, shortcuts, or updater.
+Applications or changes the installed app's data, shortcuts, or updater.
+Only the explicit live screen-access action requests capture permission.
 The executable needs its SwiftPM resource bundle; run it from the build directory.
 
 Preferences has section navigation and a Capture History fixture action.

@@ -174,6 +174,13 @@ impl Preferences {
             self.value.get("theme")?.as_str()?.into(),
         ))
     }
+    pub fn snapshot(&self) -> Result<AppSettings, String> {
+        if let Some(error) = &self.load_error {
+            return Err(error.clone());
+        }
+        serde_json::from_value(self.value.clone())
+            .map_err(|error| format!("Capture settings are not available: {error}"))
+    }
     pub fn custom_colors(&self) -> Option<(String, String)> {
         (string_at(&self.value, &["theme"]) == "custom").then(|| {
             (
@@ -857,6 +864,32 @@ fn set(v: &mut Value, path: &[&str], value: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn capture_snapshot_uses_current_edits_not_last_disk_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        captures_settings::save(&path, &AppSettings::default()).unwrap();
+        let ctx = egui::Context::default();
+        let mut prefs = Preferences::new(ctx.clone(), path.clone(), None, None);
+        prefs.io.flush();
+        prefs.receive(&ctx);
+        set(&mut prefs.value, &["auto_copy_to_clipboard"], json!(false));
+        set(&mut prefs.value, &["screenshot_format"], json!("webp"));
+        let snapshot = prefs.snapshot().unwrap();
+        assert!(!snapshot.auto_copy_to_clipboard);
+        assert_eq!(
+            snapshot.screenshot_format,
+            captures_settings::ScreenshotFormat::Webp
+        );
+        assert!(
+            captures_settings::load(&path)
+                .unwrap()
+                .auto_copy_to_clipboard
+        );
+        prefs.load_error = Some("settings unreadable".into());
+        assert!(prefs.snapshot().is_err());
+    }
+
     #[test]
     fn flush_persists_last_edit_and_reopens_it() {
         let dir = tempfile::tempdir().unwrap();
