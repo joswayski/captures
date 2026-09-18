@@ -24,6 +24,10 @@ def client_bounds(pid):
     user.GetWindowThreadProcessId.restype = w.DWORD
     user.IsWindowVisible.argtypes = [w.HWND]
     user.IsWindowVisible.restype = w.BOOL
+    user.GetWindowTextLengthW.argtypes = [w.HWND]
+    user.GetWindowTextLengthW.restype = ctypes.c_int
+    user.GetWindowTextW.argtypes = [w.HWND, w.LPWSTR, ctypes.c_int]
+    user.GetWindowTextW.restype = ctypes.c_int
     user.GetClientRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
     user.GetClientRect.restype = w.BOOL
     user.ClientToScreen.argtypes = [w.HWND, ctypes.POINTER(w.POINT)]
@@ -35,7 +39,12 @@ def client_bounds(pid):
         owner = w.DWORD()
         user.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
         if owner.value == pid and user.IsWindowVisible(hwnd):
-            found.append(hwnd)
+            # Native input/windowing helpers may have visible HWNDs too. Match
+            # the intended client rather than treating every owned HWND as UI.
+            title = ctypes.create_unicode_buffer(user.GetWindowTextLengthW(hwnd) + 1)
+            user.GetWindowTextW(hwnd, title, len(title))
+            if title.value == "Captures — DirectComposition candidate":
+                found.append(hwnd)
         return True
 
     user.EnumWindows(visit, 0)
