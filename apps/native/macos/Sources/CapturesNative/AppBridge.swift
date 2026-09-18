@@ -17,6 +17,34 @@ protocol AppTransport {
     func request(_ object: [String: Any]) throws -> [String: Any]
 }
 
+struct CapturePreferences {
+    let autoCopy: Bool
+    let directory: String
+    let format: String
+
+    init(_ settings: [String: Any]) throws {
+        guard let autoCopy = settings["auto_copy_to_clipboard"] as? Bool,
+              let directory = settings["output_directory"] as? String,
+              let format = settings["screenshot_format"] as? String,
+              ["png", "jpeg", "webp"].contains(format)
+        else { throw SettingsStoreError.invalidResponse }
+        self.autoCopy = autoCopy; self.directory = directory; self.format = format
+    }
+
+    static func load(path: String?, transport: SettingsTransport = SettingsBridge()) throws -> Self {
+        let resolvedPath: String
+        if let path { resolvedPath = path }
+        else {
+            guard let value = try transport.request(["operation": "default_path"])["path"] as? String
+            else { throw SettingsStoreError.invalidResponse }
+            resolvedPath = value
+        }
+        guard let settings = try transport.request(["operation": "load", "path": resolvedPath])["settings"] as? [String: Any]
+        else { throw SettingsStoreError.invalidResponse }
+        return try Self(settings)
+    }
+}
+
 final class AppBridge: AppTransport {
     func request(_ object: [String: Any]) throws -> [String: Any] {
         let data = try JSONSerialization.data(withJSONObject: object)

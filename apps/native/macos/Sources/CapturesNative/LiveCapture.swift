@@ -18,6 +18,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private let transport: AppTransport
     private static let queue = DispatchQueue(label: "es.captures.native.capture", qos: .userInitiated)
     private let historyRootOverride: String?
+    private let settingsPath: String?
     private let showPreferences: () -> Void
     private var historyRoot = ""
     private var displays: [DisplayItem] = []
@@ -37,10 +38,11 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var revealButton: CaptureButton!
     private var deleteButton: CaptureButton!
 
-    init(root: Surface, window: NSWindow, tokens: Tokens, historyRoot: String?,
+    init(root: Surface, window: NSWindow, tokens: Tokens, historyRoot: String?, settingsPath: String?,
          transport: AppTransport = AppBridge(), showPreferences: @escaping () -> Void) {
         self.root = root; self.window = window; self.tokens = tokens
         historyRootOverride = historyRoot; self.transport = transport; self.showPreferences = showPreferences
+        self.settingsPath = settingsPath
         super.init(); build(); loadInitial()
     }
 
@@ -73,12 +75,12 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         preview = NSImageView(frame: previewPanel.bounds.insetBy(dx: 16, dy: 16)); preview.imageScaling = .scaleProportionallyUpOrDown
         preview.setAccessibilityLabel("Selected screenshot preview"); previewPanel.addSubview(preview)
         detail = title("Select a screenshot to preview it.", frame: NSRect(x: 372, y: 560, width: 600, height: 24), muted: true)
-        saveButton = button("Save PNG…", frame: NSRect(x: 372, y: 594, width: 118, height: 34)) { [weak self] in self?.save() }
+        saveButton = button("Save image", frame: NSRect(x: 372, y: 594, width: 118, height: 34)) { [weak self] in self?.save() }
         copyButton = button("Copy image", frame: NSRect(x: 500, y: 594, width: 118, height: 34)) { [weak self] in self?.copyImage() }
         revealButton = button("Reveal export", frame: NSRect(x: 628, y: 594, width: 120, height: 34)) { [weak self] in self?.reveal() }
         deleteButton = button("Delete from history", frame: NSRect(x: 758, y: 594, width: 166, height: 34)) { [weak self] in self?.confirmDelete() }
         status = title("Loading capture history…", frame: NSRect(x: 28, y: 642, width: 944, height: 24), muted: true)
-        let limits = title("This slice captures full displays as PNG only. Cursor, countdown, regions, recording, editor, and mini previews are not available yet. Preference capture defaults are not applied. Copy is explicit; captures are never auto-copied.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
+        let limits = title("Full-display capture uses automatic copy and save format/folder preferences. History keeps a lossless PNG. Cursor, countdown, regions, recording, editor, and mini previews are not available yet.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
         limits.maximumNumberOfLines = 2; updateActions()
     }
 
@@ -158,14 +160,17 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         window.orderOut(nil)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self else { return }
-            self.run({ [transport, historyRoot] in
+            self.run({ [transport, historyRoot, settingsPath] in
+                let preferences = try CapturePreferences.load(path: settingsPath)
                 let result = try transport.request(["operation": "capture_display", "root": historyRoot, "display_id": display.id])
                 guard let value = result["artifact"] as? [String: Any], let artifact = CaptureArtifact(value) else { throw AppBridgeError.invalidResponse }
-                return artifact
+                return (artifact, preferences.autoCopy)
             }) { [weak self, window = self.window] result in
                 window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
                 guard let self else { return }; self.setBusy(false)
-                switch result { case .success(let artifact): self.loadHistory(select: artifact.id)
+                switch result { case .success(let (artifact, autoCopy)):
+                    self.loadHistory(select: artifact.id)
+                    if autoCopy { self.copyImage(at: artifact.imagePath) }
                 case .failure(let error): self.showError("Capture failed", error) }
             }
         }
@@ -220,25 +225,26 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private func save() {
         guard let index = selectedIndex, artifacts.indices.contains(index) else { return }; let artifact = artifacts[index]
-        let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false; panel.prompt = "Save Here"
-        panel.beginSheetModal(for: window) { [weak self] response in
-            guard let self, response == .OK, let directory = panel.url else { return }
-            self.status.stringValue = "Saving PNG…"
-            self.run({ [transport, historyRoot] in
-                let result = try transport.request(["operation": "save_png", "root": historyRoot, "id": artifact.id, "directory": directory.path])
-                guard let value = result["artifact"] as? [String: Any], let updated = CaptureArtifact(value), let path = result["path"] as? String else { throw AppBridgeError.invalidResponse }
-                return (updated, path)
-            }) { result in
-                switch result { case .success(let value):
-                    if let current = self.artifacts.firstIndex(where: { $0.id == artifact.id }) { self.artifacts[current] = value.0 }
-                    self.status.stringValue = "Saved PNG to \(value.1)"; self.table.reloadData()
-                case .failure(let error): self.showError("Couldn’t save PNG", error) }; self.updateActions()
-            }
+        status.stringValue = "Saving image…"
+        run({ [transport, historyRoot, settingsPath] in
+            let preferences = try CapturePreferences.load(path: settingsPath)
+            let result = try transport.request(["operation": "save_screenshot", "root": historyRoot, "id": artifact.id,
+                "directory": preferences.directory, "format": preferences.format])
+            guard let value = result["artifact"] as? [String: Any], let updated = CaptureArtifact(value), let path = result["path"] as? String else { throw AppBridgeError.invalidResponse }
+            return (updated, path)
+        }) { [weak self] result in
+            guard let self else { return }
+            switch result { case .success(let value):
+                if let current = self.artifacts.firstIndex(where: { $0.id == artifact.id }) { self.artifacts[current] = value.0 }
+                self.status.stringValue = "Saved image to \(value.1)"; self.table.reloadData()
+            case .failure(let error): self.showError("Couldn’t save image", error) }; self.updateActions()
         }
     }
     private func copyImage() {
         guard let index = selectedIndex, artifacts.indices.contains(index) else { return }
-        let path = artifacts[index].imagePath
+        copyImage(at: artifacts[index].imagePath)
+    }
+    private func copyImage(at path: String) {
         run({ try Data(contentsOf: URL(fileURLWithPath: path)) }) { [weak self] result in
             guard let self else { return }
             switch result {
@@ -253,7 +259,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private func reveal() { guard let index = selectedIndex, artifacts.indices.contains(index), let path = artifacts[index].savedPath else { return }; NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
     private func confirmDelete() {
         guard let index = selectedIndex, artifacts.indices.contains(index) else { return }; let artifact = artifacts[index]
-        let alert = NSAlert(); alert.messageText = "Delete this screenshot from history?"; alert.informativeText = "This removes the history copy. Any PNG you exported stays on disk."; alert.alertStyle = .warning
+        let alert = NSAlert(); alert.messageText = "Delete this screenshot from history?"; alert.informativeText = "This removes the history copy. Exported files stay on disk."; alert.alertStyle = .warning
         alert.addButton(withTitle: "Delete from History"); alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in guard response == .alertFirstButtonReturn else { return }; self?.delete(artifact) }
     }

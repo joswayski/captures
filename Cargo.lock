@@ -638,6 +638,7 @@ version = "0.1.0"
 dependencies = [
  "captures-capture",
  "captures-history",
+ "captures-image",
  "captures-session",
  "captures-settings",
  "chrono",

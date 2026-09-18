@@ -9,6 +9,7 @@ use std::{
 
 use captures_app::{Artifact, Request, Response};
 use captures_capture::DisplayDescriptor;
+use captures_settings::AppSettings;
 use eframe::egui::{self, RichText};
 
 use crate::tokens::Tokens;
@@ -17,14 +18,12 @@ enum Job {
     Execute(Request),
     Decode { generation: u64, path: PathBuf },
     Copy(PathBuf),
-    ChooseExport { root: PathBuf, id: String },
     Shutdown,
 }
 
 enum Reply {
     Executed(Result<Box<Response>, String>),
     Copied(Result<(), String>),
-    ExportCancelled,
     Decoded {
         generation: u64,
         path: PathBuf,
@@ -80,6 +79,7 @@ pub struct Live {
     hide_started: Option<Instant>,
     hidden_since: Option<Instant>,
     capture_in_flight: bool,
+    auto_copy_on_capture: bool,
     can_hide: Option<bool>,
     confirm_delete: Option<String>,
 }
@@ -107,18 +107,6 @@ impl Live {
                         path,
                     },
                     Job::Copy(path) => Reply::Copied(copy_image(&path, &mut clipboard)),
-                    Job::ChooseExport { root, id } => match rfd::FileDialog::new().pick_folder() {
-                        Some(directory) => Reply::Executed(
-                            captures_app::execute(Request::SavePng {
-                                root,
-                                id,
-                                directory,
-                            })
-                            .map(Box::new)
-                            .map_err(|error| error.to_string()),
-                        ),
-                        None => Reply::ExportCancelled,
-                    },
                 };
                 if out.send(reply).is_err() {
                     break;
@@ -145,6 +133,7 @@ impl Live {
             hide_started: None,
             hidden_since: None,
             capture_in_flight: false,
+            auto_copy_on_capture: false,
             can_hide: None,
             confirm_delete: None,
         };
@@ -241,10 +230,6 @@ impl Live {
                         Err(error) => self.error = Some(error),
                     }
                 }
-                Reply::ExportCancelled => {
-                    self.pending = self.pending.saturating_sub(1);
-                    self.status = "Save cancelled".into();
-                }
                 Reply::Executed(result) => {
                     self.pending = self.pending.saturating_sub(1);
                     if self.capture_in_flight {
@@ -310,9 +295,14 @@ impl Live {
             }
             Response::Captured { artifact } => {
                 let id = artifact.entry.id.clone();
+                let path = artifact.image_path.clone();
                 self.artifacts.insert(0, artifact);
                 self.select(id);
                 self.status = "Full display captured as PNG".into();
+                if std::mem::take(&mut self.auto_copy_on_capture) {
+                    self.pending += 1;
+                    let _ = self.tx.send(Job::Copy(path));
+                }
             }
             Response::Saved { artifact, path } => {
                 if let Some(item) = self
@@ -344,7 +334,12 @@ impl Live {
         }
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, t: &Tokens) {
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        t: &Tokens,
+        settings: impl Fn() -> Result<AppSettings, String>,
+    ) {
         if self.capture_waiting_for_hide || self.capture_in_flight {
             ui.disable();
         }
@@ -353,7 +348,7 @@ impl Live {
                 ui.heading("Captures");
                 ui.label(RichText::new("Native display capture").color(t.color("text-muted")));
             });
-            ui.label("Scope: full-display PNG only. Cursor, countdown, regions, recording, editing, and mini-preview are not connected yet. Capture preferences do not apply here.");
+            ui.label("Full-display capture with automatic copy and save format/folder preferences. Cursor, countdown, regions, recording, editing, and mini previews are not connected yet.");
             ui.horizontal(|ui| {
                 egui::ComboBox::from_label("Display")
                     .selected_text(self.displays.iter().find(|d| Some(&d.id) == self.display_id.as_ref()).map_or("No display", |d| d.name.as_str()))
@@ -363,11 +358,17 @@ impl Live {
                 if ui.button("Refresh displays").clicked() { self.send(Request::Displays); }
                 let capture = ui.add_enabled(self.pending == 0 && self.display_id.is_some() && self.can_hide == Some(true), egui::Button::new("Capture display"));
                 if capture.clicked() {
-                    self.status = "Hiding Captures before capture…".into();
-                    self.capture_waiting_for_hide = true;
-                    self.hide_started = Some(Instant::now());
-                    self.hidden_since = None;
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    match settings() {
+                        Ok(settings) => {
+                            self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
+                            self.status = "Hiding Captures before capture…".into();
+                            self.capture_waiting_for_hide = true;
+                            self.hide_started = Some(Instant::now());
+                            self.hidden_since = None;
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                        }
+                        Err(error) => self.error = Some(error),
+                    }
                 }
                 if ui.button("Request permission").clicked() { self.send(Request::RequestPermission); }
             });
@@ -441,17 +442,20 @@ impl Live {
                 if ui
                     .add_enabled(
                         selected.is_some() && self.pending == 0,
-                        egui::Button::new("Save PNG to folder…"),
+                        egui::Button::new("Save image"),
                     )
                     .clicked()
                     && let Some(id) = selected.clone()
                 {
-                    self.pending += 1;
-                    self.error = None;
-                    let _ = self.tx.send(Job::ChooseExport {
-                        root: self.root.clone(),
-                        id,
-                    });
+                    match settings() {
+                        Ok(settings) => self.send(Request::SaveScreenshot {
+                            root: self.root.clone(),
+                            id,
+                            directory: settings.output_directory.into(),
+                            format: settings.screenshot_format,
+                        }),
+                        Err(error) => self.error = Some(error),
+                    }
                 }
                 if ui
                     .add_enabled(
@@ -478,9 +482,7 @@ impl Live {
             });
             if let Some(id) = self.confirm_delete.clone() {
                 ui.group(|ui| {
-                    ui.label(
-                        "Delete this capture from history? Exported PNG files are never deleted.",
-                    );
+                    ui.label("Delete this capture from history? Exported files are never deleted.");
                     ui.horizontal(|ui| {
                         if ui.button("Cancel").clicked() {
                             self.confirm_delete = None;
@@ -572,10 +574,11 @@ mod tests {
         let pixels = image::RgbaImage::from_pixel(7, 3, image::Rgba([21, 96, 177, 255]));
         let artifact = captures_app::persist_screenshot(root.path(), &pixels).unwrap();
         let mut live = Live::new(egui::Context::default(), Some(root.path().into()));
-        live.send(Request::SavePng {
+        live.send(Request::SaveScreenshot {
             root: root.path().into(),
             id: artifact.entry.id,
             directory: exports.path().into(),
+            format: captures_settings::ScreenshotFormat::Png,
         });
         live.flush();
         let entries = captures_app::list(root.path()).unwrap();

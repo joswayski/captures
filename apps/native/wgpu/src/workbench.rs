@@ -596,7 +596,7 @@ impl eframe::App for Workbench {
                     }
                 });
             } else {
-                live.ui(ui, &t);
+                live.ui(ui, &t, || self.preferences_state.snapshot());
             }
             if self.options.screenshot.is_some()
                 && !self.screenshot_requested

@@ -2,6 +2,21 @@ import XCTest
 @testable import CapturesNative
 
 final class AppBridgeTests: XCTestCase {
+    func testCapturePreferencesRespectCopyOffAndExportChoice() throws {
+        let off = try CapturePreferences(["auto_copy_to_clipboard": false,
+            "output_directory": "/exports/custom", "screenshot_format": "webp"])
+        XCTAssertFalse(off.autoCopy)
+        XCTAssertEqual(off.directory, "/exports/custom")
+        XCTAssertEqual(off.format, "webp")
+        let on = try CapturePreferences(["auto_copy_to_clipboard": true,
+            "output_directory": "/exports/jpeg", "screenshot_format": "jpeg"])
+        XCTAssertTrue(on.autoCopy)
+        XCTAssertEqual(on.format, "jpeg")
+        XCTAssertThrowsError(try CapturePreferences([:]))
+        XCTAssertThrowsError(try CapturePreferences(["auto_copy_to_clipboard": false,
+            "output_directory": "/exports", "screenshot_format": "gif"]))
+    }
+
     func testDecodesResultEnvelope() throws {
         let response = try AppBridge.decode(Data(#"{"ok":true,"result":{"kind":"history_root","path":"/native/history"}}"#.utf8))
         XCTAssertEqual(response["path"] as? String, "/native/history")

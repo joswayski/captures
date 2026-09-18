@@ -12,8 +12,9 @@ separate Captures Native development identity; pass `--settings-file PATH` to
 use an explicit test file. Screenshots and scripted exercises without that flag
 use disposable settings. `--live` opts into the shared Rust full-display PNG,
 history, copy, export and delete flows; see the [live slice and limits](../README.md#live-display-capture-slice).
-Other scenes remain fixtures; storing capture defaults does not apply them to
-live capture yet. Global shortcuts, login, microphone
+Live capture applies automatic copy and PNG/JPEG/WebP output format/folder
+preferences. Cursor/countdown and the other capture defaults remain unconnected;
+other scenes remain fixtures. Global shortcuts, login, microphone
 discovery, feedback, and updating remain visibly unavailable.
 
 The candidate tests whether shared custom components are viable. It is not a

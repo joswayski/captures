@@ -223,7 +223,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         preferencesController = nil
         if scene == "live" {
             liveController = LiveCaptureController(root: content, window: window, tokens: tokens,
-                historyRoot: options.historyRoot) { [weak self] in self?.scene = "preferences"; self?.render() }
+                historyRoot: options.historyRoot, settingsPath: options.settingsFile) { [weak self] in self?.scene = "preferences"; self?.render() }
             Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
             return
         }

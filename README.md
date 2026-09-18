@@ -181,11 +181,13 @@ developed feature by feature across platforms using shared Rust logic and the
 Captures design. Development workbenches include Swift/AppKit on macOS and an
 experimental Rust/wgpu renderer candidate for Windows/Linux. They are not
 replacement downloads. An opt-in native capture workspace connects full-display
-PNG capture, local screenshot history, explicit copy, export, and deletion to
+PNG capture, local screenshot history, copy, export, and deletion to
 shared Rust engines. It uses separate development data; Wayland capture is gated
 until the candidate can hide its window reliably. Native Preferences saves
 appearance, custom colors, and capture/media defaults through shared Rust logic
-in a separate development settings file. Capture defaults, regions, recording,
+in a separate development settings file. The native workspace now applies
+automatic copy, output folder, and PNG/JPEG/WebP save-format preferences. Cursor,
+countdown, regions, recording,
 editing, mini previews, global shortcuts, login items, and updates are not
 connected to the native hosts yet. Windows/Linux
 renderer selection and full feature/design parity remain open. The

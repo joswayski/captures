@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 captures-capture = { path = "../captures-capture" }
 captures-history = { path = "../captures-history" }
+captures-image = { path = "../captures-image" }
 captures-session = { path = "../captures-session" }
 captures-settings = { path = "../captures-settings" }
 chrono.workspace = true

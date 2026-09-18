@@ -7,6 +7,7 @@ on:
       - 'crates/captures-settings*/**'
       - 'crates/captures-app/**'
       - 'crates/captures-history/**'
+      - 'crates/captures-image/**'
       - 'crates/captures-capture/**'
       - 'crates/captures-session/**'
       - 'Cargo.lock'

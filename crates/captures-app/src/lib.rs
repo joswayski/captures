@@ -3,11 +3,13 @@
 
 use captures_capture::{CaptureError, CaptureMode, DisplayDescriptor, XcapBackend};
 use captures_history::{ArtifactKind, HistoryEntry};
+use captures_settings::ScreenshotFormat;
 use chrono::{Local, Utc};
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -19,6 +21,8 @@ pub enum Error {
     History(#[from] captures_history::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error("image encoding failed: {0}")]
+    Image(String),
     #[error("capture is no longer available")]
     Missing,
     #[error("Saved to {path}, but history could not be updated: {reason}")]
@@ -43,10 +47,11 @@ pub enum Request {
     History {
         root: PathBuf,
     },
-    SavePng {
+    SaveScreenshot {
         root: PathBuf,
         id: String,
         directory: PathBuf,
+        format: ScreenshotFormat,
     },
     Delete {
         root: PathBuf,
@@ -108,11 +113,12 @@ pub fn execute(request: Request) -> Result<Response, Error> {
         Request::History { root } => Ok(Response::History {
             artifacts: list(&root)?,
         }),
-        Request::SavePng {
+        Request::SaveScreenshot {
             root,
             id,
             directory,
-        } => save_png(&root, &id, &directory),
+            format,
+        } => save_screenshot(&root, &id, &directory, format),
         Request::Delete { root, id } => {
             captures_history::delete(&root, &id)?;
             Ok(Response::Deleted { id })
@@ -163,22 +169,57 @@ pub fn persist_screenshot(root: &Path, image: &RgbaImage) -> Result<Artifact, Er
     artifact(root, entry)
 }
 
-fn save_png(root: &Path, id: &str, directory: &Path) -> Result<Response, Error> {
+fn save_screenshot(
+    root: &Path,
+    id: &str,
+    directory: &Path,
+    format: ScreenshotFormat,
+) -> Result<Response, Error> {
     let mut item = list(root)?
         .into_iter()
         .find(|item| item.entry.id == id)
         .ok_or(Error::Missing)?;
+    // Like shipping Save, a second click reuses the exported file. If it was
+    // removed outside Captures, the lossless history copy can recreate it.
+    if let Some(path) = item
+        .entry
+        .saved_path
+        .as_ref()
+        .map(PathBuf::from)
+        .filter(|p| p.is_file())
+    {
+        return Ok(Response::Saved {
+            artifact: item,
+            path,
+        });
+    }
     fs::create_dir_all(directory)?;
     let stem = format!("Captures_{}", Local::now().format("%Y-%m-%d_%H-%M-%S_%3f"));
     let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
-    std::io::copy(&mut fs::File::open(&item.image_path)?, &mut temporary)?;
+    if format == ScreenshotFormat::Png {
+        std::io::copy(&mut fs::File::open(&item.image_path)?, &mut temporary)?;
+    } else {
+        let image = image::open(&item.image_path)
+            .map_err(|e| Error::Image(e.to_string()))?
+            .into_rgba8();
+        let bytes = match format {
+            ScreenshotFormat::Jpeg => {
+                captures_image::encode_jpeg(&captures_image::composite_onto_white(&image), 100)
+            }
+            ScreenshotFormat::Webp => captures_image::encode_webp(&image, None),
+            ScreenshotFormat::Png => unreachable!("PNG is copied without re-encoding"),
+        }
+        .map_err(Error::Image)?;
+        temporary.write_all(&bytes)?;
+    }
     temporary.as_file().sync_all()?;
+    let extension = format.extension();
     let path = (0_u32..)
         .find_map(|suffix| {
             let name = if suffix == 0 {
-                format!("{stem}.png")
+                format!("{stem}.{extension}")
             } else {
-                format!("{stem}-{suffix}.png")
+                format!("{stem}-{suffix}.{extension}")
             };
             let path = directory.join(name);
             (!path.exists()).then_some(path)
@@ -206,6 +247,71 @@ mod tests {
     use super::*;
 
     #[test]
+    fn save_uses_requested_format_keeps_lossless_history_and_reuses_existing_export() {
+        for (format, signature, extension) in [
+            (ScreenshotFormat::Png, image::ImageFormat::Png, "png"),
+            (ScreenshotFormat::Jpeg, image::ImageFormat::Jpeg, "jpg"),
+            (ScreenshotFormat::Webp, image::ImageFormat::WebP, "webp"),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let output = tempfile::tempdir().unwrap();
+            let pixels = RgbaImage::from_fn(48, 24, |x, _| {
+                if x < 24 {
+                    image::Rgba([255, 0, 0, 128])
+                } else {
+                    image::Rgba([0, 255, 0, 255])
+                }
+            });
+            let artifact = persist_screenshot(root.path(), &pixels).unwrap();
+            let Response::Saved { path, .. } =
+                save_screenshot(root.path(), &artifact.entry.id, output.path(), format).unwrap()
+            else {
+                panic!("saved response")
+            };
+            assert_eq!(path.extension().unwrap(), extension);
+            assert_eq!(
+                image::guess_format(&fs::read(&path).unwrap()).unwrap(),
+                signature
+            );
+            let decoded = image::open(&path).unwrap().into_rgba8();
+            if format == ScreenshotFormat::Jpeg {
+                // Independently computed alpha-over-white, away from the color boundary.
+                for (x, expected) in [(8, [255, 127, 127, 255]), (40, [0, 255, 0, 255])] {
+                    for (actual, expected) in decoded.get_pixel(x, 12).0.into_iter().zip(expected) {
+                        assert!(actual.abs_diff(expected) <= 2, "{actual} != {expected}");
+                    }
+                }
+            } else {
+                assert_eq!(decoded, pixels);
+            }
+            assert_eq!(
+                image::open(&artifact.image_path).unwrap().into_rgba8(),
+                pixels
+            );
+            let other_directory = output.path().join("should-not-be-created");
+            let Response::Saved { path: second, .. } = save_screenshot(
+                root.path(),
+                &artifact.entry.id,
+                &other_directory,
+                ScreenshotFormat::Png,
+            )
+            .unwrap() else {
+                panic!("second save")
+            };
+            assert_eq!(path, second);
+            assert!(!other_directory.exists());
+            fs::remove_file(&path).unwrap();
+            let Response::Saved {
+                path: recreated, ..
+            } = save_screenshot(root.path(), &artifact.entry.id, output.path(), format).unwrap()
+            else {
+                panic!("recreated save")
+            };
+            assert!(recreated.is_file());
+        }
+    }
+
+    #[test]
     fn capture_save_reopen_delete_keeps_export_and_pixels() {
         let data = tempfile::tempdir().unwrap();
         let exports = tempfile::tempdir().unwrap();
@@ -214,9 +320,13 @@ mod tests {
         });
         let item = persist_screenshot(data.path(), &image).unwrap();
         assert_eq!(list(data.path()).unwrap()[0].entry.width, 7);
-        let Response::Saved { path, .. } =
-            save_png(data.path(), &item.entry.id, exports.path()).unwrap()
-        else {
+        let Response::Saved { path, .. } = save_screenshot(
+            data.path(),
+            &item.entry.id,
+            exports.path(),
+            ScreenshotFormat::Png,
+        )
+        .unwrap() else {
             panic!("save result")
         };
         assert_eq!(image::open(&path).unwrap().to_rgba8(), image);
@@ -239,7 +349,15 @@ mod tests {
         let item = persist_screenshot(data.path(), &RgbaImage::new(3, 5)).unwrap();
         let obstruction = data.path().join("not-a-directory");
         fs::write(&obstruction, b"keep").unwrap();
-        assert!(save_png(data.path(), &item.entry.id, &obstruction).is_err());
+        assert!(
+            save_screenshot(
+                data.path(),
+                &item.entry.id,
+                &obstruction,
+                ScreenshotFormat::Png
+            )
+            .is_err()
+        );
         assert!(list(data.path()).unwrap()[0].entry.saved_path.is_none());
         assert!(item.image_path.is_file());
         assert_eq!(fs::read(obstruction).unwrap(), b"keep");

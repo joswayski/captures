@@ -38,12 +38,23 @@ Permission and locked/inactive session checks remain in force.
 
 Both hosts use `captures-app` for display enumeration, PNG/thumbnail persistence,
 history recovery, save and delete. Image files cross the ABI as paths, not base64.
-Capture, file work and preview decode run off the UI thread. Export writes a new
-PNG without overwriting an existing file. Copy is explicit. Deleting history
-preserves exported PNGs. Captures remain available on reopening the workspace.
+Capture, file work and preview decode run off the UI thread. **Save image** uses
+the output folder and PNG/JPEG/WebP format selected in Preferences, without
+overwriting an unrelated file. Repeat Save reuses the existing export; a missing
+export can be recreated from history. History always retains the lossless PNG.
+JPEG composites alpha onto white; WebP saves losslessly, using the same encoders
+as the shipping application. Deleting history preserves all exported formats.
+Captures remain available on reopening the workspace.
+
+Automatic copy follows Preferences (enabled by default, like shipping Captures).
+Turn it off to leave the clipboard untouched by a new capture; explicit Copy
+still works. A clipboard failure does not discard the captured image. Only an
+explicit capture action can trigger automatic copy, never loading history or a
+fixture screenshot. Save/capture report settings errors rather than silently
+using different output or clipboard defaults.
 
 This slice has no cursor/countdown, region/window capture, recordings, editor or
-mini previews; saved capture preferences do not apply yet. Full UI parity remains
+mini previews; those stored preferences do not apply yet. Full UI parity remains
 open. The wgpu Wayland backend cannot verify hiding its root window, so capture
 is disabled there rather than photographing the app itself. Linux X11 needs an
 active, unlocked desktop session; bare Xvfb normally has no session service and
