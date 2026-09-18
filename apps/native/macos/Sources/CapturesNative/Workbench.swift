@@ -81,6 +81,25 @@ final class CaptureButton: NSButton {
     }
 }
 
+final class RootWindowCloseHandler: NSObject, NSWindowDelegate {
+    weak var rootWindow: NSWindow?
+    private let closePreviews: () -> Void
+    private let terminate: () -> Void
+
+    init(rootWindow: NSWindow, closePreviews: @escaping () -> Void,
+         terminate: @escaping () -> Void) {
+        self.rootWindow = rootWindow; self.closePreviews = closePreviews
+        self.terminate = terminate
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let closing = notification.object as? NSWindow,
+              closing === rootWindow else { return }
+        closePreviews()
+        terminate()
+    }
+}
+
 final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate {
     let options: Options
     private var window: NSWindow!
@@ -90,6 +109,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var preferencesController: PreferencesController?
     private var liveController: LiveCaptureController?
     private var miniPreviews: MiniPreviewController?
+    private var miniPreviewActions: MiniPreviewActions?
+    private var rootWindowCloseHandler: RootWindowCloseHandler?
     private var previewSelectionID: String?
     private var regionSelector: RegionSelectionView?
     private var windowSelector: WindowSelectionView?
@@ -149,10 +170,18 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         window.isReleasedWhenClosed = false
         window.center()
         let miniPreviews = MiniPreviewController(tokens: tokens)
-        miniPreviews.copyArtifact = { [weak self] artifact in self?.liveController?.copyPreview(artifact) }
-        miniPreviews.saveArtifact = { [weak self] artifact in self?.liveController?.savePreview(artifact) }
+        let miniPreviewActions = MiniPreviewActions(settingsPath: options.settingsFile)
+        miniPreviewActions.bind(previews: miniPreviews)
+        miniPreviews.copyArtifact = { [weak miniPreviewActions] artifact in miniPreviewActions?.copy(artifact) }
+        miniPreviews.saveArtifact = { [weak miniPreviewActions] artifact in miniPreviewActions?.save(artifact) }
         miniPreviews.openArtifact = { [weak self] artifact in self?.openPreview(artifact) }
         self.miniPreviews = miniPreviews
+        self.miniPreviewActions = miniPreviewActions
+        let rootWindowCloseHandler = RootWindowCloseHandler(rootWindow: window,
+            closePreviews: { [weak miniPreviews] in miniPreviews?.close() },
+            terminate: { NSApp.terminate(nil) })
+        self.rootWindowCloseHandler = rootWindowCloseHandler
+        window.delegate = rootWindowCloseHandler
         render()
         if scene != "idle" { window.makeKeyAndOrderFront(nil) }
         NSApp.activate(ignoringOtherApps: true)
@@ -274,7 +303,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         if scene == "live" {
             liveController = LiveCaptureController(root: content, window: window, tokens: tokens,
                 historyRoot: options.historyRoot, settingsPath: options.settingsFile,
-                miniPreviews: miniPreviews, initialSelectionID: previewSelectionID) { [weak self] in
+                miniPreviews: miniPreviews, miniPreviewActions: miniPreviewActions,
+                initialSelectionID: previewSelectionID) { [weak self] in
                     self?.scene = "preferences"; self?.render()
                 }
             previewSelectionID = nil

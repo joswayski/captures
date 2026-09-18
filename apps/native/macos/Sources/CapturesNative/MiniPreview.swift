@@ -20,18 +20,19 @@ final class MiniPreviewView: NSView {
     var dismissAction: () -> Void
     override var isFlipped: Bool { true }
 
-    init(frame: NSRect, artifactID: String, image: NSImage, tokens: Tokens,
+    init(geometry: CapturesPreviewGeometry, artifactID: String, image: NSImage, tokens: Tokens,
          copy: @escaping () -> Void, save: @escaping () -> Void,
          open: @escaping () -> Void, dismiss: @escaping () -> Void) {
         self.artifactID = artifactID; self.tokens = tokens
         copyAction = copy; saveAction = save; openAction = open; dismissAction = dismiss
+        let frame = NSRect(x: 0, y: 0, width: geometry.width, height: geometry.height)
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = tokens.color("glass-strong").cgColor
         layer?.cornerRadius = tokens.number("r-xl")
         layer?.borderWidth = 1; layer?.borderColor = tokens.color("glass-border").cgColor
 
-        let padding: CGFloat = 28, cardHeight: CGFloat = 160
+        let padding = CGFloat(geometry.padding), cardHeight = CGFloat(geometry.card_height)
         imageView.frame = NSRect(x: padding, y: padding, width: frame.width - padding * 2,
                                  height: cardHeight)
         imageView.image = image; imageView.imageScaling = .scaleProportionallyUpOrDown
@@ -50,9 +51,14 @@ final class MiniPreviewView: NSView {
 
         let actions: [(String, () -> Void)] = [("Copy", copy), ("Save", save),
             ("Open", open), ("Dismiss", dismiss)]
+        let buttonHeight = tokens.number("h-md")
+        let actionY = padding + cardHeight
+            + (CGFloat(geometry.control_gutter) - buttonHeight) / 2
+        let actionWidth = (frame.width - padding * 2 - 3 * tokens.number("s-2")) / 4
         for (index, action) in actions.enumerated() {
             let button = CaptureButton(action.0,
-                frame: NSRect(x: padding + CGFloat(index) * 72, y: 194, width: 64, height: 34),
+                frame: NSRect(x: padding + CGFloat(index) * (actionWidth + tokens.number("s-2")),
+                    y: actionY, width: actionWidth, height: buttonHeight),
                 tokens: tokens, glass: true, action: action.1)
             addSubview(button)
         }
@@ -71,11 +77,12 @@ final class MiniPreviewPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
-    init(frame: NSRect, artifactID: String, image: NSImage, tokens: Tokens,
+    init(frame: NSRect, geometry: CapturesPreviewGeometry,
+         artifactID: String, image: NSImage, tokens: Tokens,
          copy: @escaping () -> Void, save: @escaping () -> Void,
          open: @escaping () -> Void, dismiss: @escaping () -> Void) {
-        previewView = MiniPreviewView(frame: NSRect(origin: .zero, size: frame.size),
-            artifactID: artifactID, image: image, tokens: tokens,
+        previewView = MiniPreviewView(geometry: geometry, artifactID: artifactID,
+            image: image, tokens: tokens,
             copy: copy, save: save, open: open, dismiss: dismiss)
         super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
@@ -101,6 +108,7 @@ final class MiniPreviewController {
     private var settings = MiniPreviewSettings(enabled: false, placement: "bottom_right",
                                                includeInCaptures: false)
     private var screenID: String?
+    private var pendingArtifactID: String?
     private var decodeGeneration = 0
     var copyArtifact: ArtifactAction = { _ in }
     var saveArtifact: ArtifactAction = { _ in }
@@ -119,6 +127,8 @@ final class MiniPreviewController {
         precondition(Thread.isMainThread)
         self.settings = settings
         guard let generation = policy.beginCapture() else { return nil }
+        decodeGeneration += 1
+        pendingArtifactID = nil
         policy.suppressCaptureUI(true)
         updateVisibility()
         return generation
@@ -138,6 +148,7 @@ final class MiniPreviewController {
         guard let generation, policy.wait(generation: generation, artifact: artifact.id) else {
             restoreCapture(generation: generation); return
         }
+        pendingArtifactID = artifact.id
         policy.suppressCaptureUI(false)
         decodeGeneration += 1
         let decode = decodeGeneration
@@ -149,11 +160,13 @@ final class MiniPreviewController {
                 switch result {
                 case .success(let image):
                     guard self.policy.ready(artifact: artifact.id) else { return }
+                    self.pendingArtifactID = nil
                     self.artifact = artifact
                     self.makePanel(image: image)
                     self.updateVisibility()
                 case .failure:
                     _ = self.policy.stopWaiting()
+                    self.pendingArtifactID = nil
                     self.updateVisibility()
                 }
             }
@@ -168,6 +181,12 @@ final class MiniPreviewController {
 
     func reconcileHistory(ids: Set<String>) {
         precondition(Thread.isMainThread)
+        if let pendingArtifactID, !ids.contains(pendingArtifactID) {
+            decodeGeneration += 1
+            self.pendingArtifactID = nil
+            _ = policy.stopWaiting()
+            updateVisibility()
+        }
         if let artifact, !ids.contains(artifact.id) { dismiss() }
     }
 
@@ -180,7 +199,7 @@ final class MiniPreviewController {
         precondition(Thread.isMainThread)
         decodeGeneration += 1
         _ = policy.stopWaiting()
-        artifact = nil; screenID = nil
+        artifact = nil; pendingArtifactID = nil; screenID = nil
         panel?.close(); panel = nil
     }
 
@@ -188,9 +207,13 @@ final class MiniPreviewController {
 
     private func makePanel(image: NSImage) {
         panel?.close(); panel = nil
-        guard let artifact, let screen = targetScreen() else { return }
-        let size = NSSize(width: 340, height: 240)
-        let next = MiniPreviewPanel(frame: NSRect(origin: .zero, size: size),
+        guard let artifact, let screen = targetScreen(),
+              let monitor = Self.monitor(for: screen),
+              let geometry = NativePreviewLayout.geometry(monitor: monitor, count: 1,
+                  placement: settings.placement) else { return }
+        let frame = Self.appKitFrame(geometry: geometry, monitor: monitor,
+                                     screenFrame: screen.frame)
+        let next = MiniPreviewPanel(frame: frame, geometry: geometry,
             artifactID: artifact.id, image: image, tokens: tokens,
             copy: { [weak self] in self?.perform(\.copyArtifact) },
             save: { [weak self] in self?.perform(\.saveArtifact) },
@@ -198,7 +221,6 @@ final class MiniPreviewController {
             dismiss: { [weak self] in self?.dismiss() })
         next.sharingType = settings.includeInCaptures ? .readOnly : .none
         panel = next
-        position(panel: next, on: screen)
     }
 
     private func perform(_ action: KeyPath<MiniPreviewController, ArtifactAction>) {
@@ -273,5 +295,66 @@ final class MiniPreviewController {
                   [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
         else { throw AppBridgeError.invalidResponse }
         return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+    }
+}
+
+/// Copy/save jobs outlive the workspace scene so the nonactivating preview
+/// remains useful while Preferences owns the root window.
+final class MiniPreviewActions {
+    private let transport: AppTransport
+    private let loadPreferences: () throws -> CapturePreferences
+    private weak var previews: MiniPreviewController?
+    private var historyRoot: String?
+
+    init(settingsPath: String?, transport: AppTransport = AppBridge(),
+         loadPreferences: (() throws -> CapturePreferences)? = nil) {
+        self.transport = transport
+        self.loadPreferences = loadPreferences ?? { try CapturePreferences.load(path: settingsPath) }
+    }
+
+    func bind(previews: MiniPreviewController) { self.previews = previews }
+    func configure(historyRoot: String) { self.historyRoot = historyRoot }
+
+    func copy(_ artifact: CaptureArtifact) {
+        previews?.setStatus("Copying…", for: artifact.id)
+        LiveCaptureController.queue.async { [weak self] in
+            let result = Result { try Data(contentsOf: URL(fileURLWithPath: artifact.imagePath)) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success(let png):
+                    let pasteboard = NSPasteboard.general; pasteboard.clearContents()
+                    self.previews?.setStatus(pasteboard.setData(png, forType: .png)
+                        ? "Copied" : "Copy failed", for: artifact.id)
+                case .failure:
+                    self.previews?.setStatus("Copy failed", for: artifact.id)
+                }
+            }
+        }
+    }
+
+    func save(_ artifact: CaptureArtifact) {
+        guard let historyRoot else {
+            previews?.setStatus("Save unavailable", for: artifact.id); return
+        }
+        previews?.setStatus("Saving…", for: artifact.id)
+        LiveCaptureController.queue.async { [weak self] in
+            guard let self else { return }
+            let result = Result { () throws -> Void in
+                let preferences = try self.loadPreferences()
+                let response = try self.transport.request(["operation": "save_screenshot",
+                    "root": historyRoot, "id": artifact.id,
+                    "directory": preferences.directory, "format": preferences.format])
+                guard response["path"] as? String != nil else { throw AppBridgeError.invalidResponse }
+            }
+            DispatchQueue.main.async { [weak self] in
+                let status: String
+                switch result {
+                case .success: status = "Saved"
+                case .failure: status = "Save failed"
+                }
+                self?.previews?.setStatus(status, for: artifact.id)
+            }
+        }
     }
 }
