@@ -755,6 +755,7 @@ name = "captures-macos-window"
 version = "0.1.0"
 dependencies = [
  "block2",
+ "captures-capture",
  "dispatch2",
  "libc",
  "objc2",

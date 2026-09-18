@@ -21,7 +21,8 @@ pub use model::{CaptureMode, DisplayDescriptor, DisplayFrame, WindowDescriptor};
 pub use window::macos_window_is_capture_overlay;
 pub use window::{
     RECORDING_REGION_INDICATOR_TITLE, WindowPickRole, WindowSelectionTargets, capture_buffer_scale,
-    classify_windows_for_display, image_is_effectively_blank, mask_macos_window_corners,
+    classify_windows_for_display, image_is_effectively_blank,
+    macos_window_corner_radius_for_major_version, mask_macos_window_corners,
     refine_window_chrome_from_snapshot, resolve_window_capture, window_display_crop_is_safe,
     window_is_capturable, window_physical_rect, window_pick_role,
     windows_window_is_capture_overlay,

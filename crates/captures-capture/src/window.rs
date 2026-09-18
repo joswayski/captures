@@ -10,6 +10,12 @@ use crate::{
 const WINDOW_CORNER_MASK_SAMPLES_PER_AXIS: u32 = 4;
 pub const RECORDING_REGION_INDICATOR_TITLE: &str = "Captures Recording Region";
 
+/// Standard macOS window-corner fallback in points. Hosts supply the OS version;
+/// snapshot-derived radii still take precedence when available.
+pub fn macos_window_corner_radius_for_major_version(major_version: i64) -> f64 {
+    if major_version >= 26 { 25.0 } else { 10.0 }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WindowPickRole {
     Capturable,
@@ -631,6 +637,16 @@ pub fn mask_macos_window_corners(
 mod tests {
     use super::*;
     use image::Rgba;
+
+    #[test]
+    fn macos_window_radius_changes_at_liquid_glass_boundary() {
+        for (version, radius) in [(15, 10.), (25, 10.), (26, 25.), (27, 25.)] {
+            assert_eq!(
+                macos_window_corner_radius_for_major_version(version),
+                radius
+            );
+        }
+    }
 
     fn display(x: i32, y: i32, width: u32, height: u32, scale_factor: f64) -> DisplayDescriptor {
         DisplayDescriptor {

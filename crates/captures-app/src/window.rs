@@ -3,6 +3,7 @@
 use crate::{
     Artifact, Error, capture_flow, persist_screenshot,
     region::{ensure_active, validate_display},
+    selection::Point,
 };
 use captures_capture::{
     CaptureError, CaptureMode, CaptureResult, DisplayDescriptor, DisplayFrame, PointerCursor,
@@ -15,6 +16,8 @@ use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+pub use captures_capture::macos_window_corner_radius_for_major_version;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Target {
@@ -23,6 +26,44 @@ pub enum Target {
     Window {
         id: String,
     },
+}
+
+/// Shipping picker policy in overlay coordinates. The frontmost shell strip or
+/// an empty desktop hit means display capture (`None`). Equal z-order preserves
+/// list order, with windows before shell chrome, and bounds have half-open edges.
+/// This scans without allocating or sorting on pointer movement.
+pub fn target_index_at_point(
+    windows: &[WindowDescriptor],
+    shell_chrome: &[WindowDescriptor],
+    point: Point,
+    origin: Point,
+    scale: f64,
+) -> Option<usize> {
+    let scale = if scale > 0. { scale } else { 1. };
+    let mut front_z = None;
+    let mut target = None;
+    for (index, window) in windows
+        .iter()
+        .enumerate()
+        .map(|(i, w)| (Some(i), w))
+        .chain(shell_chrome.iter().map(|w| (None, w)))
+    {
+        if window.width == 0 || window.height == 0 {
+            continue;
+        }
+        let left = (f64::from(window.x) - origin.x) / scale;
+        let top = (f64::from(window.y) - origin.y) / scale;
+        if point.x >= left
+            && point.y >= top
+            && point.x < left + f64::from(window.width) / scale
+            && point.y < top + f64::from(window.height) / scale
+            && front_z.is_none_or(|z| window.z_order > z)
+        {
+            front_z = Some(window.z_order);
+            target = index;
+        }
+    }
+    target
 }
 
 pub struct WindowSession {
@@ -99,6 +140,25 @@ impl WindowSession {
     }
     pub fn shell_chrome(&self) -> &[WindowDescriptor] {
         &self.targets.shell_chrome
+    }
+
+    /// Point is display-local overlay/DIP space. The result indexes `windows()`;
+    /// None means the display. Frozen and live selectors use the prepared list.
+    pub fn hit_test(&self, point: Point) -> Option<usize> {
+        target_index_at_point(
+            self.windows(),
+            self.shell_chrome(),
+            point,
+            Point {
+                x: f64::from(self.display.x),
+                y: f64::from(self.display.y),
+            },
+            if DisplayDescriptor::reports_physical_geometry() {
+                self.display.scale_factor.max(1.)
+            } else {
+                1.
+            },
+        )
     }
 
     /// Borrowed RGBA8; retain the session until every provider/worker is finished.
@@ -627,5 +687,62 @@ mod tests {
             Err(Error::Cancelled)
         ));
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn hit_testing_matches_shipping_window_and_shell_vectors() {
+        #[derive(Deserialize)]
+        struct Case {
+            windows: Vec<WindowDescriptor>,
+            shell: Vec<WindowDescriptor>,
+            point: Point,
+            origin: Point,
+            scale: f64,
+            expected: Option<usize>,
+        }
+        let cases: Vec<Case> =
+            serde_json::from_str(include_str!("../tests/window-hit-golden.json")).unwrap();
+        for (index, case) in cases.iter().enumerate() {
+            assert_eq!(
+                target_index_at_point(
+                    &case.windows,
+                    &case.shell,
+                    case.point,
+                    case.origin,
+                    case.scale
+                ),
+                case.expected,
+                "shipping hit vector {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn session_hit_coordinates_follow_the_platform_display_contract() {
+        let mut session = session(false);
+        session.display.scale_factor = 2.;
+        // The window starts 20 native units from the display's negative origin.
+        let factor = if cfg!(target_os = "windows") { 2. } else { 1. };
+        assert_eq!(
+            session.hit_test(Point {
+                x: 20. / factor,
+                y: 20. / factor
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            session.hit_test(Point {
+                x: 90. / factor,
+                y: 20. / factor
+            }),
+            None
+        );
+        assert_eq!(
+            session.hit_test(Point {
+                x: 19.99 / factor,
+                y: 20. / factor
+            }),
+            None
+        );
     }
 }
