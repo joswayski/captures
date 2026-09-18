@@ -27,6 +27,7 @@ use std::{
 };
 
 use block2::RcBlock;
+use captures_capture::macos_window_corner_radius_for_major_version as window_corner_radius_for_major_version;
 use dispatch2::DispatchQueue;
 use objc2::{
     AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class,
@@ -97,9 +98,6 @@ mod symbolic_hotkeys;
 
 pub use symbolic_hotkeys::disable_symbolic_hotkeys;
 
-const LEGACY_WINDOW_CORNER_RADIUS_POINTS: f64 = 10.0;
-const LIQUID_GLASS_WINDOW_CORNER_RADIUS_POINTS: f64 = 25.0;
-const LIQUID_GLASS_MACOS_MAJOR_VERSION: isize = 26;
 /// Imperceptible alpha that still keeps WKWebView compositing. Fully transparent
 /// windows (`0.0`) can suspend painting and flash black on the first opaque frame.
 const WINDOW_REVEAL_PRIME_ALPHA: f64 = 0.01;
@@ -1368,15 +1366,7 @@ pub fn thumbnail_is_presented() -> bool {
 /// edge instead of applying one radius to every macOS release.
 pub fn standard_window_corner_radius_points() -> f64 {
     let version = NSProcessInfo::processInfo().operatingSystemVersion();
-    window_corner_radius_for_major_version(version.majorVersion)
-}
-
-fn window_corner_radius_for_major_version(major_version: isize) -> f64 {
-    if major_version >= LIQUID_GLASS_MACOS_MAJOR_VERSION {
-        LIQUID_GLASS_WINDOW_CORNER_RADIUS_POINTS
-    } else {
-        LEGACY_WINDOW_CORNER_RADIUS_POINTS
-    }
+    window_corner_radius_for_major_version(version.majorVersion as i64)
 }
 
 /// One step above the status items so capture surfaces cover the menu bar

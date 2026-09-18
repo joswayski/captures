@@ -1,5 +1,6 @@
 //! Versioned opaque window sessions; the borrowed pixel layout matches regions.
 use super::region::{RegionPixels, response, text};
+use captures_app::selection::Point;
 use captures_app::window::{Target, WindowSession};
 use serde_json::json;
 use std::{
@@ -8,6 +9,12 @@ use std::{
     path::Path,
     ptr,
 };
+
+/// Allocation-free shared macOS radius fallback; the host discovers its OS version.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_macos_window_corner_radius_v1(major_version: i64) -> f64 {
+    captures_app::window::macos_window_corner_radius_for_major_version(major_version)
+}
 
 /// Prepare on a worker after hiding capture windows. Retain the event-loop flow.
 /// The response contains display/windows/shell_chrome descriptors, never pixels.
@@ -89,6 +96,32 @@ pub unsafe extern "C" fn captures_window_pixels_v1(
     true
 }
 
+/// Allocation-free pointer hit testing in display-local overlay coordinates.
+/// -1 selects the display; nonnegative values index the prepared windows array.
+/// False for nulls/nonfinite points leaves output unchanged.
+///
+/// # Safety
+/// A non-null session is retained throughout this call. Non-null output is
+/// aligned, writable i64 storage. No references or input storage are retained.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_window_hit_test_v1(
+    session: *const WindowSession,
+    point: Point,
+    output: *mut i64,
+) -> bool {
+    if session.is_null() || output.is_null() || !point.x.is_finite() || !point.y.is_finite() {
+        return false;
+    }
+    // SAFETY: caller retains the immutable session and aligned output storage.
+    let index = unsafe { &*session }
+        .hit_test(point)
+        .map_or(-1, |index| index as i64);
+    unsafe {
+        output.write(index);
+    }
+    true
+}
+
 /// Capture/save after hiding the selector/countdown. Target JSON is either
 /// {"kind":"window","id":"…"} or {"kind":"display"}. Only listed window IDs
 /// are accepted. A countdown refreshes source geometry/pixels/cursor.
@@ -143,6 +176,13 @@ pub unsafe extern "C" fn captures_window_free_v1(session: *mut WindowSession) {
 mod tests {
     use super::*;
     use std::ffi::{CStr, CString};
+
+    #[test]
+    fn macos_radius_abi_preserves_the_version_boundary() {
+        assert_eq!(captures_macos_window_corner_radius_v1(25), 10.);
+        assert_eq!(captures_macos_window_corner_radius_v1(26), 25.);
+    }
+
     fn take(pointer: *mut c_char) -> serde_json::Value {
         assert!(!pointer.is_null());
         // SAFETY: each tested response is an owned NUL-terminated allocation.
@@ -202,5 +242,17 @@ mod tests {
         unsafe {
             captures_window_free_v1(ptr::null_mut());
         }
+    }
+
+    #[test]
+    fn failed_hit_test_preserves_the_previous_target() {
+        let mut index = 37;
+        assert!(!unsafe {
+            captures_window_hit_test_v1(ptr::null(), Point { x: 13., y: 19. }, &mut index)
+        });
+        assert_eq!(index, 37);
+        assert!(!unsafe {
+            captures_window_hit_test_v1(ptr::null(), Point { x: 13., y: 19. }, ptr::null_mut())
+        });
     }
 }

@@ -241,6 +241,19 @@ on macOS, Windows and X11; real-desktop acceptance is unverified. Wayland window
 targeting remains unsupported. Shared-core tests and ABI compilation do not close
 the cross-platform capture gate or select a Windows/Linux renderer.
 
+The window session also owns pointer hit testing: native z-order, stable equal-
+level ordering, half-open edges, negative origins and Windows DIP conversion.
+Shell chrome and empty desktop hits select the display. The allocation-free C ABI
+returns a prepared-window index, not JSON on every pointer event. 120 differential
+vectors execute the shipping TypeScript picker; regenerate intentionally with
+`node scripts/native-window-hit.test.mjs --write`. The normal gate rejects stale
+fixtures. Hosts still own drawing, focus and confirmation.
+
+The macOS version-to-window-radius fallback also lives in `captures-capture`,
+shared by the shipping adapter and allocation-free native C ABI. AppKit supplies
+its OS major version; Rust owns the pre-26/26+ policy. Native hosts do not import
+the Tauri-dependent `captures-macos-window` adapter.
+
 The first [shared wgpu candidate](../apps/native/wgpu/README.md) uses egui/winit
 with retained image textures and event-driven immediate-mode UI, an additional
 approach to evaluate against the retained/native candidates below. It implements

@@ -55,6 +55,10 @@ char *captures_region_capture_v1(const CapturesRegionSession *session,
  * Separately finish the main-thread flow guard on success, failure and quit. */
 void captures_region_free_v1(CapturesRegionSession *session);
 
+/* Allocation-free macOS window-radius fallback in points. Pass the current OS
+ * major version from ProcessInfo. No OS access or session handle is required. */
+double captures_macos_window_corner_radius_v1(int64_t major_version);
+
 /* Window sessions share region-session ownership and pixel layout. Prepare on
  * a worker after hiding capture windows, retaining an event-loop flow guard.
  * fallback_corner_radius is the finite, nonnegative OS radius (0 outside macOS).
@@ -68,6 +72,12 @@ CapturesWindowSession *captures_window_prepare_v1(const char *display_id,
     double fallback_corner_radius, char **output);
 /* Same borrowed RGBA8 contract as captures_region_pixels_v1. */
 bool captures_window_pixels_v1(const CapturesWindowSession *session, CapturesWindowPixels *output);
+/* Allocation-free pointer path; point is display-local overlay/DIP coordinates.
+ * -1 means display, >=0 indexes prepare.windows. False for nulls/nonfinite points
+ * leaves output unchanged. Retain the session through this call; non-null output
+ * must be aligned writable int64_t storage. No pointer-event JSON is needed. */
+bool captures_window_hit_test_v1(const CapturesWindowSession *session,
+    CapturesSelectionPoint point, int64_t *output);
 /* target_json: {"kind":"window","id":"..."} or {"kind":"display"}.
  * Both strings are readable UTF-8/NUL-terminated for the call. Window IDs must
  * belong to the prepared picker. Display captures cover desktop/shell targets.
