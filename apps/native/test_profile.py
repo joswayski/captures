@@ -52,6 +52,8 @@ class ProfileTests(unittest.TestCase):
         self.assertNotIn(("preview", True, True), wgpu)
         self.assertIn(("editor", False, False), wgpu)
         self.assertIn(("editor", True, False), wgpu)
+        self.assertEqual(workloads_for("gtk"), wgpu)
+        self.assertEqual(workloads_for("dcomp"), wgpu + [("preview-floating", True, False)])
 
     def test_platform_validation(self):
         validate_renderer_platform("appkit", "Darwin")
@@ -61,6 +63,13 @@ class ProfileTests(unittest.TestCase):
             validate_renderer_platform("appkit", "Linux")
         with self.assertRaises(ValueError):
             validate_renderer_platform("wgpu", "Plan9")
+        for renderer, supported in (("dcomp", "Windows"), ("gtk", "Linux")):
+            validate_renderer_platform(renderer, supported)
+            for system in {"Windows", "Linux", "Darwin"} - {supported}:
+                with self.assertRaises(ValueError):
+                    validate_renderer_platform(renderer, system)
+        with self.assertRaises(ValueError):
+            validate_renderer_platform("typo", "Windows")
 
     def test_linux_counter_and_rss_units(self):
         files = {"/proc/42/stat": "42 (name with spaces) S " + " ".join(

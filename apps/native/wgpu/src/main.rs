@@ -1,5 +1,6 @@
 mod countdown;
 mod live;
+#[path = "../../common/options.rs"]
 mod options;
 mod preferences;
 mod tokens;

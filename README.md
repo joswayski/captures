@@ -179,7 +179,9 @@ platform-specific integrations for capture, recording, and media processing.
 A browser-free native replacement is planned for macOS, Windows, and Linux,
 developed feature by feature across platforms using shared Rust logic and the
 Captures design. Development workbenches include Swift/AppKit on macOS and an
-experimental Rust/wgpu renderer candidate for Windows/Linux. They are not
+experimental Rust/wgpu renderer candidate for Windows/Linux. A Windows
+[DirectComposition comparison](apps/native/dcomp/README.md) exercises custom-drawn
+screens and compositor animation before renderer selection. These are not
 replacement downloads. An opt-in native capture workspace connects full-display
 PNG capture, local screenshot history, copy, export, and deletion to
 shared Rust engines. It uses separate development data; Wayland capture is gated

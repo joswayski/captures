@@ -1,6 +1,6 @@
 use std::{path::PathBuf, time::Duration};
 
-pub const USAGE: &str = "Captures wgpu native host\n\
+pub const USAGE: &str = "Captures native workbench\n\
   --live [--history-root PATH]\n\
   --scene preferences|history|hud|preview|editor|countdown|idle\n\
   --appearance light|dark|system --theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono\n\

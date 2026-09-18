@@ -8,8 +8,10 @@ Fixture launches do not request screen access. The opt-in capture workspace belo
 connects the existing Rust capture engine in process. The
 [shared wgpu candidate](wgpu/README.md) adds Windows/Linux fixture windows and
 cross-platform resource diagnostics; it is not a production renderer selection.
-Its fade/settle probe is not equivalent to AppKit dust. DirectComposition/GTK
-comparators and full parity gates remain open. The instructions below cover
+The [DirectComposition comparison](dcomp/README.md) adds a Windows retained
+composition candidate. Neither its opacity probe nor wgpu's fade/settle probe
+is equivalent to AppKit dust. GTK comparison and full parity gates remain open.
+The instructions below cover
 AppKit; the candidate README has Windows/Linux build and test commands.
 
 ## Persisted native Preferences
