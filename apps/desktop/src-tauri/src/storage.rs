@@ -1148,10 +1148,9 @@ fn add_row_error(row: &mut [[i16; 4]], x: usize, quant_error: [i16; 4], numerato
 }
 
 fn rgba_at(image: &RgbaImage, index: u32) -> [u8; 4] {
-    let width = image.width().max(1);
-    let x = index % width;
-    let y = index / width;
-    image.get_pixel(x, y).0
+    // Quantizer members are already row-major indices into packed RGBA8 pixels.
+    let (pixels, _) = image.as_raw().as_chunks::<4>();
+    pixels[index as usize]
 }
 
 /// Tag PNG output as sRGB with matching gAMA/cHRM. Untagged PNGs are treated as
