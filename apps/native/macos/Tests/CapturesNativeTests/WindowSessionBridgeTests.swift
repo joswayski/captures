@@ -29,4 +29,18 @@ final class WindowSessionBridgeTests: XCTestCase {
         XCTAssertEqual(pixels.bytes_per_row, 44)
         XCTAssertNil(pixels.data)
     }
+
+    func testHitTestFailurePreservesOutputAndRadiusPolicyCrossesTheABI() {
+        var index: Int64 = 73
+        XCTAssertFalse(captures_window_hit_test_v1(nil,
+            CapturesSelectionPoint(x: 10, y: 20), &index))
+        XCTAssertEqual(index, 73)
+        XCTAssertFalse(captures_window_hit_test_v1(nil,
+            CapturesSelectionPoint(x: .nan, y: 20), &index))
+        XCTAssertEqual(index, 73)
+
+        XCTAssertEqual(captures_macos_window_corner_radius_v1(25), 10)
+        XCTAssertEqual(captures_macos_window_corner_radius_v1(26), 25)
+        XCTAssertEqual(captures_macos_window_corner_radius_v1(Int64.max), 25)
+    }
 }

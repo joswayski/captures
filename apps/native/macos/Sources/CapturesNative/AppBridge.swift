@@ -141,6 +141,94 @@ final class NativeRegionSession {
     }
 }
 
+/// Immutable Rust window ownership. As with region sessions, any frozen-image
+/// provider retains the session and the session never retains its provider.
+final class NativeWindowSession {
+    private let handle: OpaquePointer
+    let display: WindowSelectionDisplay
+    let windows: [WindowSelectionTarget]
+
+    private init(handle: OpaquePointer, display: WindowSelectionDisplay,
+                 windows: [WindowSelectionTarget]) {
+        self.handle = handle; self.display = display; self.windows = windows
+    }
+    deinit { captures_window_free_v1(handle) }
+
+    static func prepare(display id: String, generation: UInt64,
+                        preferences: CapturePreferences) throws -> NativeWindowSession {
+        let majorVersion = Int64(ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
+        let fallbackRadius = captures_macos_window_corner_radius_v1(majorVersion)
+        var response: UnsafeMutablePointer<CChar>?
+        let handle = id.withCString { captures_window_prepare_v1($0, generation,
+            preferences.freezeScreen, preferences.includeCursor, fallbackRadius, &response) }
+        defer { captures_settings_free_v1(response) }
+        do {
+            guard let response else { throw AppBridgeError.invalidResponse }
+            let result = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+            guard let handle,
+                  let displayValue = result["display"] as? [String: Any],
+                  let display = WindowSelectionDisplay(displayValue),
+                  let windowValues = result["windows"] as? [[String: Any]],
+                  let shellChrome = result["shell_chrome"] as? [[String: Any]]
+            else { throw AppBridgeError.invalidResponse }
+            let windows = windowValues.compactMap {
+                WindowSelectionTarget($0, display: display,
+                    fallbackCornerRadius: CGFloat(fallbackRadius))
+            }
+            guard windows.count == windowValues.count,
+                  shellChrome.allSatisfy({ WindowSelectionTarget($0, display: display,
+                      fallbackCornerRadius: CGFloat(fallbackRadius)) != nil })
+            else { throw AppBridgeError.invalidResponse }
+            return NativeWindowSession(handle: handle, display: display, windows: windows)
+        } catch { captures_window_free_v1(handle); throw error }
+    }
+
+    func image() throws -> CGImage? {
+        var pixels = CapturesWindowPixels()
+        guard captures_window_pixels_v1(handle, &pixels) else { return nil }
+        guard let data = pixels.data else { throw AppBridgeError.invalidResponse }
+        let retained = Unmanaged.passRetained(self)
+        guard let provider = CGDataProvider(dataInfo: retained.toOpaque(), data: data, size: pixels.length,
+            releaseData: { info, _, _ in
+                if let info { Unmanaged<NativeWindowSession>.fromOpaque(info).release() }
+            }) else { retained.release(); throw AppBridgeError.invalidResponse }
+        guard let image = CGImage(width: Int(pixels.width), height: Int(pixels.height),
+            bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: pixels.bytes_per_row,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+        else { throw AppBridgeError.invalidResponse }
+        return image
+    }
+
+    func hitTest(_ point: CapturesSelectionPoint) -> Int64? {
+        var index = Int64.min
+        return captures_window_hit_test_v1(handle, point, &index) ? index : nil
+    }
+
+    func capture(root: String, target: WindowSelectionChoice,
+                 afterCountdown: Bool) throws -> CaptureArtifact {
+        let targetValue: [String: Any]
+        switch target {
+        case .display: targetValue = ["kind": "display"]
+        case .window(_, let id): targetValue = ["kind": "window", "id": id]
+        }
+        let data = try JSONSerialization.data(withJSONObject: targetValue, options: [.sortedKeys])
+        let targetJSON = String(decoding: data, as: UTF8.self)
+        let response = root.withCString { rootPointer in
+            targetJSON.withCString { targetPointer in
+                captures_window_capture_v1(handle, rootPointer, targetPointer, afterCountdown)
+            }
+        }
+        guard let response else { throw AppBridgeError.invalidResponse }
+        defer { captures_settings_free_v1(response) }
+        let result = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+        guard let value = result["artifact"] as? [String: Any], let artifact = CaptureArtifact(value)
+        else { throw AppBridgeError.invalidResponse }
+        return artifact
+    }
+}
+
 struct DisplayItem {
     let id: String
     let title: String

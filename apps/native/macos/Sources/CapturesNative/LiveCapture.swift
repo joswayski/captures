@@ -12,6 +12,12 @@ private final class CaptureHistoryRow: NSTableRowView {
     override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
 }
 
+private enum StillCaptureKind: Equatable {
+    case display
+    case region
+    case window
+}
+
 final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     private let root: Surface
     private let window: NSWindow
@@ -33,9 +39,13 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var countdownPanel: ScreenshotCountdownPanel?
     private var snapshotPending = false
     private var preparingRegion = false
+    private var preparingWindow = false
     private var regionSession: NativeRegionSession?
     private var regionPanel: RegionSelectionPanel?
     private var regionRect: CapturesSelectionRect?
+    private var windowSession: NativeWindowSession?
+    private var windowPanel: WindowSelectionPanel?
+    private var windowTarget: WindowSelectionChoice?
     private var displayMenu: ClosurePopUpButton!
     private var table: NSTableView!
     private var preview: NSImageView!
@@ -43,6 +53,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var detail: NSTextField!
     private var captureButton: CaptureButton!
     private var regionButton: CaptureButton!
+    private var windowButton: CaptureButton!
     private var saveButton: CaptureButton!
     private var copyButton: CaptureButton!
     private var revealButton: CaptureButton!
@@ -58,18 +69,19 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private func build() {
         title("Capture workspace", frame: NSRect(x: 28, y: 22, width: 360, height: 30), size: 21, weight: .semibold)
-        title("Region and display capture · local native history", frame: NSRect(x: 28, y: 52, width: 450, height: 20), muted: true)
+        title("Region, window and display capture · local native history", frame: NSRect(x: 28, y: 52, width: 480, height: 20), muted: true)
         button("Preferences", frame: NSRect(x: 846, y: 24, width: 126, height: 34), action: showPreferences)
 
-        displayMenu = ClosurePopUpButton(frame: NSRect(x: 28, y: 90, width: 360, height: 34), pullsDown: false)
+        displayMenu = ClosurePopUpButton(frame: NSRect(x: 28, y: 90, width: 300, height: 34), pullsDown: false)
         displayMenu.tokens = tokens; displayMenu.setAccessibilityLabel("Display to capture")
         displayMenu.change = { _ in }; displayMenu.target = displayMenu; displayMenu.action = #selector(ClosurePopUpButton.selectedValue)
         root.addSubview(displayMenu)
-        button("Refresh", frame: NSRect(x: 400, y: 90, width: 90, height: 34)) { [weak self] in self?.loadHistory(); self?.loadDisplays() }
-        button("Request screen access", frame: NSRect(x: 502, y: 90, width: 176, height: 34)) { [weak self] in self?.requestPermission() }
-        captureButton = button("Capture display", frame: NSRect(x: 690, y: 90, width: 136, height: 34)) { [weak self] in self?.capture() }
+        button("Refresh", frame: NSRect(x: 340, y: 90, width: 90, height: 34)) { [weak self] in self?.loadHistory(); self?.loadDisplays() }
+        button("Screen access", frame: NSRect(x: 442, y: 90, width: 148, height: 34)) { [weak self] in self?.requestPermission() }
+        captureButton = button("Capture display", frame: NSRect(x: 602, y: 90, width: 116, height: 34)) { [weak self] in self?.capture(.display) }
         captureButton.selected = true
-        regionButton = button("Capture region", frame: NSRect(x: 838, y: 90, width: 134, height: 34)) { [weak self] in self?.capture(region: true) }
+        regionButton = button("Capture region", frame: NSRect(x: 730, y: 90, width: 116, height: 34)) { [weak self] in self?.capture(.region) }
+        windowButton = button("Capture window", frame: NSRect(x: 858, y: 90, width: 114, height: 34)) { [weak self] in self?.capture(.window) }
 
         let scroll = NSScrollView(frame: NSRect(x: 28, y: 148, width: 320, height: 472))
         scroll.hasVerticalScroller = true; scroll.drawsBackground = false
@@ -91,7 +103,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         revealButton = button("Reveal export", frame: NSRect(x: 628, y: 594, width: 120, height: 34)) { [weak self] in self?.reveal() }
         deleteButton = button("Delete from history", frame: NSRect(x: 758, y: 594, width: 166, height: 34)) { [weak self] in self?.confirmDelete() }
         status = title("Loading capture history…", frame: NSRect(x: 28, y: 642, width: 944, height: 24), muted: true)
-        let limits = title("Region/display captures use countdown, cursor, copy and save preferences. Regions also use freeze and auto-start. History keeps a lossless PNG. Window capture, recording, editor and mini previews are not available yet.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
+        let limits = title("Still captures use countdown, cursor, copy and save preferences. Region and window selection also use freeze and auto-start. History keeps a lossless PNG. Recording, editor and mini previews are not available yet.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
         limits.maximumNumberOfLines = 2; updateActions()
     }
 
@@ -164,7 +176,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }
     }
 
-    private func capture(region: Bool = false) {
+    private func capture(_ kind: StillCaptureKind) {
         let index = displayMenu.indexOfSelectedItem
         guard !capturing, displays.indices.contains(index), !historyRoot.isEmpty else { return }
         let display = displays[index]; setBusy(true, message: "Preparing capture…")
@@ -175,12 +187,14 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 guard let screen = NSScreen.screens.first(where: {
                     ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.stringValue == display.id
                 }) else { throw AppBridgeError.backend("The selected display is no longer available.") }
-                let response = try AppBridge.flow(["operation": "begin", "seconds": region ? 0 : preferences.countdown])
+                let selecting = kind != .display
+                let response = try AppBridge.flow(["operation": "begin", "seconds": selecting ? 0 : preferences.countdown])
                 guard let generation = response["generation"] as? NSNumber else { throw AppBridgeError.invalidResponse }
                 self.flowGeneration = generation.uint64Value; self.snapshotPending = false
-                self.preparingRegion = region
+                self.preparingRegion = kind == .region
+                self.preparingWindow = kind == .window
                 self.window.orderOut(nil)
-                if !region && preferences.countdown > 0 {
+                if kind == .display && preferences.countdown > 0 {
                     let panel = ScreenshotCountdownPanel(screen: screen, tokens: self.tokens, remaining: preferences.countdown)
                     self.countdownPanel = panel; panel.orderFrontRegardless()
                 }
@@ -189,7 +203,11 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 let timer = Timer(timeInterval: 0.1, repeats: true) { _ in tick() }
                 self.countdownTimer = timer; RunLoop.main.add(timer, forMode: .common)
                 tick()
-                if region { self.prepareRegion(display: display, screen: screen, preferences: preferences, generation: generation.uint64Value) }
+                if kind == .region {
+                    self.prepareRegion(display: display, screen: screen, preferences: preferences, generation: generation.uint64Value)
+                } else if kind == .window {
+                    self.prepareWindow(display: display, screen: screen, preferences: preferences, generation: generation.uint64Value)
+                }
             } catch {
                 self.finishCapture(); self.showError("Couldn’t start capture", error)
             }
@@ -238,6 +256,58 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }
     }
 
+    private func prepareWindow(display: DisplayItem, screen: NSScreen,
+                               preferences: CapturePreferences, generation: UInt64) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, self.flowGeneration == generation else { return }
+            self.run({
+                let session = try NativeWindowSession.prepare(display: display.id,
+                    generation: generation, preferences: preferences)
+                return (session, try session.image())
+            }) { [weak self] result in
+                guard let self, self.flowGeneration == generation else { return }
+                do {
+                    let state = try AppBridge.flow(["operation": "poll", "generation": generation])
+                    guard state["current"] as? Bool == true else {
+                        self.finishCapture(); self.status.stringValue = "Capture cancelled."; return
+                    }
+                    let (session, image) = try result.get()
+                    guard session.display.size == screen.frame.size else {
+                        throw AppBridgeError.backend("The selected display changed. Select the window again.")
+                    }
+                    self.windowSession = session
+                    let panel = WindowSelectionPanel(screen: screen, image: image,
+                        targets: session.windows, tokens: self.tokens,
+                        autoStart: preferences.autoStart,
+                        hitTest: { [weak session] point in session?.hitTest(point) },
+                        confirm: { [weak self] target in
+                            guard let self, self.flowGeneration == generation, self.windowPanel != nil else { return }
+                            do {
+                                self.windowTarget = target
+                                self.windowPanel?.close(); self.windowPanel = nil
+                                _ = try AppBridge.flow(["operation": "start_countdown",
+                                    "generation": generation, "seconds": preferences.countdown])
+                                if preferences.countdown > 0 {
+                                    let countdown = ScreenshotCountdownPanel(screen: screen,
+                                        tokens: self.tokens, remaining: preferences.countdown)
+                                    self.countdownPanel = countdown; countdown.orderFrontRegardless()
+                                }
+                                self.tickCountdown(display: display, preferences: preferences,
+                                    generation: generation)
+                            } catch { self.finishCapture(); self.showError("Capture failed", error) }
+                        }, cancel: { [weak self] in
+                            guard let self, self.flowGeneration == generation,
+                                  self.windowPanel != nil else { return }
+                            self.finishCapture(); self.status.stringValue = "Capture cancelled."
+                        })
+                    self.windowPanel = panel; self.preparingWindow = false
+                    panel.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+                    panel.updatePointerLocation()
+                } catch { self.finishCapture(); self.showError("Couldn’t prepare window selection", error) }
+            }
+        }
+    }
+
     private func tickCountdown(display: DisplayItem, preferences: CapturePreferences, generation: UInt64) {
         guard flowGeneration == generation else { return }
         do {
@@ -245,15 +315,21 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             guard state["current"] as? Bool == true else {
                 finishCapture(); status.stringValue = "Capture cancelled (Escape or desktop session unavailable)."; return
             }
-            guard !preparingRegion, regionPanel == nil else { return }
+            guard !preparingRegion, !preparingWindow, regionPanel == nil, windowPanel == nil else { return }
             guard let remaining = state["remaining"] as? Int else { throw AppBridgeError.invalidResponse }
             countdownPanel?.countdownContent.setRemaining(remaining)
             guard remaining == 0, !snapshotPending else { return }
             snapshotPending = true; countdownPanel?.close(); countdownPanel = nil
-            status.stringValue = regionSession == nil ? "Capturing display…" : "Capturing region…"
+            if windowSession != nil { status.stringValue = "Capturing window…" }
+            else if regionSession != nil { status.stringValue = "Capturing region…" }
+            else { status.stringValue = "Capturing display…" }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 guard let self, self.flowGeneration == generation else { return }
-                self.run({ [transport, historyRoot, regionSession, regionRect] in
+                self.run({ [transport, historyRoot, regionSession, regionRect, windowSession, windowTarget] in
+                    if let windowSession, let windowTarget {
+                        return try windowSession.capture(root: historyRoot, target: windowTarget,
+                            afterCountdown: preferences.countdown > 0)
+                    }
                     if let regionSession, let regionRect {
                         return try regionSession.capture(root: historyRoot, rect: regionRect, afterCountdown: preferences.countdown > 0)
                     }
@@ -277,7 +353,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         countdownTimer?.invalidate(); countdownTimer = nil
         countdownPanel?.close(); countdownPanel = nil
         regionPanel?.close(); regionPanel = nil
+        windowPanel?.close(); windowPanel = nil
         regionSession = nil; regionRect = nil; preparingRegion = false
+        windowSession = nil; windowTarget = nil; preparingWindow = false
         if let generation = flowGeneration {
             _ = try? AppBridge.flow(["operation": "finish", "generation": generation])
             flowGeneration = nil
@@ -294,6 +372,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         deleteButton?.isEnabled = selected && !capturing; revealButton?.isEnabled = selected && selectedIndex.flatMap { artifacts[$0].savedPath } != nil
         captureButton?.isEnabled = !capturing && !displays.isEmpty && !historyRoot.isEmpty
         regionButton?.isEnabled = !capturing && !displays.isEmpty && !historyRoot.isEmpty
+        windowButton?.isEnabled = !capturing && !displays.isEmpty && !historyRoot.isEmpty
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { artifacts.count }
