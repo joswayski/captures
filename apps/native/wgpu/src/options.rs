@@ -2,7 +2,7 @@ use std::{path::PathBuf, time::Duration};
 
 pub const USAGE: &str = "Captures wgpu native host\n\
   --live [--history-root PATH]\n\
-  --scene preferences|history|hud|preview|editor|countdown|idle\n\
+  --scene preferences|history|hud|preview|editor|region|countdown|idle\n\
   --appearance light|dark|system --theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono\n\
   --history-count 0..10000 --exercise --quit-after SECONDS\n\
   --settings-file PATH\n\
@@ -20,17 +20,19 @@ pub enum Scene {
     Hud,
     Preview,
     Editor,
+    Region,
     Countdown,
     Idle,
 }
 
 impl Scene {
-    pub const VISIBLE: [Self; 5] = [
+    pub const VISIBLE: [Self; 6] = [
         Self::Preferences,
         Self::History,
         Self::Hud,
         Self::Preview,
         Self::Editor,
+        Self::Region,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -39,6 +41,7 @@ impl Scene {
             Self::Hud => "hud",
             Self::Preview => "preview",
             Self::Editor => "editor",
+            Self::Region => "region",
             Self::Countdown => "countdown",
             Self::Idle => "idle",
         }
@@ -50,6 +53,7 @@ impl Scene {
             Self::Hud => "Recording controls",
             Self::Preview => "Mini previews",
             Self::Editor => "Editor rendering probe",
+            Self::Region => "Region selector fixture",
             Self::Countdown => "Screenshot countdown",
             Self::Idle => "Hidden window",
         }

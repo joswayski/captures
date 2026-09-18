@@ -2,6 +2,7 @@ mod countdown;
 mod live;
 mod options;
 mod preferences;
+mod selector;
 mod tokens;
 mod workbench;
 
