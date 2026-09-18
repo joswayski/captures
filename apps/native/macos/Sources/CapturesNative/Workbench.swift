@@ -90,6 +90,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var preferencesController: PreferencesController?
     private var liveController: LiveCaptureController?
     private var regionSelector: RegionSelectionView?
+    private var windowSelector: WindowSelectionView?
     private var scene: String
     private var appearance: String
     private var theme: String
@@ -191,6 +192,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         preview = nil
         table = nil
         regionSelector = nil
+        windowSelector = nil
         liveController?.finishCapture(restoreWindow: false)
         liveController = nil
         content = Surface(frame: NSRect(x: 0, y: 0, width: 1000, height: 720))
@@ -235,6 +237,25 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
             return
         }
+        if scene == "window" {
+            let targets = [
+                WindowSelectionTarget(id: "fixture-front", title: "Draft capture", appName: "Editor",
+                    rect: NSRect(x: 96, y: 84, width: 510, height: 352), cornerRadius: 25),
+                WindowSelectionTarget(id: "fixture-back", title: "Reference", appName: "Browser",
+                    rect: NSRect(x: 440, y: 190, width: 470, height: 380), cornerRadius: 10),
+            ]
+            let selector = WindowSelectionView(frame: content.bounds,
+                image: PreviewView.fixtureImage(scale: 2048.0 / 284.0), targets: targets,
+                tokens: tokens, autoStart: false,
+                hitTest: { point in point.x < 380 ? 0 : (point.x < 760 ? 1 : -1) },
+                confirm: { target in Metrics.write(["event": "window-confirm", "target": String(describing: target), "fixture": true]) },
+                cancel: { [weak self] in self?.scene = "preferences"; self?.render() })
+            selector.hover(NSPoint(x: 180, y: 140))
+            windowSelector = selector; content.addSubview(selector); window.makeFirstResponder(selector)
+            label("Window selection fixture · shared hit testing is simulated", x: 24, y: 20, width: 650, glass: true)
+            Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
+            return
+        }
         if scene == "live" {
             liveController = LiveCaptureController(root: content, window: window, tokens: tokens,
                 historyRoot: options.historyRoot, settingsPath: options.settingsFile) { [weak self] in self?.scene = "preferences"; self?.render() }
@@ -253,7 +274,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             sidebar.addSubview(icon)
         }
         label("Captures", x: 58, y: 22, width: 125, size: "text-xl", parent: sidebar)
-        for (i, name) in ["preferences", "history", "hud", "preview", "region"].enumerated() {
+        for (i, name) in ["preferences", "history", "hud", "preview", "region", "window"].enumerated() {
             let button = CaptureButton(name == "hud" ? "Recording controls" : name.capitalized,
                 frame: NSRect(x: 12, y: 70 + i * 44, width: 172, height: 34), tokens: tokens) { [weak self] in
                     self?.scene = name
@@ -428,6 +449,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 default: view.drag(NSPoint(x: 500, y: 400)); view.end()
                 }
             }
+        case "window":
+            windowSelector?.hover(NSPoint(x: cycle % 2 == 0 ? 180 : 900, y: 140))
         default: break
         }
         Metrics.emit("scripted-action", milliseconds: (CACurrentMediaTime() - started) * 1000,

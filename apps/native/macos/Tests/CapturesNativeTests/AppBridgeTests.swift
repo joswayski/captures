@@ -58,6 +58,7 @@ final class AppBridgeTests: XCTestCase {
     func testLiveOptionValidationAndExplicitRoot() throws {
         let options = try Options(["--live", "--history-root", "/tmp/native-history"])
         XCTAssertTrue(options.live); XCTAssertEqual(options.historyRoot, "/tmp/native-history")
+        XCTAssertEqual(try Options(["--scene", "window"]).scene, "window")
         XCTAssertThrowsError(try Options(["--live", "--exercise"]))
         XCTAssertThrowsError(try Options(["--live", "--reference-chips"]))
         XCTAssertThrowsError(try Options(["--history-root", "/tmp/not-live"]))
