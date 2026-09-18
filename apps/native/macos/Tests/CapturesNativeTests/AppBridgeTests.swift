@@ -4,22 +4,30 @@ import XCTest
 final class AppBridgeTests: XCTestCase {
     func testCapturePreferencesRespectCopyOffAndExportChoice() throws {
         let off = try CapturePreferences(["auto_copy_to_clipboard": false,
-            "show_cursor_in_screenshots": true, "output_directory": "/exports/custom", "screenshot_format": "webp", "screenshot_countdown_seconds": 0])
+            "show_cursor_in_screenshots": true, "freeze_screen": false, "auto_start_on_selection": true,
+            "output_directory": "/exports/custom", "screenshot_format": "webp", "screenshot_countdown_seconds": 0])
         XCTAssertFalse(off.autoCopy)
         XCTAssertTrue(off.includeCursor)
+        XCTAssertFalse(off.freezeScreen)
+        XCTAssertTrue(off.autoStart)
         XCTAssertEqual(off.directory, "/exports/custom")
         XCTAssertEqual(off.format, "webp")
         let on = try CapturePreferences(["auto_copy_to_clipboard": true,
-            "show_cursor_in_screenshots": false, "output_directory": "/exports/jpeg", "screenshot_format": "jpeg", "screenshot_countdown_seconds": 7])
+            "show_cursor_in_screenshots": false, "freeze_screen": true, "auto_start_on_selection": false,
+            "output_directory": "/exports/jpeg", "screenshot_format": "jpeg", "screenshot_countdown_seconds": 7])
         XCTAssertTrue(on.autoCopy)
         XCTAssertFalse(on.includeCursor)
+        XCTAssertTrue(on.freezeScreen)
+        XCTAssertFalse(on.autoStart)
         XCTAssertEqual(on.format, "jpeg")
         XCTAssertEqual(on.countdown, 7)
         XCTAssertThrowsError(try CapturePreferences([:]))
         XCTAssertThrowsError(try CapturePreferences(["auto_copy_to_clipboard": false,
-            "show_cursor_in_screenshots": false, "output_directory": "/exports", "screenshot_format": "gif", "screenshot_countdown_seconds": 0]))
+            "show_cursor_in_screenshots": false, "freeze_screen": true, "auto_start_on_selection": false,
+            "output_directory": "/exports", "screenshot_format": "gif", "screenshot_countdown_seconds": 0]))
         XCTAssertThrowsError(try CapturePreferences(["auto_copy_to_clipboard": false,
-            "show_cursor_in_screenshots": false, "output_directory": "/exports", "screenshot_format": "png", "screenshot_countdown_seconds": 11]))
+            "show_cursor_in_screenshots": false, "freeze_screen": true, "auto_start_on_selection": false,
+            "output_directory": "/exports", "screenshot_format": "png", "screenshot_countdown_seconds": 11]))
     }
 
     func testDecodesResultEnvelope() throws {

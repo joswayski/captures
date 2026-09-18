@@ -189,9 +189,9 @@ in a separate development settings file. The native workspace now applies
 automatic copy, output folder, PNG/JPEG/WebP save-format, screenshot countdown,
 and cursor inclusion preferences. Cursor rendering matches the shipping app:
 system cursor pixels on macOS, a synthetic arrow on Windows/X11. Escape cancels
-a pending capture even with another app focused. The Windows/X11 candidate also
-connects region draw/move/resize, aspect constraints, freeze, and auto-start to
-shared Rust capture logic; matching macOS selector integration is in progress.
+a pending capture even with another app focused. Both the macOS workspace and
+Windows/X11 candidate connect region draw/move/resize, aspect constraints, freeze,
+and auto-start to shared Rust capture logic.
 Window capture, recording,
 editing, mini previews, global shortcuts, login items, and updates are not
 connected to the native hosts yet. Windows/Linux
