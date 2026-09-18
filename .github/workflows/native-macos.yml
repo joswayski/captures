@@ -7,6 +7,7 @@ on:
       - 'crates/captures-settings*/**'
       - 'crates/captures-app/**'
       - 'crates/captures-history/**'
+      - 'crates/captures-image/**'
       - 'crates/captures-capture/**'
       - 'crates/captures-session/**'
       - 'Cargo.lock'
@@ -50,6 +51,31 @@ jobs:
             --history-root "$RUNNER_TEMP/native-populated-history" --appearance dark \
             --screenshot "$RUNNER_TEMP/native-preferences/live-populated.png" --quit-after 4
           test -s "$RUNNER_TEMP/native-preferences/live-populated.png"
+      - name: Region selector diagnostics (not hardware acceptance)
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, platform, sys
+          from pathlib import Path
+          sys.path.insert(0, "apps/native")
+          from profile import trial
+          binary = Path("apps/native/macos/.build/release/CapturesNative").resolve()
+          output = Path(os.environ["RUNNER_TEMP"]) / "native-region-profile"
+          output.mkdir()
+          (output / "metadata.json").write_text(json.dumps({"platform": platform.platform(),
+              "binarySHA256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+              "note": "One excluded warmup and one 30s trial; process CPU/RSS only, not footprint, GPU, WindowServer, input latency or acceptance."}, indent=2))
+          for iteration in range(2):
+              for active in ([False, True] if iteration == 0 else [True, False]):
+                  result = trial(binary, output / f"{iteration}-region-{'active' if active else 'static'}",
+                                 "region", active, False, 30)
+                  print(iteration, active, result["summary"])
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-region-profile-macos
+          path: ${{ runner.temp }}/native-region-profile
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         if: always()
         with:

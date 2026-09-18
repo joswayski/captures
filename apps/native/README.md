@@ -38,12 +38,59 @@ Permission and locked/inactive session checks remain in force.
 
 Both hosts use `captures-app` for display enumeration, PNG/thumbnail persistence,
 history recovery, save and delete. Image files cross the ABI as paths, not base64.
-Capture, file work and preview decode run off the UI thread. Export writes a new
-PNG without overwriting an existing file. Copy is explicit. Deleting history
-preserves exported PNGs. Captures remain available on reopening the workspace.
+Capture, file work and preview decode run off the UI thread. **Save image** uses
+the output folder and PNG/JPEG/WebP format selected in Preferences, without
+overwriting an unrelated file. Repeat Save reuses the existing export; a missing
+export can be recreated from history. History always retains the lossless PNG.
+JPEG composites alpha onto white; WebP saves losslessly, using the same encoders
+as the shipping application. Deleting history preserves all exported formats.
+Captures remain available on reopening the workspace.
 
-This slice has no cursor/countdown, region/window capture, recordings, editor or
-mini previews; saved capture preferences do not apply yet. Full UI parity remains
+Automatic copy follows Preferences (enabled by default, like shipping Captures).
+Turn it off to leave the clipboard untouched by a new capture; explicit Copy
+still works. A clipboard failure does not discard the captured image. Only an
+explicit capture action can trigger automatic copy, never loading history or a
+fixture screenshot. Save/capture report settings errors rather than silently
+using different output or clipboard defaults.
+
+Screenshot countdown follows the stored 0–10-second preference. The selected
+display shows a native, fixed-media-palette countdown. Escape is registered only
+for an active capture and cancels even when another app has focus. If registration
+fails, capture is refused rather than losing cancellation. A desktop-session
+watcher invalidates the pending capture on lock/inactivity; unlocking does not
+resume it. Monotonic deadlines and capture generations are shared Rust logic.
+The overlay closes before the host hides/settles and captures. Late worker replies
+cannot restart a cancelled capture. Once the captured pixels commit to saving,
+Escape no longer claims cancellation; accepted history/file work drains at quit.
+Timers stop and Escape is released after completion/cancellation (the Windows
+low-level capture hook stays installed but disarmed). Interactive permission,
+focus, mixed-DPI, compositor, and screen-reader acceptance still needs real OS tests.
+
+Cursor inclusion follows `show_cursor_in_screenshots`: the shared Rust engine
+samples the pointer after countdown/window hiding and composites it before
+history, copy, and export. This preserves shipping behavior: macOS system pixels
+and hotspot, a synthetic arrow on Windows/X11, and no overlay when the pointer
+is outside the selected display or unavailable. Wayland-only cursor acquisition
+remains unsupported. Exact cursor shapes on Windows/Linux are not claimed.
+
+Both native hosts offer **Capture region** on the selected display.
+Draw from an empty selection, move it or resize its corners, choose Free/1:1/4:3/
+3:2/16:9/9:16, and hold Shift for a square while dragging. Release Shift to restore
+the chosen aspect. Confirm with Enter/Capture, or enable automatic start on
+selection in Preferences. Escape covers preparation, selection and countdown.
+Freeze follows Preferences; zero countdown uses the retained frame/cursor, while
+any countdown captures fresh pixels. The AppKit panel borrows Rust-owned pixels
+through an image provider and releases them after closing/worker completion.
+This adds no full-desktop temporary file. `--scene region` provides a synthetic
+selector using the same view without screen access; `--exercise` covers draw,
+move, aspect, resize and Shift release. The Windows/X11 candidate uses the same
+Rust `RegionSession`; its [private-X11 integration test](wgpu/README.md#validate-and-collect-evidence)
+checks repeated captures, exact saved pixels and cancellation with simulated
+session state. Real OS capture, mixed-DPI and accessibility acceptance is still
+required. Selector blur, magnifier and the full capture-menu UI remain open.
+
+This slice has no window capture, recordings, editor or
+mini previews; those stored preferences do not apply yet. Full UI parity remains
 open. The wgpu Wayland backend cannot verify hiding its root window, so capture
 is disabled there rather than photographing the app itself. Linux X11 needs an
 active, unlocked desktop session; bare Xvfb normally has no session service and

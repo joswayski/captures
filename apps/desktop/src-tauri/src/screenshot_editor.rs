@@ -8,12 +8,13 @@ use std::{
 };
 
 use chrono::{Local, Utc};
-use image::{ImageFormat, Rgb, RgbImage, RgbaImage};
+use image::{ImageFormat, RgbImage, RgbaImage};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
 
 use captures_capture::CaptureMode;
+use captures_image::composite_onto_white;
 
 use crate::{
     AppError, CommandResult,
@@ -933,68 +934,13 @@ fn encode_export_with_limit(
 }
 
 fn encode_jpeg(image: &RgbImage, quality: u8) -> Result<Vec<u8>, AppError> {
-    let width = u16::try_from(image.width())
-        .map_err(|_| AppError::Image("JPEG width is too large to encode".to_owned()))?;
-    let height = u16::try_from(image.height())
-        .map_err(|_| AppError::Image("JPEG height is too large to encode".to_owned()))?;
-    let mut bytes = Vec::new();
-    let mut encoder = jpeg_encoder::Encoder::new(&mut bytes, quality.clamp(40, 100));
-    // Keep full-resolution chroma and use the same quant table for luma and
-    // color. The previous encoder discarded chroma first, so Compress looked
-    // faded while edges stayed crisp. Matched tables show blocking / ringing
-    // instead of a color wash.
-    encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::F_1_1);
-    encoder.set_quantization_tables(
-        jpeg_encoder::QuantizationTableType::ImageMagick,
-        jpeg_encoder::QuantizationTableType::ImageMagick,
-    );
-    encoder
-        .encode(image.as_raw(), width, height, jpeg_encoder::ColorType::Rgb)
-        .map_err(|error| AppError::Image(error.to_string()))?;
-    Ok(bytes)
+    captures_image::encode_jpeg(image, quality).map_err(AppError::Image)
 }
 
 /// Encode WebP. `None` quality is lossless; `Some(q)` is lossy at quality 1–100.
 /// Keeps alpha (unlike JPEG). Uses libwebp because the `image` crate only encodes lossless WebP.
 fn encode_webp(image: &RgbaImage, quality: Option<u8>) -> Result<Vec<u8>, AppError> {
-    if image.width() == 0 || image.height() == 0 {
-        return Err(AppError::Image(
-            "cannot encode an empty WebP image".to_owned(),
-        ));
-    }
-    let encoder = webp::Encoder::from_rgba(image.as_raw(), image.width(), image.height());
-    let encoded = match quality {
-        None => encoder
-            .encode_simple(true, 100.0)
-            .map_err(|error| AppError::Image(format!("WebP lossless encode failed: {error:?}")))?,
-        Some(q) => {
-            let mut config = webp::WebPConfig::new()
-                .map_err(|error| AppError::Image(format!("WebP config failed: {error:?}")))?;
-            config.lossless = 0;
-            config.quality = f32::from(q.clamp(1, 100));
-            // Sharp RGB→YUV keeps saturated colors instead of the default
-            // conversion's grayish shift; remaining loss is spatial.
-            config.use_sharp_yuv = 1;
-            encoder
-                .encode_advanced(&config)
-                .map_err(|error| AppError::Image(format!("WebP lossy encode failed: {error:?}")))?
-        }
-    };
-    Ok(encoded.to_vec())
-}
-
-fn composite_onto_white(image: &RgbaImage) -> RgbImage {
-    let mut output = RgbImage::new(image.width(), image.height());
-    for (pixel, destination) in image.pixels().zip(output.pixels_mut()) {
-        let alpha = u16::from(pixel[3]);
-        let inverse = 255 - alpha;
-        *destination = Rgb([
-            ((u16::from(pixel[0]) * alpha + 255 * inverse) / 255) as u8,
-            ((u16::from(pixel[1]) * alpha + 255 * inverse) / 255) as u8,
-            ((u16::from(pixel[2]) * alpha + 255 * inverse) / 255) as u8,
-        ]);
-    }
-    output
+    captures_image::encode_webp(image, quality).map_err(AppError::Image)
 }
 
 fn validated_destination(

@@ -9,9 +9,11 @@ publish = false
 [dependencies]
 captures-capture = { path = "../captures-capture" }
 captures-history = { path = "../captures-history" }
+captures-image = { path = "../captures-image" }
 captures-session = { path = "../captures-session" }
 captures-settings = { path = "../captures-settings" }
 chrono.workspace = true
+global-hotkey = "0.8"
 image.workspace = true
 serde.workspace = true
 serde_json.workspace = true

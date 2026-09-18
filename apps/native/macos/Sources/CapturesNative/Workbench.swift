@@ -60,7 +60,7 @@ final class CaptureButton: NSButton {
             xRadius: tokens.number("r-md"), yRadius: tokens.number("r-md"))
         let fill = !isEnabled ? (glass ? "glass" : "surface-sunken")
             : cell?.isHighlighted == true ? (glass ? "glass-active" : "surface-active")
-            : selected ? "surface-selected" : (glass ? "glass-raised" : "control")
+            : selected ? (glass ? "glass-active" : "surface-selected") : (glass ? "glass-raised" : "control")
         tokens.color(fill).setFill()
         path.fill()
         tokens.color(selected && isEnabled ? "theme-accent" : (glass ? "glass-border" : "control-border")).setStroke()
@@ -89,6 +89,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var table: NSTableView?
     private var preferencesController: PreferencesController?
     private var liveController: LiveCaptureController?
+    private var regionSelector: RegionSelectionView?
     private var scene: String
     private var appearance: String
     private var theme: String
@@ -170,6 +171,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         preferencesController?.flush()
+        liveController?.finishCapture(restoreWindow: false)
         LiveCaptureController.flush()
         if let exerciseDirectory { try? FileManager.default.removeItem(at: exerciseDirectory) }
         return .terminateNow
@@ -188,6 +190,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         let started = CACurrentMediaTime()
         preview = nil
         table = nil
+        regionSelector = nil
+        liveController?.finishCapture(restoreWindow: false)
         liveController = nil
         content = Surface(frame: NSRect(x: 0, y: 0, width: 1000, height: 720))
         content.wantsLayer = true
@@ -221,9 +225,19 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             return
         }
         preferencesController = nil
+        if scene == "region" {
+            let selector = RegionSelectionView(frame: content.bounds, image: PreviewView.fixtureImage(scale: 2048.0 / 284.0),
+                tokens: tokens, autoStart: false, confirm: { rect in
+                    Metrics.write(["event": "region-confirm", "x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height, "fixture": true])
+                }, cancel: { [weak self] in self?.scene = "preferences"; self?.render() })
+            regionSelector = selector; content.addSubview(selector); window.makeFirstResponder(selector)
+            label("Region selection fixture · no capture access", x: 24, y: 20, width: 650, glass: true)
+            Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
+            return
+        }
         if scene == "live" {
             liveController = LiveCaptureController(root: content, window: window, tokens: tokens,
-                historyRoot: options.historyRoot) { [weak self] in self?.scene = "preferences"; self?.render() }
+                historyRoot: options.historyRoot, settingsPath: options.settingsFile) { [weak self] in self?.scene = "preferences"; self?.render() }
             Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
             return
         }
@@ -239,7 +253,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             sidebar.addSubview(icon)
         }
         label("Captures", x: 58, y: 22, width: 125, size: "text-xl", parent: sidebar)
-        for (i, name) in ["preferences", "history", "hud", "preview"].enumerated() {
+        for (i, name) in ["preferences", "history", "hud", "preview", "region"].enumerated() {
             let button = CaptureButton(name == "hud" ? "Recording controls" : name.capitalized,
                 frame: NSRect(x: 12, y: 70 + i * 44, width: 172, height: 34), tokens: tokens) { [weak self] in
                     self?.scene = name
@@ -399,6 +413,21 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         case "history": table?.scrollRowToVisible(cycle % 2 == 0 ? max(0, historyCount - 1) : 0)
         case "hud": paused.toggle(); render()
         case "preview": preview?.reset(); preview?.dissolve(cold: cycle % 2 == 0)
+        case "region":
+            if let view = regionSelector {
+                switch cycle {
+                case 0: view.begin(NSPoint(x: 100, y: 80)); view.drag(NSPoint(x: 520, y: 300)); view.end()
+                case 1:
+                    let center = NSPoint(x: view.selection.nsRect.midX, y: view.selection.nsRect.midY)
+                    view.begin(center); view.drag(NSPoint(x: center.x + 42, y: center.y + 27)); view.end()
+                case 2: view.setAspect(1)
+                case 3:
+                    let corner = view.selection.corners[3]
+                    view.begin(corner); view.drag(NSPoint(x: corner.x + 120, y: corner.y + 70)); view.end()
+                case 4: view.setAspect(16.0 / 9.0); view.begin(NSPoint(x: 800, y: 100)); view.drag(NSPoint(x: 500, y: 400), shift: true)
+                default: view.drag(NSPoint(x: 500, y: 400)); view.end()
+                }
+            }
         default: break
         }
         Metrics.emit("scripted-action", milliseconds: (CACurrentMediaTime() - started) * 1000,

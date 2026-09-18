@@ -7,6 +7,7 @@ on:
       - 'crates/captures-settings*/**'
       - 'crates/captures-app/**'
       - 'crates/captures-history/**'
+      - 'crates/captures-image/**'
       - 'crates/captures-capture/**'
       - 'crates/captures-session/**'
       - 'Cargo.lock'
@@ -40,9 +41,9 @@ jobs:
           toolchain: 1.95.0
           components: rustfmt, clippy
           cache-workspaces: apps/native/wgpu
-      - name: Install Linux windowing and software Vulkan dependencies
+      - name: Install Linux windowing and software-rendering test dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxi-dev libxrandr-dev libdbus-1-dev libxcb1-dev libpipewire-0.3-dev libegl-dev libgbm-dev libclang-dev mesa-vulkan-drivers xvfb
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxi-dev libxrandr-dev libdbus-1-dev libxcb1-dev libpipewire-0.3-dev libegl-dev libgbm-dev libclang-dev mesa-vulkan-drivers libgl1-mesa-dri xvfb dbus python3-dbus python3-gi openbox picom hsetroot xdotool x11-utils x11-apps imagemagick
       - run: node apps/native/prepare.mjs --output apps/native/wgpu/resources
       - run: node --test scripts/native-tokens.test.mjs
       - run: python -m unittest discover -s apps/native -p 'test_*.py'
@@ -53,6 +54,10 @@ jobs:
       - name: Exercise native Linux windows (X11, software Vulkan)
         if: runner.os == 'Linux'
         run: xvfb-run -a python apps/native/wgpu/smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-smoke
+      - name: Capture real region pixels on a private X11 desktop (simulated session state)
+        if: runner.os == 'Linux'
+        # Distro dbus/gi bindings belong to system Python, not setup-python.
+        run: /usr/bin/python3 apps/native/x11_capture_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-capture
       - name: Exercise native Windows windows
         if: runner.os == 'Windows'
         run: python apps/native/wgpu/smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench.exe --output native-smoke
@@ -60,7 +65,9 @@ jobs:
         if: always()
         with:
           name: native-wgpu-evidence-${{ matrix.os }}
-          path: native-smoke
+          path: |
+            native-smoke
+            native-x11-capture
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:

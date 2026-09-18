@@ -2,7 +2,7 @@ use std::{path::PathBuf, time::Duration};
 
 pub const USAGE: &str = "Captures wgpu native host\n\
   --live [--history-root PATH]\n\
-  --scene preferences|history|hud|preview|editor|idle\n\
+  --scene preferences|history|hud|preview|editor|region|countdown|idle\n\
   --appearance light|dark|system --theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono\n\
   --history-count 0..10000 --exercise --quit-after SECONDS\n\
   --settings-file PATH\n\
@@ -20,16 +20,19 @@ pub enum Scene {
     Hud,
     Preview,
     Editor,
+    Region,
+    Countdown,
     Idle,
 }
 
 impl Scene {
-    pub const VISIBLE: [Self; 5] = [
+    pub const VISIBLE: [Self; 6] = [
         Self::Preferences,
         Self::History,
         Self::Hud,
         Self::Preview,
         Self::Editor,
+        Self::Region,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -38,6 +41,8 @@ impl Scene {
             Self::Hud => "hud",
             Self::Preview => "preview",
             Self::Editor => "editor",
+            Self::Region => "region",
+            Self::Countdown => "countdown",
             Self::Idle => "idle",
         }
     }
@@ -48,6 +53,8 @@ impl Scene {
             Self::Hud => "Recording controls",
             Self::Preview => "Mini previews",
             Self::Editor => "Editor rendering probe",
+            Self::Region => "Region selector fixture",
+            Self::Countdown => "Screenshot countdown",
             Self::Idle => "Hidden window",
         }
     }
@@ -105,7 +112,7 @@ impl Options {
                     let value = args.next().ok_or("Missing scene")?;
                     options.scene = Scene::VISIBLE
                         .into_iter()
-                        .chain([Scene::Idle])
+                        .chain([Scene::Idle, Scene::Countdown])
                         .find(|s| s.name() == value)
                         .ok_or("Unknown scene")?;
                 }
@@ -162,6 +169,11 @@ impl Options {
         }
         if options.scene == Scene::Idle && (options.screenshot.is_some() || options.exercise) {
             return Err("Hidden idle has no screenshot or scripted actions".into());
+        }
+        if options.scene == Scene::Countdown && options.exercise {
+            return Err(
+                "Countdown is a static rendering probe; use --live for timing/cancellation".into(),
+            );
         }
         if options.live
             && (options.exercise
@@ -223,6 +235,7 @@ mod tests {
             vec!["--scene"],
             vec!["--floating"],
             vec!["--scene", "idle", "--exercise"],
+            vec!["--scene", "countdown", "--exercise"],
             vec![
                 "--screenshot",
                 "test.png",
@@ -235,6 +248,10 @@ mod tests {
             assert!(parse(&args).is_err(), "{args:?}");
         }
         assert!(parse(&["--scene", "preview", "--floating"]).is_ok());
+        assert_eq!(
+            parse(&["--scene", "countdown"]).unwrap().scene,
+            Scene::Countdown
+        );
         assert_eq!(
             parse(&["--screenshot", "test.png"]).unwrap().quit_after,
             Some(Duration::from_secs(16))
