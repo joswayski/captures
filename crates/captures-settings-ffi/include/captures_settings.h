@@ -69,6 +69,8 @@ char *captures_settings_request_v1(const char *request_json);
  * Permission is prompted only by the explicit request_permission operation. */
 char *captures_app_request_v1(const char *request_json);
 /* Event-loop-thread ONLY: begin {seconds}, poll {generation}, finish {generation}.
+ * For selection, begin with seconds=0; start_countdown {generation,seconds} after
+ * confirmation starts the delay without dropping Escape or changing generation.
  * begin returns {generation}; poll returns {current,remaining}. Escape is global
  * only for this guard. Always finish, including on cancellation/quit. The guard
  * owns native handles on this thread; never dispatch these calls to a worker.
