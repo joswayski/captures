@@ -1,5 +1,6 @@
 mod region;
 mod selection;
+mod window;
 
 use captures_settings::AppSettings;
 use serde::Deserialize;

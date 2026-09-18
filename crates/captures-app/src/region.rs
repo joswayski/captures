@@ -116,7 +116,7 @@ impl RegionSession {
     }
 }
 
-fn ensure_active(generation: u64) -> Result<(), Error> {
+pub(super) fn ensure_active(generation: u64) -> Result<(), Error> {
     if !capture_flow::is_current(generation) {
         return Err(Error::Cancelled);
     }
@@ -126,7 +126,7 @@ fn ensure_active(generation: u64) -> Result<(), Error> {
     Ok(())
 }
 
-fn validate_display(
+pub(super) fn validate_display(
     expected: &DisplayDescriptor,
     current: &DisplayDescriptor,
 ) -> Result<(), Error> {
