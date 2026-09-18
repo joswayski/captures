@@ -17,6 +17,7 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+captures-app = { path = "../../../crates/captures-app" }
 captures-capture = { path = "../../../crates/captures-capture" }
 captures-history = { path = "../../../crates/captures-history" }
 captures-image = { path = "../../../crates/captures-image" }

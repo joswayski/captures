@@ -17,6 +17,17 @@ use std::{
 
 use tauri::CursorIcon;
 
+use captures_app::preview::{
+    THUMBNAIL_CARD_HEIGHT, THUMBNAIL_CONTROL_GUTTER, THUMBNAIL_WIDTH, ThumbnailMonitorBounds,
+    ThumbnailStackAnchor, ThumbnailStackOrigin, ThumbnailWindowGeometry, ThumbnailWorkArea,
+    collapsed_frame_height as thumbnail_collapsed_frame_height,
+    collapsed_padding as thumbnail_collapsed_padding,
+    collapsed_window_position as thumbnail_collapsed_window_position,
+    stack_height as thumbnail_stack_height,
+    stack_should_be_visible as thumbnail_stack_should_be_visible, thumbnail_geometry,
+    visible_window_height as thumbnail_visible_window_height, window_top as thumbnail_window_top,
+    work_area as thumbnail_work_area,
+};
 #[cfg(target_os = "macos")]
 use captures_capture::capture_buffer_scale;
 #[cfg(any(target_os = "macos", test))]
@@ -66,7 +77,7 @@ use models::{
     HISTORY_RETENTION_DAYS, HistoryEntry, MiniPreviewPlacement,
 };
 use screenshot_editor::SCREENSHOT_EDITOR_WINDOW_PREFIX;
-use state::{AppState, ClipboardFingerprint, ThumbnailStackAnchor, ThumbnailStackOrigin};
+use state::{AppState, ClipboardFingerprint};
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -6441,12 +6452,6 @@ fn create_thumbnail_window(app: &AppHandle, visible: bool) -> Result<(), tauri::
     Ok(())
 }
 
-const THUMBNAIL_WIDTH: f64 = 340.0;
-const THUMBNAIL_CARD_HEIGHT: f64 = 160.0;
-const THUMBNAIL_GAP: f64 = 24.0;
-const THUMBNAIL_PADDING: f64 = 28.0;
-const THUMBNAIL_CONTROL_GUTTER: f64 = 52.0;
-
 fn update_thumbnail_stack(app: &AppHandle) {
     let app = app.clone();
     let handle = app.clone();
@@ -6570,32 +6575,10 @@ fn update_thumbnail_stack_window(
     }
 }
 
-fn thumbnail_stack_should_be_visible(
-    count: usize,
-    suppressed: bool,
-    show_mini_previews: bool,
-    include_mini_previews_in_captures: bool,
-) -> bool {
-    // Capture flows suppress the stack so it does not appear in screenshots or
-    // recordings. Opting in keeps it visible for self-capture / feedback.
-    count > 0 && show_mini_previews && (!suppressed || include_mini_previews_in_captures)
-}
-
 fn thumbnail_window_logical_height(window: &tauri::WebviewWindow) -> Option<f64> {
     let scale = window.scale_factor().ok()?.max(1.0);
     let size = window.inner_size().ok()?;
     Some(f64::from(size.height) / scale)
-}
-
-fn thumbnail_visible_window_height(
-    desired: f64,
-    current: Option<f64>,
-    preserve_current: bool,
-) -> f64 {
-    match (preserve_current, current) {
-        (true, Some(current)) => desired.max(current),
-        _ => desired,
-    }
 }
 
 fn thumbnail_preserve_current_height(collapsed: bool) -> bool {
@@ -6874,296 +6857,6 @@ fn set_mini_preview_stack_position(
         y: placement.front_y,
         content_y: placement.content_y,
     })
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ThumbnailCollapsedWindowPosition {
-    x: f64,
-    frame_y: f64,
-    front_y: f64,
-    content_y: f64,
-}
-
-/// Place the visible collapsed pile within a retained, potentially much taller
-/// WebView frame. The native frame stays inside the work area while the card
-/// moves through its empty space, avoiding AppKit's off-screen frame clamp.
-fn thumbnail_collapsed_window_position(
-    x: f64,
-    front_y: f64,
-    frame_height: f64,
-    padding: f64,
-    work: ThumbnailWorkArea,
-) -> ThumbnailCollapsedWindowPosition {
-    let min_x = work.left;
-    let max_x = (work.left + work.width - THUMBNAIL_WIDTH).max(min_x);
-    let work_bottom = work.top + work.height - work.bottom_gap;
-    let min_front_y = work.top + THUMBNAIL_CONTROL_GUTTER;
-    let max_front_y =
-        (work_bottom - THUMBNAIL_CARD_HEIGHT - THUMBNAIL_CONTROL_GUTTER).max(min_front_y);
-    let front_y = front_y.clamp(min_front_y, max_front_y);
-    let frame_height = frame_height.max(THUMBNAIL_CARD_HEIGHT + 2.0 * padding);
-    let min_frame_y = work.top;
-    let max_frame_y = (work_bottom - frame_height).max(min_frame_y);
-    let bottom_content_y = (frame_height - padding - THUMBNAIL_CARD_HEIGHT).max(padding);
-    let frame_y = (front_y - bottom_content_y).clamp(min_frame_y, max_frame_y);
-
-    ThumbnailCollapsedWindowPosition {
-        x: x.clamp(min_x, max_x),
-        frame_y,
-        front_y,
-        content_y: front_y - frame_y,
-    }
-}
-
-fn thumbnail_stack_pose_depth(depth: f64) -> f64 {
-    // Keep in sync with thumbnailStackPoseDepth in thumbnailLayout.ts.
-    const RECEDE: f64 = 0.55;
-    const EASE_K: f64 = 24.0;
-    if depth <= 0.0 {
-        0.0
-    } else {
-        depth * (EASE_K + RECEDE * depth) / (depth + EASE_K)
-    }
-}
-
-fn thumbnail_collapsed_peek(count: usize, hovered: bool) -> f64 {
-    let extra = count.saturating_sub(1) as f64;
-    let pose = thumbnail_stack_pose_depth(extra);
-    // Keep in sync with THUMBNAIL_STACK_IDLE_PEEK_PX / HOVER_PEEK_PX.
-    pose * if hovered { 16.0 } else { 13.0 }
-}
-
-fn thumbnail_collapsed_padding(count: usize) -> f64 {
-    (thumbnail_collapsed_peek(count.max(1), true) + THUMBNAIL_PADDING).max(THUMBNAIL_CONTROL_GUTTER)
-}
-
-fn thumbnail_collapsed_frame_height(count: usize) -> f64 {
-    THUMBNAIL_CARD_HEIGHT + 2.0 * thumbnail_collapsed_padding(count)
-}
-
-fn thumbnail_collapsed_virtual_y(
-    front_y: f64,
-    frame_height: f64,
-    anchor: ThumbnailStackAnchor,
-) -> f64 {
-    if anchor.is_top() {
-        front_y - THUMBNAIL_CONTROL_GUTTER
-    } else {
-        front_y + THUMBNAIL_CARD_HEIGHT + THUMBNAIL_CONTROL_GUTTER - frame_height
-    }
-}
-
-fn thumbnail_collapsed_front_y(
-    virtual_y: f64,
-    frame_height: f64,
-    anchor: ThumbnailStackAnchor,
-) -> f64 {
-    if anchor.is_top() {
-        virtual_y + THUMBNAIL_CONTROL_GUTTER
-    } else {
-        virtual_y + frame_height - THUMBNAIL_CARD_HEIGHT - THUMBNAIL_CONTROL_GUTTER
-    }
-}
-
-fn thumbnail_stack_height(count: usize) -> f64 {
-    let cards = count.max(1) as f64;
-    THUMBNAIL_PADDING
-        + THUMBNAIL_CONTROL_GUTTER
-        + cards * THUMBNAIL_CARD_HEIGHT
-        + (cards - 1.0) * THUMBNAIL_GAP
-}
-
-/// Extra logical pixels to keep the stack clear of system chrome.
-/// Applied on every platform so previews never sit flush against a dock/taskbar.
-const THUMBNAIL_SYSTEM_CHROME_GAP: f64 = 12.0;
-
-/// When the work area reaches the monitor bottom (auto-hide taskbar/dock/panel),
-/// reserve this many logical pixels so revealing chrome cannot cover cards.
-const THUMBNAIL_AUTO_HIDE_RESERVE: f64 = 48.0;
-
-#[derive(Clone, Copy, Debug)]
-struct ThumbnailMonitorBounds {
-    work_x: i32,
-    work_y: i32,
-    work_width: u32,
-    work_height: u32,
-    full_x: i32,
-    full_y: i32,
-    full_width: u32,
-    full_height: u32,
-    scale_factor: f64,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ThumbnailWorkArea {
-    left: f64,
-    top: f64,
-    width: f64,
-    height: f64,
-    top_gap: f64,
-    bottom_gap: f64,
-}
-
-fn thumbnail_work_area(bounds: ThumbnailMonitorBounds) -> ThumbnailWorkArea {
-    let scale = bounds.scale_factor.max(1.0);
-    let left = f64::from(bounds.work_x) / scale;
-    let top = f64::from(bounds.work_y) / scale;
-    let width = f64::from(bounds.work_width) / scale;
-    let mut height = f64::from(bounds.work_height) / scale;
-
-    // Auto-hide taskbars/docks leave the work area flush with the monitor's
-    // bottom edge. Compare bottom edges instead of whole rectangles: macOS
-    // still excludes its top menu bar, so its work area never equals the full
-    // monitor even when an auto-hidden bottom Dock is unreserved.
-    let work_bottom = i64::from(bounds.work_y) + i64::from(bounds.work_height);
-    let full_bottom = i64::from(bounds.full_y) + i64::from(bounds.full_height);
-    let work_spans_full_width =
-        bounds.work_x == bounds.full_x && bounds.work_width == bounds.full_width;
-    if work_bottom == full_bottom && work_spans_full_width {
-        let bottom_reserve = THUMBNAIL_AUTO_HIDE_RESERVE.min((height * 0.12).max(0.0));
-        height = (height - bottom_reserve).max(1.0);
-    }
-
-    ThumbnailWorkArea {
-        left,
-        top,
-        width,
-        height,
-        top_gap: THUMBNAIL_SYSTEM_CHROME_GAP,
-        bottom_gap: THUMBNAIL_SYSTEM_CHROME_GAP,
-    }
-}
-
-/// Keep the visible pile in the work area.
-///
-/// Collapsed macOS/Linux windows stay at their expanded height so WebKit does
-/// not blank cards. Bottom piles sit at the bottom of that frame (empty chrome
-/// may leave the work area above so the stack can reach the top). Top piles
-/// sit at the top so peek-down has room; empty chrome may leave below so the
-/// stack can still reach the bottom.
-fn thumbnail_clamp_aligned_frame(
-    x: f64,
-    y: f64,
-    frame_height: f64,
-    content_height: f64,
-    work: ThumbnailWorkArea,
-    anchor: ThumbnailStackAnchor,
-) -> (f64, f64) {
-    let content_height = content_height.min(frame_height).max(0.0);
-    let slack = (frame_height - content_height).max(0.0);
-    let min_x = work.left;
-    let max_x = (work.left + work.width - THUMBNAIL_WIDTH).max(min_x);
-    let (min_y, max_y) = if anchor.is_top() {
-        let min_y = work.top;
-        let max_y = (work.top + work.height - work.bottom_gap - content_height).max(min_y);
-        (min_y, max_y)
-    } else {
-        let min_y = work.top - slack;
-        let max_y = (work.top + work.height - work.bottom_gap - frame_height).max(min_y);
-        (min_y, max_y)
-    };
-    (x.clamp(min_x, max_x), y.clamp(min_y, max_y))
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ThumbnailWindowGeometry {
-    x: f64,
-    y: f64,
-    height: f64,
-    anchor: ThumbnailStackAnchor,
-}
-
-fn thumbnail_window_top(
-    desired_y: f64,
-    frame_height: f64,
-    content_height: f64,
-    anchor: ThumbnailStackAnchor,
-) -> f64 {
-    if anchor.is_top() {
-        desired_y
-    } else {
-        desired_y - (frame_height - content_height)
-    }
-}
-
-fn thumbnail_geometry(
-    bounds: ThumbnailMonitorBounds,
-    count: usize,
-    collapsed: bool,
-    origin: Option<ThumbnailStackOrigin>,
-    placement: MiniPreviewPlacement,
-) -> ThumbnailWindowGeometry {
-    let work = thumbnail_work_area(bounds);
-    let available_height = (work.height - work.bottom_gap - THUMBNAIL_PADDING).max(1.0);
-    let stack_height = if collapsed {
-        thumbnail_collapsed_frame_height(count)
-    } else {
-        thumbnail_stack_height(count).min(available_height)
-    };
-    let default_x = if placement.is_right() {
-        (work.left + work.width - THUMBNAIL_WIDTH).max(work.left)
-    } else {
-        work.left
-            .min(work.left + work.width - THUMBNAIL_WIDTH)
-            .max(work.left)
-    };
-    let default_anchor = ThumbnailStackAnchor::from(placement);
-    let (x, desired_y, anchor) = match origin {
-        Some(origin) => {
-            let desired_y = if origin.anchor.is_top() {
-                origin.edge
-            } else {
-                origin.edge - stack_height
-            };
-            (origin.x, desired_y, origin.anchor)
-        }
-        None => {
-            let desired_y = if default_anchor.is_top() {
-                work.top + work.top_gap
-            } else {
-                work.top + work.height - work.bottom_gap - stack_height
-            };
-            (default_x, desired_y, default_anchor)
-        }
-    };
-    if collapsed {
-        let front_y = match origin {
-            Some(origin) if origin.anchor.is_top() => origin.edge + THUMBNAIL_CONTROL_GUTTER,
-            Some(origin) => origin.edge - THUMBNAIL_CARD_HEIGHT - THUMBNAIL_CONTROL_GUTTER,
-            None if default_anchor.is_top() => work.top + work.top_gap + THUMBNAIL_CONTROL_GUTTER,
-            None => {
-                work.top + work.height
-                    - work.bottom_gap
-                    - THUMBNAIL_CARD_HEIGHT
-                    - THUMBNAIL_CONTROL_GUTTER
-            }
-        };
-        let virtual_y = thumbnail_collapsed_virtual_y(front_y, stack_height, anchor);
-        let (x, virtual_y) = thumbnail_clamp_aligned_frame(
-            x,
-            virtual_y,
-            stack_height,
-            THUMBNAIL_CARD_HEIGHT + 2.0 * THUMBNAIL_CONTROL_GUTTER,
-            work,
-            anchor,
-        );
-        let front_y = thumbnail_collapsed_front_y(virtual_y, stack_height, anchor);
-        let padding = thumbnail_collapsed_padding(count);
-        return ThumbnailWindowGeometry {
-            x,
-            y: front_y - padding,
-            height: stack_height,
-            anchor: ThumbnailStackAnchor::Bottom,
-        };
-    }
-    let (x, y) =
-        thumbnail_clamp_aligned_frame(x, desired_y, stack_height, stack_height, work, anchor);
-    ThumbnailWindowGeometry {
-        x,
-        y,
-        height: stack_height,
-        anchor,
-    }
 }
 
 fn report_capture_error(app: &AppHandle, error: &AppError, mode: CaptureMode) {
@@ -8279,6 +7972,16 @@ fn window_visible_corner_radius(window: &captures_capture::WindowDescriptor) -> 
 mod tests {
     use std::sync::atomic::AtomicBool;
 
+    use captures_app::preview::{
+        THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP, ThumbnailMonitorBounds,
+        ThumbnailStackAnchor, ThumbnailStackOrigin, ThumbnailWindowGeometry,
+        clamp_aligned_frame as thumbnail_clamp_aligned_frame,
+        collapsed_frame_height as thumbnail_collapsed_frame_height,
+        stack_height as thumbnail_stack_height,
+        stack_should_be_visible as thumbnail_stack_should_be_visible, thumbnail_geometry,
+        visible_window_height as thumbnail_visible_window_height,
+        window_top as thumbnail_window_top,
+    };
     #[cfg(target_os = "macos")]
     use captures_capture::macos_window_is_capture_overlay;
     use image::{Rgba, RgbaImage};
@@ -8291,11 +7994,9 @@ mod tests {
         RECORDING_SAVED_NOTICE_HEIGHT, RECORDING_SAVED_NOTICE_VISIBLE_FOR,
         RECORDING_SAVED_NOTICE_WIDTH, STARTUP_NOTICE_AFTER_SETUP_VISIBLE,
         STARTUP_NOTICE_AUTOSTART_VISIBLE, STARTUP_NOTICE_HEIGHT, STARTUP_NOTICE_WIDTH,
-        StartupNoticeCaret, THUMBNAIL_AUTO_HIDE_RESERVE, THUMBNAIL_SYSTEM_CHROME_GAP,
-        TRAY_NOTICE_CARET_INSET, TRAY_NOTICE_CARET_SIZE, TRAY_NOTICE_FRAME_PAD,
+        StartupNoticeCaret, TRAY_NOTICE_CARET_INSET, TRAY_NOTICE_CARET_SIZE, TRAY_NOTICE_FRAME_PAD,
         TRAY_NOTICE_SCREEN_MARGIN, TRAY_NOTICE_TRAY_OVERLAP, ThumbnailCursorAction,
-        ThumbnailCursorKind, ThumbnailMonitorBounds, ThumbnailPointerSpace, ThumbnailStackAnchor,
-        ThumbnailStackOrigin, ThumbnailWindowFrame, ThumbnailWindowGeometry, app_reactivation,
+        ThumbnailCursorKind, ThumbnailPointerSpace, ThumbnailWindowFrame, app_reactivation,
         capturable_windows_for_display, capture_cursor_icon, classify_preview_file_drop,
         click_through_applies, clipboard_fingerprint, display_contains_pointer,
         drag_plugin_cursor_to_pointer_space, fallback_startup_notice, freeze_prefetch_can_start,
@@ -8307,11 +8008,8 @@ mod tests {
         should_claim_region_cursor_on_shortcut_press, should_defer_macos_open_with_launch,
         should_freeze_visible_capture_ui, should_prefetch_freeze_on_shortcut_press,
         should_trigger_shortcut, startup_notice_fallback_edge_from_insets, startup_notice_url,
-        take_ready_or_defer_windows, thumbnail_clamp_aligned_frame,
-        thumbnail_collapsed_frame_height, thumbnail_cursor_action, thumbnail_cursor_ignore_update,
-        thumbnail_geometry, thumbnail_pointer_in_space, thumbnail_pointer_position,
-        thumbnail_preserve_current_height, thumbnail_stack_height,
-        thumbnail_stack_should_be_visible, thumbnail_visible_window_height, thumbnail_window_top,
+        take_ready_or_defer_windows, thumbnail_cursor_action, thumbnail_cursor_ignore_update,
+        thumbnail_pointer_in_space, thumbnail_pointer_position, thumbnail_preserve_current_height,
         track_shortcut_suppression, tray_accelerator, tray_icon_rect_is_usable,
         tray_notice_window_size, viewer_window_label, window_display_crop_is_safe,
         window_is_capturable, windows_display_affinity_excludes_capture,
@@ -9568,37 +9266,6 @@ mod tests {
         assert_eq!(top, bottom);
         assert_eq!(top.anchor, ThumbnailStackAnchor::Bottom);
         assert_eq!(top.y + super::thumbnail_collapsed_padding(6), front_y);
-    }
-
-    #[test]
-    fn collapsed_frame_preserves_tall_window_and_origin_round_trip() {
-        let count = 100;
-        let padding = super::thumbnail_collapsed_padding(count);
-        let desired_height = super::thumbnail_collapsed_frame_height(count);
-        assert_eq!(desired_height, 160.0 + 2.0 * padding);
-        assert!(desired_height > 264.0);
-
-        let retained_height = 1_400.0;
-        let actual_y = -300.0;
-        let front_y = actual_y + retained_height - padding - 160.0;
-        for anchor in [ThumbnailStackAnchor::Top, ThumbnailStackAnchor::Bottom] {
-            let virtual_y = super::thumbnail_collapsed_virtual_y(front_y, retained_height, anchor);
-            assert_eq!(
-                super::thumbnail_collapsed_front_y(virtual_y, retained_height, anchor),
-                front_y
-            );
-            let edge = if anchor.is_top() {
-                front_y - 52.0
-            } else {
-                front_y + 160.0 + 52.0
-            };
-            let recovered_front = if anchor.is_top() {
-                edge + 52.0
-            } else {
-                edge - 160.0 - 52.0
-            };
-            assert_eq!(recovered_front, front_y);
-        }
     }
 
     #[test]
