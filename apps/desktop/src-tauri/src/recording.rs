@@ -34,9 +34,8 @@ use uuid::Uuid;
 use crate::{
     AppError,
     models::{
-        CaptureArtifact, CaptureSelectorMode, HistoryEntry, RecordingArtifact,
-        RecordingArtifactData, RecordingCapabilities, RecordingSelection,
-        RecordingSelectionSession,
+        CaptureArtifact, CaptureSelectorMode, RecordingArtifact, RecordingArtifactData,
+        RecordingCapabilities, RecordingSelection, RecordingSelectionSession,
         recording_controls_are_excluded as controls_excluded_for_preference, recording_media_url,
         recording_poster_url, recording_recovery_directory, recording_selection_url,
         recording_timeline_url,
@@ -2911,7 +2910,7 @@ pub(crate) async fn open_recording_from_path(
         target: crate::open_media::opened_recording_target(),
         missing: false,
     };
-    let history_entry = HistoryEntry::from_recording(&artifact);
+    let history_entry = crate::models::history_entry_from_recording(&artifact);
     let history_saved = match storage::save_history_recording_reference(&history_entry, &poster_png)
     {
         Ok(()) => true,
@@ -3917,7 +3916,7 @@ fn upsert_recording_artifact(
     poster_png: Vec<u8>,
 ) {
     let media_source = PathBuf::from(&artifact.path);
-    let history_entry = HistoryEntry::from_recording(artifact);
+    let history_entry = crate::models::history_entry_from_recording(artifact);
     let history_saved =
         match storage::save_history_recording(&history_entry, &poster_png, &media_source) {
             Ok(recovery_path) => {

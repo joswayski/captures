@@ -143,6 +143,13 @@ TypeScript-generated golden values. This advances settings persistence and
 presentation, not lifecycle/capture integration or full Preferences acceptance;
 all checklist gates above remain open until end-to-end verification.
 
+The next shared-core slice moves history metadata, 30-day retention, atomic
+artifact replacement, recording recovery, and basic sRGB PNG/thumbnail encoding
+into `captures-history`. The shipping desktop delegates to it; callers provide
+their own history root and presentation URLs. Native capture integration can use
+the same lifecycle without accessing installed history. This extraction alone
+adds no native capture UI and closes no platform gate.
+
 The first [shared wgpu candidate](../apps/native/wgpu/README.md) uses egui/winit
 with retained image textures and event-driven immediate-mode UI, an additional
 approach to evaluate against the retained/native candidates below. It implements

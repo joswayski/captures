@@ -2,13 +2,12 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use captures_capture::{CaptureMode, DisplayDescriptor, PointerCursor, WindowDescriptor};
+pub use captures_history::{ArtifactKind, HISTORY_RETENTION_DAYS, HistoryEntry};
 use captures_recording::{RecordingKind, RecordingTarget};
 use directories::ProjectDirs;
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
-pub const HISTORY_RETENTION_DAYS: i64 = 30;
 /// kCGSHotKeyScreenshot — Save picture of screen as a file (⌘⇧3).
 const MACOS_SCREENSHOT_SAVE_SCREEN: u32 = 28;
 /// kCGSHotKeyScreenshotRegion — Save picture of selected area as a file (⌘⇧4).
@@ -164,34 +163,6 @@ pub struct RecordingArtifactData {
     pub poster_png: Vec<u8>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ArtifactKind {
-    #[default]
-    Screenshot,
-    Video,
-    Gif,
-}
-
-impl From<RecordingKind> for ArtifactKind {
-    fn from(kind: RecordingKind) -> Self {
-        match kind {
-            RecordingKind::Video => Self::Video,
-            RecordingKind::Gif => Self::Gif,
-        }
-    }
-}
-
-impl ArtifactKind {
-    pub const fn recording_kind(self) -> Option<RecordingKind> {
-        match self {
-            Self::Screenshot => None,
-            Self::Video => Some(RecordingKind::Video),
-            Self::Gif => Some(RecordingKind::Gif),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CaptureArtifact {
     pub id: String,
@@ -211,182 +182,94 @@ pub struct CaptureArtifact {
     pub preview_png: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct HistoryEntry {
-    pub id: String,
-    #[serde(default)]
-    pub kind: ArtifactKind,
-    pub preview_url: String,
-    pub full_url: String,
-    pub width: u32,
-    pub height: u32,
-    pub size_bytes: u64,
-    pub created_at: String,
-    #[serde(default)]
-    pub mode: Option<CaptureMode>,
-    #[serde(default)]
-    pub saved_path: Option<String>,
-    #[serde(default)]
-    pub mime_type: Option<String>,
-    #[serde(default)]
-    pub duration_ms: Option<u64>,
-    #[serde(default)]
-    pub target: Option<RecordingTarget>,
-    #[serde(default)]
-    pub has_system_audio: bool,
-    #[serde(default)]
-    pub has_microphone_audio: bool,
-    #[serde(default)]
-    pub dropped_frames: u64,
-}
-
-impl HistoryEntry {
-    pub fn from_recording(artifact: &RecordingArtifact) -> Self {
-        Self {
-            id: artifact.id.clone(),
-            kind: artifact.kind.into(),
-            preview_url: recording_poster_url(&artifact.id),
-            full_url: recording_media_url(&artifact.id),
-            width: artifact.width,
-            height: artifact.height,
-            size_bytes: artifact.size_bytes,
-            created_at: artifact.created_at.clone(),
-            mode: None,
-            // Permanent Captures path only. Recovery media lives under history/{id}/.
-            saved_path: artifact.saved_path.clone(),
-            mime_type: Some(artifact.mime_type.clone()),
-            duration_ms: Some(artifact.duration_ms),
-            target: Some(artifact.target.clone()),
-            has_system_audio: artifact.has_system_audio,
-            has_microphone_audio: artifact.has_microphone_audio,
-            dropped_frames: artifact.dropped_frames,
-        }
-    }
-
-    pub fn recording_artifact(&self) -> Option<RecordingArtifact> {
-        let kind = self.kind.recording_kind()?;
-        let path = self.recording_media_path()?;
-        let missing = !Path::new(&path).is_file();
-        Some(RecordingArtifact {
-            id: self.id.clone(),
-            kind,
-            path,
-            saved_path: self.saved_path.clone(),
-            media_url: recording_media_url(&self.id),
-            poster_url: recording_poster_url(&self.id),
-            mime_type: self.mime_type.clone()?,
-            duration_ms: self.duration_ms?,
-            width: self.width,
-            height: self.height,
-            size_bytes: self.size_bytes,
-            dropped_frames: self.dropped_frames,
-            has_system_audio: self.has_system_audio,
-            has_microphone_audio: self.has_microphone_audio,
-            created_at: self.created_at.clone(),
-            target: self.target.clone()?,
-            missing,
-        })
-    }
-
-    /// Prefer private history recovery media; fall back to a permanent saved path
-    /// (legacy entries stored media only in the Captures folder).
-    pub fn recording_media_path(&self) -> Option<String> {
-        let directory = history_directory().join(&self.id);
-        if let Some(path) = find_history_recording_media(&directory) {
-            return Some(path.to_string_lossy().into_owned());
-        }
-        if let Some(saved_path) = self.saved_path.clone() {
-            return Some(saved_path);
-        }
-        history_recording_media_path(&self.id, self.kind)
-            .map(|path| path.to_string_lossy().into_owned())
-    }
-
-    pub fn summary(&self) -> Option<ArtifactSummary> {
-        match self.kind {
-            ArtifactKind::Screenshot => Some(ArtifactSummary::Screenshot {
-                id: self.id.clone(),
-                preview_url: self.preview_url.clone(),
-                full_url: self.full_url.clone(),
-                width: self.width,
-                height: self.height,
-                size_bytes: self.size_bytes,
-                created_at: self.created_at.clone(),
-                mode: self.mode?,
-            }),
-            ArtifactKind::Video | ArtifactKind::Gif => {
-                let artifact = self.recording_artifact()?;
-                let fields = RecordingArtifactSummaryFields {
-                    id: artifact.id,
-                    poster_url: artifact.poster_url,
-                    media_url: artifact.media_url,
-                    saved_path: artifact.saved_path,
-                    mime_type: artifact.mime_type,
-                    duration_ms: artifact.duration_ms,
-                    width: artifact.width,
-                    height: artifact.height,
-                    size_bytes: artifact.size_bytes,
-                    dropped_frames: artifact.dropped_frames,
-                    has_system_audio: artifact.has_system_audio,
-                    has_microphone_audio: artifact.has_microphone_audio,
-                    created_at: artifact.created_at,
-                    target: artifact.target,
-                    missing: artifact.missing,
-                };
-                Some(if self.kind == ArtifactKind::Video {
-                    ArtifactSummary::Video { fields }
-                } else {
-                    ArtifactSummary::Gif { fields }
-                })
-            }
-        }
+pub fn history_entry_from_recording(artifact: &RecordingArtifact) -> HistoryEntry {
+    HistoryEntry {
+        id: artifact.id.clone(),
+        kind: artifact.kind.into(),
+        preview_url: recording_poster_url(&artifact.id),
+        full_url: recording_media_url(&artifact.id),
+        width: artifact.width,
+        height: artifact.height,
+        size_bytes: artifact.size_bytes,
+        created_at: artifact.created_at.clone(),
+        mode: None,
+        // Permanent Captures path only. Recovery media lives under history/{id}/.
+        saved_path: artifact.saved_path.clone(),
+        mime_type: Some(artifact.mime_type.clone()),
+        duration_ms: Some(artifact.duration_ms),
+        target: Some(artifact.target.clone()),
+        has_system_audio: artifact.has_system_audio,
+        has_microphone_audio: artifact.has_microphone_audio,
+        dropped_frames: artifact.dropped_frames,
     }
 }
 
-/// Preferred recovery media file name for a recording kind and source path.
-pub fn history_recording_media_file_name(kind: ArtifactKind, source: &Path) -> Option<String> {
-    kind.recording_kind()?;
-    let extension = source
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or(match kind {
-            ArtifactKind::Gif => "gif",
-            _ => "mp4",
-        });
-    Some(format!("media.{extension}"))
-}
-
-/// Locate private recovery media inside a history entry directory.
-pub fn find_history_recording_media(entry_directory: &Path) -> Option<PathBuf> {
-    const CANDIDATES: &[&str] = &["media.mp4", "media.gif", "media.webm"];
-    CANDIDATES
-        .iter()
-        .map(|name| entry_directory.join(name))
-        .find(|path| path.is_file())
-        .or_else(|| {
-            let entries = std::fs::read_dir(entry_directory).ok()?;
-            entries.flatten().map(|entry| entry.path()).find(|path| {
-                path.is_file()
-                    && path
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .is_some_and(|name| name.starts_with("media."))
-            })
-        })
-}
-
-pub fn history_recording_media_path(entry_id: &str, kind: ArtifactKind) -> Option<PathBuf> {
-    kind.recording_kind()?;
-    Uuid::parse_str(entry_id).ok()?;
-    let directory = history_directory().join(entry_id);
-    find_history_recording_media(&directory).or_else(|| {
-        // Default path used when creating a new recovery entry before the file exists.
-        let fallback = match kind {
-            ArtifactKind::Gif => "media.gif",
-            _ => "media.mp4",
-        };
-        Some(directory.join(fallback))
+pub fn history_recording_artifact(entry: &HistoryEntry) -> Option<RecordingArtifact> {
+    let kind = entry.kind.recording_kind()?;
+    let path = entry
+        .recording_media_path(&history_directory())?
+        .to_string_lossy()
+        .into_owned();
+    let missing = !Path::new(&path).is_file();
+    Some(RecordingArtifact {
+        id: entry.id.clone(),
+        kind,
+        path,
+        saved_path: entry.saved_path.clone(),
+        media_url: recording_media_url(&entry.id),
+        poster_url: recording_poster_url(&entry.id),
+        mime_type: entry.mime_type.clone()?,
+        duration_ms: entry.duration_ms?,
+        width: entry.width,
+        height: entry.height,
+        size_bytes: entry.size_bytes,
+        dropped_frames: entry.dropped_frames,
+        has_system_audio: entry.has_system_audio,
+        has_microphone_audio: entry.has_microphone_audio,
+        created_at: entry.created_at.clone(),
+        target: entry.target.clone()?,
+        missing,
     })
+}
+
+pub fn history_summary(entry: &HistoryEntry) -> Option<ArtifactSummary> {
+    match entry.kind {
+        ArtifactKind::Screenshot => Some(ArtifactSummary::Screenshot {
+            id: entry.id.clone(),
+            preview_url: entry.preview_url.clone(),
+            full_url: entry.full_url.clone(),
+            width: entry.width,
+            height: entry.height,
+            size_bytes: entry.size_bytes,
+            created_at: entry.created_at.clone(),
+            mode: entry.mode?,
+        }),
+        ArtifactKind::Video | ArtifactKind::Gif => {
+            let artifact = history_recording_artifact(entry)?;
+            let fields = RecordingArtifactSummaryFields {
+                id: artifact.id,
+                poster_url: artifact.poster_url,
+                media_url: artifact.media_url,
+                saved_path: artifact.saved_path,
+                mime_type: artifact.mime_type,
+                duration_ms: artifact.duration_ms,
+                width: artifact.width,
+                height: artifact.height,
+                size_bytes: artifact.size_bytes,
+                dropped_frames: artifact.dropped_frames,
+                has_system_audio: artifact.has_system_audio,
+                has_microphone_audio: artifact.has_microphone_audio,
+                created_at: artifact.created_at,
+                target: artifact.target,
+                missing: artifact.missing,
+            };
+            Some(if entry.kind == ArtifactKind::Video {
+                ArtifactSummary::Video { fields }
+            } else {
+                ArtifactSummary::Gif { fields }
+            })
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -855,8 +738,9 @@ mod tests {
     use super::{
         AppSettings, Appearance, ArtifactKind, ColorTheme, CustomThemeSettings, HistoryEntry,
         MiniPreviewPlacement, RecordingArtifact, RecordingCapabilities, ScreenshotFormat,
-        VideoFormat, macos_screenshot_hotkeys_conflicting_with, migrate_output_directory,
-        migrate_settings, platform_can_exclude_recording_controls, recording_controls_are_excluded,
+        VideoFormat, history_directory, history_entry_from_recording, history_summary,
+        macos_screenshot_hotkeys_conflicting_with, migrate_output_directory, migrate_settings,
+        platform_can_exclude_recording_controls, recording_controls_are_excluded,
         recording_media_url, recording_poster_url, recording_selection_url, snapshot_url,
     };
 
@@ -1313,8 +1197,7 @@ mod tests {
             },
             missing: false,
         };
-        let summary = HistoryEntry::from_recording(&artifact)
-            .summary()
+        let summary = history_summary(&history_entry_from_recording(&artifact))
             .expect("recording history should produce a summary");
         let json = serde_json::to_value(summary).expect("summary should serialize");
 
@@ -1351,7 +1234,10 @@ mod tests {
             has_microphone_audio: false,
             dropped_frames: 0,
         };
-        assert_eq!(entry.recording_media_path().as_deref(), Some(saved_path));
+        assert_eq!(
+            entry.recording_media_path(&history_directory()).as_deref(),
+            Some(Path::new(saved_path))
+        );
     }
 
     #[test]

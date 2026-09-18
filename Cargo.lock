@@ -651,6 +651,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "captures-capture",
+ "captures-history",
  "captures-macos-window",
  "captures-media",
  "captures-recording",
@@ -699,6 +700,22 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "captures-history"
+version = "0.1.0"
+dependencies = [
+ "captures-capture",
+ "captures-recording",
+ "chrono",
+ "image",
+ "png 0.17.16",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "uuid",
 ]
 
 [[package]]

@@ -92,6 +92,18 @@ enum AppError {
     UpdateInstalling,
 }
 
+impl From<captures_history::Error> for AppError {
+    fn from(error: captures_history::Error) -> Self {
+        match error {
+            captures_history::Error::Io(error) => Self::Io(error),
+            captures_history::Error::Json(error) => Self::Json(error),
+            captures_history::Error::HistoryUnavailable => Self::HistoryUnavailable,
+            captures_history::Error::Image(message) => Self::Image(message),
+            captures_history::Error::Invalid(message) => Self::Task(message),
+        }
+    }
+}
+
 type CommandResult<T> = Result<T, String>;
 pub(crate) const AUTOSTART_ARG: &str = "--captures-autostart";
 const TRAY_ICON_ID: &str = "main";
@@ -3129,7 +3141,7 @@ fn get_capture_history(state: tauri::State<'_, Arc<AppState>>) -> Vec<ArtifactSu
             }
         });
     }
-    history.iter().filter_map(HistoryEntry::summary).collect()
+    history.iter().filter_map(models::history_summary).collect()
 }
 
 #[tauri::command]
