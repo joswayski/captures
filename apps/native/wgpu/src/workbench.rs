@@ -22,6 +22,7 @@ pub struct Workbench {
     started: Instant,
     cycle: usize,
     frames: u64,
+    settled_frames: u64,
     ui_ms: f64,
     max_ui_ms: f64,
     history_filter: usize,
@@ -101,6 +102,7 @@ impl Workbench {
             started: Instant::now(),
             cycle: 0,
             frames: 0,
+            settled_frames: 0,
             ui_ms: 0.,
             max_ui_ms: 0.,
             history_filter: 0,
@@ -547,6 +549,11 @@ impl eframe::App for Workbench {
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         let start = Instant::now();
         let ctx = ui.ctx().clone();
+        // Font/layout initialization and the settings load can require several
+        // initial passes. Count settled work separately, without a sampling timer.
+        if self.started.elapsed() >= Duration::from_secs(2) {
+            self.settled_frames += 1;
+        }
         if self.options.scene == Scene::Idle {
             // eframe 0.36.2 auto-shows the root after its first paint, even if
             // the builder requested hidden. Viewport commands run after that
@@ -664,6 +671,7 @@ impl eframe::App for Workbench {
         emit(
             "exit",
             json!({"uiPasses": self.frames, "totalUiConstructionWallMs": self.ui_ms,
+            "uiPassesAfterTwoSeconds": self.settled_frames,
             "maxUiConstructionWallMs": self.max_ui_ms, "scriptedActions": self.cycle,
             "elapsedSeconds": self.started.elapsed().as_secs_f64(),
             "note": "UI construction only; not GPU presentation FPS"}),

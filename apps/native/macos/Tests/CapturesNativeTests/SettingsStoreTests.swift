@@ -52,7 +52,8 @@ final class SettingsStoreTests: XCTestCase {
         var completedRevision = 0
         _ = store.save(["value": 1]) { _, _ in XCTFail("superseded save completed") }
         let newest = store.save(["value": 2]) { revision, result in
-            XCTAssertNoThrow(try result.get()); completedRevision = revision; completion.fulfill()
+            if case .failure(let error) = result { XCTFail("Save failed: \(error)") }
+            completedRevision = revision; completion.fulfill()
         }
         wait(for: [completion], timeout: 1)
         XCTAssertEqual(completedRevision, newest)
@@ -75,7 +76,8 @@ final class SettingsStoreTests: XCTestCase {
         let store = try SettingsStore(path: "/fixture.json", transport: transport, debounceInterval: 0)
         let loaded = expectation(description: "load error")
         store.load { result in
-            XCTAssertThrowsError(try result.get()); loaded.fulfill()
+            if case .success = result { XCTFail("Expected load failure") }
+            loaded.fulfill()
         }
         wait(for: [loaded], timeout: 1)
     }

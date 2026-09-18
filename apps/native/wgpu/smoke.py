@@ -42,14 +42,18 @@ def main():
             hidden_supported = False
             print("UNSUPPORTED: hidden idle; this parity gate remains open", flush=True)
             continue
-        passes = next(e["detail"]["uiPasses"] for e in events if e["event"] == "exit")
+        metrics = next(e["detail"] for e in events if e["event"] == "exit")
+        passes = metrics["uiPassesAfterTwoSeconds"]
         lifecycle = [e["detail"] for e in events if e["event"] == "lifecycle-check"]
         if not lifecycle or any(e["nativeVisible"] is not False for e in lifecycle if scene == "idle"):
             raise RuntimeError(f"{scene}: native visibility is incorrect or unverified: {lifecycle}")
         if scene != "idle" and any(e["nativeVisible"] is False for e in lifecycle):
             raise RuntimeError(f"{scene}: expected a visible window")
-        if passes > 30:
-            raise RuntimeError(f"{scene}: {passes} UI passes while idle; investigate recurring redraw")
+        # Exclude startup font/layout/async settings work, not recurring redraw.
+        # The quit deadline itself legitimately causes a small number of passes.
+        if passes > 6:
+            raise RuntimeError(f"{scene}: {passes} UI passes after settling; investigate recurring redraw")
+        print(f"{scene}: {metrics['uiPasses']} total / {passes} settled UI passes", flush=True)
 
     shots = {
         "preferences-dark": ["--scene", "preferences"],
