@@ -1,3 +1,5 @@
+mod selection;
+
 use captures_settings::AppSettings;
 use serde::Deserialize;
 use serde_json::{Value, json};

@@ -1,6 +1,27 @@
 #ifndef CAPTURES_SETTINGS_H
 #define CAPTURES_SETTINGS_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
+/* Allocation-free region geometry in display-local logical coordinates. These
+ * field layouts are versioned alongside the function names. No pointers are
+ * retained. False leaves output unchanged (including null output, invalid mode,
+ * non-finite values, invalid bounds/initial rectangle or negative aspect).
+ * A non-null output must point to writable, aligned storage for one rectangle.
+ * Aspect 0 means freeform; Shift forces square. Resize minimum is 16 units.
+ * Keep the original drag origin/initial rectangle when modifiers change. */
+typedef struct { double x, y; } CapturesSelectionPoint;
+typedef struct { double width, height; } CapturesSelectionBounds;
+typedef struct { double x, y, width, height; } CapturesSelectionRect;
+/* mode: 0=create, 1=move, 2=NW, 3=NE, 4=SW, 5=SE. */
+bool captures_selection_drag_v1(uint32_t mode, CapturesSelectionPoint origin,
+    CapturesSelectionPoint current, CapturesSelectionRect initial,
+    CapturesSelectionBounds bounds, double aspect, bool force_square,
+    CapturesSelectionRect *output);
+bool captures_selection_constrain_v1(CapturesSelectionRect rect,
+    CapturesSelectionBounds bounds, double aspect, CapturesSelectionRect *output);
+
 /* Versioned JSON ABI. Operations are load, save, default_path, and theme.
  * Theme accepts {"operation":"theme","accent":"#rgb","signal":"#rrggbb",
  * "light":true} and returns {"ok":true,"colors":{...}}.

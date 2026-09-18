@@ -169,6 +169,17 @@ system pixels, Windows/X11 synthetic arrow). Regions/windows, recording, editor,
 mini previews and full UI/UX parity are still open; this slice closes no complete
 platform acceptance row. Hardware capture and clipboard tests remain required.
 
+Region preparation starts with `captures-app::selection`: shared create/move/
+corner-resize and settled-aspect geometry, including Shift precedence, fractional
+coordinates and the shipping minimum/clamping rules. A checked, allocation-free
+C ABI exposes the same functions to AppKit without per-pointer-event JSON.
+176 differential vectors execute the shipping TypeScript oracle; Rust compares
+both drag and settled-aspect outputs. Regenerate intentionally with
+`node scripts/native-selection.test.mjs --write`; the normal repository gate
+rejects stale vectors. Native selection windows, frozen-frame ownership, target
+revalidation and region capture integration are still pending. This shared-core
+stage changes no shipping behavior and does not close the capture-overlay gate.
+
 The first [shared wgpu candidate](../apps/native/wgpu/README.md) uses egui/winit
 with retained image textures and event-driven immediate-mode UI, an additional
 approach to evaluate against the retained/native candidates below. It implements

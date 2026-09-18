@@ -2,6 +2,7 @@
 //! Images stay in owned files, never JSON/base64. No browser or host window APIs.
 
 pub mod capture_flow;
+pub mod selection;
 
 use captures_capture::{CaptureError, CaptureMode, DisplayDescriptor, XcapBackend};
 use captures_history::{ArtifactKind, HistoryEntry};
