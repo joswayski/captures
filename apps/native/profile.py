@@ -153,14 +153,17 @@ def workloads_for(renderer):
         workloads.append(("preview", True, True))
     else:
         workloads += [("editor", False, False), ("editor", True, False)]
+    if renderer == "dcomp":
+        # DWM owns the floating fade. The ordinary preview only changes content.
+        workloads.append(("preview-floating", True, False))
     return workloads
 
 
 def validate_renderer_platform(renderer, system):
-    if renderer == "appkit" and system != "Darwin":
-        raise ValueError("AppKit diagnostics require macOS; use --renderer wgpu elsewhere")
-    if renderer == "wgpu" and system not in ("Darwin", "Windows", "Linux"):
-        raise ValueError(f"wgpu diagnostics do not support {system}")
+    supported = {"appkit": ("Darwin",), "wgpu": ("Darwin", "Windows", "Linux"),
+                 "dcomp": ("Windows",), "gtk": ("Linux",)}
+    if renderer not in supported or system not in supported[renderer]:
+        raise ValueError(f"{renderer} diagnostics do not support {system}")
 
 
 def events_at(path):
@@ -174,7 +177,9 @@ def events_at(path):
 
 
 def trial(binary, destination, scene, exercise, reference, seconds):
-    args = [str(binary), "--scene", scene, "--quit-after", str(seconds + 15)]
+    args = [str(binary), "--scene", scene.removesuffix("-floating"), "--quit-after", str(seconds + 15)]
+    if scene.endswith("-floating"):
+        args.append("--floating")
     if exercise:
         args.append("--exercise")
     if reference:
@@ -223,7 +228,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seconds", type=int, default=60)
     parser.add_argument("--trials", type=int, default=3)
-    parser.add_argument("--renderer", choices=("appkit", "wgpu"), default="appkit")
+    parser.add_argument("--renderer", choices=("appkit", "wgpu", "dcomp", "gtk"), default="appkit")
     args = parser.parse_args()
     try:
         validate_renderer_platform(args.renderer, platform.system())

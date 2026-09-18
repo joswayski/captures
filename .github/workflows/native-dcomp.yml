@@ -1,0 +1,56 @@
+name: Native DirectComposition candidate
+
+on:
+  pull_request:
+    paths:
+      - 'apps/native/**'
+      - 'shared/**'
+      - 'scripts/native-tokens.test.mjs'
+      - 'apps/desktop/ui/src/lib/thumbnailExit.ts'
+      - 'apps/desktop/assets/icon.svg'
+      - '.github/workflows/native-dcomp.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.94.0
+          components: rustfmt, clippy
+          cache-workspaces: apps/native/dcomp
+      - run: python -m pip install Pillow==11.3.0
+      - run: node apps/native/prepare.mjs --output apps/native/dcomp/resources
+      - run: python -m unittest discover -s apps/native -p 'test_*.py'
+      - run: cargo fmt --manifest-path apps/native/dcomp/Cargo.toml --all -- --check
+      - run: cargo test --manifest-path apps/native/dcomp/Cargo.toml --locked
+      - run: cargo clippy --manifest-path apps/native/dcomp/Cargo.toml --locked --all-targets -- -D warnings
+      - run: cargo build --manifest-path apps/native/dcomp/Cargo.toml --locked --release
+      - name: Verify real Windows surfaces and final desktop composition
+        run: python apps/native/dcomp/smoke.py --binary apps/native/dcomp/target/release/captures-dcomp-workbench.exe --output native-dcomp-smoke
+      - name: Short resource diagnostics (not hardware acceptance)
+        run: python apps/native/profile.py --renderer dcomp --binary apps/native/dcomp/target/release/captures-dcomp-workbench.exe --seconds 30 --trials 1 --output native-dcomp-profile
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-dcomp-evidence
+          path: |
+            native-dcomp-smoke
+            native-dcomp-profile
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-dcomp-binary
+          path: apps/native/dcomp/target/release/captures-dcomp-workbench.exe
+          if-no-files-found: error

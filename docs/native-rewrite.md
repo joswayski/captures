@@ -178,6 +178,16 @@ accessibility/IME/overlay behavior. No performance win or renderer decision foll
 from its existence. Compare equivalent workloads only; the AppKit dust and wgpu
 fade/settle probes are deliberately not equivalent effects.
 
+The [Windows DirectComposition candidate](../apps/native/dcomp/README.md) now
+implements custom Direct2D/DirectWrite fixture scenes, visible-row history,
+clipped image/text pan/zoom, hidden visibility and floating DWM opacity. The event
+loop blocks between invalidations; composition animation is submitted once.
+It shares the CLI and generated Captures tokens with wgpu. Surface readback and
+desktop composition have separate tests; process-only diagnostics include twelve
+static/active workloads. It has no UI Automation provider, full text editor/IME,
+editor rotation, matched dust or real capture integration. Those costs remain
+selection gates. Neither compilation nor hosted-CI rendering selects a renderer.
+
 The next implementation milestone is **comparable workbenches on all OSes**, not
 the next Mac-only screen. Exercise each candidate with:
 
