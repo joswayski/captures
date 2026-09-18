@@ -116,7 +116,7 @@ real login-manager acceptance. `--scene window` is a permission-free fixture on
 both hosts. The slice remains experimental and all platform acceptance gates
 stay open until real desktop/input tests pass.
 
-This slice has no recordings, editor or mini previews; those stored preferences
+This slice has no recordings or editor; those stored preferences
 do not apply yet. Full UI parity remains
 open. The wgpu Wayland backend cannot verify hiding its root window, so capture
 is disabled there rather than photographing the app itself. Linux X11 needs an
@@ -124,15 +124,35 @@ active, unlocked desktop session; bare Xvfb normally has no session service and
 must refuse capture. Verify real permission, clipboard ownership, multi-display
 behavior and exported pixels on each OS before accepting the slice.
 
-The preview foundation reuses `captures-app::preview` for corner placement,
+## Latest-screenshot mini preview
+
+Both live workbenches can show one latest screenshot in a fixed-glass native
+card. Copy uses full-resolution pixels, Save uses current screenshot preferences,
+History/Open selects the capture in the workspace, and Dismiss closes only the
+card. A new screenshot replaces the card; prior images and exports remain in
+history/on disk. There is no automatic dismissal timer. Stacking, collapse,
+repositioning by drag, native file drag, trash/reveal and dust are not connected.
+
+Show mini previews, all four placement corners and Include mini previews in
+captures use the shared settings. By default the host hides the card before
+preparing/capturing pixels, restoring it on cancellation/error. Late decodes and
+action results cannot change a replaced/dismissed card. AppKit keeps actions alive
+when Preferences replaces the workspace; closing the app closes the panel too.
+
+The implementation reuses `captures-app::preview` for corner placement,
 work-area/DPI math and capture/decode visibility generations. AppKit calls this
 policy through the versioned `captures_preview_*_v1` ABI and `NativePreviewPolicy`;
-Windows/Linux can call Rust directly. This bridge does not yet display a live
-mini preview. Hosts must supply actual usable monitor bounds, apply native
-visibility and wait for hidden windows to settle before capture. ABI tests cover
-negative origins, four corners, Retina scale, stale decode/cancellation and the
-include-in-captures override; hardware, compositor and accessibility acceptance
-remain open on macOS, Windows and X11, and Wayland positioning is not supported.
+Windows/Linux calls Rust directly. Work areas come from `NSScreen.visibleFrame`,
+the audited Windows `rcWork` query, or X11 EWMH properties clipped to the monitor.
+If the candidate cannot query usable bounds, the screenshot stays in history and
+the host reports that it cannot position a preview rather than guessing.
+
+macOS uses a nonactivating panel; X11 uses an unmanaged notification window to
+avoid activation by the window manager. Private-X11 tests cover real pixels,
+placement, focus and actions; macOS CI covers AppKit/ABI lifecycles and renders.
+Physical macOS/Windows desktops, mixed-DPI monitors, compositor behavior,
+transparent hit-region parity and screen-reader/keyboard access still need
+acceptance. Wayland live capture/preview positioning remain unsupported.
 
 ## Build and try on macOS
 

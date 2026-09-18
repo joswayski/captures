@@ -167,8 +167,18 @@ hosts; native countdown windows use the fixed media palette. Real mixed-DPI,
 focus, compositor, accessibility, and animation acceptance remains open.
 Cursor inclusion now shares sampling/compositing with the shipping host (macOS
 system pixels, Windows/X11 synthetic arrow). Full region/window parity, recording, editor,
-mini previews and full UI/UX parity are still open; this slice closes no complete
+preview-stack interactions and full UI/UX parity are still open; this slice closes no complete
 platform acceptance row. Hardware capture and clipboard tests remain required.
+
+Both hosts now connect one latest-screenshot mini preview, backed by shared Rust
+placement and visibility policy. Copy uses full pixels; Save reads current output
+preferences; History/Open restores the workspace; Dismiss preserves history and
+exports. The four corner placements use actual monitor work areas. Private-X11
+tests exercise placement, focus, minimized-root actions, exact capture inclusion/
+exclusion, cancellation and replacement. AppKit tests cover panel/decode/action
+lifecycles and fixed-glass rendering. Windows runtime, physical macOS, mixed-DPI,
+screen-reader and compositor acceptance remain open; Wayland stays unsupported.
+Stacking, drag, collapse, transparent hit regions and dust remain future slices.
 
 Region preparation starts with `captures-app::selection`: shared create/move/
 corner-resize and settled-aspect geometry, including Shift precedence, fractional

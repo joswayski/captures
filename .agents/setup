@@ -14,7 +14,10 @@ step "checking Linux build dependencies"
 packages=(
   build-essential
   curl
+  dbus
   file
+  hsetroot
+  imagemagick
   libayatana-appindicator3-dev
   libasound2-dev
   libclang-dev
@@ -31,9 +34,18 @@ packages=(
   libxdo-dev
   libxrandr-dev
   nasm
+  openbox
+  picom
   pkg-config
   postgresql
+  python3-dbus
+  python3-gi
   wget
+  x11-apps
+  x11-utils
+  xclip
+  xdotool
+  xvfb
   xz-utils
   yasm
   zlib1g-dev
@@ -78,6 +90,7 @@ if ! command -v rustup >/dev/null 2>&1; then
   source "$HOME/.cargo/env"
 fi
 rustup toolchain install 1.94.0 --profile minimal --component rustfmt --component clippy
+rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
 
 step "installing JavaScript dependencies"
 npm ci
