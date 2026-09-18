@@ -98,10 +98,11 @@ blur, click-through, topmost behavior, or correct Wayland overlay placement.
 The live mini preview currently retains only the latest successful screenshot;
 stacking, drag placement, collapse and dust remain open. winit exposes full monitor
 bounds but not the OS work area, so X11 intersects EWMH `_NET_WORKAREA` with the
-target monitor. Multi-monitor panel behavior still needs desktop verification.
-Preview positioning is unsupported on Wayland. A safe shared Windows `rcWork`
-query is still needed; Windows preview runtime, nonactivation, and accessibility
-also remain unverified beyond compilation and focused host tests.
+target monitor and Windows uses the shared audited `rcWork` query. If usable bounds
+cannot be resolved, capture still succeeds but no preview is shown. Multi-monitor
+panel behavior still needs desktop verification. Preview positioning is unsupported
+on Wayland. Windows preview runtime, nonactivation, and accessibility also remain
+unverified beyond compilation and focused host tests.
 
 **Hidden idle is unsupported on this candidate's Wayland backend.** winit cannot
 hide/query the root there; live capture is disabled, and `--scene idle` exits with an explicit unsupported event
