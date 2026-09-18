@@ -81,6 +81,29 @@ final class CaptureButton: NSButton {
     }
 }
 
+final class RootWindowCloseHandler: NSObject, NSWindowDelegate {
+    weak var rootWindow: NSWindow?
+    private let closePreviews: () -> Void
+    private let terminate: () -> Void
+
+    init(rootWindow: NSWindow, closePreviews: @escaping () -> Void,
+         terminate: @escaping () -> Void) {
+        self.rootWindow = rootWindow; self.closePreviews = closePreviews
+        self.terminate = terminate
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if sender === rootWindow { closePreviews() }
+        return true
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let closing = notification.object as? NSWindow,
+              closing === rootWindow else { return }
+        terminate()
+    }
+}
+
 final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate {
     let options: Options
     private var window: NSWindow!
@@ -89,6 +112,10 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var table: NSTableView?
     private var preferencesController: PreferencesController?
     private var liveController: LiveCaptureController?
+    private var miniPreviews: MiniPreviewController?
+    private var miniPreviewActions: MiniPreviewActions?
+    private var rootWindowCloseHandler: RootWindowCloseHandler?
+    private var previewSelectionID: String?
     private var regionSelector: RegionSelectionView?
     private var windowSelector: WindowSelectionView?
     private var scene: String
@@ -146,6 +173,19 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         window.title = options.live ? "Captures Native — capture workspace" : "Captures Native — development fixtures"
         window.isReleasedWhenClosed = false
         window.center()
+        let miniPreviews = MiniPreviewController(tokens: tokens)
+        let miniPreviewActions = MiniPreviewActions(settingsPath: options.settingsFile)
+        miniPreviewActions.bind(previews: miniPreviews)
+        miniPreviews.copyArtifact = { [weak miniPreviewActions] artifact in miniPreviewActions?.copy(artifact) }
+        miniPreviews.saveArtifact = { [weak miniPreviewActions] artifact in miniPreviewActions?.save(artifact) }
+        miniPreviews.openArtifact = { [weak self] artifact in self?.openPreview(artifact) }
+        self.miniPreviews = miniPreviews
+        self.miniPreviewActions = miniPreviewActions
+        let rootWindowCloseHandler = RootWindowCloseHandler(rootWindow: window,
+            closePreviews: { [weak miniPreviews] in miniPreviews?.close() },
+            terminate: { NSApp.terminate(nil) })
+        self.rootWindowCloseHandler = rootWindowCloseHandler
+        window.delegate = rootWindowCloseHandler
         render()
         if scene != "idle" { window.makeKeyAndOrderFront(nil) }
         NSApp.activate(ignoringOtherApps: true)
@@ -173,6 +213,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         preferencesController?.flush()
         liveController?.finishCapture(restoreWindow: false)
+        miniPreviews?.close()
         LiveCaptureController.flush()
         if let exerciseDirectory { try? FileManager.default.removeItem(at: exerciseDirectory) }
         return .terminateNow
@@ -216,6 +257,13 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                         self.resolvedTokens = self.makeTokens()
                     }
                     self.window.appearance = appearance == "system" ? nil : NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
+                }, settingsChanged: { [weak self] settings in
+                    guard let enabled = settings["show_mini_previews"] as? Bool,
+                          let placement = settings["mini_preview_placement"] as? String,
+                          let include = settings["include_mini_previews_in_captures"] as? Bool
+                    else { return }
+                    self?.miniPreviews?.updateSettings(MiniPreviewSettings(enabled: enabled,
+                        placement: placement, includeInCaptures: include))
                 }, showHistory: { [weak self] in self?.scene = self?.options.live == true ? "live" : "history"; self?.render() },
                    liveCaptureAvailable: options.live,
                    initialAppearance: options.appearanceOverride ? options.appearance : nil,
@@ -258,7 +306,12 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         }
         if scene == "live" {
             liveController = LiveCaptureController(root: content, window: window, tokens: tokens,
-                historyRoot: options.historyRoot, settingsPath: options.settingsFile) { [weak self] in self?.scene = "preferences"; self?.render() }
+                historyRoot: options.historyRoot, settingsPath: options.settingsFile,
+                miniPreviews: miniPreviews, miniPreviewActions: miniPreviewActions,
+                initialSelectionID: previewSelectionID) { [weak self] in
+                    self?.scene = "preferences"; self?.render()
+                }
+            previewSelectionID = nil
             Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
             return
         }
@@ -296,6 +349,12 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         default: break
         }
         Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
+    }
+
+    private func openPreview(_ artifact: CaptureArtifact) {
+        previewSelectionID = artifact.id
+        if scene != "live" { scene = "live"; render() }
+        else { liveController?.openPreview(artifact) }
     }
 
     private func exerciseSettingsPath() -> String {

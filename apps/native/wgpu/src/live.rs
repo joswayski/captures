@@ -29,7 +29,10 @@ use crate::{
 };
 
 enum Job {
-    Execute(Request),
+    Execute {
+        request: Request,
+        preview_generation: Option<u64>,
+    },
     PrepareRegion {
         display_id: String,
         generation: u64,
@@ -56,16 +59,27 @@ enum Job {
         target: WindowCaptureTarget,
         after_countdown: bool,
     },
-    Decode {
+    DecodeHistory {
         generation: u64,
         path: PathBuf,
     },
-    Copy(PathBuf),
+    DecodePreview {
+        generation: u64,
+        artifact_id: String,
+        path: PathBuf,
+    },
+    Copy {
+        path: PathBuf,
+        preview_generation: Option<u64>,
+    },
     Shutdown,
 }
 
 enum Reply {
-    Executed(Result<Box<Response>, String>),
+    Executed {
+        preview_generation: Option<u64>,
+        result: Result<Box<Response>, String>,
+    },
     HistoryCleared(Result<Box<Response>, String>),
     RegionPrepared {
         generation: u64,
@@ -83,10 +97,18 @@ enum Reply {
         generation: u64,
         result: Result<Box<Artifact>, String>,
     },
-    Copied(Result<(), String>),
-    Decoded {
+    Copied {
+        preview_generation: Option<u64>,
+        result: Result<(), String>,
+    },
+    HistoryDecoded {
         generation: u64,
         path: PathBuf,
+        result: Result<Decoded, String>,
+    },
+    PreviewDecoded {
+        generation: u64,
+        artifact_id: String,
         result: Result<Decoded, String>,
     },
 }
@@ -128,6 +150,175 @@ enum SelectorMessage {
         generation: u64,
         kind: SelectorKind,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum PreviewMessage {
+    Copy {
+        generation: u64,
+    },
+    Save {
+        generation: u64,
+        directory: PathBuf,
+        format: captures_settings::ScreenshotFormat,
+    },
+    OpenHistory {
+        generation: u64,
+    },
+    Dismiss {
+        generation: u64,
+    },
+}
+
+#[derive(Clone, Copy)]
+struct CaptureTarget {
+    monitor: usize,
+    position: egui::Pos2,
+    size: egui::Vec2,
+    preview_bounds: Option<captures_app::preview::ThumbnailMonitorBounds>,
+}
+
+struct PreviewCard {
+    generation: u64,
+    artifact_id: String,
+    image_path: PathBuf,
+    width: u32,
+    height: u32,
+    target: CaptureTarget,
+    texture: Option<egui::TextureHandle>,
+    busy: Option<crate::mini_preview::Busy>,
+    message: Option<String>,
+}
+
+struct MiniPreviews {
+    visibility: captures_app::preview::ThumbnailVisibility,
+    next_generation: u64,
+    card: Option<PreviewCard>,
+    capture_generation: Option<u64>,
+    capture_target: Option<CaptureTarget>,
+    show: bool,
+    include_in_captures: bool,
+    placement: captures_settings::MiniPreviewPlacement,
+    omission_frame: Option<u64>,
+}
+
+impl Default for MiniPreviews {
+    fn default() -> Self {
+        Self {
+            visibility: captures_app::preview::ThumbnailVisibility::default(),
+            next_generation: 0,
+            card: None,
+            capture_generation: None,
+            capture_target: None,
+            show: true,
+            include_in_captures: false,
+            placement: captures_settings::MiniPreviewPlacement::default(),
+            omission_frame: None,
+        }
+    }
+}
+
+impl MiniPreviews {
+    fn begin_capture(
+        &mut self,
+        settings: &AppSettings,
+        target: Option<CaptureTarget>,
+        frame: u64,
+    ) -> Result<(), String> {
+        let was_visible = self.is_visible();
+        let generation = self
+            .visibility
+            .begin_capture()
+            .ok_or("A previous mini-preview capture is still preparing.")?;
+        self.capture_generation = Some(generation);
+        self.capture_target = target;
+        self.show = settings.show_mini_previews;
+        self.include_in_captures = settings.include_mini_previews_in_captures;
+        self.placement = settings.mini_preview_placement;
+        self.omission_frame =
+            (was_visible && self.show && !self.include_in_captures).then_some(frame);
+        Ok(())
+    }
+
+    fn restore_capture(&mut self) {
+        if let Some(generation) = self.capture_generation.take() {
+            self.visibility.restore_capture(generation);
+        }
+        self.capture_target = None;
+        self.omission_frame = None;
+    }
+
+    fn start_artifact(&mut self, artifact: &Artifact) -> Result<Option<(u64, PathBuf)>, String> {
+        let Some(capture_generation) = self.capture_generation.take() else {
+            return Err("Mini-preview capture state was lost before persistence.".into());
+        };
+        self.omission_frame = None;
+        if !self.show {
+            self.visibility.restore_capture(capture_generation);
+            self.capture_target = None;
+            self.card = None;
+            return Ok(None);
+        }
+        let Some(target) = self.capture_target.take() else {
+            self.visibility.restore_capture(capture_generation);
+            self.card = None;
+            return Err("Mini-preview monitor state was lost before persistence.".into());
+        };
+        if target.preview_bounds.is_none() {
+            self.visibility.restore_capture(capture_generation);
+            self.card = None;
+            return Err("Mini-preview positioning is unavailable for this display.".into());
+        }
+        let artifact_id = artifact.entry.id.clone();
+        if !self
+            .visibility
+            .wait_for_artifact(capture_generation, artifact_id.clone())
+        {
+            return Err("Mini-preview capture generation changed before persistence.".into());
+        }
+        self.next_generation = self.next_generation.wrapping_add(1);
+        let generation = self.next_generation;
+        self.card = Some(PreviewCard {
+            generation,
+            artifact_id,
+            image_path: artifact.image_path.clone(),
+            width: artifact.entry.width,
+            height: artifact.entry.height,
+            target,
+            texture: None,
+            busy: None,
+            message: None,
+        });
+        Ok(Some((generation, artifact.preview_path.clone())))
+    }
+
+    fn accepts(&self, generation: u64) -> bool {
+        self.card
+            .as_ref()
+            .is_some_and(|card| card.generation == generation)
+    }
+
+    fn dismiss(&mut self, generation: u64) -> bool {
+        if !self.accepts(generation) {
+            return false;
+        }
+        self.card = None;
+        self.visibility.stop_waiting_for_artifact();
+        true
+    }
+
+    fn is_visible(&self) -> bool {
+        captures_app::preview::stack_should_be_visible(
+            usize::from(
+                self.card
+                    .as_ref()
+                    .is_some_and(|card| card.texture.is_some()),
+            ),
+            self.visibility.is_suppressed(),
+            self.show,
+            self.include_in_captures,
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -184,12 +375,17 @@ pub struct Live {
     include_cursor: bool,
     flow: Option<CaptureFlow>,
     capture_phase: Option<CapturePhase>,
-    countdown_target: Option<(usize, egui::Pos2, egui::Vec2)>,
+    countdown_target: Option<CaptureTarget>,
     region_session: Option<Box<RegionSession>>,
     region_texture: Option<egui::TextureHandle>,
     region_selector: Arc<Mutex<Selector>>,
     selector_tx: Sender<SelectorMessage>,
     selector_rx: Receiver<SelectorMessage>,
+    preview_tx: Sender<PreviewMessage>,
+    preview_rx: Receiver<PreviewMessage>,
+    previews: MiniPreviews,
+    root_hide_deferred: bool,
+    open_history_requested: bool,
     region_freeze: bool,
     region_auto_start: bool,
     region_countdown_seconds: u8,
@@ -210,6 +406,7 @@ impl Live {
         let (tx, jobs) = mpsc::channel();
         let (out, rx) = mpsc::channel();
         let (selector_tx, selector_rx) = mpsc::channel();
+        let (preview_tx, preview_rx) = mpsc::channel();
         let worker = thread::spawn(move || {
             // Retain ownership on X11. Disk decode and clipboard encoding never
             // block the UI, and the full uncompressed image is not retained by it.
@@ -217,7 +414,10 @@ impl Live {
             while let Ok(job) = jobs.recv() {
                 let reply = match job {
                     Job::Shutdown => break,
-                    Job::Execute(request) => {
+                    Job::Execute {
+                        request,
+                        preview_generation,
+                    } => {
                         let clearing = matches!(request, Request::ClearHistory { .. });
                         let result = captures_app::execute(request)
                             .map(Box::new)
@@ -225,7 +425,10 @@ impl Live {
                         if clearing {
                             Reply::HistoryCleared(result)
                         } else {
-                            Reply::Executed(result)
+                            Reply::Executed {
+                                preview_generation,
+                                result,
+                            }
                         }
                     }
                     Job::PrepareRegion {
@@ -287,12 +490,27 @@ impl Live {
                             .map(Box::new)
                             .map_err(|error| error.to_string()),
                     },
-                    Job::Decode { generation, path } => Reply::Decoded {
+                    Job::DecodeHistory { generation, path } => Reply::HistoryDecoded {
                         generation,
                         result: decode(&path),
                         path,
                     },
-                    Job::Copy(path) => Reply::Copied(copy_image(&path, &mut clipboard)),
+                    Job::DecodePreview {
+                        generation,
+                        artifact_id,
+                        path,
+                    } => Reply::PreviewDecoded {
+                        generation,
+                        artifact_id,
+                        result: decode(&path),
+                    },
+                    Job::Copy {
+                        path,
+                        preview_generation,
+                    } => Reply::Copied {
+                        preview_generation,
+                        result: copy_image(&path, &mut clipboard),
+                    },
                 };
                 if out.send(reply).is_err() {
                     break;
@@ -329,6 +547,11 @@ impl Live {
             region_selector: Arc::new(Mutex::new(Selector::default())),
             selector_tx,
             selector_rx,
+            preview_tx,
+            preview_rx,
+            previews: MiniPreviews::default(),
+            root_hide_deferred: false,
+            open_history_requested: false,
             region_freeze: false,
             region_auto_start: false,
             region_countdown_seconds: 0,
@@ -353,6 +576,10 @@ impl Live {
         self.flow.is_some() || self.capture_in_flight
     }
 
+    pub fn take_open_history_requested(&mut self) -> bool {
+        std::mem::take(&mut self.open_history_requested)
+    }
+
     pub fn flush(&mut self) {
         // Cancel preparation/countdown before draining work. CaptureFlow::cancel
         // leaves a capture that already crossed its persistence commit point alone.
@@ -373,7 +600,42 @@ impl Live {
     fn send(&mut self, request: Request) {
         self.pending += 1;
         self.error = None;
-        let _ = self.tx.send(Job::Execute(request));
+        let _ = self.tx.send(Job::Execute {
+            request,
+            preview_generation: None,
+        });
+    }
+
+    fn send_preview(&mut self, request: Request, generation: u64) {
+        self.pending += 1;
+        let _ = self.tx.send(Job::Execute {
+            request,
+            preview_generation: Some(generation),
+        });
+    }
+
+    fn begin_root_hide(&mut self, ctx: &egui::Context) {
+        self.capture_waiting_for_hide = true;
+        self.hide_started = Some(Instant::now());
+        self.hidden_since = None;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        ctx.request_repaint();
+    }
+
+    fn hide_for_capture(&mut self, ctx: &egui::Context) {
+        if self
+            .previews
+            .omission_frame
+            .is_some_and(|frame| frame >= ctx.cumulative_frame_nr())
+        {
+            // A deferred viewport remains alive for the frame in which it was
+            // last declared. Omit it for one completed pass before hiding and
+            // settling the root, rather than trusting asynchronous Visible(false).
+            self.root_hide_deferred = true;
+            ctx.request_repaint();
+        } else {
+            self.begin_root_hide(ctx);
+        }
     }
 
     fn load_selected(&mut self) {
@@ -388,7 +650,7 @@ impl Live {
             return;
         };
         let generation = self.selection.generation;
-        let _ = self.tx.send(Job::Decode {
+        let _ = self.tx.send(Job::DecodeHistory {
             generation,
             path: item.image_path.clone(),
         });
@@ -478,6 +740,83 @@ impl Live {
                 | SelectorMessage::ConfirmWindow { .. }
                 | SelectorMessage::Cancel { .. } => {}
             }
+        }
+        while let Ok(message) = self.preview_rx.try_recv() {
+            match message {
+                PreviewMessage::Copy { generation } if self.previews.accepts(generation) => {
+                    let path = {
+                        let card = self
+                            .previews
+                            .card
+                            .as_mut()
+                            .expect("accepted preview exists");
+                        card.busy = Some(crate::mini_preview::Busy::Copy);
+                        card.message = Some("Copying full-resolution pixels…".into());
+                        card.image_path.clone()
+                    };
+                    self.pending += 1;
+                    let _ = self.tx.send(Job::Copy {
+                        path,
+                        preview_generation: Some(generation),
+                    });
+                }
+                PreviewMessage::Save {
+                    generation,
+                    directory,
+                    format,
+                } if self.previews.accepts(generation) => {
+                    let id = {
+                        let card = self
+                            .previews
+                            .card
+                            .as_mut()
+                            .expect("accepted preview exists");
+                        card.busy = Some(crate::mini_preview::Busy::Save);
+                        card.message = Some("Saving with current preferences…".into());
+                        card.artifact_id.clone()
+                    };
+                    self.send_preview(
+                        Request::SaveScreenshot {
+                            root: self.root.clone(),
+                            id,
+                            directory,
+                            format,
+                        },
+                        generation,
+                    );
+                }
+                PreviewMessage::OpenHistory { generation } if self.previews.accepts(generation) => {
+                    let id = self
+                        .previews
+                        .card
+                        .as_ref()
+                        .expect("accepted preview exists")
+                        .artifact_id
+                        .clone();
+                    self.select(id);
+                    self.open_history_requested = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.request_repaint();
+                }
+                PreviewMessage::Dismiss { generation } => {
+                    if self.previews.dismiss(generation) {
+                        ctx.request_repaint();
+                    }
+                }
+                PreviewMessage::Copy { .. }
+                | PreviewMessage::Save { .. }
+                | PreviewMessage::OpenHistory { .. } => {}
+            }
+        }
+        if self.root_hide_deferred
+            && self.flow.as_ref().is_some_and(CaptureFlow::is_current)
+            && self
+                .previews
+                .omission_frame
+                .is_none_or(|frame| ctx.cumulative_frame_nr() > frame)
+        {
+            self.root_hide_deferred = false;
+            self.begin_root_hide(ctx);
         }
         if let Some(flow) = &self.flow {
             if !flow.is_current() {
@@ -611,7 +950,7 @@ impl Live {
                 Reply::HistoryCleared(result) => {
                     self.pending = self.pending.saturating_sub(1);
                     match result {
-                        Ok(response) => self.apply(*response),
+                        Ok(response) => self.apply(*response, true),
                         Err(error) => {
                             // Some files may already have been deleted. Refresh the
                             // remaining history without concealing the operation error.
@@ -622,14 +961,35 @@ impl Live {
                         }
                     }
                 }
-                Reply::Copied(result) => {
+                Reply::Copied {
+                    preview_generation,
+                    result,
+                } => {
                     self.pending = self.pending.saturating_sub(1);
-                    match result {
-                        Ok(()) => self.status = "Copied actual capture pixels".into(),
-                        Err(error) => self.error = Some(error),
+                    if let Some(generation) = preview_generation {
+                        if let Some(card) = self
+                            .previews
+                            .card
+                            .as_mut()
+                            .filter(|card| card.generation == generation)
+                        {
+                            card.busy = None;
+                            card.message = Some(match result {
+                                Ok(()) => "Copied full-resolution pixels".into(),
+                                Err(error) => format!("Copy failed: {error}"),
+                            });
+                        }
+                    } else {
+                        match result {
+                            Ok(()) => self.status = "Copied actual capture pixels".into(),
+                            Err(error) => self.error = Some(error),
+                        }
                     }
                 }
-                Reply::Executed(result) => {
+                Reply::Executed {
+                    preview_generation,
+                    result,
+                } => {
                     self.pending = self.pending.saturating_sub(1);
                     if self.capture_phase == Some(CapturePhase::DisplayCapturing) {
                         self.capture_in_flight = false;
@@ -637,8 +997,36 @@ impl Live {
                         self.finish_capture(ctx, captured);
                     }
                     match result {
-                        Err(error) => self.error = Some(error),
-                        Ok(response) => self.apply(*response),
+                        Err(error) => {
+                            if let Some(generation) = preview_generation {
+                                if let Some(card) = self
+                                    .previews
+                                    .card
+                                    .as_mut()
+                                    .filter(|card| card.generation == generation)
+                                {
+                                    card.busy = None;
+                                    card.message = Some(format!("Save failed: {error}"));
+                                }
+                            } else {
+                                self.error = Some(error);
+                            }
+                        }
+                        Ok(response) => {
+                            let announce = preview_generation
+                                .is_none_or(|generation| self.previews.accepts(generation));
+                            self.apply(*response, announce);
+                            if let Some(generation) = preview_generation
+                                && let Some(card) = self
+                                    .previews
+                                    .card
+                                    .as_mut()
+                                    .filter(|card| card.generation == generation)
+                            {
+                                card.busy = None;
+                                card.message = Some("Saved with current preferences".into());
+                            }
+                        }
                     }
                 }
                 Reply::RegionPrepared { generation, result } => {
@@ -779,7 +1167,7 @@ impl Live {
                         Err(error) => self.error = Some(error),
                     }
                 }
-                Reply::Decoded {
+                Reply::HistoryDecoded {
                     generation,
                     path,
                     result,
@@ -798,7 +1186,42 @@ impl Live {
                         self.error = Some(error);
                     }
                 },
-                Reply::Decoded { .. } => {}
+                Reply::HistoryDecoded { .. } => {}
+                Reply::PreviewDecoded {
+                    generation,
+                    artifact_id,
+                    result,
+                } if self.previews.accepts(generation)
+                    && self
+                        .previews
+                        .card
+                        .as_ref()
+                        .is_some_and(|card| card.artifact_id == artifact_id) =>
+                {
+                    match result {
+                        Ok(decoded)
+                            if self.previews.visibility.mark_artifact_ready(&artifact_id) =>
+                        {
+                            let card = self
+                                .previews
+                                .card
+                                .as_mut()
+                                .expect("accepted preview exists");
+                            card.texture = Some(ctx.load_texture(
+                                format!("mini-preview:{generation}:{artifact_id}"),
+                                decoded.image,
+                                egui::TextureOptions::LINEAR,
+                            ));
+                            ctx.request_repaint();
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            self.previews.dismiss(generation);
+                            self.error = Some(format!("Could not load mini preview: {error}"));
+                        }
+                    }
+                }
+                Reply::PreviewDecoded { .. } => {}
             }
         }
     }
@@ -810,7 +1233,9 @@ impl Live {
         self.hide_started = None;
         self.hidden_since = None;
         self.capture_in_flight = false;
+        self.root_hide_deferred = false;
         if !preserve_auto_copy {
+            self.previews.restore_capture();
             self.auto_copy_on_capture = false;
         }
         self.region_session = None;
@@ -826,16 +1251,38 @@ impl Live {
     fn accept_artifact(&mut self, artifact: Artifact, status: &str) {
         let id = artifact.entry.id.clone();
         let path = artifact.image_path.clone();
+        let preview = self.previews.start_artifact(&artifact);
         self.artifacts.insert(0, artifact);
         self.select(id);
         self.status = status.into();
+        match preview {
+            Ok(Some((generation, path))) => {
+                let artifact_id = self
+                    .previews
+                    .card
+                    .as_ref()
+                    .expect("preview was just prepared")
+                    .artifact_id
+                    .clone();
+                let _ = self.tx.send(Job::DecodePreview {
+                    generation,
+                    artifact_id,
+                    path,
+                });
+            }
+            Ok(None) => {}
+            Err(error) => self.error = Some(error),
+        }
         if std::mem::take(&mut self.auto_copy_on_capture) {
             self.pending += 1;
-            let _ = self.tx.send(Job::Copy(path));
+            let _ = self.tx.send(Job::Copy {
+                path,
+                preview_generation: None,
+            });
         }
     }
 
-    fn apply(&mut self, response: Response) {
+    fn apply(&mut self, response: Response, announce: bool) {
         match response {
             Response::Displays { displays } => {
                 self.display_id = self
@@ -853,6 +1300,15 @@ impl Live {
                 self.status = "Displays refreshed".into();
             }
             Response::History { artifacts } => {
+                let preview_kept = self.previews.card.as_ref().is_none_or(|card| {
+                    artifacts
+                        .iter()
+                        .any(|artifact| artifact.entry.id == card.artifact_id)
+                });
+                if !preview_kept {
+                    self.previews.card = None;
+                    self.previews.visibility.stop_waiting_for_artifact();
+                }
                 self.confirm_clear_history = false;
                 self.confirm_delete = None;
                 self.selection.clear();
@@ -876,9 +1332,20 @@ impl Live {
                 {
                     *item = artifact;
                 }
-                self.status = format!("Saved {}", path.display());
+                if announce {
+                    self.status = format!("Saved {}", path.display());
+                }
             }
             Response::Deleted { id } => {
+                if self
+                    .previews
+                    .card
+                    .as_ref()
+                    .is_some_and(|card| card.artifact_id == id)
+                {
+                    self.previews.card = None;
+                    self.previews.visibility.stop_waiting_for_artifact();
+                }
                 self.artifacts.retain(|item| item.entry.id != id);
                 self.confirm_delete = None;
                 self.selection.clear();
@@ -898,6 +1365,143 @@ impl Live {
         }
     }
 
+    pub fn viewports(
+        &mut self,
+        ctx: &egui::Context,
+        tokens: &Tokens,
+        settings: Result<AppSettings, String>,
+    ) {
+        if self.flow.is_none()
+            && let Ok(settings) = &settings
+        {
+            self.previews.show = settings.show_mini_previews;
+            self.previews.include_in_captures = settings.include_mini_previews_in_captures;
+            self.previews.placement = settings.mini_preview_placement;
+        }
+        if !self.previews.is_visible() {
+            return;
+        }
+        let Some(card) = self.previews.card.as_ref() else {
+            return;
+        };
+        let Some(texture) = card.texture.clone() else {
+            return;
+        };
+        let generation = card.generation;
+        let width = card.width;
+        let height = card.height;
+        let target = card.target;
+        let busy = card.busy;
+        let message = card.message.clone();
+        let placement = self.previews.placement;
+        let tokens = tokens.clone();
+        let geometry = captures_app::preview::thumbnail_geometry(
+            target
+                .preview_bounds
+                .expect("visible preview has validated monitor bounds"),
+            1,
+            false,
+            None,
+            placement,
+        );
+        let sender = self.preview_tx.clone();
+        let save = settings.ok().map(|settings| {
+            (
+                PathBuf::from(settings.output_directory),
+                settings.screenshot_format,
+            )
+        });
+        let builder = egui::ViewportBuilder::default()
+            .with_title("Captures Mini Preview")
+            .with_visible(true)
+            .with_position(egui::pos2(geometry.x as f32, geometry.y as f32))
+            .with_inner_size(egui::vec2(
+                captures_app::preview::THUMBNAIL_WIDTH as f32,
+                geometry.height as f32,
+            ))
+            .with_min_inner_size(egui::vec2(
+                captures_app::preview::THUMBNAIL_WIDTH as f32,
+                geometry.height as f32,
+            ))
+            .with_max_inner_size(egui::vec2(
+                captures_app::preview::THUMBNAIL_WIDTH as f32,
+                geometry.height as f32,
+            ))
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_transparent(true)
+            .with_has_shadow(false)
+            .with_always_on_top()
+            .with_taskbar(false);
+        // winit's active hint is unsupported by X11. Use it where the backend
+        // implements it, and verify X11 focus behavior in the real host smoke.
+        #[cfg(target_os = "windows")]
+        let builder = builder.with_active(false);
+        #[cfg(target_os = "linux")]
+        let builder = builder
+            .with_window_type(egui::X11WindowType::Notification)
+            // winit does not implement its active hint on X11. Bypass WM
+            // activation while retaining direct pointer input for the card.
+            .with_override_redirect(true);
+        ctx.show_viewport_deferred(
+            egui::ViewportId::from_hash_of("live-mini-preview"),
+            builder,
+            move |ui, _| {
+                // egui's deferred child may be mapped by the WM before its
+                // builder position is applied. Reassert the absolute outer
+                // position after mapping; unlike `with_monitor`, this does not
+                // create a borderless-fullscreen viewport at the monitor origin.
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                        geometry.x as f32,
+                        geometry.y as f32,
+                    )));
+                if ui.input(|input| input.viewport().close_requested()) {
+                    let _ = sender.send(PreviewMessage::Dismiss { generation });
+                    ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                    return;
+                }
+                let action = crate::mini_preview::show(
+                    ui,
+                    &tokens,
+                    crate::mini_preview::View {
+                        texture: &texture,
+                        width,
+                        height,
+                        busy,
+                        message: message.as_deref(),
+                        can_save: save.is_some(),
+                    },
+                );
+                let message = match action {
+                    Some(crate::mini_preview::Action::Copy) => {
+                        Some(PreviewMessage::Copy { generation })
+                    }
+                    Some(crate::mini_preview::Action::Save) => {
+                        save.as_ref()
+                            .map(|(directory, format)| PreviewMessage::Save {
+                                generation,
+                                directory: directory.clone(),
+                                format: *format,
+                            })
+                    }
+                    Some(crate::mini_preview::Action::OpenHistory) => {
+                        restore_root_for_history(ui.ctx());
+                        Some(PreviewMessage::OpenHistory { generation })
+                    }
+                    Some(crate::mini_preview::Action::Dismiss) => {
+                        Some(PreviewMessage::Dismiss { generation })
+                    }
+                    None => None,
+                };
+                if let Some(message) = message {
+                    let _ = sender.send(message);
+                    ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                }
+            },
+        );
+    }
+
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -912,7 +1516,7 @@ impl Live {
                 .as_ref()
                 .expect("selection owns flow")
                 .generation();
-            let (monitor, position, size) = self.countdown_target.expect("region target validated");
+            let target = self.countdown_target.expect("region target validated");
             let selector = Arc::clone(&self.region_selector);
             let sender = self.selector_tx.clone();
             let texture = self.region_texture.clone();
@@ -929,7 +1533,12 @@ impl Live {
             };
             ui.ctx().show_viewport_deferred(
                 egui::ViewportId::from_hash_of("region-selector"),
-                capture_viewport("Captures Region Selection", monitor, position, size),
+                capture_viewport(
+                    "Captures Region Selection",
+                    target.monitor,
+                    target.position,
+                    target.size,
+                ),
                 move |ui, _| {
                     if ui.input(|input| input.viewport().close_requested()) {
                         captures_app::capture_flow::cancel(generation);
@@ -970,7 +1579,7 @@ impl Live {
                 .as_ref()
                 .expect("selection owns flow")
                 .generation();
-            let (monitor, position, size) = self.countdown_target.expect("window target validated");
+            let target = self.countdown_target.expect("window target validated");
             let selector = Arc::clone(&self.window_selector);
             let sender = self.selector_tx.clone();
             let texture = self.window_texture.clone();
@@ -982,7 +1591,12 @@ impl Live {
             );
             ui.ctx().show_viewport_deferred(
                 egui::ViewportId::from_hash_of("window-selector"),
-                capture_viewport("Captures Window Selection", monitor, position, size),
+                capture_viewport(
+                    "Captures Window Selection",
+                    target.monitor,
+                    target.position,
+                    target.size,
+                ),
                 move |ui, _| {
                     if ui.input(|input| input.viewport().close_requested()) {
                         captures_app::capture_flow::cancel(generation);
@@ -1032,11 +1646,15 @@ impl Live {
             if clock.remaining(Instant::now()) > 0 {
                 let t = t.clone();
                 let generation = flow.generation();
-                let (monitor, position, size) =
-                    self.countdown_target.expect("countdown target validated");
+                let target = self.countdown_target.expect("countdown target validated");
                 ui.ctx().show_viewport_deferred(
                     egui::ViewportId::from_hash_of("screenshot-countdown"),
-                    capture_viewport("Captures Screenshot Countdown", monitor, position, size),
+                    capture_viewport(
+                        "Captures Screenshot Countdown",
+                        target.monitor,
+                        target.position,
+                        target.size,
+                    ),
                     move |ui, _| {
                         if ui.input(|i| {
                             i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)
@@ -1051,11 +1669,7 @@ impl Live {
             } else {
                 // Stop declaring the child before hiding the root. Hidden-root
                 // logic then verifies visibility and waits for compositor settling.
-                self.capture_waiting_for_hide = true;
-                self.hide_started = Some(Instant::now());
-                self.hidden_since = None;
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                self.hide_for_capture(ui.ctx());
             }
         }
         if self.flow.is_some() || self.capture_in_flight {
@@ -1068,7 +1682,7 @@ impl Live {
                     RichText::new("Native screenshot capture").color(t.color("text-muted")),
                 );
             });
-            ui.label("Display, region and window capture with countdown, cursor inclusion, automatic copy and save format/folder preferences. Recording, editing, and mini previews are not connected yet.");
+            ui.label("Display, region and window capture with countdown, cursor inclusion, automatic copy, save format/folder preferences, and one latest mini preview. Recording and editing are not connected yet.");
             ui.horizontal(|ui| {
                 egui::ComboBox::from_label("Display")
                     .selected_text(self.displays.iter().find(|d| Some(&d.id) == self.display_id.as_ref()).map_or("No display", |d| d.name.as_str()))
@@ -1080,18 +1694,31 @@ impl Live {
                 if capture.clicked() {
                     match settings() {
                         Ok(settings) => {
-                            self.countdown_target = capture_target(frame, &self.displays, self.display_id.as_deref());
-                            if settings.screenshot_countdown_seconds > 0 && self.countdown_target.is_none() {
+                            let target = capture_target(frame, &self.displays, self.display_id.as_deref());
+                            self.countdown_target = target;
+                            if settings.screenshot_countdown_seconds > 0 && target.is_none() {
                                 self.error = Some("The selected display is no longer available for countdown.".into());
                             } else {
                                 match CaptureFlow::begin(settings.screenshot_countdown_seconds) {
                                     Ok(flow) => {
-                                        self.flow = Some(flow);
-                                        self.capture_phase = Some(CapturePhase::DisplayCountdown);
-                                        self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
-                                        self.include_cursor = settings.show_cursor_in_screenshots;
-                                        self.status = "Preparing screenshot… Press Escape to cancel.".into();
-                                        ui.ctx().request_repaint();
+                                        match self.previews.begin_capture(
+                                            &settings,
+                                            target,
+                                            ui.ctx().cumulative_frame_nr(),
+                                        ) {
+                                            Ok(()) => {
+                                                self.flow = Some(flow);
+                                                self.capture_phase = Some(CapturePhase::DisplayCountdown);
+                                                self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
+                                                self.include_cursor = settings.show_cursor_in_screenshots;
+                                                self.status = "Preparing screenshot… Press Escape to cancel.".into();
+                                                ui.ctx().request_repaint();
+                                            }
+                                            Err(error) => {
+                                                flow.cancel();
+                                                self.error = Some(error);
+                                            }
+                                        }
                                     }
                                     Err(error) => self.error = Some(format!("Could not arm capture Escape: {error}")),
                                 }
@@ -1104,25 +1731,34 @@ impl Live {
                 if region.clicked() {
                     match settings() {
                         Ok(settings) => {
-                            self.countdown_target = capture_target(frame, &self.displays, self.display_id.as_deref());
-                            if self.countdown_target.is_none() {
+                            let target = capture_target(frame, &self.displays, self.display_id.as_deref());
+                            self.countdown_target = target;
+                            if target.is_none() {
                                 self.error = Some("The selected display is no longer available for region selection.".into());
                             } else {
                                 match CaptureFlow::begin(0) {
                                     Ok(flow) => {
-                                        self.flow = Some(flow);
-                                        self.capture_phase = Some(CapturePhase::RegionPreparing);
-                                        self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
-                                        self.include_cursor = settings.show_cursor_in_screenshots;
-                                        self.region_freeze = settings.freeze_screen;
-                                        self.region_auto_start = settings.auto_start_on_selection;
-                                        self.region_countdown_seconds = settings.screenshot_countdown_seconds;
-                                        self.capture_waiting_for_hide = true;
-                                        self.hide_started = Some(Instant::now());
-                                        self.hidden_since = None;
-                                        self.status = "Preparing region selector… Press Escape to cancel.".into();
-                                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                                        ui.ctx().request_repaint();
+                                        match self.previews.begin_capture(
+                                            &settings,
+                                            target,
+                                            ui.ctx().cumulative_frame_nr(),
+                                        ) {
+                                            Ok(()) => {
+                                                self.flow = Some(flow);
+                                                self.capture_phase = Some(CapturePhase::RegionPreparing);
+                                                self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
+                                                self.include_cursor = settings.show_cursor_in_screenshots;
+                                                self.region_freeze = settings.freeze_screen;
+                                                self.region_auto_start = settings.auto_start_on_selection;
+                                                self.region_countdown_seconds = settings.screenshot_countdown_seconds;
+                                                self.status = "Preparing region selector… Press Escape to cancel.".into();
+                                                self.hide_for_capture(ui.ctx());
+                                            }
+                                            Err(error) => {
+                                                flow.cancel();
+                                                self.error = Some(error);
+                                            }
+                                        }
                                     }
                                     Err(error) => self.error = Some(format!("Could not arm capture Escape: {error}")),
                                 }
@@ -1135,25 +1771,34 @@ impl Live {
                 if window.clicked() {
                     match settings() {
                         Ok(settings) => {
-                            self.countdown_target = capture_target(frame, &self.displays, self.display_id.as_deref());
-                            if self.countdown_target.is_none() {
+                            let target = capture_target(frame, &self.displays, self.display_id.as_deref());
+                            self.countdown_target = target;
+                            if target.is_none() {
                                 self.error = Some("The selected display is no longer available for window selection.".into());
                             } else {
                                 match CaptureFlow::begin(0) {
                                     Ok(flow) => {
-                                        self.flow = Some(flow);
-                                        self.capture_phase = Some(CapturePhase::WindowPreparing);
-                                        self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
-                                        self.include_cursor = settings.show_cursor_in_screenshots;
-                                        self.window_freeze = settings.freeze_screen;
-                                        self.window_auto_start = settings.auto_start_on_selection;
-                                        self.window_countdown_seconds = settings.screenshot_countdown_seconds;
-                                        self.capture_waiting_for_hide = true;
-                                        self.hide_started = Some(Instant::now());
-                                        self.hidden_since = None;
-                                        self.status = "Preparing window selector… Press Escape to cancel.".into();
-                                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                                        ui.ctx().request_repaint();
+                                        match self.previews.begin_capture(
+                                            &settings,
+                                            target,
+                                            ui.ctx().cumulative_frame_nr(),
+                                        ) {
+                                            Ok(()) => {
+                                                self.flow = Some(flow);
+                                                self.capture_phase = Some(CapturePhase::WindowPreparing);
+                                                self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
+                                                self.include_cursor = settings.show_cursor_in_screenshots;
+                                                self.window_freeze = settings.freeze_screen;
+                                                self.window_auto_start = settings.auto_start_on_selection;
+                                                self.window_countdown_seconds = settings.screenshot_countdown_seconds;
+                                                self.status = "Preparing window selector… Press Escape to cancel.".into();
+                                                self.hide_for_capture(ui.ctx());
+                                            }
+                                            Err(error) => {
+                                                flow.cancel();
+                                                self.error = Some(error);
+                                            }
+                                        }
                                     }
                                     Err(error) => self.error = Some(format!("Could not arm capture Escape: {error}")),
                                 }
@@ -1352,7 +1997,10 @@ impl Live {
         if let Some(path) = &self.decoded_path {
             self.pending += 1;
             self.error = None;
-            let _ = self.tx.send(Job::Copy(path.clone()));
+            let _ = self.tx.send(Job::Copy {
+                path: path.clone(),
+                preview_generation: None,
+            });
         }
     }
 }
@@ -1361,7 +2009,7 @@ fn capture_target(
     frame: &eframe::Frame,
     displays: &[DisplayDescriptor],
     display_id: Option<&str>,
-) -> Option<(usize, egui::Pos2, egui::Vec2)> {
+) -> Option<CaptureTarget> {
     let display = displays
         .iter()
         .find(|display| Some(display.id.as_str()) == display_id)?;
@@ -1382,11 +2030,47 @@ fn capture_target(
     let scale = monitor.scale_factor();
     let position = monitor.position().to_logical::<f32>(scale);
     let size = monitor.size().to_logical::<f32>(scale);
-    Some((
-        index,
-        egui::pos2(position.x, position.y),
-        egui::vec2(size.width, size.height),
-    ))
+    let physical_position = monitor.position();
+    let physical_size = monitor.size();
+    Some(CaptureTarget {
+        monitor: index,
+        position: egui::pos2(position.x, position.y),
+        size: egui::vec2(size.width, size.height),
+        preview_bounds: preview_bounds(
+            physical_position.x,
+            physical_position.y,
+            physical_size.width,
+            physical_size.height,
+            scale,
+        ),
+    })
+}
+
+fn preview_bounds(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    scale_factor: f64,
+) -> Option<captures_app::preview::ThumbnailMonitorBounds> {
+    let full = crate::work_area::PhysicalRect {
+        x,
+        y,
+        width,
+        height,
+    };
+    let work = crate::work_area::for_monitor(full)?;
+    Some(captures_app::preview::ThumbnailMonitorBounds {
+        work_x: work.x,
+        work_y: work.y,
+        work_width: work.width,
+        work_height: work.height,
+        full_x: x,
+        full_y: y,
+        full_width: width,
+        full_height: height,
+        scale_factor,
+    })
 }
 
 fn monitor_matches_overlay(
@@ -1428,6 +2112,16 @@ fn capture_viewport(
         .with_has_shadow(false)
         .with_always_on_top()
         .with_taskbar(false)
+}
+
+fn restore_root_for_history(ctx: &egui::Context) {
+    // The root may not run Live::logic while minimized. Target it directly
+    // from the independently repainting preview before queueing selection.
+    ctx.send_viewport_cmd_to(
+        egui::ViewportId::ROOT,
+        egui::ViewportCommand::Minimized(false),
+    );
+    ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Visible(true));
 }
 
 fn same_display_geometry(left: &DisplayDescriptor, right: &DisplayDescriptor) -> bool {
@@ -1508,6 +2202,34 @@ fn reveal(path: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    fn preview_target() -> CaptureTarget {
+        CaptureTarget {
+            monitor: 0,
+            position: egui::Pos2::ZERO,
+            size: egui::vec2(1280., 720.),
+            preview_bounds: Some(captures_app::preview::ThumbnailMonitorBounds {
+                work_x: 0,
+                work_y: 0,
+                work_width: 1280,
+                work_height: 720,
+                full_x: 0,
+                full_y: 0,
+                full_width: 1280,
+                full_height: 720,
+                scale_factor: 1.,
+            }),
+        }
+    }
+
+    fn preview_artifact(root: &Path, color: [u8; 4]) -> Artifact {
+        captures_app::persist_screenshot(
+            root,
+            &image::RgbaImage::from_pixel(9, 5, image::Rgba(color)),
+            captures_capture::CaptureMode::Display,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn shutdown_drains_accepted_exports() {
         let root = tempfile::tempdir().unwrap();
@@ -1547,6 +2269,144 @@ mod tests {
     }
 
     #[test]
+    fn history_preview_action_restores_minimized_root_without_waiting_for_live_logic() {
+        let ctx = egui::Context::default();
+        ctx.begin_pass(Default::default());
+        restore_root_for_history(&ctx);
+        let mut output = ctx.end_pass();
+        let commands = &output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .expect("root viewport output")
+            .commands;
+
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Minimized(false)))
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Visible(true)))
+        );
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn mini_preview_cancel_restores_visibility_without_touching_history() {
+        let root = tempfile::tempdir().unwrap();
+        let artifact = preview_artifact(root.path(), [11, 22, 33, 255]);
+        let mut previews = MiniPreviews::default();
+        previews
+            .begin_capture(&AppSettings::default(), Some(preview_target()), 4)
+            .unwrap();
+        assert!(previews.visibility.is_suppressed());
+
+        previews.restore_capture();
+        assert!(!previews.visibility.is_suppressed());
+        assert!(previews.card.is_none());
+        assert_eq!(captures_app::list(root.path()).unwrap().len(), 1);
+        assert!(artifact.image_path.exists());
+    }
+
+    #[test]
+    fn replacement_and_dismiss_reject_stale_preview_work() {
+        let root = tempfile::tempdir().unwrap();
+        let first = preview_artifact(root.path(), [10, 20, 30, 255]);
+        let second = preview_artifact(root.path(), [90, 80, 70, 255]);
+        let settings = AppSettings::default();
+        let mut previews = MiniPreviews::default();
+
+        previews
+            .begin_capture(&settings, Some(preview_target()), 1)
+            .unwrap();
+        let (first_generation, _) = previews.start_artifact(&first).unwrap().unwrap();
+        previews
+            .begin_capture(&settings, Some(preview_target()), 2)
+            .unwrap();
+        let (second_generation, _) = previews.start_artifact(&second).unwrap().unwrap();
+
+        assert!(!previews.accepts(first_generation));
+        assert!(!previews.dismiss(first_generation));
+        assert!(previews.accepts(second_generation));
+        assert!(previews.dismiss(second_generation));
+        assert!(!previews.accepts(second_generation));
+        assert_eq!(captures_app::list(root.path()).unwrap().len(), 2);
+        assert!(first.image_path.exists());
+        assert!(second.image_path.exists());
+    }
+
+    #[test]
+    fn disabled_mini_previews_skip_card_without_losing_capture() {
+        let root = tempfile::tempdir().unwrap();
+        let artifact = preview_artifact(root.path(), [40, 50, 60, 255]);
+        let settings = AppSettings {
+            show_mini_previews: false,
+            ..AppSettings::default()
+        };
+        let mut previews = MiniPreviews::default();
+        previews.begin_capture(&settings, None, 1).unwrap();
+
+        assert!(previews.start_artifact(&artifact).unwrap().is_none());
+        assert!(previews.card.is_none());
+        assert!(!previews.visibility.is_suppressed());
+        assert_eq!(captures_app::list(root.path()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn unavailable_work_area_skips_preview_without_losing_capture() {
+        let root = tempfile::tempdir().unwrap();
+        let artifact = preview_artifact(root.path(), [60, 50, 40, 255]);
+        let mut target = preview_target();
+        target.preview_bounds = None;
+        let mut previews = MiniPreviews::default();
+        previews
+            .begin_capture(&AppSettings::default(), Some(target), 1)
+            .unwrap();
+
+        assert_eq!(
+            previews.start_artifact(&artifact).unwrap_err(),
+            "Mini-preview positioning is unavailable for this display."
+        );
+        assert!(previews.card.is_none());
+        assert!(!previews.visibility.is_suppressed());
+        assert_eq!(captures_app::list(root.path()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn shared_preview_geometry_handles_opposite_placements() {
+        let bounds = captures_app::preview::ThumbnailMonitorBounds {
+            work_x: -160,
+            work_y: 124,
+            work_width: 3120,
+            work_height: 1700,
+            full_x: -200,
+            full_y: 100,
+            full_width: 3200,
+            full_height: 1800,
+            scale_factor: 2.,
+        };
+
+        let top_left = captures_app::preview::thumbnail_geometry(
+            bounds,
+            1,
+            false,
+            None,
+            captures_settings::MiniPreviewPlacement::TopLeft,
+        );
+        let bottom_right = captures_app::preview::thumbnail_geometry(
+            bounds,
+            1,
+            false,
+            None,
+            captures_settings::MiniPreviewPlacement::BottomRight,
+        );
+        assert!(top_left.x < bottom_right.x);
+        assert!(top_left.y < bottom_right.y);
+    }
+
+    #[test]
     fn clear_history_drains_at_shutdown_and_invalidates_selected_preview() {
         let root = tempfile::tempdir().unwrap();
         let artifact = captures_app::persist_screenshot(
@@ -1556,9 +2416,12 @@ mod tests {
         )
         .unwrap();
         let mut live = Live::new(egui::Context::default(), Some(root.path().into()));
-        live.apply(Response::History {
-            artifacts: captures_app::list(root.path()).unwrap(),
-        });
+        live.apply(
+            Response::History {
+                artifacts: captures_app::list(root.path()).unwrap(),
+            },
+            true,
+        );
         let decoding = live.selection.generation;
         live.decoded_path = Some(artifact.image_path);
         live.confirm_delete = Some(artifact.entry.id);
@@ -1575,7 +2438,7 @@ mod tests {
                 _ => None,
             })
             .expect("dedicated clear response");
-        live.apply(*response);
+        live.apply(*response, true);
         assert!(live.artifacts.is_empty());
         assert!(captures_app::list(root.path()).unwrap().is_empty());
         assert!(!live.selection.accepts(decoding));

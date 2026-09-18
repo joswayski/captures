@@ -43,7 +43,7 @@ jobs:
           cache-workspaces: apps/native/wgpu
       - name: Install Linux windowing and software-rendering test dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxi-dev libxrandr-dev libdbus-1-dev libxcb1-dev libpipewire-0.3-dev libegl-dev libgbm-dev libclang-dev mesa-vulkan-drivers libgl1-mesa-dri xvfb dbus python3-dbus python3-gi openbox picom hsetroot xdotool x11-utils x11-apps imagemagick
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxi-dev libxrandr-dev libdbus-1-dev libxcb1-dev libpipewire-0.3-dev libegl-dev libgbm-dev libclang-dev mesa-vulkan-drivers libgl1-mesa-dri xvfb dbus python3-dbus python3-gi openbox picom hsetroot xclip xdotool x11-utils x11-apps imagemagick
       - run: node apps/native/prepare.mjs --output apps/native/wgpu/resources
       - run: node --test scripts/native-tokens.test.mjs
       - run: python -m unittest discover -s apps/native -p 'test_*.py'
@@ -61,6 +61,9 @@ jobs:
       - name: Exercise native history deletion on private X11
         if: runner.os == 'Linux'
         run: python apps/native/x11_history_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-history
+      - name: Exercise real native mini previews on private X11
+        if: runner.os == 'Linux'
+        run: /usr/bin/python3 apps/native/x11_preview_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-preview
       - name: Exercise native Windows windows
         if: runner.os == 'Windows'
         run: python apps/native/wgpu/smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench.exe --output native-smoke
@@ -72,6 +75,7 @@ jobs:
             native-smoke
             native-x11-capture
             native-x11-history
+            native-x11-preview
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:

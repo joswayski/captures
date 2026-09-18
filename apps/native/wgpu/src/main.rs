@@ -1,10 +1,12 @@
 mod countdown;
 mod live;
+mod mini_preview;
 mod options;
 mod preferences;
 mod selector;
 mod tokens;
 mod window_selector;
+mod work_area;
 mod workbench;
 
 use eframe::egui;

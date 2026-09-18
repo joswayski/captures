@@ -26,6 +26,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private let store: SettingsStore
     private let tokensProvider: () -> Tokens
     private let appearanceChanged: (String, String, [String: Any]) -> Void
+    private let settingsChanged: ([String: Any]) -> Void
     private let showHistory: () -> Void
     private let liveCaptureAvailable: Bool
     private var settings: [String: Any] = [:]
@@ -50,10 +51,12 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
 
     init(root: Surface, store: SettingsStore, tokens: @escaping () -> Tokens,
          appearanceChanged: @escaping (String, String, [String: Any]) -> Void,
+         settingsChanged: @escaping ([String: Any]) -> Void = { _ in },
          showHistory: @escaping () -> Void, liveCaptureAvailable: Bool = false,
          initialAppearance: String? = nil, initialTheme: String? = nil) {
         self.root = root; self.store = store; tokensProvider = tokens
         self.appearanceChanged = appearanceChanged; self.showHistory = showHistory
+        self.settingsChanged = settingsChanged
         self.liveCaptureAvailable = liveCaptureAvailable
         super.init()
         buildShell()
@@ -65,6 +68,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
                 if let initialAppearance { self.settings["appearance"] = initialAppearance }
                 if let initialTheme { self.settings["theme"] = initialTheme }
                 self.appearanceChanged(self.settings.string("appearance", "system"), self.settings.string("theme", "mustard"), value["custom_theme"] as? [String: Any] ?? [:])
+                self.settingsChanged(self.settings)
                 self.restyle()
                 self.setStatus("", kind: "idle")
             case .failure(let error):
@@ -332,10 +336,13 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private func set(_ value: Any, for key: String, rerender: Bool) { settings[key] = value; changed(rerender: rerender) }
     private func changed(rerender: Bool) {
         setStatus("Saving changes…", kind: "saving"); saveFailed = false
+        settingsChanged(settings)
         latestRevision = store.save(settings) { [weak self] revision, result in
             guard let self, revision == self.latestRevision else { return }
             switch result {
-            case .success(let saved): self.settings = saved; self.setStatus("✓  Changes saved", kind: "saved")
+            case .success(let saved):
+                self.settings = saved; self.settingsChanged(saved)
+                self.setStatus("✓  Changes saved", kind: "saved")
             case .failure(let error): self.saveFailed = true; self.setStatus("Couldn’t save changes: \(error.localizedDescription) — Retry", kind: "error")
             }
         }
