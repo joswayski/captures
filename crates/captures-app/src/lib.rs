@@ -4,6 +4,7 @@
 pub mod capture_flow;
 pub mod region;
 pub mod selection;
+pub mod window;
 
 use captures_capture::{CaptureError, CaptureMode, DisplayDescriptor, XcapBackend};
 use captures_history::{ArtifactKind, HistoryEntry};
@@ -31,10 +32,12 @@ pub enum Error {
     Missing,
     #[error("Capture cancelled")]
     Cancelled,
-    #[error("The selected display changed. Select the region again.")]
+    #[error("The selected display changed. Select the capture target again.")]
     DisplayChanged,
     #[error("Select a valid region inside the display.")]
     InvalidRegion,
+    #[error("Window corner radius must be finite and nonnegative.")]
+    InvalidWindowRadius,
     #[error("Saved to {path}, but history could not be updated: {reason}")]
     SavedWithoutMetadata { path: String, reason: String },
 }

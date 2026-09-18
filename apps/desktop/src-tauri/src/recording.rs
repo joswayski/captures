@@ -7,6 +7,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+pub(crate) use captures_capture::RECORDING_REGION_INDICATOR_TITLE;
 use captures_capture::{CaptureMode, DisplayDescriptor};
 use captures_media::{
     ByteRange, CancelToken, EditSpec, ExportFormat, ExportProgress, ExportSpec, MediaToolError,
@@ -49,7 +50,6 @@ const RECORDING_COUNTDOWN_EVENT: &str = "recording-countdown";
 const RECORDING_WARNING_EVENT: &str = "recording-warning";
 const RECORDING_ARTIFACT_EVENT: &str = "recording-artifact-ready";
 pub(crate) const RECORDING_REGION_INDICATOR_LABEL: &str = "recording-region-indicator";
-pub(crate) const RECORDING_REGION_INDICATOR_TITLE: &str = "Captures Recording Region";
 #[cfg(target_os = "macos")]
 const RECORDING_COUNTDOWN_FADE_OUT_MS: u64 = 180;
 const RECORDING_HUD_FULL_WIDTH: f64 = 430.0;
