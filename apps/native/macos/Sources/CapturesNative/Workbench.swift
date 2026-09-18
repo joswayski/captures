@@ -92,10 +92,14 @@ final class RootWindowCloseHandler: NSObject, NSWindowDelegate {
         self.terminate = terminate
     }
 
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if sender === rootWindow { closePreviews() }
+        return true
+    }
+
     func windowWillClose(_ notification: Notification) {
         guard let closing = notification.object as? NSWindow,
               closing === rootWindow else { return }
-        closePreviews()
         terminate()
     }
 }

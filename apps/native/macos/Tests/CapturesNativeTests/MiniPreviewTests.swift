@@ -159,6 +159,7 @@ final class MiniPreviewTests: XCTestCase {
         _ = NSApplication.shared
         let root = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),
             styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        root.isReleasedWhenClosed = false
         let geometry = fixtureGeometry()
         let image = NSImage(cgImage: PreviewView.fixtureImage(scale: 1),
                             size: NSSize(width: 284, height: 160))
@@ -172,7 +173,7 @@ final class MiniPreviewTests: XCTestCase {
             closePreviews: { panel.close() }, terminate: { terminationRequests += 1 })
         root.delegate = handler
         root.makeKeyAndOrderFront(nil)
-        root.close()
+        root.performClose(nil)
         XCTAssertFalse(panel.isVisible)
         XCTAssertEqual(terminationRequests, 1)
         withExtendedLifetime(handler) {}
