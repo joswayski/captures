@@ -110,6 +110,17 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+## Native frontend migration
+
+The browser-free macOS workbench is separate from the shipping Tauri app. On a
+Mac, run `bash apps/native/macos/build.sh`; this generates shared token resources,
+runs Swift tests and builds the AppKit executable without installing it. See
+[`apps/native/README.md`](apps/native/README.md) for representative scenes,
+cold/warm effects, resource collection and known gaps. The
+[`docs/native-rewrite.md`](docs/native-rewrite.md) checklist defines the staged
+cutover and Windows/Linux prototype gates. Do not remove the existing frontend
+or change Preview packaging before those gates pass.
+
 ## Packaging
 
 Build Captures on the operating system where the package will run:
