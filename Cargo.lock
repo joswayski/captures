@@ -658,8 +658,12 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-graphics 0.25.0",
  "image",
+ "mouse_position",
+ "objc2-app-kit",
+ "objc2-foundation",
  "serde",
  "thiserror 2.0.19",
+ "x11rb",
  "xcap",
 ]
 
@@ -684,7 +688,6 @@ dependencies = [
  "directories",
  "image",
  "libc",
- "mouse_position",
  "parking_lot",
  "png 0.17.16",
  "quantette",

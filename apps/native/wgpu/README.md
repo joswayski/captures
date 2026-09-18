@@ -10,12 +10,18 @@ Preferences now uses shared Rust settings persistence and custom-theme math,
 including automatic save, retry, and a flush when the window closes. It uses a
 separate Captures Native development identity; pass `--settings-file PATH` to
 use an explicit test file. Screenshots and scripted exercises without that flag
-use disposable settings. `--live` opts into the shared Rust full-display PNG,
+use disposable settings. `--live` opts into the shared Rust full-display and region PNG,
 history, copy, export and delete flows; see the [live slice and limits](../README.md#live-display-capture-slice).
-Live capture applies automatic copy, screenshot countdown, and PNG/JPEG/WebP output
-format/folder preferences. Cursor and the other capture defaults remain unconnected;
-other scenes remain fixtures. Global shortcuts, login, microphone
-discovery, feedback, and updating remain visibly unavailable.
+Live capture applies automatic copy, screenshot countdown, cursor inclusion, and
+PNG/JPEG/WebP output format/folder preferences. Region selection also applies
+freeze-screen and auto-start-on-selection preferences, retains one shared
+`RegionSession` through confirmation, and uses the shipping shared drag/aspect
+geometry. Windows/X11 use the shipping
+synthetic cursor arrow, not the actual system cursor image. Other capture defaults remain unconnected;
+other scenes remain fixtures. System-wide global shortcuts remain unavailable except
+for temporary Escape cancellation during an active live capture; the selector
+fixture handles window-focused Escape only. Login, microphone discovery, feedback,
+and updating remain visibly unavailable.
 
 The candidate tests whether shared custom components are viable. It is not a
 retained widget renderer: egui rebuilds the visible UI on an event-driven repaint,
@@ -53,6 +59,7 @@ apps/native/wgpu/target/release/captures-wgpu-workbench --scene history --histor
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene hud --floating --appearance light
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene preview --floating
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene editor
+apps/native/wgpu/target/release/captures-wgpu-workbench --scene region --exercise
 ```
 
 Appearance: `--appearance system|light|dark`; palettes: `--theme cobalt` (or any
@@ -68,6 +75,7 @@ and Move window controls. Launch one instance at a time for measurements.
 | HUD | Running/paused/muted fixture; fixed glass palette even in light mode | Real timer/recording; recording exclusion; tray or hidden-controls notice |
 | Preview | Cold/reused texture, fade/settle, reset mid-animation, explicit Reduce motion, optional transparent native window | **Not the shipping dust effect**: no isolated-chip blur, dust trajectories, source treatment or pile/drag/hit-region parity |
 | Editor | 2048×1152 synthetic image, clipped canvas, pan/zoom/rotate, separate outline/text layers, editable text field | Real document, layer editing/undo/export; outlines/text do not rotate with the image |
+| Region | Deterministic blank/draw/move/corner-resize/aspect/Shift/cancel selector fixture using the live component | Fixture uses synthetic pixels and does not request screen permission |
 | Idle | Hidden native window; no scheduled application work except optional quit deadline | Process/GPU teardown after last window; production tray lifecycle |
 
 The current screens are token-styled fixtures, not pixel-parity reproductions.
@@ -104,14 +112,38 @@ python apps/native/profile.py --renderer wgpu --binary apps/native/wgpu/target/r
 
 Add `.exe` to both binary paths on Windows. Output directories must not exist.
 Smoke tests need an interactive desktop or a test compositor. They check two idle
-cases, fifteen framebuffer captures (including countdown and empty/populated native file
-history), and thirty scheduled actions. Inspect the
+cases, twenty-two framebuffer captures (including countdown, selector states, and
+empty/populated native file history), and thirty-six scheduled actions. Inspect the
 PNGs: their presence alone is not visual acceptance. The Wayland run explicitly
 reports hidden idle as unsupported, not passed; the full resource runner fails
 closed on that unsupported workload. Capture another state with
 `--screenshot capture.png --screenshot-after 3 --exercise`; this reads only the
 workbench's framebuffer, never your desktop. Screenshots stop the app after saving
 and must be collected separately from resource trials.
+
+The Linux CI job also runs a **real capture/persistence integration test** on a
+private Xvfb desktop with Openbox, picom and software GL. It injects X11 pointer
+and keyboard events, draws a region, and checks every saved pixel against an
+asymmetric background pattern. Zero-delay capture must retain frozen pixels;
+a nonzero countdown must capture the changed desktop. Repeated captures, Escape
+while another application owns focus, simulated lock/unlock cancellation, region
+metadata and clean shutdown are checked in the same process.
+
+```sh
+sudo apt-get install xvfb dbus python3-dbus python3-gi openbox picom hsetroot xdotool x11-utils x11-apps imagemagick libgl1-mesa-dri
+/usr/bin/python3 apps/native/x11_capture_smoke.py \
+  --binary apps/native/wgpu/target/release/captures-wgpu-workbench \
+  --output /tmp/native-x11-capture
+```
+
+Use system Python for the distro's D-Bus/GLib bindings. The test owns its display
+and D-Bus daemon; it never uses the caller's desktop/session or installed Captures
+data. A private `org.freedesktop.ScreenSaver` fixture reports unlocked/locked
+state through the normal session adapter. **Session state is simulated; X11
+input delivery, the capture engine and PNG/history persistence are real.** There
+is no application bypass flag. This does not verify an actual login manager,
+hardware keyboard/GPU, Wayland, accessibility or real-desktop compositor behavior.
+CI retains the disposable captures, metadata, screenshots and process logs.
 
 The profiler takes about 44 minutes by default (eleven workloads, one excluded
 warmup and three 60-second trials). It records process CPU-time deltas plus Linux
