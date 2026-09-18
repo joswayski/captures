@@ -144,7 +144,7 @@ static void text(CapturesWorkbench *self, GtkSnapshot *snapshot, const char *val
 }
 
 static GdkTexture *fixture_texture(void) {
-  const int width = 568, height = 320, stride = width * 4;
+  const int width = 2048, height = 1152, stride = width * 4;
   guchar *pixels = g_malloc(stride * height);
   for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) {
     double sx = x / (double)width * 284, sy = (1 - y / (double)height) * 160;
@@ -190,17 +190,21 @@ static void draw_preferences(CapturesWorkbench *self, GtkSnapshot *snapshot) {
   text(self, snapshot, "Appearance", 238, 162, number(self, "text-lg"), "text", PANGO_WEIGHT_SEMIBOLD);
   text(self, snapshot, "Choose the interface appearance and accent color.", 238, 190, number(self, "text-md"), "text-muted", PANGO_WEIGHT_NORMAL);
   text(self, snapshot, "Interface theme", 238, 236, number(self, "text-md"), "text", PANGO_WEIGHT_NORMAL);
-  const char *modes[] = { "System", "Light", "Dark" };
-  for (int i = 0; i < 3; i++) {
-    graphene_rect_t r = GRAPHENE_RECT_INIT(650 + i * 96, 224, 86, 34);
-    border(snapshot, r, number(self, "r-md"), rgba(self, i == 2 ? "surface-selected" : "control"), rgba(self, i == 2 ? "theme-accent" : "control-border"));
-    text(self, snapshot, modes[i], 668 + i * 96, 233, number(self, "text-md"), "text", PANGO_WEIGHT_MEDIUM);
+  const char *modes[] = { "Light", "Dark" };
+  const char *mode_values[] = { "light", "dark" };
+  for (int i = 0; i < 2; i++) {
+    gboolean selected = !strcmp(self->options.appearance, mode_values[i]);
+    graphene_rect_t r = GRAPHENE_RECT_INIT(746 + i * 96, 224, 86, 34);
+    border(snapshot, r, number(self, "r-md"), rgba(self, selected ? "surface-selected" : "control"), rgba(self, selected ? "theme-accent" : "control-border"));
+    text(self, snapshot, modes[i], 764 + i * 96, 233, number(self, "text-md"), "text", PANGO_WEIGHT_MEDIUM);
   }
   text(self, snapshot, "Accent color", 238, 286, number(self, "text-md"), "text", PANGO_WEIGHT_NORMAL);
   const char *themes[] = { "Mustard", "Ember", "Rose", "Violet", "Cobalt" };
+  const char *theme_values[] = { "mustard", "ember", "rose", "violet", "cobalt" };
   for (int i = 0; i < 5; i++) {
+    gboolean selected = !strcmp(self->options.theme, theme_values[i]);
     graphene_rect_t r = GRAPHENE_RECT_INIT(238 + i * 142, 318, 132, 38);
-    border(snapshot, r, number(self, "r-md"), rgba(self, i == 0 ? "surface-selected" : "control"), rgba(self, i == 0 ? "theme-accent" : "control-border"));
+    border(snapshot, r, number(self, "r-md"), rgba(self, selected ? "surface-selected" : "control"), rgba(self, selected ? "theme-accent" : "control-border"));
     text(self, snapshot, themes[i], 256 + i * 142, 328, number(self, "text-md"), "text", PANGO_WEIGHT_MEDIUM);
   }
   panel = GRAPHENE_RECT_INIT(220, 400, 752, 180);
@@ -460,9 +464,11 @@ static gboolean exercise_action(gpointer data) {
   emit("scripted-action", "s:scene", scene_name(self->options.scene), "i:cycle", (int)cycle,
        "d:zoom", self->zoom, "d:rotation", self->rotation, "b:paused", self->paused,
        "b:previewHidden", self->preview_hidden, "i:selectedRow", self->selected_row == G_MAXUINT ? -1 : (int)self->selected_row,
-       "d:scroll", self->scroll, NULL);
+       "d:scroll", self->scroll,
+       "d:elapsedSeconds", (g_get_monotonic_time() - self->started) / 1000000.0, NULL);
   gtk_widget_queue_draw(GTK_WIDGET(self));
-  return cycle < 5 ? G_SOURCE_CONTINUE : G_SOURCE_REMOVE;
+  if (self->actions < 6) g_timeout_add(4000, exercise_action, self);
+  return G_SOURCE_REMOVE;
 }
 
 static Tokens load_tokens(const Options *options) {
@@ -524,6 +530,36 @@ static CapturesWorkbench *workbench_new(const Options *options) {
   return self;
 }
 
+static char *css_color(CapturesWorkbench *self, const char *name) {
+  GdkRGBA value = rgba(self, name);
+  return gdk_rgba_to_string(&value);
+}
+
+static void install_css(CapturesWorkbench *self) {
+  g_autofree char *field = css_color(self, "surface-field");
+  g_autofree char *text_color = css_color(self, "text");
+  g_autofree char *border_color = css_color(self, "control-border");
+  g_autofree char *focus = css_color(self, "theme-accent");
+  g_autofree char *css_text = g_strdup_printf(
+    "window { background: transparent; } "
+    ".captures-entry { min-height: 38px; padding: 0 12px; border-radius: 8px; "
+    "border: 1px solid %s; background: %s; color: %s; caret-color: %s; box-shadow: none; } "
+    ".captures-entry:focus, .captures-entry:focus-within { border-color: %s; outline: none; "
+    "box-shadow: 0 0 0 2px %s; } .captures-entry text:focus { outline: none; }",
+    border_color, field, text_color, focus, focus, focus);
+  GtkCssProvider *css = gtk_css_provider_new();
+  G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+  gtk_css_provider_load_from_data(css, css_text, -1);
+  G_GNUC_END_IGNORE_DEPRECATIONS
+  gtk_style_context_add_provider_for_display(gdk_display_get_default(), GTK_STYLE_PROVIDER(css),
+                                              GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+  g_object_unref(css);
+  emit("probe-contract", "s:selectedAppearance", self->options.appearance,
+       "s:entrySurface", field, "s:entryText", text_color, "s:entryFocus", focus,
+       "i:textureWidth", 2048, "i:textureHeight", 1152,
+       "s:exerciseScheduleSeconds", "2,6,10,14,18,22", NULL);
+}
+
 static gboolean save_screenshot(gpointer data) {
   CapturesWorkbench *self = data;
   self->screenshot_source = 0;
@@ -572,6 +608,7 @@ static void activate(GtkApplication *application, gpointer data) {
   gtk_window_set_decorated(window, !options->floating);
   gtk_widget_add_css_class(GTK_WIDGET(window), options->floating ? "transparent-window" : "captures-window");
   CapturesWorkbench *self = workbench_new(options);
+  install_css(self);
   gtk_window_set_child(window, GTK_WIDGET(self));
   g_signal_connect(window, "destroy", G_CALLBACK(window_destroyed), self);
   if (options->scene != SCENE_IDLE) gtk_window_present(window);
@@ -580,7 +617,8 @@ static void activate(GtkApplication *application, gpointer data) {
   emit("ready", "s:scene", scene_name(options->scene), "s:renderer", "gtk4-custom-snapshot",
        "s:backend", backend, "s:readiness", "native surface created; not first compositor presentation",
        "b:floating", options->floating, "s:overlayPlacement", strstr(backend, "Wayland") ? "compositor-controlled; absolute placement unsupported" : "window-manager-controlled; no GTK4 absolute positioning API", NULL);
-  emit("accessibility", "s:rootRole", "group", "s:searchRole", "text-box", "s:annotationRole", "text-box", NULL);
+  emit("declared-accessibility", "s:rootRole", "group", "s:searchRole", "text-box", "s:annotationRole", "text-box",
+       "s:acceptance", "role declarations only; not AT-SPI verification", NULL);
   if (options->exercise) g_timeout_add(2000, exercise_action, self);
   if (options->screenshot) self->screenshot_source = g_timeout_add((guint)(options->screenshot_after * 1000), save_screenshot, self);
   if (options->quit_after > 0) g_timeout_add((guint)(options->quit_after * 1000), quit_app, self);
@@ -613,7 +651,7 @@ static Options parse_options(int *argc, char ***argv) {
   const char *themes[] = { "mustard", "ember", "rose", "violet", "cobalt", "aqua", "mint", "lime", "mono" };
   gboolean theme_found = FALSE;
   for (int i = 0; i < 9; i++) if (!strcmp(options.theme, themes[i])) theme_found = TRUE;
-  if (!found || !theme_found || (strcmp(options.appearance, "light") && strcmp(options.appearance, "dark") && strcmp(options.appearance, "system")) || options.history_count > 10000)
+  if (!found || !theme_found || (strcmp(options.appearance, "light") && strcmp(options.appearance, "dark")) || options.history_count > 10000)
     g_error("Invalid scene, appearance, theme, or history count");
   if (options.floating && options.scene != SCENE_HUD && options.scene != SCENE_PREVIEW) g_error("Floating is only valid for HUD/preview");
   if (options.scene == SCENE_IDLE && (options.exercise || options.screenshot)) g_error("Hidden idle cannot exercise or screenshot");
@@ -623,13 +661,6 @@ static Options parse_options(int *argc, char ***argv) {
 int main(int argc, char **argv) {
   Options options = parse_options(&argc, &argv);
   gtk_init();
-  GtkCssProvider *css = gtk_css_provider_new();
-  G_GNUC_BEGIN_IGNORE_DEPRECATIONS
-  gtk_css_provider_load_from_data(css,
-    "window { background: transparent; } .captures-entry { min-height: 38px; padding: 0 12px; border-radius: 8px; border: 1px solid alpha(currentColor,.18); background: rgba(14,14,18,.96); color: #f2f2f4; caret-color: #ffca28; box-shadow: none; } .captures-entry:focus { border-color: #ffca28; outline: 2px solid alpha(#ffca28,.25); }", -1);
-  G_GNUC_END_IGNORE_DEPRECATIONS
-  gtk_style_context_add_provider_for_display(gdk_display_get_default(), GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-  g_object_unref(css);
   GtkApplication *application = gtk_application_new("com.captures.gtk-workbench", G_APPLICATION_NON_UNIQUE);
   g_signal_connect(application, "activate", G_CALLBACK(activate), &options);
   int status = g_application_run(G_APPLICATION(application), argc, argv);

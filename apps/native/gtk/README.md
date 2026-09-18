@@ -29,19 +29,21 @@ apps/native/gtk/build/captures-gtk-workbench --scene editor --exercise
 apps/native/gtk/build/captures-gtk-workbench --scene idle --quit-after 60
 ```
 
-Options match the comparison contract: `--scene`, `--appearance`, `--theme`,
+Options match the comparison contract: `--scene`, `--appearance light|dark`, `--theme`,
 `--history-count`, `--exercise`, `--quit-after`, `--floating`,
 `--reduced-motion`, `--screenshot`, and `--screenshot-after`. JSONL events report
-ready state, native visibility/mapping, accessibility roles, edits, selections,
+ready state, native visibility/mapping, declared accessibility roles, edits, selections,
 scripted outcomes, animation settlement, rendered alpha and teardown. A screenshot
 uses GTK's GSK renderer for this native widget tree; it never captures the desktop.
+`system` appearance is explicitly rejected because this bounded candidate does not
+yet subscribe to GTK appearance changes; it must not silently resolve to dark.
 
 ## Implemented probes and boundaries
 
 | Scene | Representative behavior | Deliberate gap |
 | --- | --- | --- |
 | Preferences | Custom token UI, styled native search entry, keyboard focus/editing, text-box semantics | Fixture values only; no persistence or complete settings |
-| History | Empty/100/1,000 image-backed rows, visible-range snapshot construction, scroll/selection endpoints | One retained synthetic texture, not real files or cache eviction pressure |
+| History | Empty/100/1,000 image-backed rows, visible-range snapshot construction, scroll/selection endpoints | One retained 2048×1152 synthetic texture, not real files or cache eviction pressure |
 | HUD | Transparent undecorated window, running/paused and muted states | No recording, exclusion, topmost or layer-shell behavior |
 | Preview | Transparent toplevel, pile/controls, visible/saved-hidden and reduced-motion states, bounded frame callback | Not dust parity, drag/drop, click-through, blur or placement parity |
 | Editor | 2048×1152 synthetic texture, clipped pan/zoom/rotation, custom layers and a styled editable native text field | No document model, undo, export or full layer editing |
@@ -72,9 +74,9 @@ apps/native/gtk/run-headless-wayland.sh \
 
 The smoke gate checks native hidden/visible/mapped state, no recurring snapshot
 after a static scene settles, real X11 keyboard editing/focus, declared GTK
-accessibility roles, ten default/non-default screenshots, transparent render-target
+accessibility roles (not AT-SPI verification), eleven default/non-default screenshots, transparent render-target
 corners, history/editor outcomes, thirty scripted actions, animation settlement
-and clean teardown. Weston in CI has no virtual-keyboard automation protocol, so
+at the shared 2/6/10/14/18/22-second cadence, and clean teardown. Weston in CI has no virtual-keyboard automation protocol, so
 Wayland verifies programmatic GTK editable focus/text outcomes but **not physical
 keyboard/IME input**. AT-SPI screen-reader navigation also remains a real-desktop
 gate; role declarations alone do not accept it.
@@ -107,18 +109,19 @@ hardware acceptance:
 
 | Backend/workload | CPU, one-core definition | Median / peak process RSS |
 | --- | ---: | ---: |
-| Xvfb X11, hidden | 0.000% | 82.3 / 82.3 MiB |
-| Xvfb X11, Preferences static | 0.083% | 155.7 / 155.7 MiB |
-| Weston Wayland, hidden | 0.017% | 23.3 / 23.3 MiB |
-| Weston Wayland, Preferences static | **1.217%** | 164.5 / 164.5 MiB |
+| Xvfb X11, hidden | 0.000% | 90.4 / 90.4 MiB |
+| Xvfb X11, Preferences static | 0.067% | 163.8 / 163.8 MiB |
+| Weston Wayland, hidden | 0.000% | 31.8 / 31.8 MiB |
+| Weston Wayland, Preferences static | 0.167% | 172.8 / 172.8 MiB |
 
-The static Wayland software-GL sample misses the provisional <0.5% idle target
-even though the custom widget recorded one snapshot pass. A separate 30-second
-diagnostic with GSK's Cairo renderer measured 0.033% / 31.6 MiB, suggesting the
-software-GL renderer/compositor path rather than application invalidation. That
-short alternative is not an acceptance result or reason to select Cairo; repeat
-rotated trials on real integrated-GPU hardware before drawing a performance
-conclusion.
+These final samples retain the comparison-aligned 2048×1152 texture. An earlier
+run with the undersized 568×320 backing texture measured Wayland software-GL
+Preferences at 1.217% / 164.5 MiB; a separate 30-second Cairo diagnostic measured
+0.033% / 31.6 MiB. Those are not equivalent final workloads, but the variance is
+itself a warning against treating one headless software trial as acceptance. The
+custom widget recorded one static snapshot pass in each case. Repeat warmups and
+rotated trials on real integrated-GPU hardware before drawing a performance or
+renderer conclusion.
 
 ## Candidate findings
 

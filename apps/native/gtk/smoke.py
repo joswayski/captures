@@ -53,6 +53,11 @@ def main():
     binary = args.binary.resolve(strict=True)
     args.output.mkdir(parents=True, exist_ok=False)
 
+    rejected = subprocess.run([str(binary), "--appearance", "system"], capture_output=True,
+                              timeout=10)
+    if rejected.returncode == 0 or b"Invalid scene, appearance" not in rejected.stderr:
+        raise RuntimeError("system appearance must fail explicitly in this bounded candidate")
+
     # A visible static scene and a genuinely hidden root must settle without a
     # recurring application-owned snapshot callback.
     for scene in ("preferences", "idle"):
@@ -74,13 +79,15 @@ def main():
     changes = [row["detail"] for row in rows if row["event"] == "text-changed"]
     if not wayland and (not changes or changes[-1]["value"] != typed or not changes[-1]["focused"]):
         raise RuntimeError(f"keyboard editing/focus did not reach the search field: {changes[-3:]}")
-    accessibility = next(row["detail"] for row in rows if row["event"] == "accessibility")
-    if accessibility != {"rootRole": "group", "searchRole": "text-box", "annotationRole": "text-box"}:
-        raise RuntimeError(f"unexpected accessibility roles: {accessibility}")
+    accessibility = next(row["detail"] for row in rows if row["event"] == "declared-accessibility")
+    if (accessibility["rootRole"], accessibility["searchRole"], accessibility["annotationRole"]) != (
+            "group", "text-box", "text-box") or "not AT-SPI" not in accessibility["acceptance"]:
+        raise RuntimeError(f"unexpected accessibility declarations: {accessibility}")
 
     shots = {
         "preferences-dark": ["--scene", "preferences"],
         "preferences-light": ["--scene", "preferences", "--appearance", "light", "--theme", "cobalt"],
+        "preferences-focused": ["--scene", "preferences", "--theme", "ember", "--exercise", "--screenshot-after", "3"],
         "history-empty": ["--scene", "history", "--history-count", "0"],
         "history-100": ["--scene", "history", "--history-count", "100"],
         "history-1000": ["--scene", "history", "--history-count", "1000", "--exercise", "--screenshot-after", "3"],
@@ -88,11 +95,19 @@ def main():
         "preview-visible": ["--scene", "preview", "--floating"],
         "preview-hidden": ["--scene", "preview", "--floating", "--exercise", "--screenshot-after", "3"],
         "preview-reduced": ["--scene", "preview", "--floating", "--exercise", "--reduced-motion", "--screenshot-after", "3"],
-        "editor-transformed": ["--scene", "editor", "--exercise", "--screenshot-after", "5"],
+        "editor-transformed": ["--scene", "editor", "--exercise", "--screenshot-after", "7"],
     }
+    contracts = {}
     for name, arguments in shots.items():
         screenshot = args.output / f"{name}.png"
         rows = run(binary, args.output, name, [*arguments, "--screenshot", str(screenshot)])
+        contract = next(row["detail"] for row in rows if row["event"] == "probe-contract")
+        contracts[name] = contract
+        expected_appearance = "light" if "--appearance" in arguments else "dark"
+        if (contract["selectedAppearance"] != expected_appearance or
+                (contract["textureWidth"], contract["textureHeight"]) != (2048, 1152) or
+                contract["exerciseScheduleSeconds"] != "2,6,10,14,18,22"):
+            raise RuntimeError(f"{name}: mismatched shared probe contract: {contract}")
         saved = next(row["detail"] for row in rows if row["event"] == "screenshot-saved")
         if min(png_size(screenshot)) < 480:
             raise RuntimeError(f"{name}: undersized screenshot")
@@ -109,12 +124,22 @@ def main():
         if name == "editor-transformed" and (actions[-1]["rotation"] != 15 or actions[-1]["zoom"] != .75):
             raise RuntimeError("editor transform did not reach the expected asymmetric state")
 
+    dark = contracts["preferences-dark"]
+    light = contracts["preferences-light"]
+    if dark["entrySurface"] == light["entrySurface"] or dark["entryText"] == light["entryText"]:
+        raise RuntimeError("entry surface/text did not follow light and dark tokens")
+    if dark["entryFocus"] == light["entryFocus"]:
+        raise RuntimeError("entry focus did not follow mustard and cobalt theme tokens")
+
     for scene in ("preferences", "history", "hud", "preview", "editor"):
         rows = run(binary, args.output, f"{scene}-exercise",
-                   ["--scene", scene, "--exercise", "--quit-after", "14"])
+                   ["--scene", scene, "--exercise", "--quit-after", "24"])
         actions = [row["detail"] for row in rows if row["event"] == "scripted-action"]
         if [row["cycle"] for row in actions] != list(range(6)):
             raise RuntimeError(f"{scene}: missing/repeated actions: {actions}")
+        for action, expected in zip(actions, (2, 6, 10, 14, 18, 22)):
+            if abs(action["elapsedSeconds"] - expected) > .35:
+                raise RuntimeError(f"{scene}: action cadence drifted from shared probes: {actions}")
         if scene == "preview" and len([row for row in rows if row["event"] == "animation-settled"]) != 6:
             raise RuntimeError("preview retained or skipped a frame callback")
 
@@ -122,7 +147,7 @@ def main():
     input_result = ("keyboard injection unavailable in the headless Wayland compositor; editable focus/text "
                     "covered by scripted GTK actions" if wayland else "keyboard focus/editing")
     print(f"PASS {backend}: hidden/visible lifecycle, static redraw guard, {input_result}, "
-          "accessibility roles, 10 rendered states with alpha checks, 30 scripted actions")
+          "accessibility declarations, 11 rendered states with alpha checks, 30 scripted actions")
 
 
 if __name__ == "__main__":
