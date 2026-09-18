@@ -1,5 +1,10 @@
 //! Shared native application operations. Hosts schedule these off the UI thread.
-//! Images stay in owned files, never JSON/base64. No browser or host window APIs.
+//! Images stay in owned buffers/files, never JSON/base64. No browser or host window APIs.
+
+pub mod capture_flow;
+pub mod region;
+pub mod selection;
+pub mod window;
 
 use captures_capture::{CaptureError, CaptureMode, DisplayDescriptor, XcapBackend};
 use captures_history::{ArtifactKind, HistoryEntry};
@@ -25,6 +30,14 @@ pub enum Error {
     Image(String),
     #[error("capture is no longer available")]
     Missing,
+    #[error("Capture cancelled")]
+    Cancelled,
+    #[error("The selected display changed. Select the capture target again.")]
+    DisplayChanged,
+    #[error("Select a valid region inside the display.")]
+    InvalidRegion,
+    #[error("Window corner radius must be finite and nonnegative.")]
+    InvalidWindowRadius,
     #[error("Saved to {path}, but history could not be updated: {reason}")]
     SavedWithoutMetadata { path: String, reason: String },
 }
@@ -43,6 +56,8 @@ pub enum Request {
     CaptureDisplay {
         root: PathBuf,
         display_id: String,
+        generation: u64,
+        include_cursor: bool,
     },
     History {
         root: PathBuf,
@@ -95,19 +110,43 @@ pub fn execute(request: Request) -> Result<Response, Error> {
             XcapBackend.ensure_permission(true)?;
             Ok(Response::PermissionGranted)
         }
-        Request::CaptureDisplay { root, display_id } => {
+        Request::CaptureDisplay {
+            root,
+            display_id,
+            generation,
+            include_cursor,
+        } => {
+            if !capture_flow::is_current(generation) {
+                return Err(Error::Cancelled);
+            }
             XcapBackend.ensure_permission(false)?;
             if !captures_session::capture_session_available() {
                 return Err(CaptureError::SessionUnavailable.into());
             }
             captures_session::dismiss_transient_shell_ui_before_capture();
-            let frame = XcapBackend.capture_display(&display_id)?;
+            let cursor = include_cursor
+                .then(captures_capture::pointer_cursor)
+                .flatten();
+            let mut frame = XcapBackend.capture_display(&display_id)?;
             // A session may lock during a backend/portal round trip. Discard it.
             if !captures_session::capture_session_available() {
                 return Err(CaptureError::SessionUnavailable.into());
             }
+            if let Some(cursor) = cursor {
+                captures_capture::overlay_pointer_cursor(
+                    &mut frame.image,
+                    &frame.descriptor,
+                    &cursor,
+                    captures_capture::screenshot_pointer_scale(frame.descriptor.scale_factor),
+                );
+            }
+            // Linearize Cancel versus Save before the irreversible history write.
+            // Once committed, Escape cannot claim that the capture was cancelled.
+            if !capture_flow::commit(generation) {
+                return Err(Error::Cancelled);
+            }
             Ok(Response::Captured {
-                artifact: persist_screenshot(&root, &frame.image)?,
+                artifact: persist_screenshot(&root, &frame.image, CaptureMode::Display)?,
             })
         }
         Request::History { root } => Ok(Response::History {
@@ -144,7 +183,11 @@ pub fn list(root: &Path) -> Result<Vec<Artifact>, Error> {
 }
 
 /// Commit a captured, color-normalized buffer once. Reused by backend tests.
-pub fn persist_screenshot(root: &Path, image: &RgbaImage) -> Result<Artifact, Error> {
+pub fn persist_screenshot(
+    root: &Path,
+    image: &RgbaImage,
+    mode: CaptureMode,
+) -> Result<Artifact, Error> {
     let png = captures_history::encode_png(image)?;
     let preview = captures_history::encode_thumbnail_png(image)?;
     let entry = HistoryEntry {
@@ -156,7 +199,7 @@ pub fn persist_screenshot(root: &Path, image: &RgbaImage) -> Result<Artifact, Er
         height: image.height(),
         size_bytes: png.len() as u64,
         created_at: Utc::now().to_rfc3339(),
-        mode: Some(CaptureMode::Display),
+        mode: Some(mode),
         saved_path: None,
         mime_type: Some("image/png".into()),
         duration_ms: None,
@@ -247,6 +290,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stale_capture_is_rejected_before_permission_or_disk_access() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            execute(Request::CaptureDisplay {
+                root: root.path().join("must-not-be-created"),
+                display_id: "not-a-real-display".into(),
+                generation: 0,
+                include_cursor: true,
+            }),
+            Err(Error::Cancelled)
+        ));
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+
+    #[test]
     fn save_uses_requested_format_keeps_lossless_history_and_reuses_existing_export() {
         for (format, signature, extension) in [
             (ScreenshotFormat::Png, image::ImageFormat::Png, "png"),
@@ -262,7 +320,7 @@ mod tests {
                     image::Rgba([0, 255, 0, 255])
                 }
             });
-            let artifact = persist_screenshot(root.path(), &pixels).unwrap();
+            let artifact = persist_screenshot(root.path(), &pixels, CaptureMode::Display).unwrap();
             let Response::Saved { path, .. } =
                 save_screenshot(root.path(), &artifact.entry.id, output.path(), format).unwrap()
             else {
@@ -318,7 +376,7 @@ mod tests {
         let image = RgbaImage::from_fn(7, 3, |x, y| {
             image::Rgba([x as u8 * 23, y as u8 * 91, 42, 255])
         });
-        let item = persist_screenshot(data.path(), &image).unwrap();
+        let item = persist_screenshot(data.path(), &image, CaptureMode::Display).unwrap();
         assert_eq!(list(data.path()).unwrap()[0].entry.width, 7);
         let Response::Saved { path, .. } = save_screenshot(
             data.path(),
@@ -346,7 +404,8 @@ mod tests {
     #[test]
     fn failed_export_preserves_unsaved_history_for_retry() {
         let data = tempfile::tempdir().unwrap();
-        let item = persist_screenshot(data.path(), &RgbaImage::new(3, 5)).unwrap();
+        let item =
+            persist_screenshot(data.path(), &RgbaImage::new(3, 5), CaptureMode::Display).unwrap();
         let obstruction = data.path().join("not-a-directory");
         fs::write(&obstruction, b"keep").unwrap();
         assert!(
