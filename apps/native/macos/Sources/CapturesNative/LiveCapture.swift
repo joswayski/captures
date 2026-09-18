@@ -185,7 +185,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     self.countdownPanel = panel; panel.orderFrontRegardless()
                 }
                 let tick: () -> Void = { [weak self] in self?.tickCountdown(display: display, preferences: preferences, generation: generation.uint64Value) }
-                self.countdownTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in tick() }
+                // Cancellation must still poll while AppKit tracks a drag/control.
+                let timer = Timer(timeInterval: 0.1, repeats: true) { _ in tick() }
+                self.countdownTimer = timer; RunLoop.main.add(timer, forMode: .common)
                 tick()
                 if region { self.prepareRegion(display: display, screen: screen, preferences: preferences, generation: generation.uint64Value) }
             } catch {
