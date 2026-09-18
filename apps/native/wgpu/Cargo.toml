@@ -1,0 +1,29 @@
+[package]
+name = "captures-wgpu-workbench"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+publish = false
+
+# An isolated renderer experiment: do not change the shipping workspace's
+# toolchain, lockfile, dependencies, packaging, or supported platforms.
+[workspace]
+
+[dependencies]
+eframe = { version = "=0.36.2", default-features = false, features = ["wgpu", "x11", "wayland", "accesskit", "default_fonts"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.dev]
+debug = 0
+
+[profile.release]
+strip = "debuginfo"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"

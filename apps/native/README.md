@@ -1,14 +1,15 @@
-# Native desktop workbench — stage 1
+# Native desktop workbenches
 
-This is the first implementation stage of the [native rewrite](../../docs/native-rewrite.md),
+These are early implementation stages of the [native rewrite](../../docs/native-rewrite.md),
 **not a usable capture application**. The existing Tauri Preview is unchanged.
 macOS is Swift/AppKit + Core Animation with Core Image explicitly backed by Metal.
 No WebView, React, JavaScript runtime, Rust sidecar, network service or capture
-permission is used. Rust engine integration is not implemented here. Next are
-Windows/Linux renderer prototypes alongside AppKit, before production feature
-slices advance across all three OSes. Those hosts do not exist yet and their
-renderer choices remain open. See the migration plan for per-platform acceptance;
-the macOS workbench is a reference, not a plan to finish macOS before other OSes.
+permission is used. Rust engine integration is not implemented here. The
+[shared wgpu candidate](wgpu/README.md) adds Windows/Linux fixture windows and
+cross-platform resource diagnostics; it is not a production renderer selection.
+Its fade/settle probe is not equivalent to AppKit dust. DirectComposition/GTK
+comparators and full parity gates remain open. The instructions below cover
+AppKit; the candidate README has Windows/Linux build and test commands.
 
 ## Build and try on macOS
 

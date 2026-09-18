@@ -1,9 +1,9 @@
 # Browser-free desktop migration
 
-Status: **macOS development workbench merged; cross-platform foundations next**.
+Status: **cross-platform foundations in progress; renderer selection still open**.
 This rewrite covers macOS, Windows, and Linux, feature by feature rather than one
-complete OS at a time. Only the AppKit fixture frontend exists today; Windows and
-Linux native frontends are not implemented. No native replacement is released.
+complete OS at a time. AppKit and an experimental shared Rust/wgpu fixture
+frontend exist; no production native capture workflow or replacement is released.
 The shipping Tauri application remains available. No WebView, JavaScript runtime,
 localhost server, or Tauri dependency belongs in the replacement. The website is
 unaffected.
@@ -134,6 +134,15 @@ visible and cannot justify a renderer selection or performance claim.
 
 No renderer is selected for these platforms yet. The same fixture scenes, token
 resources, resource budgets, visual checkpoints and input scripts are mandatory.
+
+The first [shared wgpu candidate](../apps/native/wgpu/README.md) uses egui/winit
+with retained image textures and event-driven immediate-mode UI, an additional
+approach to evaluate against the retained/native candidates below. It implements
+fixture preferences/history/HUD, a fade/settle probe, editor rendering and hidden
+idle. It does **not** implement dust parity, production domain logic or complete
+accessibility/IME/overlay behavior. No performance win or renderer decision follows
+from its existence. Compare equivalent workloads only; the AppKit dust and wgpu
+fade/settle probes are deliberately not equivalent effects.
 
 The next implementation milestone is **comparable workbenches on all OSes**, not
 the next Mac-only screen. Exercise each candidate with:
