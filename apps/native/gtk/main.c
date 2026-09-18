@@ -624,8 +624,10 @@ int main(int argc, char **argv) {
   Options options = parse_options(&argc, &argv);
   gtk_init();
   GtkCssProvider *css = gtk_css_provider_new();
+  G_GNUC_BEGIN_IGNORE_DEPRECATIONS
   gtk_css_provider_load_from_data(css,
     "window { background: transparent; } .captures-entry { min-height: 38px; padding: 0 12px; border-radius: 8px; border: 1px solid alpha(currentColor,.18); background: rgba(14,14,18,.96); color: #f2f2f4; caret-color: #ffca28; box-shadow: none; } .captures-entry:focus { border-color: #ffca28; outline: 2px solid alpha(#ffca28,.25); }", -1);
+  G_GNUC_END_IGNORE_DEPRECATIONS
   gtk_style_context_add_provider_for_display(gdk_display_get_default(), GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
   g_object_unref(css);
   GtkApplication *application = gtk_application_new("com.captures.gtk-workbench", G_APPLICATION_NON_UNIQUE);
