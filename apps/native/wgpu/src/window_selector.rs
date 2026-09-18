@@ -145,7 +145,7 @@ impl WindowSelector {
             1 => Some(Point { x: 540., y: 250. }),
             2 => Some(Point { x: 500., y: 20. }),
             3 => Some(Point { x: 920., y: 680. }),
-            4 => Some(Point { x: 720., y: 500. }),
+            4 => Some(Point { x: 800., y: 550. }),
             5 => {
                 self.reset();
                 return;

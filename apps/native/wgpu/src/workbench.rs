@@ -1086,5 +1086,15 @@ mod tests {
             None,
             "empty desktop is an entire-display target"
         );
+        assert_eq!(
+            fixture_window_hit_test(
+                &windows,
+                &shell,
+                &display,
+                captures_app::selection::Point { x: 800., y: 550. }
+            ),
+            Some(2),
+            "terminal-only area must avoid the higher-z project window"
+        );
     }
 }
