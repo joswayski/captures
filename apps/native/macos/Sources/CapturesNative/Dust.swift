@@ -47,7 +47,6 @@ final class DustTextures {
 
     struct Chip {
         let image: CGImage
-        let contentsRect: CGRect
         let size: CGSize
     }
 
@@ -75,7 +74,6 @@ final class DustTextures {
                 let clear = CIImage(color: .clear).cropped(to: padded)
                 let filtered = filter(image.cropped(to: slice).composited(over: clear), scale: scale)
                 chips.append(Chip(image: try render(filtered, rect: padded.integral),
-                    contentsRect: CGRect(x: 0, y: 0, width: 1, height: 1),
                     size: CGSize(width: p.width + 2 * pad, height: p.height + 2 * pad)))
                 continue
             }
@@ -94,12 +92,14 @@ final class DustTextures {
         guard atlas else { return chips }
         // One GPU evaluation/readback instead of 198 createCGImage calls.
         let texture = try render(filter(packed, scale: scale), rect: extent)
-        return zip(rects, particles).map { rect, particle in
-            // macOS CALayer unit coordinates have a bottom-left origin, like
-            // Core Image. Flipping Y here selects a different row of the atlas.
-            Chip(image: texture, contentsRect: CGRect(x: rect.minX / extent.width,
-                y: rect.minY / extent.height, width: rect.width / extent.width,
-                height: rect.height / extent.height),
+        return try zip(rects, particles).map { rect, particle in
+            // Crop in integer CGImage pixels (top-left origin) after the single
+            // filter render. CALayer.contentsRect changes interpretation under
+            // flipped ancestors; a full-image chip works in either hierarchy.
+            let pixels = CGRect(x: rect.minX, y: extent.maxY - rect.maxY,
+                width: rect.width, height: rect.height)
+            guard let image = texture.cropping(to: pixels) else { throw NativeError.renderFailed }
+            return Chip(image: image,
                 size: CGSize(width: particle.width + 2 * pad, height: particle.height + 2 * pad))
         }
     }
@@ -243,7 +243,6 @@ final class PreviewView: NSView {
             layer.position = CGPoint(x: particle.left + particle.width / 2,
                 y: particle.top + particle.height / 2)
             layer.contents = chip.image
-            layer.contentsRect = chip.contentsRect
             layer.contentsScale = cachedScale
             let poses = times.map { thumbnailDustVisualAt(particle, elapsedMs: $0 * 1000) }
             let transforms: [NSValue] = poses.map { pose in

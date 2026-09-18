@@ -106,7 +106,6 @@ final class DustTests: XCTestCase {
             let layer = CALayer()
             layer.frame = parent.bounds
             layer.contents = chip.image
-            layer.contentsRect = chip.contentsRect
             layer.contentsScale = scale
             parent.addSublayer(layer)
             parent.render(in: context)
