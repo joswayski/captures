@@ -1486,6 +1486,7 @@ impl Live {
                             })
                     }
                     Some(crate::mini_preview::Action::OpenHistory) => {
+                        restore_root_for_history(ui.ctx());
                         Some(PreviewMessage::OpenHistory { generation })
                     }
                     Some(crate::mini_preview::Action::Dismiss) => {
@@ -2113,6 +2114,16 @@ fn capture_viewport(
         .with_taskbar(false)
 }
 
+fn restore_root_for_history(ctx: &egui::Context) {
+    // The root may not run Live::logic while minimized. Target it directly
+    // from the independently repainting preview before queueing selection.
+    ctx.send_viewport_cmd_to(
+        egui::ViewportId::ROOT,
+        egui::ViewportCommand::Minimized(false),
+    );
+    ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Visible(true));
+}
+
 fn same_display_geometry(left: &DisplayDescriptor, right: &DisplayDescriptor) -> bool {
     left.id == right.id
         && left.x == right.x
@@ -2255,6 +2266,31 @@ mod tests {
         selection.clear();
         assert!(!selection.accepts(current));
         assert_eq!(selection.id, None);
+    }
+
+    #[test]
+    fn history_preview_action_restores_minimized_root_without_waiting_for_live_logic() {
+        let ctx = egui::Context::default();
+        ctx.begin_pass(Default::default());
+        restore_root_for_history(&ctx);
+        let mut output = ctx.end_pass();
+        let commands = &output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .expect("root viewport output")
+            .commands;
+
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Minimized(false)))
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Visible(true)))
+        );
+        output.textures_delta.clear();
     }
 
     #[test]
