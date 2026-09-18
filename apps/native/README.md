@@ -83,8 +83,11 @@ The Swift differential test covers uneven times and each delay boundary.
 
 The atlas candidate filters isolated, padded chips once instead of issuing one
 Core Image render per chip. A 1×/2× static chip pixel test compares it to per-chip
-filtering and rejects blank output. A missing Metal device explicitly skips that
-test; a skip is **not** acceptance. The full original WindowServer visual gate is
+filtering under both normal and flipped preview parents, and rejects blank output.
+CI uploads representative rendered chip pairs as `native-pixels` for inspection;
+set `CAPTURES_TEST_ARTIFACTS` to an output directory to retain them locally.
+A missing Metal device explicitly skips these tests; a skip is **not** acceptance.
+The full original WindowServer visual gate is
 still required: this workbench's synthetic image and sampled Core Animation
 keyframes differ from #529, and its source fade does not yet reproduce the original
 blur/brightness/scale treatment. No performance or visual-parity result is claimed.
