@@ -23,11 +23,12 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private let window: NSWindow
     private let tokens: Tokens
     private let transport: AppTransport
-    private static let queue = DispatchQueue(label: "es.captures.native.capture", qos: .userInitiated)
+    static let queue = DispatchQueue(label: "es.captures.native.capture", qos: .userInitiated)
     private let historyRootOverride: String?
     private let settingsPath: String?
     private let showPreferences: () -> Void
     private weak var miniPreviews: MiniPreviewController?
+    private weak var miniPreviewActions: MiniPreviewActions?
     private let initialSelectionID: String?
     private var historyRoot = ""
     private var displays: [DisplayItem] = []
@@ -66,11 +67,13 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     init(root: Surface, window: NSWindow, tokens: Tokens, historyRoot: String?, settingsPath: String?,
          transport: AppTransport = AppBridge(), miniPreviews: MiniPreviewController? = nil,
+         miniPreviewActions: MiniPreviewActions? = nil,
          initialSelectionID: String? = nil,
          showPreferences: @escaping () -> Void) {
         self.root = root; self.window = window; self.tokens = tokens
         historyRootOverride = historyRoot; self.transport = transport; self.showPreferences = showPreferences
         self.settingsPath = settingsPath; self.miniPreviews = miniPreviews
+        self.miniPreviewActions = miniPreviewActions
         self.initialSelectionID = initialSelectionID
         super.init(); build(); loadInitial()
     }
@@ -134,7 +137,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }) { [weak self] result in
             guard let self else { return }
             switch result { case .success(let path):
-                self.historyRoot = path; self.loadHistory(select: self.initialSelectionID); self.loadDisplays()
+                self.historyRoot = path; self.miniPreviewActions?.configure(historyRoot: path)
+                self.loadHistory(select: self.initialSelectionID); self.loadDisplays()
             case .failure(let error): self.showError("Couldn’t locate native history", error) }
         }
     }
@@ -444,9 +448,6 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         guard let index = selectedIndex, artifacts.indices.contains(index) else { return }; let artifact = artifacts[index]
         save(artifact)
     }
-    func savePreview(_ artifact: CaptureArtifact) {
-        save(artifact)
-    }
     private func save(_ artifact: CaptureArtifact) {
         status.stringValue = "Saving image…"
         miniPreviews?.setStatus("Saving…", for: artifact.id)
@@ -481,22 +482,6 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 self.status.stringValue = pasteboard.setData(png, forType: .png)
                     ? "Copied the selected image." : "Couldn’t copy the selected image."
             case .failure(let error): self.showError("Couldn’t copy image", error)
-            }
-        }
-    }
-    func copyPreview(_ artifact: CaptureArtifact) {
-        miniPreviews?.setStatus("Copying…", for: artifact.id)
-        run({ try Data(contentsOf: URL(fileURLWithPath: artifact.imagePath)) }) { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success(let png):
-                let pasteboard = NSPasteboard.general; pasteboard.clearContents()
-                let copied = pasteboard.setData(png, forType: .png)
-                self.status.stringValue = copied ? "Copied the mini preview image." : "Couldn’t copy the mini preview image."
-                self.miniPreviews?.setStatus(copied ? "Copied" : "Copy failed", for: artifact.id)
-            case .failure(let error):
-                self.showError("Couldn’t copy image", error)
-                self.miniPreviews?.setStatus("Copy failed", for: artifact.id)
             }
         }
     }
