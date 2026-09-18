@@ -73,7 +73,14 @@ and hotspot, a synthetic arrow on Windows/X11, and no overlay when the pointer
 is outside the selected display or unavailable. Wayland-only cursor acquisition
 remains unsupported. Exact cursor shapes on Windows/Linux are not claimed.
 
-This slice has no region/window capture, recordings, editor or
+The Windows/X11 candidate also connects region selection to the shared Rust
+`RegionSession`: draw/move/corner-resize, aspect constraints, Shift, Enter/Escape,
+freeze-screen and create-only auto-start. A countdown uses fresh pixels even
+when the selector was frozen. Its [private-X11 integration test](wgpu/README.md#validate-and-collect-evidence)
+checks real saved pixels and cancellation with simulated session state. Matching
+AppKit region presentation is developed in the companion macOS slice.
+
+This slice has no window capture, recordings, editor or
 mini previews; those stored preferences do not apply yet. Full UI parity remains
 open. The wgpu Wayland backend cannot verify hiding its root window, so capture
 is disabled there rather than photographing the app itself. Linux X11 needs an

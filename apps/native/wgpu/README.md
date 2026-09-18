@@ -121,6 +121,30 @@ closed on that unsupported workload. Capture another state with
 workbench's framebuffer, never your desktop. Screenshots stop the app after saving
 and must be collected separately from resource trials.
 
+The Linux CI job also runs a **real capture/persistence integration test** on a
+private Xvfb desktop with Openbox, picom and software GL. It injects X11 pointer
+and keyboard events, draws a region, and checks every saved pixel against an
+asymmetric background pattern. Zero-delay capture must retain frozen pixels;
+a nonzero countdown must capture the changed desktop. Repeated captures, Escape
+while another application owns focus, simulated lock/unlock cancellation, region
+metadata and clean shutdown are checked in the same process.
+
+```sh
+sudo apt-get install xvfb dbus python3-dbus python3-gi openbox picom hsetroot xdotool x11-utils x11-apps imagemagick libgl1-mesa-dri
+/usr/bin/python3 apps/native/x11_capture_smoke.py \
+  --binary apps/native/wgpu/target/release/captures-wgpu-workbench \
+  --output /tmp/native-x11-capture
+```
+
+Use system Python for the distro's D-Bus/GLib bindings. The test owns its display
+and D-Bus daemon; it never uses the caller's desktop/session or installed Captures
+data. A private `org.freedesktop.ScreenSaver` fixture reports unlocked/locked
+state through the normal session adapter. **Session state is simulated; X11
+input delivery, the capture engine and PNG/history persistence are real.** There
+is no application bypass flag. This does not verify an actual login manager,
+hardware keyboard/GPU, Wayland, accessibility or real-desktop compositor behavior.
+CI retains the disposable captures, metadata, screenshots and process logs.
+
 The profiler takes about 44 minutes by default (eleven workloads, one excluded
 warmup and three 60-second trials). It records process CPU-time deltas plus Linux
 RSS or Windows working set, raw samples, initialization and action events. Neither
