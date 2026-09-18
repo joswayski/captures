@@ -72,8 +72,10 @@ final class MiniPreviewTests: XCTestCase {
         let imagePath = directory.appendingPathComponent("full.png")
         try png.write(to: imagePath)
         let transport = MiniPreviewActionTransport()
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("es.captures.tests.\(UUID())"))
+        pasteboard.clearContents()
         let actions = MiniPreviewActions(settingsPath: nil, transport: transport,
-            loadPreferences: { try self.preferences() })
+            loadPreferences: { try self.preferences() }, pasteboard: { pasteboard })
         actions.configure(historyRoot: directory.path)
         var workspaceOwner: NSObject? = NSObject()
         workspaceOwner = nil // Preferences replaced the live workspace controller.
@@ -84,11 +86,11 @@ final class MiniPreviewTests: XCTestCase {
         actions.copy(captured)
         actions.save(captured)
         LiveCaptureController.flush()
-        try waitUntil {
-            transport.saveCount == 1 && NSPasteboard.general.data(forType: .png) == png
-        }
+        XCTAssertEqual(transport.saveCount, 1, "Save must execute on the persistent queue")
         XCTAssertEqual(transport.savedRoot, directory.path)
-        XCTAssertEqual(NSPasteboard.general.data(forType: .png), png)
+        try waitUntil { pasteboard.data(forType: .png) == png }
+        XCTAssertEqual(pasteboard.data(forType: .png), png,
+            "Copy must publish the full-resolution PNG, not the thumbnail")
     }
 
     func testReplacementRejectsLateDecodeAndCaptureCancellationRestoresPanel() throws {
