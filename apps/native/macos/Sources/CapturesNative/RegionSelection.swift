@@ -130,8 +130,9 @@ final class RegionSelectionView: NSView {
     func drag(_ point: NSPoint, shift: Bool = false) { selection.update(point, shift: shift); update() }
     func end() {
         guard selection.mode != nil else { return }
+        let created = selection.mode == 0
         selection.end(); update()
-        if autoStart { confirmSelection() }
+        if autoStart && created { confirmSelection() }
     }
     func confirmSelection() { if selection.capturable && selection.mode == nil { confirm(selection.rect) } }
     override func mouseDown(with event: NSEvent) {

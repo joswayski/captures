@@ -58,6 +58,12 @@ final class RegionSelectionTests: XCTestCase {
         XCTAssertEqual(region.x, 100); XCTAssertEqual(region.y, 80)
         XCTAssertEqual(region.width, 320); XCTAssertEqual(region.height, 180)
         view.end(); XCTAssertEqual(confirmed.count, 1, "no duplicate pointer-up commit")
+        view.mouseDown(with: try event(.leftMouseDown, 200, 160))
+        view.mouseUp(with: try event(.leftMouseUp, 240, 185))
+        XCTAssertEqual(confirmed.count, 1, "moving is adjust-only even with automatic start")
+        view.mouseDown(with: try event(.leftMouseDown, 460, 285))
+        view.mouseUp(with: try event(.leftMouseUp, 520, 325))
+        XCTAssertEqual(confirmed.count, 1, "resizing is adjust-only even with automatic start")
         view.keyDown(with: try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
             modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil,
             characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)))
