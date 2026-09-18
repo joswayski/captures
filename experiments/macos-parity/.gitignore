@@ -1,0 +1,5 @@
+.build/
+results/
+tauri/target/
+tauri/gen/
+__pycache__/

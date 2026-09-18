@@ -1,0 +1,7 @@
+/* Test stage, not a proposed product redesign. Effect styles come from shipping CSS. */
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #20242b; }
+#stage { position: relative; width: 640px; height: 720px; }
+#stage .fixture-card { position: absolute; left: 178px; width: 284px; height: 160px; box-shadow: none; }
+#stage .fixture-card::after { display: none; }
+/* The component comparison excludes preview outline/chrome, not media effects. */
+#stage .thumbnail-exit-delete { animation-name: thumbnail-delete; }
