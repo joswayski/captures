@@ -763,12 +763,17 @@ impl eframe::App for Workbench {
                     let windows = &self.window_targets;
                     let shell = &self.window_shell;
                     let display = &self.window_display;
-                    if let Some(action) =
-                        self.window_selector
-                            .show(ui, &t, texture, display, windows, |point| {
-                                fixture_window_hit_test(windows, shell, display, point)
-                            })
-                    {
+                    if let Some(action) = self.window_selector.show(
+                        ui,
+                        &t,
+                        crate::window_selector::View {
+                            frozen: texture,
+                            display,
+                            windows,
+                            auto_start: false,
+                        },
+                        |point| fixture_window_hit_test(windows, shell, display, point),
+                    ) {
                         match action {
                             crate::window_selector::Action::Confirm(target) => emit(
                                 "window-confirm",

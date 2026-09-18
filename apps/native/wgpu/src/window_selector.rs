@@ -1,6 +1,8 @@
 use captures_app::selection::Point;
 use captures_capture::{DisplayDescriptor, WindowDescriptor};
-use eframe::egui::{self, Color32, FontId, Pos2, Sense, Stroke, StrokeKind, TextureHandle};
+use eframe::egui::{
+    self, Align2, Color32, FontId, Pos2, RichText, Sense, Stroke, StrokeKind, TextureHandle,
+};
 
 use crate::tokens::Tokens;
 
@@ -16,9 +18,17 @@ pub enum Action {
     Cancel,
 }
 
+pub struct View<'a> {
+    pub frozen: Option<&'a TextureHandle>,
+    pub display: &'a DisplayDescriptor,
+    pub windows: &'a [WindowDescriptor],
+    pub auto_start: bool,
+}
+
 #[derive(Default)]
 pub struct WindowSelector {
     hovered: Option<SelectionTarget>,
+    selected: Option<SelectionTarget>,
 }
 
 impl WindowSelector {
@@ -26,25 +36,28 @@ impl WindowSelector {
         self.hovered
     }
 
+    #[cfg(test)]
+    fn selected(&self) -> Option<SelectionTarget> {
+        self.selected
+    }
+
     pub fn reset(&mut self) {
-        self.hovered = None;
+        *self = Self::default();
     }
 
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         tokens: &Tokens,
-        frozen: Option<&TextureHandle>,
-        display: &DisplayDescriptor,
-        windows: &[WindowDescriptor],
+        view: View<'_>,
         hit_test: impl Fn(Point) -> Option<usize>,
     ) -> Option<Action> {
         let surface = ui.max_rect();
-        let coordinates = CoordinateMap::new(surface, display);
+        let coordinates = CoordinateMap::new(surface, view.display);
         let response = ui.allocate_rect(surface, Sense::click());
         if let Some(position) = response.hover_pos() {
             self.hovered = Some(match hit_test(coordinates.point(position)) {
-                Some(index) if index < windows.len() => SelectionTarget::Window(index),
+                Some(index) if index < view.windows.len() => SelectionTarget::Window(index),
                 _ => SelectionTarget::Display,
             });
         } else if ui.input(|input| input.pointer.latest_pos()).is_none() {
@@ -54,26 +67,72 @@ impl WindowSelector {
         paint_surface(
             ui,
             tokens,
-            frozen,
+            &view,
             coordinates,
-            display,
-            windows,
-            self.hovered,
+            self.selected.or(self.hovered),
+            self.selected.is_some(),
         );
 
+        let mut action = None;
         if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
-            return Some(Action::Cancel);
-        }
-        if ui.input(|input| input.key_pressed(egui::Key::Enter))
+            action = Some(Action::Cancel);
+        } else if ui.input(|input| input.key_pressed(egui::Key::Enter))
+            && let Some(target) = self.selected
+        {
+            action = Some(Action::Confirm(target));
+        } else if response.clicked()
             && let Some(target) = self.hovered
         {
-            return Some(Action::Confirm(target));
+            if view.auto_start {
+                action = Some(Action::Confirm(target));
+            } else {
+                self.selected = Some(target);
+            }
         }
-        response
-            .clicked()
-            .then_some(self.hovered)
-            .flatten()
-            .map(Action::Confirm)
+
+        if !view.auto_start {
+            egui::Area::new("window-selector-toolbar".into())
+                .anchor(Align2::CENTER_BOTTOM, egui::vec2(0., -26.))
+                .order(egui::Order::Foreground)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::new()
+                        .fill(tokens.color("glass-strong"))
+                        .stroke(Stroke::new(1., tokens.color("glass-border")))
+                        .corner_radius(tokens.number("r-2xl") as u8)
+                        .inner_margin(tokens.number("s-4") as i8)
+                        .show(ui, |ui| {
+                            tokens.glass_controls(ui);
+                            ui.horizontal(|ui| {
+                                if ui.button("×").on_hover_text("Cancel (Esc)").clicked() {
+                                    action = Some(Action::Cancel);
+                                }
+                                ui.separator();
+                                ui.label(
+                                    RichText::new(selection_label(self.selected, view.windows))
+                                        .small()
+                                        .color(tokens.color("glass-text-subtle")),
+                                );
+                                if ui
+                                    .add_enabled(
+                                        self.selected.is_some(),
+                                        egui::Button::new(
+                                            RichText::new("Capture")
+                                                .color(tokens.color("theme-accent-ink")),
+                                        )
+                                        .fill(tokens.color("theme-accent"))
+                                        .stroke(Stroke::NONE),
+                                    )
+                                    .on_hover_text("Capture selected target (Enter)")
+                                    .clicked()
+                                    && let Some(target) = self.selected
+                                {
+                                    action = Some(Action::Confirm(target));
+                                }
+                            });
+                        });
+                });
+        }
+        action
     }
 
     pub fn exercise(&mut self, cycle: usize, hit_test: impl Fn(Point) -> Option<usize>) {
@@ -83,7 +142,10 @@ impl WindowSelector {
             2 => Some(Point { x: 500., y: 20. }),
             3 => Some(Point { x: 920., y: 680. }),
             4 => Some(Point { x: 720., y: 500. }),
-            5 => None,
+            5 => {
+                self.reset();
+                return;
+            }
             _ => return,
         };
         self.hovered = point.map(|point| match hit_test(point) {
@@ -147,15 +209,14 @@ impl CoordinateMap {
 fn paint_surface(
     ui: &egui::Ui,
     tokens: &Tokens,
-    frozen: Option<&TextureHandle>,
+    view: &View<'_>,
     coordinates: CoordinateMap,
-    display: &DisplayDescriptor,
-    windows: &[WindowDescriptor],
     hovered: Option<SelectionTarget>,
+    has_selection: bool,
 ) {
     let surface = coordinates.surface;
     let painter = ui.painter();
-    if let Some(texture) = frozen {
+    if let Some(texture) = view.frozen {
         painter.image(
             texture.id(),
             surface,
@@ -164,9 +225,10 @@ fn paint_surface(
         );
     }
     let selected = match hovered {
-        Some(SelectionTarget::Window(index)) => windows
+        Some(SelectionTarget::Window(index)) => view
+            .windows
             .get(index)
-            .map(|window| (coordinates.rect(window, display), window)),
+            .map(|window| (coordinates.rect(window, view.display), window)),
         _ => None,
     };
     let veil = tokens.color("glass-veil-heavy");
@@ -201,11 +263,7 @@ fn paint_surface(
             painter,
             tokens,
             rect.left_top() + egui::vec2(8., 8.),
-            if window.title.is_empty() {
-                window.app_name.as_deref().unwrap_or("Window")
-            } else {
-                &window.title
-            },
+            window_label(window),
         );
     } else {
         painter.rect_filled(surface, 0., veil);
@@ -244,7 +302,14 @@ fn paint_surface(
         tokens.color("glass-text"),
     );
     let hint = painter.layout_no_wrap(
-        "Click or press Enter to capture · Esc to cancel".into(),
+        if view.auto_start {
+            "Click to capture · Esc to cancel"
+        } else if has_selection {
+            "Press Enter or Capture to confirm · Esc to cancel"
+        } else {
+            "Click a target to select it · Esc to cancel"
+        }
+        .into(),
         FontId::proportional(tokens.number("text-sm")),
         tokens.color("glass-text-muted"),
     );
@@ -284,6 +349,30 @@ fn paint_label(painter: &egui::Painter, tokens: &Tokens, origin: Pos2, title: &s
         tokens.color("glass-strong"),
     );
     painter.galley(origin + egui::vec2(7., 4.), galley, Color32::WHITE);
+}
+
+fn window_label(window: &WindowDescriptor) -> &str {
+    let title = window.title.trim();
+    if !title.is_empty() {
+        return title;
+    }
+    window
+        .app_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Window")
+}
+
+fn selection_label(target: Option<SelectionTarget>, windows: &[WindowDescriptor]) -> &str {
+    match target {
+        Some(SelectionTarget::Display) => "Entire display",
+        Some(SelectionTarget::Window(index)) => windows
+            .get(index)
+            .map(window_label)
+            .unwrap_or("Selected window"),
+        None => "Click a target to select it",
+    }
 }
 
 #[cfg(test)]
@@ -360,6 +449,7 @@ mod tests {
         ctx: &egui::Context,
         selector: &mut WindowSelector,
         events: Vec<egui::Event>,
+        auto_start: bool,
     ) -> Option<Action> {
         let screen = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1000., 720.));
         let display = display();
@@ -371,28 +461,38 @@ mod tests {
             egui::Id::new("window-selector-input-test"),
             egui::UiBuilder::new().max_rect(screen),
         );
-        let action = selector.show(&mut ui, &tokens, None, &display, &windows, |point| {
-            target_index_at_point(
-                &windows,
-                &shell,
-                point,
-                Point {
-                    x: f64::from(display.x),
-                    y: f64::from(display.y),
-                },
-                1.,
-            )
-        });
+        let action = selector.show(
+            &mut ui,
+            &tokens,
+            View {
+                frozen: None,
+                display: &display,
+                windows: &windows,
+                auto_start,
+            },
+            |point| {
+                target_index_at_point(
+                    &windows,
+                    &shell,
+                    point,
+                    Point {
+                        x: f64::from(display.x),
+                        y: f64::from(display.y),
+                    },
+                    1.,
+                )
+            },
+        );
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         action
     }
 
     #[test]
-    fn raw_input_hovers_frontmost_window_and_clicks_it() {
+    fn raw_input_false_latches_click_until_enter_while_true_click_starts() {
         let ctx = egui::Context::default();
         let mut selector = WindowSelector::default();
-        run_input(&ctx, &mut selector, vec![]);
+        run_input(&ctx, &mut selector, vec![], false);
         run_input(
             &ctx,
             &mut selector,
@@ -400,37 +500,97 @@ mod tests {
                 egui::Event::PointerMoved(egui::pos2(520., 230.)),
                 pointer(egui::pos2(520., 230.), true),
             ],
+            false,
         );
         assert_eq!(selector.hovered(), Some(SelectionTarget::Window(1)));
         assert_eq!(
             run_input(
                 &ctx,
                 &mut selector,
-                vec![pointer(egui::pos2(520., 230.), false)]
+                vec![pointer(egui::pos2(520., 230.), false)],
+                false,
+            ),
+            None
+        );
+        assert_eq!(selector.selected(), Some(SelectionTarget::Window(1)));
+        run_input(
+            &ctx,
+            &mut selector,
+            vec![egui::Event::PointerMoved(egui::pos2(200., 130.))],
+            false,
+        );
+        assert_eq!(selector.hovered(), Some(SelectionTarget::Window(0)));
+        assert_eq!(
+            run_input(&ctx, &mut selector, vec![key(egui::Key::Enter)], false,),
+            Some(Action::Confirm(SelectionTarget::Window(1))),
+            "Enter must confirm the clicked target, not the later hover"
+        );
+
+        let ctx = egui::Context::default();
+        let mut selector = WindowSelector::default();
+        run_input(&ctx, &mut selector, vec![], true);
+        run_input(
+            &ctx,
+            &mut selector,
+            vec![
+                egui::Event::PointerMoved(egui::pos2(520., 230.)),
+                pointer(egui::pos2(520., 230.), true),
+            ],
+            true,
+        );
+        assert_eq!(
+            run_input(
+                &ctx,
+                &mut selector,
+                vec![pointer(egui::pos2(520., 230.), false)],
+                true,
             ),
             Some(Action::Confirm(SelectionTarget::Window(1)))
         );
+        assert_eq!(selector.selected(), None);
     }
 
     #[test]
     fn raw_input_maps_shell_and_desktop_to_display_then_enter_confirms() {
         let ctx = egui::Context::default();
         let mut selector = WindowSelector::default();
-        run_input(&ctx, &mut selector, vec![]);
+        run_input(&ctx, &mut selector, vec![], false);
         run_input(
             &ctx,
             &mut selector,
             vec![egui::Event::PointerMoved(egui::pos2(500., 20.))],
+            false,
         );
         assert_eq!(selector.hovered(), Some(SelectionTarget::Display));
         assert_eq!(
-            run_input(&ctx, &mut selector, vec![key(egui::Key::Enter)]),
+            run_input(&ctx, &mut selector, vec![key(egui::Key::Enter)], false),
+            None,
+            "Enter cannot confirm a mere hover"
+        );
+        run_input(
+            &ctx,
+            &mut selector,
+            vec![pointer(egui::pos2(500., 20.), true)],
+            false,
+        );
+        assert_eq!(
+            run_input(
+                &ctx,
+                &mut selector,
+                vec![pointer(egui::pos2(500., 20.), false)],
+                false,
+            ),
+            None
+        );
+        assert_eq!(
+            run_input(&ctx, &mut selector, vec![key(egui::Key::Enter)], false),
             Some(Action::Confirm(SelectionTarget::Display))
         );
         run_input(
             &ctx,
             &mut selector,
             vec![egui::Event::PointerMoved(egui::pos2(920., 680.))],
+            false,
         );
         assert_eq!(selector.hovered(), Some(SelectionTarget::Display));
     }
@@ -439,19 +599,21 @@ mod tests {
     fn raw_input_escape_cancels_and_reset_clears_hover() {
         let ctx = egui::Context::default();
         let mut selector = WindowSelector::default();
-        run_input(&ctx, &mut selector, vec![]);
+        run_input(&ctx, &mut selector, vec![], false);
         run_input(
             &ctx,
             &mut selector,
             vec![egui::Event::PointerMoved(egui::pos2(200., 130.))],
+            false,
         );
         assert!(selector.hovered().is_some());
         assert_eq!(
-            run_input(&ctx, &mut selector, vec![key(egui::Key::Escape)]),
+            run_input(&ctx, &mut selector, vec![key(egui::Key::Escape)], false,),
             Some(Action::Cancel)
         );
         selector.reset();
         assert_eq!(selector.hovered(), None);
+        assert_eq!(selector.selected(), None);
     }
 
     #[test]
@@ -470,5 +632,19 @@ mod tests {
         let rect = map.rect(&window("mapped", 1, 100, 350, 400, 600), &display);
         assert_eq!(rect.min, egui::pos2(120., 130.));
         assert_eq!(rect.size(), egui::vec2(200., 200.));
+    }
+
+    #[test]
+    fn label_uses_nonempty_trimmed_title_then_app_then_fallback() {
+        let mut target = window("id", 1, 0, 0, 100, 100);
+        target.title = "  Document  ".into();
+        target.app_name = Some(" Editor ".into());
+        assert_eq!(window_label(&target), "Document");
+        target.title = "  ".into();
+        assert_eq!(window_label(&target), "Editor");
+        target.app_name = Some(" ".into());
+        assert_eq!(window_label(&target), "Window");
+        target.app_name = None;
+        assert_eq!(window_label(&target), "Window");
     }
 }

@@ -18,8 +18,10 @@ freeze-screen and auto-start-on-selection preferences, retains one shared
 `RegionSession` through confirmation, and uses the shipping shared drag/aspect
 geometry. Window selection retains one shared `WindowSession`, uses its shipping
 frontmost-window/shell hit testing and source-safety policy, and treats shell or
-empty-desktop clicks as display capture. Frozen and live window selection both
-refresh after a nonzero countdown. Windows/X11 use the shipping
+empty-desktop clicks as display capture. It applies freeze-screen and
+auto-start-on-selection preferences; otherwise a clicked target stays selected
+until Capture or Enter confirms it. Frozen and live window selection both refresh
+after a nonzero countdown. Windows/X11 use the shipping
 synthetic cursor arrow, not the actual system cursor image. Other capture defaults remain unconnected;
 other scenes remain fixtures. System-wide global shortcuts remain unavailable except
 for temporary Escape cancellation during an active live capture; the selector

@@ -196,6 +196,7 @@ pub struct Live {
     window_texture: Option<egui::TextureHandle>,
     window_selector: Arc<Mutex<WindowSelector>>,
     window_freeze: bool,
+    window_auto_start: bool,
     window_countdown_seconds: u8,
     can_hide: Option<bool>,
     confirm_delete: Option<String>,
@@ -327,6 +328,7 @@ impl Live {
             window_texture: None,
             window_selector: Arc::new(Mutex::new(WindowSelector::default())),
             window_freeze: false,
+            window_auto_start: false,
             window_countdown_seconds: 0,
             can_hide: None,
             confirm_delete: None,
@@ -947,6 +949,7 @@ impl Live {
             let selector = Arc::clone(&self.window_selector);
             let sender = self.selector_tx.clone();
             let texture = self.window_texture.clone();
+            let auto_start = self.window_auto_start;
             let session = Arc::clone(
                 self.window_session
                     .as_ref()
@@ -964,9 +967,12 @@ impl Live {
                     let action = selector.lock().unwrap().show(
                         ui,
                         &t,
-                        texture.as_ref(),
-                        session.display(),
-                        session.windows(),
+                        window_selector::View {
+                            frozen: texture.as_ref(),
+                            display: session.display(),
+                            windows: session.windows(),
+                            auto_start,
+                        },
                         |point| session.hit_test(point),
                     );
                     if let Some(action) = action {
@@ -1115,6 +1121,7 @@ impl Live {
                                         self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
                                         self.include_cursor = settings.show_cursor_in_screenshots;
                                         self.window_freeze = settings.freeze_screen;
+                                        self.window_auto_start = settings.auto_start_on_selection;
                                         self.window_countdown_seconds = settings.screenshot_countdown_seconds;
                                         self.capture_waiting_for_hide = true;
                                         self.hide_started = Some(Instant::now());
