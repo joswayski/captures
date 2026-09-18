@@ -610,6 +610,10 @@ impl eframe::App for Workbench {
         let t = self.tokens(&ctx);
         ui.set_style(ctx.style_of(ctx.theme()));
         if let Some(live) = &mut self.live {
+            live.viewports(&ctx, &t, self.preferences_state.snapshot());
+            if live.take_open_history_requested() {
+                self.live_preferences = false;
+            }
             egui::Panel::top("live-navigation").show(ui, |ui| {
                 if live.is_capturing() {
                     ui.disable();

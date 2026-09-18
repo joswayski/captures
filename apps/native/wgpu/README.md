@@ -21,7 +21,11 @@ frontmost-window/shell hit testing and source-safety policy, and treats shell or
 empty-desktop clicks as display capture. It applies freeze-screen and
 auto-start-on-selection preferences; otherwise a clicked target stays selected
 until Capture or Enter confirms it. Frozen and live window selection both refresh
-after a nonzero countdown. Windows/X11 use the shipping
+after a nonzero countdown. A successful screenshot can show one fixed-glass native
+mini preview in any preference-selected corner, with full-resolution Copy, Save,
+history selection, and nondestructive Dismiss actions. The card is excluded from
+captures by default and retained when the include-in-captures preference is enabled.
+Windows/X11 use the shipping
 synthetic cursor arrow, not the actual system cursor image. Other capture defaults remain unconnected;
 other scenes remain fixtures. System-wide global shortcuts remain unavailable except
 for temporary Escape cancellation during an active live capture; the selector
@@ -91,6 +95,12 @@ enabled, but screen-reader navigation and IME need real platform testing; painte
 images/canvas layers lack full semantic nodes. Reduce motion is an explicit probe
 switch, not yet connected to each OS setting. Transparency does not imply desktop
 blur, click-through, topmost behavior, or correct Wayland overlay placement.
+The live mini preview currently retains only the latest successful screenshot;
+stacking, drag placement, collapse and dust remain open. winit exposes full monitor
+bounds but not the OS work area, so this host reserves every edge conservatively;
+multi-monitor work-area behavior needs desktop verification. Preview positioning is
+unsupported on Wayland. Windows preview runtime, nonactivation, and accessibility
+also remain unverified beyond compilation and focused host tests.
 
 **Hidden idle is unsupported on this candidate's Wayland backend.** winit cannot
 hide/query the root there; live capture is disabled, and `--scene idle` exits with an explicit unsupported event
