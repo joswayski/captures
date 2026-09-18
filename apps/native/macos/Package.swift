@@ -26,6 +26,8 @@ let package = Package(
                 .linkedFramework("CoreFoundation"),
                 .linkedFramework("IOSurface"),
                 .linkedFramework("CoreVideo"),
+                .linkedFramework("CoreMedia"),
+                .linkedFramework("Carbon"),
             ]
         ),
         .testTarget(name: "CapturesNativeTests", dependencies: ["CapturesNative"], resources: [.process("Resources")]),
