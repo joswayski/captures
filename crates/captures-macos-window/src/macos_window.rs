@@ -50,42 +50,6 @@ use objc2_foundation::{
 use tauri::WebviewWindow;
 use tauri_nspanel::WebviewWindowExt;
 
-/// The system cursor pixels and geometry captured before Captures replaces it
-/// with a selector cursor.
-#[derive(Debug)]
-pub struct SystemCursorImage {
-    pub tiff: Vec<u8>,
-    pub logical_width: f64,
-    pub logical_height: f64,
-    pub hot_spot_x: f64,
-    pub hot_spot_y: f64,
-}
-
-/// Snapshot the cursor currently displayed by any application.
-///
-/// `currentCursor` only reports Captures' cursor. The deprecated system-wide
-/// accessor is still the public AppKit API that preserves another app's exact
-/// cursor image and hotspot for a still capture. ScreenCaptureKit handles this
-/// itself for macOS recordings.
-#[allow(deprecated)]
-pub fn system_cursor_image() -> Option<SystemCursorImage> {
-    let cursor = NSCursor::currentSystemCursor()?;
-    let image = cursor.image();
-    let size = image.size();
-    let hot_spot = cursor.hotSpot();
-    let tiff = image.TIFFRepresentation()?.to_vec();
-    if tiff.is_empty() || size.width <= 0.0 || size.height <= 0.0 {
-        return None;
-    }
-    Some(SystemCursorImage {
-        tiff,
-        logical_width: size.width,
-        logical_height: size.height,
-        hot_spot_x: hot_spot.x,
-        hot_spot_y: hot_spot.y,
-    })
-}
-
 mod interactive_hud_panel {
     use tauri::Manager;
     use tauri_nspanel::tauri_panel;

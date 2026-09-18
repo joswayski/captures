@@ -2,6 +2,9 @@
 //! Layers are composited in document order, then the crop is applied. This crate
 //! owns neither editor state nor file/clipboard operations.
 
+mod encoding;
+pub use encoding::{composite_onto_white, encode_jpeg, encode_webp};
+
 use std::sync::Arc;
 
 use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle};

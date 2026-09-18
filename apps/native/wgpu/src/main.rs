@@ -1,5 +1,8 @@
+mod countdown;
+mod live;
 mod options;
 mod preferences;
+mod selector;
 mod tokens;
 mod workbench;
 
@@ -29,14 +32,25 @@ fn main() -> eframe::Result {
     let native = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
-            .with_title("Captures — wgpu fixture workbench")
+            .with_title(if options.live {
+                "Captures"
+            } else {
+                "Captures — wgpu fixture workbench"
+            })
             .with_inner_size(size)
             .with_min_inner_size(size)
             .with_visible(!idle)
-            .with_transparent(floating)
+            // eframe's wgpu painter takes its alpha capability from the root,
+            // including for the transparent countdown child viewport.
+            .with_transparent(floating || options.live)
             .with_decorations(!floating),
         ..Default::default()
     };
+    emit(
+        "starting",
+        json!({"scene": if options.live { "live" } else { options.scene.name() },
+        "phase": "before native event loop and renderer initialization"}),
+    );
     eframe::run_native(
         "Captures renderer experiment",
         native,
