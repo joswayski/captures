@@ -19,6 +19,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 captures-capture = { path = "../../../crates/captures-capture" }
 captures-history = { path = "../../../crates/captures-history" }
+captures-image = { path = "../../../crates/captures-image" }
 captures-media = { path = "../../../crates/captures-media" }
 captures-recording = { path = "../../../crates/captures-recording" }
 captures-settings = { path = "../../../crates/captures-settings" }
@@ -29,9 +30,6 @@ image.workspace = true
 parking_lot.workspace = true
 png = "0.17"
 quantette = { version = "0.6", default-features = false, features = ["image", "std", "threads"] }
-jpeg-encoder = "0.6"
-# Lossy WebP via libwebp (image crate only supports lossless WebP encode).
-webp = { version = "0.3", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

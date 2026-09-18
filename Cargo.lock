@@ -669,6 +669,7 @@ dependencies = [
  "arboard",
  "captures-capture",
  "captures-history",
+ "captures-image",
  "captures-macos-window",
  "captures-media",
  "captures-recording",
@@ -680,7 +681,6 @@ dependencies = [
  "clipboard-win",
  "directories",
  "image",
- "jpeg-encoder",
  "libc",
  "mouse_position",
  "parking_lot",
@@ -705,7 +705,6 @@ dependencies = [
  "tracing",
  "trash",
  "uuid",
- "webp",
  "windows-sys 0.61.2",
 ]
 
@@ -741,7 +740,9 @@ version = "0.1.0"
 dependencies = [
  "fontdue",
  "image",
+ "jpeg-encoder",
  "tiny-skia",
+ "webp",
 ]
 
 [[package]]

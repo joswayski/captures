@@ -8,6 +8,8 @@ publish = false
 
 [dependencies]
 image.workspace = true
+jpeg-encoder = "0.6"
+webp = { version = "0.3", default-features = false }
 tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
 fontdue = "0.9"
 
