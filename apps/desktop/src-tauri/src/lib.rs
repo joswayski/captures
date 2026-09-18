@@ -18,12 +18,11 @@ use std::{
 use tauri::CursorIcon;
 
 use captures_capture::{
-    CaptureError, CaptureMode, CursorImage, DisplayFrame, LogicalRect, PhysicalRect, PointerCursor,
-    WindowDescriptor,
+    CaptureError, CaptureMode, DisplayFrame, LogicalRect, PhysicalRect, PointerCursor,
+    WindowDescriptor, pointer_cursor, pointer_position,
 };
 use chrono::{DateTime, Utc};
 use image::RgbaImage;
-use mouse_position::mouse_position::Mouse;
 use serde::Serialize;
 use tauri::{
     AppHandle, Emitter, LogicalSize, Manager, Theme, WebviewUrl, WebviewWindowBuilder,
@@ -4095,46 +4094,6 @@ fn apply_screenshot_cursor_on_window(
         cursor,
         captures_capture::screenshot_pointer_scale(display_scale_factor),
     );
-}
-
-fn pointer_cursor() -> Option<PointerCursor> {
-    let position = pointer_position()?;
-    Some(PointerCursor {
-        position,
-        image: native_cursor_image(),
-    })
-}
-
-#[cfg(target_os = "macos")]
-fn native_cursor_image() -> Option<CursorImage> {
-    let cursor = captures_macos_window::system_cursor_image()?;
-    let pixels = image::load_from_memory(&cursor.tiff).ok()?.to_rgba8();
-    Some(CursorImage {
-        pixels,
-        logical_width: cursor.logical_width,
-        logical_height: cursor.logical_height,
-        hot_spot_x: cursor.hot_spot_x,
-        hot_spot_y: cursor.hot_spot_y,
-    })
-}
-
-#[cfg(not(target_os = "macos"))]
-const fn native_cursor_image() -> Option<CursorImage> {
-    None
-}
-
-fn pointer_position() -> Option<(i32, i32)> {
-    #[cfg(target_os = "linux")]
-    if !x11_display_available() {
-        // mouse_position uses Xlib and dereferences a null display on a
-        // Wayland-only session. Fall back to the primary monitor instead.
-        return None;
-    }
-
-    match Mouse::get_mouse_position() {
-        Mouse::Position { x, y } => Some((x, y)),
-        Mouse::Error => None,
-    }
 }
 
 fn display_contains_pointer(
