@@ -1407,7 +1407,6 @@ impl Live {
         let builder = egui::ViewportBuilder::default()
             .with_title("Captures Mini Preview")
             .with_visible(true)
-            .with_monitor(target.monitor)
             .with_position(egui::pos2(geometry.x as f32, geometry.y as f32))
             .with_inner_size(egui::vec2(
                 captures_app::preview::THUMBNAIL_WIDTH as f32,
@@ -1431,10 +1430,21 @@ impl Live {
         // implements it, and verify X11 focus behavior in the real host smoke.
         #[cfg(target_os = "windows")]
         let builder = builder.with_active(false);
+        #[cfg(target_os = "linux")]
+        let builder = builder.with_window_type(egui::X11WindowType::Notification);
         ctx.show_viewport_deferred(
             egui::ViewportId::from_hash_of("live-mini-preview"),
             builder,
             move |ui, _| {
+                // egui's deferred child may be mapped by the WM before its
+                // builder position is applied. Reassert the absolute outer
+                // position after mapping; unlike `with_monitor`, this does not
+                // create a borderless-fullscreen viewport at the monitor origin.
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                        geometry.x as f32,
+                        geometry.y as f32,
+                    )));
                 if ui.input(|input| input.viewport().close_requested()) {
                     let _ = sender.send(PreviewMessage::Dismiss { generation });
                     ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
@@ -2014,7 +2024,7 @@ fn capture_target(
         monitor: index,
         position: egui::pos2(position.x, position.y),
         size: egui::vec2(size.width, size.height),
-        preview_bounds: conservative_preview_bounds(
+        preview_bounds: preview_bounds(
             physical_position.x,
             physical_position.y,
             physical_size.width,
@@ -2024,25 +2034,25 @@ fn capture_target(
     })
 }
 
-fn conservative_preview_bounds(
+fn preview_bounds(
     x: i32,
     y: i32,
     width: u32,
     height: u32,
     scale_factor: f64,
 ) -> captures_app::preview::ThumbnailMonitorBounds {
-    // winit exposes full monitor geometry but not the OS usable work area.
-    // Reserve a conservative logical margin on every edge rather than passing
-    // full bounds as though taskbars, docks, and panels did not exist.
-    let reserve =
-        (captures_app::preview::THUMBNAIL_AUTO_HIDE_RESERVE * scale_factor.max(1.)).round() as u32;
-    let horizontal = reserve.min(width / 4);
-    let vertical = reserve.min(height / 4);
+    let full = crate::work_area::PhysicalRect {
+        x,
+        y,
+        width,
+        height,
+    };
+    let work = crate::work_area::for_monitor(full).unwrap_or(full);
     captures_app::preview::ThumbnailMonitorBounds {
-        work_x: x.saturating_add(horizontal as i32),
-        work_y: y.saturating_add(vertical as i32),
-        work_width: width.saturating_sub(horizontal * 2).max(1),
-        work_height: height.saturating_sub(vertical * 2).max(1),
+        work_x: work.x,
+        work_y: work.y,
+        work_width: work.width,
+        work_height: work.height,
         full_x: x,
         full_y: y,
         full_width: width,
@@ -2175,7 +2185,7 @@ mod tests {
             monitor: 0,
             position: egui::Pos2::ZERO,
             size: egui::vec2(1280., 720.),
-            preview_bounds: conservative_preview_bounds(0, 0, 1280, 720, 1.),
+            preview_bounds: preview_bounds(0, 0, 1280, 720, 1.),
         }
     }
 
@@ -2288,14 +2298,12 @@ mod tests {
     }
 
     #[test]
-    fn preview_monitor_fallback_does_not_claim_full_bounds_as_work_area() {
-        let bounds = conservative_preview_bounds(-200, 100, 3200, 1800, 2.);
+    fn preview_monitor_bounds_are_valid_for_all_shared_placements() {
+        let bounds = preview_bounds(-200, 100, 3200, 1800, 2.);
         assert_eq!((bounds.full_x, bounds.full_y), (-200, 100));
         assert_eq!((bounds.full_width, bounds.full_height), (3200, 1800));
-        assert!(bounds.work_x > bounds.full_x);
-        assert!(bounds.work_y > bounds.full_y);
-        assert!(bounds.work_width < bounds.full_width);
-        assert!(bounds.work_height < bounds.full_height);
+        assert!(bounds.work_width > 0);
+        assert!(bounds.work_height > 0);
 
         let top_left = captures_app::preview::thumbnail_geometry(
             bounds,

@@ -6,6 +6,7 @@ mod preferences;
 mod selector;
 mod tokens;
 mod window_selector;
+mod work_area;
 mod workbench;
 
 use eframe::egui;

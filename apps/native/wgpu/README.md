@@ -97,9 +97,10 @@ switch, not yet connected to each OS setting. Transparency does not imply deskto
 blur, click-through, topmost behavior, or correct Wayland overlay placement.
 The live mini preview currently retains only the latest successful screenshot;
 stacking, drag placement, collapse and dust remain open. winit exposes full monitor
-bounds but not the OS work area, so this host reserves every edge conservatively;
-multi-monitor work-area behavior needs desktop verification. Preview positioning is
-unsupported on Wayland. Windows preview runtime, nonactivation, and accessibility
+bounds but not the OS work area, so X11 intersects EWMH `_NET_WORKAREA` with the
+target monitor. Multi-monitor panel behavior still needs desktop verification.
+Preview positioning is unsupported on Wayland. A safe shared Windows `rcWork`
+query is still needed; Windows preview runtime, nonactivation, and accessibility
 also remain unverified beyond compilation and focused host tests.
 
 **Hidden idle is unsupported on this candidate's Wayland backend.** winit cannot
