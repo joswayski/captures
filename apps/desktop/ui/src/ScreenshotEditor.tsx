@@ -15,6 +15,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import { playSound } from "./lib/sounds";
 import { CompressionPreview } from "./CompressionPreview";
 import { createCleanupRegistry } from "./lib/cleanupRegistry";
 import { eventTargetBelongsToSelectIn } from "./lib/customSelectMenu";
@@ -2092,6 +2093,7 @@ export function ScreenshotEditor() {
     if (successTimerRef.current !== null) {
       window.clearTimeout(successTimerRef.current);
     }
+    playSound(kind === "copy" ? "success" : "complete");
     setSuccess({ kind, message });
     setCopyAnnouncement(kind === "copy" ? "Copied to clipboard" : "");
     successTimerRef.current = window.setTimeout(() => {
@@ -5746,6 +5748,7 @@ export function ScreenshotEditor() {
           panActive ? "is-panning" : "",
         ].filter(Boolean).join(" ")}
         aria-label="Screenshot editing canvas"
+        data-sound-gesture
         onPointerDownCapture={startPanPointer}
         onPointerMoveCapture={movePanPointer}
         onPointerUpCapture={finishPanPointer}

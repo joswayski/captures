@@ -78,6 +78,7 @@ Preview builds automatically publish installed-app changes from `main`, and may 
 - Screenshots during an active recording
 - 30-day capture history, filtered by screenshots, video, or GIF
 - Light, dark, or system appearance across every Captures window
+- Soft, locally synthesized interaction sounds for app controls, menus, and editor copy/save feedback. Mute in Preferences → Appearance; the choice is saved on this device. Sounds can be picked up by desktop-audio or microphone recording, so mute them for clean recordings. Native OS dialogs and tray menus keep their system behavior.
 - Customizable shortcuts and accent colors. Find a setting in Preferences with `Cmd`+`F` on macOS or `Ctrl`+`F` on Windows and Linux
 - Capture UI and capture actions stay disabled while the desktop session is locked or inactive
 - Optional in-app feedback (never includes your captures)

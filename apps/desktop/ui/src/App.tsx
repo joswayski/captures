@@ -14,8 +14,10 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 
+import { playSound, setSoundsEnabled, soundsEnabled, subscribeSounds } from "./lib/sounds";
 import { CompressionPreview } from "./CompressionPreview";
 import { CustomSelect } from "./CustomSelect";
 import { Feedback } from "./Feedback";
@@ -3173,6 +3175,7 @@ export function RecordingSelector() {
     <main
       ref={surfaceRef}
       className={`recording-selector recording-target-${targetMode}${focusVisibleSessionId === session.id ? " recording-focus-visible" : ""}`}
+      data-sound-gesture
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -4107,6 +4110,7 @@ export function RecordingEditor() {
           }
           setExported(payload.artifact);
           setSavedFingerprint(pendingExportFingerprintRef.current);
+          playSound("complete");
           setToast(
             `${payload.artifact.kind === "gif" ? "GIF" : "Video"} saved — ${formatFileSize(payload.artifact.size_bytes)}.${
               payload.reveal_error ? " Its folder could not be opened." : ""
@@ -4873,6 +4877,7 @@ export function RecordingEditor() {
           <div
             ref={previewMediaRef}
             className="recording-preview-media"
+            data-sound-gesture
             style={previewMode === "actual"
               ? { width: artifact.width, height: artifact.height }
               : {
@@ -4971,6 +4976,7 @@ export function RecordingEditor() {
           ref={timelineRef}
           className="timeline-track"
           aria-label="Recording timeline"
+          data-sound-gesture
           onPointerDown={(event) => {
             if ((event.target as Element).closest(".timeline-trim-handle")) return;
             event.currentTarget.setPointerCapture(event.pointerId);
@@ -5954,6 +5960,7 @@ function CaptureOverlay() {
       key={sessionId}
       ref={surfaceRef}
       className={`capture-surface capture-${mode}${visibleSessionId === sessionId ? " capture-visible" : ""}${primingSessionId === sessionId ? " capture-priming" : ""}`}
+      data-sound-gesture
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -9343,6 +9350,7 @@ function PreferencesSections({
 }) {
   const appearance = settings.appearance ?? DEFAULT_APPEARANCE;
   const shortcutHelp = platformShortcutHelp(detectShortcutPlatform());
+  const soundEnabled = useSyncExternalStore(subscribeSounds, soundsEnabled);
 
   return (
     <>
@@ -9351,6 +9359,18 @@ function PreferencesSections({
           <h2 id="appearance-heading">Appearance</h2>
           <p>One look across every Captures window. Capture overlays stay dark so they read on any desktop.</p>
         </header>
+
+        <label className="check-row switch-row" data-sound="off">
+          <input
+            type="checkbox"
+            checked={soundEnabled}
+            onChange={(event) => setSoundsEnabled(event.target.checked)}
+          />
+          <span>
+            Interaction sounds
+            <small>Soft clicks, switches, and celebrations. Turn off when recording desktop audio to keep these sounds out of your capture.</small>
+          </span>
+        </label>
 
         <SettingRow
           title="Interface theme"

@@ -7,6 +7,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import { playSound } from "./lib/sounds";
 import {
   CUSTOM_SELECT_MAX_MENU_HEIGHT,
   CUSTOM_SELECT_MAX_MENU_WIDTH,
@@ -73,17 +74,22 @@ export function CustomSelect({
 
   const openMenu = () => {
     if (disabled) return;
+    playSound("swoosh", { volume: 0.6 });
     onOpen?.();
     setGlass(isGlassSelect(rootRef.current));
     setActiveIndex(options[selectedIndex]?.disabled ? (enabledIndexes[0] ?? 0) : selectedIndex);
     setOpen(true);
   };
-  const closeMenu = () => setOpen(false);
+  const closeMenu = () => {
+    if (open) playSound("whoosh", { volume: 0.4 });
+    setOpen(false);
+  };
   const choose = (index: number) => {
     const option = options[index];
     if (!option || option.disabled) return;
     onChange(option.value);
-    closeMenu();
+    playSound("switch");
+    setOpen(false);
     requestAnimationFrame(() => triggerRef.current?.focus());
   };
   const moveActive = (direction: 1 | -1) => {
@@ -99,7 +105,8 @@ export function CustomSelect({
     if (!open) return;
     const onPointerDown = (event: PointerEvent) => {
       if (!menuContainsTarget(rootRef.current, listboxRef.current, event.target as Node)) {
-        closeMenu();
+        playSound("whoosh", { volume: 0.4 });
+        setOpen(false);
       }
     };
     window.addEventListener("pointerdown", onPointerDown, true);
@@ -150,6 +157,7 @@ export function CustomSelect({
         className?.includes("filename-format-select") ? "filename-format-select-listbox" : "",
         glass ? "custom-select-listbox-glass" : "",
       ].filter(Boolean).join(" ")}
+      data-sound="off"
       role="listbox"
       aria-label={ariaLabel}
       style={{
@@ -194,6 +202,7 @@ export function CustomSelect({
         className,
       ].filter(Boolean).join(" ")}
       ref={rootRef}
+      data-sound="off"
     >
       <button
         ref={triggerRef}

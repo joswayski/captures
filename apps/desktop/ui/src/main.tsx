@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 
 import { App } from "./App";
 import "./styles.css";
+import { installInteractionSounds } from "./lib/sounds";
 import { applyAppearance, readStoredAppearance } from "../../../../shared/appearance";
 import {
   applyColorTheme,
@@ -24,6 +25,8 @@ async function start() {
     installPreviewBackend();
   }
 
+  const stopSounds = installInteractionSounds();
+  import.meta.hot?.dispose(stopSounds);
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
       <App />
