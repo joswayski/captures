@@ -170,6 +170,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         preferencesController?.flush()
+        liveController?.finishCapture(restoreWindow: false)
         LiveCaptureController.flush()
         if let exerciseDirectory { try? FileManager.default.removeItem(at: exerciseDirectory) }
         return .terminateNow
@@ -188,6 +189,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         let started = CACurrentMediaTime()
         preview = nil
         table = nil
+        liveController?.finishCapture(restoreWindow: false)
         liveController = nil
         content = Surface(frame: NSRect(x: 0, y: 0, width: 1000, height: 720))
         content.wantsLayer = true

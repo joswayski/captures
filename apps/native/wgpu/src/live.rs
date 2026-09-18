@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use captures_app::{Artifact, Request, Response};
+use captures_app::{Artifact, Request, Response, capture_flow::CaptureFlow};
 use captures_capture::DisplayDescriptor;
 use captures_settings::AppSettings;
 use eframe::egui::{self, RichText};
@@ -80,6 +80,8 @@ pub struct Live {
     hidden_since: Option<Instant>,
     capture_in_flight: bool,
     auto_copy_on_capture: bool,
+    flow: Option<CaptureFlow>,
+    countdown_target: Option<(usize, egui::Pos2, egui::Vec2)>,
     can_hide: Option<bool>,
     confirm_delete: Option<String>,
 }
@@ -134,6 +136,8 @@ impl Live {
             hidden_since: None,
             capture_in_flight: false,
             auto_copy_on_capture: false,
+            flow: None,
+            countdown_target: None,
             can_hide: None,
             confirm_delete: None,
         };
@@ -144,7 +148,12 @@ impl Live {
         live
     }
 
+    pub fn is_capturing(&self) -> bool {
+        self.flow.is_some() || self.capture_in_flight
+    }
+
     pub fn flush(&mut self) {
+        self.flow = None;
         // Finish accepted capture/export/delete operations before process teardown.
         let _ = self.tx.send(Job::Shutdown);
         if let Some(worker) = self.worker.take() {
@@ -188,6 +197,18 @@ impl Live {
         self.can_hide = frame
             .winit_window()
             .map(|window| window.is_visible().is_some());
+        if let Some(flow) = &self.flow {
+            if !flow.is_current() {
+                self.flow = None;
+                self.capture_waiting_for_hide = false;
+                self.auto_copy_on_capture = false;
+                self.status = "Capture cancelled (Escape or desktop session unavailable).".into();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            } else {
+                // Only active captures poll; settled history/preferences stay event-driven.
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
         if self.capture_waiting_for_hide {
             let visible = frame.winit_window().and_then(|window| window.is_visible());
             if visible == Some(false) {
@@ -201,19 +222,24 @@ impl Live {
             {
                 self.capture_waiting_for_hide = false;
                 let Some(display_id) = self.display_id.clone() else {
+                    self.flow = None;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                     return;
                 };
+                let Some(flow) = &self.flow else { return };
+                let generation = flow.generation();
                 self.capture_in_flight = true;
                 self.send(Request::CaptureDisplay {
                     root: self.root.clone(),
                     display_id,
+                    generation,
                 });
             } else if self
                 .hide_started
                 .is_some_and(|since| since.elapsed() > Duration::from_secs(2))
             {
                 self.capture_waiting_for_hide = false;
+                self.flow = None;
                 self.error =
                     Some("Could not hide the capture window. No screenshot was taken.".into());
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
@@ -234,6 +260,7 @@ impl Live {
                     self.pending = self.pending.saturating_sub(1);
                     if self.capture_in_flight {
                         self.capture_in_flight = false;
+                        self.flow = None;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                     }
                     match result {
@@ -338,9 +365,56 @@ impl Live {
         &mut self,
         ui: &mut egui::Ui,
         t: &Tokens,
+        frame: &eframe::Frame,
         settings: impl Fn() -> Result<AppSettings, String>,
     ) {
-        if self.capture_waiting_for_hide || self.capture_in_flight {
+        if let Some(flow) = &self.flow
+            && !self.capture_waiting_for_hide
+            && !self.capture_in_flight
+        {
+            let clock = flow.countdown();
+            if clock.remaining(Instant::now()) > 0 {
+                let t = t.clone();
+                let generation = flow.generation();
+                let (monitor, position, size) =
+                    self.countdown_target.expect("countdown target validated");
+                ui.ctx().show_viewport_deferred(
+                    egui::ViewportId::from_hash_of("screenshot-countdown"),
+                    egui::ViewportBuilder::default()
+                        .with_title("Captures Screenshot Countdown")
+                        .with_visible(true)
+                        .with_monitor(monitor)
+                        .with_position(position)
+                        .with_inner_size(size)
+                        .with_fullscreen(true)
+                        .with_decorations(false)
+                        .with_resizable(false)
+                        .with_transparent(true)
+                        .with_has_shadow(false)
+                        .with_always_on_top()
+                        .with_taskbar(false),
+                    move |ui, _| {
+                        if ui.input(|i| {
+                            i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)
+                        }) {
+                            captures_app::capture_flow::cancel(generation);
+                            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                        }
+                        crate::countdown::show(ui, &t, clock.remaining(Instant::now()).max(1));
+                        ui.ctx().request_repaint_after(Duration::from_millis(100));
+                    },
+                );
+            } else {
+                // Stop declaring the child before hiding the root. Hidden-root
+                // logic then verifies visibility and waits for compositor settling.
+                self.capture_waiting_for_hide = true;
+                self.hide_started = Some(Instant::now());
+                self.hidden_since = None;
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
+        }
+        if self.flow.is_some() || self.capture_in_flight {
             ui.disable();
         }
         egui::Panel::top("live-header").show(ui, |ui| {
@@ -348,7 +422,7 @@ impl Live {
                 ui.heading("Captures");
                 ui.label(RichText::new("Native display capture").color(t.color("text-muted")));
             });
-            ui.label("Full-display capture with automatic copy and save format/folder preferences. Cursor, countdown, regions, recording, editing, and mini previews are not connected yet.");
+            ui.label("Full-display capture with countdown, automatic copy and save format/folder preferences. Cursor, regions, recording, editing, and mini previews are not connected yet.");
             ui.horizontal(|ui| {
                 egui::ComboBox::from_label("Display")
                     .selected_text(self.displays.iter().find(|d| Some(&d.id) == self.display_id.as_ref()).map_or("No display", |d| d.name.as_str()))
@@ -360,12 +434,27 @@ impl Live {
                 if capture.clicked() {
                     match settings() {
                         Ok(settings) => {
-                            self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
-                            self.status = "Hiding Captures before capture…".into();
-                            self.capture_waiting_for_hide = true;
-                            self.hide_started = Some(Instant::now());
-                            self.hidden_since = None;
-                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                            self.countdown_target = frame.winit_window().and_then(|window| {
+                                let display = self.displays.iter().find(|d| Some(&d.id) == self.display_id.as_ref())?;
+                                let (index, monitor) = window.available_monitors().enumerate().find(|(_, m)| m.position().x == display.x && m.position().y == display.y)?;
+                                let scale = monitor.scale_factor();
+                                let position = monitor.position().to_logical::<f32>(scale);
+                                let size = monitor.size().to_logical::<f32>(scale);
+                                Some((index, egui::pos2(position.x, position.y), egui::vec2(size.width, size.height)))
+                            });
+                            if settings.screenshot_countdown_seconds > 0 && self.countdown_target.is_none() {
+                                self.error = Some("The selected display is no longer available for countdown.".into());
+                            } else {
+                                match CaptureFlow::begin(settings.screenshot_countdown_seconds) {
+                                    Ok(flow) => {
+                                        self.flow = Some(flow);
+                                        self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
+                                        self.status = "Preparing screenshot… Press Escape to cancel.".into();
+                                        ui.ctx().request_repaint();
+                                    }
+                                    Err(error) => self.error = Some(format!("Could not arm capture Escape: {error}")),
+                                }
+                            }
                         }
                         Err(error) => self.error = Some(error),
                     }

@@ -27,6 +27,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var selectedIndex: Int?
     private var selectionGeneration = 0
     private var capturing = false
+    private var flowGeneration: UInt64?
+    private var countdownTimer: Timer?
+    private var countdownPanel: ScreenshotCountdownPanel?
+    private var snapshotPending = false
     private var displayMenu: ClosurePopUpButton!
     private var table: NSTableView!
     private var preview: NSImageView!
@@ -80,7 +84,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         revealButton = button("Reveal export", frame: NSRect(x: 628, y: 594, width: 120, height: 34)) { [weak self] in self?.reveal() }
         deleteButton = button("Delete from history", frame: NSRect(x: 758, y: 594, width: 166, height: 34)) { [weak self] in self?.confirmDelete() }
         status = title("Loading capture history…", frame: NSRect(x: 28, y: 642, width: 944, height: 24), muted: true)
-        let limits = title("Full-display capture uses automatic copy and save format/folder preferences. History keeps a lossless PNG. Cursor, countdown, regions, recording, editor, and mini previews are not available yet.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
+        let limits = title("Full-display capture uses countdown, automatic copy, and save format/folder preferences. History keeps a lossless PNG. Cursor, regions, recording, editor, and mini previews are not available yet.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
         limits.maximumNumberOfLines = 2; updateActions()
     }
 
@@ -156,24 +160,71 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private func capture() {
         let index = displayMenu.indexOfSelectedItem
         guard !capturing, displays.indices.contains(index), !historyRoot.isEmpty else { return }
-        let display = displays[index]; setBusy(true, message: "Hiding Captures before capture…")
-        window.orderOut(nil)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+        let display = displays[index]; setBusy(true, message: "Preparing capture…")
+        run({ [settingsPath] in try CapturePreferences.load(path: settingsPath) }) { [weak self] result in
             guard let self else { return }
-            self.run({ [transport, historyRoot, settingsPath] in
-                let preferences = try CapturePreferences.load(path: settingsPath)
-                let result = try transport.request(["operation": "capture_display", "root": historyRoot, "display_id": display.id])
-                guard let value = result["artifact"] as? [String: Any], let artifact = CaptureArtifact(value) else { throw AppBridgeError.invalidResponse }
-                return (artifact, preferences.autoCopy)
-            }) { [weak self, window = self.window] result in
-                window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
-                guard let self else { return }; self.setBusy(false)
-                switch result { case .success(let (artifact, autoCopy)):
-                    self.loadHistory(select: artifact.id)
-                    if autoCopy { self.copyImage(at: artifact.imagePath) }
-                case .failure(let error): self.showError("Capture failed", error) }
+            do {
+                let preferences = try result.get()
+                guard let screen = NSScreen.screens.first(where: {
+                    ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.stringValue == display.id
+                }) else { throw AppBridgeError.backend("The selected display is no longer available.") }
+                let response = try AppBridge.flow(["operation": "begin", "seconds": preferences.countdown])
+                guard let generation = response["generation"] as? NSNumber else { throw AppBridgeError.invalidResponse }
+                self.flowGeneration = generation.uint64Value; self.snapshotPending = false
+                self.window.orderOut(nil)
+                if preferences.countdown > 0 {
+                    let panel = ScreenshotCountdownPanel(screen: screen, tokens: self.tokens, remaining: preferences.countdown)
+                    self.countdownPanel = panel; panel.orderFrontRegardless()
+                }
+                let tick: () -> Void = { [weak self] in self?.tickCountdown(display: display, preferences: preferences, generation: generation.uint64Value) }
+                self.countdownTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in tick() }
+                tick()
+            } catch {
+                self.finishCapture(); self.showError("Couldn’t start capture", error)
             }
         }
+    }
+
+    private func tickCountdown(display: DisplayItem, preferences: CapturePreferences, generation: UInt64) {
+        guard flowGeneration == generation else { return }
+        do {
+            let state = try AppBridge.flow(["operation": "poll", "generation": generation])
+            guard state["current"] as? Bool == true else {
+                finishCapture(); status.stringValue = "Capture cancelled (Escape or desktop session unavailable)."; return
+            }
+            guard let remaining = state["remaining"] as? Int else { throw AppBridgeError.invalidResponse }
+            countdownPanel?.countdownContent.setRemaining(remaining)
+            guard remaining == 0, !snapshotPending else { return }
+            snapshotPending = true; countdownPanel?.close(); countdownPanel = nil
+            status.stringValue = "Capturing display…"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self, self.flowGeneration == generation else { return }
+                self.run({ [transport, historyRoot] in
+                    let result = try transport.request(["operation": "capture_display", "root": historyRoot,
+                        "display_id": display.id, "generation": generation])
+                    guard let value = result["artifact"] as? [String: Any], let artifact = CaptureArtifact(value) else { throw AppBridgeError.invalidResponse }
+                    return artifact
+                }) { [weak self] result in
+                    guard let self, self.flowGeneration == generation else { return }
+                    self.finishCapture()
+                    switch result { case .success(let artifact):
+                        self.loadHistory(select: artifact.id)
+                        if preferences.autoCopy { self.copyImage(at: artifact.imagePath) }
+                    case .failure(let error): self.showError("Capture failed", error) }
+                }
+            }
+        } catch { finishCapture(); showError("Capture failed", error) }
+    }
+
+    func finishCapture(restoreWindow: Bool = true) {
+        countdownTimer?.invalidate(); countdownTimer = nil
+        countdownPanel?.close(); countdownPanel = nil
+        if let generation = flowGeneration {
+            _ = try? AppBridge.flow(["operation": "finish", "generation": generation])
+            flowGeneration = nil
+        }
+        snapshotPending = false; setBusy(false)
+        if restoreWindow { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
     }
 
     private func setBusy(_ busy: Bool, message: String = "") { capturing = busy; updateActions(); if busy { status.stringValue = message } }

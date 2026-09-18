@@ -12,8 +12,8 @@ separate Captures Native development identity; pass `--settings-file PATH` to
 use an explicit test file. Screenshots and scripted exercises without that flag
 use disposable settings. `--live` opts into the shared Rust full-display PNG,
 history, copy, export and delete flows; see the [live slice and limits](../README.md#live-display-capture-slice).
-Live capture applies automatic copy and PNG/JPEG/WebP output format/folder
-preferences. Cursor/countdown and the other capture defaults remain unconnected;
+Live capture applies automatic copy, screenshot countdown, and PNG/JPEG/WebP output
+format/folder preferences. Cursor and the other capture defaults remain unconnected;
 other scenes remain fixtures. Global shortcuts, login, microphone
 discovery, feedback, and updating remain visibly unavailable.
 
@@ -84,6 +84,13 @@ re-hides the root after eframe's automatic first paint and verifies visibility a
 the quit deadline. A transient startup map remains possible; this is not a
 production background/tray implementation. Resolving this is a renderer gate.
 
+**Transparent Vulkan windows failed under the orb's Xvfb/Mesa llvmpipe setup.**
+The countdown's GPU readback was correct, but the compositor displayed no content.
+`WGPU_BACKEND=gl` rendered the live overlay correctly with picom; this is a test
+workaround, not a production backend decision. Verify transparent windows on real
+Linux and Windows GPUs. Countdown entrance/exit motion and complete visual parity
+remain open; cancellation and timing are shared Rust behavior.
+
 ## Validate and collect evidence
 
 ```sh
@@ -97,7 +104,7 @@ python apps/native/profile.py --renderer wgpu --binary apps/native/wgpu/target/r
 
 Add `.exe` to both binary paths on Windows. Output directories must not exist.
 Smoke tests need an interactive desktop or a test compositor. They check two idle
-cases, thirteen framebuffer captures (including empty and populated native file
+cases, fifteen framebuffer captures (including countdown and empty/populated native file
 history), and thirty scheduled actions. Inspect the
 PNGs: their presence alone is not visual acceptance. The Wayland run explicitly
 reports hidden idle as unsupported, not passed; the full resource runner fails

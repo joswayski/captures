@@ -160,7 +160,11 @@ off the UI thread. It preserves permission/session checks and hides its window
 before capture. Wayland capture remains gated by the candidate's missing window
 visibility support. Automatic copy and output folder/format preferences are now
 connected; JPEG/WebP encoding is shared with the legacy host and history remains
-lossless PNG. Cursor/countdown preferences, regions/windows, recording, editor,
+lossless PNG. Screenshot countdown and temporary global Escape now share Rust
+deadlines, generation invalidation, and a cancellation/commit boundary across
+hosts; native countdown windows use the fixed media palette. Real mixed-DPI,
+focus, compositor, accessibility, and animation acceptance remains open.
+Cursor preferences, regions/windows, recording, editor,
 mini previews and full UI/UX parity are still open; this slice closes no complete
 platform acceptance row. Hardware capture and clipboard tests remain required.
 

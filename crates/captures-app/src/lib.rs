@@ -1,6 +1,8 @@
 //! Shared native application operations. Hosts schedule these off the UI thread.
 //! Images stay in owned files, never JSON/base64. No browser or host window APIs.
 
+pub mod capture_flow;
+
 use captures_capture::{CaptureError, CaptureMode, DisplayDescriptor, XcapBackend};
 use captures_history::{ArtifactKind, HistoryEntry};
 use captures_settings::ScreenshotFormat;
@@ -25,6 +27,8 @@ pub enum Error {
     Image(String),
     #[error("capture is no longer available")]
     Missing,
+    #[error("Capture cancelled")]
+    Cancelled,
     #[error("Saved to {path}, but history could not be updated: {reason}")]
     SavedWithoutMetadata { path: String, reason: String },
 }
@@ -43,6 +47,7 @@ pub enum Request {
     CaptureDisplay {
         root: PathBuf,
         display_id: String,
+        generation: u64,
     },
     History {
         root: PathBuf,
@@ -95,7 +100,14 @@ pub fn execute(request: Request) -> Result<Response, Error> {
             XcapBackend.ensure_permission(true)?;
             Ok(Response::PermissionGranted)
         }
-        Request::CaptureDisplay { root, display_id } => {
+        Request::CaptureDisplay {
+            root,
+            display_id,
+            generation,
+        } => {
+            if !capture_flow::is_current(generation) {
+                return Err(Error::Cancelled);
+            }
             XcapBackend.ensure_permission(false)?;
             if !captures_session::capture_session_available() {
                 return Err(CaptureError::SessionUnavailable.into());
@@ -105,6 +117,11 @@ pub fn execute(request: Request) -> Result<Response, Error> {
             // A session may lock during a backend/portal round trip. Discard it.
             if !captures_session::capture_session_available() {
                 return Err(CaptureError::SessionUnavailable.into());
+            }
+            // Linearize Cancel versus Save before the irreversible history write.
+            // Once committed, Escape cannot claim that the capture was cancelled.
+            if !capture_flow::commit(generation) {
+                return Err(Error::Cancelled);
             }
             Ok(Response::Captured {
                 artifact: persist_screenshot(&root, &frame.image)?,
@@ -245,6 +262,20 @@ fn save_screenshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_capture_is_rejected_before_permission_or_disk_access() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            execute(Request::CaptureDisplay {
+                root: root.path().join("must-not-be-created"),
+                display_id: "not-a-real-display".into(),
+                generation: 0,
+            }),
+            Err(Error::Cancelled)
+        ));
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+    }
 
     #[test]
     fn save_uses_requested_format_keeps_lossless_history_and_reuses_existing_export() {

@@ -14,6 +14,12 @@ char *captures_settings_request_v1(const char *request_json);
  * File paths, not image bytes, cross this ABI. The same free function owns both.
  * Permission is prompted only by the explicit request_permission operation. */
 char *captures_app_request_v1(const char *request_json);
+/* Event-loop-thread ONLY: begin {seconds}, poll {generation}, finish {generation}.
+ * begin returns {generation}; poll returns {current,remaining}. Escape is global
+ * only for this guard. Always finish, including on cancellation/quit. The guard
+ * owns native handles on this thread; never dispatch these calls to a worker.
+ * Uses the same {ok,result}/{ok,error} envelope and response ownership as above. */
+char *captures_flow_request_v1(const char *request_json);
 void captures_settings_free_v1(char *response);
 
 #endif

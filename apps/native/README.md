@@ -53,7 +53,20 @@ explicit capture action can trigger automatic copy, never loading history or a
 fixture screenshot. Save/capture report settings errors rather than silently
 using different output or clipboard defaults.
 
-This slice has no cursor/countdown, region/window capture, recordings, editor or
+Screenshot countdown follows the stored 0–10-second preference. The selected
+display shows a native, fixed-media-palette countdown. Escape is registered only
+for an active capture and cancels even when another app has focus. If registration
+fails, capture is refused rather than losing cancellation. A desktop-session
+watcher invalidates the pending capture on lock/inactivity; unlocking does not
+resume it. Monotonic deadlines and capture generations are shared Rust logic.
+The overlay closes before the host hides/settles and captures. Late worker replies
+cannot restart a cancelled capture. Once the captured pixels commit to saving,
+Escape no longer claims cancellation; accepted history/file work drains at quit.
+Timers stop and Escape is released after completion/cancellation (the Windows
+low-level capture hook stays installed but disarmed). Interactive permission,
+focus, mixed-DPI, compositor, and screen-reader acceptance still needs real OS tests.
+
+This slice has no cursor, region/window capture, recordings, editor or
 mini previews; those stored preferences do not apply yet. Full UI parity remains
 open. The wgpu Wayland backend cannot verify hiding its root window, so capture
 is disabled there rather than photographing the app itself. Linux X11 needs an

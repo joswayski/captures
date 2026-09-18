@@ -67,6 +67,8 @@ def main():
     shots = {
         "live-empty": ["--live", "--history-root", str(args.output / "empty-history"), "--appearance", "light"],
         "live-populated": ["--live", "--history-root", str(populated)],
+        "countdown-light": ["--scene", "countdown", "--appearance", "light"],
+        "countdown-dark": ["--scene", "countdown", "--appearance", "dark"],
         "preferences-dark": ["--scene", "preferences"],
         "preferences-light": ["--scene", "preferences", "--appearance", "light", "--theme", "cobalt"],
         "history-empty": ["--scene", "history", "--history-count", "0"],
@@ -104,7 +106,7 @@ def main():
             raise RuntimeError("Editor rotation did not advance")
         if scene == "preview" and len([e for e in events if e["event"] == "first-action-total"]) != 6:
             raise RuntimeError("Preview did not submit six effects")
-    print("PASS: static redraw guard, 13 viewport captures, 30 scripted actions; "
+    print("PASS: static redraw guard, 15 viewport captures, 30 scripted actions; "
           + ("hidden visibility verified" if hidden_supported else "hidden idle UNSUPPORTED, not accepted"))
 
 

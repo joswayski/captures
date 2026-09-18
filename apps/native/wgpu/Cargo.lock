@@ -649,6 +649,7 @@ dependencies = [
  "captures-session",
  "captures-settings",
  "chrono",
+ "global-hotkey",
  "image",
  "serde",
  "serde_json",

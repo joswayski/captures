@@ -21,14 +21,18 @@ struct CapturePreferences {
     let autoCopy: Bool
     let directory: String
     let format: String
+    let countdown: Int
 
     init(_ settings: [String: Any]) throws {
         guard let autoCopy = settings["auto_copy_to_clipboard"] as? Bool,
               let directory = settings["output_directory"] as? String,
               let format = settings["screenshot_format"] as? String,
-              ["png", "jpeg", "webp"].contains(format)
+              ["png", "jpeg", "webp"].contains(format),
+              let countdown = settings["screenshot_countdown_seconds"] as? Int,
+              (0...10).contains(countdown)
         else { throw SettingsStoreError.invalidResponse }
         self.autoCopy = autoCopy; self.directory = directory; self.format = format
+        self.countdown = countdown
     }
 
     static func load(path: String?, transport: SettingsTransport = SettingsBridge()) throws -> Self {
@@ -46,6 +50,15 @@ struct CapturePreferences {
 }
 
 final class AppBridge: AppTransport {
+    static func flow(_ object: [String: Any]) throws -> [String: Any] {
+        precondition(Thread.isMainThread)
+        let data = try JSONSerialization.data(withJSONObject: object)
+        let pointer = String(decoding: data, as: UTF8.self).withCString { captures_flow_request_v1($0) }
+        guard let pointer else { throw AppBridgeError.invalidResponse }
+        defer { captures_settings_free_v1(pointer) }
+        return try decode(Data(bytes: pointer, count: strlen(pointer)))
+    }
+
     func request(_ object: [String: Any]) throws -> [String: Any] {
         let data = try JSONSerialization.data(withJSONObject: object)
         let pointer: UnsafeMutablePointer<CChar>? = String(decoding: data, as: UTF8.self).withCString {

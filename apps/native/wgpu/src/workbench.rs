@@ -483,7 +483,7 @@ impl Workbench {
                 };
                 self.rotation = self.cycle as f32 * 15.;
             }
-            Scene::Idle => unreachable!("idle exercises rejected by options"),
+            Scene::Idle | Scene::Countdown => unreachable!("exercises rejected by options"),
         }
         emit(
             "scripted-action",
@@ -557,7 +557,7 @@ impl eframe::App for Workbench {
         self.schedule(ctx);
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let start = Instant::now();
         let ctx = ui.ctx().clone();
         // Font/layout initialization and the settings load can require several
@@ -579,6 +579,9 @@ impl eframe::App for Workbench {
         ui.set_style(ctx.style_of(ctx.theme()));
         if let Some(live) = &mut self.live {
             egui::Panel::top("live-navigation").show(ui, |ui| {
+                if live.is_capturing() {
+                    ui.disable();
+                }
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.live_preferences, false, "Capture workspace");
                     ui.selectable_value(&mut self.live_preferences, true, "Preferences");
@@ -596,7 +599,7 @@ impl eframe::App for Workbench {
                     }
                 });
             } else {
-                live.ui(ui, &t, || self.preferences_state.snapshot());
+                live.ui(ui, &t, frame, || self.preferences_state.snapshot());
             }
             if self.options.screenshot.is_some()
                 && !self.screenshot_requested
@@ -694,6 +697,7 @@ impl eframe::App for Workbench {
                 Scene::Hud => self.hud(ui, &t),
                 Scene::Preview => self.preview(ui, &t),
                 Scene::Editor => self.editor(ui, &t),
+                Scene::Countdown => crate::countdown::show(ui, &t, 3),
                 Scene::Idle => {}
             }
         });
