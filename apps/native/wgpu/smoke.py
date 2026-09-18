@@ -13,7 +13,13 @@ from pathlib import Path
 
 
 def run(binary, output, name, arguments, allow_unsupported_hidden=False):
-    result = subprocess.run([str(binary), *arguments], capture_output=True, timeout=40)
+    try:
+        result = subprocess.run([str(binary), *arguments], capture_output=True, timeout=40)
+    except subprocess.TimeoutExpired as error:
+        # Keep the actual failure evidence; never turn a hung workload into a pass.
+        (output / f"{name}.jsonl").write_bytes(error.stdout or b"")
+        (output / f"{name}.stderr.txt").write_bytes(error.stderr or b"")
+        raise
     (output / f"{name}.jsonl").write_bytes(result.stdout)
     (output / f"{name}.stderr.txt").write_bytes(result.stderr)
     events = [json.loads(line) for line in result.stdout.decode().splitlines() if line.strip()]

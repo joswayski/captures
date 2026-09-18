@@ -42,6 +42,11 @@ fn main() -> eframe::Result {
             .with_decorations(!floating),
         ..Default::default()
     };
+    emit(
+        "starting",
+        json!({"scene": if options.live { "live" } else { options.scene.name() },
+        "phase": "before native event loop and renderer initialization"}),
+    );
     eframe::run_native(
         "Captures renderer experiment",
         native,
