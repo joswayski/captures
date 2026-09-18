@@ -72,6 +72,9 @@ pub enum Request {
         root: PathBuf,
         id: String,
     },
+    ClearHistory {
+        root: PathBuf,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -161,6 +164,16 @@ pub fn execute(request: Request) -> Result<Response, Error> {
         Request::Delete { root, id } => {
             captures_history::delete(&root, &id)?;
             Ok(Response::Deleted { id })
+        }
+        Request::ClearHistory { root } => {
+            // Clear only the screenshots exposed by this workspace, never exports
+            // or another data root. Hosts refresh even on error: deletion can be partial.
+            for item in list(&root)? {
+                captures_history::delete(&root, &item.entry.id)?;
+            }
+            Ok(Response::History {
+                artifacts: list(&root)?,
+            })
         }
     }
 }
@@ -420,5 +433,96 @@ mod tests {
         assert!(list(data.path()).unwrap()[0].entry.saved_path.is_none());
         assert!(item.image_path.is_file());
         assert_eq!(fs::read(obstruction).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn clear_history_removes_all_local_screenshots_but_keeps_exports_and_other_roots() {
+        let data = tempfile::tempdir().unwrap();
+        let exports = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let pixels = RgbaImage::from_fn(7, 3, |x, y| {
+            image::Rgba([x as u8 * 23, y as u8 * 91, 42, 255])
+        });
+        let first = persist_screenshot(data.path(), &pixels, CaptureMode::Window).unwrap();
+        let second = persist_screenshot(data.path(), &pixels, CaptureMode::Region).unwrap();
+        let untouched = persist_screenshot(other.path(), &pixels, CaptureMode::Display).unwrap();
+        let Response::Saved { path, .. } = save_screenshot(
+            data.path(),
+            &first.entry.id,
+            exports.path(),
+            ScreenshotFormat::Png,
+        )
+        .unwrap() else {
+            panic!("saved response")
+        };
+        // The native workspace exposes screenshots only. Hidden recording entries
+        // must not be swept up by a screenshot-history confirmation.
+        let media = exports.path().join("keep.mp4");
+        fs::write(&media, b"recording fixture").unwrap();
+        let mut recording = first.entry.clone();
+        recording.id = uuid::Uuid::new_v4().to_string();
+        recording.kind = ArtifactKind::Video;
+        recording.saved_path = Some(media.to_string_lossy().into());
+        recording.mime_type = Some("video/mp4".into());
+        recording.duration_ms = Some(1000);
+        recording.target = Some(
+            serde_json::from_value(serde_json::json!({
+                "type": "display", "display_id": "fixture",
+            }))
+            .unwrap(),
+        );
+        captures_history::save_recording_reference(data.path(), &recording, b"preview").unwrap();
+        assert_eq!(
+            captures_history::load(data.path(), Utc::now())
+                .unwrap()
+                .len(),
+            3
+        );
+        // A non-history file in the root is not permission to recursively remove it.
+        fs::write(data.path().join("keep.txt"), b"keep").unwrap();
+        let request = serde_json::from_value(serde_json::json!({
+            "operation": "clear_history", "root": data.path(),
+        }))
+        .unwrap();
+        let Response::History { artifacts } = execute(request).unwrap() else {
+            panic!("refreshed history response")
+        };
+        assert!(artifacts.is_empty());
+        assert!(!first.image_path.parent().unwrap().exists());
+        assert!(!second.image_path.parent().unwrap().exists());
+        assert_eq!(image::open(&path).unwrap().into_rgba8(), pixels);
+        assert!(untouched.image_path.is_file());
+        let remaining = captures_history::load(data.path(), Utc::now()).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, recording.id);
+        assert_eq!(fs::read(media).unwrap(), b"recording fixture");
+        assert_eq!(fs::read(data.path().join("keep.txt")).unwrap(), b"keep");
+        assert!(
+            execute(Request::ClearHistory {
+                root: data.path().into()
+            })
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn clear_history_accepts_missing_roots_but_does_not_report_io_failure_as_success() {
+        let data = tempfile::tempdir().unwrap();
+        let missing = data.path().join("missing");
+        assert!(
+            execute(Request::ClearHistory {
+                root: missing.clone()
+            })
+            .is_ok()
+        );
+        assert!(!missing.exists());
+        fs::write(&missing, b"not a history directory").unwrap();
+        assert!(
+            execute(Request::ClearHistory {
+                root: missing.clone()
+            })
+            .is_err()
+        );
+        assert_eq!(fs::read(missing).unwrap(), b"not a history directory");
     }
 }

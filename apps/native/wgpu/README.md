@@ -136,6 +136,15 @@ a nonzero countdown must capture the changed desktop. Repeated captures, Escape
 while another application owns focus, simulated lock/unlock cancellation, region
 metadata and clean shutdown are checked in the same process.
 
+The Linux job also runs `x11_history_smoke.py` against disposable on-disk history.
+It checks Clear history confirmation, Escape/Cancel, preserved exports, empty
+history, and a real permission-denied partial failure followed by retry. Light
+and dark captures are emitted for inspection. Run it as an unprivileged user:
+
+```sh
+python apps/native/x11_history_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-history
+```
+
 ```sh
 sudo apt-get install xvfb dbus python3-dbus python3-gi openbox picom hsetroot xdotool x11-utils x11-apps imagemagick libgl1-mesa-dri
 /usr/bin/python3 apps/native/x11_capture_smoke.py \
