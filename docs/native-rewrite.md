@@ -185,9 +185,15 @@ outside hotspot cannot leave a clipped arrow fragment. Its opaque C ABI lends
 read-only pixels without a full-desktop temporary file or JSON image transfer;
 hosts must retain the session until every image provider and worker has finished.
 Rust pixel/source-selection tests and Swift ABI tests cover these contracts.
-Native selection windows and host capture integration are still pending on all
-OSes. This shared-core stage changes no shipping behavior and does not close the
-capture-overlay gate; real display/permission/session tests remain required.
+The AppKit host now connects a native region panel with draw/move/corner resize,
+all six aspect presets, Shift-square override, Enter/Cancel and automatic start.
+Its layer-backed frozen image stays separate from the input-driven scrim canvas
+and native controls. Preparation/selection keep the same Escape generation; the
+countdown starts only after confirmation. Windows/X11 selector integration is
+underway in the same feature slice; Wayland's host visibility/placement gate
+remains open. Neither this stage nor its synthetic input/render checks close the
+capture-overlay gate: real display/permission/session/VoiceOver verification,
+magnifier, blur and full capture-menu UI parity remain required.
 
 The first [shared wgpu candidate](../apps/native/wgpu/README.md) uses egui/winit
 with retained image textures and event-driven immediate-mode UI, an additional

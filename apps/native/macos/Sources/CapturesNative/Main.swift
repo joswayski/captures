@@ -44,7 +44,7 @@ struct Options {
             default: throw Usage.invalid
             }
         }
-        guard ["preferences", "history", "hud", "preview", "idle"].contains(scene),
+        guard ["preferences", "history", "hud", "preview", "region", "idle"].contains(scene),
             ["light", "dark", "system"].contains(appearance), Self.themes.contains(theme),
             !(live && (exercise || referenceChips)), historyRoot == nil || live
         else { throw Usage.invalid }
@@ -62,7 +62,7 @@ struct Options {
             application.delegate = delegate
             withExtendedLifetime(delegate) { application.run() }
         } catch {
-            FileHandle.standardError.write(Data("Usage: CapturesNative [--live [--history-root PATH]] [--scene preferences|history|hud|preview|idle] [--appearance light|dark|system] [--theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono] [--history-count 0..10000] [--settings-file PATH] [--screenshot PATH] [--reference-chips] [--exercise] [--quit-after SECONDS]\n".utf8))
+            FileHandle.standardError.write(Data("Usage: CapturesNative [--live [--history-root PATH]] [--scene preferences|history|hud|preview|region|idle] [--appearance light|dark|system] [--theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono] [--history-count 0..10000] [--settings-file PATH] [--screenshot PATH] [--reference-chips] [--exercise] [--quit-after SECONDS]\n".utf8))
             exit(1)
         }
     }
