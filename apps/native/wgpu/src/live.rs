@@ -80,6 +80,7 @@ pub struct Live {
     hidden_since: Option<Instant>,
     capture_in_flight: bool,
     auto_copy_on_capture: bool,
+    include_cursor: bool,
     flow: Option<CaptureFlow>,
     countdown_target: Option<(usize, egui::Pos2, egui::Vec2)>,
     can_hide: Option<bool>,
@@ -136,6 +137,7 @@ impl Live {
             hidden_since: None,
             capture_in_flight: false,
             auto_copy_on_capture: false,
+            include_cursor: false,
             flow: None,
             countdown_target: None,
             can_hide: None,
@@ -233,6 +235,7 @@ impl Live {
                     root: self.root.clone(),
                     display_id,
                     generation,
+                    include_cursor: self.include_cursor,
                 });
             } else if self
                 .hide_started
@@ -422,7 +425,7 @@ impl Live {
                 ui.heading("Captures");
                 ui.label(RichText::new("Native display capture").color(t.color("text-muted")));
             });
-            ui.label("Full-display capture with countdown, automatic copy and save format/folder preferences. Cursor, regions, recording, editing, and mini previews are not connected yet.");
+            ui.label("Full-display capture with countdown, cursor inclusion, automatic copy and save format/folder preferences. Regions, recording, editing, and mini previews are not connected yet.");
             ui.horizontal(|ui| {
                 egui::ComboBox::from_label("Display")
                     .selected_text(self.displays.iter().find(|d| Some(&d.id) == self.display_id.as_ref()).map_or("No display", |d| d.name.as_str()))
@@ -449,6 +452,7 @@ impl Live {
                                     Ok(flow) => {
                                         self.flow = Some(flow);
                                         self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
+                                        self.include_cursor = settings.show_cursor_in_screenshots;
                                         self.status = "Preparing screenshot… Press Escape to cancel.".into();
                                         ui.ctx().request_repaint();
                                     }

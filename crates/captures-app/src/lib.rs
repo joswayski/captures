@@ -48,6 +48,7 @@ pub enum Request {
         root: PathBuf,
         display_id: String,
         generation: u64,
+        include_cursor: bool,
     },
     History {
         root: PathBuf,
@@ -104,6 +105,7 @@ pub fn execute(request: Request) -> Result<Response, Error> {
             root,
             display_id,
             generation,
+            include_cursor,
         } => {
             if !capture_flow::is_current(generation) {
                 return Err(Error::Cancelled);
@@ -113,10 +115,21 @@ pub fn execute(request: Request) -> Result<Response, Error> {
                 return Err(CaptureError::SessionUnavailable.into());
             }
             captures_session::dismiss_transient_shell_ui_before_capture();
-            let frame = XcapBackend.capture_display(&display_id)?;
+            let cursor = include_cursor
+                .then(captures_capture::pointer_cursor)
+                .flatten();
+            let mut frame = XcapBackend.capture_display(&display_id)?;
             // A session may lock during a backend/portal round trip. Discard it.
             if !captures_session::capture_session_available() {
                 return Err(CaptureError::SessionUnavailable.into());
+            }
+            if let Some(cursor) = cursor {
+                captures_capture::overlay_pointer_cursor(
+                    &mut frame.image,
+                    &frame.descriptor,
+                    &cursor,
+                    captures_capture::screenshot_pointer_scale(frame.descriptor.scale_factor),
+                );
             }
             // Linearize Cancel versus Save before the irreversible history write.
             // Once committed, Escape cannot claim that the capture was cancelled.
@@ -271,6 +284,7 @@ mod tests {
                 root: root.path().join("must-not-be-created"),
                 display_id: "not-a-real-display".into(),
                 generation: 0,
+                include_cursor: true,
             }),
             Err(Error::Cancelled)
         ));

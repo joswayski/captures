@@ -84,7 +84,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         revealButton = button("Reveal export", frame: NSRect(x: 628, y: 594, width: 120, height: 34)) { [weak self] in self?.reveal() }
         deleteButton = button("Delete from history", frame: NSRect(x: 758, y: 594, width: 166, height: 34)) { [weak self] in self?.confirmDelete() }
         status = title("Loading capture history…", frame: NSRect(x: 28, y: 642, width: 944, height: 24), muted: true)
-        let limits = title("Full-display capture uses countdown, automatic copy, and save format/folder preferences. History keeps a lossless PNG. Cursor, regions, recording, editor, and mini previews are not available yet.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
+        let limits = title("Full-display capture uses countdown, cursor inclusion, automatic copy, and save format/folder preferences. History keeps a lossless PNG. Regions, recording, editor, and mini previews are not available yet.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
         limits.maximumNumberOfLines = 2; updateActions()
     }
 
@@ -201,7 +201,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 guard let self, self.flowGeneration == generation else { return }
                 self.run({ [transport, historyRoot] in
                     let result = try transport.request(["operation": "capture_display", "root": historyRoot,
-                        "display_id": display.id, "generation": generation])
+                        "display_id": display.id, "generation": generation, "include_cursor": preferences.includeCursor])
                     guard let value = result["artifact"] as? [String: Any], let artifact = CaptureArtifact(value) else { throw AppBridgeError.invalidResponse }
                     return artifact
                 }) { [weak self] result in

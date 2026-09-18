@@ -66,7 +66,14 @@ Timers stop and Escape is released after completion/cancellation (the Windows
 low-level capture hook stays installed but disarmed). Interactive permission,
 focus, mixed-DPI, compositor, and screen-reader acceptance still needs real OS tests.
 
-This slice has no cursor, region/window capture, recordings, editor or
+Cursor inclusion follows `show_cursor_in_screenshots`: the shared Rust engine
+samples the pointer after countdown/window hiding and composites it before
+history, copy, and export. This preserves shipping behavior: macOS system pixels
+and hotspot, a synthetic arrow on Windows/X11, and no overlay when the pointer
+is outside the selected display or unavailable. Wayland-only cursor acquisition
+remains unsupported. Exact cursor shapes on Windows/Linux are not claimed.
+
+This slice has no region/window capture, recordings, editor or
 mini previews; those stored preferences do not apply yet. Full UI parity remains
 open. The wgpu Wayland backend cannot verify hiding its root window, so capture
 is disabled there rather than photographing the app itself. Linux X11 needs an

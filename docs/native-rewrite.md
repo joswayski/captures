@@ -164,7 +164,8 @@ lossless PNG. Screenshot countdown and temporary global Escape now share Rust
 deadlines, generation invalidation, and a cancellation/commit boundary across
 hosts; native countdown windows use the fixed media palette. Real mixed-DPI,
 focus, compositor, accessibility, and animation acceptance remains open.
-Cursor preferences, regions/windows, recording, editor,
+Cursor inclusion now shares sampling/compositing with the shipping host (macOS
+system pixels, Windows/X11 synthetic arrow). Regions/windows, recording, editor,
 mini previews and full UI/UX parity are still open; this slice closes no complete
 platform acceptance row. Hardware capture and clipboard tests remain required.
 

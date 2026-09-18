@@ -2449,7 +2449,7 @@ fn get_capture_pointer_position(window: tauri::WebviewWindow) -> Option<Thumbnai
     webview_pointer_position(&window)
 }
 
-/// False on Wayland-only Linux, where `mouse_position` cannot sample the cursor.
+/// False on Wayland-only Linux, where X11 cannot sample the global cursor.
 #[tauri::command]
 fn thumbnail_pointer_poll_available() -> bool {
     thumbnail_global_pointer_poll_available(cfg!(target_os = "linux"), x11_display_is_present())

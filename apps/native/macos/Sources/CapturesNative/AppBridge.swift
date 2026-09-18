@@ -19,12 +19,14 @@ protocol AppTransport {
 
 struct CapturePreferences {
     let autoCopy: Bool
+    let includeCursor: Bool
     let directory: String
     let format: String
     let countdown: Int
 
     init(_ settings: [String: Any]) throws {
         guard let autoCopy = settings["auto_copy_to_clipboard"] as? Bool,
+              let includeCursor = settings["show_cursor_in_screenshots"] as? Bool,
               let directory = settings["output_directory"] as? String,
               let format = settings["screenshot_format"] as? String,
               ["png", "jpeg", "webp"].contains(format),
@@ -32,6 +34,7 @@ struct CapturePreferences {
               (0...10).contains(countdown)
         else { throw SettingsStoreError.invalidResponse }
         self.autoCopy = autoCopy; self.directory = directory; self.format = format
+        self.includeCursor = includeCursor
         self.countdown = countdown
     }
 
