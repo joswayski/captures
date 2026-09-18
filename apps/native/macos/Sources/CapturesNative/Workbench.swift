@@ -199,14 +199,16 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 preferencesController = PreferencesController(root: content, store: store, tokens: { [weak self] in self?.tokens ?? Tokens.variants["dark-mustard"]! }, appearanceChanged: { [weak self] appearance, theme, customTheme in
                     guard let self else { return }
                     let changed = self.appearance != appearance || self.theme != theme || !NSDictionary(dictionary: self.customTheme).isEqual(to: customTheme)
-                    self.appearance = self.options.appearanceOverride ? self.options.appearance : appearance
-                    self.theme = self.options.themeOverride ? self.options.theme : theme
+                    self.appearance = appearance
+                    self.theme = theme
                     self.customTheme = customTheme
                     if changed {
                         self.resolvedTokens = self.makeTokens()
-                        self.preferencesController?.restyle()
                     }
-                }, showHistory: { [weak self] in self?.scene = "history"; self?.render() })
+                    self.window.appearance = appearance == "system" ? nil : NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
+                }, showHistory: { [weak self] in self?.scene = "history"; self?.render() },
+                   initialAppearance: options.appearanceOverride ? options.appearance : nil,
+                   initialTheme: options.themeOverride ? options.theme : nil)
             } catch {
                 label("Preferences unavailable: \(error.localizedDescription)", x: 32, y: 32, width: 900)
             }

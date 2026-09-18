@@ -23,15 +23,12 @@ const MACOS_SCREENSHOT_SAVE_AREA_PARAMETERS: (u32, u32, u32) = (52, 21, 1_179_64
 #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 const MACOS_SCREENSHOT_OPTIONS_PARAMETERS: (u32, u32, u32) = (53, 23, 1_179_648);
 
-pub use captures_settings::{
-    AppSettings, Appearance, ColorTheme, CustomThemeSettings, MiniPreviewPlacement,
-    ScreenshotFormat, VideoFormat,
-};
+pub use captures_settings::{AppSettings, Appearance, MiniPreviewPlacement, ScreenshotFormat};
 #[cfg(test)]
 use captures_settings::{
-    default_display_shortcut, default_gif_shortcut, default_new_capture_shortcut,
-    default_record_display_shortcut, default_record_window_shortcut, default_region_shortcut,
-    default_video_shortcut, default_window_shortcut,
+    ColorTheme, CustomThemeSettings, VideoFormat, default_display_shortcut, default_gif_shortcut,
+    default_new_capture_shortcut, default_record_display_shortcut, default_record_window_shortcut,
+    default_region_shortcut, default_video_shortcut, default_window_shortcut, migrate_settings,
 };
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -501,10 +498,7 @@ pub fn default_output_directory() -> PathBuf {
     captures_settings::default_output_directory()
 }
 
-pub fn migrate_settings(settings: &mut AppSettings) -> bool {
-    captures_settings::migrate_settings(settings)
-}
-
+#[cfg(test)]
 fn shortcuts_equivalent(left: &str, right: &str) -> bool {
     match (
         canonical_shortcut_parts(left),
@@ -768,6 +762,7 @@ pub fn shortcut_is_super_shift_s(shortcut: &str) -> bool {
     shortcut_matches(shortcut, &["Super", "Shift"], "S")
 }
 
+#[cfg(test)]
 fn migrate_output_directory(settings: &mut AppSettings, legacy: &Path, current: &Path) {
     if Path::new(&settings.output_directory) == legacy {
         settings.output_directory = current.to_string_lossy().into_owned();

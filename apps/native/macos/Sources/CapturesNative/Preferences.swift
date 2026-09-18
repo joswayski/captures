@@ -1,8 +1,19 @@
 import AppKit
 
 final class ClosurePopUpButton: NSPopUpButton {
+    var tokens: Tokens!
     var change: ((Int) -> Void)?
     @objc func selectedValue() { change?(indexOfSelectedItem) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: tokens.number("r-md"), yRadius: tokens.number("r-md"))
+        tokens.color("control").setFill(); outline.fill()
+        tokens.color(window?.firstResponder === self ? "theme-accent" : "control-border").setStroke(); outline.stroke()
+        let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: tokens.number("text-md")),
+            .foregroundColor: tokens.color(isEnabled ? "text" : "text-muted")]
+        (title as NSString).draw(at: NSPoint(x: 12, y: 7), withAttributes: attributes)
+        ("⌄" as NSString).draw(at: NSPoint(x: bounds.width - 22, y: 7), withAttributes: attributes)
+    }
 }
 
 final class ClosureColorWell: NSColorWell {
@@ -28,7 +39,9 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private var matchIndex = 0
     private var latestRevision = 0
     private var saveFailed = false
+    private var rebuilding = false
     private let sections = [("appearance", "Appearance"), ("capture", "Capture"),
+                            ("shortcuts", "Shortcuts"),
                             ("recording", "Recording"), ("gif", "GIF export"),
                             ("updates", "Updates"), ("about", "About")]
     private var sectionViews: [String: NSView] = [:]
@@ -36,7 +49,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
 
     init(root: Surface, store: SettingsStore, tokens: @escaping () -> Tokens,
          appearanceChanged: @escaping (String, String, [String: Any]) -> Void,
-         showHistory: @escaping () -> Void) {
+         showHistory: @escaping () -> Void, initialAppearance: String? = nil, initialTheme: String? = nil) {
         self.root = root; self.store = store; tokensProvider = tokens
         self.appearanceChanged = appearanceChanged; self.showHistory = showHistory
         super.init()
@@ -46,8 +59,10 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             switch result {
             case .success(let value):
                 self.settings = value
-                self.appearanceChanged(value.string("appearance", "system"), value.string("theme", "mustard"), value["custom_theme"] as? [String: Any] ?? [:])
-                self.rebuildCards()
+                if let initialAppearance { self.settings["appearance"] = initialAppearance }
+                if let initialTheme { self.settings["theme"] = initialTheme }
+                self.appearanceChanged(self.settings.string("appearance", "system"), self.settings.string("theme", "mustard"), value["custom_theme"] as? [String: Any] ?? [:])
+                self.restyle()
                 self.setStatus("", kind: "idle")
             case .failure(let error):
                 self.setStatus("Couldn’t load preferences: \(error.localizedDescription)", kind: "error")
@@ -98,7 +113,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         let oldY = scroll.contentView.bounds.origin.y
         document.subviews.forEach { $0.removeFromSuperview() }; sectionViews.removeAll(); searchable.removeAll()
         var y: CGFloat = 28
-        y = appearanceCard(y); y = captureCard(y); y = recordingCard(y); y = gifCard(y)
+        y = appearanceCard(y); y = captureCard(y); y = shortcutsCard(y); y = recordingCard(y); y = gifCard(y)
         y = updatesCard(y); y = aboutCard(y)
         document.frame.size = NSSize(width: scroll.contentSize.width, height: y + 42)
         scroll.contentView.scroll(to: NSPoint(x: 0, y: min(oldY, max(0, y - scroll.contentSize.height))))
@@ -122,7 +137,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         rowTitle("Interface theme", detail: "Follow the system setting, or lock Captures to light or dark.", y: 88, parent: card)
         let selected = settings.string("appearance", "system")
         for (i, value) in ["system", "light", "dark"].enumerated() {
-            let button = actionButton(value.capitalized, x: 414 + i * 86, y: 91, width: 78, parent: card) { [weak self] in self?.set(value, for: "appearance", rerender: true) }
+            let button = actionButton(value.capitalized, x: 414 + CGFloat(i) * 86, y: 91, width: 78, parent: card) { [weak self] in self?.set(value, for: "appearance", rerender: true) }
             button.selected = selected == value
         }
         rowTitle("Accent color", detail: "Used for capture, selection and focus. Status colors keep their meaning.", y: 142, parent: card)
@@ -132,7 +147,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             "aqua": "Clear cyan and watermelon", "mint": "Fresh mint and vermilion", "lime": "Crisp lime and vermilion",
             "mono": "Vercel-like black and white", "custom": "Build your own RGB palette"]
         for (i, value) in themes.enumerated() {
-            let button = actionButton(value.capitalized, x: 22 + (i % 5) * 134, y: 194 + (i / 5) * 43, width: 124, parent: card) { [weak self] in self?.set(value, for: "theme", rerender: true) }
+            let button = actionButton(value.capitalized, x: 22 + CGFloat(i % 5) * 134, y: 194 + CGFloat(i / 5) * 43, width: 124, parent: card) { [weak self] in self?.set(value, for: "theme", rerender: true) }
             button.selected = settings.string("theme", "mustard") == value
             button.setAccessibilityLabel("\(value.capitalized): \(descriptions[value]!)")
             let mode = tokens.color("text").brightnessComponent > 0.5 ? "dark" : "light"
@@ -164,26 +179,34 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         toggle("Automatically copy captures to the clipboard", detail: "Turn this off to preserve existing clipboard contents.", key: "auto_copy_to_clipboard", y: 150, parent: card)
         toggle("Start capture as soon as a target is selected", detail: "Region, window, or Full screen selection immediately starts capture.", key: "auto_start_on_selection", y: 214, parent: card)
         toggle("Show mini previews after screenshots", detail: "Turn this off to keep the quick-access preview stack hidden.", key: "show_mini_previews", y: 278, parent: card)
-        menuSetting("Mini preview position", detail: "Choose the screen corner for the preview stack.", key: "mini_preview_placement", values: ["bottom-right", "bottom-left", "top-right", "top-left"], y: 342, parent: card, enabled: settings.bool("show_mini_previews"))
+        menuSetting("Mini preview position", detail: "Choose the screen corner for the preview stack.", key: "mini_preview_placement", values: ["bottom_left", "bottom_right", "top_left", "top_right"], y: 342, parent: card, enabled: settings.bool("show_mini_previews"))
         toggle("Show mini previews in screenshots and recordings", detail: "Mini previews must be enabled above.", key: "include_mini_previews_in_captures", y: 406, parent: card, enabled: settings.bool("show_mini_previews"))
         toggle("Show recording controls in screenshots and recordings", detail: "This native fixture cannot exclude recording controls yet.", key: "include_recording_controls_in_captures", y: 470, parent: card, enabled: false)
         toggle("Freeze screen when capturing", detail: "Holds hover states, menus and motion still while selecting.", key: "freeze_screen", y: 534, parent: card)
         toggle("Show cursor in screenshots", detail: "Includes the pointer in still captures.", key: "show_cursor_in_screenshots", y: 598, parent: card)
         menuSetting("Screenshot format", detail: "Used when you save or export.", key: "screenshot_format", values: ["png", "jpeg", "webp"], y: 662, parent: card)
-        menuSetting("Screenshot countdown", detail: "Wait before capturing; Escape cancels.", key: "screenshot_countdown_seconds", values: [0, 1, 3, 5, 7, 10], y: 726, parent: card)
+        menuSetting("Screenshot countdown", detail: "Wait before capturing; Escape cancels.", key: "screenshot_countdown_seconds", values: Array(0...10), y: 726, parent: card)
+        return y + card.frame.height + 22
+    }
+
+    private func shortcutsCard(_ y: CGFloat) -> CGFloat {
+        let card = card("shortcuts", title: "Shortcuts", description: "Global capture shortcuts are not connected in this native development build.", y: y, height: 164)
+        disabledRow("Global capture shortcuts", detail: "Use the installed Preview for capture shortcuts.", y: 88, parent: card)
         return y + card.frame.height + 22
     }
 
     private func recordingCard(_ y: CGFloat) -> CGFloat {
-        let card = card("recording", title: "Recording", description: "Defaults for new screen recordings. The native capture engine is not connected yet.", y: y, height: 500)
+        let card = card("recording", title: "Recording", description: "Defaults for new screen recordings. The native capture engine is not connected yet.", y: y, height: 626)
         recordingMenu("Recording format", detail: "MP4, GIF or WebM", key: "video_format", values: ["mp4", "gif", "webm"], y: 88, parent: card)
         recordingMenu("Frames per second", detail: "Default recording frame rate", key: "video_fps", values: [60, 30, 15], y: 146, parent: card)
-        disabledRow("Maximum resolution", detail: "Unavailable until the native recording engine is connected.", y: 204, parent: card)
-        recordingMenu("Countdown", detail: "Delay before a recording starts", key: "countdown_seconds", values: [0, 1, 3, 5, 7, 10], y: 262, parent: card)
+        recordingMenu("Maximum resolution", detail: "Original, 1080p or 720p", key: "video_max_resolution", values: ["original", "p1080", "p720"], y: 204, parent: card)
+        recordingMenu("Countdown", detail: "Delay before a recording starts", key: "countdown_seconds", values: Array(0...10), y: 262, parent: card)
         toggleRecording("Record desktop audio", key: "capture_system_audio", y: 320, parent: card)
         disabledRow("Microphone", detail: "Unavailable until native microphone capture is connected.", y: 366, parent: card)
         toggleRecording("Show cursor in recordings", key: "show_cursor", y: 412, parent: card)
         toggleRecording("Open the editor after recording", key: "open_editor_after_recording", y: 458, parent: card)
+        toggleRecording("Export recording audio in mono", key: "mono_audio", y: 504, parent: card)
+        toggleRecording("Show clicks in recordings", key: "highlight_clicks", y: 550, parent: card)
         return y + card.frame.height + 22
     }
 
@@ -249,7 +272,9 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     }
 
     private func addMenu(_ values: [String], selected: String, title: String, y: CGFloat, parent: NSView, change: @escaping (Int) -> Void) -> NSPopUpButton {
-        let menu = ClosurePopUpButton(frame: NSRect(x: 528, y: y + 7, width: 150, height: 30), pullsDown: false); menu.addItems(withTitles: values.map { $0.uppercased() })
+        let menu = ClosurePopUpButton(frame: NSRect(x: 528, y: y + 7, width: 150, height: 30), pullsDown: false)
+        menu.tokens = tokens
+        menu.addItems(withTitles: values.map { $0.replacingOccurrences(of: "_", with: " ").capitalized })
         menu.selectItem(at: values.firstIndex(of: selected) ?? 0); menu.setAccessibilityLabel(title)
         menu.change = change; menu.target = menu; menu.action = #selector(ClosurePopUpButton.selectedValue); parent.addSubview(menu); return menu
     }
@@ -273,6 +298,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
+        guard !rebuilding else { return }
         guard let field = obj.object as? NSTextField else { return }
         if field.identifier?.rawValue.hasPrefix("custom.") == true {
             var custom = settings["custom_theme"] as? [String: Any] ?? [:]
@@ -311,7 +337,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             }
         }
         if rerender {
-            appearanceChanged(settings.string("appearance", "system"), settings.string("theme", "mustard"), settings["custom_theme"] as? [String: Any] ?? [:]); rebuildCards()
+            appearanceChanged(settings.string("appearance", "system"), settings.string("theme", "mustard"), settings["custom_theme"] as? [String: Any] ?? [:]); restyle()
         }
     }
 
@@ -359,7 +385,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         findCount?.stringValue = query.isEmpty ? "" : matches.isEmpty ? "No matches" : "\(matchIndex + 1) of \(matches.count)"
     }
 
-    func stepFind(_ delta: Int) { guard !matches.isEmpty else { return }; matchIndex = (matchIndex + delta + matches.count) % matches.count; highlightMatch() }
+    func stepFind(_ delta: Int) { guard !matches.isEmpty else { return }; matchIndex = (matchIndex + delta + matches.count) % matches.count; highlightMatch(); findCount?.stringValue = "\(matchIndex + 1) of \(matches.count)" }
     private func highlightMatch() {
         for (index, view) in matches.enumerated() { view.layer?.backgroundColor = tokens.color(index == matchIndex ? "surface-active" : "surface-selected").cgColor }
         if !matches.isEmpty {
@@ -377,8 +403,27 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     func exerciseAppearance(_ value: String) { set(value, for: "appearance", rerender: true) }
 
     func restyle() {
+        guard !rebuilding else { return }
+        rebuilding = true
+        defer { rebuilding = false }
+        let oldY = scroll.contentView.bounds.origin.y
+        let query = findField?.stringValue
+        let focused = (root.window?.firstResponder as? NSView)?.accessibilityLabel()
+        root.subviews.forEach { $0.removeFromSuperview() }
+        findBar = nil; findField = nil; findCount = nil
         root.layer?.backgroundColor = tokens.color("surface-canvas").cgColor
+        buildShell()
         rebuildCards()
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: oldY))
+        if let query { showFind(); findField?.stringValue = query; updateFind() }
+        else if let focused {
+            func restore(_ view: NSView) -> NSView? {
+                if view.accessibilityLabel() == focused, view.acceptsFirstResponder { return view }
+                for child in view.subviews { if let found = restore(child) { return found } }
+                return nil
+            }
+            if let view = restore(root) { root.window?.makeFirstResponder(view) }
+        }
         setStatus(status.stringValue, kind: saveFailed ? "error" : "idle")
     }
 

@@ -903,8 +903,10 @@ mod tests {
     #[test]
     fn failed_save_can_retry_without_discarding_edits() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("parent/settings.json");
-        std::fs::write(dir.path().join("parent"), "not a directory").unwrap();
+        let path = dir.path().join("settings.json");
+        // Reading a directory as JSON fails on every host. A file used as a
+        // parent instead reports NotFound on Windows (a valid defaults load).
+        std::fs::create_dir(&path).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut io = SettingsIo::start(path.clone(), tx, || {});
         assert!(matches!(rx.recv().unwrap(), Message::Loaded(Err(_))));
@@ -919,7 +921,7 @@ mod tests {
             rx.recv_timeout(Duration::from_secs(5)).unwrap(),
             Message::Saved(1, Err(_))
         ));
-        std::fs::remove_file(dir.path().join("parent")).unwrap();
+        std::fs::remove_dir(&path).unwrap();
         io.tx.send(Command::Save(2, Box::new(settings))).unwrap();
         io.flush();
         assert_eq!(

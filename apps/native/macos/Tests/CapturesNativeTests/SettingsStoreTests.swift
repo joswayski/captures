@@ -24,6 +24,27 @@ final class RecordingTransport: SettingsTransport {
 }
 
 final class SettingsStoreTests: XCTestCase {
+    func testRealBridgePersistsSettingsAndRejectsInvalidSave() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("settings.json").path
+        let bridge = SettingsBridge()
+        var settings = try XCTUnwrap(bridge.request(["operation": "load", "path": path])["settings"] as? [String: Any])
+        settings["appearance"] = "dark"
+        settings["theme"] = "custom"
+        settings["custom_theme"] = ["accent": "#AABBCC", "signal": "#DE4567"]
+        settings["screenshot_countdown_seconds"] = 7
+        _ = try bridge.request(["operation": "save", "path": path, "settings": settings])
+        let reopened = try XCTUnwrap(bridge.request(["operation": "load", "path": path])["settings"] as? [String: Any])
+        XCTAssertEqual(reopened.string("appearance"), "dark")
+        XCTAssertEqual(reopened.int("screenshot_countdown_seconds"), 7)
+        XCTAssertEqual((reopened["custom_theme"] as? [String: String])?["accent"], "#AABBCC")
+        settings["screenshot_countdown_seconds"] = 11
+        XCTAssertThrowsError(try bridge.request(["operation": "save", "path": path, "settings": settings]))
+        let unchanged = try XCTUnwrap(bridge.request(["operation": "load", "path": path])["settings"] as? [String: Any])
+        XCTAssertEqual(unchanged.int("screenshot_countdown_seconds"), 7)
+    }
+
     func testRapidUpdatesCoalesceToNewestRevision() throws {
         let transport = RecordingTransport()
         let store = try SettingsStore(path: "/fixture.json", transport: transport, debounceInterval: 0.03)

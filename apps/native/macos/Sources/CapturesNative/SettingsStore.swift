@@ -49,6 +49,7 @@ final class SettingsStore {
     private var pending: (Int, [String: Any], Completion)?
     private var debounce: DispatchWorkItem?
     private var revision = 0
+    private let revisionLock = NSLock()
     private let debounceInterval: TimeInterval
 
     init(path: String?, transport: SettingsTransport = SettingsBridge(), debounceInterval: TimeInterval = 0.18) throws {
@@ -76,16 +77,18 @@ final class SettingsStore {
     }
 
     @discardableResult func save(_ settings: [String: Any], completion: @escaping Completion) -> Int {
-        return queue.sync {
-            revision += 1
-            let current = revision
+        revisionLock.lock()
+        revision += 1
+        let current = revision
+        revisionLock.unlock()
+        queue.async {
             self.pending = (current, settings, completion)
             self.debounce?.cancel()
             let work = DispatchWorkItem { [weak self] in self?.writePending() }
             self.debounce = work
             self.queue.asyncAfter(deadline: .now() + self.debounceInterval, execute: work)
-            return current
         }
+        return current
     }
 
     private func writePending() {
