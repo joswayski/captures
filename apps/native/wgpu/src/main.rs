@@ -1,3 +1,4 @@
+mod live;
 mod options;
 mod preferences;
 mod tokens;
@@ -29,7 +30,11 @@ fn main() -> eframe::Result {
     let native = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
-            .with_title("Captures — wgpu fixture workbench")
+            .with_title(if options.live {
+                "Captures"
+            } else {
+                "Captures — wgpu fixture workbench"
+            })
             .with_inner_size(size)
             .with_min_inner_size(size)
             .with_visible(!idle)

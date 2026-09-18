@@ -1,17 +1,19 @@
 # Shared wgpu renderer candidate
 
-An **experimental Windows/Linux fixture workbench**, not the chosen production UI
-and not a capture app. macOS keeps its Swift/AppKit frontend. This candidate uses
+An **experimental Windows/Linux native workbench**, not the chosen production UI
+or a replacement download. macOS keeps its Swift/AppKit frontend. This candidate uses
 Rust, winit native windows, egui custom-drawn controls, and wgpu. It has no WebView,
-JS runtime, Tauri dependency, capture permissions, network
+JS runtime, Tauri dependency, network
 service, installer, or updater. Node is build-time only.
 
 Preferences now uses shared Rust settings persistence and custom-theme math,
 including automatic save, retry, and a flush when the window closes. It uses a
 separate Captures Native development identity; pass `--settings-file PATH` to
 use an explicit test file. Screenshots and scripted exercises without that flag
-use disposable settings. Other scenes remain fixtures; storing capture defaults
-does not connect the capture engines. Global shortcuts, login, microphone
+use disposable settings. `--live` opts into the shared Rust full-display PNG,
+history, copy, export and delete flows; see the [live slice and limits](../README.md#live-display-capture-slice).
+Other scenes remain fixtures; storing capture defaults does not apply them to
+live capture yet. Global shortcuts, login, microphone
 discovery, feedback, and updating remain visibly unavailable.
 
 The candidate tests whether shared custom components are viable. It is not a
@@ -45,6 +47,7 @@ supported production distro.
 
 ```sh
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene preferences
+apps/native/wgpu/target/release/captures-wgpu-workbench --live
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene history --history-count 1000
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene hud --floating --appearance light
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene preview --floating
@@ -74,7 +77,7 @@ switch, not yet connected to each OS setting. Transparency does not imply deskto
 blur, click-through, topmost behavior, or correct Wayland overlay placement.
 
 **Hidden idle is unsupported on this candidate's Wayland backend.** winit cannot
-hide/query the root there; `--scene idle` exits with an explicit unsupported event
+hide/query the root there; live capture is disabled, and `--scene idle` exits with an explicit unsupported event
 and status 3 rather than measuring a visible window. On X11/Windows the workbench
 re-hides the root after eframe's automatic first paint and verifies visibility at
 the quit deadline. A transient startup map remains possible; this is not a

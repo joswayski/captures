@@ -79,11 +79,42 @@ pub unsafe extern "C" fn captures_settings_request_v1(request_json: *const c_cha
         .into_raw()
 }
 
-/// Releases a response returned by `captures_settings_request_v1`.
+/// Runs a native application command. Heavy work must be scheduled off the UI thread.
+/// Success is {"ok":true,"result":{...}}; failures have `error` text.
+///
+/// # Safety
+/// `request_json` must be a readable NUL-terminated UTF-8 string during this call.
+/// Release the result exactly once with `captures_settings_free_v1`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_app_request_v1(request_json: *const c_char) -> *mut c_char {
+    let value = catch_unwind(AssertUnwindSafe(|| {
+        if request_json.is_null() {
+            return json!({"ok":false,"error":"request pointer is null"});
+        }
+        // SAFETY: The caller upholds the same pointer contract as settings requests.
+        let bytes = unsafe { CStr::from_ptr(request_json) }.to_bytes();
+        if bytes.len() > MAX_REQUEST_BYTES {
+            return json!({"ok":false,"error":"request exceeds 8 MiB"});
+        }
+        match serde_json::from_slice::<captures_app::Request>(bytes) {
+            Ok(request) => match captures_app::execute(request) {
+                Ok(response) => json!({"ok":true,"result":response}),
+                Err(error) => json!({"ok":false,"error":error.to_string()}),
+            },
+            Err(error) => json!({"ok":false,"error":error.to_string()}),
+        }
+    }))
+    .unwrap_or_else(|_| json!({"ok":false,"error":"internal panic"}));
+    CString::new(value.to_string())
+        .expect("JSON contains no NUL bytes")
+        .into_raw()
+}
+
+/// Releases a response returned by either native JSON request entry point.
 ///
 /// # Safety
 /// `response` must be null or a pointer returned by
-/// `captures_settings_request_v1` that has not previously been freed.
+/// `captures_settings_request_v1` or `captures_app_request_v1` that has not previously been freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn captures_settings_free_v1(response: *mut c_char) {
     if !response.is_null() {
@@ -97,6 +128,34 @@ pub unsafe extern "C" fn captures_settings_free_v1(response: *mut c_char) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn application_abi_envelopes_and_ownership() {
+        for (request, succeeds) in [
+            (Some(r#"{"operation":"default_history_root"}"#), true),
+            (Some(r#"{"operation":"unknown"}"#), false),
+            (Some(r#"{"operation":"capture_display"}"#), false),
+            (Some("not json"), false),
+            (None, false),
+        ] {
+            let input = request.map(|s| CString::new(s).unwrap());
+            let ptr = unsafe {
+                captures_app_request_v1(input.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()))
+            };
+            assert!(!ptr.is_null());
+            let result: Value =
+                serde_json::from_slice(unsafe { CStr::from_ptr(ptr) }.to_bytes()).unwrap();
+            unsafe { captures_settings_free_v1(ptr) };
+            assert_eq!(result["ok"], succeeds);
+            if succeeds {
+                assert_eq!(result["result"]["kind"], "history_root");
+                assert!(!result["result"]["path"].as_str().unwrap().is_empty());
+            } else {
+                assert!(result["result"].is_null());
+                assert!(!result["error"].as_str().unwrap().is_empty());
+            }
+        }
+    }
+
     fn call(s: &str) -> Value {
         let input = CString::new(s).unwrap();
         let ptr = unsafe { captures_settings_request_v1(input.as_ptr()) };

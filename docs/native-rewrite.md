@@ -150,6 +150,16 @@ their own history root and presentation URLs. Native capture integration can use
 the same lifecycle without accessing installed history. This extraction alone
 adds no native capture UI and closes no platform gate.
 
+The opt-in `--live` workspace now connects full-display PNG capture and local
+screenshot history on both native hosts through `captures-app`. It includes
+explicit copy, export, reveal and history deletion while keeping exports and the
+installed Preview's data separate. Image decode and capture/file operations run
+off the UI thread. It preserves permission/session checks and hides its window
+before capture. Wayland capture remains gated by the candidate's missing window
+visibility support. Capture preferences, regions/windows, recording, editor,
+mini previews and full UI/UX parity are still open; this slice closes no complete
+platform acceptance row. Hardware capture and clipboard tests remain required.
+
 The first [shared wgpu candidate](../apps/native/wgpu/README.md) uses egui/winit
 with retained image textures and event-driven immediate-mode UI, an additional
 approach to evaluate against the retained/native candidates below. It implements

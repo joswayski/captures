@@ -5,6 +5,10 @@ on:
     paths:
       - 'apps/native/**'
       - 'crates/captures-settings*/**'
+      - 'crates/captures-app/**'
+      - 'crates/captures-history/**'
+      - 'crates/captures-capture/**'
+      - 'crates/captures-session/**'
       - 'Cargo.lock'
       - 'shared/**'
       - 'scripts/native-tokens.test.mjs'

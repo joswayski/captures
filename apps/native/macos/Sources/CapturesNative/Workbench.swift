@@ -87,6 +87,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var preview: PreviewView?
     private var table: NSTableView?
     private var preferencesController: PreferencesController?
+    private var liveController: LiveCaptureController?
     private var scene: String
     private var appearance: String
     private var theme: String
@@ -106,7 +107,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     init(options: Options) {
         self.options = options
-        scene = options.scene
+        scene = options.live ? "live" : options.scene
         appearance = options.appearance
         theme = options.theme
         historyCount = options.historyCount
@@ -139,7 +140,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         NSApp.mainMenu = menu
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 720),
             styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = "Captures Native — development fixtures"
+        window.title = options.live ? "Captures Native — capture workspace" : "Captures Native — development fixtures"
         window.isReleasedWhenClosed = false
         window.center()
         render()
@@ -185,6 +186,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         let started = CACurrentMediaTime()
         preview = nil
         table = nil
+        liveController = nil
         content = Surface(frame: NSRect(x: 0, y: 0, width: 1000, height: 720))
         content.wantsLayer = true
         content.layer!.backgroundColor = tokens.color("surface-canvas").cgColor
@@ -206,7 +208,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                         self.resolvedTokens = self.makeTokens()
                     }
                     self.window.appearance = appearance == "system" ? nil : NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
-                }, showHistory: { [weak self] in self?.scene = "history"; self?.render() },
+                }, showHistory: { [weak self] in self?.scene = self?.options.live == true ? "live" : "history"; self?.render() },
+                   liveCaptureAvailable: options.live,
                    initialAppearance: options.appearanceOverride ? options.appearance : nil,
                    initialTheme: options.themeOverride ? options.theme : nil)
             } catch {
@@ -216,6 +219,12 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             return
         }
         preferencesController = nil
+        if scene == "live" {
+            liveController = LiveCaptureController(root: content, window: window, tokens: tokens,
+                historyRoot: options.historyRoot) { [weak self] in self?.scene = "preferences"; self?.render() }
+            Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
+            return
+        }
         let sidebar = Surface(frame: NSRect(x: 0, y: 0, width: 196, height: 720))
         sidebar.wantsLayer = true
         sidebar.layer!.backgroundColor = tokens.color("surface-sunken").cgColor

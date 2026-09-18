@@ -1,10 +1,11 @@
 # Native desktop workbenches
 
 These are implementation stages of the [native rewrite](../../docs/native-rewrite.md),
-**not a usable capture application**. The existing Tauri Preview is unchanged.
+**not replacement downloads**. The existing Tauri Preview is unchanged.
 macOS is Swift/AppKit + Core Animation with Core Image explicitly backed by Metal.
-No WebView, React, JavaScript runtime, Rust sidecar, network service or capture
-permission is used. Rust engine integration is not implemented here. The
+No WebView, React, JavaScript runtime, Rust sidecar or network service is used.
+Fixture launches do not request screen access. The opt-in capture workspace below
+connects the existing Rust capture engine in process. The
 [shared wgpu candidate](wgpu/README.md) adds Windows/Linux fixture windows and
 cross-platform resource diagnostics; it is not a production renderer selection.
 Its fade/settle probe is not equivalent to AppKit dust. DirectComposition/GTK
@@ -21,10 +22,33 @@ directly. Preferences stores appearance and capture/media defaults in a separate
 explicit test file. Malformed/newer files report an error instead of resetting
 them. `--exercise` uses disposable data. No installed Preview settings are imported.
 
-Capture, recording, history, and editor scenes still use fixtures. Saving a
+Without `--live`, capture, recording, history, and editor scenes use fixtures. Saving a
 default is not an engine integration: global shortcuts, microphone discovery,
 login items, feedback and update actions remain visibly unavailable. Full
 Preferences visual/input parity and the other checklist gates remain open.
+
+## Live display-capture slice
+
+Launch with `--live [--history-root PATH]` on either native host. This is an
+explicit opt-in to real desktop capture, not a synthetic benchmark. The default
+history is beside the separate Captures Native settings file, never installed
+Preview history. Choose a display, request screen access if needed, and capture.
+The host hides its window before capture and restores it on success or failure.
+Permission and locked/inactive session checks remain in force.
+
+Both hosts use `captures-app` for display enumeration, PNG/thumbnail persistence,
+history recovery, save and delete. Image files cross the ABI as paths, not base64.
+Capture, file work and preview decode run off the UI thread. Export writes a new
+PNG without overwriting an existing file. Copy is explicit. Deleting history
+preserves exported PNGs. Captures remain available on reopening the workspace.
+
+This slice has no cursor/countdown, region/window capture, recordings, editor or
+mini previews; saved capture preferences do not apply yet. Full UI parity remains
+open. The wgpu Wayland backend cannot verify hiding its root window, so capture
+is disabled there rather than photographing the app itself. Linux X11 needs an
+active, unlocked desktop session; bare Xvfb normally has no session service and
+must refuse capture. Verify real permission, clipboard ownership, multi-display
+behavior and exported pixels on each OS before accepting the slice.
 
 ## Build and try on macOS
 
@@ -34,6 +58,7 @@ Requires macOS 13+, Xcode command-line tools with Swift 5.9+, Rust 1.94, and Nod
 ```sh
 bash apps/native/macos/build.sh
 apps/native/macos/.build/release/CapturesNative --scene preferences
+apps/native/macos/.build/release/CapturesNative --live
 apps/native/macos/.build/release/CapturesNative --scene history --history-count 1000
 apps/native/macos/.build/release/CapturesNative --scene history --history-count 0
 apps/native/macos/.build/release/CapturesNative --scene hud --appearance light
@@ -43,7 +68,8 @@ apps/native/macos/.build/release/CapturesNative --scene preview --reference-chip
 ```
 
 Close each instance before starting another. Cmd+Q quits. Nothing installs into
-Applications or changes the installed app's data, permissions, shortcuts, or updater.
+Applications or changes the installed app's data, shortcuts, or updater.
+Only the explicit live screen-access action requests capture permission.
 The executable needs its SwiftPM resource bundle; run it from the build directory.
 
 Preferences has section navigation and a Capture History fixture action.

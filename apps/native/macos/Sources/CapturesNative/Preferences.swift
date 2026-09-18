@@ -27,6 +27,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private let tokensProvider: () -> Tokens
     private let appearanceChanged: (String, String, [String: Any]) -> Void
     private let showHistory: () -> Void
+    private let liveCaptureAvailable: Bool
     private var settings: [String: Any] = [:]
     private var scroll = NSScrollView()
     private var document = Surface()
@@ -49,9 +50,11 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
 
     init(root: Surface, store: SettingsStore, tokens: @escaping () -> Tokens,
          appearanceChanged: @escaping (String, String, [String: Any]) -> Void,
-         showHistory: @escaping () -> Void, initialAppearance: String? = nil, initialTheme: String? = nil) {
+         showHistory: @escaping () -> Void, liveCaptureAvailable: Bool = false,
+         initialAppearance: String? = nil, initialTheme: String? = nil) {
         self.root = root; self.store = store; tokensProvider = tokens
         self.appearanceChanged = appearanceChanged; self.showHistory = showHistory
+        self.liveCaptureAvailable = liveCaptureAvailable
         super.init()
         buildShell()
         store.load { [weak self] result in
@@ -90,12 +93,12 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         }
         addLabel("Native development build", frame: NSRect(x: 22, y: root.bounds.height - 62, width: 160, height: 20),
                  size: 11, muted: true, parent: nav).autoresizingMask = [.minYMargin]
-        addLabel("Capture engine not connected", frame: NSRect(x: 22, y: root.bounds.height - 40, width: 166, height: 20),
+        addLabel(liveCaptureAvailable ? "Display capture enabled" : "Capture engine not connected", frame: NSRect(x: 22, y: root.bounds.height - 40, width: 166, height: 20),
                  size: 11, muted: true, parent: nav).autoresizingMask = [.minYMargin]
 
         addLabel("Preferences", frame: NSRect(x: 224, y: 18, width: 220, height: 28), size: 20, weight: .semibold, parent: root)
         addLabel("Changes save automatically.", frame: NSRect(x: 224, y: 43, width: 240, height: 20), size: 12, muted: true, parent: root)
-        let history = actionButton("Capture History · fixture", x: root.bounds.width - 574, y: 22, width: 174, parent: root) { [weak self] in
+        let history = actionButton(liveCaptureAvailable ? "Capture Workspace" : "Capture History", x: root.bounds.width - 574, y: 22, width: 174, parent: root) { [weak self] in
             self?.flush(); self?.showHistory()
         }
         history.autoresizingMask = [.minXMargin]

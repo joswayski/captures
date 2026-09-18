@@ -633,6 +633,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "captures-app"
+version = "0.1.0"
+dependencies = [
+ "captures-capture",
+ "captures-history",
+ "captures-session",
+ "captures-settings",
+ "chrono",
+ "image",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "uuid",
+]
+
+[[package]]
 name = "captures-capture"
 version = "0.1.0"
 dependencies = [
@@ -820,6 +837,7 @@ dependencies = [
 name = "captures-settings-ffi"
 version = "0.1.0"
 dependencies = [
+ "captures-app",
  "captures-settings",
  "serde",
  "serde_json",

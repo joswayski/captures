@@ -8,6 +8,8 @@ struct Options {
     var historyCount = 1000
     var referenceChips = false
     var exercise = false
+    var live = false
+    var historyRoot: String?
     var quitAfter: Double?
     var settingsFile: String?
     var screenshot: String?
@@ -26,6 +28,10 @@ struct Options {
                 historyCount = count
             case "--reference-chips": referenceChips = true
             case "--exercise": exercise = true
+            case "--live": live = true
+            case "--history-root":
+                guard let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
+                historyRoot = value
             case "--settings-file":
                 guard let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
                 settingsFile = value
@@ -39,7 +45,8 @@ struct Options {
             }
         }
         guard ["preferences", "history", "hud", "preview", "idle"].contains(scene),
-            ["light", "dark", "system"].contains(appearance), Self.themes.contains(theme)
+            ["light", "dark", "system"].contains(appearance), Self.themes.contains(theme),
+            !(live && (exercise || referenceChips)), historyRoot == nil || live
         else { throw Usage.invalid }
     }
     enum Usage: Error { case invalid }
@@ -55,7 +62,7 @@ struct Options {
             application.delegate = delegate
             withExtendedLifetime(delegate) { application.run() }
         } catch {
-            FileHandle.standardError.write(Data("Usage: CapturesNative [--scene preferences|history|hud|preview|idle] [--appearance light|dark|system] [--theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono] [--history-count 0..10000] [--settings-file PATH] [--screenshot PATH] [--reference-chips] [--exercise] [--quit-after SECONDS]\n".utf8))
+            FileHandle.standardError.write(Data("Usage: CapturesNative [--live [--history-root PATH]] [--scene preferences|history|hud|preview|idle] [--appearance light|dark|system] [--theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono] [--history-count 0..10000] [--settings-file PATH] [--screenshot PATH] [--reference-chips] [--exercise] [--quit-after SECONDS]\n".utf8))
             exit(1)
         }
     }

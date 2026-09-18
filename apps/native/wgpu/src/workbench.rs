@@ -8,6 +8,7 @@ use serde_json::json;
 
 use crate::{
     emit,
+    live::Live,
     options::{Options, Scene},
     preferences::Preferences,
     tokens::{self, Tokens},
@@ -41,6 +42,8 @@ pub struct Workbench {
     screenshot_saved: bool,
     preferences_state: Preferences,
     _temporary_settings: Option<tempfile::TempDir>,
+    live: Option<Live>,
+    live_preferences: bool,
 }
 
 impl Workbench {
@@ -65,7 +68,7 @@ impl Workbench {
         emit(
             "ready",
             json!({
-                "scene": options.scene.name(), "renderer": "eframe-wgpu", "adapter": adapter.name,
+                "scene": if options.live { "live" } else { options.scene.name() }, "renderer": "eframe-wgpu", "adapter": adapter.name,
                 "backend": format!("{:?}", adapter.backend), "deviceType": format!("{:?}", adapter.device_type),
                 "os": std::env::consts::OS, "appearance": options.appearance, "theme": options.theme,
                 "historyCount": options.history_count, "floating": options.floating,
@@ -95,6 +98,9 @@ impl Workbench {
                 .then(|| options.appearance.clone()),
             options.theme_override.then(|| options.theme.clone()),
         );
+        let live = options
+            .live
+            .then(|| Live::new(cc.egui_ctx.clone(), options.history_root.clone()));
         let this = Self {
             options,
             variants: tokens::load(),
@@ -121,6 +127,8 @@ impl Workbench {
             screenshot_saved: false,
             preferences_state,
             _temporary_settings: temporary_settings,
+            live,
+            live_preferences: false,
         };
         this.schedule(&cc.egui_ctx);
         this
@@ -494,6 +502,9 @@ impl eframe::App for Workbench {
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if let Some(live) = &mut self.live {
+            live.logic(ctx, frame);
+        }
         self.preferences_state.receive(ctx);
         let screenshot = ctx.input(|i| {
             i.raw.events.iter().find_map(|event| {
@@ -566,6 +577,40 @@ impl eframe::App for Workbench {
         }
         let t = self.tokens(&ctx);
         ui.set_style(ctx.style_of(ctx.theme()));
+        if let Some(live) = &mut self.live {
+            egui::Panel::top("live-navigation").show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.live_preferences, false, "Capture workspace");
+                    ui.selectable_value(&mut self.live_preferences, true, "Preferences");
+                });
+            });
+            if self.live_preferences {
+                egui::Panel::left("live-preferences-sidebar")
+                    .exact_size(196.)
+                    .show(ui, |ui| {
+                        self.preferences_state.sidebar(ui, &t);
+                    });
+                egui::CentralPanel::default().show(ui, |ui| {
+                    if self.preferences_state.ui(ui, &t) {
+                        self.live_preferences = false;
+                    }
+                });
+            } else {
+                live.ui(ui, &t);
+            }
+            if self.options.screenshot.is_some()
+                && !self.screenshot_requested
+                && self.started.elapsed() >= self.options.screenshot_after
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+                self.screenshot_requested = true;
+            }
+            let elapsed = start.elapsed().as_secs_f64() * 1000.;
+            self.ui_ms += elapsed;
+            self.max_ui_ms = self.max_ui_ms.max(elapsed);
+            self.frames += 1;
+            return;
+        }
         if !self.options.floating {
             egui::Panel::left("navigation")
                 .exact_size(196.)
