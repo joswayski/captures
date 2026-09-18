@@ -19,10 +19,13 @@ final class HistoryClearTests: XCTestCase {
             let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             defer { window.close() }
+            let tokens = Tokens.variants["\(appearance)-mustard"]!
             let root = Surface(frame: frame); window.contentView = root
+            root.wantsLayer = true; root.layer!.backgroundColor = tokens.color("surface-canvas").cgColor
+            window.appearance = NSAppearance(named: failPartway ? .darkAqua : .aqua)
             let transport = HistoryTransport(path: path.path, width: image.width, height: image.height, failPartway: failPartway)
             let controller = LiveCaptureController(root: root, window: window,
-                tokens: Tokens.variants["\(appearance)-mustard"]!, historyRoot: directory.path,
+                tokens: tokens, historyRoot: directory.path,
                 settingsPath: nil, transport: transport, showPreferences: {})
             defer { withExtendedLifetime(controller) {} }
             window.makeKeyAndOrderFront(nil)
@@ -59,10 +62,18 @@ final class HistoryClearTests: XCTestCase {
                 window.display(); root.layoutSubtreeIfNeeded()
                 let bitmap = try XCTUnwrap(root.bitmapImageRepForCachingDisplay(in: root.bounds))
                 root.cacheDisplay(in: root.bounds, to: bitmap)
+                XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 500, y: 50)).alphaComponent, 1, accuracy: 0.01,
+                    "render the same opaque canvas as the real workspace")
                 let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
                 let folder = URL(fileURLWithPath: output)
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                 try png.write(to: folder.appendingPathComponent("history-clear-\(appearance)-\(failPartway ? "error" : "empty").png"))
+            }
+            if failPartway {
+                clear.performClick(nil)
+                try waitUntil { window.attachedSheet != nil }
+                window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertFirstButtonReturn)
+                try waitUntil { transport.clearCount == 2 && table.numberOfRows == 0 && !clear.isEnabled }
             }
         }
     }
@@ -79,7 +90,7 @@ private final class HistoryTransport: AppTransport {
     private let lock = NSLock()
     private var artifacts: [[String: Any]]
     private var clears = 0
-    private let failPartway: Bool
+    private var failPartway: Bool
 
     init(path: String, width: Int, height: Int, failPartway: Bool) {
         self.failPartway = failPartway
@@ -99,7 +110,7 @@ private final class HistoryTransport: AppTransport {
         case "clear_history":
             clears += 1
             artifacts.removeFirst()
-            if failPartway { throw AppBridgeError.backend("fixture deletion failed") }
+            if failPartway { failPartway = false; throw AppBridgeError.backend("fixture deletion failed") }
             artifacts.removeAll()
             return ["kind": "history", "artifacts": artifacts]
         default: throw AppBridgeError.invalidResponse
