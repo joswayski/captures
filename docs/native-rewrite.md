@@ -70,7 +70,8 @@ must be explicit, not silently successful.
 - Default workbench scenes use synthetic capture fixtures; `--live` explicitly
   enables the current native capture slice. Both use separate development data,
   never installed settings/history. Fixture launches do not request capture
-  access; neither mode registers global shortcuts or installs updates yet.
+  access. Live captures register temporary global Escape for cancellation;
+  capture-launch shortcuts and update installation are not connected yet.
   Production data migration requires backup, version checks and rollback tests.
 
 ## Reviewable stages and exit gates

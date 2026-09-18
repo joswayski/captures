@@ -228,7 +228,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                                 self.tickCountdown(display: display, preferences: preferences, generation: generation)
                             } catch { self.finishCapture(); self.showError("Capture failed", error) }
                         }, cancel: { [weak self] in
-                            self?.finishCapture(); self?.status.stringValue = "Capture cancelled."
+                            guard let self, self.flowGeneration == generation, self.regionPanel != nil else { return }
+                            self.finishCapture(); self.status.stringValue = "Capture cancelled."
                         })
                     self.regionPanel = panel; self.preparingRegion = false
                     panel.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
