@@ -11,6 +11,11 @@ mod shell_ui;
 mod win_shift_s;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(any(target_os = "windows", test))]
+mod work_area;
+
+#[cfg(target_os = "windows")]
+pub use work_area::windows_monitor_work_area;
 
 /// Returns whether the process belongs to an active, unlocked desktop session.
 pub fn capture_session_available() -> bool {
