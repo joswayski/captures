@@ -26,6 +26,9 @@ struct CapturePreferences {
     let countdown: Int
     let freezeScreen: Bool
     let autoStart: Bool
+    let showMiniPreviews: Bool
+    let miniPreviewPlacement: String
+    let includeMiniPreviewsInCaptures: Bool
 
     init(_ settings: [String: Any]) throws {
         guard let autoCopy = settings["auto_copy_to_clipboard"] as? Bool,
@@ -35,6 +38,10 @@ struct CapturePreferences {
               ["png", "jpeg", "webp"].contains(format),
               let freezeScreen = settings["freeze_screen"] as? Bool,
               let autoStart = settings["auto_start_on_selection"] as? Bool,
+              let showMiniPreviews = settings["show_mini_previews"] as? Bool,
+              let miniPreviewPlacement = settings["mini_preview_placement"] as? String,
+              ["bottom_left", "bottom_right", "top_left", "top_right"].contains(miniPreviewPlacement),
+              let includeMiniPreviewsInCaptures = settings["include_mini_previews_in_captures"] as? Bool,
               let countdown = settings["screenshot_countdown_seconds"] as? Int,
               (0...10).contains(countdown)
         else { throw SettingsStoreError.invalidResponse }
@@ -42,6 +49,13 @@ struct CapturePreferences {
         self.includeCursor = includeCursor
         self.countdown = countdown
         self.freezeScreen = freezeScreen; self.autoStart = autoStart
+        self.showMiniPreviews = showMiniPreviews; self.miniPreviewPlacement = miniPreviewPlacement
+        self.includeMiniPreviewsInCaptures = includeMiniPreviewsInCaptures
+    }
+
+    var miniPreviewSettings: MiniPreviewSettings {
+        MiniPreviewSettings(enabled: showMiniPreviews, placement: miniPreviewPlacement,
+                            includeInCaptures: includeMiniPreviewsInCaptures)
     }
 
     static func load(path: String?, transport: SettingsTransport = SettingsBridge()) throws -> Self {

@@ -27,6 +27,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private let historyRootOverride: String?
     private let settingsPath: String?
     private let showPreferences: () -> Void
+    private weak var miniPreviews: MiniPreviewController?
+    private let initialSelectionID: String?
     private var historyRoot = ""
     private var displays: [DisplayItem] = []
     private var artifacts: [CaptureArtifact] = []
@@ -36,6 +38,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var capturing = false
     private var clearingHistory = false
     private var flowGeneration: UInt64?
+    private var previewCaptureGeneration: UInt64?
     private var countdownTimer: Timer?
     private var countdownPanel: ScreenshotCountdownPanel?
     private var snapshotPending = false
@@ -62,10 +65,13 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var clearHistoryButton: CaptureButton!
 
     init(root: Surface, window: NSWindow, tokens: Tokens, historyRoot: String?, settingsPath: String?,
-         transport: AppTransport = AppBridge(), showPreferences: @escaping () -> Void) {
+         transport: AppTransport = AppBridge(), miniPreviews: MiniPreviewController? = nil,
+         initialSelectionID: String? = nil,
+         showPreferences: @escaping () -> Void) {
         self.root = root; self.window = window; self.tokens = tokens
         historyRootOverride = historyRoot; self.transport = transport; self.showPreferences = showPreferences
-        self.settingsPath = settingsPath
+        self.settingsPath = settingsPath; self.miniPreviews = miniPreviews
+        self.initialSelectionID = initialSelectionID
         super.init(); build(); loadInitial()
     }
 
@@ -106,7 +112,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         deleteButton = button("Delete from history", frame: NSRect(x: 758, y: 594, width: 166, height: 34)) { [weak self] in self?.confirmDelete() }
         clearHistoryButton = button("Clear history…", frame: NSRect(x: 28, y: 594, width: 150, height: 34)) { [weak self] in self?.confirmClearHistory() }
         status = title("Loading capture history…", frame: NSRect(x: 28, y: 642, width: 944, height: 24), muted: true)
-        let limits = title("Still captures use countdown, cursor, copy and save preferences. Region and window selection also use freeze and auto-start. History keeps a lossless PNG. Recording, editor and mini previews are not available yet.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
+        let limits = title("Still captures use countdown, cursor, copy, save and mini preview preferences. Region and window selection also use freeze and auto-start. History keeps a lossless PNG. Recording and the editor are not available yet.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
         limits.maximumNumberOfLines = 2; updateActions()
     }
 
@@ -127,7 +133,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             guard let path = result["path"] as? String else { throw AppBridgeError.invalidResponse }; return path
         }) { [weak self] result in
             guard let self else { return }
-            switch result { case .success(let path): self.historyRoot = path; self.loadHistory(); self.loadDisplays()
+            switch result { case .success(let path):
+                self.historyRoot = path; self.loadHistory(select: self.initialSelectionID); self.loadDisplays()
             case .failure(let error): self.showError("Couldn’t locate native history", error) }
         }
     }
@@ -163,6 +170,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 let previousID = id ?? self.selectedIndex.flatMap { self.artifacts.indices.contains($0) ? self.artifacts[$0].id : nil }
                 self.clearSelection()
                 self.artifacts = values; self.table.reloadData(); self.status.stringValue = self.historyStatus()
+                self.miniPreviews?.reconcileHistory(ids: Set(values.map(\.id)))
                 if let previousID, let index = values.firstIndex(where: { $0.id == previousID }) { self.table.selectRowIndexes([index], byExtendingSelection: false) }
                 else if !values.isEmpty { self.table.selectRowIndexes([0], byExtendingSelection: false) }
                 else { self.clearSelection() }
@@ -195,6 +203,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 let response = try AppBridge.flow(["operation": "begin", "seconds": selecting ? 0 : preferences.countdown])
                 guard let generation = response["generation"] as? NSNumber else { throw AppBridgeError.invalidResponse }
                 self.flowGeneration = generation.uint64Value; self.snapshotPending = false
+                self.previewCaptureGeneration = self.miniPreviews?.beginCapture(
+                    settings: preferences.miniPreviewSettings)
                 self.preparingRegion = kind == .region
                 self.preparingWindow = kind == .window
                 self.window.orderOut(nil)
@@ -343,17 +353,24 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     return artifact
                 }) { [weak self] result in
                     guard let self, self.flowGeneration == generation else { return }
-                    self.finishCapture()
                     switch result { case .success(let artifact):
+                        let previewGeneration = self.previewCaptureGeneration
+                        self.previewCaptureGeneration = nil
+                        self.finishCapture(restorePreview: false)
+                        self.miniPreviews?.present(artifact, on: display.id,
+                            settings: preferences.miniPreviewSettings,
+                            generation: previewGeneration)
                         self.loadHistory(select: artifact.id)
                         if preferences.autoCopy { self.copyImage(at: artifact.imagePath) }
-                    case .failure(let error): self.showError("Capture failed", error) }
+                    case .failure(let error):
+                        self.finishCapture(); self.showError("Capture failed", error)
+                    }
                 }
             }
         } catch { finishCapture(); showError("Capture failed", error) }
     }
 
-    func finishCapture(restoreWindow: Bool = true) {
+    func finishCapture(restoreWindow: Bool = true, restorePreview: Bool = true) {
         countdownTimer?.invalidate(); countdownTimer = nil
         countdownPanel?.close(); countdownPanel = nil
         regionPanel?.close(); regionPanel = nil
@@ -363,6 +380,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         if let generation = flowGeneration {
             _ = try? AppBridge.flow(["operation": "finish", "generation": generation])
             flowGeneration = nil
+        }
+        if restorePreview {
+            miniPreviews?.restoreCapture(generation: previewCaptureGeneration)
+            previewCaptureGeneration = nil
         }
         snapshotPending = false; setBusy(false)
         if restoreWindow { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
@@ -421,7 +442,14 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private func save() {
         guard let index = selectedIndex, artifacts.indices.contains(index) else { return }; let artifact = artifacts[index]
+        save(artifact)
+    }
+    func savePreview(_ artifact: CaptureArtifact) {
+        save(artifact)
+    }
+    private func save(_ artifact: CaptureArtifact) {
         status.stringValue = "Saving image…"
+        miniPreviews?.setStatus("Saving…", for: artifact.id)
         run({ [transport, historyRoot, settingsPath] in
             let preferences = try CapturePreferences.load(path: settingsPath)
             let result = try transport.request(["operation": "save_screenshot", "root": historyRoot, "id": artifact.id,
@@ -433,7 +461,11 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             switch result { case .success(let value):
                 if let current = self.artifacts.firstIndex(where: { $0.id == artifact.id }) { self.artifacts[current] = value.0 }
                 self.status.stringValue = "Saved image to \(value.1)"; self.table.reloadData()
-            case .failure(let error): self.showError("Couldn’t save image", error) }; self.updateActions()
+                self.miniPreviews?.setStatus("Saved", for: artifact.id)
+            case .failure(let error):
+                self.showError("Couldn’t save image", error)
+                self.miniPreviews?.setStatus("Save failed", for: artifact.id)
+            }; self.updateActions()
         }
     }
     private func copyImage() {
@@ -451,6 +483,26 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             case .failure(let error): self.showError("Couldn’t copy image", error)
             }
         }
+    }
+    func copyPreview(_ artifact: CaptureArtifact) {
+        miniPreviews?.setStatus("Copying…", for: artifact.id)
+        run({ try Data(contentsOf: URL(fileURLWithPath: artifact.imagePath)) }) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let png):
+                let pasteboard = NSPasteboard.general; pasteboard.clearContents()
+                let copied = pasteboard.setData(png, forType: .png)
+                self.status.stringValue = copied ? "Copied the mini preview image." : "Couldn’t copy the mini preview image."
+                self.miniPreviews?.setStatus(copied ? "Copied" : "Copy failed", for: artifact.id)
+            case .failure(let error):
+                self.showError("Couldn’t copy image", error)
+                self.miniPreviews?.setStatus("Copy failed", for: artifact.id)
+            }
+        }
+    }
+    func openPreview(_ artifact: CaptureArtifact) {
+        window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        loadHistory(select: artifact.id)
     }
     private func reveal() { guard let index = selectedIndex, artifacts.indices.contains(index), let path = artifacts[index].savedPath else { return }; NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
     private func confirmDelete() {
