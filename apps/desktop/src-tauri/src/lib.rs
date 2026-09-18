@@ -19,7 +19,8 @@ use tauri::CursorIcon;
 
 use captures_capture::{
     CaptureError, CaptureMode, DisplayFrame, LogicalRect, PhysicalRect, PointerCursor,
-    WindowDescriptor, pointer_cursor, pointer_position,
+    WindowDescriptor, image_is_effectively_blank, pointer_cursor, pointer_position,
+    resolve_window_capture, window_display_crop_is_safe,
 };
 use chrono::{DateTime, Utc};
 use image::RgbaImage;
@@ -62,7 +63,7 @@ use state::{AppState, ClipboardFingerprint, ThumbnailStackAnchor, ThumbnailStack
 #[derive(Debug, Error)]
 enum AppError {
     #[error(transparent)]
-    Capture(#[from] CaptureError),
+    Capture(CaptureError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -89,6 +90,19 @@ enum AppError {
     Task(String),
     #[error("an update is being installed; Captures will restart when it finishes")]
     UpdateInstalling,
+}
+
+impl From<CaptureError> for AppError {
+    fn from(error: CaptureError) -> Self {
+        match error {
+            // Preserve the shipping error category as well as its text after
+            // moving window-source policy into the shared capture crate.
+            CaptureError::WindowOccluded | CaptureError::WindowEmpty => {
+                Self::Task(error.to_string())
+            }
+            error => Self::Capture(error),
+        }
+    }
 }
 
 impl From<captures_history::Error> for AppError {
@@ -8245,89 +8259,7 @@ fn capture_live_window(
             Ok(image)
         },
     )
-}
-
-fn resolve_window_capture(
-    display_crop_is_safe: bool,
-    display_crop: impl FnOnce() -> Option<RgbaImage>,
-    native_capture: impl FnOnce() -> Result<RgbaImage, CaptureError>,
-) -> Result<RgbaImage, AppError> {
-    if display_crop_is_safe
-        && let Some(image) = display_crop()
-        && !image_is_effectively_blank(&image)
-    {
-        return Ok(image);
-    }
-
-    let native_error = match native_capture() {
-        Ok(image) if !image_is_effectively_blank(&image) => return Ok(image),
-        Ok(_) => None,
-        Err(error) => Some(error),
-    };
-
-    if !display_crop_is_safe {
-        return Err(AppError::Task(
-            "Could not isolate that window while another window was covering it. Bring the window forward and try again."
-                .to_owned(),
-        ));
-    }
-
-    match native_error {
-        None => Err(AppError::Task(
-            "Could not capture that window (empty frame). Try Region capture.".to_owned(),
-        )),
-        Some(error) => Err(error.into()),
-    }
-}
-
-fn window_display_crop_is_safe(
-    selected: &captures_capture::WindowDescriptor,
-    windows: &[captures_capture::WindowDescriptor],
-) -> bool {
-    windows.iter().any(|candidate| candidate.id == selected.id)
-        && !windows.iter().any(|candidate| {
-            candidate.id != selected.id
-                && candidate.display_id == selected.display_id
-                && candidate.z_order > selected.z_order
-                && window_rects_overlap(selected, candidate)
-                && !window_is_associated_transient(selected, candidate)
-        })
-}
-
-fn window_is_associated_transient(
-    selected: &captures_capture::WindowDescriptor,
-    candidate: &captures_capture::WindowDescriptor,
-) -> bool {
-    // xcap exposes app-owned menus, popovers, and similar transient surfaces as
-    // separate untitled windows. Keeping those in an otherwise safe display crop
-    // preserves frozen/countdown states without admitting another document window.
-    candidate.title.trim().is_empty()
-        && selected
-            .app_name
-            .as_deref()
-            .zip(candidate.app_name.as_deref())
-            .is_some_and(|(selected_app, candidate_app)| {
-                !selected_app.trim().is_empty()
-                    && selected_app
-                        .trim()
-                        .eq_ignore_ascii_case(candidate_app.trim())
-            })
-}
-
-fn window_rects_overlap(
-    left: &captures_capture::WindowDescriptor,
-    right: &captures_capture::WindowDescriptor,
-) -> bool {
-    let left_x = i64::from(left.x);
-    let left_y = i64::from(left.y);
-    let left_right = left_x + i64::from(left.width);
-    let left_bottom = left_y + i64::from(left.height);
-    let right_x = i64::from(right.x);
-    let right_y = i64::from(right.y);
-    let right_right = right_x + i64::from(right.width);
-    let right_bottom = right_y + i64::from(right.height);
-
-    left_x < right_right && right_x < left_right && left_y < right_bottom && right_y < left_bottom
+    .map_err(Into::into)
 }
 
 fn crop_window_from_session(session: &CaptureSession, window_id: &str) -> Option<RgbaImage> {
@@ -8658,29 +8590,6 @@ fn mask_macos_window_corners(
     }
 }
 
-pub(crate) fn image_is_effectively_blank(image: &RgbaImage) -> bool {
-    // Solid / near-solid frames from failed CGWindow captures (common black full-screen).
-    let mut samples = 0u32;
-    let mut matching = 0u32;
-    let first = image.get_pixel(0, 0).0;
-    let step_x = (image.width() / 16).max(1);
-    let step_y = (image.height() / 16).max(1);
-    for y in (0..image.height()).step_by(step_y as usize) {
-        for x in (0..image.width()).step_by(step_x as usize) {
-            samples += 1;
-            let pixel = image.get_pixel(x, y).0;
-            let close = pixel
-                .iter()
-                .zip(first.iter())
-                .all(|(a, b)| a.abs_diff(*b) <= 2);
-            if close {
-                matching += 1;
-            }
-        }
-    }
-    samples > 0 && matching * 100 / samples >= 98
-}
-
 enum WindowPickRole {
     Capturable,
     ShellChrome,
@@ -8997,6 +8906,28 @@ mod tests {
     }
 
     use captures_capture::{DisplayDescriptor, WindowDescriptor};
+
+    #[test]
+    fn shared_window_errors_preserve_shipping_categories_and_messages() {
+        for (error, message) in [
+            (
+                captures_capture::CaptureError::WindowOccluded,
+                "Could not isolate that window while another window was covering it. Bring the window forward and try again.",
+            ),
+            (
+                captures_capture::CaptureError::WindowEmpty,
+                "Could not capture that window (empty frame). Try Region capture.",
+            ),
+        ] {
+            let error = AppError::from(error);
+            assert!(matches!(error, AppError::Task(_)));
+            assert_eq!(error.to_string(), message);
+        }
+        assert!(matches!(
+            AppError::from(captures_capture::CaptureError::PermissionDenied),
+            AppError::Capture(captures_capture::CaptureError::PermissionDenied)
+        ));
+    }
 
     fn patterned_window_image(primary: [u8; 4], secondary: [u8; 4]) -> RgbaImage {
         RgbaImage::from_fn(8, 8, |x, y| {

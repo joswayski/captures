@@ -189,6 +189,15 @@ Native selection windows and host capture integration are still pending on all
 OSes. This shared-core stage changes no shipping behavior and does not close the
 capture-overlay gate; real display/permission/session tests remain required.
 
+Window capture begins with a behavior-preserving extraction of pixel-source
+policy into `captures-capture`. The shipping host uses the shared stack-occlusion
+check, composited-crop/native fallback and blank-frame heuristic. A failed native
+capture must never fall back to pixels from a covering window; known same-app
+untitled transients retain the existing exception. Error messages/categories and
+the existing shipping tests are preserved. Native window enumeration, selection,
+frozen/live orchestration, corner masking and host UI integration remain open;
+this extraction alone implements no new native capture mode on any OS.
+
 The first [shared wgpu candidate](../apps/native/wgpu/README.md) uses egui/winit
 with retained image textures and event-driven immediate-mode UI, an additional
 approach to evaluate against the retained/native candidates below. It implements
