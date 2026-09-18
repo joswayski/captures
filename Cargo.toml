@@ -10,6 +10,8 @@ members = [
     "crates/captures-recording",
     "crates/captures-recording-xcap",
     "crates/captures-recording-macos",
+    "crates/captures-settings",
+    "crates/captures-settings-ffi",
     "crates/captures-session",
     "crates/captures-video",
 ]
@@ -29,6 +31,7 @@ parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+tempfile = "3"
 tracing = "0.1"
 uuid = { version = "1", features = ["serde", "v4"] }
 

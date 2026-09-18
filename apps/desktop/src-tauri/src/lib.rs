@@ -2783,58 +2783,7 @@ fn update_settings(
             .to_string_lossy()
             .into_owned();
     }
-    if settings.new_capture_shortcut.trim().is_empty()
-        || settings.region_shortcut.trim().is_empty()
-        || settings.window_shortcut.trim().is_empty()
-        || settings.display_shortcut.trim().is_empty()
-        || settings.recording.video_shortcut.trim().is_empty()
-        || settings.recording.window_shortcut.trim().is_empty()
-        || settings.recording.display_shortcut.trim().is_empty()
-    {
-        return Err("all shortcuts must be set".to_owned());
-    }
-    let new_capture_shortcut =
-        parse_shortcut(&settings.new_capture_shortcut).map_err(|error| error.to_string())?;
-    let region_shortcut =
-        parse_shortcut(&settings.region_shortcut).map_err(|error| error.to_string())?;
-    let window_shortcut =
-        parse_shortcut(&settings.window_shortcut).map_err(|error| error.to_string())?;
-    let display_shortcut =
-        parse_shortcut(&settings.display_shortcut).map_err(|error| error.to_string())?;
-    let record_region_shortcut =
-        parse_shortcut(&settings.recording.video_shortcut).map_err(|error| error.to_string())?;
-    let record_window_shortcut =
-        parse_shortcut(&settings.recording.window_shortcut).map_err(|error| error.to_string())?;
-    let record_display_shortcut =
-        parse_shortcut(&settings.recording.display_shortcut).map_err(|error| error.to_string())?;
-    let shortcuts = [
-        new_capture_shortcut,
-        region_shortcut,
-        window_shortcut,
-        display_shortcut,
-        record_region_shortcut,
-        record_window_shortcut,
-        record_display_shortcut,
-    ];
-    if shortcuts
-        .iter()
-        .enumerate()
-        .any(|(index, shortcut)| shortcuts[index + 1..].contains(shortcut))
-    {
-        return Err("shortcuts must be unique".to_owned());
-    }
-    if !matches!(settings.recording.video_fps, 15 | 30 | 60)
-        || !matches!(settings.recording.gif_fps, 8..=30)
-        || settings.recording.gif_max_width < 320
-        || !(64..=256).contains(&settings.recording.gif_max_colors)
-        || settings.recording.countdown_seconds > 10
-        || settings.screenshot_countdown_seconds > 10
-    {
-        return Err("capture settings are outside their supported range".to_owned());
-    }
-    if !settings.custom_theme.is_valid() {
-        return Err("custom theme colors must use #RRGGBB values".to_owned());
-    }
+    captures_settings::validate(&settings).map_err(|error| error.to_string())?;
 
     // Migration and permission bookkeeping are internal state, not
     // user-editable settings.

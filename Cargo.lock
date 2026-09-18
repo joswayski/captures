@@ -657,6 +657,7 @@ dependencies = [
  "captures-recording-macos",
  "captures-recording-xcap",
  "captures-session",
+ "captures-settings",
  "chrono",
  "clipboard-win",
  "directories",
@@ -782,6 +783,29 @@ dependencies = [
  "core-foundation 0.10.1",
  "dbus",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "captures-settings"
+version = "0.1.0"
+dependencies = [
+ "captures-capture",
+ "captures-recording",
+ "directories",
+ "global-hotkey",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "captures-settings-ffi"
+version = "0.1.0"
+dependencies = [
+ "captures-settings",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

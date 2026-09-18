@@ -36,17 +36,7 @@ pub struct ArtifactDragFiles {
 
 pub fn load_settings() -> AppSettings {
     let path = crate::models::settings_path();
-    let mut settings = fs::read_to_string(&path)
-        .ok()
-        .and_then(|contents| serde_json::from_str(&contents).ok())
-        .unwrap_or_default();
-    crate::models::migrate_legacy_output_directory(&mut settings);
-    if crate::models::migrate_settings(&mut settings)
-        && let Err(error) = save_settings_to(&path, &settings)
-    {
-        eprintln!("failed to persist migrated settings: {error}");
-    }
-    settings
+    captures_settings::load_shipping(&path)
 }
 
 pub fn save_settings(settings: &AppSettings) -> Result<(), AppError> {
@@ -55,23 +45,8 @@ pub fn save_settings(settings: &AppSettings) -> Result<(), AppError> {
 }
 
 fn save_settings_to(path: &Path, settings: &AppSettings) -> Result<(), AppError> {
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty());
-    if let Some(parent) = parent {
-        fs::create_dir_all(parent)?;
-    }
-
-    let contents = serde_json::to_vec_pretty(settings)?;
-    let mut temporary = match parent {
-        Some(parent) => tempfile::NamedTempFile::new_in(parent)?,
-        None => tempfile::NamedTempFile::new_in(".")?,
-    };
-    temporary.write_all(&contents)?;
-    temporary.as_file().sync_all()?;
-    temporary
-        .persist(path)
-        .map_err(|error| AppError::Io(error.error))?;
+    captures_settings::write_atomic(path, settings)
+        .map_err(|error| AppError::Task(error.to_string()))?;
     Ok(())
 }
 
