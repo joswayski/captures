@@ -198,9 +198,40 @@ the existing shipping tests are preserved. Native-coordinate buffer scaling,
 clipped window rectangles, freeze-frame corner-radius inference and antialiased
 macOS corner masking now use the same shared algorithms. The host still supplies
 the macOS fallback radius and decides where that mask applies; Windows and Linux
-do not gain rounded masks. Native window enumeration, selection, frozen/live
-orchestration and host UI integration remain open on macOS, Windows, X11 and
-Wayland; this extraction alone implements no new native capture mode on any OS.
+do not gain rounded masks. This extraction alone implements no new native capture
+mode on any OS.
+
+A follow-up shared-core stage moves window target classification into
+`captures-capture`: display membership, empty/minimum-size filtering, Captures'
+internal surfaces, shell edge strips, desktop backdrops and excluded system apps
+now produce shared capturable/shell-chrome groups. The macOS Screenshot and
+Windows NVIDIA overlay exclusions retain their compile-time platform gates. The
+shipping host still owns enumeration failures/logging and applies snapshot chrome
+refinement after classification.
+
+`captures-app::window::WindowSession` now owns native preparation, frozen pixels,
+target descriptors and window/display confirmation. Its versioned C ABI exposes
+the same session to AppKit, including borrowed RGBA storage with the region
+session's lifetime contract. Hosts supply the OS corner-radius fallback, hide and
+settle their windows before capture, and retain the event-loop capture-flow guard.
+No pixels enter JSON or temporary preview files. Safe frozen crops keep their
+original pixels/cursor; countdowns always refresh pixels, window geometry and
+cursor. Unsafe/blank crops use the shared native-surface fallback, never a crop of
+an occluding window. Display/shell selections persist display-mode history;
+window selections persist window-mode history. Cancellation and session checks
+surround capture and use the existing commit gate before persistence.
+
+The native session deliberately fails closed when live target enumeration fails,
+the target disappears or moves to another display, or display geometry changes.
+It retains the **unfiltered** stack for occlusion checks: a window too small to
+pick may still cover the selected target. These are stricter than the legacy
+host's stale-descriptor fallback and filtered frozen stack; legacy behavior is
+unchanged. Unit tests distinguish frozen/fresh geometry and pixels, small
+occluders, source failures, cursor spaces, output metadata and macOS-only masks.
+Native window selection surfaces and host integration remain **not implemented**
+on macOS, Windows and X11; real-desktop acceptance is unverified. Wayland window
+targeting remains unsupported. Shared-core tests and ABI compilation do not close
+the cross-platform capture gate or select a Windows/Linux renderer.
 
 The first [shared wgpu candidate](../apps/native/wgpu/README.md) uses egui/winit
 with retained image textures and event-driven immediate-mode UI, an additional

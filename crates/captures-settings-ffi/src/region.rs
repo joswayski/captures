@@ -11,21 +11,21 @@ use std::{
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct RegionPixels {
-    data: *const u8,
-    length: usize,
-    width: u32,
-    height: u32,
-    bytes_per_row: usize,
+    pub(super) data: *const u8,
+    pub(super) length: usize,
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) bytes_per_row: usize,
 }
 
-fn response(value: Value) -> *mut c_char {
+pub(super) fn response(value: Value) -> *mut c_char {
     CString::new(value.to_string())
         .expect("JSON contains no NUL bytes")
         .into_raw()
 }
 
 // Callers establish C-string validity before entering this helper.
-unsafe fn text<'a>(input: *const c_char) -> Result<&'a str, String> {
+pub(super) unsafe fn text<'a>(input: *const c_char) -> Result<&'a str, String> {
     if input.is_null() {
         return Err("string pointer is null".into());
     }
