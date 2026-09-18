@@ -1,5 +1,6 @@
 mod countdown;
 mod live;
+mod mini_preview;
 mod options;
 mod preferences;
 mod selector;
