@@ -175,7 +175,7 @@ struct CaptureTarget {
     monitor: usize,
     position: egui::Pos2,
     size: egui::Vec2,
-    preview_bounds: captures_app::preview::ThumbnailMonitorBounds,
+    preview_bounds: Option<captures_app::preview::ThumbnailMonitorBounds>,
 }
 
 struct PreviewCard {
@@ -264,6 +264,11 @@ impl MiniPreviews {
             self.card = None;
             return Err("Mini-preview monitor state was lost before persistence.".into());
         };
+        if target.preview_bounds.is_none() {
+            self.visibility.restore_capture(capture_generation);
+            self.card = None;
+            return Err("Mini-preview positioning is unavailable for this display.".into());
+        }
         let artifact_id = artifact.entry.id.clone();
         if !self
             .visibility
@@ -1391,7 +1396,9 @@ impl Live {
         let placement = self.previews.placement;
         let tokens = tokens.clone();
         let geometry = captures_app::preview::thumbnail_geometry(
-            target.preview_bounds,
+            target
+                .preview_bounds
+                .expect("visible preview has validated monitor bounds"),
             1,
             false,
             None,
@@ -2044,15 +2051,15 @@ fn preview_bounds(
     width: u32,
     height: u32,
     scale_factor: f64,
-) -> captures_app::preview::ThumbnailMonitorBounds {
+) -> Option<captures_app::preview::ThumbnailMonitorBounds> {
     let full = crate::work_area::PhysicalRect {
         x,
         y,
         width,
         height,
     };
-    let work = crate::work_area::for_monitor(full).unwrap_or(full);
-    captures_app::preview::ThumbnailMonitorBounds {
+    let work = crate::work_area::for_monitor(full)?;
+    Some(captures_app::preview::ThumbnailMonitorBounds {
         work_x: work.x,
         work_y: work.y,
         work_width: work.width,
@@ -2062,7 +2069,7 @@ fn preview_bounds(
         full_width: width,
         full_height: height,
         scale_factor,
-    }
+    })
 }
 
 fn monitor_matches_overlay(
@@ -2189,7 +2196,17 @@ mod tests {
             monitor: 0,
             position: egui::Pos2::ZERO,
             size: egui::vec2(1280., 720.),
-            preview_bounds: preview_bounds(0, 0, 1280, 720, 1.),
+            preview_bounds: Some(captures_app::preview::ThumbnailMonitorBounds {
+                work_x: 0,
+                work_y: 0,
+                work_width: 1280,
+                work_height: 720,
+                full_x: 0,
+                full_y: 0,
+                full_width: 1280,
+                full_height: 720,
+                scale_factor: 1.,
+            }),
         }
     }
 
@@ -2302,12 +2319,38 @@ mod tests {
     }
 
     #[test]
-    fn preview_monitor_bounds_are_valid_for_all_shared_placements() {
-        let bounds = preview_bounds(-200, 100, 3200, 1800, 2.);
-        assert_eq!((bounds.full_x, bounds.full_y), (-200, 100));
-        assert_eq!((bounds.full_width, bounds.full_height), (3200, 1800));
-        assert!(bounds.work_width > 0);
-        assert!(bounds.work_height > 0);
+    fn unavailable_work_area_skips_preview_without_losing_capture() {
+        let root = tempfile::tempdir().unwrap();
+        let artifact = preview_artifact(root.path(), [60, 50, 40, 255]);
+        let mut target = preview_target();
+        target.preview_bounds = None;
+        let mut previews = MiniPreviews::default();
+        previews
+            .begin_capture(&AppSettings::default(), Some(target), 1)
+            .unwrap();
+
+        assert_eq!(
+            previews.start_artifact(&artifact).unwrap_err(),
+            "Mini-preview positioning is unavailable for this display."
+        );
+        assert!(previews.card.is_none());
+        assert!(!previews.visibility.is_suppressed());
+        assert_eq!(captures_app::list(root.path()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn shared_preview_geometry_handles_opposite_placements() {
+        let bounds = captures_app::preview::ThumbnailMonitorBounds {
+            work_x: -160,
+            work_y: 124,
+            work_width: 3120,
+            work_height: 1700,
+            full_x: -200,
+            full_y: 100,
+            full_width: 3200,
+            full_height: 1800,
+            scale_factor: 2.,
+        };
 
         let top_left = captures_app::preview::thumbnail_geometry(
             bounds,

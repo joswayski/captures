@@ -73,11 +73,15 @@ pub fn for_monitor(full: PhysicalRect) -> Option<PhysicalRect> {
 }
 
 #[cfg(target_os = "windows")]
-pub fn for_monitor(_full: PhysicalRect) -> Option<PhysicalRect> {
-    // winit exposes HMONITOR, but querying rcWork requires unsafe Win32 calls.
-    // Keep this host's unsafe-code prohibition and consume the audited shared
-    // platform helper once available rather than inventing a work area.
-    None
+pub fn for_monitor(full: PhysicalRect) -> Option<PhysicalRect> {
+    captures_session::windows_monitor_work_area((full.x, full.y, full.width, full.height)).map(
+        |(x, y, width, height)| PhysicalRect {
+            x,
+            y,
+            width,
+            height,
+        },
+    )
 }
 
 fn intersect(left: PhysicalRect, right: PhysicalRect) -> Option<PhysicalRect> {

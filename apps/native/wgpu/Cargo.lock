@@ -740,6 +740,7 @@ dependencies = [
  "arboard",
  "captures-app",
  "captures-capture",
+ "captures-session",
  "captures-settings",
  "chrono",
  "eframe",
