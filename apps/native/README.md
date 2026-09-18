@@ -44,7 +44,12 @@ overwriting an unrelated file. Repeat Save reuses the existing export; a missing
 export can be recreated from history. History always retains the lossless PNG.
 JPEG composites alpha onto white; WebP saves losslessly, using the same encoders
 as the shipping application. Deleting history preserves all exported formats.
-Captures remain available on reopening the workspace.
+**Clear history…** requires confirmation, deletes the workspace's screenshot
+history copies, and leaves exported files and other history roots untouched.
+Cancel leaves history unchanged. Both hosts reload after a failure, including
+partial deletion, and keep the error visible. This also works with existing
+local history on Wayland; the live capture restriction is separate.
+Captures not deleted remain available on reopening the workspace.
 
 Automatic copy follows Preferences (enabled by default, like shipping Captures).
 Turn it off to leave the clipboard untouched by a new capture; explicit Copy

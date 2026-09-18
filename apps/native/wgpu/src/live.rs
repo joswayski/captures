@@ -66,6 +66,7 @@ enum Job {
 
 enum Reply {
     Executed(Result<Box<Response>, String>),
+    HistoryCleared(Result<Box<Response>, String>),
     RegionPrepared {
         generation: u64,
         result: Result<Box<RegionSession>, String>,
@@ -200,6 +201,7 @@ pub struct Live {
     window_countdown_seconds: u8,
     can_hide: Option<bool>,
     confirm_delete: Option<String>,
+    confirm_clear_history: bool,
 }
 
 impl Live {
@@ -215,11 +217,17 @@ impl Live {
             while let Ok(job) = jobs.recv() {
                 let reply = match job {
                     Job::Shutdown => break,
-                    Job::Execute(request) => Reply::Executed(
-                        captures_app::execute(request)
+                    Job::Execute(request) => {
+                        let clearing = matches!(request, Request::ClearHistory { .. });
+                        let result = captures_app::execute(request)
                             .map(Box::new)
-                            .map_err(|error| error.to_string()),
-                    ),
+                            .map_err(|error| error.to_string());
+                        if clearing {
+                            Reply::HistoryCleared(result)
+                        } else {
+                            Reply::Executed(result)
+                        }
+                    }
                     Job::PrepareRegion {
                         display_id,
                         generation,
@@ -332,6 +340,7 @@ impl Live {
             window_countdown_seconds: 0,
             can_hide: None,
             confirm_delete: None,
+            confirm_clear_history: false,
         };
         live.send(Request::History {
             root: live.root.clone(),
@@ -599,6 +608,20 @@ impl Live {
         }
         while let Ok(reply) = self.rx.try_recv() {
             match reply {
+                Reply::HistoryCleared(result) => {
+                    self.pending = self.pending.saturating_sub(1);
+                    match result {
+                        Ok(response) => self.apply(*response),
+                        Err(error) => {
+                            // Some files may already have been deleted. Refresh the
+                            // remaining history without concealing the operation error.
+                            self.send(Request::History {
+                                root: self.root.clone(),
+                            });
+                            self.error = Some(format!("Could not clear history: {error}"));
+                        }
+                    }
+                }
                 Reply::Copied(result) => {
                     self.pending = self.pending.saturating_sub(1);
                     match result {
@@ -830,6 +853,8 @@ impl Live {
                 self.status = "Displays refreshed".into();
             }
             Response::History { artifacts } => {
+                self.confirm_clear_history = false;
+                self.confirm_delete = None;
                 self.selection.clear();
                 self.texture = None;
                 self.decoded_path = None;
@@ -1157,6 +1182,46 @@ impl Live {
                         .small()
                         .color(t.color("text-muted")),
                 );
+                if ui
+                    .add_enabled(
+                        self.pending == 0 && !self.artifacts.is_empty(),
+                        egui::Button::new("Clear history…"),
+                    )
+                    .clicked()
+                {
+                    self.confirm_clear_history = true;
+                    self.confirm_delete = None;
+                }
+                if self.confirm_clear_history {
+                    ui.group(|ui| {
+                        ui.label(
+                            "Delete all screenshots from history? Exported files stay on disk.",
+                        );
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked()
+                                || ui.input_mut(|input| {
+                                    input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                                })
+                            {
+                                self.confirm_clear_history = false;
+                            }
+                            if ui
+                                .add_enabled(
+                                    self.pending == 0,
+                                    egui::Button::new(
+                                        RichText::new("Delete all").color(t.color("theme-signal")),
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                self.confirm_clear_history = false;
+                                self.send(Request::ClearHistory {
+                                    root: self.root.clone(),
+                                });
+                            }
+                        });
+                    });
+                }
                 if self.artifacts.is_empty() {
                     ui.label("No captures yet");
                 }
@@ -1231,6 +1296,7 @@ impl Live {
                     )
                     .clicked()
                 {
+                    self.confirm_clear_history = false;
                     self.confirm_delete = selected.clone();
                 }
                 let saved = self
@@ -1478,6 +1544,46 @@ mod tests {
         selection.clear();
         assert!(!selection.accepts(current));
         assert_eq!(selection.id, None);
+    }
+
+    #[test]
+    fn clear_history_drains_at_shutdown_and_invalidates_selected_preview() {
+        let root = tempfile::tempdir().unwrap();
+        let artifact = captures_app::persist_screenshot(
+            root.path(),
+            &image::RgbaImage::new(7, 3),
+            captures_capture::CaptureMode::Window,
+        )
+        .unwrap();
+        let mut live = Live::new(egui::Context::default(), Some(root.path().into()));
+        live.apply(Response::History {
+            artifacts: captures_app::list(root.path()).unwrap(),
+        });
+        let decoding = live.selection.generation;
+        live.decoded_path = Some(artifact.image_path);
+        live.confirm_delete = Some(artifact.entry.id);
+        live.confirm_clear_history = true;
+        live.send(Request::ClearHistory {
+            root: root.path().into(),
+        });
+        live.flush();
+        let response = live
+            .rx
+            .try_iter()
+            .find_map(|reply| match reply {
+                Reply::HistoryCleared(result) => Some(result.unwrap()),
+                _ => None,
+            })
+            .expect("dedicated clear response");
+        live.apply(*response);
+        assert!(live.artifacts.is_empty());
+        assert!(captures_app::list(root.path()).unwrap().is_empty());
+        assert!(!live.selection.accepts(decoding));
+        assert!(live.selection.id.is_none());
+        assert!(live.decoded_path.is_none());
+        assert!(!live.preview_loading);
+        assert!(live.confirm_delete.is_none());
+        assert!(!live.confirm_clear_history);
     }
 
     #[test]

@@ -34,6 +34,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var selectedIndex: Int?
     private var selectionGeneration = 0
     private var capturing = false
+    private var clearingHistory = false
     private var flowGeneration: UInt64?
     private var countdownTimer: Timer?
     private var countdownPanel: ScreenshotCountdownPanel?
@@ -58,6 +59,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var copyButton: CaptureButton!
     private var revealButton: CaptureButton!
     private var deleteButton: CaptureButton!
+    private var clearHistoryButton: CaptureButton!
 
     init(root: Surface, window: NSWindow, tokens: Tokens, historyRoot: String?, settingsPath: String?,
          transport: AppTransport = AppBridge(), showPreferences: @escaping () -> Void) {
@@ -83,7 +85,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         regionButton = button("Capture region", frame: NSRect(x: 730, y: 90, width: 116, height: 34)) { [weak self] in self?.capture(.region) }
         windowButton = button("Capture window", frame: NSRect(x: 858, y: 90, width: 114, height: 34)) { [weak self] in self?.capture(.window) }
 
-        let scroll = NSScrollView(frame: NSRect(x: 28, y: 148, width: 320, height: 472))
+        let scroll = NSScrollView(frame: NSRect(x: 28, y: 148, width: 320, height: 426))
         scroll.hasVerticalScroller = true; scroll.drawsBackground = false
         table = NSTableView(frame: scroll.bounds)
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("history")); column.width = 300
@@ -102,6 +104,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         copyButton = button("Copy image", frame: NSRect(x: 500, y: 594, width: 118, height: 34)) { [weak self] in self?.copyImage() }
         revealButton = button("Reveal export", frame: NSRect(x: 628, y: 594, width: 120, height: 34)) { [weak self] in self?.reveal() }
         deleteButton = button("Delete from history", frame: NSRect(x: 758, y: 594, width: 166, height: 34)) { [weak self] in self?.confirmDelete() }
+        clearHistoryButton = button("Clear history…", frame: NSRect(x: 28, y: 594, width: 150, height: 34)) { [weak self] in self?.confirmClearHistory() }
         status = title("Loading capture history…", frame: NSRect(x: 28, y: 642, width: 944, height: 24), muted: true)
         let limits = title("Still captures use countdown, cursor, copy and save preferences. Region and window selection also use freeze and auto-start. History keeps a lossless PNG. Recording, editor and mini previews are not available yet.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
         limits.maximumNumberOfLines = 2; updateActions()
@@ -147,7 +150,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }
     }
 
-    private func loadHistory(select id: String? = nil) {
+    private func loadHistory(select id: String? = nil, completion: (() -> Void)? = nil) {
         status.stringValue = "Loading capture history…"
         run({ [transport, historyRoot] in
             let result = try transport.request(["operation": "history", "root": historyRoot])
@@ -164,6 +167,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 else if !values.isEmpty { self.table.selectRowIndexes([0], byExtendingSelection: false) }
                 else { self.clearSelection() }
             case .failure(let error): self.clearSelection(); self.artifacts = []; self.table.reloadData(); self.showError("Couldn’t load capture history", error) }
+            self.updateActions(); completion?()
         }
     }
 
@@ -368,11 +372,13 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private func showError(_ context: String, _ error: Error) { status.stringValue = "\(context): \(error.localizedDescription)"; status.textColor = tokens.color("danger-text") }
     private func updateActions() {
         let selected = selectedIndex.map { artifacts.indices.contains($0) } == true
-        saveButton?.isEnabled = selected && !capturing; copyButton?.isEnabled = selectedImage != nil && !capturing
-        deleteButton?.isEnabled = selected && !capturing; revealButton?.isEnabled = selected && selectedIndex.flatMap { artifacts[$0].savedPath } != nil
-        captureButton?.isEnabled = !capturing && !displays.isEmpty && !historyRoot.isEmpty
-        regionButton?.isEnabled = !capturing && !displays.isEmpty && !historyRoot.isEmpty
-        windowButton?.isEnabled = !capturing && !displays.isEmpty && !historyRoot.isEmpty
+        let busy = capturing || clearingHistory
+        saveButton?.isEnabled = selected && !busy; copyButton?.isEnabled = selectedImage != nil && !busy
+        deleteButton?.isEnabled = selected && !busy; revealButton?.isEnabled = selected && selectedIndex.flatMap { artifacts[$0].savedPath } != nil
+        clearHistoryButton?.isEnabled = !artifacts.isEmpty && !busy
+        captureButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
+        regionButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
+        windowButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { artifacts.count }
@@ -458,6 +464,30 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         run({ [transport, historyRoot] in _ = try transport.request(["operation": "delete", "root": historyRoot, "id": artifact.id]) }) { [weak self] result in
             switch result { case .success: self?.loadHistory()
             case .failure(let error): self?.showError("Couldn’t delete screenshot", error) }
+        }
+    }
+
+    private func confirmClearHistory() {
+        guard !artifacts.isEmpty, !capturing, !clearingHistory else { return }
+        let alert = NSAlert(); alert.messageText = "Clear screenshot history?"
+        alert.informativeText = "This deletes all screenshots in native history. Exported files stay on disk."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete All"); alert.addButton(withTitle: "Cancel")
+        alert.buttons[0].keyEquivalent = ""; alert.buttons[1].keyEquivalent = "\r"
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            self.clearingHistory = true; self.updateActions(); self.status.stringValue = "Clearing history…"
+            self.run({ [transport = self.transport, historyRoot = self.historyRoot] in
+                _ = try transport.request(["operation": "clear_history", "root": historyRoot])
+            }) { [weak self] result in
+                guard let self else { return }
+                // A failed bulk delete can still remove some entries; always reload.
+                self.loadHistory { [weak self] in
+                    guard let self else { return }
+                    self.clearingHistory = false; self.updateActions()
+                    if case .failure(let error) = result { self.showError("Couldn’t clear history", error) }
+                }
+            }
         }
     }
 

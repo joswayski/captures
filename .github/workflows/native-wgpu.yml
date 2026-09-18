@@ -58,6 +58,9 @@ jobs:
         if: runner.os == 'Linux'
         # Distro dbus/gi bindings belong to system Python, not setup-python.
         run: /usr/bin/python3 apps/native/x11_capture_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-capture
+      - name: Exercise native history deletion on private X11
+        if: runner.os == 'Linux'
+        run: python apps/native/x11_history_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-history
       - name: Exercise native Windows windows
         if: runner.os == 'Windows'
         run: python apps/native/wgpu/smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench.exe --output native-smoke
@@ -68,6 +71,7 @@ jobs:
           path: |
             native-smoke
             native-x11-capture
+            native-x11-history
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
