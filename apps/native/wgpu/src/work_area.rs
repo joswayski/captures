@@ -84,6 +84,7 @@ pub fn for_monitor(full: PhysicalRect) -> Option<PhysicalRect> {
     )
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn intersect(left: PhysicalRect, right: PhysicalRect) -> Option<PhysicalRect> {
     let x = left.x.max(right.x);
     let y = left.y.max(right.y);
