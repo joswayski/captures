@@ -96,7 +96,8 @@ python apps/native/profile.py --renderer wgpu --binary apps/native/wgpu/target/r
 
 Add `.exe` to both binary paths on Windows. Output directories must not exist.
 Smoke tests need an interactive desktop or a test compositor. They check two idle
-cases, eleven framebuffer captures, and thirty scheduled actions. Inspect the
+cases, thirteen framebuffer captures (including empty and populated native file
+history), and thirty scheduled actions. Inspect the
 PNGs: their presence alone is not visual acceptance. The Wayland run explicitly
 reports hidden idle as unsupported, not passed; the full resource runner fails
 closed on that unsupported workload. Capture another state with

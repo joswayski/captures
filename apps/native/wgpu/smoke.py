@@ -8,6 +8,7 @@ import argparse
 import json
 import struct
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -55,7 +56,11 @@ def main():
             raise RuntimeError(f"{scene}: {passes} UI passes after settling; investigate recurring redraw")
         print(f"{scene}: {metrics['uiPasses']} total / {passes} settled UI passes", flush=True)
 
+    populated = args.output / "populated-history"
+    subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "history_fixture.py"), str(populated)], check=True)
     shots = {
+        "live-empty": ["--live", "--history-root", str(args.output / "empty-history"), "--appearance", "light"],
+        "live-populated": ["--live", "--history-root", str(populated)],
         "preferences-dark": ["--scene", "preferences"],
         "preferences-light": ["--scene", "preferences", "--appearance", "light", "--theme", "cobalt"],
         "history-empty": ["--scene", "history", "--history-count", "0"],
@@ -93,7 +98,7 @@ def main():
             raise RuntimeError("Editor rotation did not advance")
         if scene == "preview" and len([e for e in events if e["event"] == "first-action-total"]) != 6:
             raise RuntimeError("Preview did not submit six effects")
-    print("PASS: static redraw guard, 11 viewport captures, 30 scripted actions; "
+    print("PASS: static redraw guard, 13 viewport captures, 30 scripted actions; "
           + ("hidden visibility verified" if hidden_supported else "hidden idle UNSUPPORTED, not accepted"))
 
 

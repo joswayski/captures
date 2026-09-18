@@ -16,7 +16,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private let window: NSWindow
     private let tokens: Tokens
     private let transport: AppTransport
-    private let queue = DispatchQueue(label: "es.captures.native.capture", qos: .userInitiated)
+    private static let queue = DispatchQueue(label: "es.captures.native.capture", qos: .userInitiated)
     private let historyRootOverride: String?
     private let showPreferences: () -> Void
     private var historyRoot = ""
@@ -136,7 +136,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 self.clearSelection()
                 self.artifacts = values; self.table.reloadData(); self.status.stringValue = self.historyStatus()
                 if let previousID, let index = values.firstIndex(where: { $0.id == previousID }) { self.table.selectRowIndexes([index], byExtendingSelection: false) }
-                else if values.isEmpty { self.clearSelection() }
+                else if !values.isEmpty { self.table.selectRowIndexes([0], byExtendingSelection: false) }
+                else { self.clearSelection() }
             case .failure(let error): self.clearSelection(); self.artifacts = []; self.table.reloadData(); self.showError("Couldn’t load capture history", error) }
         }
     }
@@ -266,6 +267,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private func run<T>(_ work: @escaping () throws -> T, completion: @escaping (Result<T, Error>) -> Void) {
         status.textColor = tokens.color("text-muted")
-        queue.async { let result = Result(catching: work); DispatchQueue.main.async { completion(result) } }
+        Self.queue.async { let result = Result(catching: work); DispatchQueue.main.async { completion(result) } }
     }
+
+    // One process-wide queue also drains operations from a closed workspace view.
+    static func flush() { queue.sync {} }
 }

@@ -18,6 +18,7 @@ enum Job {
     Decode { generation: u64, path: PathBuf },
     Copy(PathBuf),
     ChooseExport { root: PathBuf, id: String },
+    Shutdown,
 }
 
 enum Reply {
@@ -64,6 +65,7 @@ pub struct Live {
     root: PathBuf,
     tx: Sender<Job>,
     rx: Receiver<Reply>,
+    worker: Option<thread::JoinHandle<()>>,
     displays: Vec<DisplayDescriptor>,
     display_id: Option<String>,
     artifacts: Vec<Artifact>,
@@ -87,12 +89,13 @@ impl Live {
         let root = root.unwrap_or_else(captures_app::default_history_root);
         let (tx, jobs) = mpsc::channel();
         let (out, rx) = mpsc::channel();
-        thread::spawn(move || {
+        let worker = thread::spawn(move || {
             // Retain ownership on X11. Disk decode and clipboard encoding never
             // block the UI, and the full uncompressed image is not retained by it.
             let mut clipboard = None;
             while let Ok(job) = jobs.recv() {
                 let reply = match job {
+                    Job::Shutdown => break,
                     Job::Execute(request) => Reply::Executed(
                         captures_app::execute(request)
                             .map(Box::new)
@@ -127,6 +130,7 @@ impl Live {
             root,
             tx,
             rx,
+            worker: Some(worker),
             displays: vec![],
             display_id: None,
             artifacts: vec![],
@@ -149,6 +153,14 @@ impl Live {
         });
         live.send(Request::Displays);
         live
+    }
+
+    pub fn flush(&mut self) {
+        // Finish accepted capture/export/delete operations before process teardown.
+        let _ = self.tx.send(Job::Shutdown);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
     }
 
     fn send(&mut self, request: Request) {
@@ -369,6 +381,7 @@ impl Live {
         egui::Panel::left("live-history")
             .resizable(true)
             .default_size(270.)
+            .min_size(220.)
             .show(ui, |ui| {
                 ui.heading("History");
                 ui.label(
@@ -401,7 +414,7 @@ impl Live {
                                         "{}×{}\n{}",
                                         item.width, item.height, date
                                     ))
-                                    .truncate()
+                                    .wrap_mode(egui::TextWrapMode::Extend)
                                     .selected(self.selection.id.as_deref() == Some(&id)),
                                 )
                                 .clicked()
@@ -551,6 +564,25 @@ fn reveal(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shutdown_drains_accepted_exports() {
+        let root = tempfile::tempdir().unwrap();
+        let exports = tempfile::tempdir().unwrap();
+        let pixels = image::RgbaImage::from_pixel(7, 3, image::Rgba([21, 96, 177, 255]));
+        let artifact = captures_app::persist_screenshot(root.path(), &pixels).unwrap();
+        let mut live = Live::new(egui::Context::default(), Some(root.path().into()));
+        live.send(Request::SavePng {
+            root: root.path().into(),
+            id: artifact.entry.id,
+            directory: exports.path().into(),
+        });
+        live.flush();
+        let entries = captures_app::list(root.path()).unwrap();
+        let saved = entries[0].entry.saved_path.as_ref().unwrap();
+        assert_eq!(image::open(saved).unwrap().into_rgba8(), pixels);
+        live.flush();
+    }
 
     #[test]
     fn stale_decode_is_rejected_after_selection_changes() {

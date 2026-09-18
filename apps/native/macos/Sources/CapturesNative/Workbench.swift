@@ -58,16 +58,17 @@ final class CaptureButton: NSButton {
     override func draw(_ dirtyRect: NSRect) {
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
             xRadius: tokens.number("r-md"), yRadius: tokens.number("r-md"))
-        let fill = cell?.isHighlighted == true ? (glass ? "glass-active" : "surface-active")
+        let fill = !isEnabled ? (glass ? "glass" : "surface-sunken")
+            : cell?.isHighlighted == true ? (glass ? "glass-active" : "surface-active")
             : selected ? "surface-selected" : (glass ? "glass-raised" : "control")
         tokens.color(fill).setFill()
         path.fill()
-        tokens.color(selected ? "theme-accent" : (glass ? "glass-border" : "control-border")).setStroke()
+        tokens.color(selected && isEnabled ? "theme-accent" : (glass ? "glass-border" : "control-border")).setStroke()
         path.lineWidth = 1
         path.stroke()
         let font = NSFont.systemFont(ofSize: tokens.number("text-md"), weight: .medium)
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: font, .foregroundColor: tokens.color(glass ? "glass-text" : "text"),
+            .font: font, .foregroundColor: tokens.color(isEnabled ? (glass ? "glass-text" : "text") : (glass ? "glass-text-subtle" : "text-faint")),
         ]
         let size = (title as NSString).size(withAttributes: attributes)
         (title as NSString).draw(at: CGPoint(x: (bounds.width - size.width) / 2,
@@ -169,6 +170,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         preferencesController?.flush()
+        LiveCaptureController.flush()
         if let exerciseDirectory { try? FileManager.default.removeItem(at: exerciseDirectory) }
         return .terminateNow
     }

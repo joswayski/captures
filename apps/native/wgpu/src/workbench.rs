@@ -713,6 +713,9 @@ impl eframe::App for Workbench {
 
     fn on_exit(&mut self) {
         self.preferences_state.flush();
+        if let Some(live) = &mut self.live {
+            live.flush();
+        }
         emit(
             "exit",
             json!({"uiPasses": self.frames, "totalUiConstructionWallMs": self.ui_ms,

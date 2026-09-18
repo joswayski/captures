@@ -8,7 +8,6 @@ use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -172,7 +171,7 @@ fn save_png(root: &Path, id: &str, directory: &Path) -> Result<Response, Error> 
     fs::create_dir_all(directory)?;
     let stem = format!("Captures_{}", Local::now().format("%Y-%m-%d_%H-%M-%S_%3f"));
     let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
-    temporary.write_all(&fs::read(&item.image_path)?)?;
+    std::io::copy(&mut fs::File::open(&item.image_path)?, &mut temporary)?;
     temporary.as_file().sync_all()?;
     let path = (0_u32..)
         .find_map(|suffix| {

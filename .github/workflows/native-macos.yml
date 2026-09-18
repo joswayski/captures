@@ -45,6 +45,11 @@ jobs:
             --history-root "$RUNNER_TEMP/native-live-history" --appearance light \
             --screenshot "$RUNNER_TEMP/native-preferences/live-empty.png" --quit-after 4
           test -s "$RUNNER_TEMP/native-preferences/live-empty.png"
+          python3 apps/native/history_fixture.py "$RUNNER_TEMP/native-populated-history"
+          apps/native/macos/.build/release/CapturesNative --live \
+            --history-root "$RUNNER_TEMP/native-populated-history" --appearance dark \
+            --screenshot "$RUNNER_TEMP/native-preferences/live-populated.png" --quit-after 4
+          test -s "$RUNNER_TEMP/native-preferences/live-populated.png"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
