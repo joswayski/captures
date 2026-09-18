@@ -2,6 +2,7 @@
 #define CAPTURES_SETTINGS_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /* Allocation-free region geometry in display-local logical coordinates. These
@@ -22,6 +23,64 @@ bool captures_selection_drag_v1(uint32_t mode, CapturesSelectionPoint origin,
 bool captures_selection_constrain_v1(CapturesSelectionRect rect,
     CapturesSelectionBounds bounds, double aspect, CapturesSelectionRect *output);
 
+/* Owned immutable region session. Prepare/capture may block; use a worker after
+ * hiding capture windows. Begin/retain a capture-flow guard on the event-loop
+ * thread first. Freeze and cursor settings are fixed at prepare. No pixel data
+ * crosses JSON or temporary files. No permissions prompt occurs implicitly.
+ * Prepare returns NULL on failure; non-null output must be writable char-pointer
+ * storage and receives owned {ok,result:{display}} or {ok,error} JSON. It does
+ * not free a previous output value. NULL output refuses preparation entirely.
+ * Free all JSON results with captures_settings_free_v1. */
+typedef struct CapturesRegionSession CapturesRegionSession;
+CapturesRegionSession *captures_region_prepare_v1(const char *display_id,
+    uint64_t generation, bool freeze, bool include_cursor, char **output);
+/* Borrowed straight-alpha RGBA8/sRGB, top-to-bottom, tight rows. Keep the session
+ * alive for every image-provider/worker borrow, including asynchronous draws.
+ * Never mutate/free data. False (nulls or live-desktop mode) leaves output intact.
+ * Non-null output must point to writable, aligned CapturesRegionPixels storage. */
+typedef struct {
+    const uint8_t *data;
+    size_t length;
+    uint32_t width, height;
+    size_t bytes_per_row;
+} CapturesRegionPixels;
+bool captures_region_pixels_v1(const CapturesRegionSession *session, CapturesRegionPixels *output);
+/* Capture after the selector/countdown has closed and settled. A countdown uses
+ * fresh pixels/cursor, even when the selection used frozen pixels. Rect is in
+ * display-local logical coordinates. Returns app-request {ok,result}/{ok,error}.
+ * The session and UTF-8/NUL-terminated root must remain valid through this call. */
+char *captures_region_capture_v1(const CapturesRegionSession *session,
+    const char *root, CapturesSelectionRect rect, bool after_countdown);
+/* Exactly once after all workers/providers stop borrowing; NULL is permitted.
+ * Separately finish the main-thread flow guard on success, failure and quit. */
+void captures_region_free_v1(CapturesRegionSession *session);
+
+/* Window sessions share region-session ownership and pixel layout. Prepare on
+ * a worker after hiding capture windows, retaining an event-loop flow guard.
+ * fallback_corner_radius is the finite, nonnegative OS radius (0 outside macOS).
+ * No implicit permission prompt. NULL output refuses preparation; otherwise it
+ * receives owned {ok,result:{display,windows,shell_chrome}} or {ok,error} JSON.
+ * Freeze/cursor preferences remain fixed for the session. */
+typedef struct CapturesWindowSession CapturesWindowSession;
+typedef CapturesRegionPixels CapturesWindowPixels;
+CapturesWindowSession *captures_window_prepare_v1(const char *display_id,
+    uint64_t generation, bool freeze, bool include_cursor,
+    double fallback_corner_radius, char **output);
+/* Same borrowed RGBA8 contract as captures_region_pixels_v1. */
+bool captures_window_pixels_v1(const CapturesWindowSession *session, CapturesWindowPixels *output);
+/* target_json: {"kind":"window","id":"..."} or {"kind":"display"}.
+ * Both strings are readable UTF-8/NUL-terminated for the call. Window IDs must
+ * belong to the prepared picker. Display captures cover desktop/shell targets.
+ * Nonzero countdown requires after_countdown=true: fresh geometry and pixels,
+ * even if frozen. A missing target or target moved off this display fails.
+ * Hide/settle selector/countdown windows first. Free returned JSON with
+ * captures_settings_free_v1. Keep session alive through every worker call. */
+char *captures_window_capture_v1(const CapturesWindowSession *session,
+    const char *root, const char *target_json, bool after_countdown);
+/* Exactly once, after all workers/providers/borrows finish. NULL is permitted.
+ * Separately finish the event-loop capture-flow guard on every exit path. */
+void captures_window_free_v1(CapturesWindowSession *session);
+
 /* Versioned JSON ABI. Operations are load, save, default_path, and theme.
  * Theme accepts {"operation":"theme","accent":"#rgb","signal":"#rrggbb",
  * "light":true} and returns {"ok":true,"colors":{...}}.
@@ -36,6 +95,8 @@ char *captures_settings_request_v1(const char *request_json);
  * Permission is prompted only by the explicit request_permission operation. */
 char *captures_app_request_v1(const char *request_json);
 /* Event-loop-thread ONLY: begin {seconds}, poll {generation}, finish {generation}.
+ * For selection, begin with seconds=0; start_countdown {generation,seconds} after
+ * confirmation starts the delay without dropping Escape or changing generation.
  * begin returns {generation}; poll returns {current,remaining}. Escape is global
  * only for this guard. Always finish, including on cancellation/quit. The guard
  * owns native handles on this thread; never dispatch these calls to a worker.

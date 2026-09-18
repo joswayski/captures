@@ -1,4 +1,6 @@
+mod region;
 mod selection;
+mod window;
 
 use captures_settings::AppSettings;
 use serde::Deserialize;
@@ -23,6 +25,7 @@ thread_local! {
 #[serde(tag = "operation", rename_all = "snake_case")]
 enum FlowRequest {
     Begin { seconds: u8 },
+    StartCountdown { generation: u64, seconds: u8 },
     Poll { generation: u64 },
     Finish { generation: u64 },
 }
@@ -37,6 +40,12 @@ fn flow_response(request: FlowRequest) -> Result<Value, String> {
                 let generation = flow.generation();
                 *slot = Some(flow);
                 Ok(json!({"generation":generation}))
+            }
+            FlowRequest::StartCountdown { generation, seconds } => {
+                let flow = slot.as_mut().filter(|flow| flow.generation() == generation)
+                    .ok_or("Capture is no longer active")?;
+                flow.start_countdown(seconds)?;
+                Ok(json!({}))
             }
             FlowRequest::Poll { generation } => {
                 let flow = slot.as_ref().filter(|flow| flow.generation() == generation)
@@ -206,6 +215,10 @@ mod tests {
         for (request, succeeds) in [
             (r#"{"operation":"begin","seconds":11}"#, false),
             (r#"{"operation":"poll","generation":999}"#, false),
+            (
+                r#"{"operation":"start_countdown","generation":999,"seconds":3}"#,
+                false,
+            ),
             (r#"{"operation":"finish","generation":999}"#, true),
             ("not json", false),
         ] {

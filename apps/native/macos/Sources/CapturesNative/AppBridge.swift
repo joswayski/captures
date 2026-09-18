@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import CCapturesSettings
 
 enum AppBridgeError: LocalizedError, Equatable {
@@ -23,6 +24,8 @@ struct CapturePreferences {
     let directory: String
     let format: String
     let countdown: Int
+    let freezeScreen: Bool
+    let autoStart: Bool
 
     init(_ settings: [String: Any]) throws {
         guard let autoCopy = settings["auto_copy_to_clipboard"] as? Bool,
@@ -30,12 +33,15 @@ struct CapturePreferences {
               let directory = settings["output_directory"] as? String,
               let format = settings["screenshot_format"] as? String,
               ["png", "jpeg", "webp"].contains(format),
+              let freezeScreen = settings["freeze_screen"] as? Bool,
+              let autoStart = settings["auto_start_on_selection"] as? Bool,
               let countdown = settings["screenshot_countdown_seconds"] as? Int,
               (0...10).contains(countdown)
         else { throw SettingsStoreError.invalidResponse }
         self.autoCopy = autoCopy; self.directory = directory; self.format = format
         self.includeCursor = includeCursor
         self.countdown = countdown
+        self.freezeScreen = freezeScreen; self.autoStart = autoStart
     }
 
     static func load(path: String?, transport: SettingsTransport = SettingsBridge()) throws -> Self {
@@ -78,6 +84,60 @@ final class AppBridge: AppTransport {
         guard ok else { throw AppBridgeError.backend(envelope["error"] as? String ?? "Capture operation failed.") }
         guard let result = envelope["result"] as? [String: Any] else { throw AppBridgeError.invalidResponse }
         return result
+    }
+}
+
+/// Immutable Rust ownership. Image providers retain this object, but this object
+/// never caches an image/provider (which would create a retain cycle).
+final class NativeRegionSession {
+    private let handle: OpaquePointer
+    let logicalSize: CGSize
+
+    private init(handle: OpaquePointer, logicalSize: CGSize) {
+        self.handle = handle; self.logicalSize = logicalSize
+    }
+    deinit { captures_region_free_v1(handle) }
+
+    static func prepare(display: String, generation: UInt64, preferences: CapturePreferences) throws -> NativeRegionSession {
+        var response: UnsafeMutablePointer<CChar>?
+        let handle = display.withCString { captures_region_prepare_v1($0, generation,
+            preferences.freezeScreen, preferences.includeCursor, &response) }
+        defer { captures_settings_free_v1(response) }
+        do {
+            guard let response else { throw AppBridgeError.invalidResponse }
+            let result = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+            guard let handle, let descriptor = result["display"] as? [String: Any],
+                  let width = descriptor["width"] as? NSNumber, let height = descriptor["height"] as? NSNumber
+            else { throw AppBridgeError.invalidResponse }
+            return NativeRegionSession(handle: handle, logicalSize: CGSize(width: width.doubleValue, height: height.doubleValue))
+        } catch { captures_region_free_v1(handle); throw error }
+    }
+
+    func image() throws -> CGImage? {
+        var pixels = CapturesRegionPixels()
+        guard captures_region_pixels_v1(handle, &pixels) else { return nil }
+        guard let data = pixels.data else { throw AppBridgeError.invalidResponse }
+        let retained = Unmanaged.passRetained(self)
+        guard let provider = CGDataProvider(dataInfo: retained.toOpaque(), data: data, size: pixels.length,
+            releaseData: { info, _, _ in
+                if let info { Unmanaged<NativeRegionSession>.fromOpaque(info).release() }
+            }) else { retained.release(); throw AppBridgeError.invalidResponse }
+        guard let image = CGImage(width: Int(pixels.width), height: Int(pixels.height),
+            bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: pixels.bytes_per_row,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+        else { throw AppBridgeError.invalidResponse }
+        return image
+    }
+
+    func capture(root: String, rect: CapturesSelectionRect, afterCountdown: Bool) throws -> CaptureArtifact {
+        let response = root.withCString { captures_region_capture_v1(handle, $0, rect, afterCountdown) }
+        guard let response else { throw AppBridgeError.invalidResponse }
+        defer { captures_settings_free_v1(response) }
+        let result = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+        guard let value = result["artifact"] as? [String: Any], let artifact = CaptureArtifact(value)
+        else { throw AppBridgeError.invalidResponse }
+        return artifact
     }
 }
 

@@ -1,8 +1,10 @@
 //! Shared native application operations. Hosts schedule these off the UI thread.
-//! Images stay in owned files, never JSON/base64. No browser or host window APIs.
+//! Images stay in owned buffers/files, never JSON/base64. No browser or host window APIs.
 
 pub mod capture_flow;
+pub mod region;
 pub mod selection;
+pub mod window;
 
 use captures_capture::{CaptureError, CaptureMode, DisplayDescriptor, XcapBackend};
 use captures_history::{ArtifactKind, HistoryEntry};
@@ -30,6 +32,12 @@ pub enum Error {
     Missing,
     #[error("Capture cancelled")]
     Cancelled,
+    #[error("The selected display changed. Select the capture target again.")]
+    DisplayChanged,
+    #[error("Select a valid region inside the display.")]
+    InvalidRegion,
+    #[error("Window corner radius must be finite and nonnegative.")]
+    InvalidWindowRadius,
     #[error("Saved to {path}, but history could not be updated: {reason}")]
     SavedWithoutMetadata { path: String, reason: String },
 }
@@ -138,7 +146,7 @@ pub fn execute(request: Request) -> Result<Response, Error> {
                 return Err(Error::Cancelled);
             }
             Ok(Response::Captured {
-                artifact: persist_screenshot(&root, &frame.image)?,
+                artifact: persist_screenshot(&root, &frame.image, CaptureMode::Display)?,
             })
         }
         Request::History { root } => Ok(Response::History {
@@ -175,7 +183,11 @@ pub fn list(root: &Path) -> Result<Vec<Artifact>, Error> {
 }
 
 /// Commit a captured, color-normalized buffer once. Reused by backend tests.
-pub fn persist_screenshot(root: &Path, image: &RgbaImage) -> Result<Artifact, Error> {
+pub fn persist_screenshot(
+    root: &Path,
+    image: &RgbaImage,
+    mode: CaptureMode,
+) -> Result<Artifact, Error> {
     let png = captures_history::encode_png(image)?;
     let preview = captures_history::encode_thumbnail_png(image)?;
     let entry = HistoryEntry {
@@ -187,7 +199,7 @@ pub fn persist_screenshot(root: &Path, image: &RgbaImage) -> Result<Artifact, Er
         height: image.height(),
         size_bytes: png.len() as u64,
         created_at: Utc::now().to_rfc3339(),
-        mode: Some(CaptureMode::Display),
+        mode: Some(mode),
         saved_path: None,
         mime_type: Some("image/png".into()),
         duration_ms: None,
@@ -308,7 +320,7 @@ mod tests {
                     image::Rgba([0, 255, 0, 255])
                 }
             });
-            let artifact = persist_screenshot(root.path(), &pixels).unwrap();
+            let artifact = persist_screenshot(root.path(), &pixels, CaptureMode::Display).unwrap();
             let Response::Saved { path, .. } =
                 save_screenshot(root.path(), &artifact.entry.id, output.path(), format).unwrap()
             else {
@@ -364,7 +376,7 @@ mod tests {
         let image = RgbaImage::from_fn(7, 3, |x, y| {
             image::Rgba([x as u8 * 23, y as u8 * 91, 42, 255])
         });
-        let item = persist_screenshot(data.path(), &image).unwrap();
+        let item = persist_screenshot(data.path(), &image, CaptureMode::Display).unwrap();
         assert_eq!(list(data.path()).unwrap()[0].entry.width, 7);
         let Response::Saved { path, .. } = save_screenshot(
             data.path(),
@@ -392,7 +404,8 @@ mod tests {
     #[test]
     fn failed_export_preserves_unsaved_history_for_retry() {
         let data = tempfile::tempdir().unwrap();
-        let item = persist_screenshot(data.path(), &RgbaImage::new(3, 5)).unwrap();
+        let item =
+            persist_screenshot(data.path(), &RgbaImage::new(3, 5), CaptureMode::Display).unwrap();
         let obstruction = data.path().join("not-a-directory");
         fs::write(&obstruction, b"keep").unwrap();
         assert!(

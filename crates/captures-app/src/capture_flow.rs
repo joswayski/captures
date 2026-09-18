@@ -163,6 +163,18 @@ impl CaptureFlow {
     pub fn countdown(&self) -> Countdown {
         self.countdown
     }
+    /// Start the configured delay only after region confirmation. The same
+    /// generation and Escape registration cover preparation, selection and delay.
+    pub fn start_countdown(&mut self, seconds: u8) -> Result<(), String> {
+        if seconds > 10 {
+            return Err("Unsupported screenshot countdown".into());
+        }
+        if GATE.current.load(Ordering::Acquire) != self.generation {
+            return Err("Capture is no longer pending".into());
+        }
+        self.countdown = Countdown::new(Instant::now(), seconds);
+        Ok(())
+    }
     pub fn is_current(&self) -> bool {
         GATE.is_current(self.generation)
     }
