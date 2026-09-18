@@ -89,8 +89,30 @@ checks repeated captures, exact saved pixels and cancellation with simulated
 session state. Real OS capture, mixed-DPI and accessibility acceptance is still
 required. Selector blur, magnifier and the full capture-menu UI remain open.
 
-This slice has no window capture, recordings, editor or
-mini previews; those stored preferences do not apply yet. Full UI parity remains
+Both hosts also offer **Capture window**. Hover a window or desktop, click to
+select and confirm with Enter/Capture; automatic start confirms on click. Shared
+Rust hit testing handles front-to-back targets, shell strips, half-open bounds
+and platform coordinates. The retained `WindowSession` owns target descriptors,
+frozen pixels/cursor and safe composited-crop/native-surface selection. If another
+window covers the target, capture uses its native surface rather than saving the
+covering pixels; this fallback reads current pixels even in frozen mode. A
+countdown refreshes window geometry and pixels. A target that disappears or moves
+to another display fails rather than saving stale bounds. Desktop/shell selection
+saves display-mode history. AppKit calls the allocation-free Rust hit-test and
+corner-radius ABI, not a Swift copy of the targeting or masking policy.
+
+The private-X11 test checks two captures in each region/window scenario, exact
+asymmetric PNG pixels and metadata, frozen versus fresh countdown and live
+capture, an occluded window's native surface, a disappearing countdown target,
+desktop fallback, clicked-target confirmation after moving the pointer, automatic
+start without Enter, cross-application Escape and simulated lock/unlock. This is
+software-rendered X11 integration evidence, not Mac/Windows hardware, Wayland, accessibility or
+real login-manager acceptance. `--scene window` is a permission-free fixture on
+both hosts. The slice remains experimental and all platform acceptance gates
+stay open until real desktop/input tests pass.
+
+This slice has no recordings, editor or mini previews; those stored preferences
+do not apply yet. Full UI parity remains
 open. The wgpu Wayland backend cannot verify hiding its root window, so capture
 is disabled there rather than photographing the app itself. Linux X11 needs an
 active, unlocked desktop session; bare Xvfb normally has no session service and

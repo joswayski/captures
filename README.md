@@ -191,9 +191,12 @@ and cursor inclusion preferences. Cursor rendering matches the shipping app:
 system cursor pixels on macOS, a synthetic arrow on Windows/X11. Escape cancels
 a pending capture even with another app focused. Both the macOS workspace and
 Windows/X11 candidate connect region draw/move/resize, aspect constraints, freeze,
-and auto-start to shared Rust capture logic.
-Window capture, recording,
-editing, mini previews, global shortcuts, login items, and updates are not
+and auto-start to shared Rust capture logic. Window selection uses the same Rust
+targeting and pixel-source policy, with window/desktop confirmation, freeze/live
+selection, countdown and cancellation. Real desktop, mixed-DPI and accessibility
+acceptance is still open; private-X11 tests check saved region/window pixels and
+simulated session cancellation. Recording,
+editing, mini previews, capture-launch global shortcuts, login items, and updates are not
 connected to the native hosts yet. Windows/Linux
 renderer selection and full feature/design parity remain open. The
 [migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;
