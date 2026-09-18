@@ -95,8 +95,10 @@ final class DustTextures {
         // One GPU evaluation/readback instead of 198 createCGImage calls.
         let texture = try render(filter(packed, scale: scale), rect: extent)
         return zip(rects, particles).map { rect, particle in
+            // macOS CALayer unit coordinates have a bottom-left origin, like
+            // Core Image. Flipping Y here selects a different row of the atlas.
             Chip(image: texture, contentsRect: CGRect(x: rect.minX / extent.width,
-                y: 1 - rect.maxY / extent.height, width: rect.width / extent.width,
+                y: rect.minY / extent.height, width: rect.width / extent.width,
                 height: rect.height / extent.height),
                 size: CGSize(width: particle.width + 2 * pad, height: particle.height + 2 * pad))
         }
