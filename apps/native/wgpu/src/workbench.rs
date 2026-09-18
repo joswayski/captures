@@ -633,16 +633,19 @@ impl eframe::App for Workbench {
                 );
                 ui.add_space(t.number("s-6"));
             } else {
-                ui.horizontal(|ui| {
-                    if ui
-                        .add(egui::Button::new("Move window").sense(Sense::drag()))
-                        .drag_started()
-                    {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                    }
-                    if ui.button("Close").clicked() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
+                glass(&t).show(ui, |ui| {
+                    t.glass_controls(ui);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add(egui::Button::new("Move window").sense(Sense::drag()))
+                            .drag_started()
+                        {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                        }
+                        if ui.button("Close").clicked() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                    });
                 });
             }
             match self.options.scene {
