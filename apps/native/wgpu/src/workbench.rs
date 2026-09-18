@@ -133,7 +133,7 @@ impl Workbench {
             screenshot_saved: false,
             preferences_state,
             region_selector: crate::selector::Selector::default(),
-            window_selector: crate::window_selector::WindowSelector::default(),
+            window_selector: crate::window_selector::WindowSelector::fixture(),
             window_display,
             window_targets,
             window_shell,
@@ -1085,6 +1085,16 @@ mod tests {
             ),
             None,
             "empty desktop is an entire-display target"
+        );
+        assert_eq!(
+            fixture_window_hit_test(
+                &windows,
+                &shell,
+                &display,
+                captures_app::selection::Point { x: 800., y: 550. }
+            ),
+            Some(2),
+            "terminal-only area must avoid the higher-z project window"
         );
     }
 }

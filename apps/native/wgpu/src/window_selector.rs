@@ -29,9 +29,17 @@ pub struct View<'a> {
 pub struct WindowSelector {
     hovered: Option<SelectionTarget>,
     selected: Option<SelectionTarget>,
+    scripted: bool,
 }
 
 impl WindowSelector {
+    pub fn fixture() -> Self {
+        Self {
+            scripted: true,
+            ..Self::default()
+        }
+    }
+
     pub fn hovered(&self) -> Option<SelectionTarget> {
         self.hovered
     }
@@ -59,13 +67,27 @@ impl WindowSelector {
         let surface = ui.max_rect();
         let coordinates = CoordinateMap::new(surface, view.display);
         let response = ui.allocate_rect(surface, Sense::click());
-        if let Some(position) = response.hover_pos() {
-            self.hovered = Some(match hit_test(coordinates.point(position)) {
-                Some(index) if index < view.windows.len() => SelectionTarget::Window(index),
-                _ => SelectionTarget::Display,
-            });
-        } else if ui.input(|input| input.pointer.latest_pos()).is_none() {
-            self.hovered = None;
+        if self.scripted
+            && ui.input(|input| {
+                input.events.iter().any(|event| {
+                    matches!(
+                        event,
+                        egui::Event::PointerButton { .. } | egui::Event::Key { .. }
+                    )
+                })
+            })
+        {
+            self.scripted = false;
+        }
+        if !self.scripted {
+            if let Some(position) = response.hover_pos() {
+                self.hovered = Some(match hit_test(coordinates.point(position)) {
+                    Some(index) if index < view.windows.len() => SelectionTarget::Window(index),
+                    _ => SelectionTarget::Display,
+                });
+            } else if ui.input(|input| input.pointer.latest_pos()).is_none() {
+                self.hovered = None;
+            }
         }
 
         paint_surface(
@@ -145,9 +167,9 @@ impl WindowSelector {
             1 => Some(Point { x: 540., y: 250. }),
             2 => Some(Point { x: 500., y: 20. }),
             3 => Some(Point { x: 920., y: 680. }),
-            4 => Some(Point { x: 720., y: 500. }),
+            4 => Some(Point { x: 800., y: 550. }),
             5 => {
-                self.reset();
+                *self = Self::fixture();
                 return;
             }
             _ => return,
@@ -156,6 +178,8 @@ impl WindowSelector {
             Some(index) => SelectionTarget::Window(index),
             None => SelectionTarget::Display,
         });
+        self.selected = self.hovered;
+        self.scripted = true;
     }
 }
 
@@ -492,6 +516,54 @@ mod tests {
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         action
+    }
+
+    #[test]
+    fn scripted_fixture_ignores_passive_pointer_until_real_input() {
+        let ctx = egui::Context::default();
+        let display = display();
+        let (windows, shell) = targets();
+        let mut selector = WindowSelector::fixture();
+        selector.exercise(1, |point| {
+            target_index_at_point(
+                &windows,
+                &shell,
+                point,
+                Point {
+                    x: f64::from(display.x),
+                    y: f64::from(display.y),
+                },
+                1.,
+            )
+        });
+        assert_eq!(selector.hovered(), Some(SelectionTarget::Window(1)));
+
+        run_input(
+            &ctx,
+            &mut selector,
+            vec![egui::Event::PointerMoved(egui::pos2(200., 130.))],
+            false,
+        );
+        assert_eq!(
+            selector.hovered(),
+            Some(SelectionTarget::Window(1)),
+            "the X11 startup pointer must not overwrite a scripted screenshot target"
+        );
+
+        run_input(
+            &ctx,
+            &mut selector,
+            vec![pointer(egui::pos2(200., 130.), true)],
+            false,
+        );
+        run_input(
+            &ctx,
+            &mut selector,
+            vec![pointer(egui::pos2(200., 130.), false)],
+            false,
+        );
+        assert_eq!(selector.hovered(), Some(SelectionTarget::Window(0)));
+        assert_eq!(selector.selected(), Some(SelectionTarget::Window(0)));
     }
 
     #[test]
