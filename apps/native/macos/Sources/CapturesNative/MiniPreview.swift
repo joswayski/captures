@@ -303,13 +303,16 @@ final class MiniPreviewController {
 final class MiniPreviewActions {
     private let transport: AppTransport
     private let loadPreferences: () throws -> CapturePreferences
+    private let pasteboard: () -> NSPasteboard
     private weak var previews: MiniPreviewController?
     private var historyRoot: String?
 
     init(settingsPath: String?, transport: AppTransport = AppBridge(),
-         loadPreferences: (() throws -> CapturePreferences)? = nil) {
+         loadPreferences: (() throws -> CapturePreferences)? = nil,
+         pasteboard: @escaping () -> NSPasteboard = { .general }) {
         self.transport = transport
         self.loadPreferences = loadPreferences ?? { try CapturePreferences.load(path: settingsPath) }
+        self.pasteboard = pasteboard
     }
 
     func bind(previews: MiniPreviewController) { self.previews = previews }
@@ -323,7 +326,7 @@ final class MiniPreviewActions {
                 guard let self else { return }
                 switch result {
                 case .success(let png):
-                    let pasteboard = NSPasteboard.general; pasteboard.clearContents()
+                    let pasteboard = self.pasteboard(); pasteboard.clearContents()
                     self.previews?.setStatus(pasteboard.setData(png, forType: .png)
                         ? "Copied" : "Copy failed", for: artifact.id)
                 case .failure:
