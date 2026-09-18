@@ -192,6 +192,14 @@ the next Mac-only screen. Exercise each candidate with:
 - Lifecycle: hidden/minimized/occluded idle, mixed/fractional DPI, repeated
   open/close and resource recovery. No recurring redraw loop for static scenes.
 
+The bounded [GTK4 custom snapshot candidate](../apps/native/gtk/README.md) now
+covers these representative Linux scenes with synthetic fixture state. Headless
+X11 and Wayland software-GL checks exercise custom drawing, native editable text,
+virtual rows, transparent render targets, hidden lifecycle and teardown. This is
+candidate evidence, not renderer selection or a closed parity gate: hardware,
+real-compositor placement/transparency, AT-SPI/IME, fractional scale and layer
+policy remain unverified or explicitly unsupported.
+
 Extend the AppKit workbench to these same cases where it is incomplete. Reuse
 tokens/assets and deterministic effect fixtures; do not translate the entire app
 into each candidate just to evaluate it. Preserve custom Captures styling and
