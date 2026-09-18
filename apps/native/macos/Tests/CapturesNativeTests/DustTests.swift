@@ -47,8 +47,30 @@ final class DustTests: XCTestCase {
             let atlas = try textures.prepare(source: source, particles: particles, scale: scale, atlas: true)
             XCTAssertEqual(atlas.count, reference.count)
             var totalError = 0, channelCount = 0, largeErrors = 0, nonzero = 0
-            for (a, b) in zip(atlas, reference) {
+            var flippedError = 0, croppedError = 0
+            for (index, pair) in zip(atlas, reference).enumerated() {
+                let (a, b) = pair
                 let actual = pixels(a, scale: scale), expected = pixels(b, scale: scale)
+                var flippedRect = a.contentsRect
+                flippedRect.origin.y = 1 - flippedRect.maxY
+                let flipped = pixels(DustTextures.Chip(image: a.image,
+                    contentsRect: flippedRect, size: a.size), scale: scale)
+                let cropRect = CGRect(x: a.contentsRect.minX * CGFloat(a.image.width),
+                    y: a.contentsRect.minY * CGFloat(a.image.height),
+                    width: a.contentsRect.width * CGFloat(a.image.width),
+                    height: a.contentsRect.height * CGFloat(a.image.height))
+                let croppedImage = try XCTUnwrap(a.image.cropping(to: cropRect))
+                let cropped = pixels(DustTextures.Chip(image: croppedImage,
+                    contentsRect: CGRect(x: 0, y: 0, width: 1, height: 1), size: a.size), scale: scale)
+                for (x, y) in zip(flipped, expected) { flippedError += abs(Int(x) - Int(y)) }
+                for (x, y) in zip(cropped, expected) { croppedError += abs(Int(x) - Int(y)) }
+                if [0, 42, 100, 197].contains(index),
+                   let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
+                    let prefix = URL(fileURLWithPath: directory).appendingPathComponent("chip-\(index)-\(Int(scale))x")
+                    try writePNG(a.image, to: prefix.appendingPathExtension("atlas.png"))
+                    try writePNG(b.image, to: prefix.appendingPathExtension("reference.png"))
+                    try writePNG(croppedImage, to: prefix.appendingPathExtension("crop.png"))
+                }
                 XCTAssertEqual(actual.count, expected.count)
                 for (x, y) in zip(actual, expected) {
                     guard x > 0 || y > 0 else { continue }
@@ -59,10 +81,17 @@ final class DustTests: XCTestCase {
                     channelCount += 1
                 }
             }
+            print("Atlas diagnostics \(scale)x: contentsRect=\(Double(totalError) / Double(channelCount)), flipped=\(Double(flippedError) / Double(channelCount)), cropped=\(Double(croppedError) / Double(channelCount))")
             XCTAssertGreaterThan(nonzero, 1000, "Blank fixtures cannot pass parity")
             XCTAssertLessThanOrEqual(Double(totalError) / Double(channelCount), 2)
             XCTAssertLessThanOrEqual(Double(largeErrors) / Double(channelCount), 0.01)
         }
+    }
+
+    private func writePNG(_ image: CGImage, to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: url)
     }
 
     private func pixels(_ chip: DustTextures.Chip, scale: CGFloat) -> [UInt8] {

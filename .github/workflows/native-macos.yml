@@ -21,4 +21,12 @@ jobs:
         with:
           node-version: 24
       - run: bash apps/native/macos/build.sh
+        env:
+          CAPTURES_TEST_ARTIFACTS: ${{ runner.temp }}/native-pixels
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-pixels
+          path: ${{ runner.temp }}/native-pixels
+          if-no-files-found: ignore
       - run: python3 -m unittest discover -s apps/native -p 'test_*.py'
