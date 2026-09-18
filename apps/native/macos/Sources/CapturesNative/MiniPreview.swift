@@ -327,8 +327,9 @@ final class MiniPreviewActions {
                 switch result {
                 case .success(let png):
                     let pasteboard = self.pasteboard(); pasteboard.clearContents()
-                    self.previews?.setStatus(pasteboard.setData(png, forType: .png)
-                        ? "Copied" : "Copy failed", for: artifact.id)
+                    let copied = pasteboard.setData(png, forType: .png)
+                    self.previews?.setStatus(copied ? "Copied" : "Copy failed",
+                                             for: artifact.id)
                 case .failure:
                     self.previews?.setStatus("Copy failed", for: artifact.id)
                 }
