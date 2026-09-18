@@ -1,6 +1,6 @@
 # Native desktop workbenches
 
-These are early implementation stages of the [native rewrite](../../docs/native-rewrite.md),
+These are implementation stages of the [native rewrite](../../docs/native-rewrite.md),
 **not a usable capture application**. The existing Tauri Preview is unchanged.
 macOS is Swift/AppKit + Core Animation with Core Image explicitly backed by Metal.
 No WebView, React, JavaScript runtime, Rust sidecar, network service or capture
@@ -11,10 +11,25 @@ Its fade/settle probe is not equivalent to AppKit dust. DirectComposition/GTK
 comparators and full parity gates remain open. The instructions below cover
 AppKit; the candidate README has Windows/Linux build and test commands.
 
+## Persisted native Preferences
+
+Both native hosts use the same `captures-settings` Rust types, migrations,
+validation, atomic persistence, and custom-theme derivation as the shipping
+adapter. AppKit calls a versioned in-process C ABI; Windows/Linux calls Rust
+directly. Preferences stores appearance and capture/media defaults in a separate
+**Captures Native** development identity. `--settings-file PATH` selects an
+explicit test file. Malformed/newer files report an error instead of resetting
+them. `--exercise` uses disposable data. No installed Preview settings are imported.
+
+Capture, recording, history, and editor scenes still use fixtures. Saving a
+default is not an engine integration: global shortcuts, microphone discovery,
+login items, feedback and update actions remain visibly unavailable. Full
+Preferences visual/input parity and the other checklist gates remain open.
+
 ## Build and try on macOS
 
-Requires macOS 13+, Xcode command-line tools with Swift 5.9+, and Node 24 at build
-time. Node compiles existing design tokens and test fixtures; it is not bundled.
+Requires macOS 13+, Xcode command-line tools with Swift 5.9+, Rust 1.94, and Node
+24 at build time. Node compiles design tokens and test fixtures; it is not bundled.
 
 ```sh
 bash apps/native/macos/build.sh
@@ -31,20 +46,20 @@ Close each instance before starting another. Cmd+Q quits. Nothing installs into
 Applications or changes the installed app's data, permissions, shortcuts, or updater.
 The executable needs its SwiftPM resource bundle; run it from the build directory.
 
-The sidebar switches fixture scenes. Appearance/theme buttons work in memory;
-history uses reusable native table rows, with an empty-state switch. HUD Pause /
+Preferences has section navigation and a Capture History fixture action.
+Appearance/theme changes save automatically; history uses reusable native table
+rows, with an empty-state switch. HUD Pause /
 Resume changes fixture state; the timer is deliberately static. Preview has cold
 and warm dissolve buttons plus Reset. Reduce Motion uses an immediate change.
 `--exercise` runs six scripted actions (appearance changes, history end-to-end
 scroll, HUD pause/resume, or alternating cold/warm dust); `--quit-after 30` exits
 automatically. `--scene idle` creates no visible window.
 
-These screens preserve the token palette and basic hierarchy, **not pixel or
-functional parity**. They omit full Preferences/search/custom colors, image-backed
-history rows, real recording, transparent desktop windows, preview controls/pile,
-and editor surfaces. They must not be used to claim whole-app savings. System
-appearance is resolved at scene construction; live OS appearance changes are a
-later parity item.
+These screens are **not full pixel or functional parity**. Native Preferences
+includes Find, custom colors, persisted defaults and live system appearance.
+Image-backed history, real recording, transparent desktop windows, preview
+controls/pile and editor surfaces remain incomplete. Do not claim whole-app
+savings from these development scenes.
 
 ## Checks and measurements
 

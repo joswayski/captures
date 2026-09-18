@@ -114,7 +114,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 The browser-free macOS workbench is separate from the shipping Tauri app. On a
 Mac, run `bash apps/native/macos/build.sh`; this generates shared token resources,
-runs Swift tests and builds the AppKit executable without installing it. See
+builds the Rust settings static library, runs Swift tests and builds the AppKit
+executable without installing it. Native Preferences uses a separate Captures Native
+development settings file; pass `--settings-file PATH` for disposable tests.
+`--exercise` isolates its settings from normal development data. See
 [`apps/native/README.md`](apps/native/README.md) for representative scenes,
 cold/warm effects, resource collection and known gaps. The
 [`docs/native-rewrite.md`](docs/native-rewrite.md) checklist defines the staged

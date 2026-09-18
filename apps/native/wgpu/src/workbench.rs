@@ -8,7 +8,8 @@ use serde_json::json;
 
 use crate::{
     emit,
-    options::{Options, Scene, THEMES},
+    options::{Options, Scene},
+    preferences::Preferences,
     tokens::{self, Tokens},
 };
 
@@ -23,12 +24,9 @@ pub struct Workbench {
     frames: u64,
     ui_ms: f64,
     max_ui_ms: f64,
-    search: String,
     history_filter: usize,
     history_end: bool,
     selected_row: Option<usize>,
-    copy: bool,
-    mini_previews: bool,
     paused: bool,
     muted: bool,
     texture: Option<egui::TextureHandle>,
@@ -40,6 +38,8 @@ pub struct Workbench {
     annotation: String,
     screenshot_requested: bool,
     screenshot_saved: bool,
+    preferences_state: Preferences,
+    _temporary_settings: Option<tempfile::TempDir>,
 }
 
 impl Workbench {
@@ -75,6 +75,25 @@ impl Workbench {
                 }
             }),
         );
+        let temporary_settings = (options.settings_file.is_none()
+            && (options.exercise
+                || options.screenshot.is_some()
+                || options.scene != Scene::Preferences))
+            .then(|| tempfile::tempdir().expect("temporary native settings directory"));
+        let settings_path = options.settings_file.clone().unwrap_or_else(|| {
+            temporary_settings
+                .as_ref()
+                .map(|dir| dir.path().join("settings.json"))
+                .unwrap_or_else(captures_settings::default_native_settings_path)
+        });
+        let preferences_state = Preferences::new(
+            cc.egui_ctx.clone(),
+            settings_path,
+            options
+                .appearance_override
+                .then(|| options.appearance.clone()),
+            options.theme_override.then(|| options.theme.clone()),
+        );
         let this = Self {
             options,
             variants: tokens::load(),
@@ -84,12 +103,9 @@ impl Workbench {
             frames: 0,
             ui_ms: 0.,
             max_ui_ms: 0.,
-            search: String::new(),
             history_filter: 0,
             history_end: false,
             selected_row: None,
-            copy: true,
-            mini_previews: true,
             paused: false,
             muted: false,
             texture: None,
@@ -101,6 +117,8 @@ impl Workbench {
             annotation: "A capture worth keeping".into(),
             screenshot_requested: false,
             screenshot_saved: false,
+            preferences_state,
+            _temporary_settings: temporary_settings,
         };
         this.schedule(&cc.egui_ctx);
         this
@@ -122,17 +140,32 @@ impl Workbench {
     }
 
     fn tokens(&mut self, ctx: &egui::Context) -> Tokens {
+        if self.options.scene == Scene::Preferences
+            && let Some((appearance, theme)) = self.preferences_state.appearance_theme()
+        {
+            self.options.appearance = appearance;
+            self.options.theme = theme;
+        }
         let light = match self.options.appearance.as_str() {
             "light" => true,
             "system" => ctx.input(|i| i.raw.system_theme) == Some(egui::Theme::Light),
             _ => false,
         };
-        let name = format!(
+        let base = format!(
             "{}-{}",
             if light { "light" } else { "dark" },
-            self.options.theme
+            if self.options.theme == "custom" {
+                "mustard"
+            } else {
+                &self.options.theme
+            }
         );
-        let tokens = self.variants[&name].clone();
+        let mut name = base.clone();
+        let mut tokens = self.variants[&base].clone();
+        if let Some((accent, signal)) = self.preferences_state.custom_colors() {
+            tokens = tokens.with_custom_colors(&accent, &signal, light);
+            name = format!("{base}-{accent}-{signal}");
+        }
         if name != self.applied_variant {
             tokens.apply(ctx, light);
             self.applied_variant = name;
@@ -146,7 +179,6 @@ impl Workbench {
             self.texture = None; // Release image residency when its scene closes.
             self.animation = None;
             self.deleted = false;
-            self.search.clear();
             emit("scene-changed", json!({"scene": scene.name()}));
         }
     }
@@ -178,59 +210,9 @@ impl Workbench {
     }
 
     fn preferences(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        ui.add(
-            egui::TextEdit::singleline(&mut self.search)
-                .hint_text("Find a fixture setting…")
-                .desired_width(f32::INFINITY),
-        );
-        let query = self.search.to_lowercase();
-        if "appearance interface theme accent color".contains(&query) {
-            panel(t).show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                ui.heading("Appearance");
-                ui.label(
-                    RichText::new("Choose the interface appearance and accent color.")
-                        .color(t.color("text-muted")),
-                );
-                ui.horizontal(|ui| {
-                    ui.label("Interface theme");
-                    for (mode, label) in
-                        [("system", "System"), ("light", "Light"), ("dark", "Dark")]
-                    {
-                        ui.selectable_value(&mut self.options.appearance, mode.into(), label);
-                    }
-                });
-                ui.label("Accent color");
-                ui.horizontal_wrapped(|ui| {
-                    for theme in THEMES {
-                        ui.selectable_value(
-                            &mut self.options.theme,
-                            theme.into(),
-                            title_case(theme),
-                        );
-                    }
-                });
-            });
+        if self.preferences_state.ui(ui, t) {
+            self.change_scene(Scene::History);
         }
-        if "capture automatically copy mini previews".contains(&query) {
-            panel(t).show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                ui.heading("Capture");
-                ui.label(
-                    RichText::new("Fixture state only. Your installed app is untouched.")
-                        .color(t.color("text-muted")),
-                );
-                ui.checkbox(&mut self.copy, "Automatically copy captures");
-                ui.checkbox(&mut self.mini_previews, "Show mini previews");
-            });
-        }
-        ui.label(
-            RichText::new(
-                "No settings are saved. Search, theme, focus and text input are renderer probes.",
-            )
-            .small()
-            .color(t.color("text-muted")),
-        );
     }
 
     fn history(&mut self, ui: &mut egui::Ui, t: &Tokens) {
@@ -472,12 +454,13 @@ impl Workbench {
         let start = Instant::now();
         match self.options.scene {
             Scene::Preferences => {
+                self.preferences_state.exercise(self.cycle);
                 self.options.appearance = if self.cycle.is_multiple_of(2) {
                     "light"
                 } else {
                     "dark"
                 }
-                .into()
+                .into();
             }
             Scene::History => self.history_end = !self.history_end,
             Scene::Hud => self.paused = !self.paused,
@@ -509,6 +492,7 @@ impl eframe::App for Workbench {
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.preferences_state.receive(ctx);
         let screenshot = ctx.input(|i| {
             i.raw.events.iter().find_map(|event| {
                 if let egui::Event::Screenshot { image, .. } = event {
@@ -588,26 +572,30 @@ impl eframe::App for Workbench {
                     ui.add_space(t.number("s-5"));
                     ui.heading("Captures");
                     ui.add_space(t.number("s-8"));
-                    for scene in Scene::VISIBLE {
-                        if ui
-                            .add_sized(
-                                [ui.available_width(), t.number("h-lg")],
-                                egui::Button::new(scene.title())
-                                    .selected(scene == self.options.scene),
-                            )
-                            .clicked()
-                        {
-                            self.change_scene(scene);
+                    if self.options.scene == Scene::Preferences {
+                        self.preferences_state.sidebar(ui, &t);
+                    } else {
+                        for scene in Scene::VISIBLE {
+                            if ui
+                                .add_sized(
+                                    [ui.available_width(), t.number("h-lg")],
+                                    egui::Button::new(scene.title())
+                                        .selected(scene == self.options.scene),
+                                )
+                                .clicked()
+                            {
+                                self.change_scene(scene);
+                            }
                         }
                     }
                     ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                         ui.label(
-                            RichText::new("No capture access")
+                            RichText::new("Capture engine not connected")
                                 .small()
                                 .color(t.color("text-muted")),
                         );
                         ui.label(
-                            RichText::new("wgpu · fixture mode")
+                            RichText::new("Native development build")
                                 .small()
                                 .color(t.color("text-muted")),
                         );
@@ -622,7 +610,7 @@ impl eframe::App for Workbench {
             })
             .inner_margin(t.number("s-8") as i8);
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
-            if !self.options.floating {
+            if !self.options.floating && self.options.scene != Scene::Preferences {
                 ui.heading(self.options.scene.title());
                 ui.label(
                     RichText::new(
@@ -632,7 +620,7 @@ impl eframe::App for Workbench {
                     .color(t.color("text-muted")),
                 );
                 ui.add_space(t.number("s-6"));
-            } else {
+            } else if self.options.floating {
                 glass(&t).show(ui, |ui| {
                     t.glass_controls(ui);
                     ui.horizontal(|ui| {
@@ -672,6 +660,7 @@ impl eframe::App for Workbench {
     }
 
     fn on_exit(&mut self) {
+        self.preferences_state.flush();
         emit(
             "exit",
             json!({"uiPasses": self.frames, "totalUiConstructionWallMs": self.ui_ms,
@@ -682,14 +671,6 @@ impl eframe::App for Workbench {
     }
 }
 
-fn panel(t: &Tokens) -> egui::Frame {
-    egui::Frame::new()
-        .fill(t.color("surface-raised"))
-        .stroke(Stroke::new(1., t.color("border")))
-        .corner_radius(t.number("r-xl") as u8)
-        .inner_margin(t.number("s-6") as i8)
-}
-
 fn glass(t: &Tokens) -> egui::Frame {
     egui::Frame::new()
         .fill(t.color("glass-strong"))
@@ -698,9 +679,6 @@ fn glass(t: &Tokens) -> egui::Frame {
         .inner_margin(t.number("s-6") as i8)
 }
 
-fn title_case(value: &str) -> String {
-    format!("{}{}", value[..1].to_uppercase(), &value[1..])
-}
 fn uv() -> Rect {
     Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.))
 }

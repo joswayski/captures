@@ -4,6 +4,7 @@ pub const USAGE: &str = "Captures wgpu fixture workbench (no capture access)\n\
   --scene preferences|history|hud|preview|editor|idle\n\
   --appearance light|dark|system --theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono\n\
   --history-count 0..10000 --exercise --quit-after SECONDS\n\
+  --settings-file PATH\n\
   --floating (HUD/preview only) --reduced-motion\n\
   --screenshot FILE.png --screenshot-after SECONDS";
 
@@ -63,6 +64,9 @@ pub struct Options {
     pub screenshot_after: Duration,
     pub floating: bool,
     pub reduced_motion: bool,
+    pub settings_file: Option<PathBuf>,
+    pub appearance_override: bool,
+    pub theme_override: bool,
 }
 
 impl Options {
@@ -78,6 +82,9 @@ impl Options {
             screenshot_after: Duration::from_secs(1),
             floating: false,
             reduced_motion: false,
+            settings_file: None,
+            appearance_override: false,
+            theme_override: false,
         };
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
@@ -93,8 +100,14 @@ impl Options {
                         .find(|s| s.name() == value)
                         .ok_or("Unknown scene")?;
                 }
-                "--appearance" => options.appearance = args.next().ok_or("Missing appearance")?,
-                "--theme" => options.theme = args.next().ok_or("Missing theme")?,
+                "--appearance" => {
+                    options.appearance = args.next().ok_or("Missing appearance")?;
+                    options.appearance_override = true;
+                }
+                "--theme" => {
+                    options.theme = args.next().ok_or("Missing theme")?;
+                    options.theme_override = true;
+                }
                 "--history-count" => {
                     options.history_count = args
                         .next()
@@ -123,6 +136,9 @@ impl Options {
                 }
                 "--screenshot" => {
                     options.screenshot = Some(args.next().ok_or("Missing screenshot path")?.into())
+                }
+                "--settings-file" => {
+                    options.settings_file = Some(args.next().ok_or("Missing settings path")?.into())
                 }
                 _ => return Err(format!("Unknown option {arg}")),
             }

@@ -1,0 +1,4 @@
+module CCapturesSettings [system] {
+  header "include/captures_settings.h"
+  export *
+}

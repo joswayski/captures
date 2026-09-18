@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'apps/native/**'
+      - 'crates/captures-settings*/**'
+      - 'Cargo.lock'
       - 'shared/**'
       - 'apps/desktop/ui/src/lib/thumbnailExit.ts'
       - 'apps/desktop/assets/icon.svg'
@@ -20,9 +22,27 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.94.0
       - run: bash apps/native/macos/build.sh
         env:
           CAPTURES_TEST_ARTIFACTS: ${{ runner.temp }}/native-pixels
+      - name: Render native preferences
+        run: |
+          mkdir -p "$RUNNER_TEMP/native-preferences"
+          for appearance in light dark; do
+            apps/native/macos/.build/release/CapturesNative --scene preferences \
+              --appearance "$appearance" --settings-file "$RUNNER_TEMP/native-preferences/$appearance.json" \
+              --screenshot "$RUNNER_TEMP/native-preferences/$appearance.png" --quit-after 4
+            test -s "$RUNNER_TEMP/native-preferences/$appearance.png"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-preferences-macos
+          path: ${{ runner.temp }}/native-preferences
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         if: always()
         with:

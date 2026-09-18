@@ -14,6 +14,13 @@ pub fn load() -> BTreeMap<String, Tokens> {
 }
 
 impl Tokens {
+    pub fn with_custom_colors(mut self, accent: &str, signal: &str, light: bool) -> Self {
+        if let Ok(colors) = captures_settings::theme::custom_colors(accent, signal, light) {
+            self.colors.extend(colors);
+        }
+        self
+    }
+
     pub fn color(&self, name: &str) -> Color32 {
         let [r, g, b, a] = self.colors[name].map(|c| (c * 255.).round() as u8);
         Color32::from_rgba_unmultiplied(r, g, b, a)

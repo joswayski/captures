@@ -1,4 +1,5 @@
 mod options;
+mod preferences;
 mod tokens;
 mod workbench;
 

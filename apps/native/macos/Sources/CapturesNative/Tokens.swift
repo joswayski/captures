@@ -18,4 +18,27 @@ struct Tokens: Decodable {
         guard let n = numbers[name] else { preconditionFailure("Missing number \(name)") }
         return CGFloat(n)
     }
+
+    func applyingCustomTheme(_ custom: [String: Any], light: Bool,
+                             transport: SettingsTransport = SettingsBridge()) -> Tokens {
+        guard let response = try? transport.request([
+            "operation": "theme", "accent": custom.string("accent", "#32d3ff"),
+            "signal": custom.string("signal", "#ff4fc3"), "light": light,
+        ]), let derived = response["colors"] as? [String: [Double]] else { return self }
+        return Tokens(colors: colors.merging(derived) { _, value in value }, numbers: numbers)
+    }
+}
+
+extension NSColor {
+    convenience init?(hex: String) {
+        guard let value = PreferencesController.normalizeHex(hex), let rgb = Int(value.dropFirst(), radix: 16) else { return nil }
+        self.init(srgbRed: CGFloat((rgb >> 16) & 255) / 255, green: CGFloat((rgb >> 8) & 255) / 255,
+                  blue: CGFloat(rgb & 255) / 255, alpha: 1)
+    }
+
+    var rgbHex: String? {
+        guard let color = usingColorSpace(.sRGB) else { return nil }
+        return String(format: "#%02X%02X%02X", Int((color.redComponent * 255).rounded()),
+                      Int((color.greenComponent * 255).rounded()), Int((color.blueComponent * 255).rounded()))
+    }
 }

@@ -135,6 +135,14 @@ visible and cannot justify a renderer selection or performance claim.
 No renderer is selected for these platforms yet. The same fixture scenes, token
 resources, resource budgets, visual checkpoints and input scripts are mandatory.
 
+The first domain slice now extracts shipping settings types/defaults/migrations
+and persistence into `captures-settings`, with a versioned `captures-settings-ffi`
+static library for AppKit. Both native Preferences screens edit a separate
+development settings file. Shared custom-theme derivation is checked against
+TypeScript-generated golden values. This advances settings persistence and
+presentation, not lifecycle/capture integration or full Preferences acceptance;
+all checklist gates above remain open until end-to-end verification.
+
 The first [shared wgpu candidate](../apps/native/wgpu/README.md) uses egui/winit
 with retained image textures and event-driven immediate-mode UI, an additional
 approach to evaluate against the retained/native candidates below. It implements

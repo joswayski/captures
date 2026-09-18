@@ -3,8 +3,16 @@
 An **experimental Windows/Linux fixture workbench**, not the chosen production UI
 and not a capture app. macOS keeps its Swift/AppKit frontend. This candidate uses
 Rust, winit native windows, egui custom-drawn controls, and wgpu. It has no WebView,
-JS runtime, Tauri dependency, capture permissions, settings persistence, network
+JS runtime, Tauri dependency, capture permissions, network
 service, installer, or updater. Node is build-time only.
+
+Preferences now uses shared Rust settings persistence and custom-theme math,
+including automatic save, retry, and a flush when the window closes. It uses a
+separate Captures Native development identity; pass `--settings-file PATH` to
+use an explicit test file. Screenshots and scripted exercises without that flag
+use disposable settings. Other scenes remain fixtures; storing capture defaults
+does not connect the capture engines. Global shortcuts, login, microphone
+discovery, feedback, and updating remain visibly unavailable.
 
 The candidate tests whether shared custom components are viable. It is not a
 retained widget renderer: egui rebuilds the visible UI on an event-driven repaint,
@@ -51,7 +59,7 @@ and Move window controls. Launch one instance at a time for measurements.
 
 | Scene | Exercise | Not implemented / not accepted |
 | --- | --- | --- |
-| Preferences | Token palette, appearance/accent switching, editable search, fixture toggles | Persistence, full settings, custom colors, font/visual parity |
+| Preferences | Persisted appearance/presets/custom colors, capture/media defaults, folder picker, Find, save errors/retry | OS integrations, full font/visual/input parity |
 | History | Empty/100/1,000 rows, filters, virtualized scrolling, selection, image-backed rows | Real files, open/delete, thumbnail cache pressure: rows intentionally share one synthetic texture |
 | HUD | Running/paused/muted fixture; fixed glass palette even in light mode | Real timer/recording; recording exclusion; tray or hidden-controls notice |
 | Preview | Cold/reused texture, fade/settle, reset mid-animation, explicit Reduce motion, optional transparent native window | **Not the shipping dust effect**: no isolated-chip blur, dust trajectories, source treatment or pile/drag/hit-region parity |

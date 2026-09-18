@@ -180,7 +180,10 @@ A browser-free native replacement is planned for macOS, Windows, and Linux,
 developed feature by feature across platforms using shared Rust logic and the
 Captures design. Development workbenches include Swift/AppKit on macOS and an
 experimental Rust/wgpu renderer candidate for Windows/Linux. They use synthetic
-data, not real capture workflows, and are not replacement downloads. Windows/Linux
+capture data and are not replacement downloads. Native Preferences now saves
+appearance, custom colors, and capture/media defaults through shared Rust logic
+in a separate development settings file. Capture engines, global shortcuts,
+login items, and updates are not connected to the native hosts yet. Windows/Linux
 renderer selection and full feature/design parity remain open. The
 [migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;
 existing Preview features remain available during development. The wgpu candidate
