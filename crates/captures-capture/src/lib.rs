@@ -17,4 +17,8 @@ pub use cursor::{
 pub use error::{CaptureError, CaptureResult};
 pub use geometry::{LogicalRect, PhysicalRect};
 pub use model::{CaptureMode, DisplayDescriptor, DisplayFrame, WindowDescriptor};
-pub use window::{image_is_effectively_blank, resolve_window_capture, window_display_crop_is_safe};
+pub use window::{
+    capture_buffer_scale, image_is_effectively_blank, mask_macos_window_corners,
+    refine_window_chrome_from_snapshot, resolve_window_capture, window_display_crop_is_safe,
+    window_physical_rect,
+};

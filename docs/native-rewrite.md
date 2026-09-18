@@ -194,9 +194,13 @@ policy into `captures-capture`. The shipping host uses the shared stack-occlusio
 check, composited-crop/native fallback and blank-frame heuristic. A failed native
 capture must never fall back to pixels from a covering window; known same-app
 untitled transients retain the existing exception. Error messages/categories and
-the existing shipping tests are preserved. Native window enumeration, selection,
-frozen/live orchestration, corner masking and host UI integration remain open;
-this extraction alone implements no new native capture mode on any OS.
+the existing shipping tests are preserved. Native-coordinate buffer scaling,
+clipped window rectangles, freeze-frame corner-radius inference and antialiased
+macOS corner masking now use the same shared algorithms. The host still supplies
+the macOS fallback radius and decides where that mask applies; Windows and Linux
+do not gain rounded masks. Native window enumeration, selection, frozen/live
+orchestration and host UI integration remain open on macOS, Windows, X11 and
+Wayland; this extraction alone implements no new native capture mode on any OS.
 
 The first [shared wgpu candidate](../apps/native/wgpu/README.md) uses egui/winit
 with retained image textures and event-driven immediate-mode UI, an additional

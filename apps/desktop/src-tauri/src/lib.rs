@@ -17,10 +17,15 @@ use std::{
 
 use tauri::CursorIcon;
 
+#[cfg(target_os = "macos")]
+use captures_capture::capture_buffer_scale;
+#[cfg(any(target_os = "macos", test))]
+use captures_capture::mask_macos_window_corners;
 use captures_capture::{
     CaptureError, CaptureMode, DisplayFrame, LogicalRect, PhysicalRect, PointerCursor,
     WindowDescriptor, image_is_effectively_blank, pointer_cursor, pointer_position,
-    resolve_window_capture, window_display_crop_is_safe,
+    refine_window_chrome_from_snapshot, resolve_window_capture, window_display_crop_is_safe,
+    window_physical_rect,
 };
 use chrono::{DateTime, Utc};
 use image::RgbaImage;
@@ -130,8 +135,6 @@ const AUTO_START_PREFERENCE_TARGET: &str = "auto-start-on-selection";
 const RECORDING_CONTROLS_PREFERENCE_TARGET: &str = "include-recording-controls-in-captures";
 /// Mini-preview stack listens for this to clear “In editor” when a window dies.
 const EDITOR_LAYERS_CHANGED_EVENT: &str = "editor-layers-changed";
-#[cfg(any(target_os = "macos", test))]
-const WINDOW_CORNER_MASK_SAMPLES_PER_AXIS: u32 = 4;
 
 /// Payload for `editor-layers-changed` (matches the frontend `EditorLayerPresence`).
 #[derive(Clone, Debug, Serialize)]
@@ -8128,25 +8131,6 @@ fn resolve_asset(state: &AppState, path: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// Map native window/display geometry onto the capture buffer.
-///
-/// Coordinates come from the capture backend in the same units as
-/// `display.width`/`height` (logical points on macOS, physical pixels on
-/// Windows). Region selections from the overlay use
-/// [`DisplayDescriptor::overlay_to_buffer_scale`] instead.
-fn capture_buffer_scale(display: &captures_capture::DisplayDescriptor, image: &RgbaImage) -> f64 {
-    let logical_w = f64::from(display.width.max(1));
-    let logical_h = f64::from(display.height.max(1));
-    let scale_x = f64::from(image.width()) / logical_w;
-    let scale_y = f64::from(image.height()) / logical_h;
-    let derived = ((scale_x + scale_y) * 0.5).max(1.0);
-    // If the platform scale disagrees badly, trust the buffer dimensions.
-    if (derived - display.scale_factor.max(1.0)).abs() > 0.25 {
-        return derived;
-    }
-    display.scale_factor.max(1.0).max(derived)
-}
-
 fn crop_live_region(
     state: &AppState,
     display_id: &str,
@@ -8271,26 +8255,6 @@ fn crop_window_from_session(session: &CaptureSession, window_id: &str) -> Option
     crop_window_from_display(&session.display, image, window)
 }
 
-fn window_physical_rect(
-    display: &captures_capture::DisplayDescriptor,
-    image: &RgbaImage,
-    window: &captures_capture::WindowDescriptor,
-) -> Option<PhysicalRect> {
-    let scale = capture_buffer_scale(display, image);
-    let rect = LogicalRect {
-        x: f64::from(window.x - display.x),
-        y: f64::from(window.y - display.y),
-        width: f64::from(window.width),
-        height: f64::from(window.height),
-    };
-    let physical = rect.to_physical(scale, image.width(), image.height());
-    if physical.width == 0 || physical.height == 0 {
-        None
-    } else {
-        Some(physical)
-    }
-}
-
 fn crop_window_from_display(
     display: &captures_capture::DisplayDescriptor,
     image: &RgbaImage,
@@ -8328,266 +8292,6 @@ fn window_visible_corner_radius(window: &captures_capture::WindowDescriptor) -> 
         .corner_radius
         .filter(|radius| radius.is_finite() && *radius >= 0.0)
         .unwrap_or_else(window_corner_radius_points)
-}
-
-/// Measure each window's visible corner radius from the freeze-frame so the
-/// selector ring, dim cutout, and PNG mask share one shape.
-///
-/// A single OS-default radius is wrong for panels, terminals, and other apps
-/// that keep tighter chrome than the current system window style. Sampling the
-/// already-captured display image avoids a second per-window capture pass.
-fn refine_window_chrome_from_snapshot(
-    windows: &mut [captures_capture::WindowDescriptor],
-    display: &captures_capture::DisplayDescriptor,
-    image: &RgbaImage,
-    fallback_radius: f64,
-) {
-    let scale = capture_buffer_scale(display, image);
-    for window in windows.iter_mut() {
-        if let Some(radius) = estimate_window_corner_radius_from_snapshot(
-            window,
-            display,
-            image,
-            scale,
-            fallback_radius,
-        ) {
-            window.corner_radius = Some(radius);
-        }
-    }
-}
-
-fn estimate_window_corner_radius_from_snapshot(
-    window: &captures_capture::WindowDescriptor,
-    display: &captures_capture::DisplayDescriptor,
-    image: &RgbaImage,
-    scale: f64,
-    fallback_radius: f64,
-) -> Option<f64> {
-    let scale = scale.max(1.0);
-    let left = ((f64::from(window.x - display.x) * scale).round() as i64).max(0);
-    let top = ((f64::from(window.y - display.y) * scale).round() as i64).max(0);
-    let width = ((f64::from(window.width) * scale).round() as i64).max(1);
-    let height = ((f64::from(window.height) * scale).round() as i64).max(1);
-    let right = left + width;
-    let bottom = top + height;
-    if right > i64::from(image.width()) || bottom > i64::from(image.height()) {
-        return None;
-    }
-
-    // Fullscreen-ish targets keep square display edges.
-    if window.x <= display.x
-        && window.y <= display.y
-        && window.x + window.width as i32 >= display.x + display.width as i32
-        && window.y + window.height as i32 >= display.y + display.height as i32
-    {
-        return Some(0.0);
-    }
-
-    let max_radius_px = ((fallback_radius * scale)
-        .min(width as f64 / 2.0)
-        .min(height as f64 / 2.0)
-        .floor() as i64)
-        .max(0);
-    if max_radius_px < 2 {
-        return Some(0.0);
-    }
-
-    let mut samples = Vec::with_capacity(4);
-    for (corner_x, corner_y, dir_x, dir_y) in [
-        (left, top, 1_i64, 1_i64),
-        (right - 1, top, -1, 1),
-        (left, bottom - 1, 1, -1),
-        (right - 1, bottom - 1, -1, -1),
-    ] {
-        if let Some(radius_px) = estimate_corner_radius_px(
-            image,
-            corner_x,
-            corner_y,
-            dir_x,
-            dir_y,
-            max_radius_px,
-            width,
-            height,
-        ) {
-            samples.push(radius_px);
-        }
-    }
-    if samples.is_empty() {
-        return None;
-    }
-    // Inclusive pixel bounds make the trailing edge of a corner one pixel short
-    // of the true radius. Prefer the strongest readable corner instead of the
-    // median, which systematically under-reads rounded chrome.
-    let best_px = *samples.iter().max().unwrap_or(&0) as f64;
-    let radius_points = (best_px / scale).clamp(0.0, fallback_radius.max(0.0));
-    // Prefer half-point steps so CSS border-radius stays stable on Retina.
-    Some((radius_points * 2.0).round() / 2.0)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn estimate_corner_radius_px(
-    image: &RgbaImage,
-    corner_x: i64,
-    corner_y: i64,
-    dir_x: i64,
-    dir_y: i64,
-    max_radius_px: i64,
-    window_width_px: i64,
-    window_height_px: i64,
-) -> Option<i64> {
-    let outside = sample_image(image, corner_x, corner_y)?;
-    // Deep interior of this corner — should land on window chrome/content.
-    let inset = (max_radius_px.max(8) + 4)
-        .min(window_width_px / 3)
-        .min(window_height_px / 3);
-    if inset < 4 {
-        return None;
-    }
-    let inside = sample_image(image, corner_x + dir_x * inset, corner_y + dir_y * inset)?;
-    // If the corner already looks like the interior, this corner is square or
-    // the freeze-frame has no readable edge (e.g. same-colored neighbor).
-    if pixels_similar(outside, inside, 18) {
-        return Some(0);
-    }
-
-    let mut along_x = 0_i64;
-    while along_x < max_radius_px {
-        let x = corner_x + dir_x * along_x;
-        let Some(pixel) = sample_image(image, x, corner_y) else {
-            break;
-        };
-        if !pixels_similar(pixel, outside, 18) {
-            break;
-        }
-        along_x += 1;
-    }
-
-    let mut along_y = 0_i64;
-    while along_y < max_radius_px {
-        let y = corner_y + dir_y * along_y;
-        let Some(pixel) = sample_image(image, corner_x, y) else {
-            break;
-        };
-        if !pixels_similar(pixel, outside, 18) {
-            break;
-        }
-        along_y += 1;
-    }
-
-    // At an inclusive trailing edge the arc is one pixel short of R, so the two
-    // runs can disagree. Keep the longer readable edge for this corner.
-    let radius = along_x.max(along_y).clamp(0, max_radius_px);
-    // Tiny runs are usually anti-alias or 1px framing, not real window chrome.
-    if radius <= 1 {
-        return Some(0);
-    }
-    Some(radius)
-}
-
-fn sample_image(image: &RgbaImage, x: i64, y: i64) -> Option<[u8; 4]> {
-    if x < 0 || y < 0 {
-        return None;
-    }
-    let x = u32::try_from(x).ok()?;
-    let y = u32::try_from(y).ok()?;
-    if x >= image.width() || y >= image.height() {
-        return None;
-    }
-    Some(image.get_pixel(x, y).0)
-}
-
-fn pixels_similar(left: [u8; 4], right: [u8; 4], max_channel_delta: u8) -> bool {
-    left.iter()
-        .zip(right.iter())
-        .all(|(a, b)| a.abs_diff(*b) <= max_channel_delta)
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn mask_macos_window_corners(
-    image: &mut RgbaImage,
-    window: &captures_capture::WindowDescriptor,
-    display: &captures_capture::DisplayDescriptor,
-    scale: f64,
-    corner_radius_points: f64,
-) {
-    let window_left = i64::from(window.x);
-    let window_top = i64::from(window.y);
-    let window_right = window_left + i64::from(window.width);
-    let window_bottom = window_top + i64::from(window.height);
-    let display_left = i64::from(display.x);
-    let display_top = i64::from(display.y);
-    let display_right = display_left + i64::from(display.width);
-    let display_bottom = display_top + i64::from(display.height);
-
-    // A fullscreen window has square display edges. A larger, clipped window
-    // also has no visible window corners within this display crop.
-    if window_left <= display_left
-        && window_top <= display_top
-        && window_right >= display_right
-        && window_bottom >= display_bottom
-    {
-        return;
-    }
-
-    let scale = scale.max(1.0);
-    let full_width = f64::from(window.width) * scale;
-    let full_height = f64::from(window.height) * scale;
-    let radius = (corner_radius_points * scale)
-        .min(full_width / 2.0)
-        .min(full_height / 2.0);
-    if radius <= 0.0 {
-        return;
-    }
-
-    // Crops are clipped to the selected display. Keep coordinates relative to
-    // the full window so a partially offscreen rounded corner is masked only
-    // where that corner is still visible.
-    let crop_offset_x = ((display_left - window_left).max(0) as f64) * scale;
-    let crop_offset_y = ((display_top - window_top).max(0) as f64) * scale;
-    let samples = WINDOW_CORNER_MASK_SAMPLES_PER_AXIS;
-    let sample_count = samples * samples;
-
-    for y in 0..image.height() {
-        let window_y = crop_offset_y + f64::from(y);
-        let near_vertical_corner = window_y < radius || window_y + 1.0 > full_height - radius;
-        if !near_vertical_corner {
-            continue;
-        }
-
-        for x in 0..image.width() {
-            let window_x = crop_offset_x + f64::from(x);
-            let near_horizontal_corner = window_x < radius || window_x + 1.0 > full_width - radius;
-            if !near_horizontal_corner {
-                continue;
-            }
-
-            let mut inside_samples = 0;
-            for sample_y in 0..samples {
-                for sample_x in 0..samples {
-                    let sample_x = window_x + (f64::from(sample_x) + 0.5) / f64::from(samples);
-                    let sample_y = window_y + (f64::from(sample_y) + 0.5) / f64::from(samples);
-                    let center_x = sample_x.clamp(radius, full_width - radius);
-                    let center_y = sample_y.clamp(radius, full_height - radius);
-                    let distance_x = sample_x - center_x;
-                    let distance_y = sample_y - center_y;
-                    if distance_x.mul_add(distance_x, distance_y * distance_y) <= radius * radius {
-                        inside_samples += 1;
-                    }
-                }
-            }
-
-            let mask_alpha = u8::try_from((inside_samples * 255 + sample_count / 2) / sample_count)
-                .expect("corner coverage stays within one byte");
-            let pixel = image.get_pixel_mut(x, y);
-            if mask_alpha == 0 {
-                // Do not leave pixels from windows behind the target hidden in
-                // fully transparent PNG data.
-                pixel.0 = [0, 0, 0, 0];
-            } else {
-                pixel.0[3] = pixel.0[3].min(mask_alpha);
-            }
-        }
-    }
 }
 
 enum WindowPickRole {
