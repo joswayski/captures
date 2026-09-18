@@ -8,15 +8,15 @@ use std::sync::{
 use std::time::Duration;
 use std::time::Instant;
 
+use captures_app::preview::ThumbnailVisibility;
 use captures_capture::{DisplayDescriptor, WindowDescriptor, XcapBackend};
 use parking_lot::{Mutex, RwLock};
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
     models::{
-        AppSettings, CaptureArtifact, CaptureSession, HistoryEntry, MiniPreviewPlacement,
-        RecordingArtifactData, RecordingSelection,
+        AppSettings, CaptureArtifact, CaptureSession, HistoryEntry, RecordingArtifactData,
+        RecordingSelection,
     },
     recording::RecordingRuntime,
     storage,
@@ -28,144 +28,6 @@ pub struct PreparedArtifactDrag {
     pub artifact_id: String,
     pub path: PathBuf,
     pub file_name: String,
-}
-
-/// Which edge of the visible pile stays put when the stack opens or closes.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ThumbnailStackAnchor {
-    #[default]
-    Bottom,
-    Top,
-}
-
-impl ThumbnailStackAnchor {
-    pub const fn is_top(self) -> bool {
-        matches!(self, Self::Top)
-    }
-}
-
-impl From<MiniPreviewPlacement> for ThumbnailStackAnchor {
-    fn from(placement: MiniPreviewPlacement) -> Self {
-        if placement.is_top() {
-            Self::Top
-        } else {
-            Self::Bottom
-        }
-    }
-}
-
-/// Session-only: last user-dragged position of the mini-preview pile.
-///
-/// `edge` is the anchored edge of the visible pile in logical pixels: the
-/// pile bottom when `anchor` is bottom, or the pile top when it is top.
-#[derive(Clone, Copy, Debug)]
-pub struct ThumbnailStackOrigin {
-    pub x: f64,
-    pub edge: f64,
-    pub anchor: ThumbnailStackAnchor,
-}
-
-#[derive(Default)]
-pub struct ThumbnailVisibility {
-    next_capture_generation: u64,
-    suppressed_capture_generation: Option<u64>,
-    pending_artifact_id: Option<String>,
-    capture_ui_suppressed: bool,
-    /// Session-only: the user parked the stack behind the restore chip.
-    user_collapsed: bool,
-    stack_origin: Option<ThumbnailStackOrigin>,
-}
-
-impl ThumbnailVisibility {
-    pub fn begin_capture(&mut self) -> Option<u64> {
-        if self.suppressed_capture_generation.is_some() && self.pending_artifact_id.is_none() {
-            return None;
-        }
-        self.next_capture_generation = self.next_capture_generation.wrapping_add(1);
-        self.suppressed_capture_generation = Some(self.next_capture_generation);
-        self.pending_artifact_id = None;
-        Some(self.next_capture_generation)
-    }
-
-    pub fn wait_for_artifact(&mut self, capture_generation: u64, artifact_id: String) -> bool {
-        if self.suppressed_capture_generation != Some(capture_generation) {
-            return false;
-        }
-        self.pending_artifact_id = Some(artifact_id);
-        true
-    }
-
-    pub fn mark_artifact_ready(&mut self, artifact_id: &str) -> bool {
-        if self.pending_artifact_id.as_deref() != Some(artifact_id) {
-            return false;
-        }
-        self.pending_artifact_id = None;
-        self.suppressed_capture_generation = None;
-        // Un-hide the stack so the new shot lands on the pile. Leave parking
-        // alone: auto-expanding resized the window to the expanded bar while
-        // the webview stayed collapsed, which pinned drag to that bar's top.
-        true
-    }
-
-    pub fn restore_capture(&mut self, capture_generation: u64) -> bool {
-        if self.suppressed_capture_generation != Some(capture_generation) {
-            return false;
-        }
-        self.suppressed_capture_generation = None;
-        self.pending_artifact_id = None;
-        true
-    }
-
-    pub fn stop_waiting_for_artifact(&mut self) -> bool {
-        if self.pending_artifact_id.is_none() {
-            return false;
-        }
-        self.suppressed_capture_generation = None;
-        self.pending_artifact_id = None;
-        true
-    }
-
-    pub fn suppress_for_capture_ui(&mut self) {
-        self.capture_ui_suppressed = true;
-    }
-
-    pub fn restore_capture_ui(&mut self) {
-        self.capture_ui_suppressed = false;
-    }
-
-    pub fn collapse(&mut self) {
-        self.user_collapsed = true;
-    }
-
-    pub fn expand(&mut self) {
-        self.user_collapsed = false;
-    }
-
-    pub fn reset_session_placement(&mut self) {
-        self.user_collapsed = false;
-        self.stack_origin = None;
-    }
-
-    pub fn set_stack_origin(&mut self, origin: ThumbnailStackOrigin) {
-        self.stack_origin = Some(origin);
-    }
-
-    pub fn stack_origin(&self) -> Option<ThumbnailStackOrigin> {
-        self.stack_origin
-    }
-
-    pub fn clear_stack_origin(&mut self) {
-        self.stack_origin = None;
-    }
-
-    pub fn is_collapsed(&self) -> bool {
-        self.user_collapsed
-    }
-
-    pub fn is_suppressed(&self) -> bool {
-        self.suppressed_capture_generation.is_some() || self.capture_ui_suppressed
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -443,127 +305,13 @@ impl AppState {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{ClipboardFingerprint, ClipboardOwnership, ThumbnailVisibility};
+    use super::{ClipboardFingerprint, ClipboardOwnership};
 
     const FINGERPRINT: ClipboardFingerprint = ClipboardFingerprint {
         width: 2,
         height: 3,
         checksum: 41,
     };
-
-    #[test]
-    fn blocks_overlapping_capture_preparation() {
-        let mut visibility = ThumbnailVisibility::default();
-
-        let first = visibility
-            .begin_capture()
-            .expect("first capture should start");
-        assert!(visibility.begin_capture().is_none());
-        assert!(visibility.is_suppressed());
-
-        assert!(visibility.restore_capture(first));
-        assert!(!visibility.is_suppressed());
-        assert!(visibility.begin_capture().is_some());
-    }
-
-    #[test]
-    fn ignores_stale_restore_and_image_ready_events_after_the_next_capture_starts() {
-        let mut visibility = ThumbnailVisibility::default();
-
-        let first = visibility
-            .begin_capture()
-            .expect("first capture should start");
-        assert!(visibility.wait_for_artifact(first, "first".to_owned()));
-        let second = visibility
-            .begin_capture()
-            .expect("second capture should start");
-
-        assert!(!visibility.restore_capture(first));
-        assert!(visibility.is_suppressed());
-        assert!(visibility.wait_for_artifact(second, "second".to_owned()));
-
-        assert!(!visibility.mark_artifact_ready("first"));
-        assert!(visibility.is_suppressed());
-        assert!(visibility.mark_artifact_ready("second"));
-        assert!(!visibility.is_suppressed());
-    }
-
-    #[test]
-    fn disabling_previews_releases_only_an_artifact_wait() {
-        let mut visibility = ThumbnailVisibility::default();
-
-        let capture = visibility.begin_capture().expect("capture should start");
-        assert!(!visibility.stop_waiting_for_artifact());
-        assert!(visibility.is_suppressed());
-
-        assert!(visibility.wait_for_artifact(capture, "artifact".to_owned()));
-        assert!(visibility.stop_waiting_for_artifact());
-        assert!(!visibility.is_suppressed());
-    }
-
-    #[test]
-    fn capture_ui_suppression_stays_active_across_a_screenshot_preview() {
-        let mut visibility = ThumbnailVisibility::default();
-        visibility.suppress_for_capture_ui();
-
-        let capture = visibility.begin_capture().expect("capture should start");
-        assert!(visibility.wait_for_artifact(capture, "artifact".to_owned()));
-        assert!(visibility.mark_artifact_ready("artifact"));
-        assert!(visibility.is_suppressed());
-
-        visibility.restore_capture_ui();
-        assert!(!visibility.is_suppressed());
-    }
-
-    #[test]
-    fn stack_origin_survives_expand_and_clears_with_session_placement() {
-        let mut visibility = ThumbnailVisibility::default();
-        visibility.set_stack_origin(super::ThumbnailStackOrigin {
-            x: 120.0,
-            edge: 640.0,
-            anchor: super::ThumbnailStackAnchor::Bottom,
-        });
-        visibility.collapse();
-        visibility.expand();
-        assert!(!visibility.is_collapsed());
-        assert_eq!(visibility.stack_origin().unwrap().x, 120.0);
-        assert_eq!(visibility.stack_origin().unwrap().edge, 640.0);
-        assert_eq!(
-            visibility.stack_origin().unwrap().anchor,
-            super::ThumbnailStackAnchor::Bottom
-        );
-
-        visibility.reset_session_placement();
-        assert!(visibility.stack_origin().is_none());
-        assert!(!visibility.is_collapsed());
-    }
-
-    #[test]
-    fn a_new_preview_keeps_the_stack_collapsed() {
-        let mut visibility = ThumbnailVisibility::default();
-        visibility.collapse();
-        assert!(visibility.is_collapsed());
-
-        visibility.expand();
-        assert!(!visibility.is_collapsed());
-
-        visibility.collapse();
-        let capture = visibility.begin_capture().expect("capture should start");
-        assert!(visibility.is_collapsed());
-        assert!(visibility.wait_for_artifact(capture, "artifact".to_owned()));
-        assert!(visibility.mark_artifact_ready("artifact"));
-        assert!(visibility.is_collapsed());
-    }
-
-    #[test]
-    fn cancelling_a_capture_keeps_the_stack_collapsed() {
-        let mut visibility = ThumbnailVisibility::default();
-        visibility.collapse();
-        let capture = visibility.begin_capture().expect("capture should start");
-        assert!(visibility.restore_capture(capture));
-        assert!(visibility.is_collapsed());
-        assert!(!visibility.is_suppressed());
-    }
 
     #[test]
     fn clipboard_ownership_tracks_one_artifact_until_the_pasteboard_changes() {
