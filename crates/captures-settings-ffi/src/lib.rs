@@ -1,3 +1,4 @@
+mod preview;
 mod region;
 mod selection;
 mod window;
