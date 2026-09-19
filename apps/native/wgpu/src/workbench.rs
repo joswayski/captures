@@ -17,6 +17,7 @@ use crate::{
     live::{CaptureRequest, Live},
     options::{Options, Scene},
     preferences::Preferences,
+    shortcut_input,
     tokens::{self, Tokens},
     tray::{self, Action as TrayAction, Tray},
 };
@@ -69,7 +70,11 @@ pub struct Workbench {
 }
 
 impl Workbench {
-    pub fn new(cc: &eframe::CreationContext<'_>, options: Options) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        options: Options,
+        shortcut_input: shortcut_input::Bridge,
+    ) -> Self {
         if options.scene == Scene::Idle && cc.winit_window().and_then(|w| w.is_visible()).is_none()
         {
             // winit's Wayland root cannot be hidden with set_visible. Do not
@@ -112,13 +117,14 @@ impl Workbench {
                 .map(|dir| dir.path().join("settings.json"))
                 .unwrap_or_else(captures_settings::default_native_settings_path)
         });
-        let preferences_state = Preferences::new(
+        let preferences_state = Preferences::new_with_shortcut_input(
             cc.egui_ctx.clone(),
             settings_path,
             options
                 .appearance_override
                 .then(|| options.appearance.clone()),
             options.theme_override.then(|| options.theme.clone()),
+            shortcut_input,
         );
         let live = options
             .live
@@ -736,10 +742,11 @@ impl eframe::App for Workbench {
         if let Some(live) = &mut self.live {
             live.launch_requested_capture(ctx, frame, self.preferences_state.snapshot());
         }
-        let quit_key = ctx.input_mut(|input| {
-            input.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)
-                || input.consume_key(egui::Modifiers::CTRL, egui::Key::Q)
-        });
+        let quit_key = !self.preferences_state.is_recording_shortcut()
+            && ctx.input_mut(|input| {
+                input.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)
+                    || input.consume_key(egui::Modifiers::CTRL, egui::Key::Q)
+            });
         if self.options.live && quit_key {
             self.quit(ctx);
         }
