@@ -37,11 +37,12 @@ final class MiniPreviewCardView: NSView {
         let inset = tokens.number("s-2")
         title.frame = NSRect(x: inset, y: inset, width: 150, height: 19)
         title.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
-        title.textColor = tokens.color("glass-text"); addSubview(title)
+        title.textColor = tokens.color("glass-text"); styleLabelBacking(title); addSubview(title)
         status.frame = NSRect(x: bounds.width - 126, y: inset, width: 118, height: 19)
         status.alignment = .right; status.lineBreakMode = .byTruncatingTail
         status.font = .systemFont(ofSize: tokens.number("text-sm"))
-        status.textColor = tokens.color("glass-text-muted"); addSubview(status)
+        status.textColor = tokens.color("glass-text-muted"); styleLabelBacking(status)
+        status.isHidden = true; addSubview(status)
 
         let actions: [(String, () -> Void)] = [("Copy", copy), ("Save", save),
             ("Open", open), ("Dismiss", dismiss)]
@@ -61,11 +62,19 @@ final class MiniPreviewCardView: NSView {
 
     func setStatus(_ value: String) {
         status.stringValue = value
+        status.isHidden = value.isEmpty
         status.setAccessibilityLabel(value.isEmpty ? nil : value)
     }
 
     func setActionsVisible(_ visible: Bool) {
         actionButtons.forEach { $0.isHidden = !visible }
+    }
+
+    private func styleLabelBacking(_ label: NSTextField) {
+        label.wantsLayer = true
+        label.layer?.backgroundColor = tokens.color("glass-strong").cgColor
+        label.layer?.cornerRadius = tokens.number("r-xs")
+        label.layer?.masksToBounds = true
     }
 }
 
