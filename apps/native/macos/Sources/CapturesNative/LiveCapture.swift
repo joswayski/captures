@@ -180,8 +180,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         previewPanel.layer?.cornerRadius = tokens.number("r-xl"); previewPanel.layer?.borderWidth = 1
         previewPanel.layer?.borderColor = tokens.color("border").cgColor; root.addSubview(previewPanel)
         preview = NSImageView(frame: previewPanel.bounds.insetBy(dx: 16, dy: 16)); preview.imageScaling = .scaleProportionallyUpOrDown
-        preview.setAccessibilityLabel("Selected screenshot preview"); previewPanel.addSubview(preview)
-        detail = title("Select a screenshot to preview it.", frame: NSRect(x: 372, y: 560, width: 600, height: 24), muted: true)
+        preview.setAccessibilityLabel("Selected capture preview"); previewPanel.addSubview(preview)
+        detail = title("Select a capture to preview it.", frame: NSRect(x: 372, y: 560, width: 600, height: 24), muted: true)
         saveButton = button("Save image", frame: NSRect(x: 372, y: 594, width: 118, height: 34)) { [weak self] in self?.save() }
         copyButton = button("Copy image", frame: NSRect(x: 500, y: 594, width: 118, height: 34)) { [weak self] in self?.copyImage() }
         revealButton = button("Reveal export", frame: NSRect(x: 628, y: 594, width: 120, height: 34)) { [weak self] in self?.reveal() }
@@ -823,7 +823,20 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     private func pollRecording() {
-        guard !recordingPollPending, let session = recordingSession else { return }
+        guard !recordingPollPending, let session = recordingSession,
+              let generation = activeRecordingGeneration else { return }
+        do {
+            let flow = try AppBridge.flow(["operation": "poll", "generation": generation])
+            guard flow["current"] as? Bool == true else {
+                stopRecording()
+                status.stringValue = "Recording stopped because the desktop session changed. Saving…"
+                return
+            }
+        } catch {
+            stopRecording()
+            showError("Recording session monitoring failed; saving the recording", error)
+            return
+        }
         recordingPollPending = true
         run({ try session.snapshot() }) { [weak self] result in
             guard let self else { return }
@@ -840,6 +853,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 self.recordingHUD?.hud.setWarning(snapshot.warning)
                 if let warning = snapshot.warning { self.status.stringValue = warning }
             case .failure(let error):
+                self.recordingPollTimer?.invalidate(); self.recordingPollTimer = nil
                 self.showError("Couldn’t refresh recording status", error)
             }
         }
@@ -1044,7 +1058,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private func clearSelection() {
         selectionGeneration += 1; selectedIndex = nil; selectedImage = nil; preview?.image = nil
         if table.selectedRow >= 0 { table.deselectAll(nil) }
-        detail?.stringValue = artifacts.isEmpty ? "Capture a display to begin." : "Select a screenshot to preview it."
+        detail?.stringValue = artifacts.isEmpty ? "Choose New Capture to begin." : "Select a capture to preview it."
         updateActions()
     }
 

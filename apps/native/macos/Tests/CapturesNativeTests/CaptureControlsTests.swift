@@ -211,6 +211,12 @@ final class CaptureControlsTests: XCTestCase {
         view.dragRegion(NSPoint(x: 900.2, y: 499.7)); view.endRegion()
         XCTAssertTrue(confirmed.isEmpty,
             "screenshot auto-start must not implicitly start a recording")
+        let start = try XCTUnwrap(buttons(in: view.controls).first {
+            $0.accessibilityLabel() == "Start recording"
+        })
+        XCTAssertFalse(start.isHidden,
+            "recording always retains explicit confirmation even when screenshot auto-start is enabled")
+        XCTAssertEqual(start.title, "Start recording")
         view.confirmSelection()
         XCTAssertEqual(confirmed.count, 1)
 
@@ -245,6 +251,7 @@ final class CaptureControlsTests: XCTestCase {
         XCTAssertTrue(buttons.first { $0.accessibilityLabel() == "Desktop audio" }?.isEnabled == true)
         XCTAssertTrue(buttons.first { $0.accessibilityLabel() == "Microphone" }?.isEnabled == false)
         XCTAssertEqual(view.controlsState.mode, .record)
+        XCTAssertEqual(view.controls.frame.width, 736)
         XCTAssertEqual(view.controls.frame.height, 154)
         XCTAssertTrue(view.controls.subviews.allSatisfy {
             $0.frame.minX >= 0 && $0.frame.maxX <= view.controls.bounds.width
@@ -373,6 +380,7 @@ final class CaptureControlsTests: XCTestCase {
             XCTAssertEqual(automatic.controls.frame.minY, frame.height - 112)
 
             automatic.setMode(.record)
+            XCTAssertEqual(automatic.controls.frame.width, 902)
             XCTAssertEqual(automatic.controls.frame.height, 154)
             try render(automatic, window: window,
                 name: "capture-controls-\(appearance)-recording")

@@ -2,6 +2,7 @@ import AppKit
 
 final class RecordingHUDView: NSView {
     private let tokens: Tokens
+    private let defaultNotice: String
     private let statusDot = NSView()
     private let timerLabel = NSTextField(labelWithString: "0:00")
     private let statusLabel = NSTextField(labelWithString: "RECORDING")
@@ -17,8 +18,11 @@ final class RecordingHUDView: NSView {
 
     override var isFlipped: Bool { true }
 
-    init(frame: NSRect, tokens: Tokens) {
+    init(frame: NSRect, tokens: Tokens, excludedFromCapture: Bool = true) {
         self.tokens = tokens
+        defaultNotice = excludedFromCapture
+            ? "These controls won’t show in recordings"
+            : "These controls will appear in recordings"
         pauseButton = CaptureButton("Ⅱ", frame: .zero, tokens: tokens, glass: true) {}
         super.init(frame: frame)
         wantsLayer = true
@@ -29,6 +33,7 @@ final class RecordingHUDView: NSView {
         layer?.shadowRadius = 22; layer?.shadowOffset = NSSize(width: 0, height: -8)
         setAccessibilityRole(.group); setAccessibilityLabel("Recording controls")
 
+        noticeLabel.stringValue = defaultNotice
         noticeLabel.frame = NSRect(x: 60, y: 8, width: 310, height: 18)
         noticeLabel.alignment = .center
         noticeLabel.font = .systemFont(ofSize: 11, weight: .medium)
@@ -89,7 +94,7 @@ final class RecordingHUDView: NSView {
     }
 
     func setWarning(_ warning: String?) {
-        noticeLabel.stringValue = warning ?? "These controls won’t show in recordings"
+        noticeLabel.stringValue = warning ?? defaultNotice
         noticeLabel.textColor = tokens.color(warning == nil ? "glass-text-subtle" : "signal")
         noticeLabel.toolTip = warning
         noticeLabel.setAccessibilityLabel(noticeLabel.stringValue)
@@ -111,7 +116,8 @@ final class RecordingHUDPanel: NSPanel {
         let size = NSSize(width: 430, height: 102)
         let visible = screen.visibleFrame
         let origin = NSPoint(x: visible.midX - size.width / 2, y: visible.minY + 20)
-        hud = RecordingHUDView(frame: NSRect(origin: .zero, size: size), tokens: tokens)
+        hud = RecordingHUDView(frame: NSRect(origin: .zero, size: size), tokens: tokens,
+            excludedFromCapture: excludedFromCapture)
         super.init(contentRect: NSRect(origin: origin, size: size), styleMask: [.borderless],
             backing: .buffered, defer: false)
         title = "Captures Recording Controls"
