@@ -171,15 +171,17 @@ impl CaptureControls {
             .movable(true)
             .order(egui::Order::Foreground)
             .show(ui.ctx(), |ui| {
-                // Match the shipping toolbar's stable width while retaining a
-                // sixteen-point margin on narrow displays.
-                ui.set_min_width((content_rect.width() - 32.).min(854.));
                 egui::Frame::new()
                     .fill(tokens.color("glass-strong"))
                     .stroke(Stroke::new(1., tokens.color("glass-border")))
                     .corner_radius(tokens.number("r-2xl") as u8)
                     .inner_margin(tokens.number("s-4") as i8)
                     .show(ui, |ui| {
+                        // Match the shipping toolbar's stable outer width while
+                        // retaining a sixteen-point margin on narrow displays.
+                        let outer_width = (content_rect.width() - 32.).min(854.);
+                        let frame_chrome = 2. * (tokens.number("s-4") + 1.);
+                        ui.set_min_width(outer_width - frame_chrome);
                         tokens.glass_controls(ui);
                         if content_rect.width() <= 800. {
                             ui.spacing_mut().item_spacing.x = tokens.number("s-2");
