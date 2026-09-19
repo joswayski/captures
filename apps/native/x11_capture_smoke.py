@@ -311,6 +311,9 @@ def main():
                     # or accidental capture of the temporary Full screen target.
                     click(selector, 653, 811)
                     click(selector, 492 if mode == "region" else 568, 811)
+                    # Release queues the target change; let the compositor
+                    # present it before collecting the selection screenshot.
+                    time.sleep(.2)
                 return selector
 
             def entries():
