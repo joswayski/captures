@@ -33,6 +33,11 @@ pub enum Command {
     Pause {
         generation: u64,
     },
+    SetMicrophoneMuted {
+        generation: u64,
+        muted: bool,
+        exclude_captures_app: bool,
+    },
     Restart {
         generation: u64,
     },
@@ -75,6 +80,10 @@ pub enum Event {
         generation: u64,
         result: Result<RecordingSessionSnapshot, String>,
     },
+    MicrophoneMuted {
+        generation: u64,
+        result: Result<RecordingSessionSnapshot, MutationFailure>,
+    },
     Restarted {
         generation: u64,
         result: Result<RecordingSessionSnapshot, String>,
@@ -87,6 +96,11 @@ pub enum Event {
         generation: u64,
         result: Result<RecordingSessionSnapshot, String>,
     },
+}
+
+pub struct MutationFailure {
+    pub error: String,
+    pub snapshot: Option<Box<RecordingSessionSnapshot>>,
 }
 
 pub struct Worker {
@@ -158,6 +172,32 @@ impl Worker {
                         result: session.as_mut().map_or_else(
                             || Err("Recording session is unavailable".into()),
                             RecordingSession::pause,
+                        ),
+                    },
+                    Command::SetMicrophoneMuted {
+                        generation,
+                        muted,
+                        exclude_captures_app,
+                    } => Event::MicrophoneMuted {
+                        generation,
+                        result: session.as_mut().map_or_else(
+                            || {
+                                Err(MutationFailure {
+                                    error: "Recording session is unavailable".into(),
+                                    snapshot: None,
+                                })
+                            },
+                            |session| match session.set_microphone_muted(
+                                muted,
+                                exclude_captures_app,
+                                || captures_app::capture_flow::is_current(generation),
+                            ) {
+                                Ok(snapshot) => Ok(snapshot),
+                                Err(error) => Err(MutationFailure {
+                                    error,
+                                    snapshot: Some(Box::new(session.snapshot())),
+                                }),
+                            },
                         ),
                     },
                     Command::Restart { generation } => Event::Restarted {

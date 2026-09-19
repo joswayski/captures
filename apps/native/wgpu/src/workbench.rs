@@ -20,7 +20,7 @@ use captures_app::shortcuts::{CaptureShortcut, CaptureShortcuts};
 use crate::{
     emit,
     live::{CaptureRequest, Live},
-    options::{Options, Scene},
+    options::{HudState, Options, Scene},
     preferences::Preferences,
     recording_hud, shortcut_input,
     tokens::{self, Tokens},
@@ -551,21 +551,32 @@ impl Workbench {
     }
 
     fn hud(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        if matches!(
-            recording_hud::show(
-                ui,
-                t,
-                recording_hud::View {
-                    paused: self.paused,
-                    busy: false,
-                    elapsed_ms: 24_000,
-                    notice: "These controls won’t show in recordings",
-                    warning: false,
-                },
-            ),
-            Some(recording_hud::Action::Pause | recording_hud::Action::Resume)
+        if let Some(action) = recording_hud::show(
+            ui,
+            t,
+            recording_hud::View {
+                paused: self.paused,
+                busy: self.options.hud_state == HudState::Busy,
+                has_microphone: self.options.hud_state != HudState::NoMicrophone,
+                microphone_muted: self.options.hud_state == HudState::Muted,
+                elapsed_ms: 24_000,
+                notice: "These controls won’t show in recordings",
+                warning: false,
+            },
         ) {
-            self.paused = !self.paused;
+            match action {
+                recording_hud::Action::Pause | recording_hud::Action::Resume => {
+                    self.paused = !self.paused;
+                }
+                recording_hud::Action::SetMicrophoneMuted(muted) => {
+                    self.options.hud_state = if muted {
+                        HudState::Muted
+                    } else {
+                        HudState::Unmuted
+                    };
+                }
+                _ => {}
+            }
         }
     }
 

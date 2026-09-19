@@ -755,10 +755,13 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     let hud = RecordingHUDPanel(screen: screen, tokens: self.tokens,
                         excludedFromCapture: self.recordingCapabilities?.controlsExcluded == true)
                     hud.hud.pauseOrResume = { [weak self] in self?.pauseOrResumeRecording() }
+                    hud.hud.toggleMicrophone = { [weak self] in self?.toggleRecordingMicrophone() }
                     hud.hud.restart = { [weak self] in self?.confirmRestartRecording() }
                     hud.hud.stop = { [weak self] in self?.stopRecording() }
                     hud.hud.discard = { [weak self] in self?.discardRecording() }
                     hud.hud.setPaused(false, elapsedMilliseconds: snapshot.elapsedMilliseconds)
+                    hud.hud.setMicrophone(muted: snapshot.microphoneMuted,
+                        available: snapshot.hasMicrophone)
                     hud.hud.setWarning(snapshot.warning)
                     self.recordingHUD = hud; hud.orderFrontRegardless()
                     self.status.stringValue = snapshot.warning ?? "Recording in progress…"
@@ -845,6 +848,59 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }
         recordingPollTimer = timer
         RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func toggleRecordingMicrophone() {
+        guard let session = recordingSession, let hud = recordingHUD,
+              let generation = activeRecordingGeneration,
+              recordingLifecycle.begin() else { return }
+        let muted = !hud.hud.microphoneMuted
+        let excludeCapturesApp = recordingCapabilities?.controlsExcluded == true
+        hud.hud.setLifecycleActionsEnabled(false)
+        status.stringValue = muted ? "Muting microphone…" : "Unmuting microphone…"
+        run({ [recordingGate] in
+            try session.setMicrophoneMuted(muted, generation: generation,
+                excludeCapturesApp: excludeCapturesApp, gate: recordingGate)
+        }) { [weak self] result in
+            guard let self, self.recordingSession === session else { return }
+            switch result {
+            case .success(let snapshot):
+                self.recordingLifecycle.end()
+                hud.hud.setLifecycleActionsEnabled(true)
+                hud.hud.setPaused(snapshot.state == "paused",
+                    elapsedMilliseconds: snapshot.elapsedMilliseconds)
+                hud.hud.setMicrophone(muted: snapshot.microphoneMuted,
+                    available: snapshot.hasMicrophone)
+                hud.hud.setWarning(snapshot.warning)
+                self.status.stringValue = snapshot.warning
+                    ?? (snapshot.state == "paused" ? "Recording paused." : "Recording in progress…")
+            case .failure(let mutationError):
+                // The shared owner may have durably completed the old segment
+                // before cancellation or a replacement-device failure. Read its
+                // state on the same worker before deciding how to preserve it.
+                self.run({ try session.snapshot() }) { [weak self] snapshotResult in
+                    guard let self, self.recordingSession === session else { return }
+                    self.recordingLifecycle.end()
+                    hud.hud.setLifecycleActionsEnabled(true)
+                    switch snapshotResult {
+                    case .success(let snapshot) where snapshot.state == "failed":
+                        self.preserveFailedRecording(session,
+                            warning: mutationError.localizedDescription)
+                    case .success(let snapshot):
+                        hud.hud.setPaused(snapshot.state == "paused",
+                            elapsedMilliseconds: snapshot.elapsedMilliseconds)
+                        hud.hud.setMicrophone(muted: snapshot.microphoneMuted,
+                            available: snapshot.hasMicrophone)
+                        self.stopRecording()
+                        self.showError("Couldn’t change microphone; saving the existing take",
+                            mutationError)
+                    case .failure(let snapshotError):
+                        self.preserveFailedRecording(session,
+                            warning: "\(mutationError.localizedDescription); \(snapshotError.localizedDescription)")
+                    }
+                }
+            }
+        }
     }
 
     private func restartRecording() {
@@ -944,6 +1000,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 }
                 self.recordingHUD?.hud.setPaused(snapshot.state == "paused",
                     elapsedMilliseconds: snapshot.elapsedMilliseconds)
+                self.recordingHUD?.hud.setMicrophone(muted: snapshot.microphoneMuted,
+                    available: snapshot.hasMicrophone)
                 self.recordingHUD?.hud.setWarning(snapshot.warning)
                 if let warning = snapshot.warning { self.status.stringValue = warning }
             case .failure(let error):

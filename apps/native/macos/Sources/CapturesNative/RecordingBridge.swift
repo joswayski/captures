@@ -38,13 +38,20 @@ struct NativeRecordingSnapshot: Equatable {
     let id: String
     let state: String
     let elapsedMilliseconds: UInt64
+    let hasMicrophone: Bool
+    let microphoneMuted: Bool
     let warning: String?
 
     init?(_ value: [String: Any]) {
         guard let id = value["id"] as? String,
               let state = value["state"] as? String,
-              let elapsed = value["elapsed_ms"] as? NSNumber else { return nil }
+              let elapsed = value["elapsed_ms"] as? NSNumber,
+              let options = value["options"] as? [String: Any],
+              let audio = options["audio"] as? [String: Any],
+              let microphoneMuted = audio["microphone_muted"] as? Bool else { return nil }
         self.id = id; self.state = state; elapsedMilliseconds = elapsed.uint64Value
+        hasMicrophone = audio["microphone_device_id"] as? String != nil
+        self.microphoneMuted = microphoneMuted
         warning = value["warning"] as? String
     }
 }
@@ -150,6 +157,16 @@ final class NativeRecordingSession {
 
     func pause() throws -> NativeRecordingSnapshot {
         try snapshot(request(["operation": "pause"]))
+    }
+
+    func setMicrophoneMuted(_ muted: Bool, generation: UInt64,
+                            excludeCapturesApp: Bool,
+                            gate: RecordingGenerationGate) throws -> NativeRecordingSnapshot {
+        try snapshot(request([
+            "operation": "set_microphone_muted", "muted": muted,
+            "generation": generation, "exclude_captures_app": excludeCapturesApp,
+        ], callback: recordingIsCurrent,
+           context: Unmanaged.passUnretained(gate).toOpaque()))
     }
 
     func restart() throws -> NativeRecordingSnapshot {

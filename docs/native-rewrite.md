@@ -161,6 +161,18 @@ permissions, worker scheduling, window exclusion, recording lifecycle and media
 finalization. This behavior-preserving extraction does not connect the native
 Record button or close a recording acceptance gate.
 
+Native recording microphone mute now shares one `RecordingSession` operation
+across AppKit and wgpu. Running changes durably complete the accepted segment,
+persist only `audio.microphone_muted`, then reopen with the same target/options;
+paused changes stay paused, unchanged values do not rotate, and stale generation,
+invalid-state, missing-device and reopen-failure paths preserve recovery media.
+Both 430×102 HUDs expose Mute/Unmute names, selected muted state, lifecycle busy
+gating and an explicit mic-less explanation. Status: macOS AppKit and Windows are
+implemented / unverified on physical hosts; Linux X11 is verified on the private
+software-rendered Xvfb desktop with a disposable PulseAudio null-sink microphone;
+Wayland remains gated with native live capture. Silent virtual audio verifies
+segmentation and track presence, not physical microphone waveform correctness.
+
 The opt-in `--live` workspace now connects full-display PNG capture and local
 screenshot history on both native hosts through `captures-app`. It includes
 explicit copy, export, reveal and history deletion while keeping exports and the

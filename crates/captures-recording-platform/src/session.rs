@@ -102,6 +102,20 @@ impl RecordingSession {
         exclude_captures_app: bool,
         is_current: impl Fn() -> bool,
     ) -> Result<RecordingSessionSnapshot, String> {
+        self.start_with(exclude_captures_app, is_current, start_native_segment)
+    }
+
+    fn start_with(
+        &mut self,
+        exclude_captures_app: bool,
+        is_current: impl Fn() -> bool,
+        open: impl FnOnce(
+            &RecordingOptions,
+            &Path,
+            &DisplayDescriptor,
+            bool,
+        ) -> Result<NativeRecordingSegment, String>,
+    ) -> Result<RecordingSessionSnapshot, String> {
         if !matches!(
             self.manifest.state,
             RecordingState::Countdown | RecordingState::Paused
@@ -117,7 +131,7 @@ impl RecordingSession {
         let path = self
             .directory
             .join(format!("segment-{:03}.mp4", self.manifest.segments.len()));
-        let segment = match start_native_segment(
+        let segment = match open(
             &self.manifest.options,
             &path,
             &self.display,
@@ -182,6 +196,72 @@ impl RecordingSession {
         self.started_at_ms = Some(now);
         self.active = Some(segment);
         Ok(self.snapshot())
+    }
+
+    /// Change only the microphone's live mute state. A running take completes
+    /// its current segment before the option is durably changed, then opens a
+    /// new segment with the same target and all other options. Paused sessions
+    /// persist the option without resuming. Completed media remains recoverable
+    /// if cancellation or engine startup prevents the replacement segment.
+    pub fn set_microphone_muted(
+        &mut self,
+        muted: bool,
+        exclude_captures_app: bool,
+        is_current: impl Fn() -> bool,
+    ) -> Result<RecordingSessionSnapshot, String> {
+        self.set_microphone_muted_with(
+            muted,
+            exclude_captures_app,
+            is_current,
+            start_native_segment,
+        )
+    }
+
+    fn set_microphone_muted_with(
+        &mut self,
+        muted: bool,
+        exclude_captures_app: bool,
+        is_current: impl Fn() -> bool,
+        open: impl FnOnce(
+            &RecordingOptions,
+            &Path,
+            &DisplayDescriptor,
+            bool,
+        ) -> Result<NativeRecordingSegment, String>,
+    ) -> Result<RecordingSessionSnapshot, String> {
+        if !is_current() {
+            return Err("Recording cancelled".into());
+        }
+        if !matches!(
+            self.manifest.state,
+            RecordingState::Recording | RecordingState::Paused
+        ) {
+            return Err("Microphone mute can only change while recording or paused".into());
+        }
+        if self.manifest.options.audio.microphone_device_id.is_none() {
+            return Err("Recording does not have a selected microphone".into());
+        }
+        if self.manifest.options.audio.microphone_muted == muted {
+            return Ok(self.snapshot());
+        }
+
+        let was_recording = self.manifest.state == RecordingState::Recording;
+        if was_recording {
+            self.complete_active()?;
+            self.transition(RecordingState::Paused, now_ms())
+                .map_err(|error| self.fail(error))?;
+        }
+
+        let mut options = self.manifest.options.clone();
+        options.audio.microphone_muted = muted;
+        self.persist_options(options)
+            .map_err(|error| self.fail(error))?;
+
+        if was_recording {
+            self.start_with(exclude_captures_app, is_current, open)
+        } else {
+            Ok(self.snapshot())
+        }
     }
 
     pub fn pause(&mut self) -> Result<RecordingSessionSnapshot, String> {
@@ -455,6 +535,16 @@ impl RecordingSession {
         self.store.save(&self.manifest).map_err(string)
     }
 
+    fn persist_options(&mut self, options: RecordingOptions) -> Result<(), String> {
+        let now = now_ms();
+        self.coordinator
+            .update_options(&self.manifest.session_id, options.clone(), now)
+            .map_err(string)?;
+        self.manifest.options = options;
+        self.manifest.updated_at_ms = now;
+        self.store.save(&self.manifest).map_err(string)
+    }
+
     fn fail(&mut self, message: String) -> String {
         let now = now_ms();
         // A metadata write can fail while the engine is still running. Stop it
@@ -600,6 +690,170 @@ mod tests {
         assert_eq!(session.store.load(&before.session_id).unwrap(), before);
         assert_eq!(std::fs::read(sentinel).unwrap(), b"preserve prior take");
         assert!(session.active.is_none());
+    }
+
+    #[test]
+    fn paused_microphone_mute_is_durable_and_survives_resume_cancellation_and_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let display = display();
+        let mut options = options(&display);
+        options.audio.microphone_device_id = Some("fixture-microphone".into());
+        let mut session = RecordingSession::prepare(root.path().into(), options, display).unwrap();
+        session
+            .transition(RecordingState::Recording, now_ms().saturating_sub(1_000))
+            .unwrap();
+        session.pause().unwrap();
+        let elapsed = session.snapshot().elapsed_ms;
+
+        let muted = session.set_microphone_muted(true, false, || true).unwrap();
+        assert_eq!(muted.state, RecordingState::Paused);
+        assert!(muted.options.audio.microphone_muted);
+        assert_eq!(muted.elapsed_ms, elapsed);
+        assert_eq!(session.manifest.options, muted.options);
+        assert_eq!(
+            session.store.load(&session.manifest.session_id).unwrap(),
+            session.manifest
+        );
+
+        let before = session.manifest.clone();
+        let unchanged = session.set_microphone_muted(true, false, || true).unwrap();
+        assert_eq!(unchanged, muted);
+        assert_eq!(
+            session.manifest, before,
+            "unchanged mute must not rotate media"
+        );
+
+        assert_eq!(
+            session.start(false, || false).unwrap_err(),
+            "Recording cancelled"
+        );
+        assert_eq!(session.manifest, before);
+        assert!(session.snapshot().options.audio.microphone_muted);
+
+        let restarted = session.restart().unwrap();
+        assert_eq!(restarted.state, RecordingState::Countdown);
+        assert!(restarted.options.audio.microphone_muted);
+        assert_eq!(
+            restarted.options.audio.microphone_device_id.as_deref(),
+            Some("fixture-microphone")
+        );
+    }
+
+    #[test]
+    fn microphone_mute_rejects_stale_invalid_and_micless_sessions_without_mutation() {
+        let root = tempfile::tempdir().unwrap();
+        let display = display();
+        let mut selected = options(&display);
+        selected.audio.microphone_device_id = Some("fixture-microphone".into());
+        let mut session =
+            RecordingSession::prepare(root.path().join("selected"), selected, display.clone())
+                .unwrap();
+        let before = session.manifest.clone();
+        assert_eq!(
+            session
+                .set_microphone_muted(true, false, || false)
+                .unwrap_err(),
+            "Recording cancelled"
+        );
+        assert_eq!(session.manifest, before);
+        assert_eq!(
+            session
+                .set_microphone_muted(true, false, || true)
+                .unwrap_err(),
+            "Microphone mute can only change while recording or paused"
+        );
+        assert_eq!(session.manifest, before);
+
+        let mut micless =
+            RecordingSession::prepare(root.path().join("micless"), options(&display), display)
+                .unwrap();
+        micless
+            .transition(RecordingState::Recording, now_ms())
+            .unwrap();
+        micless.pause().unwrap();
+        let before = micless.manifest.clone();
+        assert_eq!(
+            micless
+                .set_microphone_muted(true, false, || true)
+                .unwrap_err(),
+            "Recording does not have a selected microphone"
+        );
+        assert_eq!(micless.manifest, before);
+    }
+
+    #[test]
+    fn unchanged_running_mute_does_not_complete_or_reopen_a_segment() {
+        let root = tempfile::tempdir().unwrap();
+        let display = display();
+        let mut options = options(&display);
+        options.audio.microphone_device_id = Some("fixture-microphone".into());
+        let mut session = RecordingSession::prepare(root.path().into(), options, display).unwrap();
+        session
+            .transition(RecordingState::Recording, now_ms())
+            .unwrap();
+
+        let snapshot = session
+            .set_microphone_muted_with(
+                false,
+                false,
+                || true,
+                |_, _, _, _| panic!("unchanged mute opened a recording engine"),
+            )
+            .unwrap();
+
+        assert_eq!(snapshot.state, RecordingState::Recording);
+        assert!(session.manifest.segments.is_empty());
+    }
+
+    #[test]
+    fn running_mute_preserves_completed_media_when_reopening_fails() {
+        let root = tempfile::tempdir().unwrap();
+        let display = display();
+        let mut options = options(&display);
+        options.audio.microphone_device_id = Some("fixture-microphone".into());
+        let mut session = RecordingSession::prepare(root.path().into(), options, display).unwrap();
+        let media = session.directory.join("segment-000.mp4");
+        std::fs::write(&media, b"accepted media").unwrap();
+        session.manifest.segments.push(RecordingSegmentManifest {
+            index: 0,
+            relative_path: "segment-000.mp4".into(),
+            system_audio_relative_path: None,
+            system_audio_offset_ms: 0,
+            system_audio_warning: None,
+            microphone_relative_path: Some("segment-000-microphone.wav".into()),
+            microphone_offset_ms: 0,
+            microphone_warning: None,
+            started_at_ms: 1,
+            duration_ms: 500,
+            width: 310,
+            height: 170,
+            size_bytes: 14,
+            dropped_frames: 0,
+            complete: true,
+        });
+        session.store.save(&session.manifest).unwrap();
+        session
+            .transition(RecordingState::Recording, now_ms().saturating_sub(500))
+            .unwrap();
+
+        let error = session
+            .set_microphone_muted_with(
+                true,
+                false,
+                || true,
+                |_, _, _, _| Err("replacement microphone could not open".into()),
+            )
+            .unwrap_err();
+
+        assert_eq!(error, "replacement microphone could not open");
+        assert_eq!(session.snapshot().state, RecordingState::Failed);
+        assert!(session.snapshot().options.audio.microphone_muted);
+        assert_eq!(session.manifest.segments.len(), 1);
+        assert_eq!(std::fs::read(media).unwrap(), b"accepted media");
+        assert_eq!(
+            session.store.load(&session.manifest.session_id).unwrap(),
+            session.manifest
+        );
     }
 
     #[test]

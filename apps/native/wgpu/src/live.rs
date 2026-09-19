@@ -169,6 +169,9 @@ enum CapturePhase {
     Recording,
     RecordingPausing,
     RecordingPaused,
+    RecordingMuting {
+        paused: bool,
+    },
     RecordingRestarting,
     RecordingFinalizing,
     RecordingDiscarding,
@@ -205,6 +208,10 @@ enum SelectorMessage {
     },
     ResumeRecording {
         generation: u64,
+    },
+    SetMicrophoneMuted {
+        generation: u64,
+        muted: bool,
     },
     RestartRecording {
         generation: u64,
@@ -963,6 +970,7 @@ impl Live {
                             | CapturePhase::Recording
                             | CapturePhase::RecordingPausing
                             | CapturePhase::RecordingPaused
+                            | CapturePhase::RecordingMuting { .. }
                     )
                 )
             {
@@ -1253,6 +1261,29 @@ impl Live {
                         ),
                     });
                 }
+                SelectorMessage::SetMicrophoneMuted { generation, muted }
+                    if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
+                        && matches!(
+                            self.capture_phase,
+                            Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
+                        ) =>
+                {
+                    let paused = self.capture_phase == Some(CapturePhase::RecordingPaused);
+                    self.capture_phase = Some(CapturePhase::RecordingMuting { paused });
+                    self.status = if muted {
+                        "Muting microphone…".into()
+                    } else {
+                        "Unmuting microphone…".into()
+                    };
+                    self.recording_worker
+                        .send(recording::Command::SetMicrophoneMuted {
+                            generation,
+                            muted,
+                            exclude_captures_app: recording_controls_are_excluded(
+                                self.include_recording_controls,
+                            ),
+                        });
+                }
                 SelectorMessage::RestartRecording { generation }
                     if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
                         && matches!(
@@ -1370,6 +1401,7 @@ impl Live {
                 | SelectorMessage::StartRecording { .. }
                 | SelectorMessage::PauseRecording { .. }
                 | SelectorMessage::ResumeRecording { .. }
+                | SelectorMessage::SetMicrophoneMuted { .. }
                 | SelectorMessage::RestartRecording { .. }
                 | SelectorMessage::ConfirmRestartRecording { .. }
                 | SelectorMessage::CancelRestartRecording { .. }
@@ -1608,6 +1640,56 @@ impl Live {
                         }
                     }
                 }
+                recording::Event::MicrophoneMuted { generation, result }
+                    if accepts_recording_event(
+                        self.flow.as_ref().map(CaptureFlow::generation),
+                        generation,
+                        self.flow.as_ref().is_some_and(CaptureFlow::is_current),
+                        self.capture_phase,
+                        |phase| matches!(phase, CapturePhase::RecordingMuting { .. }),
+                    ) =>
+                {
+                    match result {
+                        Ok(snapshot) => {
+                            self.recording_segment_started =
+                                snapshot_interpolation_origin(snapshot.state, Instant::now());
+                            self.capture_phase =
+                                Some(if snapshot.state == RecordingState::Paused {
+                                    CapturePhase::RecordingPaused
+                                } else {
+                                    CapturePhase::Recording
+                                });
+                            self.status = if snapshot.state == RecordingState::Paused {
+                                "Recording paused".into()
+                            } else {
+                                "Recording in progress".into()
+                            };
+                            self.recording_snapshot = Some(snapshot);
+                        }
+                        Err(failure) => {
+                            self.error = Some(format!(
+                                "Could not change microphone; accepted media was preserved: {}",
+                                failure.error
+                            ));
+                            if failure
+                                .snapshot
+                                .is_some_and(|snapshot| snapshot.state == RecordingState::Failed)
+                            {
+                                self.finish_capture(ctx, false);
+                            } else if self.recording_has_started {
+                                self.capture_phase = Some(CapturePhase::RecordingFinalizing);
+                                self.status =
+                                    "Microphone change failed; preserving recording…".into();
+                                self.recording_worker.send(recording::Command::Finish {
+                                    generation,
+                                    history_root: self.root.clone(),
+                                });
+                            } else {
+                                self.finish_capture(ctx, false);
+                            }
+                        }
+                    }
+                }
                 recording::Event::Restarted { generation, result }
                     if accepts_recording_event(
                         self.flow.as_ref().map(CaptureFlow::generation),
@@ -1685,6 +1767,7 @@ impl Live {
                 | recording::Event::Prepared { .. }
                 | recording::Event::Started { .. }
                 | recording::Event::Paused { .. }
+                | recording::Event::MicrophoneMuted { .. }
                 | recording::Event::Restarted { .. }
                 | recording::Event::Finished { .. }
                 | recording::Event::Discarded { .. } => {}
@@ -1714,6 +1797,7 @@ impl Live {
                         CapturePhase::Recording
                         | CapturePhase::RecordingPausing
                         | CapturePhase::RecordingPaused
+                        | CapturePhase::RecordingMuting { .. }
                         | CapturePhase::RecordingStarting,
                     ) if self.recording_has_started => {
                         let generation = flow.generation();
@@ -2700,14 +2784,28 @@ impl Live {
     fn capture_viewports(&mut self, ctx: &egui::Context, t: &Tokens) {
         if matches!(
             self.capture_phase,
-            Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
+            Some(
+                CapturePhase::Recording
+                    | CapturePhase::RecordingPaused
+                    | CapturePhase::RecordingMuting { .. }
+            )
         ) && let (Some(flow), Some(snapshot), Some(target)) = (
             &self.flow,
             self.recording_snapshot.clone(),
             self.countdown_target,
         ) {
             let generation = flow.generation();
-            let paused = self.capture_phase == Some(CapturePhase::RecordingPaused);
+            let paused = match self.capture_phase {
+                Some(CapturePhase::RecordingPaused) => true,
+                Some(CapturePhase::RecordingMuting { paused }) => paused,
+                _ => false,
+            };
+            let restart_confirmation = self.recording_restart_confirmation;
+            let busy = restart_confirmation
+                || matches!(
+                    self.capture_phase,
+                    Some(CapturePhase::RecordingMuting { .. })
+                );
             let elapsed_ms = interpolated_recording_elapsed(
                 snapshot.elapsed_ms,
                 self.recording_segment_started
@@ -2717,7 +2815,6 @@ impl Live {
             let confirmation_sender = self.selector_tx.clone();
             let tokens = t.clone();
             let include_controls = self.include_recording_controls;
-            let restart_confirmation = self.recording_restart_confirmation;
             let warning = snapshot.warning.clone();
             let position = target.position
                 + egui::vec2(
@@ -2757,7 +2854,9 @@ impl Live {
                         &tokens,
                         recording_hud::View {
                             paused,
-                            busy: restart_confirmation,
+                            busy,
+                            has_microphone: snapshot.options.audio.microphone_device_id.is_some(),
+                            microphone_muted: snapshot.options.audio.microphone_muted,
                             elapsed_ms,
                             notice,
                             warning: warning.is_some(),
@@ -2772,6 +2871,9 @@ impl Live {
                             }
                             recording_hud::Action::Restart => {
                                 SelectorMessage::RestartRecording { generation }
+                            }
+                            recording_hud::Action::SetMicrophoneMuted(muted) => {
+                                SelectorMessage::SetMicrophoneMuted { generation, muted }
                             }
                             recording_hud::Action::Stop => {
                                 SelectorMessage::StopRecording { generation }
@@ -3637,6 +3739,7 @@ fn is_recording_phase(phase: Option<CapturePhase>) -> bool {
                 | CapturePhase::Recording
                 | CapturePhase::RecordingPausing
                 | CapturePhase::RecordingPaused
+                | CapturePhase::RecordingMuting { .. }
                 | CapturePhase::RecordingRestarting
                 | CapturePhase::RecordingFinalizing
                 | CapturePhase::RecordingDiscarding

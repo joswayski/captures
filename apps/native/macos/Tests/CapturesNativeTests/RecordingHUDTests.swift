@@ -27,7 +27,12 @@ final class RecordingHUDTests: XCTestCase {
             XCTAssertTrue(hud.subviews.allSatisfy { $0.frame.maxX <= 430 && $0.frame.maxY <= 102 },
                 "compact controls must not clip")
             XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 4,
-                "Stop, Pause/Resume, Restart, and Trash are connected in this slice")
+                "mic-less sessions keep mute unavailable")
+            let microphone = try XCTUnwrap(hud.subviews.compactMap { $0 as? CaptureButton }
+                .first { $0.accessibilityLabel()?.contains("Microphone unavailable") == true })
+            XCTAssertFalse(microphone.isEnabled)
+            XCTAssertEqual(microphone.toolTip,
+                "Microphone unavailable because no microphone was selected")
             let buttons = hud.subviews.compactMap { $0 as? CaptureButton }
             XCTAssertEqual(buttons.filter(\.signal).compactMap { $0.accessibilityLabel() },
                 ["Stop recording"])
@@ -40,6 +45,14 @@ final class RecordingHUDTests: XCTestCase {
             }
             hud.setLifecycleActionsEnabled(true)
             XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 4)
+            hud.setMicrophone(muted: false, available: true)
+            XCTAssertTrue(microphone.isEnabled)
+            XCTAssertEqual(microphone.accessibilityLabel(), "Mute microphone")
+            XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 5)
+            hud.setMicrophone(muted: true, available: true)
+            XCTAssertTrue(microphone.selected)
+            XCTAssertEqual(microphone.accessibilityLabel(), "Unmute microphone")
+            XCTAssertEqual((microphone.accessibilityValue() as? NSNumber)?.intValue, 1)
             var restarted = false
             hud.restart = { restarted = true }
             try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Restart recording" })

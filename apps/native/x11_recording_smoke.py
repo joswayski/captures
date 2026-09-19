@@ -29,6 +29,8 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--restart-only", action="store_true",
                         help="stop after running/paused Restart and replacement-media checks")
+    parser.add_argument("--virtual-microphone", action="store_true",
+                        help="use a disposable PulseAudio null-sink monitor to verify mute segments")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -169,6 +171,13 @@ def main():
         threading.Thread(target=loop.run, daemon=True).start()
         spawn("openbox", ["openbox", "--sm-disable"])
         spawn("picom", ["picom", "--config", "/dev/null", "--backend", "xrender"])
+        if args.virtual_microphone:
+            spawn("pulseaudio", ["pulseaudio", "--daemonize=no", "--exit-idle-time=-1"])
+            wait(lambda: subprocess.run(["pactl", "info"], env=env, capture_output=True).returncode == 0,
+                 "PulseAudio virtual microphone server")
+            run("pactl", "load-module", "module-null-sink", "sink_name=captures",
+                "sink_properties=device.description=CapturesVirtualMicrophone")
+            run("pactl", "set-default-source", "captures.monitor")
         time.sleep(1)
         run("hsetroot", "-solid", "#c02040")
         settings = output / "settings.json"
@@ -184,7 +193,8 @@ def main():
                           "video_shortcut": "Ctrl+Alt+R", "window_shortcut": "Ctrl+Alt+W",
                           "display_shortcut": "Ctrl+Alt+D",
                           "highlight_clicks": False, "capture_system_audio": False,
-                          "microphone_device_id": None, "open_editor_after_recording": False},
+                          "microphone_device_id": "default" if args.virtual_microphone else None,
+                          "open_editor_after_recording": False},
         }))
         app = spawn("app", [str(binary), "--live", "--history-root", str(output / "history"),
                             "--settings-file", str(settings), "--quit-after", "120"])
@@ -204,6 +214,17 @@ def main():
         time.sleep(.3)
         assert manifest()["state"] == "recording"
         assert windows("Captures Recording Controls")
+        if args.virtual_microphone:
+            click(hud, 318, 54)
+            wait(lambda: (value := manifest()) and value["state"] == "recording"
+                 and value["options"]["audio"]["microphone_muted"]
+                 and len(value["segments"]) == 2, "running microphone mute segment")
+            shot(hud, "hud-muted")
+            click(hud, 318, 54)
+            wait(lambda: (value := manifest()) and value["state"] == "recording"
+                 and not value["options"]["audio"]["microphone_muted"]
+                 and len(value["segments"]) == 3, "running microphone unmute segment")
+            shot(hud, "hud-unmuted")
         click(hud, 178, 54)
         wait(lambda: (value := manifest()) and value["state"] == "paused", "pause completed")
         time.sleep(.3)
@@ -235,6 +256,12 @@ def main():
         run("hsetroot", "-solid", "#2070c0")
         hud = running_hud()
         time.sleep(.5)
+        if args.virtual_microphone:
+            click(hud, 318, 54)
+            wait(lambda: (value := manifest()) and value["state"] == "recording"
+                 and value["options"]["audio"]["microphone_muted"]
+                 and len(value["segments"]) == 2, "published recording mute segment")
+            time.sleep(.3)
         click(hud, 142, 54)
         metadata = wait(lambda: list((output / "history").glob("*/metadata.json")), "History publication")
         assert len(metadata) == 1
@@ -242,7 +269,8 @@ def main():
         assert entry["kind"] == "video" and entry["mime_type"] == "video/mp4", entry
         assert (entry["width"], entry["height"]) == (310, 170), entry
         assert entry["target"]["rect"] == {"x": 140, "y": 180, "width": 310, "height": 170}
-        assert entry["saved_path"] is None and not entry["has_microphone_audio"]
+        assert entry["saved_path"] is None
+        assert entry["has_microphone_audio"] == args.virtual_microphone, entry
         media = metadata[0].parent / "media.mp4"
         frames = run("ffmpeg", "-v", "error", "-i", str(media), "-vf", "crop=2:2:40:40",
                      "-f", "rawvideo", "-pix_fmt", "rgb24", "-")
@@ -257,6 +285,7 @@ def main():
                 "region": entry["target"]["rect"], "duration_ms": entry["duration_ms"],
                 "first_pixel": list(frames[:3]), "last_pixel": list(frames[-3:]),
                 "paused_restart": True, "running_restart": True,
+                "virtual_microphone_mute": args.virtual_microphone,
                 "restart_countdown_escape_discarded": True,
                 "replacement_only_media": True, "source_cleanup": True,
             }, indent=2))

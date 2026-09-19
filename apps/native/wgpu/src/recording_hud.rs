@@ -8,6 +8,7 @@ pub enum Action {
     Resume,
     Restart,
     Stop,
+    SetMicrophoneMuted(bool),
     Discard,
 }
 
@@ -27,6 +28,8 @@ enum Icon {
 pub struct View<'a> {
     pub paused: bool,
     pub busy: bool,
+    pub has_microphone: bool,
+    pub microphone_muted: bool,
     pub elapsed_ms: u64,
     pub notice: &'a str,
     pub warning: bool,
@@ -86,6 +89,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                             "Stop and save recording",
                             true,
                             !view.busy,
+                            false,
                             tokens,
                         )
                         .clicked()
@@ -102,6 +106,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                             },
                             false,
                             !view.busy,
+                            false,
                             tokens,
                         )
                         .clicked()
@@ -118,6 +123,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                             "Restart recording",
                             false,
                             !view.busy,
+                            false,
                             tokens,
                         )
                         .clicked()
@@ -136,18 +142,40 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                             "System audio",
                             "Audio controls are set before recording",
                         );
-                        unavailable(
-                            ui,
-                            Icon::Microphone,
-                            "Microphone",
-                            "Microphone controls are set before recording",
-                        );
+                        let microphone_label = if view.microphone_muted {
+                            "Unmute microphone"
+                        } else {
+                            "Mute microphone"
+                        };
+                        if view.has_microphone {
+                            if control(
+                                ui,
+                                Icon::Microphone,
+                                microphone_label,
+                                false,
+                                !view.busy,
+                                view.microphone_muted,
+                                tokens,
+                            )
+                            .clicked()
+                            {
+                                action = Some(Action::SetMicrophoneMuted(!view.microphone_muted));
+                            }
+                        } else {
+                            unavailable(
+                                ui,
+                                Icon::Microphone,
+                                "Microphone unavailable: no microphone selected",
+                                "Select a microphone before starting a recording",
+                            );
+                        }
                         if control(
                             ui,
                             Icon::Discard,
                             "Discard recording",
                             false,
                             !view.busy,
+                            false,
                             tokens,
                         )
                         .clicked()
@@ -173,11 +201,16 @@ fn control(
     description: &str,
     signal: bool,
     enabled: bool,
+    selected: bool,
     tokens: &Tokens,
 ) -> egui::Response {
     let mut button = egui::Button::new("").min_size(Vec2::splat(32.));
     if signal {
         button = button.fill(tokens.color("theme-signal"));
+    } else if selected {
+        button = button
+            .fill(tokens.color("glass-active"))
+            .stroke(Stroke::new(1., tokens.color("theme-accent")));
     }
     let response = ui.add_enabled(enabled, button).on_hover_text(description);
     response

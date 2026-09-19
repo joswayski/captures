@@ -18,12 +18,16 @@ final class RecordingHUDView: NSView {
     private let statusLabel = NSTextField(labelWithString: "RECORDING")
     private let noticeLabel = NSTextField(labelWithString: "These controls won’t show in recordings")
     private let pauseButton: CaptureButton
+    private let microphoneButton: CaptureButton
     private var lifecycleButtons: [CaptureButton] = []
     private var elapsedMilliseconds: UInt64 = 0
     private var resumedAt: Date?
     private var timer: Timer?
     private(set) var paused = false
+    private(set) var microphoneMuted = false
+    private var microphoneAvailable = false
     var pauseOrResume: () -> Void = {}
+    var toggleMicrophone: () -> Void = {}
     var restart: () -> Void = {}
     var stop: () -> Void = {}
     var discard: () -> Void = {}
@@ -36,6 +40,7 @@ final class RecordingHUDView: NSView {
             ? "These controls won’t show in recordings"
             : "These controls will appear in recordings"
         pauseButton = CaptureButton("Ⅱ", frame: .zero, tokens: tokens, glass: true) {}
+        microphoneButton = CaptureButton("♩", frame: .zero, tokens: tokens, glass: true) {}
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassStrong.rawValue).cgColor
@@ -76,12 +81,15 @@ final class RecordingHUDView: NSView {
         restart.setAccessibilityLabel("Restart recording")
         unavailable("⌗", x: 224, label: "Screenshot during recording is unavailable in this version")
         unavailable("—", x: 264, label: "Audio meter is unavailable in this version")
-        unavailable("♩", x: 304, label: "Microphone mute is unavailable in this version")
+        microphoneButton.frame = NSRect(x: 304, y: 35, width: 38, height: 42)
+        microphoneButton.actionBlock = { [weak self] in self?.toggleMicrophone() }
+        addSubview(microphoneButton)
         let trash = hudButton("⌫", x: 344, help: "Discard recording") { [weak self] in self?.discard() }
         trash.setAccessibilityLabel("Discard recording")
-        lifecycleButtons = [stop, pauseButton, restart, trash]
+        lifecycleButtons = [stop, pauseButton, restart, microphoneButton, trash]
         unavailable("◉̸", x: 384, label: "Hide controls is unavailable in this version")
         setPaused(false, elapsedMilliseconds: 0)
+        setMicrophone(muted: false, available: false)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
@@ -120,11 +128,26 @@ final class RecordingHUDView: NSView {
         noticeLabel.setAccessibilityLabel(noticeLabel.stringValue)
     }
 
+    func setMicrophone(muted: Bool, available: Bool) {
+        microphoneMuted = muted
+        microphoneAvailable = available
+        microphoneButton.title = muted ? "♩̸" : "♩"
+        microphoneButton.selected = muted
+        microphoneButton.isEnabled = available
+        let action = muted ? "Unmute microphone" : "Mute microphone"
+        let unavailable = "Microphone unavailable because no microphone was selected"
+        microphoneButton.toolTip = available ? action : unavailable
+        microphoneButton.setAccessibilityLabel(available ? action : unavailable)
+        microphoneButton.setAccessibilityValue(muted ? 1 : 0)
+        microphoneButton.needsDisplay = true
+    }
+
     func setLifecycleActionsEnabled(_ enabled: Bool) {
         lifecycleButtons.forEach {
             $0.isEnabled = enabled
             $0.needsDisplay = true
         }
+        microphoneButton.isEnabled = enabled && microphoneAvailable
     }
 
     private func updateTimer() {

@@ -5,7 +5,7 @@ pub const USAGE: &str = "Captures wgpu native host\n\
   --scene preferences|history|hud|preview|editor|capture-controls|region|window|countdown|idle\n\
   --appearance light|dark|system --theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono\n\
   --history-count 0..10000 --exercise --quit-after SECONDS\n\
-  --capture-controls-recording\n\
+  --capture-controls-recording --hud-state unmuted|muted|busy|no-microphone\n\
   --settings-file PATH\n\
   --floating (HUD/preview only) --reduced-motion\n\
   --screenshot FILE.png --screenshot-after SECONDS";
@@ -26,6 +26,14 @@ pub enum Scene {
     Window,
     Countdown,
     Idle,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HudState {
+    Unmuted,
+    Muted,
+    Busy,
+    NoMicrophone,
 }
 
 impl Scene {
@@ -84,6 +92,7 @@ pub struct Options {
     pub floating: bool,
     pub reduced_motion: bool,
     pub capture_controls_recording: bool,
+    pub hud_state: HudState,
     pub settings_file: Option<PathBuf>,
     pub appearance_override: bool,
     pub theme_override: bool,
@@ -105,6 +114,7 @@ impl Options {
             floating: false,
             reduced_motion: false,
             capture_controls_recording: false,
+            hud_state: HudState::Unmuted,
             settings_file: None,
             appearance_override: false,
             theme_override: false,
@@ -120,6 +130,15 @@ impl Options {
                 "--floating" => options.floating = true,
                 "--reduced-motion" => options.reduced_motion = true,
                 "--capture-controls-recording" => options.capture_controls_recording = true,
+                "--hud-state" => {
+                    options.hud_state = match args.next().ok_or("Missing HUD state")?.as_str() {
+                        "unmuted" => HudState::Unmuted,
+                        "muted" => HudState::Muted,
+                        "busy" => HudState::Busy,
+                        "no-microphone" => HudState::NoMicrophone,
+                        _ => return Err("Unknown HUD state".into()),
+                    }
+                }
                 "--scene" => {
                     let value = args.next().ok_or("Missing scene")?;
                     options.scene = Scene::VISIBLE
@@ -260,6 +279,13 @@ mod tests {
             assert!(parse(&args).is_err(), "{args:?}");
         }
         assert!(parse(&["--scene", "preview", "--floating"]).is_ok());
+        assert_eq!(
+            parse(&["--scene", "hud", "--hud-state", "muted"])
+                .unwrap()
+                .hud_state,
+            HudState::Muted
+        );
+        assert!(parse(&["--hud-state", "unknown"]).is_err());
         assert_eq!(
             parse(&["--scene", "countdown"]).unwrap().scene,
             Scene::Countdown
