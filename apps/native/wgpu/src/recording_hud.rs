@@ -57,9 +57,12 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                             Vec2::new(103., 32.),
                             Layout::left_to_right(Align::Center),
                             |ui| {
-                                ui.label(
-                                    RichText::new(if view.paused { "Ⅱ" } else { "●" })
-                                        .color(tokens.color("theme-signal")),
+                                let (status_rect, _) =
+                                    ui.allocate_exact_size(Vec2::splat(12.), egui::Sense::hover());
+                                ui.painter().circle_filled(
+                                    status_rect.center(),
+                                    5.,
+                                    tokens.color("theme-signal"),
                                 );
                                 ui.vertical_centered_justified(|ui| {
                                     ui.monospace(format_duration(view.elapsed_ms));
@@ -99,16 +102,28 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                                 Action::Pause
                             });
                         }
-                        unavailable(ui, Icon::Restart, "Restart is not available in this build");
+                        unavailable(
+                            ui,
+                            Icon::Restart,
+                            "Restart recording",
+                            "Restart is not available in this build",
+                        );
                         unavailable(
                             ui,
                             Icon::Screenshot,
+                            "Take screenshot",
                             "Screenshots are not available while recording",
                         );
-                        unavailable(ui, Icon::Audio, "Audio controls are set before recording");
+                        unavailable(
+                            ui,
+                            Icon::Audio,
+                            "System audio",
+                            "Audio controls are set before recording",
+                        );
                         unavailable(
                             ui,
                             Icon::Microphone,
+                            "Microphone",
                             "Microphone controls are set before recording",
                         );
                         if control(ui, Icon::Discard, "Discard recording", false, tokens).clicked()
@@ -118,6 +133,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                         unavailable(
                             ui,
                             Icon::Hide,
+                            "Hide recording controls",
                             "Hiding controls is not available in this build",
                         );
                     });
@@ -139,6 +155,7 @@ fn control(
         button = button.fill(tokens.color("theme-signal"));
     }
     let response = ui.add(button).on_hover_text(description);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, description));
     paint_icon(
         ui,
         response.rect,
@@ -148,10 +165,11 @@ fn control(
     response
 }
 
-fn unavailable(ui: &mut egui::Ui, icon: Icon, description: &str) {
+fn unavailable(ui: &mut egui::Ui, icon: Icon, label: &str, description: &str) {
     let response = ui
         .add_enabled(false, egui::Button::new("").min_size(Vec2::splat(32.)))
         .on_disabled_hover_text(description);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, false, label));
     paint_icon(
         ui,
         response.rect,
