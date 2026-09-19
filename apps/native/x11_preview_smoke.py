@@ -448,7 +448,12 @@ def main():
                 run("xdotool", "windowactivate", "--sync", root, "key", "ctrl+shift+F7")
                 time.sleep(.5)
                 assert not windows(SELECTOR), "focused Preferences did not suppress shortcut"
-                run("xdotool", "windowactivate", "--sync", other, "key", "ctrl+shift+F7")
+                run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
+                assert run("xdotool", "getwindowfocus").decode().strip() == other
+                # X11 activation acknowledgement precedes delivery of egui's
+                # focus event; exercise the settled focus boundary here.
+                time.sleep(.3)
+                run("xdotool", "key", "ctrl+shift+F7")
                 wait(lambda: windows(SELECTOR), "unfocused Preferences permits background shortcut")
                 run("xdotool", "key", "Escape")
                 wait(lambda: not windows(SELECTOR) and windows("Captures"),
