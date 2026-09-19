@@ -1,5 +1,14 @@
 import AppKit
 
+enum RecordingHUDColorToken: String, CaseIterable {
+    case glassStrong = "glass-strong"
+    case glassBorder = "glass-border"
+    case glassText = "glass-text"
+    case glassTextSubtle = "glass-text-subtle"
+    case themeAccent = "theme-accent"
+    case themeSignal = "theme-signal"
+}
+
 final class RecordingHUDView: NSView {
     private let tokens: Tokens
     private let defaultNotice: String
@@ -27,9 +36,10 @@ final class RecordingHUDView: NSView {
         pauseButton = CaptureButton("Ⅱ", frame: .zero, tokens: tokens, glass: true) {}
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = tokens.color("glass-strong").cgColor
+        layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassStrong.rawValue).cgColor
         layer?.cornerRadius = tokens.number("r-2xl")
-        layer?.borderWidth = 1; layer?.borderColor = tokens.color("glass-border").cgColor
+        layer?.borderWidth = 1
+        layer?.borderColor = tokens.color(RecordingHUDColorToken.glassBorder.rawValue).cgColor
         layer?.shadowColor = NSColor.black.cgColor; layer?.shadowOpacity = 0.44
         layer?.shadowRadius = 22; layer?.shadowOffset = NSSize(width: 0, height: -8)
         setAccessibilityRole(.group); setAccessibilityLabel("Recording controls")
@@ -38,7 +48,7 @@ final class RecordingHUDView: NSView {
         noticeLabel.frame = NSRect(x: 60, y: 8, width: 310, height: 18)
         noticeLabel.alignment = .center
         noticeLabel.font = .systemFont(ofSize: 11, weight: .medium)
-        noticeLabel.textColor = tokens.color("glass-text-subtle")
+        noticeLabel.textColor = tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue)
         noticeLabel.lineBreakMode = .byTruncatingTail
         addSubview(noticeLabel)
 
@@ -47,10 +57,11 @@ final class RecordingHUDView: NSView {
         addSubview(statusDot)
         timerLabel.frame = NSRect(x: 34, y: 31, width: 64, height: 30)
         timerLabel.font = .monospacedDigitSystemFont(ofSize: 22, weight: .semibold)
-        timerLabel.textColor = tokens.color("glass-text"); addSubview(timerLabel)
+        timerLabel.textColor = tokens.color(RecordingHUDColorToken.glassText.rawValue); addSubview(timerLabel)
         statusLabel.frame = NSRect(x: 34, y: 60, width: 76, height: 16)
         statusLabel.font = .systemFont(ofSize: 9, weight: .semibold)
-        statusLabel.textColor = tokens.color("glass-text-subtle"); addSubview(statusLabel)
+        statusLabel.textColor = tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue)
+        addSubview(statusLabel)
 
         let stop = hudButton("■", x: 104, help: "Stop and save recording") { [weak self] in self?.stop() }
         stop.primary = true; stop.setAccessibilityLabel("Stop recording")
@@ -85,7 +96,8 @@ final class RecordingHUDView: NSView {
         self.paused = paused; self.elapsedMilliseconds = elapsedMilliseconds
         resumedAt = paused ? nil : Date()
         statusLabel.stringValue = paused ? "PAUSED" : "RECORDING"
-        statusDot.layer?.backgroundColor = tokens.color(paused ? "theme-accent" : "signal").cgColor
+        let statusToken: RecordingHUDColorToken = paused ? .themeAccent : .themeSignal
+        statusDot.layer?.backgroundColor = tokens.color(statusToken.rawValue).cgColor
         pauseButton.title = paused ? "▶" : "Ⅱ"
         pauseButton.setAccessibilityLabel(paused ? "Resume recording" : "Pause recording")
         updateTimer()
@@ -97,7 +109,8 @@ final class RecordingHUDView: NSView {
 
     func setWarning(_ warning: String?) {
         noticeLabel.stringValue = warning ?? defaultNotice
-        noticeLabel.textColor = tokens.color(warning == nil ? "glass-text-subtle" : "signal")
+        let noticeToken: RecordingHUDColorToken = warning == nil ? .glassTextSubtle : .themeSignal
+        noticeLabel.textColor = tokens.color(noticeToken.rawValue)
         noticeLabel.toolTip = warning
         noticeLabel.setAccessibilityLabel(noticeLabel.stringValue)
     }
