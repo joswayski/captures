@@ -95,7 +95,8 @@ impl RecordingSession {
 
     /// Called after countdown and hiding capture controls. The callback reads
     /// the host's capture-generation cancellation gate before and after the
-    /// blocking engine start. A cancelled start never becomes Recording.
+    /// blocking engine start. A cancelled initial start discards its bundle;
+    /// cancelled resume leaves completed segments paused for stop/finalization.
     pub fn start(
         &mut self,
         exclude_captures_app: bool,
@@ -108,7 +109,9 @@ impl RecordingSession {
             return Err("Recording is not waiting to start".into());
         }
         if !is_current() {
-            self.discard()?;
+            if self.manifest.state == RecordingState::Countdown {
+                self.discard()?;
+            }
             return Err("Recording cancelled".into());
         }
         let path = self
@@ -127,7 +130,9 @@ impl RecordingSession {
             if let Err(error) = segment.discard() {
                 return Err(self.fail(error.to_string()));
             }
-            self.discard()?;
+            if self.manifest.state == RecordingState::Countdown {
+                self.discard()?;
+            }
             return Err("Recording cancelled".into());
         }
         let now = now_ms();
@@ -513,6 +518,31 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_resume_before_engine_open_preserves_paused_bundle() {
+        let root = tempfile::tempdir().unwrap();
+        let display = display();
+        let mut session =
+            RecordingSession::prepare(root.path().into(), options(&display), display).unwrap();
+        // Exercise the state gate without opening an engine on the test runner.
+        session
+            .transition(RecordingState::Recording, now_ms())
+            .unwrap();
+        session.pause().unwrap();
+        let before = session.manifest.clone();
+        let sentinel = session.directory.join("completed-media");
+        std::fs::write(&sentinel, b"preserve prior take").unwrap();
+        assert_eq!(
+            session.start(false, || false).unwrap_err(),
+            "Recording cancelled"
+        );
+        assert_eq!(session.snapshot().state, RecordingState::Paused);
+        assert_eq!(session.manifest, before);
+        assert_eq!(session.store.load(&before.session_id).unwrap(), before);
+        assert_eq!(std::fs::read(sentinel).unwrap(), b"preserve prior take");
+        assert!(session.active.is_none());
+    }
+
+    #[test]
     fn invalid_options_do_not_create_a_recovery_bundle() {
         let root = tempfile::tempdir().unwrap();
         let display = display();
@@ -600,6 +630,40 @@ mod tests {
                 session.store.load(&session.manifest.session_id).unwrap(),
                 session.manifest
             );
+        }
+        // Losing the selector generation during Resume must discard only the
+        // newly opened engine, never either completed segment of this take.
+        for after_open in [false, true] {
+            let before = session.manifest.clone();
+            let media: Vec<_> = before
+                .segments
+                .iter()
+                .map(|segment| {
+                    std::fs::read(session.directory.join(&segment.relative_path)).unwrap()
+                })
+                .collect();
+            let calls = Cell::new(0);
+            assert_eq!(
+                session
+                    .start(false, || {
+                        calls.set(calls.get() + 1);
+                        after_open && calls.get() == 1
+                    })
+                    .unwrap_err(),
+                "Recording cancelled"
+            );
+            assert_eq!(calls.get(), if after_open { 2 } else { 1 });
+            assert_eq!(session.snapshot().state, RecordingState::Paused);
+            assert!(session.active.is_none());
+            assert_eq!(session.manifest, before);
+            assert_eq!(session.store.load(&before.session_id).unwrap(), before);
+            for (segment, bytes) in before.segments.iter().zip(media) {
+                assert_eq!(
+                    std::fs::read(session.directory.join(&segment.relative_path)).unwrap(),
+                    bytes
+                );
+            }
+            assert!(!session.directory.join("segment-002.mp4").exists());
         }
         // A later healthy segment must not hide an earlier audio failure.
         session.manifest.segments[0].microphone_warning = Some("Microphone disconnected".into());
