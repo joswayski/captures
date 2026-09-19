@@ -1,7 +1,7 @@
 //! One cancellable native capture at a time. The host owns this guard on its
 //! native event-loop thread; workers carry only the generation, never OS handles.
 use global_hotkey::{
-    GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
+    GlobalHotKeyManager,
     hotkey::{Code, HotKey},
 };
 use std::{
@@ -71,7 +71,11 @@ pub(crate) fn commit(generation: u64) -> bool {
     GATE.commit(generation)
 }
 
-fn escape() {
+pub(crate) fn active() -> bool {
+    GATE.current.load(Ordering::Acquire) != 0
+}
+
+pub(crate) fn escape() {
     let generation = GATE.current.load(Ordering::Acquire) & !1;
     GATE.cancel(generation);
 }
@@ -115,14 +119,8 @@ impl CaptureFlow {
         }
         let generation = GATE.begin()?;
         let registration: Result<_, String> = (|| {
+            crate::shortcuts::install_dispatcher();
             let manager = GlobalHotKeyManager::new().map_err(|e| e.to_string())?;
-            GlobalHotKeyEvent::set_event_handler(Some(|event: GlobalHotKeyEvent| {
-                if event.id == HotKey::new(None, Code::Escape).id()
-                    && event.state == HotKeyState::Pressed
-                {
-                    escape();
-                }
-            }));
             manager
                 .register(HotKey::new(None, Code::Escape))
                 .map_err(|e| e.to_string())?;

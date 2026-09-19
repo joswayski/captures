@@ -5,6 +5,21 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Event-loop-thread-only native capture-launch shortcuts. One owner per process.
+ * JSON requests: configure {settings: AppSettings}, enabled {enabled: bool},
+ * next, close. Envelopes follow captures_app_request_v1. next returns
+ * {action: "region"|"window"|"display"|null}; it consumes one pending launch.
+ * Configure copies settings; conflicts retain the prior registered mapping.
+ * wake is required on first configure, must remain callable for process lifetime,
+ * may run on an OS worker thread, and must ONLY schedule host work (no synchronous
+ * reentry). Drain next on the native thread after waking. No timer is required.
+ * Disabling/reconfiguring/closing discards queued and held-key launch intent.
+ * Close before app teardown. Do not configure synthetic fixture scenes.
+ * request_json is readable NUL-terminated UTF-8 during the call. Free returned
+ * owned JSON with captures_settings_free_v1 exactly once. */
+typedef void (*CapturesShortcutWake)(void);
+char *captures_shortcuts_request_v1(const char *request_json, CapturesShortcutWake wake);
+
 /* Allocation-free region geometry in display-local logical coordinates. These
  * field layouts are versioned alongside the function names. No pointers are
  * retained. False leaves output unchanged (including null output, invalid mode,
