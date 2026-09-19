@@ -29,10 +29,10 @@ final class HistoryClearTests: XCTestCase {
                 settingsPath: nil, transport: transport, showPreferences: {})
             defer { withExtendedLifetime(controller) {} }
             window.makeKeyAndOrderFront(nil)
-            let clear = try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }.first { $0.title == "Clear history…" })
+            let clear = try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }.first { $0.title == "Clear screenshots…" })
             let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? NSTableView)
             try waitUntil { table.numberOfRows == 2 && clear.isEnabled }
-            XCTAssertEqual(clear.accessibilityLabel(), "Clear history…")
+            XCTAssertEqual(clear.accessibilityLabel(), "Clear screenshots…")
 
             clear.performClick(nil)
             try waitUntil { window.attachedSheet != nil }
