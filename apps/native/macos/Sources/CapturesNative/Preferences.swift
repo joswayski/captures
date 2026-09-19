@@ -27,6 +27,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private let tokensProvider: () -> Tokens
     private let appearanceChanged: (String, String, [String: Any]) -> Void
     private let settingsChanged: ([String: Any]) -> Void
+    private let settingsPersisted: ([String: Any]) -> Void
     private let showHistory: () -> Void
     private let liveCaptureAvailable: Bool
     private var settings: [String: Any] = [:]
@@ -52,11 +53,13 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     init(root: Surface, store: SettingsStore, tokens: @escaping () -> Tokens,
          appearanceChanged: @escaping (String, String, [String: Any]) -> Void,
          settingsChanged: @escaping ([String: Any]) -> Void = { _ in },
+         settingsPersisted: @escaping ([String: Any]) -> Void = { _ in },
          showHistory: @escaping () -> Void, liveCaptureAvailable: Bool = false,
          initialAppearance: String? = nil, initialTheme: String? = nil) {
         self.root = root; self.store = store; tokensProvider = tokens
         self.appearanceChanged = appearanceChanged; self.showHistory = showHistory
         self.settingsChanged = settingsChanged
+        self.settingsPersisted = settingsPersisted
         self.liveCaptureAvailable = liveCaptureAvailable
         super.init()
         buildShell()
@@ -69,6 +72,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
                 if let initialTheme { self.settings["theme"] = initialTheme }
                 self.appearanceChanged(self.settings.string("appearance", "system"), self.settings.string("theme", "mustard"), value["custom_theme"] as? [String: Any] ?? [:])
                 self.settingsChanged(self.settings)
+                self.settingsPersisted(self.settings)
                 self.restyle()
                 self.setStatus("", kind: "idle")
             case .failure(let error):
@@ -197,8 +201,13 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     }
 
     private func shortcutsCard(_ y: CGFloat) -> CGFloat {
-        let card = card("shortcuts", title: "Shortcuts", description: "Global capture shortcuts are not connected in this native development build.", y: y, height: 164)
-        disabledRow("Global capture shortcuts", detail: "Use the installed Preview for capture shortcuts.", y: 88, parent: card)
+        let description = liveCaptureAvailable
+            ? "Saved bindings for native region, window and display captures."
+            : "Global capture shortcuts are not connected in this native development build."
+        let card = card("shortcuts", title: "Shortcuts", description: description, y: y, height: 164)
+        disabledRow(liveCaptureAvailable ? "Capture shortcuts" : "Global capture shortcuts",
+            detail: liveCaptureAvailable ? "Shortcut editing is not available in the native workspace yet."
+                : "Use the installed Preview for capture shortcuts.", y: 88, parent: card)
         return y + card.frame.height + 22
     }
 
@@ -342,6 +351,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             switch result {
             case .success(let saved):
                 self.settings = saved; self.settingsChanged(saved)
+                self.settingsPersisted(saved)
                 self.setStatus("✓  Changes saved", kind: "saved")
             case .failure(let error): self.saveFailed = true; self.setStatus("Couldn’t save changes: \(error.localizedDescription) — Retry", kind: "error")
             }

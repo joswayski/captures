@@ -163,11 +163,40 @@ func liveReopenAction(hasVisibleWindows: Bool) -> LiveReopenAction {
     hasVisibleWindows ? .focusExisting : .showPreferences
 }
 
+func captureShortcutSignature(_ settings: [String: Any]) -> [String] {
+    [settings.string("region_shortcut"), settings.string("window_shortcut"),
+     settings.string("display_shortcut")]
+}
+
+func captureShortcutsEnabled(scene: String, captureBusy: Bool) -> Bool {
+    scene != "preferences" && !captureBusy
+}
+
+func stillCaptureKind(for shortcut: CaptureShortcut) -> StillCaptureKind {
+    switch shortcut {
+    case .region: return .region
+    case .window: return .window
+    case .display: return .display
+    }
+}
+
+func configureStatusItemButton(_ button: NSStatusBarButton) {
+    if let image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Captures") {
+        image.isTemplate = true
+        button.image = image
+    } else {
+        button.title = "C"
+    }
+    button.setAccessibilityLabel("Captures")
+}
+
 func performTermination(flushPreferences: () -> Void, cancelCapture: () -> Void,
-                        closePreviews: () -> Void, drainActions: () -> Void,
+                        closeShortcuts: () -> Void, closePreviews: () -> Void,
+                        drainActions: () -> Void,
                         removeExerciseDirectory: () -> Void) {
     flushPreferences()
     cancelCapture()
+    closeShortcuts()
     closePreviews()
     drainActions()
     removeExerciseDirectory()
@@ -186,7 +215,14 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var rootWindowCloseHandler: RootWindowCloseHandler?
     private var statusItem: NSStatusItem?
     private var statusActions: LiveStatusActions?
+    private var captureShortcuts: NativeCaptureShortcuts?
+    private var shortcutWakeObserver: NSObjectProtocol?
+    private var shortcutSignature: [String]?
+    private var captureBusy = false
+    private var terminating = false
     private var liveContent: Surface?
+    private var liveStyleRevision = 0
+    private var renderedLiveStyleRevision = -1
     private var previewSelectionID: String?
     private var regionSelector: RegionSelectionView?
     private var windowSelector: WindowSelectionView?
@@ -261,7 +297,10 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         self.rootWindowCloseHandler = rootWindowCloseHandler
         window.delegate = rootWindowCloseHandler
         render()
-        if options.live { installStatusItem() }
+        if options.live {
+            installStatusItem()
+            installCaptureShortcuts()
+        }
         if scene != "idle" { window.makeKeyAndOrderFront(nil) }
         NSApp.activate(ignoringOtherApps: true)
         Metrics.write(["event": "ready", "scene": scene, "window": window.windowNumber,
@@ -286,8 +325,10 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !options.live }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        terminating = true
         performTermination(flushPreferences: { [weak self] in self?.preferencesController?.flush() },
             cancelCapture: { [weak self] in self?.liveController?.finishCapture(restoreWindow: false) },
+            closeShortcuts: { [weak self] in self?.closeCaptureShortcuts() },
             closePreviews: { [weak self] in self?.miniPreviews?.close() },
             drainActions: { LiveCaptureController.flush() },
             removeExerciseDirectory: { [weak self] in
@@ -319,6 +360,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         guard appearance == "system" else { return }
         resolvedTokens = makeTokens()
         preferencesController?.restyle()
+        liveStyleRevision += 1
+        rebuildRenderedLiveWorkspaceIfNeeded()
     }
 
     private func render() {
@@ -357,6 +400,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     self.customTheme = customTheme
                     if changed {
                         self.resolvedTokens = self.makeTokens()
+                        self.liveStyleRevision += 1
                     }
                     self.window.appearance = appearance == "system" ? nil : NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
                 }, settingsChanged: { [weak self] settings in
@@ -366,6 +410,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     else { return }
                     self?.miniPreviews?.updateSettings(MiniPreviewSettings(enabled: enabled,
                         placement: placement, includeInCaptures: include))
+                }, settingsPersisted: { [weak self] settings in
+                    self?.updateCaptureShortcuts(settings: settings)
                 }, showHistory: { [weak self] in self?.showHistory() },
                    liveCaptureAvailable: options.live,
                    initialAppearance: options.appearanceOverride ? options.appearance : nil,
@@ -411,9 +457,21 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             liveController = LiveCaptureController(root: content, window: window, tokens: tokens,
                 historyRoot: options.historyRoot, settingsPath: options.settingsFile,
                 miniPreviews: miniPreviews, miniPreviewActions: miniPreviewActions,
-                initialSelectionID: previewSelectionID) { [weak self] in
-                    self?.scene = "preferences"; self?.render()
+                initialSelectionID: previewSelectionID,
+                captureStateChanged: { [weak self] busy in
+                    self?.captureBusy = busy
+                    self?.updateShortcutEnabled()
+                    if !busy {
+                        DispatchQueue.main.async { [weak self] in
+                            self?.rebuildRenderedLiveWorkspaceIfNeeded()
+                        }
+                    }
+                }, reportError: { [weak self] message in
+                    self?.presentHostError(title: "Capture Failed", message: message)
+                }) { [weak self] in
+                    self?.showPreferences()
                 }
+            renderedLiveStyleRevision = liveStyleRevision
             previewSelectionID = nil
             Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
             return
@@ -464,7 +522,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private func installStatusItem() {
         let actions = LiveStatusActions(capture: { [weak self] kind in
             self?.preferencesController?.flush()
-            self?.liveController?.capture(kind)
+            self?.launchCapture(kind)
         }, history: { [weak self] in
             self?.showHistory()
         }, preferences: { [weak self] in
@@ -475,16 +533,87 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             NSApp.terminate(nil)
         })
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Captures") {
-            image.isTemplate = true
-            item.button?.image = image
-        } else {
-            item.button?.title = "C"
-        }
-        item.button?.setAccessibilityLabel("Captures")
+        if let button = item.button { configureStatusItemButton(button) }
         item.menu = actions.makeMenu()
         statusActions = actions
         statusItem = item
+    }
+
+    private func installCaptureShortcuts() {
+        shortcutWakeObserver = NotificationCenter.default.addObserver(
+            forName: NativeCaptureShortcuts.wakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.drainCaptureShortcuts()
+        }
+        do {
+            let store = try SettingsStore(path: options.settingsFile)
+            store.load { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case .success(let settings): self.updateCaptureShortcuts(settings: settings)
+                case .failure(let error): self.reportShortcutError(error)
+                }
+            }
+        } catch {
+            reportShortcutError(error)
+        }
+    }
+
+    private func updateCaptureShortcuts(settings: [String: Any]) {
+        guard !terminating else { return }
+        let signature = captureShortcutSignature(settings)
+        guard signature != shortcutSignature else { return }
+        do {
+            if let captureShortcuts {
+                try captureShortcuts.update(settings: settings)
+            } else {
+                captureShortcuts = try NativeCaptureShortcuts(settings: settings)
+            }
+            shortcutSignature = signature
+            updateShortcutEnabled()
+        } catch {
+            reportShortcutError(error)
+        }
+    }
+
+    private func updateShortcutEnabled() {
+        captureShortcuts?.setEnabled(captureShortcutsEnabled(scene: scene, captureBusy: captureBusy))
+    }
+
+    private func drainCaptureShortcuts() {
+        guard !terminating, scene != "preferences", !captureBusy,
+              let captureShortcuts else { return }
+        do {
+            while let action = try captureShortcuts.nextAction() {
+                launchCapture(stillCaptureKind(for: action))
+                if captureBusy { break }
+            }
+        } catch {
+            reportShortcutError(error)
+        }
+    }
+
+    private func closeCaptureShortcuts() {
+        if let shortcutWakeObserver {
+            NotificationCenter.default.removeObserver(shortcutWakeObserver)
+            self.shortcutWakeObserver = nil
+        }
+        captureShortcuts?.close()
+        captureShortcuts = nil
+    }
+
+    private func reportShortcutError(_ error: Error) {
+        Metrics.write(["event": "shortcut-error", "detail": error.localizedDescription])
+        liveController?.showShortcutError(error)
+        presentHostError(title: "Capture Shortcuts Unavailable", message: error.localizedDescription)
+    }
+
+    private func launchCapture(_ kind: StillCaptureKind) {
+        guard liveController?.capture(kind) == true else {
+            presentHostError(title: "Capture Unavailable",
+                message: "The capture workspace is still loading or another capture is already active.")
+            return
+        }
     }
 
     private func showHistory() {
@@ -493,7 +622,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         }
         preferencesController?.flush()
         scene = "live"
+        _ = discardLiveWorkspaceForStyleChange()
         render()
+        updateShortcutEnabled()
         liveController?.refreshHistory()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -502,6 +633,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private func showPreferences() {
         preferencesController?.flush()
         scene = "preferences"
+        updateShortcutEnabled()
         render()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -509,14 +641,58 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     private func openOutputFolder() {
         LiveCaptureController.queue.async { [settingsPath = options.settingsFile] in
-            let result = Result { try CapturePreferences.load(path: settingsPath).directory }
-            DispatchQueue.main.async {
-                guard case .success(let path) = result else { return }
+            let result = Result { () throws -> URL in
+                let path = try CapturePreferences.load(path: settingsPath).directory
                 let url = URL(fileURLWithPath: path, isDirectory: true)
-                try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-                NSWorkspace.shared.open(url)
+                try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+                return url
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                switch result {
+                case .success(let url):
+                    if !NSWorkspace.shared.open(url) {
+                        self.presentHostError(title: "Couldn’t Open Save Location",
+                            message: "The configured output folder could not be opened.")
+                    }
+                case .failure(let error):
+                    self.presentHostError(title: "Couldn’t Open Save Location",
+                        message: error.localizedDescription)
+                }
             }
         }
+    }
+
+    @discardableResult private func discardLiveWorkspaceForStyleChange() -> Bool {
+        guard scene == "live", !captureBusy,
+              renderedLiveStyleRevision != liveStyleRevision else { return false }
+        liveController?.finishCapture(restoreWindow: false)
+        liveController = nil
+        liveContent = nil
+        return true
+    }
+
+    private func rebuildRenderedLiveWorkspaceIfNeeded() {
+        guard discardLiveWorkspaceForStyleChange() else { return }
+        render()
+        liveController?.refreshHistory()
+    }
+
+    private func presentHostError(title: String, message: String) {
+        guard window.attachedSheet == nil else {
+            Metrics.write(["event": "host-error", "detail": "\(title): \(message)"])
+            return
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        if !window.isVisible {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        alert.beginSheetModal(for: window)
     }
 
     private func exerciseSettingsPath() -> String {
