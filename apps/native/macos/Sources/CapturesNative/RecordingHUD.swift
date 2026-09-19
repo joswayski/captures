@@ -20,6 +20,7 @@ final class RecordingHUDView: NSView {
     private let pauseButton: CaptureButton
     private let microphoneButton: CaptureButton
     private var lifecycleButtons: [CaptureButton] = []
+    private var lifecycleActionsEnabled = true
     private var elapsedMilliseconds: UInt64 = 0
     private var resumedAt: Date?
     private var timer: Timer?
@@ -133,7 +134,7 @@ final class RecordingHUDView: NSView {
         microphoneAvailable = available
         microphoneButton.title = muted ? "♩̸" : "♩"
         microphoneButton.selected = muted
-        microphoneButton.isEnabled = available
+        microphoneButton.isEnabled = available && lifecycleActionsEnabled
         let action = muted ? "Unmute microphone" : "Mute microphone"
         let unavailable = "Microphone unavailable because no microphone was selected"
         microphoneButton.toolTip = available ? action : unavailable
@@ -143,6 +144,7 @@ final class RecordingHUDView: NSView {
     }
 
     func setLifecycleActionsEnabled(_ enabled: Bool) {
+        lifecycleActionsEnabled = enabled
         lifecycleButtons.forEach {
             $0.isEnabled = enabled
             $0.needsDisplay = true

@@ -49,10 +49,16 @@ final class RecordingHUDTests: XCTestCase {
             XCTAssertTrue(microphone.isEnabled)
             XCTAssertEqual(microphone.accessibilityLabel(), "Mute microphone")
             XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 5)
+            hud.setLifecycleActionsEnabled(false)
+            // A snapshot queued before the mutation can arrive while it is busy.
             hud.setMicrophone(muted: true, available: true)
+            XCTAssertFalse(microphone.isEnabled, "a late snapshot must not unlock lifecycle actions")
             XCTAssertTrue(microphone.selected)
             XCTAssertEqual(microphone.accessibilityLabel(), "Unmute microphone")
             XCTAssertEqual((microphone.accessibilityValue() as? NSNumber)?.intValue, 1)
+            try render(hud, window: window, name: "recording-hud-\(appearance)-mic-busy")
+            hud.setLifecycleActionsEnabled(true)
+            XCTAssertTrue(microphone.isEnabled)
             var restarted = false
             hud.restart = { restarted = true }
             try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Restart recording" })
