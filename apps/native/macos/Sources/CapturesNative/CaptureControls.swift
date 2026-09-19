@@ -277,7 +277,7 @@ final class UnifiedCaptureSelectionView: NSView {
         currentDisplayTitle = displayTitles.indices.contains(selectedDisplay)
             ? displayTitles[selectedDisplay] : "Full screen"
         region = RegionSelection(bounds: CapturesSelectionBounds(width: frame.width, height: frame.height))
-        let controlsWidth = min(frame.width - tokens.number("s-8"), 854)
+        let controlsWidth = min(frame.width - 32, 854)
         controls = CaptureControlsView(frame: NSRect(x: (frame.width - controlsWidth) / 2,
             y: frame.height - 112, width: controlsWidth, height: 86), tokens: tokens,
             autoStart: autoStart, displayTitles: displayTitles, selectedDisplay: selectedDisplay)

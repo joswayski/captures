@@ -179,11 +179,14 @@ final class CaptureControlsTests: XCTestCase {
         XCTAssertEqual(view.controls.frame.maxY, frame.height - 16)
         view.controls.endPanelDrag()
 
-        XCTAssertTrue(view.controls.hitTest(NSPoint(x: 20, y: 70)) === view.controls,
+        let footerPoint = view.convert(NSPoint(x: 20, y: 70), from: view.controls)
+        XCTAssertTrue(view.controls.hitTest(footerPoint) === view.controls,
             "the blank footer is the drag target")
         let capture = try XCTUnwrap(buttons(in: view.controls).first { $0.title == "Capture" })
-        XCTAssertTrue(view.controls.hitTest(NSPoint(x: capture.frame.midX,
-            y: capture.frame.midY)) === capture, "interactive controls do not begin a panel drag")
+        let capturePoint = view.convert(NSPoint(x: capture.frame.midX,
+            y: capture.frame.midY), from: view.controls)
+        XCTAssertTrue(view.controls.hitTest(capturePoint) === capture,
+            "interactive controls do not begin a panel drag")
     }
 
     func testNarrowMonitorKeepsPickerAndPrimaryActionVisibleWithoutOverlap() throws {
