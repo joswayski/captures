@@ -864,7 +864,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }
 
         hud.hud.setLifecycleActionsEnabled(false)
-        hud.isHidden = true
+        hud.orderOut(nil)
         recordingPollTimer?.invalidate(); recordingPollTimer = nil
         recordingPendingStart = true
         snapshotPending = false
