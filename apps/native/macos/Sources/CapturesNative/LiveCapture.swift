@@ -109,9 +109,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var unifiedScreen: NSScreen?
     private var unifiedControlsState = UnifiedCaptureControlsState.initial
     private var recordingCapabilities: NativeRecordingCapabilities?
+    private var microphoneDevices: [NativeMicrophoneDevice] = []
     private var recordingControlState = RecordingControlState(framesPerSecond: 60,
         maxResolution: "original", showCursor: true, highlightClicks: false,
-        systemAudio: false, microphone: false)
+        systemAudio: false, microphoneDeviceID: nil)
     private let recordingGate = RecordingGenerationGate()
     private var recordingSession: NativeRecordingSession?
     private var recordingHUD: RecordingHUDPanel?
@@ -337,19 +338,23 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             let preferences = try CapturePreferences.load(path: settingsPath)
             let capabilities = try NativeRecordingInfo.capabilities(
                 includeControls: preferences.includeRecordingControlsInCaptures)
-            return (preferences, capabilities)
+            let devices = capabilities.microphone
+                ? try NativeRecordingInfo.microphoneDevices() : []
+            return (preferences, capabilities, devices)
         }) { [weak self] result in
             guard let self, self.capturing, self.unifiedPreparation.accepts(request) else { return }
             do {
-                let (preferences, capabilities) = try result.get()
+                let (preferences, capabilities, devices) = try result.get()
                 self.recordingCapabilities = capabilities
+                self.microphoneDevices = devices
                 self.recordingControlState = RecordingControlState(
                     framesPerSecond: preferences.recording.framesPerSecond,
                     maxResolution: preferences.recording.maxResolution,
                     showCursor: preferences.recording.showCursor,
                     highlightClicks: preferences.recording.highlightClicks,
                     systemAudio: preferences.recording.captureSystemAudio,
-                    microphone: preferences.recording.microphoneDeviceID != nil)
+                    microphoneDeviceID: capabilities.microphone
+                        ? preferences.recording.microphoneDeviceID : nil)
                 let response = try AppBridge.flow(["operation": "begin", "seconds": 0])
                 guard let generation = response["generation"] as? NSNumber else {
                     throw AppBridgeError.invalidResponse
@@ -444,7 +449,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                             RecordingControlAvailability(cursor: $0.cursorControl,
                                 clicks: $0.clickHighlights, systemAudio: $0.systemAudio,
                                 microphone: $0.microphone)
-                        })
+                        }, microphoneDevices: self.microphoneDevices)
                     panel.selector.controls.recordingControlsChanged = { [weak self] state in
                         self?.recordingControlState = state
                     }
@@ -503,19 +508,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }
         do {
             let targetValue = try nativeRecordingTarget(target, displayID: display.id)
-            var options = preferences.recording.options(target: targetValue,
-                capabilities: capabilities)
-            options["frames_per_second"] = recordingControlState.framesPerSecond
-            options["max_resolution"] = recordingControlState.maxResolution
-            options["show_cursor"] = capabilities.cursorControl && recordingControlState.showCursor
-            options["highlight_clicks"] = capabilities.clickHighlights
-                && recordingControlState.highlightClicks
-            if var audio = options["audio"] as? [String: Any] {
-                audio["capture_system_audio"] = capabilities.systemAudio
-                    && recordingControlState.systemAudio
-                if !recordingControlState.microphone { audio["microphone_device_id"] = NSNull() }
-                options["audio"] = audio
-            }
+            let options = nativeRecordingOptions(preferences: preferences.recording,
+                target: targetValue, capabilities: capabilities,
+                controls: recordingControlState)
             selectorShortcutGeneration = nil
             unifiedTarget = target
             unifiedPanel?.close(); unifiedPanel = nil
@@ -986,7 +981,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         unifiedSession = nil; unifiedTarget = nil; unifiedDisplay = nil; unifiedScreen = nil
         unifiedControlsState = .initial
         preparingUnified = false; preparingRecording = false; recordingPendingStart = false
-        recordingCapabilities = nil
+        recordingCapabilities = nil; microphoneDevices = []
         if let generation = flowGeneration {
             _ = try? AppBridge.flow(["operation": "finish", "generation": generation])
             flowGeneration = nil

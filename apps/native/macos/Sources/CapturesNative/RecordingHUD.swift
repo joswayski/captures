@@ -7,6 +7,7 @@ enum RecordingHUDColorToken: String, CaseIterable {
     case glassTextSubtle = "glass-text-subtle"
     case themeAccent = "theme-accent"
     case themeSignal = "theme-signal"
+    case themeSignalSurface = "theme-signal-surface"
 }
 
 final class RecordingHUDView: NSView {
@@ -64,7 +65,7 @@ final class RecordingHUDView: NSView {
         addSubview(statusLabel)
 
         let stop = hudButton("■", x: 104, help: "Stop and save recording") { [weak self] in self?.stop() }
-        stop.primary = true; stop.setAccessibilityLabel("Stop recording")
+        stop.signal = true; stop.setAccessibilityLabel("Stop recording")
         pauseButton.frame = NSRect(x: 144, y: 35, width: 38, height: 42)
         pauseButton.actionBlock = { [weak self] in self?.pauseOrResume() }
         pauseButton.setAccessibilityLabel("Pause recording"); addSubview(pauseButton)

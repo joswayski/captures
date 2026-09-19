@@ -26,7 +26,7 @@ struct RecordingControlState: Equatable {
     var showCursor: Bool
     var highlightClicks: Bool
     var systemAudio: Bool
-    var microphone: Bool
+    var microphoneDeviceID: String?
 }
 
 struct RecordingControlAvailability: Equatable {
@@ -86,6 +86,8 @@ final class CaptureControlsView: NSView {
     private let note: NSTextField
     private let fpsMenu: GlassPopUpButton
     private let resolutionMenu: GlassPopUpButton
+    private let microphoneMenu: GlassPopUpButton
+    private var microphoneIDs: [String?] = []
     private var panelDragOffset: NSPoint?
     var switchTarget: (UnifiedCaptureTarget) -> Void = { _ in }
     var switchMode: (UnifiedCaptureMode) -> Void = { _ in }
@@ -103,14 +105,16 @@ final class CaptureControlsView: NSView {
     init(frame: NSRect, tokens: Tokens, autoStart: Bool, displayTitles: [String],
          selectedDisplay: Int, recordingState: RecordingControlState = RecordingControlState(
             framesPerSecond: 60, maxResolution: "original", showCursor: true,
-            highlightClicks: false, systemAudio: false, microphone: false),
-         recordingAvailability: RecordingControlAvailability? = nil) {
+            highlightClicks: false, systemAudio: false, microphoneDeviceID: nil),
+         recordingAvailability: RecordingControlAvailability? = nil,
+         microphoneDevices: [NativeMicrophoneDevice] = []) {
         self.tokens = tokens; self.autoStart = autoStart
         self.recordingState = recordingState; self.recordingAvailability = recordingAvailability
         aspectMenu = GlassPopUpButton(frame: .zero, pullsDown: false)
         displayMenu = GlassPopUpButton(frame: .zero, pullsDown: false)
         fpsMenu = GlassPopUpButton(frame: .zero, pullsDown: false)
         resolutionMenu = GlassPopUpButton(frame: .zero, pullsDown: false)
+        microphoneMenu = GlassPopUpButton(frame: .zero, pullsDown: false)
         captureButton = CaptureButton("Capture", frame: .zero, tokens: tokens, glass: true) {}
         screenshotButton = CaptureButton("Screenshot", frame: .zero, tokens: tokens, glass: true) {}
         recordButton = CaptureButton("Record", frame: .zero, tokens: tokens, glass: true) {}
@@ -235,7 +239,7 @@ final class CaptureControlsView: NSView {
             available: recordingAvailability?.clicks ?? false)
         addRecordingControl("Desktop audio", x: 378, width: 112, keyPath: \.systemAudio,
             available: recordingAvailability?.systemAudio ?? false)
-        addRecordingControl("Microphone", x: 494, width: max(116, frame.width - 510), keyPath: \.microphone,
+        configureMicrophoneMenu(devices: microphoneDevices,
             available: recordingAvailability?.microphone ?? false)
         selectTarget(.region, notify: false)
         selectMode(.screenshot, notify: false)
@@ -307,6 +311,7 @@ final class CaptureControlsView: NSView {
         note.setAccessibilityLabel(note.stringValue)
         fpsMenu.isHidden = !recording
         resolutionMenu.isHidden = !recording
+        microphoneMenu.isHidden = !recording
         for (button, keyPath) in recordingButtons {
             button.isHidden = mode != .record
             button.selected = mode == .record && recordingState[keyPath: keyPath]
@@ -327,9 +332,7 @@ final class CaptureControlsView: NSView {
             captureButton.frame = mode == .record
                 ? NSRect(x: width - 162, y: 10, width: 152, height: 40)
                 : NSRect(x: width - 122, y: 10, width: 112, height: 40)
-            if let microphone = recordingButtons.last {
-                microphone.0.frame.size.width = max(116, width - microphone.0.frame.minX - 16)
-            }
+            microphoneMenu.frame.size.width = max(116, width - microphoneMenu.frame.minX - 16)
         }
         screenshotButton.selected = mode == .screenshot
         recordButton.selected = mode == .record
@@ -357,10 +360,44 @@ final class CaptureControlsView: NSView {
 
     func selectAspect(_ index: Int) { aspectMenu.selectItem(at: index) }
     func selectDisplay(_ index: Int) { displayMenu.selectItem(at: index) }
+    func selectMicrophone(_ index: Int, notify: Bool) {
+        guard microphoneIDs.indices.contains(index), microphoneMenu.isEnabled else { return }
+        microphoneMenu.selectItem(at: index)
+        recordingState.microphoneDeviceID = microphoneIDs[index]
+        if notify { recordingControlsChanged(recordingState) }
+    }
     func setCaptureEnabled(_ enabled: Bool) {
         captureButton.isEnabled = enabled
         captureButton.isHidden = autoStart && mode == .screenshot
         captureButton.needsDisplay = true
+    }
+
+    private func configureMicrophoneMenu(devices: [NativeMicrophoneDevice], available: Bool) {
+        microphoneMenu.frame = NSRect(x: 494, y: 68,
+            width: max(116, frame.width - 510), height: 36)
+        microphoneMenu.tokens = tokens
+        microphoneMenu.setAccessibilityLabel("Microphone")
+        microphoneMenu.isEnabled = available
+        microphoneIDs = [nil]
+        var titles = [available ? "Off" : "Unavailable"]
+        if let selected = recordingState.microphoneDeviceID,
+           !devices.contains(where: { $0.id == selected }) {
+            microphoneIDs.append(selected)
+            titles.append("Selected microphone")
+        }
+        for device in devices where !microphoneIDs.contains(where: { $0 == device.id }) {
+            microphoneIDs.append(device.id)
+            titles.append(device.name)
+        }
+        microphoneMenu.addItems(withTitles: titles)
+        let selected = microphoneIDs.firstIndex(where: {
+            $0 == recordingState.microphoneDeviceID
+        }) ?? 0
+        microphoneMenu.selectItem(at: selected)
+        microphoneMenu.bindChange { [weak self] index in
+            self?.selectMicrophone(index, notify: true)
+        }
+        addSubview(microphoneMenu)
     }
 }
 
@@ -411,8 +448,9 @@ final class UnifiedCaptureSelectionView: NSView {
          cancel: @escaping () -> Void, changeDisplay: @escaping (Int) -> Void,
          recordingState: RecordingControlState = RecordingControlState(
             framesPerSecond: 60, maxResolution: "original", showCursor: true, highlightClicks: false,
-            systemAudio: false, microphone: false),
-         recordingAvailability: RecordingControlAvailability? = nil) {
+            systemAudio: false, microphoneDeviceID: nil),
+         recordingAvailability: RecordingControlAvailability? = nil,
+         microphoneDevices: [NativeMicrophoneDevice] = []) {
         self.tokens = tokens; self.autoStart = autoStart; self.targets = targets
         self.hitTest = hitTest; self.confirm = confirm; self.cancel = cancel
         self.changeDisplay = changeDisplay
@@ -423,7 +461,8 @@ final class UnifiedCaptureSelectionView: NSView {
         controls = CaptureControlsView(frame: NSRect(x: (frame.width - controlsWidth) / 2,
             y: frame.height - 112, width: controlsWidth, height: 86), tokens: tokens,
             autoStart: autoStart, displayTitles: displayTitles, selectedDisplay: selectedDisplay,
-            recordingState: recordingState, recordingAvailability: recordingAvailability)
+            recordingState: recordingState, recordingAvailability: recordingAvailability,
+            microphoneDevices: microphoneDevices)
         super.init(frame: frame)
         wantsLayer = true; layer?.backgroundColor = NSColor.clear.cgColor
         if let image {
@@ -694,13 +733,15 @@ final class UnifiedCapturePanel: NSPanel {
          changeDisplay: @escaping (Int) -> Void,
          recordingState: RecordingControlState = RecordingControlState(
             framesPerSecond: 60, maxResolution: "original", showCursor: true,
-            highlightClicks: false, systemAudio: false, microphone: false),
-         recordingAvailability: RecordingControlAvailability? = nil) {
+            highlightClicks: false, systemAudio: false, microphoneDeviceID: nil),
+         recordingAvailability: RecordingControlAvailability? = nil,
+         microphoneDevices: [NativeMicrophoneDevice] = []) {
         selector = UnifiedCaptureSelectionView(frame: NSRect(origin: .zero, size: screen.frame.size),
             image: image, targets: targets, tokens: tokens, autoStart: autoStart,
             hitTest: hitTest, displayTitles: displayTitles, selectedDisplay: selectedDisplay,
             confirm: confirm, cancel: cancel, changeDisplay: changeDisplay,
-            recordingState: recordingState, recordingAvailability: recordingAvailability)
+            recordingState: recordingState, recordingAvailability: recordingAvailability,
+            microphoneDevices: microphoneDevices)
         super.init(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         title = "Captures Capture Controls"
         isReleasedWhenClosed = false; isOpaque = false; backgroundColor = .clear; hasShadow = false

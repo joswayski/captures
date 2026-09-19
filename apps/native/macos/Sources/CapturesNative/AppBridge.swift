@@ -149,6 +149,26 @@ func nativeRecordingTarget(_ target: WindowSelectionChoice, displayID: String) t
     }
 }
 
+func nativeRecordingOptions(preferences: RecordingPreferences, target: [String: Any],
+                            capabilities: NativeRecordingCapabilities,
+                            controls: RecordingControlState) -> [String: Any] {
+    var options = preferences.options(target: target, capabilities: capabilities)
+    options["frames_per_second"] = controls.framesPerSecond
+    options["max_resolution"] = controls.maxResolution
+    options["show_cursor"] = capabilities.cursorControl && controls.showCursor
+    options["highlight_clicks"] = capabilities.clickHighlights && controls.highlightClicks
+    if var audio = options["audio"] as? [String: Any] {
+        audio["capture_system_audio"] = capabilities.systemAudio && controls.systemAudio
+        if capabilities.microphone, let microphoneDeviceID = controls.microphoneDeviceID {
+            audio["microphone_device_id"] = microphoneDeviceID
+        } else {
+            audio["microphone_device_id"] = NSNull()
+        }
+        options["audio"] = audio
+    }
+    return options
+}
+
 final class AppBridge: AppTransport {
     static func flow(_ object: [String: Any]) throws -> [String: Any] {
         precondition(Thread.isMainThread)

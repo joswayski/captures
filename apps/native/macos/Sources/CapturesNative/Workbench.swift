@@ -34,6 +34,7 @@ final class CaptureButton: NSButton {
     var selected = false
     var glass = false
     var primary = false
+    var signal = false
     var icon: CaptureButtonIcon?
     var actionBlock: (() -> Void)?
     var enterActionBlock: (() -> Void)?
@@ -80,17 +81,22 @@ final class CaptureButton: NSButton {
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
             xRadius: tokens.number("r-md"), yRadius: tokens.number("r-md"))
         let fill = !isEnabled ? (glass ? "glass" : "surface-sunken")
+            : signal ? "theme-signal-surface"
             : primary ? "theme-accent"
             : cell?.isHighlighted == true ? (glass ? "glass-active" : "surface-active")
             : selected ? (glass ? "glass-active" : "surface-selected") : (glass ? "glass-raised" : "control")
         tokens.color(fill).setFill()
         path.fill()
-        tokens.color(primary && isEnabled ? "theme-accent" : selected && isEnabled ? "theme-accent" : (glass ? "glass-border" : "control-border")).setStroke()
+        tokens.color(signal && isEnabled ? "theme-signal"
+            : primary && isEnabled ? "theme-accent"
+            : selected && isEnabled ? "theme-accent"
+            : (glass ? "glass-border" : "control-border")).setStroke()
         path.lineWidth = 1
         path.stroke()
         let font = NSFont.systemFont(ofSize: tokens.number("text-md"), weight: .medium)
         let foreground = tokens.color(isEnabled
-            ? (primary ? "theme-accent-ink" : glass ? "glass-text" : "text")
+            ? (signal ? "theme-signal"
+                : primary ? "theme-accent-ink" : glass ? "glass-text" : "text")
             : (glass ? "glass-text-subtle" : "text-faint"))
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font, .foregroundColor: foreground,

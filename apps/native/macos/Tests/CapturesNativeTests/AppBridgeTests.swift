@@ -65,6 +65,30 @@ final class AppBridgeTests: XCTestCase {
         XCTAssertEqual(audio["capture_system_audio"] as? Bool, true)
         XCTAssertEqual(audio["microphone_device_id"] as? String, "studio-mic")
         XCTAssertEqual(audio["mono_output"] as? Bool, true)
+
+        var controls = RecordingControlState(framesPerSecond: 60, maxResolution: "original",
+            showCursor: true, highlightClicks: false, systemAudio: false,
+            microphoneDeviceID: nil)
+        let offOptions = nativeRecordingOptions(preferences: preferences,
+            target: ["type": "display", "display_id": "7"],
+            capabilities: NativeRecordingCapabilities([
+                "system_audio": true, "microphone": true, "cursor_control": true,
+                "click_highlights": true, "controls_excluded": true,
+            ])!, controls: controls)
+        let offAudio = try XCTUnwrap(offOptions["audio"] as? [String: Any])
+        XCTAssertTrue(offAudio["microphone_device_id"] is NSNull,
+            "choosing Off must override the stored microphone")
+
+        controls.microphoneDeviceID = "built-in-mic"
+        let selectedOptions = nativeRecordingOptions(preferences: preferences,
+            target: ["type": "display", "display_id": "7"],
+            capabilities: NativeRecordingCapabilities([
+                "system_audio": true, "microphone": true, "cursor_control": true,
+                "click_highlights": true, "controls_excluded": true,
+            ])!, controls: controls)
+        let selectedAudio = try XCTUnwrap(selectedOptions["audio"] as? [String: Any])
+        XCTAssertEqual(selectedAudio["microphone_device_id"] as? String, "built-in-mic",
+            "the picker must pass the actual selected device ID")
     }
 
     func testBackendErrorIsPreserved() {
