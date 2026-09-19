@@ -87,6 +87,8 @@ void captures_preview_stack_free_v1(CapturesPreviewStack *handle);
 bool captures_preview_stack_insert_v1(CapturesPreviewStack *handle, const char *id);
 bool captures_preview_stack_remove_v1(CapturesPreviewStack *handle, const char *id);
 size_t captures_preview_stack_count_v1(const CapturesPreviewStack *handle);
+/* Unclamped logical document height, including the control gutter; zero empty. */
+double captures_preview_stack_height_v1(const CapturesPreviewStack *handle);
 /* Borrowed UTF-8 bytes, not NUL terminated; copy before next mutation/free.
  * Outputs require aligned writable storage. Null/invalid index leaves outputs
  * unchanged. Layout index is chronological. y is in logical unscrolled content;

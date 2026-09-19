@@ -48,6 +48,11 @@ final class NativePreviewStack {
         return captures_preview_stack_collapsed_v1(handle)
     }
 
+    var contentHeight: Double {
+        precondition(Thread.isMainThread)
+        return captures_preview_stack_height_v1(handle)
+    }
+
     func setCollapsed(_ collapsed: Bool) {
         precondition(Thread.isMainThread)
         let updated = captures_preview_stack_set_collapsed_v1(handle, collapsed)
