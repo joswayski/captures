@@ -736,12 +736,7 @@ impl eframe::App for Workbench {
         let shortcuts_suspended =
             shortcuts_should_be_suspended(self.live_preferences, !self.root_hidden, root_focused);
         self.sync_shortcut_suspension(shortcuts_suspended);
-        let shortcuts_enabled = shortcuts_should_be_enabled(
-            self.live.as_ref().is_some_and(Live::can_launch_capture),
-            self.live_preferences,
-            !self.root_hidden,
-            root_focused,
-        );
+        let shortcuts_enabled = self.live.as_ref().is_some_and(Live::can_launch_capture);
         let shortcut_action = self.shortcuts.as_ref().and_then(|shortcuts| {
             shortcuts.set_enabled(shortcuts_enabled);
             shortcuts.next_action()
@@ -1258,16 +1253,6 @@ fn window_selection_name(
     }
 }
 
-fn shortcuts_should_be_enabled(
-    can_launch_capture: bool,
-    preferences_selected: bool,
-    root_visible: bool,
-    root_focused: bool,
-) -> bool {
-    can_launch_capture
-        && !shortcuts_should_be_suspended(preferences_selected, root_visible, root_focused)
-}
-
 fn shortcuts_should_be_suspended(
     preferences_selected: bool,
     root_visible: bool,
@@ -1313,16 +1298,11 @@ mod tests {
     }
 
     #[test]
-    fn shortcuts_suppress_focused_preferences_but_not_hidden_or_unfocused_preferences() {
+    fn shortcuts_suspend_focused_preferences_but_not_hidden_or_unfocused_preferences() {
         assert!(shortcuts_should_be_suspended(true, true, true));
         assert!(!shortcuts_should_be_suspended(true, false, true));
         assert!(!shortcuts_should_be_suspended(true, true, false));
         assert!(!shortcuts_should_be_suspended(false, true, true));
-        assert!(!shortcuts_should_be_enabled(true, true, true, true));
-        assert!(shortcuts_should_be_enabled(true, true, false, true));
-        assert!(shortcuts_should_be_enabled(true, true, true, false));
-        assert!(shortcuts_should_be_enabled(true, false, true, true));
-        assert!(!shortcuts_should_be_enabled(false, false, false, false));
     }
     #[test]
     fn image_has_top_right_sun_and_bottom_green_strip() {
