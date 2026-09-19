@@ -20,7 +20,7 @@ use crate::{NativeRecordingSegment, start_native_segment};
 pub struct FinalizedRecording {
     pub entry: HistoryEntry,
     pub path: PathBuf,
-    /// Publication succeeded, but recovery metadata or source cleanup failed.
+    /// Publication succeeded with an engine/device or housekeeping warning.
     pub warning: Option<String>,
 }
 
@@ -64,9 +64,25 @@ impl RecordingSession {
     }
 
     pub fn snapshot(&self) -> RecordingSessionSnapshot {
-        self.coordinator
+        let mut snapshot = self
+            .coordinator
             .snapshot(now_ms())
-            .expect("session owns coordinator")
+            .expect("session owns coordinator");
+        // Engine/device warnings are not coordinator transitions. Surface them
+        // while running and retain completed-segment warnings across pause/stop.
+        snapshot.warning = self
+            .active
+            .as_ref()
+            .and_then(NativeRecordingSegment::warning)
+            .or_else(|| {
+                self.manifest.segments.iter().rev().find_map(|segment| {
+                    segment
+                        .system_audio_warning
+                        .clone()
+                        .or_else(|| segment.microphone_warning.clone())
+                })
+            });
+        snapshot
     }
 
     pub fn manifest(&self) -> &RecordingDraftManifest {
@@ -219,7 +235,7 @@ impl RecordingSession {
         Ok(FinalizedRecording {
             entry,
             path,
-            warning,
+            warning: warning.or_else(|| self.snapshot().warning),
         })
     }
 
@@ -585,6 +601,14 @@ mod tests {
                 session.manifest
             );
         }
+        // A later healthy segment must not hide an earlier audio failure.
+        session.manifest.segments[0].microphone_warning = Some("Microphone disconnected".into());
+        assert_eq!(
+            session.snapshot().warning.as_deref(),
+            Some("Microphone disconnected")
+        );
+        session.manifest.segments[0].microphone_warning = None;
+        assert!(session.snapshot().warning.is_none());
         assert_eq!(session.stop().unwrap().state, RecordingState::Finalizing);
         assert_eq!(session.manifest.segments.len(), 2);
         assert!(
