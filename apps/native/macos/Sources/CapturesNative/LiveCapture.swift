@@ -1174,7 +1174,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             guard let self else { return }
             switch result { case .success(let value):
                 if let current = self.artifacts.firstIndex(where: { $0.id == artifact.id }) { self.artifacts[current] = value.0 }
-                self.status.stringValue = "Saved \(noun) to \(value.1)"; self.table.reloadData()
+                self.status.stringValue = "Saved \(noun) to \(value.1)"
                 self.miniPreviews?.setStatus("Saved", for: artifact.id)
             case .failure(let error):
                 self.showError("Couldn’t save \(noun)", error)
