@@ -41,7 +41,7 @@ final class RecordingHUDView: NSView {
             ? "These controls won’t show in recordings"
             : "These controls will appear in recordings"
         pauseButton = CaptureButton("Ⅱ", frame: .zero, tokens: tokens, glass: true) {}
-        microphoneButton = CaptureButton("♩", frame: .zero, tokens: tokens, glass: true) {}
+        microphoneButton = CaptureButton("", frame: .zero, tokens: tokens, glass: true) {}
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassStrong.rawValue).cgColor
@@ -132,7 +132,7 @@ final class RecordingHUDView: NSView {
     func setMicrophone(muted: Bool, available: Bool) {
         microphoneMuted = muted
         microphoneAvailable = available
-        microphoneButton.title = muted ? "♩̸" : "♩"
+        microphoneButton.icon = .microphone(muted: muted)
         microphoneButton.selected = muted
         microphoneButton.isEnabled = available && lifecycleActionsEnabled
         let action = muted ? "Unmute microphone" : "Mute microphone"

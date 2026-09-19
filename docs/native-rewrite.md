@@ -170,8 +170,9 @@ Both 430×102 HUDs expose Mute/Unmute names, selected muted state, lifecycle bus
 gating and an explicit mic-less explanation. Status: macOS AppKit and Windows are
 implemented / unverified on physical hosts; Linux X11 is verified on the private
 software-rendered Xvfb desktop with a disposable PulseAudio null-sink microphone;
-Wayland remains gated with native live capture. Silent virtual audio verifies
-segmentation and track presence, not physical microphone waveform correctness.
+Wayland remains gated with native live capture. A synthetic tone verifies decoded
+audible/silent/audible intervals across mute/unmute, not physical microphone
+fidelity or gapless device/encoder transitions.
 
 The opt-in `--live` workspace now connects full-display PNG capture and local
 screenshot history on both native hosts through `captures-app`. It includes

@@ -147,12 +147,13 @@ and `python3-xlib`, then run:
   --output /tmp/native-x11-recording
 ```
 
-Add `--virtual-microphone` when PulseAudio, `pactl`, and the ALSA Pulse plugin
-are installed. The test creates a disposable null-sink monitor, drives running
-mute/unmute through the real HUD, checks durable segment boundaries, and verifies
-that finalized metadata reports microphone audio. This proves segmented audio
-presence and mute routing with silence; it does not prove physical microphone
-waveform correctness.
+Add `--virtual-microphone` when PulseAudio, `pactl`, `paplay`, and the ALSA Pulse
+plugin are installed. The test feeds a 730 Hz tone into a disposable null-sink
+monitor, drives running mute/unmute through the real HUD, checks durable segment
+boundaries and finalized microphone metadata, then decodes AAC to assert audible,
+silent, and audible intervals. It waits for actual PCM delivery after Unmute,
+not just stream startup. This verifies synthetic audio routing, not physical
+microphone fidelity or gapless device/encoder transitions.
 
 Pass `--restart-only` for the focused running/paused Restart, restarted-countdown
 Escape, replacement-pixel decode and source-cleanup checkpoint.

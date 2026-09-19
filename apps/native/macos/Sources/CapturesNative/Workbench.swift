@@ -25,6 +25,7 @@ enum CaptureButtonIcon {
     case record
     case window
     case display
+    case microphone(muted: Bool)
 }
 
 // NSButton keeps keyboard activation, target/action and accessibility behavior;
@@ -102,7 +103,7 @@ final class CaptureButton: NSButton {
             .font: font, .foregroundColor: foreground,
         ]
         let size = (title as NSString).size(withAttributes: attributes)
-        let iconWidth: CGFloat = icon == nil ? 0 : 20
+        let iconWidth: CGFloat = icon == nil ? 0 : (title.isEmpty ? 14 : 20)
         let startX = (bounds.width - size.width - iconWidth) / 2
         if let icon { draw(icon, in: NSRect(x: startX, y: (bounds.height - 14) / 2,
             width: 14, height: 14), color: foreground) }
@@ -144,6 +145,24 @@ final class CaptureButton: NSButton {
             stand.line(to: NSPoint(x: rect.midX, y: rect.minY))
             stand.move(to: NSPoint(x: rect.midX - 3, y: rect.minY))
             stand.line(to: NSPoint(x: rect.midX + 3, y: rect.minY)); stand.stroke()
+        case .microphone(let muted):
+            let capsule = NSBezierPath(roundedRect: NSRect(x: rect.midX - 2.5, y: rect.minY + 5,
+                width: 5, height: 8), xRadius: 2.5, yRadius: 2.5)
+            capsule.lineWidth = 1.4; capsule.stroke()
+            let stand = NSBezierPath(); stand.lineWidth = 1.4
+            stand.move(to: NSPoint(x: rect.minX + 2, y: rect.minY + 8))
+            stand.curve(to: NSPoint(x: rect.maxX - 2, y: rect.minY + 8),
+                controlPoint1: NSPoint(x: rect.minX + 2, y: rect.minY + 1),
+                controlPoint2: NSPoint(x: rect.maxX - 2, y: rect.minY + 1))
+            stand.move(to: NSPoint(x: rect.midX, y: rect.minY + 3))
+            stand.line(to: NSPoint(x: rect.midX, y: rect.minY))
+            stand.move(to: NSPoint(x: rect.midX - 3, y: rect.minY))
+            stand.line(to: NSPoint(x: rect.midX + 3, y: rect.minY)); stand.stroke()
+            if muted {
+                let slash = NSBezierPath(); slash.lineWidth = 1.6
+                slash.move(to: NSPoint(x: rect.minX, y: rect.maxY))
+                slash.line(to: NSPoint(x: rect.maxX, y: rect.minY)); slash.stroke()
+            }
         }
     }
 }

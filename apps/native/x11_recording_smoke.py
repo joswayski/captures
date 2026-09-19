@@ -6,10 +6,12 @@ ImageMagick, FFmpeg and FFprobe. Uses actual input and persisted media, no app h
 """
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import re
 import select
+import struct
 import subprocess
 import threading
 import time
@@ -178,6 +180,10 @@ def main():
             run("pactl", "load-module", "module-null-sink", "sink_name=captures",
                 "sink_properties=device.description=CapturesVirtualMicrophone")
             run("pactl", "set-default-source", "captures.monitor")
+            tone = output / "microphone-tone.wav"
+            run("ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                "sine=frequency=730:sample_rate=48000", "-t", "120", str(tone))
+            spawn("microphone-tone", ["paplay", "--device=captures", str(tone)])
         time.sleep(1)
         run("hsetroot", "-solid", "#c02040")
         settings = output / "settings.json"
@@ -261,7 +267,23 @@ def main():
             wait(lambda: (value := manifest()) and value["state"] == "recording"
                  and value["options"]["audio"]["microphone_muted"]
                  and len(value["segments"]) == 2, "published recording mute segment")
-            time.sleep(.3)
+            time.sleep(.6)
+            click(hud, 318, 54)
+            wait(lambda: (value := manifest()) and value["state"] == "recording"
+                 and not value["options"]["audio"]["microphone_muted"]
+                 and len(value["segments"]) == 3, "published recording unmute segment")
+            segments = manifest()["segments"]
+            assert segments[0]["microphone_relative_path"]
+            assert segments[1]["microphone_relative_path"] is None
+            assert segments[2]["microphone_relative_path"]
+            mute_start = segments[0]["duration_ms"] / 1000
+            mute_end = mute_start + segments[1]["duration_ms"] / 1000
+            print(f"Microphone mute interval: {mute_start:.3f}–{mute_end:.3f}s")
+            bundle = next((output / "recording-recovery").glob("*/manifest.json")).parent
+            microphone = bundle / segments[2]["microphone_relative_path"]
+            # Stream startup is not sample delivery. Require actual buffered PCM
+            # before Stop; a broken unmute must time out rather than pass on metadata.
+            wait(lambda: microphone.stat().st_size > 192000, "unmuted microphone sample delivery")
         click(hud, 142, 54)
         metadata = wait(lambda: list((output / "history").glob("*/metadata.json")), "History publication")
         assert len(metadata) == 1
@@ -277,6 +299,22 @@ def main():
         assert len(frames) >= 24
         for actual, expected in ((frames[:3], (32, 112, 192)), (frames[-3:], (32, 112, 192))):
             assert all(abs(a - e) <= 6 for a, e in zip(actual, expected)), (actual, expected)
+        microphone_rms = None
+        if args.virtual_microphone:
+            pcm = run("ffmpeg", "-v", "error", "-i", str(media), "-map", "0:a:0",
+                      "-ac", "1", "-ar", "24000", "-f", "f32le", "-")
+            samples = [sample[0] for sample in struct.iter_unpack("<f", pcm)]
+            def rms(begin, end):
+                window = samples[int(begin * 24000):int(end * 24000)]
+                assert len(window) >= 2400, "need at least 100 ms away from AAC boundaries"
+                return math.sqrt(sum(value * value for value in window) / len(window))
+            # Inspect the interior of the first take, not its padded encoder-drain tail.
+            microphone_rms = [rms(.2, mute_start / 2),
+                              rms(mute_start + .2, mute_end - .2),
+                              rms(mute_end + .2, len(samples) / 24000 - .1)]
+            assert microphone_rms[0] > .01 and microphone_rms[2] > .01, microphone_rms
+            assert microphone_rms[1] < .001, microphone_rms
+            print(f"PASS microphone waveform RMS: audible/muted/audible {microphone_rms}")
         assert (metadata[0].parent / "preview.png").is_file()
         finished(1)
         published = history()
@@ -286,6 +324,7 @@ def main():
                 "first_pixel": list(frames[:3]), "last_pixel": list(frames[-3:]),
                 "paused_restart": True, "running_restart": True,
                 "virtual_microphone_mute": args.virtual_microphone,
+                "microphone_rms": microphone_rms,
                 "restart_countdown_escape_discarded": True,
                 "replacement_only_media": True, "source_cleanup": True,
             }, indent=2))

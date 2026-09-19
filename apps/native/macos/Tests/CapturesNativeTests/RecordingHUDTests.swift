@@ -49,6 +49,7 @@ final class RecordingHUDTests: XCTestCase {
             XCTAssertTrue(microphone.isEnabled)
             XCTAssertEqual(microphone.accessibilityLabel(), "Mute microphone")
             XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 5)
+            try render(hud, window: window, name: "recording-hud-\(appearance)-unmuted")
             hud.setLifecycleActionsEnabled(false)
             // A snapshot queued before the mutation can arrive while it is busy.
             hud.setMicrophone(muted: true, available: true)
