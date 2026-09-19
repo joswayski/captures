@@ -199,8 +199,10 @@ def main():
                 return set(history.glob("*/metadata.json"))
 
             def begin():
-                # Keep the capture control outside all four always-on-top cards.
-                run("xdotool", "windowmove", "--sync", root, "400", "280")
+                # Region is root-local x=575. Keep its desktop x=875 between
+                # the always-on-top preview windows at x=0..340 and 940..1280,
+                # including their transparent margins and expanded stacks.
+                run("xdotool", "windowmove", "--sync", root, "300", "280")
                 click(root, 575, 141)
                 selector = wait(lambda: windows(SELECTOR), "region selector")[0]
                 wait(lambda: int(run("import", "-window", selector, "-crop", "1280x96+0+804",
