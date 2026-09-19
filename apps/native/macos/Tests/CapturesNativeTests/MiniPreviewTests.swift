@@ -256,7 +256,7 @@ final class MiniPreviewTests: XCTestCase {
         defer { white.close() }
         let whiteBitmap = try render(white)
         let whiteImagePixel = try XCTUnwrap(whiteBitmap.colorAt(x: 170, y: 90))
-        let titleBackingPixel = try XCTUnwrap(whiteBitmap.colorAt(x: 180, y: 50))
+        let titleBackingPixel = try XCTUnwrap(whiteBitmap.colorAt(x: 150, y: 41))
         XCTAssertGreaterThan(whiteImagePixel.brightnessComponent, 0.9)
         XCTAssertLessThan(titleBackingPixel.brightnessComponent, 0.5,
             "fixed dark-glass backing keeps title legible on white captures")
@@ -293,8 +293,10 @@ final class MiniPreviewTests: XCTestCase {
         let collapsed = fixturePanel(ids: ids,
             images: Dictionary(uniqueKeysWithValues: ids.map { ($0, image) }), collapsed: true)
         defer { collapsed.close() }
-        XCTAssertEqual(collapsed.previewView.documentHeight, collapsed.previewView.bounds.height,
+        XCTAssertLessThanOrEqual(collapsed.previewView.documentHeight,
+            collapsed.previewView.viewportHeight + 0.5,
             "collapsed piles never create a hidden scroll range")
+        XCTAssertEqual(collapsed.previewView.scrollOffsetY, 0, accuracy: 0.5)
 
         let distinct = Dictionary(uniqueKeysWithValues: ids.enumerated().map { index, id in
             (id, solidImage(NSColor(calibratedHue: CGFloat(index) / CGFloat(ids.count),

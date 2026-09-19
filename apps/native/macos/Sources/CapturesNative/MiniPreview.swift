@@ -125,6 +125,7 @@ final class MiniPreviewView: NSView {
     }
     var pileExpandAccessibilityLabel: String? { pileExpandButton?.accessibilityLabel() }
     var documentHeight: CGFloat { document.frame.height }
+    var viewportHeight: CGFloat { scroll.contentView.bounds.height }
     var scrollOffsetY: CGFloat { scroll.contentView.bounds.minY }
     override var isFlipped: Bool { true }
 
