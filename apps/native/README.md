@@ -23,9 +23,28 @@ explicit test file. Malformed/newer files report an error instead of resetting
 them. `--exercise` uses disposable data. No installed Preview settings are imported.
 
 Without `--live`, capture, recording, history, and editor scenes use fixtures. Saving a
-default is not an engine integration: shortcut editing, microphone discovery,
+default is not an engine integration: microphone discovery,
 login items, feedback and update actions remain visibly unavailable. Full
 Preferences visual/input parity and the other checklist gates remain open.
+
+Preferences records all seven stored shortcut fields using the shared Rust
+key/modifier, display, cancellation and validation policy. Escape (including
+modified Escape), focus loss or leaving the recorder cancels without saving.
+Modifier-only input previews the chord; invalid keys show an inline error.
+Focused Preferences releases the three screenshot OS registrations so a recorder
+can receive an existing global chord. Edits remain unregistered until Preferences
+loses focus; registration failures are reported rather than treated as success.
+Only the three screenshot actions are connected in live mode. New Capture and
+recording bindings can be saved but do not launch those unimplemented workflows.
+Fixture Preferences never registers global keys. The shipping TypeScript policy
+supplies 390 recording and 195 platform-display differential test vectors.
+
+On X11, `x11_preview_smoke.py --lifecycle --shortcut-editing` exercises all seven
+storage paths with native input, registered-key delivery, invalid/cancel/blur,
+duplicate rejection, restart persistence and a saved global launch chord. AppKit
+XCTest renders both appearances and checks controller/bridge input. Synthetic
+virtual-key mapping does not prove physical Mac media/external-keyboard input;
+physical Windows/macOS, Wayland and screen-reader acceptance remain open.
 
 ## Resident lifecycle and screenshot shortcuts
 
@@ -43,7 +62,7 @@ temporary Escape cancellation without competing process-wide handlers. Native
 event loops drain actions on their UI thread. Active capture/preparation and
 focused Preferences suppress screenshot shortcuts; hidden or unfocused
 Preferences does not. Invalid/colliding shortcuts report errors. This does not
-implement OS shortcut takeover, shortcut editing, New Capture or recording keys,
+implement OS shortcut takeover, New Capture or recording actions,
 single-instance relaunch, launch at login, or complete lifecycle parity.
 
 Linux uses SNI/KSNI over session D-Bus, not XEmbed or GTK/AppIndicator. Building

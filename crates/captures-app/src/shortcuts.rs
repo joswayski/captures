@@ -515,6 +515,11 @@ mod tests {
                 .event(key, HotKeyState::Released, false)
         );
         assert!(routes.lock().unwrap().pending.is_none());
+        // Focus can reverse after a failed release: resume the old, restored
+        // registrations rather than remaining blocked behind a stale cache.
+        suspend_routes(&backend, &mut registered, &routes, false).unwrap();
+        assert!(!routes.lock().unwrap().suspended);
+        assert_eq!(*backend.keys.borrow(), desired.keys().copied().collect());
         backend.fail_cleanup = None;
         suspend_routes(&backend, &mut registered, &routes, true).unwrap();
         backend.fail = Some(key);
@@ -522,6 +527,10 @@ mod tests {
         assert!(backend.keys.borrow().is_empty());
         assert!(registered.is_empty());
         assert!(routes.lock().unwrap().suspended);
+        // The opposite reversal is safe too: returning to Preferences after
+        // failed restoration must keep every key released for the recorder.
+        suspend_routes(&backend, &mut registered, &routes, true).unwrap();
+        assert!(backend.keys.borrow().is_empty());
         backend.fail = None;
         suspend_routes(&backend, &mut registered, &routes, false).unwrap();
         assert_eq!(*backend.keys.borrow(), desired.keys().copied().collect());

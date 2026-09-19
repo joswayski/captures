@@ -198,6 +198,20 @@ not replace real tray/input testing; physical Mac, Windows, Wayland, mixed-DPI
 and accessibility acceptance remain open. Single-instance relaunch, login items,
 OS shortcut takeover and the other lifecycle checklist requirements remain open.
 
+The shortcut-editor slice adds all seven Preferences recorder rows to both hosts.
+Rust owns modifier/key policy, cancellation, display tokens and persisted-field
+validation, checked against 585 shipping TypeScript recording/display vectors.
+AppKit intercepts focused recorder events before menu equivalents; wgpu observes
+root winit physical keys before egui loses PrintScreen, keypad or Super identity.
+Focused Preferences temporarily releases screenshot OS grabs, retaining desired
+bindings and restoring the latest saved mapping on blur. Registration failures
+leave capture routing suspended and report an error. New Capture and recording
+bindings remain storage-only. The private-X11 `--lifecycle --shortcut-editing`
+test covers real input, collision rejection, persistence and global reactivation;
+AppKit XCTest covers controller/bridge semantics and both-appearance renders.
+Physical Mac external/media keys, Windows real input, Wayland and screen-reader
+acceptance remain open; this does not close the full Preferences/input gate.
+
 Region preparation starts with `captures-app::selection`: shared create/move/
 corner-resize and settled-aspect geometry, including Shift precedence, fractional
 coordinates and the shipping minimum/clamping rules. A checked, allocation-free

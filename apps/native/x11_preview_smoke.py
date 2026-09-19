@@ -12,6 +12,7 @@ import select
 import subprocess
 import threading
 import time
+import xml.etree.ElementTree as ET
 
 import dbus
 import dbus.service
@@ -31,7 +32,10 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--stack", action="store_true", help="Also exercise retained multi-card previews")
     parser.add_argument("--lifecycle", action="store_true", help="Exercise a real Xfce SNI tray and background shortcuts")
+    parser.add_argument("--shortcut-editing", action="store_true", help="Also exercise live Preferences recording and persistence")
     args = parser.parse_args()
+    if args.shortcut_editing and not args.lifecycle:
+        parser.error("--shortcut-editing requires --lifecycle for real global registrations")
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -495,6 +499,165 @@ def main():
         if args.lifecycle:
             live_args = [str(binary), "--live", "--history-root", str(history),
                          "--settings-file", str(settings)]
+            if args.shortcut_editing:
+                # Test physical PrintScreen delivery without Openbox's external
+                # scrot shortcut stealing it. Change only this private editor
+                # session, not the preceding lifecycle fixture or user config.
+                # Native OS shortcut takeover remains unimplemented.
+                configuration = ET.parse("/etc/xdg/openbox/rc.xml")
+                for keyboard in configuration.findall(".//{*}keyboard"):
+                    for binding in list(keyboard):
+                        if binding.get("key") == "Print":
+                            keyboard.remove(binding)
+                openbox_config = output / "config/openbox/rc.xml"
+                openbox_config.parent.mkdir(parents=True, exist_ok=True)
+                configuration.write(openbox_config, encoding="utf-8", xml_declaration=True)
+                run("openbox", "--reconfigure")
+                edit_settings = output / "shortcut-settings.json"
+                edit_settings.write_text(settings.read_text())
+                edit_args = [str(binary), "--live", "--history-root", str(history),
+                             "--settings-file", str(edit_settings), "--quit-after", "180"]
+                editor = spawn("shortcut-editor", edit_args)
+                root = wait(lambda: windows("Captures"), "shortcut editor workspace")[0]
+                run("xdotool", "windowmove", "--sync", root, "20", "60")
+                time.sleep(1)
+
+                def open_shortcuts():
+                    click(root, 196, 18)
+                    click(root, 98, 144)
+                    time.sleep(.4)
+
+                # Measured live root-client positions, not fixture coordinates.
+                # Both normal and focused states retain the same row geometry.
+                rows = [242, 304, 366, 428, 490, 552, 614]
+                paths = [("new_capture_shortcut",), ("region_shortcut",),
+                         ("window_shortcut",), ("display_shortcut",),
+                         ("recording", "video_shortcut"), ("recording", "window_shortcut"),
+                         ("recording", "display_shortcut")]
+
+                def stored_keys():
+                    data = json.loads(edit_settings.read_text())
+                    values = []
+                    for path in paths:
+                        value = data
+                        for key in path:
+                            value = value.get(key, {})
+                        values.append(value if isinstance(value, str) else None)
+                    return values
+
+                def record(index, chord, expected):
+                    before = stored_keys()
+                    click(root, 400, rows[index])
+                    run("xdotool", "key", chord)
+                    wait(lambda: stored_keys()[index] == expected, f"persist {paths[index]} = {expected}")
+                    after = stored_keys()
+                    assert all(value is None or after[i] == value
+                               for i, value in enumerate(before) if i != index), (before, after)
+                    assert editor.poll() is None and not windows(SELECTOR)
+                    time.sleep(.3)
+
+                open_shortcuts()
+                shot(root, "shortcuts-dark-normal")
+                # An alias change makes persistence observable even though this
+                # chord is already globally registered. Merely suppressing its
+                # callback (without releasing the OS grab) cannot pass this.
+                record(1, "ctrl+shift+F7", "Control+Shift+F7")
+                baseline = stored_keys()
+                click(root, 400, rows[0])
+                run("xdotool", "keydown", "ctrl", "sleep", ".2")
+                shot(root, "shortcuts-dark-recording")
+                run("xdotool", "keyup", "ctrl", "key", "p", "sleep", ".2")
+                shot(root, "shortcuts-dark-invalid")
+                assert stored_keys() == baseline
+                run("xdotool", "key", "ctrl+shift+Escape", "key", "ctrl+alt+F11", "sleep", ".4")
+                assert stored_keys() == baseline, "modified Escape failed to cancel recording"
+
+                other_app = spawn("editor-focus", ["xmessage", "-title", "Recorder focus fixture",
+                    "-geometry", "220x70+1040+250", "Recorder blur target"])
+                other = wait(lambda: windows("Recorder focus fixture"), "recorder blur target")[0]
+                click(root, 400, rows[0])
+                run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
+                time.sleep(.3)
+                run("xdotool", "windowactivate", "--sync", root, "windowfocus", "--sync", root)
+                time.sleep(.3)
+                run("xdotool", "key", "ctrl+alt+F11", "sleep", ".4")
+                assert stored_keys() == baseline, "blurred recorder accepted a later key"
+
+                # The existing Region chord is deliverable to another recorder,
+                # but the settings validator must reject that duplicate.
+                click(root, 400, rows[2])
+                run("xdotool", "key", "ctrl+shift+F7", "sleep", ".5")
+                shot(root, "shortcuts-duplicate-error")
+                assert stored_keys() == baseline, "duplicate shortcut was persisted"
+                # The recorder keeps keyboard focus across the error banner.
+                run("xdotool", "key", "space", "sleep", ".2", "key", "ctrl+f")
+                wait(lambda: stored_keys()[2] == "Control+KeyF", "repair duplicate via focused recorder")
+                open_shortcuts()
+                for index, chord, expected in [
+                    (0, "ctrl+q", "Control+KeyQ"),
+                    (1, "ctrl+alt+r", "Control+Alt+KeyR"),
+                    (2, "ctrl+f", "Control+KeyF"),
+                    (3, "ctrl+shift+F6", "Control+Shift+F6"),
+                    (4, "Print", "PrintScreen"),
+                    # With NumLock off, this is the physical keypad 7 key.
+                    # KP_7 makes xdotool inject a NumLock key first, which a
+                    # correctly raw recorder would capture instead.
+                    (5, "ctrl+KP_Home", "Control+Numpad7"),
+                    (6, "ctrl+shift+alt+super+XF86AudioPrev", "Control+Shift+Alt+Super+MediaTrackPrevious"),
+                ]:
+                    record(index, chord, expected)
+                expected = stored_keys()
+                shot(root, "shortcuts-all-seven-edited")
+                click(root, 80, 18)
+                time.sleep(.3)  # Settle navigation without injecting another event.
+                run("xdotool", "key", "ctrl+alt+r")
+                wait(lambda: windows(SELECTOR), "first global chord after leaving Preferences")
+                run("xdotool", "key", "Escape")
+                wait(lambda: not windows(SELECTOR) and windows("Captures"), "navigation shortcut cancel")
+                open_shortcuts()
+                click(root, 400, rows[0])
+                click(root, 80, 18)  # Leaving Preferences must cancel the recorder.
+                run("xdotool", "key", "ctrl+q")
+                assert editor.wait(timeout=10) == 0, "stale recorder swallowed workspace Quit"
+                assert stored_keys() == expected
+
+                editor = spawn("shortcut-editor-restart", edit_args)
+                root = wait(lambda: windows("Captures"), "restart with saved shortcuts")[0]
+                run("xdotool", "windowmove", "--sync", root, "20", "60")
+                time.sleep(1)
+                assert stored_keys() == expected, "restart changed stored bindings"
+                open_shortcuts()
+                shot(root, "shortcuts-restarted")
+                run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
+                time.sleep(.3)
+                run("xdotool", "key", "ctrl+alt+r")
+                wait(lambda: windows(SELECTOR), "edited Region chord restored after Preferences blur")
+                run("xdotool", "key", "Escape")
+                wait(lambda: not windows(SELECTOR) and windows("Captures"), "edited shortcut cancellation")
+                # No retained child viewport may bootstrap the hidden root's
+                # UI incidentally. This is the first preview after restart.
+                assert not windows(PREVIEW)
+                run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
+                wait(lambda: not windows("Captures"), "hide empty-preview Preferences")
+                run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
+                time.sleep(.3)
+                previous = entries()
+                run("xdotool", "key", "ctrl+alt+r")
+                selector = wait(lambda: windows(SELECTOR), "hidden root creates first selector")[0]
+                run("xdotool", "windowfocus", "--sync", selector, "mousemove", "--window", selector,
+                    "140", "180", "mousedown", "1", "sleep", ".15", "mousemove", "--window", selector,
+                    "450", "350", "sleep", ".15", "mouseup", "1", "key", "Return")
+                entry = wait(lambda: entries() - previous, "first background capture after restart").pop()
+                preview = wait(lambda: windows(PREVIEW), "hidden root creates first mini preview")[0]
+                assert not windows("Captures"), "first preview reopened hidden Preferences"
+                assert rgb(entry.parent / "capture.png") == wallpaper_crop(140, 180, 310, 170)
+                shot(preview, "shortcuts-first-background-preview")
+                menu_action(6)
+                assert editor.wait(timeout=10) == 0
+                other_app.terminate()
+                other_app.wait(timeout=5)
+                print("PASS shortcut editing: all seven fields, registered chord, raw keys, cancel/blur, duplicate rejection, restart and global launch", flush=True)
+
             # Automation completion must explicitly quit even when a real tray
             # would intercept an ordinary window close into background mode.
             for label, completion in [
@@ -529,7 +692,7 @@ def main():
             assert probe.wait(timeout=10) == 0, "tray loss retained close-to-hide"
             print("PASS lifecycle: real tray automation Quit and hidden-root host-loss recovery", flush=True)
         (output / "result.json").write_text(json.dumps({"passed": True, "scenarios": len(cases),
-            "multiCard": args.stack, "residentLifecycle": args.lifecycle,
+            "multiCard": args.stack, "residentLifecycle": args.lifecycle, "shortcutEditing": args.shortcut_editing,
             "checks": ["selected corner positions and dimensions", "nonactivating map",
                 "minimized-root full-pixel Copy and Save without activation",
                 "History restores minimized workspace", "Dismiss preserves history and export",
@@ -545,7 +708,13 @@ def main():
                   "hidden Preferences countdown and cancellation",
                   "tray region/window capture from hidden Preferences",
                   "timed/framebuffer completion quits with real tray",
-                  "tray host loss restores/focuses hidden root and restores normal close"] if args.lifecycle else []),
+                  "tray host loss restores/focuses hidden root and restores normal close"] if args.lifecycle else []) +
+                (["all seven shortcut persistence paths", "registered chord reaches recorder",
+                  "modifier/invalid rendering and modified Escape/blur cancellation",
+                  "duplicate save rejection", "Ctrl-F/Q interception while recording",
+                  "raw PrintScreen/keypad/Super/media input", "leaving Preferences restores Quit",
+                  "restart persistence and edited global launch after blur",
+                  "hidden root creates first selector and mini preview without reopening"] if args.shortcut_editing else []),
             "scope": "Private X11/software GL, simulated session; not hardware, real lock, Wayland or accessibility acceptance."}, indent=2))
     finally:
         for child in reversed(children):

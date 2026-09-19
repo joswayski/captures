@@ -55,8 +55,13 @@ Linux). Linux tray builds additionally require the D-Bus development package
 (`libdbus-1-dev` on Ubuntu). A working Vulkan or other wgpu-supported graphics
 driver is required.
 The isolated Cargo workspace/lockfile leaves the shipping Rust 1.94 workspace
-unchanged. eframe 0.36.2 includes the native idle-loop fix absent from 0.34.3;
-do not downgrade solely to match the shipping toolchain.
+unchanged. The egui/eframe stack is pinned to upstream
+[`60d7caae`](https://github.com/emilk/egui/commit/60d7caaea38a795618e842925061ad2210028a2a),
+after the 0.36.2 release. This adds `RequestPaintWhileHidden`, needed to create
+selectors and the first mini preview while the root stays hidden. Child-window
+transitions request one paint, not a recurring hidden repaint loop. Released
+0.36.2 lacks that API; 0.34.3 also lacks the native idle-loop fix. Do not downgrade
+solely to match the shipping toolchain.
 
 From the repository root, on either Windows or Linux:
 
