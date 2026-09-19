@@ -513,6 +513,14 @@ fn exact_indexed_rgba(image: &RgbaImage, max_colors: u16) -> Option<(Vec<[u8; 4]
     let mut palette = Vec::new();
     let mut indices = Vec::with_capacity(rgba_pixel_count(image));
     for pixel in image.pixels() {
+        // Flat screenshot regions repeat colors: reuse the previous index
+        // without hashing, while retaining first-seen palette order.
+        if let Some(&index) = indices.last()
+            && palette[usize::from(index)] == pixel.0
+        {
+            indices.push(index);
+            continue;
+        }
         if let Some(&index) = map.get(&pixel.0) {
             indices.push(index);
             continue;
