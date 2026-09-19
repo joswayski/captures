@@ -4,6 +4,7 @@ import XCTest
 
 final class StatusItemTests: XCTestCase {
     func testStatusMenuContainsOnlyShippingActionsAndRoutesThem() {
+        _ = NSApplication.shared
         var captures: [StillCaptureKind] = []
         var actions: [String] = []
         let target = LiveStatusActions(capture: { captures.append($0) },
@@ -19,8 +20,9 @@ final class StatusItemTests: XCTestCase {
         XCTAssertFalse(menu.items.contains { $0.title.localizedCaseInsensitiveContains("record") })
         XCTAssertFalse(menu.items.contains { $0.title.localizedCaseInsensitiveContains("update") })
 
-        target.captureRegion(); target.captureWindow(); target.captureDisplay()
-        target.showHistory(); target.showPreferences(); target.openOutputFolder(); target.quit()
+        for index in [0, 1, 2, 4, 5, 6, 8] {
+            menu.performActionForItem(at: index)
+        }
         XCTAssertEqual(captures, [.region, .window, .display])
         XCTAssertEqual(actions, ["history", "preferences", "folder", "quit"])
     }

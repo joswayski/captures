@@ -463,6 +463,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     private func installStatusItem() {
         let actions = LiveStatusActions(capture: { [weak self] kind in
+            self?.preferencesController?.flush()
             self?.liveController?.capture(kind)
         }, history: { [weak self] in
             self?.showHistory()
