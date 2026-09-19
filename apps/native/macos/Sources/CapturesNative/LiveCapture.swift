@@ -12,10 +12,20 @@ private final class CaptureHistoryRow: NSTableRowView {
     override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
 }
 
-private enum StillCaptureKind: Equatable {
+enum StillCaptureKind: Equatable {
     case display
     case region
     case window
+}
+
+struct CaptureWindowRestoration {
+    private var wasVisible = false
+
+    mutating func begin(windowIsVisible: Bool) { wasVisible = windowIsVisible }
+    mutating func finish(restoreRequested: Bool) -> Bool {
+        defer { wasVisible = false }
+        return restoreRequested && wasVisible
+    }
 }
 
 final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
@@ -37,6 +47,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var selectedIndex: Int?
     private var selectionGeneration = 0
     private var capturing = false
+    private var windowRestoration = CaptureWindowRestoration()
     private var clearingHistory = false
     private var flowGeneration: UInt64?
     private var previewCaptureGeneration: UInt64?
@@ -192,9 +203,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }
     }
 
-    private func capture(_ kind: StillCaptureKind) {
+    func capture(_ kind: StillCaptureKind) {
         let index = displayMenu.indexOfSelectedItem
         guard !capturing, displays.indices.contains(index), !historyRoot.isEmpty else { return }
+        windowRestoration.begin(windowIsVisible: window.isVisible)
         let display = displays[index]; setBusy(true, message: "Preparing capture…")
         run({ [settingsPath] in try CapturePreferences.load(path: settingsPath) }) { [weak self] result in
             guard let self else { return }
@@ -390,7 +402,11 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             previewCaptureGeneration = nil
         }
         snapshotPending = false; setBusy(false)
-        if restoreWindow { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
+        let shouldRestoreWindow = windowRestoration.finish(restoreRequested: restoreWindow)
+        if shouldRestoreWindow {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     private func setBusy(_ busy: Bool, message: String = "") { capturing = busy; updateActions(); if busy { status.stringValue = message } }
@@ -489,6 +505,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         loadHistory(select: artifact.id)
     }
+    func refreshHistory() { loadHistory() }
     private func reveal() { guard let index = selectedIndex, artifacts.indices.contains(index), let path = artifacts[index].savedPath else { return }; NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
     private func confirmDelete() {
         guard let index = selectedIndex, artifacts.indices.contains(index) else { return }; let artifact = artifacts[index]

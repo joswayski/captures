@@ -85,15 +85,21 @@ final class RootWindowCloseHandler: NSObject, NSWindowDelegate {
     weak var rootWindow: NSWindow?
     private let closePreviews: () -> Void
     private let terminate: () -> Void
+    private let hidesRootWindow: Bool
 
     init(rootWindow: NSWindow, closePreviews: @escaping () -> Void,
-         terminate: @escaping () -> Void) {
+         terminate: @escaping () -> Void, hidesRootWindow: Bool = false) {
         self.rootWindow = rootWindow; self.closePreviews = closePreviews
-        self.terminate = terminate
+        self.terminate = terminate; self.hidesRootWindow = hidesRootWindow
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        if sender === rootWindow { closePreviews() }
+        guard sender === rootWindow else { return true }
+        if hidesRootWindow {
+            sender.orderOut(nil)
+            return false
+        }
+        closePreviews()
         return true
     }
 
@@ -102,6 +108,69 @@ final class RootWindowCloseHandler: NSObject, NSWindowDelegate {
               closing === rootWindow else { return }
         terminate()
     }
+}
+
+final class LiveStatusActions: NSObject {
+    private let captureAction: (StillCaptureKind) -> Void
+    private let historyAction: () -> Void
+    private let preferencesAction: () -> Void
+    private let outputFolderAction: () -> Void
+    private let quitAction: () -> Void
+
+    init(capture: @escaping (StillCaptureKind) -> Void,
+         history: @escaping () -> Void, preferences: @escaping () -> Void,
+         outputFolder: @escaping () -> Void, quit: @escaping () -> Void) {
+        captureAction = capture; historyAction = history
+        preferencesAction = preferences; outputFolderAction = outputFolder
+        quitAction = quit
+    }
+
+    @objc func captureRegion() { captureAction(.region) }
+    @objc func captureWindow() { captureAction(.window) }
+    @objc func captureDisplay() { captureAction(.display) }
+    @objc func showHistory() { historyAction() }
+    @objc func showPreferences() { preferencesAction() }
+    @objc func openOutputFolder() { outputFolderAction() }
+    @objc func quit() { quitAction() }
+
+    func makeMenu() -> NSMenu {
+        let menu = NSMenu()
+        add("Screenshot Region", action: #selector(captureRegion), to: menu)
+        add("Screenshot Window", action: #selector(captureWindow), to: menu)
+        add("Screenshot Display", action: #selector(captureDisplay), to: menu)
+        menu.addItem(.separator())
+        add("Capture History…", action: #selector(showHistory), to: menu)
+        add("Open Save Location", action: #selector(openOutputFolder), to: menu)
+        add("Preferences…", action: #selector(showPreferences), to: menu)
+        menu.addItem(.separator())
+        add("Quit Captures", action: #selector(quit), to: menu)
+        return menu
+    }
+
+    private func add(_ title: String, action: Selector, to menu: NSMenu) {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+    }
+}
+
+enum LiveReopenAction: Equatable {
+    case focusExisting
+    case showPreferences
+}
+
+func liveReopenAction(hasVisibleWindows: Bool) -> LiveReopenAction {
+    hasVisibleWindows ? .focusExisting : .showPreferences
+}
+
+func performTermination(flushPreferences: () -> Void, cancelCapture: () -> Void,
+                        closePreviews: () -> Void, drainActions: () -> Void,
+                        removeExerciseDirectory: () -> Void) {
+    flushPreferences()
+    cancelCapture()
+    closePreviews()
+    drainActions()
+    removeExerciseDirectory()
 }
 
 final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate {
@@ -115,6 +184,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var miniPreviews: MiniPreviewController?
     private var miniPreviewActions: MiniPreviewActions?
     private var rootWindowCloseHandler: RootWindowCloseHandler?
+    private var statusItem: NSStatusItem?
+    private var statusActions: LiveStatusActions?
+    private var liveContent: Surface?
     private var previewSelectionID: String?
     private var regionSelector: RegionSelectionView?
     private var windowSelector: WindowSelectionView?
@@ -149,7 +221,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         let item = NSMenuItem()
         menu.addItem(item)
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "Quit Captures Native Workbench", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let quit = appMenu.addItem(withTitle: options.live ? "Quit Captures" : "Quit Captures Native Workbench",
+                                   action: #selector(quitApplication), keyEquivalent: "q")
+        quit.target = self
         item.submenu = appMenu
         let editItem = NSMenuItem()
         menu.addItem(editItem)
@@ -183,10 +257,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         self.miniPreviewActions = miniPreviewActions
         let rootWindowCloseHandler = RootWindowCloseHandler(rootWindow: window,
             closePreviews: { [weak miniPreviews] in miniPreviews?.close() },
-            terminate: { NSApp.terminate(nil) })
+            terminate: { NSApp.terminate(nil) }, hidesRootWindow: options.live)
         self.rootWindowCloseHandler = rootWindowCloseHandler
         window.delegate = rootWindowCloseHandler
         render()
+        if options.live { installStatusItem() }
         if scene != "idle" { window.makeKeyAndOrderFront(nil) }
         NSApp.activate(ignoringOtherApps: true)
         Metrics.write(["event": "ready", "scene": scene, "window": window.windowNumber,
@@ -209,15 +284,33 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         }
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !options.live }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        preferencesController?.flush()
-        liveController?.finishCapture(restoreWindow: false)
-        miniPreviews?.close()
-        LiveCaptureController.flush()
-        if let exerciseDirectory { try? FileManager.default.removeItem(at: exerciseDirectory) }
+        performTermination(flushPreferences: { [weak self] in self?.preferencesController?.flush() },
+            cancelCapture: { [weak self] in self?.liveController?.finishCapture(restoreWindow: false) },
+            closePreviews: { [weak self] in self?.miniPreviews?.close() },
+            drainActions: { LiveCaptureController.flush() },
+            removeExerciseDirectory: { [weak self] in
+                if let directory = self?.exerciseDirectory {
+                    try? FileManager.default.removeItem(at: directory)
+                }
+            })
         return .terminateNow
     }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard options.live else { return true }
+        switch liveReopenAction(hasVisibleWindows: flag) {
+        case .focusExisting:
+            window.makeKeyAndOrderFront(nil)
+            sender.activate(ignoringOtherApps: true)
+        case .showPreferences:
+            showPreferences()
+        }
+        return true
+    }
+
+    @objc private func quitApplication() { NSApp.terminate(nil) }
 
     @objc private func showFind() { if scene == "preferences" { preferencesController?.showFind() } }
     @objc private func findNext() { preferencesController?.stepFind(1) }
@@ -234,8 +327,17 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         table = nil
         regionSelector = nil
         windowSelector = nil
-        liveController?.finishCapture(restoreWindow: false)
-        liveController = nil
+        if !options.live {
+            liveController?.finishCapture(restoreWindow: false)
+            liveController = nil
+            liveContent = nil
+        }
+        if options.live, scene == "live", let liveContent, liveController != nil {
+            content = liveContent
+            window.contentView = liveContent
+            Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
+            return
+        }
         content = Surface(frame: NSRect(x: 0, y: 0, width: 1000, height: 720))
         content.wantsLayer = true
         content.layer!.backgroundColor = tokens.color("surface-canvas").cgColor
@@ -264,7 +366,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     else { return }
                     self?.miniPreviews?.updateSettings(MiniPreviewSettings(enabled: enabled,
                         placement: placement, includeInCaptures: include))
-                }, showHistory: { [weak self] in self?.scene = self?.options.live == true ? "live" : "history"; self?.render() },
+                }, showHistory: { [weak self] in self?.showHistory() },
                    liveCaptureAvailable: options.live,
                    initialAppearance: options.appearanceOverride ? options.appearance : nil,
                    initialTheme: options.themeOverride ? options.theme : nil)
@@ -305,6 +407,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             return
         }
         if scene == "live" {
+            liveContent = content
             liveController = LiveCaptureController(root: content, window: window, tokens: tokens,
                 historyRoot: options.historyRoot, settingsPath: options.settingsFile,
                 miniPreviews: miniPreviews, miniPreviewActions: miniPreviewActions,
@@ -354,7 +457,66 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private func openPreview(_ artifact: CaptureArtifact) {
         previewSelectionID = artifact.id
         if scene != "live" { scene = "live"; render() }
-        else { liveController?.openPreview(artifact) }
+        liveController?.openPreview(artifact)
+        previewSelectionID = nil
+    }
+
+    private func installStatusItem() {
+        let actions = LiveStatusActions(capture: { [weak self] kind in
+            self?.preferencesController?.flush()
+            self?.liveController?.capture(kind)
+        }, history: { [weak self] in
+            self?.showHistory()
+        }, preferences: { [weak self] in
+            self?.showPreferences()
+        }, outputFolder: { [weak self] in
+            self?.openOutputFolder()
+        }, quit: {
+            NSApp.terminate(nil)
+        })
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Captures") {
+            image.isTemplate = true
+            item.button?.image = image
+        } else {
+            item.button?.title = "C"
+        }
+        item.button?.setAccessibilityLabel("Captures")
+        item.menu = actions.makeMenu()
+        statusActions = actions
+        statusItem = item
+    }
+
+    private func showHistory() {
+        guard options.live else {
+            scene = "history"; render(); return
+        }
+        preferencesController?.flush()
+        scene = "live"
+        render()
+        liveController?.refreshHistory()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func showPreferences() {
+        preferencesController?.flush()
+        scene = "preferences"
+        render()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func openOutputFolder() {
+        LiveCaptureController.queue.async { [settingsPath = options.settingsFile] in
+            let result = Result { try CapturePreferences.load(path: settingsPath).directory }
+            DispatchQueue.main.async {
+                guard case .success(let path) = result else { return }
+                let url = URL(fileURLWithPath: path, isDirectory: true)
+                try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+                NSWorkspace.shared.open(url)
+            }
+        }
     }
 
     private func exerciseSettingsPath() -> String {
