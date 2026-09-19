@@ -12,6 +12,23 @@ private final class CaptureHistoryRow: NSTableRowView {
     override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
 }
 
+enum CaptureHistoryFilter: String, CaseIterable {
+    case all, screenshot, video, gif
+
+    var title: String {
+        switch self {
+        case .all: return "All"
+        case .screenshot: return "Screenshots"
+        case .video: return "Video"
+        case .gif: return "GIF"
+        }
+    }
+
+    func matches(_ artifact: CaptureArtifact) -> Bool {
+        self == .all || artifact.kind == rawValue
+    }
+}
+
 enum StillCaptureKind: Equatable {
     case display
     case region
@@ -81,6 +98,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var historyRoot = ""
     private var displays: [DisplayItem] = []
     private var artifacts: [CaptureArtifact] = []
+    private var historyFilter = CaptureHistoryFilter.all
+    private var historyFilterButtons: [(CaptureHistoryFilter, CaptureButton)] = []
+    private var historyRows: [Int] = []
     private var selectedImage: NSImage?
     private var selectedIndex: Int?
     private var selectionGeneration = 0
@@ -181,7 +201,19 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         regionButton = button("Capture region", frame: NSRect(x: 730, y: 90, width: 116, height: 34)) { [weak self] in self?.capture(.region) }
         windowButton = button("Capture window", frame: NSRect(x: 858, y: 90, width: 114, height: 34)) { [weak self] in self?.capture(.window) }
 
-        let scroll = NSScrollView(frame: NSRect(x: 28, y: 148, width: 320, height: 426))
+        var filterX: CGFloat = 28
+        let filterWidths: [CGFloat] = [90, 160, 110, 100]
+        for (filter, width) in zip(CaptureHistoryFilter.allCases, filterWidths) {
+            let control = button(filter.title, frame: NSRect(x: filterX, y: 144, width: width, height: 34)) { [weak self] in
+                guard let self else { return }
+                let previousID = self.selectedIndex.map { self.artifacts[$0].id }
+                self.historyFilter = filter
+                self.reloadHistorySelection(previousID)
+            }
+            control.setButtonType(.toggle)
+            historyFilterButtons.append((filter, control)); filterX += width + 8
+        }
+        let scroll = NSScrollView(frame: NSRect(x: 28, y: 194, width: 320, height: 380))
         scroll.hasVerticalScroller = true; scroll.drawsBackground = false
         table = NSTableView(frame: scroll.bounds)
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("history")); column.width = 300
@@ -189,7 +221,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         table.backgroundColor = tokens.color("surface-canvas"); table.dataSource = self; table.delegate = self
         table.setAccessibilityLabel("Capture history"); scroll.documentView = table; root.addSubview(scroll)
 
-        let previewPanel = Surface(frame: NSRect(x: 372, y: 148, width: 600, height: 400))
+        let previewPanel = Surface(frame: NSRect(x: 372, y: 194, width: 600, height: 354))
         previewPanel.wantsLayer = true; previewPanel.layer?.backgroundColor = tokens.color("surface-raised").cgColor
         previewPanel.layer?.cornerRadius = tokens.number("r-xl"); previewPanel.layer?.borderWidth = 1
         previewPanel.layer?.borderColor = tokens.color("border").cgColor; root.addSubview(previewPanel)
@@ -264,18 +296,41 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             guard let self else { return }
             switch result { case .success(let values):
                 let previousID = id ?? self.selectedIndex.flatMap { self.artifacts.indices.contains($0) ? self.artifacts[$0].id : nil }
-                self.clearSelection()
-                self.artifacts = values; self.table.reloadData(); self.status.stringValue = self.historyStatus()
+                if let id, let requested = values.first(where: { $0.id == id }),
+                   !self.historyFilter.matches(requested) { self.historyFilter = .all }
+                self.artifacts = values; self.reloadHistorySelection(previousID)
                 self.miniPreviews?.reconcileHistory(ids: Set(values.map(\.id)))
-                if let previousID, let index = values.firstIndex(where: { $0.id == previousID }) { self.table.selectRowIndexes([index], byExtendingSelection: false) }
-                else if !values.isEmpty { self.table.selectRowIndexes([0], byExtendingSelection: false) }
-                else { self.clearSelection() }
-            case .failure(let error): self.clearSelection(); self.artifacts = []; self.table.reloadData(); self.showError("Couldn’t load capture history", error) }
+            case .failure(let error): self.artifacts = []; self.reloadHistorySelection(nil); self.showError("Couldn’t load capture history", error) }
             self.updateActions(); completion?()
         }
     }
 
-    private func historyStatus() -> String { artifacts.isEmpty ? "No captures yet. Choose New Capture to begin." : "\(artifacts.count) capture\(artifacts.count == 1 ? "" : "s") in native history." }
+    private func reloadHistorySelection(_ previousID: String?) {
+        historyRows = artifacts.indices.filter { historyFilter.matches(artifacts[$0]) }
+        clearSelection(); table.reloadData()
+        let rows = historyRows
+        for (filter, control) in historyFilterButtons {
+            let count = artifacts.filter(filter.matches).count
+            control.title = "\(filter.title) \(count)"
+            control.setAccessibilityLabel("\(filter.title), \(count) captures")
+            control.selected = filter == historyFilter
+            control.state = filter == historyFilter ? .on : .off
+            control.isEnabled = filter == .all || count > 0
+            control.needsDisplay = true
+        }
+        if let row = rows.firstIndex(where: { artifacts[$0].id == previousID }) {
+            table.selectRowIndexes([row], byExtendingSelection: false)
+        } else if !rows.isEmpty {
+            table.selectRowIndexes([0], byExtendingSelection: false)
+        }
+        status.stringValue = historyStatus(); updateActions()
+    }
+
+    private func historyStatus() -> String {
+        if artifacts.isEmpty { return "No captures yet. Choose New Capture to begin." }
+        if historyRows.isEmpty { return "No captures match this filter." }
+        return "\(historyRows.count) of \(artifacts.count) captures · \(historyFilter.title)"
+    }
     private func requestPermission() {
         status.stringValue = "Requesting screen access…"
         run({ [transport] in _ = try transport.request(["operation": "request_permission"]) }) { [weak self] result in
@@ -1045,14 +1100,19 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         newCaptureButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
     }
 
-    func numberOfRows(in tableView: NSTableView) -> Int { artifacts.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { historyRows.count }
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         let view = CaptureHistoryRow(); view.tokens = tokens; return view
     }
-    func tableViewSelectionDidChange(_ notification: Notification) { select(table.selectedRow) }
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        let rows = historyRows
+        guard rows.indices.contains(table.selectedRow) else { clearSelection(); return }
+        select(rows[table.selectedRow])
+    }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let cell = NSTableCellView(); let artifact = artifacts[row]
-        let name = NSTextField(labelWithString: "\(artifact.isRecording ? "Recording" : "Screenshot") · \(artifact.width) × \(artifact.height)")
+        let cell = NSTableCellView(); let artifact = artifacts[historyRows[row]]
+        let kind = artifact.kind == "gif" ? "GIF" : artifact.isRecording ? "Video" : "Screenshot"
+        let name = NSTextField(labelWithString: "\(kind) · \(artifact.width) × \(artifact.height)")
         name.frame = NSRect(x: 12, y: 31, width: 280, height: 20); name.font = .systemFont(ofSize: 13, weight: .medium); name.textColor = tokens.color("text")
         let date = NSTextField(labelWithString: artifact.createdAt); date.frame = NSRect(x: 12, y: 10, width: 280, height: 18); date.font = .systemFont(ofSize: 11); date.textColor = tokens.color("text-muted")
         cell.addSubview(name); cell.addSubview(date); cell.textField = name; return cell
@@ -1077,7 +1137,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             switch result { case .success(let image):
                 self.selectedImage = image; self.preview.image = image
                 self.detail.stringValue = artifact.isRecording
-                    ? "\(artifact.width) × \(artifact.height) · H.264 MP4 · Editor unavailable"
+                    ? "\(artifact.width) × \(artifact.height) · \(artifact.kind == "gif" ? "GIF" : "H.264 MP4") · Editor unavailable"
                     : "\(artifact.width) × \(artifact.height) · PNG"
             case .failure(let error):
                 self.showError(artifact.isRecording
@@ -1090,7 +1150,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private func clearSelection() {
         selectionGeneration += 1; selectedIndex = nil; selectedImage = nil; preview?.image = nil
         if table.selectedRow >= 0 { table.deselectAll(nil) }
-        detail?.stringValue = artifacts.isEmpty ? "Choose New Capture to begin." : "Select a capture to preview it."
+        detail?.stringValue = artifacts.isEmpty ? "Choose New Capture to begin."
+            : historyRows.isEmpty ? "No captures match this filter." : "Select a capture to preview it."
         updateActions()
     }
 
