@@ -31,11 +31,11 @@ Preferences records all seven stored shortcut fields using the shared Rust
 key/modifier, display, cancellation and validation policy. Escape (including
 modified Escape), focus loss or leaving the recorder cancels without saving.
 Modifier-only input previews the chord; invalid keys show an inline error.
-Focused Preferences releases the three screenshot OS registrations so a recorder
+Focused Preferences releases the four capture OS registrations so a recorder
 can receive an existing global chord. Edits remain unregistered until Preferences
 loses focus; registration failures are reported rather than treated as success.
-Only the three screenshot actions are connected in live mode. New Capture and
-recording bindings can be saved but do not launch those unimplemented workflows.
+New Capture and the three screenshot actions are connected in live mode.
+Recording bindings can be saved but do not launch those unimplemented workflows.
 Fixture Preferences never registers global keys. The shipping TypeScript policy
 supplies 390 recording and 195 platform-display differential test vectors.
 
@@ -49,9 +49,10 @@ physical Windows/macOS, Wayland and screen-reader acceptance remain open.
 ## Resident lifecycle and screenshot shortcuts
 
 Only `--live` creates the macOS menu-bar item or Windows/Linux tray and registers
-the persisted region/window/display shortcuts. The menu offers those three
-captures, History, Preferences, the output folder, and Quit. Closing the root
-hides it when a usable tray is available; previews and accepted work stay alive.
+the persisted New Capture and region/window/display shortcuts. The menu offers
+New Capture, those three captures, History, Preferences, the output folder, and
+Quit. Closing the root hides it when a usable tray is available; previews and
+accepted work stay alive.
 Quit cancels pending capture, drains accepted file work and removes shortcuts/tray.
 Timed and framebuffer-screenshot completion also explicitly quit, not hide.
 Captures launched from a hidden root leave it hidden on success or cancellation.
@@ -62,7 +63,7 @@ temporary Escape cancellation without competing process-wide handlers. Native
 event loops drain actions on their UI thread. Active capture/preparation and
 focused Preferences suppress screenshot shortcuts; hidden or unfocused
 Preferences does not. Invalid/colliding shortcuts report errors. This does not
-implement OS shortcut takeover, New Capture or recording actions,
+implement OS shortcut takeover or recording actions,
 single-instance relaunch, launch at login, or complete lifecycle parity.
 
 Linux uses SNI/KSNI over session D-Bus, not XEmbed or GTK/AppIndicator. Building
@@ -72,6 +73,25 @@ normal close-to-quit. Losing the tray host restores the root instead of strandin
 the process. XEmbed-only trays require an SNI bridge. Wayland capture/hidden-window
 support remains gated; a tray does not remove that limitation. Physical macOS,
 Windows, mixed-DPI and accessibility acceptance remain open.
+
+## New Capture controls
+
+New Capture starts a screenshot selector in Region mode. Its fixed-glass toolbar
+switches between Region, Window and Full screen without replacing the prepared
+desktop snapshot or discarding settled selections. An actual display change
+prepares a replacement session and clears display-local selections; stale replies
+cannot reopen a cancelled selector. Capture is disabled until the selected target
+is valid. Enter confirms, Escape cancels, and aspect/auto-start/freeze/countdown
+preferences use the existing Rust geometry and capture policies. The root returns
+to its prior visibility; a background capture does not reopen Preferences.
+
+One Rust `WindowSession` also accepts a region target, reusing region crop/cursor
+validation without another full-screen copy. A nonzero countdown refreshes pixels
+for all three targets. The Record control is visibly disabled: recording selector,
+HUD and editor integration remain separate slices. Existing direct screenshot
+actions remain available. Native controls are not yet full capture-menu UI/input
+parity; physical displays, global target switching while the menu is open, and
+accessibility acceptance remain open.
 
 ## Live display-capture slice
 

@@ -71,7 +71,7 @@ must be explicit, not silently successful.
   enables the current native capture slice. Both use separate development data,
   never installed settings/history. Fixture launches do not request capture
   access. Live captures register temporary global Escape for cancellation and
-  persisted region/window/display launch shortcuts. New Capture/recording keys,
+  persisted New Capture/region/window/display launch shortcuts. Recording keys,
   OS shortcut takeover and update installation are not connected yet.
   Production data migration requires backup, version checks and rollback tests.
 
@@ -205,12 +205,24 @@ AppKit intercepts focused recorder events before menu equivalents; wgpu observes
 root winit physical keys before egui loses PrintScreen, keypad or Super identity.
 Focused Preferences temporarily releases screenshot OS grabs, retaining desired
 bindings and restoring the latest saved mapping on blur. Registration failures
-leave capture routing suspended and report an error. New Capture and recording
-bindings remain storage-only. The private-X11 `--lifecycle --shortcut-editing`
+leave capture routing suspended and report an error. Recording bindings remain
+storage-only. The private-X11 `--lifecycle --shortcut-editing`
 test covers real input, collision rejection, persistence and global reactivation;
 AppKit XCTest covers controller/bridge semantics and both-appearance renders.
 Physical Mac external/media keys, Windows real input, Wayland and screen-reader
 acceptance remain open; this does not close the full Preferences/input gate.
+
+New Capture connects its persisted shortcut, tray action and workspace entry to
+fixed-glass screenshot controls on both hosts. Region, Window and Full screen
+share one prepared Rust session and desktop snapshot, retaining selections across
+target switches. A display replacement invalidates stale preparation and local
+selections. Region confirmation reuses the existing audited crop/cursor policy;
+countdown refresh and the cancellation/commit boundary are unchanged. The
+controls include aspect selection, Enter/Escape and auto-start behavior, while
+Record remains explicitly disabled. Existing direct screenshot paths remain
+available. Recording, global target switching inside the open menu, physical
+platform input/display acceptance and full capture-menu visual/accessibility
+parity remain open.
 
 Region preparation starts with `captures-app::selection`: shared create/move/
 corner-resize and settled-aspect geometry, including Shift precedence, fractional
