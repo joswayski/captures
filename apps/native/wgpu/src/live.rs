@@ -931,6 +931,10 @@ impl Live {
         // Cancel preparation/countdown before draining work. CaptureFlow::cancel
         // leaves a capture that already crossed its persistence commit point alone.
         self.selector_scope_generation.store(0, Ordering::Release);
+        // on_exit joins this worker from the native event thread. Do not let a
+        // final Finished/Discarded event re-enter egui's repaint callback while
+        // that thread is synchronously draining accepted media.
+        self.recording_worker.begin_shutdown();
         let drain_recording_worker = is_recording_phase(self.capture_phase);
         if let Some(flow) = &self.flow {
             let generation = flow.generation();

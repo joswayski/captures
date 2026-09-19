@@ -304,10 +304,10 @@ impl Workbench {
             return;
         }
         self.quitting = true;
-        self.preferences_state.flush();
         if let Some(live) = &mut self.live {
             live.flush();
         }
+        self.preferences_state.flush();
         self.shortcuts.take();
         self.tray.take();
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1167,10 +1167,10 @@ impl eframe::App for Workbench {
     }
 
     fn on_exit(&mut self) {
-        self.preferences_state.flush();
         if let Some(live) = &mut self.live {
             live.flush();
         }
+        self.preferences_state.flush();
         self.shortcuts.take();
         self.tray.take();
         emit(

@@ -1,6 +1,10 @@
 use std::{
     path::PathBuf,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, Sender},
+    },
     thread,
 };
 
@@ -85,6 +89,7 @@ pub enum Event {
 pub struct Worker {
     tx: Sender<Command>,
     rx: Receiver<Event>,
+    repaint_enabled: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -92,6 +97,8 @@ impl Worker {
     pub fn new(ctx: egui::Context) -> Self {
         let (tx, commands) = mpsc::channel();
         let (events, rx) = mpsc::channel();
+        let repaint_enabled = Arc::new(AtomicBool::new(true));
+        let worker_repaint_enabled = Arc::clone(&repaint_enabled);
         let thread = thread::spawn(move || {
             let mut session: Option<RecordingSession> = None;
             let tools = MediaToolchain::from_command_names();
@@ -178,12 +185,15 @@ impl Worker {
                 if events.send(event).is_err() {
                     break;
                 }
-                ctx.request_repaint();
+                if worker_repaint_enabled.load(Ordering::Acquire) {
+                    ctx.request_repaint();
+                }
             }
         });
         Self {
             tx,
             rx,
+            repaint_enabled,
             thread: Some(thread),
         }
     }
@@ -196,7 +206,12 @@ impl Worker {
         self.rx.try_recv().ok()
     }
 
+    pub fn begin_shutdown(&self) {
+        self.repaint_enabled.store(false, Ordering::Release);
+    }
+
     pub fn shutdown(&mut self) {
+        self.begin_shutdown();
         let _ = self.tx.send(Command::Shutdown);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -206,6 +221,7 @@ impl Worker {
     /// Request worker shutdown without waiting for a blocking device discovery
     /// call. The caller must ensure that the worker owns no recording media.
     pub fn shutdown_detached(&mut self) {
+        self.begin_shutdown();
         let _ = self.tx.send(Command::Shutdown);
         drop(self.thread.take());
     }
@@ -214,5 +230,26 @@ impl Worker {
 impl Drop for Worker {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shutdown_drain_does_not_reenter_the_event_loop_with_a_repaint() {
+        let ctx = egui::Context::default();
+        let (repaints, repaint_events) = mpsc::channel();
+        ctx.set_request_repaint_callback(move |_| {
+            let _ = repaints.send(());
+        });
+        let mut worker = Worker::new(ctx);
+
+        worker.begin_shutdown();
+        worker.send(Command::Snapshot { generation: 42 });
+        worker.shutdown();
+
+        assert!(repaint_events.try_recv().is_err());
     }
 }
