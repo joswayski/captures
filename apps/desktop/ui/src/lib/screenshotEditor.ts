@@ -100,6 +100,8 @@ export type ElementStyle = {
   color: string;
   fill: string | null;
   strokeWidth: number;
+  /** Closed shapes only. Omitted in older drafts means the stroke is enabled. */
+  strokeEnabled?: boolean;
   /**
    * Soft contact shadow under the stroke. Omitted in older documents; treat
    * missing as off so saved drafts keep their original look.
