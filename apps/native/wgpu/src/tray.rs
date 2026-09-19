@@ -20,6 +20,7 @@ pub enum Action {
     History,
     Preferences,
     OpenOutputFolder,
+    #[cfg(target_os = "linux")]
     Unavailable,
     Quit,
 }
@@ -31,7 +32,6 @@ pub struct Tray {
 
 impl Tray {
     pub fn new(ctx: egui::Context) -> Result<Self, String> {
-        ensure_backend_available()?;
         let capture_display = MenuItem::with_id("capture-display", "Capture display", true, None);
         let capture_region = MenuItem::with_id("capture-region", "Capture region", true, None);
         let capture_window = MenuItem::with_id("capture-window", "Capture window", true, None);
@@ -70,7 +70,7 @@ impl Tray {
             .map_err(|error| format!("Tray is unavailable: {error}"))?;
         let (actions, receiver) = mpsc::channel();
         #[cfg(target_os = "linux")]
-        monitor_backend(actions.clone(), ctx.clone());
+        monitor_backend(actions.clone(), ctx.clone())?;
         let menu_actions = actions.clone();
         let menu_ctx = ctx.clone();
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
@@ -118,19 +118,12 @@ impl Tray {
     }
 }
 
-#[cfg(target_os = "windows")]
-fn ensure_backend_available() -> Result<(), String> {
-    Ok(())
-}
-
 #[cfg(target_os = "linux")]
-fn ensure_backend_available() -> Result<(), String> {
+fn backend_available(connection: &dbus::blocking::Connection) -> Result<(), String> {
     use std::time::Duration;
 
-    use dbus::blocking::{Connection, stdintf::org_freedesktop_dbus::Properties};
+    use dbus::blocking::stdintf::org_freedesktop_dbus::Properties;
 
-    let connection = Connection::new_session()
-        .map_err(|error| format!("Could not connect to the desktop session bus: {error}"))?;
     let proxy = connection.with_proxy(
         "org.freedesktop.DBus",
         "/org/freedesktop/DBus",
@@ -162,73 +155,88 @@ fn ensure_backend_available() -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
-fn monitor_backend(actions: mpsc::Sender<Action>, ctx: egui::Context) {
+fn monitor_backend(actions: mpsc::Sender<Action>, ctx: egui::Context) -> Result<(), String> {
     use std::{thread, time::Duration};
 
     use dbus::{arg::PropMap, blocking::Connection, message::MatchRule};
 
+    let connection = Connection::new_session()
+        .map_err(|error| format!("Could not connect to the desktop session bus: {error}"))?;
+    let (recheck, rechecks) = mpsc::channel();
+    let owner_actions = actions.clone();
+    let owner_ctx = ctx.clone();
+    let mut owner_rule = MatchRule::new_signal("org.freedesktop.DBus", "NameOwnerChanged");
+    owner_rule.sender = Some("org.freedesktop.DBus".into());
+    owner_rule.path = Some("/org/freedesktop/DBus".into());
+    connection
+        .add_match(
+            owner_rule,
+            move |(name, old_owner, new_owner): (String, String, String), _, _| {
+                if name == "org.kde.StatusNotifierWatcher"
+                    && !old_owner.is_empty()
+                    && old_owner != new_owner
+                {
+                    let _ = owner_actions.send(Action::Unavailable);
+                    owner_ctx.request_repaint();
+                }
+                true
+            },
+        )
+        .map_err(|error| format!("Could not monitor the system tray watcher: {error}"))?;
+    let property_recheck = recheck.clone();
+    let host_rule = MatchRule::new_signal("org.freedesktop.DBus.Properties", "PropertiesChanged")
+        .with_path("/StatusNotifierWatcher");
+    connection
+        .add_match(
+            host_rule,
+            move |(interface, changed, invalidated): (String, PropMap, Vec<String>), _, _| {
+                if interface == "org.kde.StatusNotifierWatcher"
+                    && (changed.contains_key("IsStatusNotifierHostRegistered")
+                        || invalidated
+                            .iter()
+                            .any(|name| name == "IsStatusNotifierHostRegistered"))
+                {
+                    let _ = property_recheck.send(());
+                }
+                true
+            },
+        )
+        .map_err(|error| format!("Could not monitor system tray host state: {error}"))?;
+    for member in [
+        "StatusNotifierHostRegistered",
+        "StatusNotifierHostUnregistered",
+    ] {
+        let signal_recheck = recheck.clone();
+        connection
+            .add_match(
+                MatchRule::new_signal("org.kde.StatusNotifierWatcher", member)
+                    .with_path("/StatusNotifierWatcher"),
+                move |(): (), _, _| {
+                    let _ = signal_recheck.send(());
+                    true
+                },
+            )
+            .map_err(|error| format!("Could not monitor system tray host state: {error}"))?;
+    }
+
+    // Subscribe before taking the state snapshot so watcher/host loss cannot
+    // fall between the availability check and the event-driven monitor.
+    backend_available(&connection)?;
     thread::spawn(move || {
-        let Ok(connection) = Connection::new_session() else {
-            let _ = actions.send(Action::Unavailable);
-            ctx.request_repaint();
-            return;
-        };
-        let owner_actions = actions.clone();
-        let owner_ctx = ctx.clone();
-        let mut owner_rule = MatchRule::new_signal("org.freedesktop.DBus", "NameOwnerChanged");
-        owner_rule.sender = Some("org.freedesktop.DBus".into());
-        owner_rule.path = Some("/org/freedesktop/DBus".into());
-        if connection
-            .add_match(
-                owner_rule,
-                move |(name, _, new_owner): (String, String, String), _, _| {
-                    if name == "org.kde.StatusNotifierWatcher" && new_owner.is_empty() {
-                        let _ = owner_actions.send(Action::Unavailable);
-                        owner_ctx.request_repaint();
-                    }
-                    true
-                },
-            )
-            .is_err()
-        {
-            let _ = actions.send(Action::Unavailable);
-            ctx.request_repaint();
-            return;
-        }
-        let host_actions = actions.clone();
-        let host_ctx = ctx.clone();
-        let host_rule =
-            MatchRule::new_signal("org.freedesktop.DBus.Properties", "PropertiesChanged")
-                .with_path("/StatusNotifierWatcher");
-        if connection
-            .add_match(
-                host_rule,
-                move |(interface, changed, _): (String, PropMap, Vec<String>), _, _| {
-                    let host_registered = changed
-                        .get("IsStatusNotifierHostRegistered")
-                        .and_then(|value| value.0.as_i64())
-                        .is_none_or(|value| value != 0);
-                    if interface == "org.kde.StatusNotifierWatcher" && !host_registered {
-                        let _ = host_actions.send(Action::Unavailable);
-                        host_ctx.request_repaint();
-                    }
-                    true
-                },
-            )
-            .is_err()
-        {
-            let _ = actions.send(Action::Unavailable);
-            ctx.request_repaint();
-            return;
-        }
         loop {
             if connection.process(Duration::from_secs(86_400)).is_err() {
                 let _ = actions.send(Action::Unavailable);
                 ctx.request_repaint();
                 return;
             }
+            if rechecks.try_iter().next().is_some() && backend_available(&connection).is_err() {
+                let _ = actions.send(Action::Unavailable);
+                ctx.request_repaint();
+                return;
+            }
         }
     });
+    Ok(())
 }
 
 impl Drop for Tray {
