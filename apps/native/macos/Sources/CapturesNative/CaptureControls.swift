@@ -456,6 +456,7 @@ final class UnifiedCaptureSelectionView: NSView {
 final class UnifiedCapturePanel: NSPanel {
     let selector: UnifiedCaptureSelectionView
     override var canBecomeKey: Bool { true }
+    override func cancelOperation(_ sender: Any?) { selector.cancel() }
 
     init(screen: NSScreen, image: CGImage?, targets: [WindowSelectionTarget], tokens: Tokens,
          autoStart: Bool, hitTest: @escaping UnifiedCaptureSelectionView.HitTest,

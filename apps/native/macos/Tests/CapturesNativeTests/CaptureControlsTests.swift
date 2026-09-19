@@ -96,14 +96,17 @@ final class CaptureControlsTests: XCTestCase {
     func testPanelIsExcludedFromCapturedPixels() throws {
         _ = NSApplication.shared
         let screen = try XCTUnwrap(NSScreen.main)
+        var cancelled = 0
         let panel = UnifiedCapturePanel(screen: screen, image: nil, targets: targets,
             tokens: Tokens.variants["dark-mustard"]!, autoStart: false,
             hitTest: { _ in -1 }, displayTitles: ["Main display"], selectedDisplay: 0,
-            confirm: { _ in }, cancel: {}, changeDisplay: { _ in })
+            confirm: { _ in }, cancel: { cancelled += 1 }, changeDisplay: { _ in })
         defer { panel.close() }
         XCTAssertEqual(panel.title, "Captures Capture Controls")
         XCTAssertEqual(panel.sharingType, .none)
         XCTAssertEqual(panel.selector.target, .region)
+        panel.cancelOperation(nil)
+        XCTAssertEqual(cancelled, 1, "Escape command routing cancels even when a control owns focus")
     }
 
     func testFixedGlassEmptySelectedAndAutoStatesRenderInBothAppearances() throws {
