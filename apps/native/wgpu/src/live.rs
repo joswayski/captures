@@ -2445,7 +2445,7 @@ impl Live {
                         .inner_margin(tokens.number("s-4") as i8)
                         .show(ui, |ui| {
                             ui.label(
-                                RichText::new(warning.as_deref().unwrap_or_else(|| {
+                                RichText::new(warning.as_deref().unwrap_or({
                                     if cfg!(target_os = "linux") {
                                         "These controls will show in recordings on Linux"
                                     } else if include_controls {
@@ -3512,6 +3512,39 @@ mod tests {
                     width: 300,
                     height: 161,
                 },
+            }
+        );
+    }
+
+    #[test]
+    fn recording_region_stays_display_local_logical_on_scaled_negative_origin_display() {
+        let display = DisplayDescriptor {
+            id: "retina-left".into(),
+            name: "Retina left".into(),
+            x: -1440,
+            y: 0,
+            width: 2880,
+            height: 1800,
+            scale_factor: 2.,
+            is_primary: false,
+        };
+
+        assert_eq!(
+            recording_rect(
+                LogicalRect {
+                    x: 100.,
+                    y: 50.,
+                    width: 800.,
+                    height: 450.,
+                },
+                &display,
+            )
+            .unwrap(),
+            CaptureRect {
+                x: 100,
+                y: 50,
+                width: 800,
+                height: 450,
             }
         );
     }
