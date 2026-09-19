@@ -172,16 +172,6 @@ func captureShortcutsEnabled(captureBusy: Bool) -> Bool { !captureBusy }
 
 func captureShortcutsSuspended(preferencesFocused: Bool) -> Bool { preferencesFocused }
 
-struct ShortcutSuspensionState {
-    private(set) var settled: Bool?
-
-    init(settled: Bool? = nil) { self.settled = settled }
-
-    func needsApply(_ suspended: Bool) -> Bool { settled != suspended }
-    mutating func didApply(_ suspended: Bool) { settled = suspended }
-    mutating func didFail() { settled = nil }
-}
-
 func preferencesWindowFocused(scene: String, visible: Bool, key: Bool,
                               attachedSheetKey: Bool) -> Bool {
     scene == "preferences" && visible && (key || attachedSheetKey)
@@ -234,7 +224,6 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var shortcutWakeObserver: NSObjectProtocol?
     private var shortcutFocusObservers: [NSObjectProtocol] = []
     private var shortcutSignature: [String]?
-    private var shortcutSuspension = ShortcutSuspensionState()
     private var shortcutEnabled: Bool?
     private var captureBusy = false
     private var terminating = false
@@ -595,7 +584,6 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 try captureShortcuts.update(settings: settings)
             } else {
                 captureShortcuts = try NativeCaptureShortcuts(settings: settings)
-                shortcutSuspension = ShortcutSuspensionState()
                 shortcutEnabled = nil
             }
             shortcutSignature = signature
@@ -608,15 +596,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private func updateShortcutState() {
         guard let captureShortcuts else { return }
         let suspended = captureShortcutsSuspended(preferencesFocused: preferencesFocused)
-        if shortcutSuspension.needsApply(suspended) {
-            do {
-                try captureShortcuts.setSuspended(suspended)
-                shortcutSuspension.didApply(suspended)
-            } catch {
-                shortcutSuspension.didFail()
-                reportShortcutError(error)
-                return
-            }
+        do {
+            try captureShortcuts.setSuspended(suspended)
+        } catch {
+            reportShortcutError(error)
+            return
         }
         let enabled = captureShortcutsEnabled(captureBusy: captureBusy)
         if enabled != shortcutEnabled {
@@ -649,7 +633,6 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         shortcutFocusObservers.removeAll()
         captureShortcuts?.close()
         captureShortcuts = nil
-        shortcutSuspension = ShortcutSuspensionState()
         shortcutEnabled = nil
     }
 
