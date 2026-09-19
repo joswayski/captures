@@ -107,6 +107,8 @@ function installExportableCanvas(): () => void {
     stroke: vi.fn(),
     fill: vi.fn(),
     arc: vi.fn(),
+    roundRect: vi.fn(),
+    ellipse: vi.fn(),
     closePath: vi.fn(),
     setLineDash: vi.fn(),
     measureText: (text: string) => ({
@@ -428,7 +430,8 @@ describe("ScreenshotEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Shapes" }));
     expect(screen.getByRole("button", { name: "Shapes" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("img", { name: "Stroke preview" })).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "Filled shape" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Filled shape" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Stroke" })).not.toBeChecked();
     expect(screen.getByRole("slider", { name: "Opacity" })).toHaveValue("100");
 
     fireEvent.click(
@@ -447,6 +450,8 @@ describe("ScreenshotEditor", () => {
 
     fireEvent.keyDown(window, { key: "r" });
     fireEvent.click(screen.getByRole("checkbox", { name: "Filled shape" }));
+    expect(screen.queryByRole("group", { name: "Fill color" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Filled shape" }));
     expect(screen.getByRole("checkbox", { name: "Filled shape" })).toBeChecked();
     expect(screen.getByRole("group", { name: "Fill color" })).toBeInTheDocument();
 
@@ -459,6 +464,102 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("button", { name: "Triangle" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText("Triangle", { selector: ".screenshot-properties-heading strong" }))
       .toBeInTheDocument();
+  });
+
+  it("previews opaque fills with an optional stroke without disabling line or arrow ink", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+    chooseShapeTool("Rectangle (R)");
+
+    const preview = () => screen.getByRole("img", { name: "Stroke preview" }).querySelector("rect")!;
+    expect(preview()).toHaveAttribute("fill", "#ff3b5c");
+    expect(preview()).toHaveAttribute("stroke-width", "0");
+    expect(screen.getByRole("button", { name: "Fill color: #ff3b5c" })).toHaveClass("active");
+    expect(screen.queryByRole("slider", { name: "Stroke width" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Fill color: #2d9cff" }));
+    expect(preview()).toHaveAttribute("fill", "#2d9cff");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Stroke" }));
+    fireEvent.change(screen.getByRole("slider", { name: "Stroke width" }), { target: { value: "14" } });
+    fireEvent.click(screen.getByRole("button", { name: "Stroke color: #36c96b" }));
+    expect(preview()).toHaveAttribute("stroke", "#36c96b");
+    expect(preview()).toHaveAttribute("fill", "#2d9cff");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Filled shape" }));
+    expect(preview()).toHaveAttribute("fill", "none");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Filled shape" }));
+    expect(preview()).toHaveAttribute("fill", "#36c96b");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Stroke" }));
+    expect(preview()).toHaveAttribute("stroke-width", "0");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Stroke" }));
+    expect(screen.getByRole("slider", { name: "Stroke width" })).toHaveValue("14");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Stroke" }));
+
+    for (const key of ["l", "a", "p"]) {
+      fireEvent.keyDown(window, { key });
+      expect(screen.queryByRole("checkbox", { name: "Stroke" })).not.toBeInTheDocument();
+      expect(screen.getByRole("slider", { name: "Stroke width" })).toHaveValue("14");
+      expect(Number(screen.getByRole("img", { name: "Stroke preview" })
+        .querySelector("path")?.getAttribute("stroke-width"))).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps drawn shape fill and stroke controls independent, undoable, and opaque", async () => {
+    const restore = installExportableCanvas();
+    const context = document.createElement("canvas").getContext("2d")!;
+    const fills: { color: unknown; opacity: number }[] = [];
+    const strokes: { color: unknown; width: number }[] = [];
+    vi.mocked(context.fill).mockImplementation(() => {
+      fills.push({ color: context.fillStyle, opacity: context.globalAlpha });
+    });
+    vi.mocked(context.stroke).mockImplementation(() => {
+      strokes.push({ color: context.strokeStyle, width: context.lineWidth });
+    });
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+      setCanvasZoomPercent(100);
+      chooseShapeTool("Rectangle (R)");
+      fireEvent.click(screen.getByRole("button", { name: "Fill color: #2d9cff" }));
+      const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+      setCanvasBounds(canvas);
+      fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: 100, clientY: 120 });
+      fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 360, clientY: 280 });
+      fireEvent.pointerUp(canvas, { button: 0, pointerId: 1, clientX: 360, clientY: 280 });
+
+      expect(screen.getByRole("button", { name: "Fill color: #2d9cff" })).toHaveClass("active");
+      expect(screen.getByRole("checkbox", { name: "Stroke" })).not.toBeChecked();
+      await waitFor(() => expect(fills).toContainEqual({ color: "#2d9cff", opacity: 1 }));
+      expect(strokes).not.toContainEqual({ color: "#ff3b5c", width: 8 });
+      fireEvent.click(screen.getByRole("checkbox", { name: "Stroke" }));
+      fireEvent.change(screen.getByRole("slider", { name: "Stroke width" }), { target: { value: "18" } });
+      fireEvent.click(screen.getByRole("button", { name: "Stroke color: #111318" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Filled shape" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Filled shape" }));
+      await waitFor(() => expect(fills).toContainEqual({ color: "#111318", opacity: 1 }));
+      fireEvent.click(screen.getByRole("button", { name: "Fill color: #ffffff" }));
+      await waitFor(() => expect(fills).toContainEqual({ color: "#ffffff", opacity: 1 }));
+      expect(strokes).toContainEqual({ color: "#111318", width: 18 });
+      fireEvent.click(screen.getByRole("checkbox", { name: "Stroke" }));
+      expect(screen.queryByRole("slider", { name: "Stroke width" })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+      fireEvent.click(within(screen.getByRole("region", { name: "Layers" }))
+        .getByRole("button", { name: /^Rectangle/ }));
+      expect(screen.getByRole("checkbox", { name: "Stroke" })).toBeChecked();
+      expect(screen.getByRole("slider", { name: "Stroke width" })).toHaveValue("18");
+      expect(screen.getByRole("button", { name: "Stroke color: #111318" })).toHaveClass("active");
+      expect(screen.getByRole("button", { name: "Fill color: #ffffff" })).toHaveClass("active");
+      fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+      fireEvent.click(within(screen.getByRole("region", { name: "Layers" }))
+        .getByRole("button", { name: /^Rectangle/ }));
+      expect(screen.getByRole("checkbox", { name: "Stroke" })).not.toBeChecked();
+      expect(screen.getByRole("slider", { name: "Opacity" })).toHaveValue("100");
+      strokes.length = 0;
+      fireEvent.change(screen.getByRole("slider", { name: "Opacity" }), { target: { value: "37" } });
+      await waitFor(() => expect(fills).toContainEqual({ color: "#ffffff", opacity: 0.37 }));
+      expect(strokes).not.toContainEqual({ color: "#111318", width: 18 });
+    } finally {
+      restore();
+    }
   });
 
   it("uses the crosshair cursor for every Shapes flyout drawing tool", () => {
