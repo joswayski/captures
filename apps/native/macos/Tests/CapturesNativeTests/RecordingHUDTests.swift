@@ -20,6 +20,7 @@ final class RecordingHUDTests: XCTestCase {
                 tokens: tokens)
             let window = NSWindow(contentRect: hud.bounds, styleMask: [.borderless],
                 backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
             window.contentView = hud; defer { window.close() }
 
             XCTAssertEqual(hud.frame.size, NSSize(width: 430, height: 102))
