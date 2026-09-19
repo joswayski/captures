@@ -79,8 +79,9 @@ Windows, mixed-DPI and accessibility acceptance remain open.
 New Capture starts a screenshot selector in Region mode. Its fixed-glass toolbar
 switches between Region, Window and Full screen without replacing the prepared
 desktop snapshot or discarding settled selections. An actual display change
-prepares a replacement session and clears display-local selections; stale replies
-cannot reopen a cancelled selector. Capture is disabled until the selected target
+prepares a replacement session and clears display-local selections while retaining
+target mode and aspect ratio; stale replies cannot reopen a cancelled selector.
+Capture is disabled until the selected target
 is valid. Enter confirms, Escape cancels, and aspect/auto-start/freeze/countdown
 preferences use the existing Rust geometry and capture policies. The root returns
 to its prior visibility; a background capture does not reopen Preferences.
@@ -92,6 +93,16 @@ HUD and editor integration remain separate slices. Existing direct screenshot
 actions remain available. Native controls are not yet full capture-menu UI/input
 parity; physical displays, global target switching while the menu is open, and
 accessibility acceptance remain open.
+
+The toolbar drags from blank/footer space, clamps inside the display, and fits a
+768-point viewport without hiding the picker or Capture action. Region guidance
+hides during a selection drag. AppKit XCTest renders empty, selected, auto-start
+and narrow controls; inspect those native pixels alongside the assertions.
+`x11_capture_smoke.py --controls` reuses the exact-pixel capture oracle through
+New Capture, including target retention, toolbar drag, frozen/live/countdown
+sources, occluded windows, full-screen capture and cancellation. Its seven
+scenarios persist 15 captures using real X11 input and simulated session state;
+this is not hardware or physical multi-display acceptance.
 
 ## Live display-capture slice
 
