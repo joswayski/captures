@@ -10,6 +10,7 @@ private final class ShortcutSettingsTransport: SettingsTransport {
     init(appearance: String = "dark", newCaptureShortcut: String = "Command+Shift+Space") {
         value = [
             "appearance": appearance, "theme": "mustard", "custom_theme": [:],
+            "output_directory": "/fixture/Captures",
             "new_capture_shortcut": newCaptureShortcut,
             "region_shortcut": "Command+Shift+Digit4",
             "window_shortcut": "Command+Shift+KeyW",
@@ -95,6 +96,8 @@ final class ShortcutEditingTests: XCTestCase {
         }
         let recorder = try XCTUnwrap(controller.shortcutRecorder(identifier: "display_shortcut"))
         recorder.performClick(nil)
+        controller.flush()
+        let baselineSaveCount = transport.saveCount()
         controller.handleShortcutInput(code: "KeyA", control: false, shift: false,
             alt: false, meta: false)
         XCTAssertTrue(recorder.recording)
@@ -103,7 +106,8 @@ final class ShortcutEditingTests: XCTestCase {
         controller.handleShortcutInput(code: "Escape", control: true, shift: true,
             alt: false, meta: false)
         XCTAssertFalse(recorder.recording, "modified Escape still cancels")
-        XCTAssertNil(transport.latestSave())
+        controller.flush()
+        XCTAssertEqual(transport.saveCount(), baselineSaveCount)
 
         recorder.performClick(nil)
         XCTAssertTrue(window.makeFirstResponder(nil))
@@ -111,7 +115,8 @@ final class ShortcutEditingTests: XCTestCase {
         recorder.performClick(nil)
         NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
         XCTAssertFalse(recorder.recording, "window focus loss cancels recording")
-        XCTAssertNil(transport.latestSave())
+        controller.flush()
+        XCTAssertEqual(transport.saveCount(), baselineSaveCount)
     }
 
     func testRealBridgeCancelWithoutKeysStopsControllerRecording() throws {
@@ -119,6 +124,8 @@ final class ShortcutEditingTests: XCTestCase {
         let (controller, _) = try fixture(transport: transport)
         let recorder = try XCTUnwrap(controller.shortcutRecorder(identifier: "region_shortcut"))
         recorder.performClick(nil)
+        controller.flush()
+        let baselineSaveCount = transport.saveCount()
 
         let response = try NativeCaptureShortcuts.record(code: "Escape", control: true,
             shift: true, alt: true, meta: true)
@@ -128,7 +135,8 @@ final class ShortcutEditingTests: XCTestCase {
             alt: true, meta: true)
 
         XCTAssertFalse(recorder.recording)
-        XCTAssertNil(transport.latestSave())
+        controller.flush()
+        XCTAssertEqual(transport.saveCount(), baselineSaveCount)
     }
 
     func testRealBridgeLongestChordFitsAndPersists() throws {
@@ -159,13 +167,16 @@ final class ShortcutEditingTests: XCTestCase {
         let identifiers = ["new_capture_shortcut", "region_shortcut", "window_shortcut",
             "display_shortcut", "recording.video_shortcut", "recording.window_shortcut",
             "recording.display_shortcut"]
+        try XCTUnwrap(controller.shortcutRecorder(identifier: identifiers[0])).performClick(nil)
+        controller.flush()
+        let baselineSaveCount = transport.saveCount()
         for (index, identifier) in identifiers.enumerated() {
             let recorder = try XCTUnwrap(controller.shortcutRecorder(identifier: identifier))
             recorder.performClick(nil)
             controller.handleShortcutInput(code: "F\(index + 1)", control: true,
                 shift: false, alt: false, meta: false)
             controller.flush()
-            try waitUntil { transport.saveCount() == index + 1 }
+            XCTAssertEqual(transport.saveCount(), baselineSaveCount + index + 1)
         }
         let saved = try XCTUnwrap(transport.latestSave())
         XCTAssertEqual(saved.string("new_capture_shortcut"), "Control+F1")
@@ -230,26 +241,17 @@ final class ShortcutEditingTests: XCTestCase {
     }
 
     func testMacVirtualKeyTranslationUsesPhysicalDomCodes() throws {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 20, height: 20),
-            styleMask: .borderless, backing: .buffered, defer: false)
-        windows.append(window)
-        func event(_ keyCode: UInt16) throws -> NSEvent {
-            try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
-                modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
-                context: nil, characters: "", charactersIgnoringModifiers: "",
-                isARepeat: false, keyCode: keyCode))
-        }
-        XCTAssertEqual(PreferencesController.domCode(for: try event(0)), "KeyA")
-        XCTAssertEqual(PreferencesController.domCode(for: try event(18)), "Digit1",
+        XCTAssertEqual(PreferencesController.domCode(forKeyCode: 0), "KeyA")
+        XCTAssertEqual(PreferencesController.domCode(forKeyCode: 18), "Digit1",
             "ANSI number row must not be confused with the keypad")
-        XCTAssertEqual(PreferencesController.domCode(for: try event(83)), "Numpad1")
-        XCTAssertEqual(PreferencesController.domCode(for: try event(53)), "Escape")
-        XCTAssertEqual(PreferencesController.domCode(for: try event(64)), "F17")
-        XCTAssertEqual(PreferencesController.domCode(for: try event(79)), "F18")
-        XCTAssertEqual(PreferencesController.domCode(for: try event(80)), "F19")
-        XCTAssertEqual(PreferencesController.domCode(for: try event(90)), "F20")
-        XCTAssertEqual(PreferencesController.domCode(for: try event(123)), "ArrowLeft")
-        XCTAssertEqual(PreferencesController.domCode(for: try event(255)), "Unidentified")
+        XCTAssertEqual(PreferencesController.domCode(forKeyCode: 83), "Numpad1")
+        XCTAssertEqual(PreferencesController.domCode(forKeyCode: 53), "Escape")
+        XCTAssertEqual(PreferencesController.domCode(forKeyCode: 64), "F17")
+        XCTAssertEqual(PreferencesController.domCode(forKeyCode: 79), "F18")
+        XCTAssertEqual(PreferencesController.domCode(forKeyCode: 80), "F19")
+        XCTAssertEqual(PreferencesController.domCode(forKeyCode: 90), "F20")
+        XCTAssertEqual(PreferencesController.domCode(forKeyCode: 123), "ArrowLeft")
+        XCTAssertEqual(PreferencesController.domCode(forKeyCode: 255), "Unidentified")
     }
 
     private func fixture(transport: ShortcutSettingsTransport, appearance: String = "dark",
