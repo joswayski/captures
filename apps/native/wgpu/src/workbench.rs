@@ -1,7 +1,9 @@
 use std::{
+    cell::RefCell,
     collections::BTreeMap,
     fs,
     path::Path,
+    rc::Rc,
     sync::{
         Arc,
         mpsc::{self, Receiver, Sender},
@@ -27,6 +29,19 @@ use crate::{
 
 // All state below is disposable fixture/UI state, not a second implementation
 // of capture, settings persistence, history retention, or editor documents.
+#[derive(Clone, Default)]
+pub(crate) struct ShortcutOwner(Rc<RefCell<Option<CaptureShortcuts>>>);
+
+impl ShortcutOwner {
+    pub(crate) fn resume_after_root_blur(&self) {
+        if let Some(shortcuts) = self.0.borrow_mut().as_mut() {
+            // The next UI pass retries and reports a failed restore. Doing this
+            // on the native focus event closes the gap before that repaint.
+            let _ = shortcuts.set_suspended(false);
+        }
+    }
+}
+
 pub struct Workbench {
     options: Options,
     variants: BTreeMap<String, Tokens>,
@@ -67,7 +82,7 @@ pub struct Workbench {
     root_hidden: bool,
     tray: Option<Tray>,
     tray_error: Option<String>,
-    shortcuts: Option<CaptureShortcuts>,
+    shortcuts: ShortcutOwner,
     shortcuts_generation: u64,
     shortcut_error: Option<String>,
     shortcut_suspension_error: Option<String>,
@@ -82,6 +97,7 @@ impl Workbench {
         cc: &eframe::CreationContext<'_>,
         options: Options,
         shortcut_input: shortcut_input::Bridge,
+        shortcuts: ShortcutOwner,
     ) -> Self {
         if options.scene == Scene::Idle && cc.winit_window().and_then(|w| w.is_visible()).is_none()
         {
@@ -201,7 +217,7 @@ impl Workbench {
             root_hidden: false,
             tray,
             tray_error,
-            shortcuts: None,
+            shortcuts,
             shortcuts_generation: 0,
             shortcut_error: None,
             shortcut_suspension_error: None,
@@ -305,7 +321,7 @@ impl Workbench {
         if let Some(live) = &mut self.live {
             live.flush();
         }
-        self.shortcuts.take();
+        self.shortcuts.0.borrow_mut().take();
         self.tray.take();
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
@@ -323,12 +339,13 @@ impl Workbench {
                 return;
             }
         };
-        let result = if let Some(shortcuts) = &mut self.shortcuts {
+        let mut owner = self.shortcuts.0.borrow_mut();
+        let result = if let Some(shortcuts) = owner.as_mut() {
             shortcuts.update(&settings)
         } else {
             let wake = ctx.clone();
             CaptureShortcuts::new(&settings, move || wake.request_repaint()).map(|shortcuts| {
-                self.shortcuts = Some(shortcuts);
+                *owner = Some(shortcuts);
             })
         };
         match result {
@@ -341,7 +358,8 @@ impl Workbench {
     }
 
     fn sync_shortcut_suspension(&mut self, suspended: bool) {
-        let Some(shortcuts) = &mut self.shortcuts else {
+        let mut owner = self.shortcuts.0.borrow_mut();
+        let Some(shortcuts) = owner.as_mut() else {
             return;
         };
         self.shortcut_suspension_error = shortcuts.set_suspended(suspended).err().map(|error| {
@@ -356,7 +374,7 @@ impl Workbench {
         let (enabled, selector_generation) = self.live.as_ref().map_or((false, None), |live| {
             shortcut_routing_state(live.can_launch_capture(), live.selector_generation())
         });
-        if let Some(shortcuts) = &self.shortcuts {
+        if let Some(shortcuts) = self.shortcuts.0.borrow().as_ref() {
             shortcuts.set_selector_generation(selector_generation);
             shortcuts.set_enabled(enabled);
         }
@@ -799,6 +817,8 @@ impl eframe::App for Workbench {
         self.sync_shortcut_routing();
         let shortcut_action = self
             .shortcuts
+            .0
+            .borrow()
             .as_ref()
             .and_then(CaptureShortcuts::next_action);
         if let (Some(action), Some(live)) = (shortcut_action, &mut self.live)
@@ -1173,7 +1193,7 @@ impl eframe::App for Workbench {
         if let Some(live) = &mut self.live {
             live.flush();
         }
-        self.shortcuts.take();
+        self.shortcuts.0.borrow_mut().take();
         self.tray.take();
         emit(
             "exit",
