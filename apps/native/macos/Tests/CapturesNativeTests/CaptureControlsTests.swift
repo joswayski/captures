@@ -49,6 +49,56 @@ final class CaptureControlsTests: XCTestCase {
         XCTAssertEqual(view.choice, .display)
     }
 
+    func testDisplayReplacementPreservesControlsButClearsDisplayLocalSelections() {
+        _ = NSApplication.shared
+        let initial = makeView()
+        XCTAssertEqual(initial.controlsState, .initial)
+
+        initial.setAspect(4)
+        initial.beginRegion(NSPoint(x: 90, y: 70))
+        initial.dragRegion(NSPoint(x: 410, y: 250)); initial.endRegion()
+        let regionState = initial.controlsState
+        XCTAssertNotNil(initial.choice)
+
+        let replacementRegion = makeView()
+        replacementRegion.restoreControls(regionState)
+        XCTAssertEqual(replacementRegion.target, .region)
+        XCTAssertEqual(replacementRegion.aspectIndex, 4)
+        XCTAssertNil(replacementRegion.choice,
+            "an actual display change clears the old display's region")
+
+        initial.setTarget(.window)
+        initial.selectWindow(NSPoint(x: 24, y: 40))
+        let windowState = initial.controlsState
+        XCTAssertNotNil(initial.choice)
+        let replacementWindow = makeView()
+        replacementWindow.restoreControls(windowState)
+        XCTAssertEqual(replacementWindow.target, .window)
+        XCTAssertEqual(replacementWindow.aspectIndex, 4)
+        XCTAssertNil(replacementWindow.choice,
+            "an actual display change clears the old display's window")
+
+        var confirmed: [WindowSelectionChoice] = []
+        let automaticDisplay = makeView(autoStart: true, confirm: { confirmed.append($0) })
+        automaticDisplay.restoreControls(
+            UnifiedCaptureControlsState(target: .display, aspectIndex: 4))
+        XCTAssertEqual(automaticDisplay.target, .display)
+        XCTAssertEqual(confirmed, [.display],
+            "display auto-capture is scheduled against the replacement session")
+    }
+
+    func testShellOrEmptyDesktopClickSelectsFullScreenSegment() {
+        _ = NSApplication.shared
+        let view = makeView()
+        view.setTarget(.window)
+
+        view.selectWindow(NSPoint(x: 700, y: 400))
+
+        XCTAssertEqual(view.target, .display)
+        XCTAssertEqual(view.controls.target, .display)
+        XCTAssertEqual(view.choice, .display)
+    }
+
     func testEnterEscapeAndAutoStartRespectSelectionBoundaries() throws {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: frame, styleMask: [.borderless],
@@ -129,11 +179,14 @@ final class CaptureControlsTests: XCTestCase {
         XCTAssertEqual(view.controls.frame.maxY, frame.height - 16)
         view.controls.endPanelDrag()
 
-        XCTAssertTrue(view.controls.hitTest(NSPoint(x: 20, y: 70)) === view.controls,
+        let footerPoint = view.convert(NSPoint(x: 20, y: 70), from: view.controls)
+        XCTAssertTrue(view.controls.hitTest(footerPoint) === view.controls,
             "the blank footer is the drag target")
         let capture = try XCTUnwrap(buttons(in: view.controls).first { $0.title == "Capture" })
-        XCTAssertTrue(view.controls.hitTest(NSPoint(x: capture.frame.midX,
-            y: capture.frame.midY)) === capture, "interactive controls do not begin a panel drag")
+        let capturePoint = view.convert(NSPoint(x: capture.frame.midX,
+            y: capture.frame.midY), from: view.controls)
+        XCTAssertTrue(view.controls.hitTest(capturePoint) === capture,
+            "interactive controls do not begin a panel drag")
     }
 
     func testNarrowMonitorKeepsPickerAndPrimaryActionVisibleWithoutOverlap() throws {
