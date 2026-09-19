@@ -119,7 +119,11 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--controls", action="store_true",
                         help="Exercise the same capture oracles through New Capture controls")
+    parser.add_argument("--target-shortcuts", action="store_true",
+                        help="Switch New Capture targets using registered global shortcuts")
     args = parser.parse_args()
+    if args.target_shortcuts and not args.controls:
+        parser.error("--target-shortcuts requires --controls")
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -242,8 +246,10 @@ def main():
                 "settings_schema_version": 5, "appearance": "dark", "theme": "mustard",
                 "output_directory": str(output / prefix / "exports"),
                 "new_capture_shortcut": "Ctrl+Shift+F10",
-                "region_shortcut": "Super+Shift+S", "window_shortcut": "Alt+PrintScreen",
-                "display_shortcut": "Shift+PrintScreen", "launch_at_login": False,
+                "region_shortcut": "Ctrl+Shift+F7" if args.target_shortcuts else "Super+Shift+S",
+                "window_shortcut": "Ctrl+Shift+F8" if args.target_shortcuts else "Alt+PrintScreen",
+                "display_shortcut": "Ctrl+Shift+F9" if args.target_shortcuts else "Shift+PrintScreen",
+                "launch_at_login": False,
                 "auto_copy_to_clipboard": False, "auto_start_on_selection": auto_start,
                 "freeze_screen": freeze, "show_cursor_in_screenshots": False,
                 "screenshot_countdown_seconds": countdown,
@@ -255,6 +261,14 @@ def main():
             time.sleep(2)
             screenshot(root, f"{prefix}-workspace")
             checked_toolbar_drag = False
+
+            def select_target(selector, target):
+                if args.target_shortcuts:
+                    key = {"region": "F7", "window": "F8", "display": "F9"}[target]
+                    run("xdotool", "key", f"ctrl+shift+{key}", "sleep", ".2")
+                    assert windows(title) == [selector], "target shortcut replaced or captured the selector"
+                else:
+                    click(selector, {"region": 492, "window": 568, "display": 653}[target], 811)
 
             def begin_selection(full_display=False):
                 nonlocal checked_toolbar_drag
@@ -285,11 +299,18 @@ def main():
                     run("xdotool", "key", "Return", "sleep", ".3")
                     assert windows(title) and entries() == previous, "toolbar drag created a region"
                     checked_toolbar_drag = True
+                if args.target_shortcuts:
+                    previous = entries()
+                    run("xdotool", "key", "ctrl+shift+F10", "sleep", ".2")
+                    assert windows(title) == [selector] and entries() == previous, "New Capture re-entered"
+                    if auto_start:
+                        select_target(selector, "display")
+                        assert entries() == previous, "keyboard Full screen armed automatic capture"
                 if args.controls and full_display:
-                    click(selector, 653, 811)
+                    select_target(selector, "display")
                     return selector
                 if args.controls and mode == "window":
-                    click(selector, 568, 811)
+                    select_target(selector, "window")
                 if mode == "region":
                     run("xdotool", "windowfocus", "--sync", selector, "mousemove", "--window",
                         selector, "140", "180", "sleep", ".1", "mousedown", "1", "sleep", ".2", "mousemove",
@@ -309,8 +330,16 @@ def main():
                     # Returning to each target must retain its settled choice.
                     # The independent pixel/size oracle below catches a reset
                     # or accidental capture of the temporary Full screen target.
-                    click(selector, 653, 811)
-                    click(selector, 492 if mode == "region" else 568, 811)
+                    select_target(selector, "display")
+                    select_target(selector, mode)
+                    if args.target_shortcuts and mode == "window":
+                        # Keyboard Region/Display clear the settled window,
+                        # unlike explicit toolbar target toggles.
+                        previous = entries()
+                        run("xdotool", "key", "Return", "sleep", ".3")
+                        assert windows(title) == [selector] and entries() == previous
+                        click(selector, 660, 360)
+                        select_target(selector, "window")  # Same-target shortcut retains this choice.
                 return selector
 
             def entries():
@@ -340,6 +369,10 @@ def main():
                 if countdown:
                     clock = wait(lambda: windows("Captures Screenshot Countdown"), "countdown")[0]
                     screenshot(clock, f"{capture_prefix}-clock")
+                    if args.target_shortcuts:
+                        # Once confirmed, target keys cannot change the target
+                        # or queue another capture behind the existing flow.
+                        run("xdotool", "key", "ctrl+shift+F9", "ctrl+shift+F8")
 
                 new_entries = wait(lambda: entries() - captured, "persisted capture")
                 wait(lambda: windows("Captures"), "workspace restored")
@@ -434,6 +467,7 @@ def main():
             "passed": True, "screenSaverQueries": saver.queries,
             "scenarios": len(cases),
             "newCaptureControls": args.controls,
+            "targetShortcuts": args.target_shortcuts,
             "savedCaptures": sum(1 for _ in output.glob("*/history/*/metadata.json")),
             "scope": "Real capture/persistence and X11 input on private Xvfb; simulated session state, software GL; not hardware, OS login/lock, Wayland or accessibility acceptance.",
         }, indent=2))
