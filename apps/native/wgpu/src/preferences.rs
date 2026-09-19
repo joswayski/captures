@@ -39,7 +39,7 @@ const THEMES: [(&str, &str, &str); 10] = [
     ("custom", "Custom", "Build your own RGB palette"),
 ];
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum ShortcutField {
     NewCapture,
     Region,
@@ -206,6 +206,7 @@ pub struct Preferences {
     variants: std::collections::BTreeMap<String, Tokens>,
     persisted_generation: u64,
     shortcut_recorder: Option<ShortcutRecorder>,
+    shortcut_focus: Option<ShortcutField>,
     shortcut_input: shortcut_input::Bridge,
     suppress_shortcut_commands: bool,
 }
@@ -261,6 +262,7 @@ impl Preferences {
             variants: tokens::load(),
             persisted_generation: 0,
             shortcut_recorder: None,
+            shortcut_focus: None,
             shortcut_input,
             suppress_shortcut_commands: false,
         }
@@ -302,6 +304,7 @@ impl Preferences {
     pub fn set_presented(&mut self, presented: bool) {
         if !presented {
             self.cancel_shortcut_recording();
+            self.shortcut_focus = None;
         }
     }
 
@@ -887,23 +890,30 @@ impl Preferences {
             .flatten();
         self.row(ui, field.label(), "", |this, ui| {
             let response = ui
-                .vertical(|ui| {
-                    ui.set_width(230.);
-                    let label = if keys.is_empty() {
-                        "Press shortcut…".to_owned()
-                    } else {
-                        keys.join("  +  ")
-                    };
-                    let response = ui.add_sized(
-                        [230., t.number("h-md")],
-                        egui::Button::new(label).selected(recording),
-                    );
-                    if let Some(error) = &error {
-                        ui.colored_label(t.color("danger-text"), error);
-                    }
-                    response
+                .push_id(("shortcut-recorder", field), |ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(230.);
+                        let label = if keys.is_empty() {
+                            "Press shortcut…".to_owned()
+                        } else {
+                            keys.join("  +  ")
+                        };
+                        let response = ui.add_sized(
+                            [230., t.number("h-md")],
+                            egui::Button::new(label).selected(recording),
+                        );
+                        if let Some(error) = &error {
+                            ui.colored_label(t.color("danger-text"), error);
+                        }
+                        response
+                    })
+                    .inner
                 })
                 .inner;
+            if this.shortcut_focus == Some(field) {
+                response.request_focus();
+                this.shortcut_focus = None;
+            }
             let started = response.clicked() && !recording;
             if started {
                 this.shortcut_recorder = Some(ShortcutRecorder::new(field));
@@ -1006,6 +1016,7 @@ impl Preferences {
             }
             ShortcutRecording::Complete { shortcut, .. } => {
                 let field = recorder.field;
+                self.shortcut_focus = Some(field);
                 self.set(field.path(), json!(shortcut));
                 self.cancel_shortcut_recording();
                 false
@@ -1234,6 +1245,7 @@ mod tests {
             "Control+Shift+KeyD"
         );
         assert!(prefs.shortcut_recorder.is_none());
+        assert_eq!(prefs.shortcut_focus, Some(ShortcutField::Region));
     }
 
     #[test]
