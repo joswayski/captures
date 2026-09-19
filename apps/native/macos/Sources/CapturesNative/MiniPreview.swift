@@ -119,7 +119,8 @@ final class MiniPreviewView: NSView {
     var scrollOffsetY: CGFloat { scroll.contentView.bounds.minY }
     override var isFlipped: Bool { true }
 
-    init(geometry: CapturesPreviewGeometry, resources: [String: MiniPreviewResource],
+    init(geometry: CapturesPreviewGeometry, contentHeight: Double,
+         resources: [String: MiniPreviewResource],
          ids: [String], layouts: [String: CapturesPreviewCardLayout], collapsed: Bool,
          topAnchor: Bool, tokens: Tokens, copy: @escaping (String) -> Void,
          save: @escaping (String) -> Void, open: @escaping (String) -> Void,
@@ -137,9 +138,7 @@ final class MiniPreviewView: NSView {
 
         let padding = CGFloat(geometry.padding), cardHeight = CGFloat(geometry.card_height)
         let cardWidth = bounds.width - padding * 2
-        let contentBottom = layouts.values.map { CGFloat($0.y) + cardHeight }.max() ?? 0
-        let trailingGutter = topAnchor ? padding : CGFloat(geometry.control_gutter)
-        let documentHeight = collapsed ? bounds.height : max(bounds.height, contentBottom + trailingGutter)
+        let documentHeight = collapsed ? bounds.height : max(bounds.height, CGFloat(contentHeight))
         document.frame = NSRect(x: 0, y: 0, width: bounds.width,
             height: documentHeight)
         scroll.documentView = document
@@ -207,14 +206,15 @@ final class MiniPreviewPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
-    init(frame: NSRect, geometry: CapturesPreviewGeometry,
+    init(frame: NSRect, geometry: CapturesPreviewGeometry, contentHeight: Double,
          resources: [String: MiniPreviewResource], ids: [String],
          layouts: [String: CapturesPreviewCardLayout], collapsed: Bool,
          topAnchor: Bool, tokens: Tokens, copy: @escaping (String) -> Void,
          save: @escaping (String) -> Void, open: @escaping (String) -> Void,
          dismiss: @escaping (String) -> Void, setCollapsed: @escaping (Bool) -> Void,
          clearAll: @escaping () -> Void) {
-        previewView = MiniPreviewView(geometry: geometry, resources: resources, ids: ids,
+        previewView = MiniPreviewView(geometry: geometry, contentHeight: contentHeight,
+            resources: resources, ids: ids,
             layouts: layouts, collapsed: collapsed, topAnchor: topAnchor, tokens: tokens,
             copy: copy, save: save, open: open, dismiss: dismiss,
             setCollapsed: setCollapsed, clearAll: clearAll)
@@ -412,6 +412,7 @@ final class MiniPreviewController {
         let frame = Self.appKitFrame(geometry: geometry, monitor: monitor,
                                      screenFrame: screen.frame)
         let next = MiniPreviewPanel(frame: frame, geometry: geometry,
+            contentHeight: stack.contentHeight,
             resources: resources, ids: ids, layouts: layouts,
             collapsed: stack.isCollapsed, topAnchor: topAnchor, tokens: tokens,
             copy: { [weak self] in self?.perform(\.copyArtifact, artifactID: $0) },

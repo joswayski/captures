@@ -335,6 +335,7 @@ final class MiniPreviewTests: XCTestCase {
         })
         return MiniPreviewPanel(frame: NSRect(x: 0, y: 0,
             width: geometry.width, height: geometry.height), geometry: geometry,
+            contentHeight: stack.contentHeight,
             resources: resources, ids: ids, layouts: layouts, collapsed: collapsed,
             topAnchor: topAnchor, tokens: tokens, copy: copy, save: save, open: open,
             dismiss: dismiss, setCollapsed: setCollapsed, clearAll: {})
