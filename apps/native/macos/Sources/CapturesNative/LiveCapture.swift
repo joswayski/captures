@@ -94,6 +94,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var unifiedTarget: WindowSelectionChoice?
     private var unifiedDisplay: DisplayItem?
     private var unifiedScreen: NSScreen?
+    private var unifiedControlsState = UnifiedCaptureControlsState.initial
     private var displayMenu: ClosurePopUpButton!
     private var table: NSTableView!
     private var preview: NSImageView!
@@ -289,6 +290,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         guard !capturing, displays.indices.contains(index), !historyRoot.isEmpty else { return false }
         windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
         let display = displays[index]
+        unifiedControlsState = .initial
         setBusy(true, message: "Preparing capture controls…")
         let request = unifiedPreparation.begin()
         run({ [settingsPath] in try CapturePreferences.load(path: settingsPath) }) { [weak self] result in
@@ -330,6 +332,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             showError("Couldn’t prepare capture controls",
                 AppBridgeError.backend("The selected display is no longer available."))
             return
+        }
+        if let selector = unifiedPanel?.selector {
+            unifiedControlsState = selector.controlsState
         }
         unifiedPanel?.close(); unifiedPanel = nil
         unifiedSession = nil; unifiedTarget = nil
@@ -383,6 +388,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                         })
                     self.unifiedPanel = panel
                     self.preparingUnified = false
+                    panel.selector.restoreControls(self.unifiedControlsState)
+                    guard self.unifiedPanel === panel else { return }
                     panel.makeKeyAndOrderFront(nil)
                     NSApp.activate(ignoringOtherApps: true)
                     panel.selector.updatePointerLocation()
@@ -582,6 +589,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         regionSession = nil; regionRect = nil; preparingRegion = false
         windowSession = nil; windowTarget = nil; preparingWindow = false
         unifiedSession = nil; unifiedTarget = nil; unifiedDisplay = nil; unifiedScreen = nil
+        unifiedControlsState = .initial
         preparingUnified = false
         if let generation = flowGeneration {
             _ = try? AppBridge.flow(["operation": "finish", "generation": generation])

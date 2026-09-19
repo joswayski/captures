@@ -15,6 +15,13 @@ enum UnifiedCaptureTarget: String, CaseIterable {
     }
 }
 
+struct UnifiedCaptureControlsState: Equatable {
+    var target: UnifiedCaptureTarget
+    var aspectIndex: Int
+
+    static let initial = UnifiedCaptureControlsState(target: .region, aspectIndex: 0)
+}
+
 private final class GlassPopUpButton: NSPopUpButton {
     var tokens: Tokens!
     var change: ((Int) -> Void)?
@@ -245,6 +252,7 @@ final class UnifiedCaptureSelectionView: NSView {
     private(set) var selectedWindowIndex: Int64?
     private(set) var hoveredWindowIndex: Int64 = -1
     private(set) var target: UnifiedCaptureTarget = .region
+    private(set) var aspectIndex = 0
     let controls: CaptureControlsView
     private let selectionLabel = NSTextField(labelWithString: "")
     private let guidance = Surface()
@@ -314,6 +322,9 @@ final class UnifiedCaptureSelectionView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     var isGuidanceVisible: Bool { !guidance.isHidden }
+    var controlsState: UnifiedCaptureControlsState {
+        UnifiedCaptureControlsState(target: target, aspectIndex: aspectIndex)
+    }
 
     var choice: WindowSelectionChoice? {
         switch target {
@@ -333,8 +344,14 @@ final class UnifiedCaptureSelectionView: NSView {
 
     func setAspect(_ index: Int) {
         guard RegionSelection.presets.indices.contains(index) else { return }
+        aspectIndex = index
         region.setAspect(RegionSelection.presets[index].1)
         controls.selectAspect(index); update()
+    }
+
+    func restoreControls(_ state: UnifiedCaptureControlsState) {
+        setAspect(state.aspectIndex)
+        setTarget(state.target)
     }
 
     func beginRegion(_ point: NSPoint, shift: Bool = false) {
