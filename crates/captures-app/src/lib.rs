@@ -5,6 +5,7 @@ pub mod capture_flow;
 pub mod preview;
 pub mod region;
 pub mod selection;
+pub mod shortcuts;
 pub mod window;
 
 use captures_capture::{CaptureError, CaptureMode, DisplayDescriptor, XcapBackend};

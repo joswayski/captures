@@ -1,6 +1,7 @@
 mod preview;
 mod region;
 mod selection;
+mod shortcuts;
 mod window;
 
 use captures_settings::AppSettings;

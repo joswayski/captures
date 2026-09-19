@@ -24,10 +24,13 @@ rfd = "0.15"
 tempfile = "3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+dbus = "0.9"
 x11rb = "0.13"
+tray-icon = { version = "0.25.1", default-features = false, features = ["ksni"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 captures-session = { path = "../../../crates/captures-session" }
+tray-icon = { version = "0.25.1", default-features = false }
 
 [profile.dev]
 debug = 0

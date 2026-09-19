@@ -30,12 +30,18 @@ def main():
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--stack", action="store_true", help="Also exercise retained multi-card previews")
+    parser.add_argument("--lifecycle", action="store_true", help="Exercise a real Xfce SNI tray and background shortcuts")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     env = {**os.environ, "WGPU_BACKEND": "gl", "WINIT_X11_SCALE_FACTOR": "1", "XDG_SESSION_TYPE": "x11"}
     env.pop("WAYLAND_DISPLAY", None)
+    if args.lifecycle:
+        # Set before D-Bus starts: activated xfconfd must inherit the same
+        # disposable configuration as the panel, not the orb user's home.
+        env["XDG_CONFIG_HOME"] = str(output / "config")
+        env["XDG_CACHE_HOME"] = str(output / "cache")
     children, logs = [], []
     loop = None
 
@@ -125,8 +131,41 @@ def main():
         background.write_bytes(b"P6\n1280 900\n255\n" + wallpaper_crop(0, 0, 1280, 900))
         run("hsetroot", "-fill", str(background))
 
+        if args.lifecycle:
+            # A real SNI host, not a fake watcher or an XEmbed-only tray. Keep
+            # all Xfce configuration and its D-Bus activation private to this run.
+            config = output / "config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml"
+            config.parent.mkdir(parents=True)
+            config.write_text('''<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-panel" version="1.0">
+ <property name="configver" type="int" value="2"/>
+ <property name="panels" type="array"><value type="int" value="1"/>
+  <property name="panel-1" type="empty">
+   <property name="position" type="string" value="p=0;x=1200;y=24"/>
+   <property name="position-locked" type="bool" value="true"/>
+   <property name="disable-struts" type="bool" value="true"/>
+   <property name="length" type="uint" value="1"/>
+   <property name="length-adjust" type="bool" value="true"/>
+   <property name="size" type="uint" value="32"/>
+   <property name="plugin-ids" type="array"><value type="int" value="1"/></property>
+  </property>
+ </property>
+ <property name="plugins" type="empty">
+  <property name="plugin-1" type="string" value="systray">
+   <property name="hide-new-items" type="bool" value="false"/>
+   <property name="icon-size" type="uint" value="24"/>
+   <property name="single-row" type="bool" value="true"/>
+   <property name="square-icons" type="bool" value="true"/>
+  </property>
+ </property>
+</channel>''')
+            panel = spawn("sni-panel", ["xfce4-panel", "--disable-wm-check", "--sm-client-disable"])
+            wait(lambda: bus.name_has_owner("org.kde.StatusNotifierWatcher"), "real SNI watcher")
+
         cases = [(placement, True, False) for placement in ("bottom_left", "bottom_right", "top_left", "top_right")]
         cases += [("bottom_left", True, True), ("bottom_left", False, False)]
+        if args.lifecycle:
+            cases = cases[:1]
         for placement, enabled, include in cases:
             prefix = f"{placement}-enabled-{enabled}-include-{include}"
             history = output / prefix / "history"
@@ -134,15 +173,16 @@ def main():
             settings.write_text(json.dumps({
                 "settings_schema_version": 5, "appearance": "dark", "theme": "mustard",
                 "output_directory": str(output / prefix / "exports"),
-                "region_shortcut": "Super+Shift+S", "window_shortcut": "Alt+PrintScreen",
-                "display_shortcut": "Shift+PrintScreen", "launch_at_login": False,
+                "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
+                "display_shortcut": "Ctrl+Shift+F9", "launch_at_login": False,
                 "auto_copy_to_clipboard": False, "auto_start_on_selection": False,
                 "freeze_screen": True, "show_cursor_in_screenshots": False,
-                "screenshot_countdown_seconds": 0, "show_mini_previews": enabled,
+                "screenshot_countdown_seconds": 1 if args.lifecycle else 0,
+                "show_mini_previews": enabled,
                 "include_mini_previews_in_captures": include, "mini_preview_placement": placement,
             }))
             app = spawn(prefix, [str(binary), "--live", "--history-root", str(history),
-                "--settings-file", str(settings), "--quit-after", "180"])
+                "--settings-file", str(settings), "--quit-after", "300" if args.lifecycle else "180"])
             root = wait(lambda: windows("Captures"), "root workspace")[0]
             # Leave the left-hand preview/capture area unobstructed. Both root
             # capture buttons still fit on this desktop after moving the window.
@@ -347,20 +387,165 @@ def main():
             else:
                 time.sleep(1)
                 assert not windows(PREVIEW), "disabled previews still appeared"
-            run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
+            if args.lifecycle:
+                watcher = dbus.Interface(bus.get_object("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher"),
+                                         "org.freedesktop.DBus.Properties")
+                wait(lambda: watcher.Get("org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems"),
+                     "Captures registered in real SNI tray")
+                assert watcher.Get("org.kde.StatusNotifierWatcher", "IsStatusNotifierHostRegistered")
+                shot("root", "lifecycle-tray-visible")
+
+                def menu_action(index, screenshot=False):
+                    panel_ids = run("xdotool", "search", "--onlyvisible", "--class", "xfce4-panel").decode().split()
+                    tray = next(window for window in panel_ids
+                                if int(window_geometry(window)["WIDTH"]) >= 24)
+                    geometry = window_geometry(tray)
+                    run("xdotool", "mousemove", "--window", tray, str(int(geometry["WIDTH"]) // 2),
+                        str(int(geometry["HEIGHT"]) // 2), "click", "3", "sleep", ".4")
+                    if screenshot:
+                        shot("root", "lifecycle-open-tray-menu")
+                    # Resolve the actual GTK popup, not a fixed desktop point.
+                    # This fixture's native menu has seven non-separator rows.
+                    popup_ids = run("xdotool", "search", "--onlyvisible", "--class", ".*").decode().split()
+                    popup = next(window for window in popup_ids
+                                 if b"_MENU" in run("xprop", "-id", window, "_NET_WM_WINDOW_TYPE"))
+                    popup_geometry = window_geometry(popup)
+                    click(popup, int(popup_geometry["WIDTH"]) // 2,
+                          int((index + .5) * int(popup_geometry["HEIGHT"]) / 7), activate=False)
+
+                run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
+                wait(lambda: not windows("Captures"), "close hides resident workspace")
+                assert app.poll() is None and windows(PREVIEW), "close terminated app or previews"
+                other_app = spawn("shortcut-focus", ["xmessage", "-title", "Shortcut focus fixture",
+                    "-geometry", "220x70+850+250", "Other application remains focused"])
+                other = wait(lambda: windows("Shortcut focus fixture"), "shortcut focus target")[0]
+                run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
+                previous = entries()
+                run("xdotool", "keydown", "ctrl+shift+F7", "sleep", ".3")
+                assert not windows(SELECTOR), "capture started before shortcut release"
+                run("xdotool", "keyup", "ctrl+shift+F7")
+                selector = wait(lambda: windows(SELECTOR), "hidden-root region shortcut")[0]
+                run("xdotool", "windowfocus", "--sync", selector, "mousemove", "--window", selector,
+                    "140", "180", "mousedown", "1", "sleep", ".15", "mousemove", "--window", selector,
+                    "450", "350", "sleep", ".15", "mouseup", "1", "key", "Return")
+                entry = wait(lambda: entries() - previous, "background region artifact").pop()
+                assert rgb(entry.parent / "capture.png") == wallpaper_crop(140, 180, 310, 170)
+                wait(lambda: not windows(SELECTOR) and windows(PREVIEW), "background preview restored")
+                assert not windows("Captures"), "background capture reopened workspace"
+
+                run("xdotool", "windowactivate", "--sync", other, "key", "ctrl+shift+F8")
+                selector = wait(lambda: windows("Captures Window Selection"), "hidden-root window shortcut")[0]
+                run("xdotool", "windowfocus", "--sync", other, "key", "Escape")
+                wait(lambda: not windows("Captures Window Selection") and windows(PREVIEW), "cross-app Escape restores background")
+                assert not windows("Captures") and entries() == previous | {entry}
+
+                previous = entries()
+                run("xdotool", "key", "ctrl+shift+F9")
+                wait(lambda: entries() - previous, "hidden-root display shortcut")
+                wait(lambda: windows(PREVIEW), "display preview")
+                assert not windows("Captures"), "display capture reopened workspace"
+
+                menu_action(3, screenshot=True)  # Real GTK/DBusMenu History item.
+                wait(lambda: windows("Captures"), "tray History reopens workspace")
+                menu_action(4)
+                time.sleep(.3)
+                shot("root", "lifecycle-preferences")
+                run("xdotool", "windowactivate", "--sync", root, "key", "ctrl+shift+F7")
+                time.sleep(.5)
+                assert not windows(SELECTOR), "focused Preferences did not suppress shortcut"
+                run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
+                assert run("xdotool", "getwindowfocus").decode().strip() == other
+                # X11 activation acknowledgement precedes delivery of egui's
+                # focus event; exercise the settled focus boundary here.
+                time.sleep(.3)
+                run("xdotool", "key", "ctrl+shift+F7")
+                wait(lambda: windows(SELECTOR), "unfocused Preferences permits background shortcut")
+                run("xdotool", "key", "Escape")
+                wait(lambda: not windows(SELECTOR) and windows("Captures"),
+                     "cancel restores previously visible Preferences")
+                run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
+                wait(lambda: not windows("Captures"), "hide Preferences")
+                run("xdotool", "windowactivate", "--sync", other, "key", "ctrl+shift+F7")
+                selector = wait(lambda: windows(SELECTOR), "hidden Preferences does not block background shortcut")[0]
+                previous = entries()
+                run("xdotool", "windowfocus", "--sync", selector, "mousemove", "--window", selector,
+                    "140", "180", "mousedown", "1", "sleep", ".15", "mousemove", "--window", selector,
+                    "450", "350", "sleep", ".15", "mouseup", "1", "key", "Return")
+                countdown = wait(lambda: windows("Captures Screenshot Countdown"),
+                                 "countdown from hidden Preferences")[0]
+                shot(countdown, "lifecycle-hidden-preferences-countdown")
+                run("xdotool", "key", "Escape")
+                wait(lambda: not windows(SELECTOR) and not windows("Captures Screenshot Countdown"),
+                     "cancel hidden Preferences countdown")
+                assert not windows("Captures") and entries() == previous
+                for index, title in [(1, SELECTOR), (2, "Captures Window Selection")]:
+                    menu_action(index)
+                    wait(lambda: windows(title), "tray selector launches from hidden Preferences")
+                    run("xdotool", "key", "Escape")
+                    wait(lambda: not windows(title), "cancel tray capture")
+                    assert not windows("Captures")
+                menu_action(6)
+                other_app.terminate()
+                other_app.wait(timeout=5)
+            else:
+                run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
             assert app.wait(timeout=10) == 0, "unclean exit"
             assert not windows(PREVIEW), "preview outlived application"
             print(f"PASS {prefix}: pixels, placement/visibility, cancellation, clean exit", flush=True)
+        if args.lifecycle:
+            live_args = [str(binary), "--live", "--history-root", str(history),
+                         "--settings-file", str(settings)]
+            # Automation completion must explicitly quit even when a real tray
+            # would intercept an ordinary window close into background mode.
+            for label, completion in [
+                ("timed", ["--quit-after", "3"]),
+                ("framebuffer", ["--screenshot", str(output / "lifecycle-framebuffer.png"),
+                                 "--screenshot-after", "2"]),
+            ]:
+                probe = spawn(f"lifecycle-{label}-quit", live_args + completion)
+                wait(lambda: watcher.Get("org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems"),
+                     f"{label} automation has a real tray")
+                assert probe.wait(timeout=10) == 0, f"{label} completion hid instead of quitting"
+                wait(lambda: not watcher.Get("org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems"),
+                     f"{label} quit unregisters tray")
+                assert not windows("Captures") and not windows(PREVIEW)
+            assert (output / "lifecycle-framebuffer.png").is_file()
+
+            probe = spawn("lifecycle-tray-loss", live_args)
+            root = wait(lambda: windows("Captures"), "tray-loss workspace")[0]
+            wait(lambda: watcher.Get("org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems"),
+                 "tray-loss registration")
+            run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
+            wait(lambda: not windows("Captures"), "hide before tray host loss")
+            assert probe.poll() is None
+            run("xfce4-panel", "--quit")
+            panel.wait(timeout=10)
+            root = wait(lambda: windows("Captures"), "tray loss restores hidden root")[0]
+            wait(lambda: run("xdotool", "getactivewindow").decode().strip() == root,
+                 "tray loss focuses recovered root")
+            time.sleep(.3)
+            shot(root, "lifecycle-tray-loss-recovery")
+            run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
+            assert probe.wait(timeout=10) == 0, "tray loss retained close-to-hide"
+            print("PASS lifecycle: real tray automation Quit and hidden-root host-loss recovery", flush=True)
         (output / "result.json").write_text(json.dumps({"passed": True, "scenarios": len(cases),
-            "multiCard": args.stack,
-            "checks": ["four corner positions and dimensions", "nonactivating map",
+            "multiCard": args.stack, "residentLifecycle": args.lifecycle,
+            "checks": ["selected corner positions and dimensions", "nonactivating map",
                 "minimized-root full-pixel Copy and Save without activation",
                 "History restores minimized workspace", "Dismiss preserves history and export",
                 "new capture after dismissal", "exact inclusion and exclusion pixels",
-                "Escape and simulated-lock restoration", "disabled previews", "clean exit"] +
+                "Escape and simulated-lock restoration", "clean exit"] +
+                ([] if args.lifecycle else ["disabled previews"]) +
                 (["three-card retention and per-card Copy", "middle-card dismissal preserves files",
                   "collapsed arrival/cancel/front-card expand", "eight-card overflow retains oldest",
-                  "Clear all preserves files and later arrivals"] if args.stack else []),
+                  "Clear all preserves files and later arrivals"] if args.stack else []) +
+                (["real SNI menu History/Preferences/Quit", "close-to-background keeps previews",
+                  "region/window/display global shortcuts", "release-only launch", "hidden root stays hidden",
+                  "focused Preferences suppression and unfocused/hidden Preferences launch",
+                  "hidden Preferences countdown and cancellation",
+                  "tray region/window capture from hidden Preferences",
+                  "timed/framebuffer completion quits with real tray",
+                  "tray host loss restores/focuses hidden root and restores normal close"] if args.lifecycle else []),
             "scope": "Private X11/software GL, simulated session; not hardware, real lock, Wayland or accessibility acceptance."}, indent=2))
     finally:
         for child in reversed(children):

@@ -12,10 +12,31 @@ private final class CaptureHistoryRow: NSTableRowView {
     override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
 }
 
-private enum StillCaptureKind: Equatable {
+enum StillCaptureKind: Equatable {
     case display
     case region
     case window
+}
+
+enum CaptureWindowRestoreAction: Equatable {
+    case none
+    case visible
+    case key
+}
+
+struct CaptureWindowRestoration {
+    private var wasVisible = false
+    private var wasKey = false
+
+    mutating func begin(windowIsVisible: Bool, windowIsKey: Bool) {
+        wasVisible = windowIsVisible
+        wasKey = windowIsKey
+    }
+    mutating func finish(restoreRequested: Bool) -> CaptureWindowRestoreAction {
+        defer { wasVisible = false; wasKey = false }
+        guard restoreRequested, wasVisible else { return .none }
+        return wasKey ? .key : .visible
+    }
 }
 
 final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
@@ -27,6 +48,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private let historyRootOverride: String?
     private let settingsPath: String?
     private let showPreferences: () -> Void
+    private let captureStateChanged: (Bool) -> Void
+    private let reportError: (String) -> Void
     private weak var miniPreviews: MiniPreviewController?
     private weak var miniPreviewActions: MiniPreviewActions?
     private let initialSelectionID: String?
@@ -37,6 +60,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var selectedIndex: Int?
     private var selectionGeneration = 0
     private var capturing = false
+    private var windowRestoration = CaptureWindowRestoration()
     private var clearingHistory = false
     private var flowGeneration: UInt64?
     private var previewCaptureGeneration: UInt64?
@@ -69,12 +93,16 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
          transport: AppTransport = AppBridge(), miniPreviews: MiniPreviewController? = nil,
          miniPreviewActions: MiniPreviewActions? = nil,
          initialSelectionID: String? = nil,
+         captureStateChanged: @escaping (Bool) -> Void = { _ in },
+         reportError: @escaping (String) -> Void = { _ in },
          showPreferences: @escaping () -> Void) {
         self.root = root; self.window = window; self.tokens = tokens
         historyRootOverride = historyRoot; self.transport = transport; self.showPreferences = showPreferences
         self.settingsPath = settingsPath; self.miniPreviews = miniPreviews
         self.miniPreviewActions = miniPreviewActions
         self.initialSelectionID = initialSelectionID
+        self.captureStateChanged = captureStateChanged
+        self.reportError = reportError
         super.init(); build(); loadInitial()
     }
 
@@ -192,9 +220,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }
     }
 
-    private func capture(_ kind: StillCaptureKind) {
+    @discardableResult func capture(_ kind: StillCaptureKind) -> Bool {
         let index = displayMenu.indexOfSelectedItem
-        guard !capturing, displays.indices.contains(index), !historyRoot.isEmpty else { return }
+        guard !capturing, displays.indices.contains(index), !historyRoot.isEmpty else { return false }
+        windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
         let display = displays[index]; setBusy(true, message: "Preparing capture…")
         run({ [settingsPath] in try CapturePreferences.load(path: settingsPath) }) { [weak self] result in
             guard let self else { return }
@@ -230,6 +259,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 self.finishCapture(); self.showError("Couldn’t start capture", error)
             }
         }
+        return true
     }
 
     private func prepareRegion(display: DisplayItem, screen: NSScreen, preferences: CapturePreferences, generation: UInt64) {
@@ -390,11 +420,32 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             previewCaptureGeneration = nil
         }
         snapshotPending = false; setBusy(false)
-        if restoreWindow { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
+        switch windowRestoration.finish(restoreRequested: restoreWindow) {
+        case .none: break
+        case .visible:
+            window.orderFront(nil)
+        case .key:
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
-    private func setBusy(_ busy: Bool, message: String = "") { capturing = busy; updateActions(); if busy { status.stringValue = message } }
-    private func showError(_ context: String, _ error: Error) { status.stringValue = "\(context): \(error.localizedDescription)"; status.textColor = tokens.color("danger-text") }
+    private func setBusy(_ busy: Bool, message: String = "") {
+        capturing = busy
+        captureStateChanged(busy)
+        updateActions()
+        if busy { status.stringValue = message }
+    }
+    func showShortcutError(_ error: Error) {
+        status.stringValue = "Capture shortcuts unavailable: \(error.localizedDescription)"
+        status.textColor = tokens.color("danger-text")
+    }
+    private func showError(_ context: String, _ error: Error) {
+        let message = "\(context): \(error.localizedDescription)"
+        status.stringValue = message
+        status.textColor = tokens.color("danger-text")
+        reportError(message)
+    }
     private func updateActions() {
         let selected = selectedIndex.map { artifacts.indices.contains($0) } == true
         let busy = capturing || clearingHistory
@@ -489,6 +540,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         loadHistory(select: artifact.id)
     }
+    func refreshHistory() { loadHistory() }
     private func reveal() { guard let index = selectedIndex, artifacts.indices.contains(index), let path = artifacts[index].savedPath else { return }; NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
     private func confirmDelete() {
         guard let index = selectedIndex, artifacts.indices.contains(index) else { return }; let artifact = artifacts[index]

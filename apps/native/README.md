@@ -23,9 +23,36 @@ explicit test file. Malformed/newer files report an error instead of resetting
 them. `--exercise` uses disposable data. No installed Preview settings are imported.
 
 Without `--live`, capture, recording, history, and editor scenes use fixtures. Saving a
-default is not an engine integration: global shortcuts, microphone discovery,
+default is not an engine integration: shortcut editing, microphone discovery,
 login items, feedback and update actions remain visibly unavailable. Full
 Preferences visual/input parity and the other checklist gates remain open.
+
+## Resident lifecycle and screenshot shortcuts
+
+Only `--live` creates the macOS menu-bar item or Windows/Linux tray and registers
+the persisted region/window/display shortcuts. The menu offers those three
+captures, History, Preferences, the output folder, and Quit. Closing the root
+hides it when a usable tray is available; previews and accepted work stay alive.
+Quit cancels pending capture, drains accepted file work and removes shortcuts/tray.
+Timed and framebuffer-screenshot completion also explicitly quit, not hide.
+Captures launched from a hidden root leave it hidden on success or cancellation.
+macOS Dock reopen shows an existing visible window or Preferences.
+
+The shared Rust dispatcher queues release-triggered screenshot actions and
+temporary Escape cancellation without competing process-wide handlers. Native
+event loops drain actions on their UI thread. Active capture/preparation and
+focused Preferences suppress screenshot shortcuts; hidden or unfocused
+Preferences does not. Invalid/colliding shortcuts report errors. This does not
+implement OS shortcut takeover, shortcut editing, New Capture or recording keys,
+single-instance relaunch, launch at login, or complete lifecycle parity.
+
+Linux uses SNI/KSNI over session D-Bus, not XEmbed or GTK/AppIndicator. Building
+needs pkg-config and libdbus-1-dev; runtime needs a registered StatusNotifier host
+and `xdg-open` for the folder action. No watcher/host means an explicit error and
+normal close-to-quit. Losing the tray host restores the root instead of stranding
+the process. XEmbed-only trays require an SNI bridge. Wayland capture/hidden-window
+support remains gated; a tray does not remove that limitation. Physical macOS,
+Windows, mixed-DPI and accessibility acceptance remain open.
 
 ## Live display-capture slice
 
@@ -33,7 +60,7 @@ Launch with `--live [--history-root PATH]` on either native host. This is an
 explicit opt-in to real desktop capture, not a synthetic benchmark. The default
 history is beside the separate Captures Native settings file, never installed
 Preview history. Choose a display, request screen access if needed, and capture.
-The host hides its window before capture and restores it on success or failure.
+The host hides its window before capture and restores its prior visibility afterward.
 Permission and locked/inactive session checks remain in force.
 
 Both hosts use `captures-app` for display enumeration, PNG/thumbnail persistence,
