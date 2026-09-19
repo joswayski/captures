@@ -46,6 +46,32 @@ XCTest renders both appearances and checks controller/bridge input. Synthetic
 virtual-key mapping does not prove physical Mac media/external-keyboard input;
 physical Windows/macOS, Wayland and screen-reader acceptance remain open.
 
+## Shared recording runtime (not yet connected to native controls)
+
+`captures-recording-platform::RecordingSession` owns a durable recovery bundle
+and the existing platform engine across start, pause/resume, stop, discard and
+MP4/GIF finalization into private History. Run its blocking methods on a worker.
+Hosts still own permissions, countdown presentation, window exclusion and the
+capture-generation cancellation gate passed to `start`; `prepare` never records.
+Failed assembly/publication keeps source segments. Successful video publication
+removes the draft only after Ready metadata is saved; GIFs keep editable sources.
+Post-publication housekeeping failures return the saved artifact with a warning.
+The Record controls and recording shortcuts remain unconnected in both hosts.
+
+Linux CI records an asymmetric 310×170 region on a private Xvfb display, pauses
+and resumes, independently decodes the saved colors with FFmpeg, publishes video
+and GIF History entries, and exercises cancellation and persistence failures:
+
+```sh
+env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 CAPTURES_TEST_PRIVATE_X11=1 \
+  xvfb-run -a -s '-screen 0 640x480x24 -nolisten tcp -noreset' \
+  cargo test -p captures-recording-platform \
+  private_x11_records_pause_resume_pixels_and_cancelled_start -- --ignored
+```
+
+This needs `xvfb`, `xauth`, `hsetroot`, FFmpeg and FFprobe. It is not physical
+Windows/macOS, audio-device, multi-display or Wayland acceptance.
+
 ## Resident lifecycle and screenshot shortcuts
 
 Only `--live` creates the macOS menu-bar item or Windows/Linux tray and registers
