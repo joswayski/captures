@@ -1,4 +1,5 @@
 mod preview;
+mod recording;
 mod region;
 mod selection;
 mod shortcuts;
