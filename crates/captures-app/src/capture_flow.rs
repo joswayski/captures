@@ -11,6 +11,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+const COMMITTED: u64 = 1;
+const ESCAPE_DISARMED: u64 = 2;
+const STATE_BITS: u64 = COMMITTED | ESCAPE_DISARMED;
+
 #[derive(Default)]
 struct Gate {
     next: AtomicU64,
@@ -19,27 +23,56 @@ struct Gate {
 
 impl Gate {
     fn begin(&self) -> Result<u64, String> {
-        // Even generations reserve the low bit for the irreversible commit point.
-        let generation = self.next.fetch_add(2, Ordering::AcqRel) + 2;
+        // Reserve two low bits for persistence commit and Escape ownership.
+        let generation = self.next.fetch_add(4, Ordering::AcqRel) + 4;
         self.current
             .compare_exchange(0, generation, Ordering::AcqRel, Ordering::Acquire)
             .map(|_| generation)
             .map_err(|_| "A capture is already in progress".into())
     }
     fn is_current(&self, generation: u64) -> bool {
-        generation != 0 && self.current.load(Ordering::Acquire) & !1 == generation
+        generation != 0 && self.current.load(Ordering::Acquire) & !STATE_BITS == generation
     }
     fn shortcuts_allowed(&self, selector_generation: Option<u64>) -> bool {
         let current = self.current.load(Ordering::Acquire);
         match selector_generation {
             None => current == 0,
-            Some(generation) => generation != 0 && generation & 1 == 0 && current == generation,
+            Some(generation) => {
+                generation != 0 && generation & STATE_BITS == 0 && current == generation
+            }
         }
     }
     fn cancel(&self, generation: u64) {
         let _ = self
             .current
             .compare_exchange(generation, 0, Ordering::AcqRel, Ordering::Acquire);
+        let _ = self.current.compare_exchange(
+            generation | ESCAPE_DISARMED,
+            0,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+    fn escape(&self) {
+        let current = self.current.load(Ordering::Acquire);
+        if current != 0 && current & STATE_BITS == 0 {
+            // Unlike session cancellation, this must lose to disarm_escape even
+            // when a queued key release read the generation before disarming.
+            let _ = self
+                .current
+                .compare_exchange(current, 0, Ordering::AcqRel, Ordering::Acquire);
+        }
+    }
+    fn disarm_escape(&self, generation: u64) -> bool {
+        match self.current.compare_exchange(
+            generation,
+            generation | ESCAPE_DISARMED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => true,
+            Err(current) => current == generation | ESCAPE_DISARMED,
+        }
     }
     fn commit(&self, generation: u64) -> bool {
         generation != 0
@@ -47,7 +80,7 @@ impl Gate {
                 .current
                 .compare_exchange(
                     generation,
-                    generation | 1,
+                    generation | COMMITTED,
                     Ordering::AcqRel,
                     Ordering::Acquire,
                 )
@@ -55,9 +88,12 @@ impl Gate {
     }
     fn finish(&self, generation: u64) {
         self.cancel(generation);
-        let _ =
-            self.current
-                .compare_exchange(generation | 1, 0, Ordering::AcqRel, Ordering::Acquire);
+        let _ = self.current.compare_exchange(
+            generation | COMMITTED,
+            0,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
     }
 }
 
@@ -83,8 +119,7 @@ pub(crate) fn shortcuts_allowed(selector_generation: Option<u64>) -> bool {
 }
 
 pub(crate) fn escape() {
-    let generation = GATE.current.load(Ordering::Acquire) & !1;
-    GATE.cancel(generation);
+    GATE.escape();
 }
 
 /// Uses a monotonic deadline, not a decrementing frame/timer counter. Late UI
@@ -116,6 +151,7 @@ pub struct CaptureFlow {
     generation: u64,
     countdown: Countdown,
     manager: GlobalHotKeyManager,
+    escape_registered: bool,
     _event_loop_thread: PhantomData<Rc<()>>,
 }
 
@@ -153,6 +189,7 @@ impl CaptureFlow {
                     generation,
                     countdown: Countdown::new(Instant::now(), seconds),
                     manager,
+                    escape_registered: true,
                     _event_loop_thread: PhantomData,
                 })
             }
@@ -183,6 +220,24 @@ impl CaptureFlow {
     pub fn is_current(&self) -> bool {
         GATE.is_current(self.generation)
     }
+    /// Once a recording has started, Escape must no longer discard the take.
+    /// Keep this guard for single-flow ownership and desktop-session monitoring.
+    /// Call on the native event thread after accepting a current Started reply.
+    /// Cancellation that wins the atomic handoff is still reported as an error.
+    pub fn disarm_escape(&mut self) -> Result<(), String> {
+        if !GATE.disarm_escape(self.generation) {
+            return Err("Capture was cancelled before recording started".into());
+        }
+        captures_session::set_capture_escape_enabled(false);
+        captures_session::set_capture_escape_handler(None);
+        if self.escape_registered {
+            self.manager
+                .unregister(HotKey::new(None, Code::Escape))
+                .map_err(|error| error.to_string())?;
+            self.escape_registered = false;
+        }
+        Ok(())
+    }
     pub fn cancel(&self) {
         GATE.cancel(self.generation);
     }
@@ -193,7 +248,9 @@ impl Drop for CaptureFlow {
         GATE.finish(self.generation);
         captures_session::set_capture_escape_enabled(false);
         captures_session::set_capture_escape_handler(None);
-        let _ = self.manager.unregister(HotKey::new(None, Code::Escape));
+        if self.escape_registered {
+            let _ = self.manager.unregister(HotKey::new(None, Code::Escape));
+        }
     }
 }
 
@@ -283,5 +340,41 @@ mod tests {
         gate.finish(committed);
         assert!(!gate.is_current(committed));
         assert!(gate.begin().is_ok());
+    }
+
+    #[test]
+    fn recording_handoff_disarms_escape_without_losing_session_cancellation() {
+        let gate = Gate::default();
+        let cancelled = gate.begin().unwrap();
+        gate.escape();
+        assert!(!gate.disarm_escape(cancelled), "Escape won before handoff");
+        let recording = gate.begin().unwrap();
+        assert!(gate.disarm_escape(recording));
+        assert!(gate.disarm_escape(recording), "handoff is idempotent");
+        gate.escape();
+        assert!(
+            gate.is_current(recording),
+            "Escape cannot discard a started take"
+        );
+        assert!(!gate.shortcuts_allowed(Some(recording)));
+        assert!(!gate.shortcuts_allowed(None));
+        assert!(gate.begin().is_err(), "recording still owns the flow");
+        gate.cancel(recording);
+        assert!(
+            !gate.is_current(recording),
+            "session lock still cancels the flow"
+        );
+        let next = gate.begin().unwrap();
+        assert!(
+            !gate.disarm_escape(recording),
+            "stale handoff cannot disarm a new selector"
+        );
+        gate.finish(recording);
+        assert!(gate.is_current(next));
+        gate.escape();
+        assert!(
+            !gate.is_current(next),
+            "the next selector arms Escape again"
+        );
     }
 }
