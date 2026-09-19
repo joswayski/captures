@@ -138,8 +138,7 @@ fn rebind(manager: &impl Registration, old: &Bindings, new: &Bindings) -> Result
         if let Err(error) = manager.register(binding.key) {
             // X11 registration may have grabbed some modifier variants before
             // failing. Unregister attempts every variant, even absent map state.
-            let _ = manager.unregister(binding.key);
-            let mut rollback_failed = false;
+            let mut rollback_failed = manager.unregister(binding.key).is_err();
             for key in added.into_iter().rev() {
                 rollback_failed |= manager.unregister(key).is_err();
             }
@@ -161,7 +160,9 @@ fn rebind(manager: &impl Registration, old: &Bindings, new: &Bindings) -> Result
             continue;
         }
         if let Err(error) = manager.unregister(binding.key) {
-            let mut rollback_failed = false;
+            // A failing release may already have removed some OS grabs. Restore
+            // that chord too, not only earlier successfully removed chords.
+            let mut rollback_failed = manager.register(binding.key).is_err();
             for key in removed {
                 rollback_failed |= manager.register(key).is_err();
             }
@@ -405,6 +406,45 @@ mod tests {
         assert_eq!(*backend.keys.borrow(), old.keys().copied().collect());
         let key = "Ctrl+Shift+1".parse::<HotKey>().unwrap().id();
         assert_eq!(next[&key].action, CaptureShortcut::Window);
+    }
+
+    #[test]
+    fn failed_partial_release_restores_the_failed_chord_and_removes_additions() {
+        let old = bindings(&settings()).unwrap();
+        let changed = AppSettings {
+            region_shortcut: "Alt+4".into(),
+            window_shortcut: "Alt+5".into(),
+            display_shortcut: "Alt+6".into(),
+            ..settings()
+        };
+        let next = bindings(&changed).unwrap();
+        let backend = Backend {
+            keys: RefCell::new(old.keys().copied().collect()),
+            fail_cleanup: old.keys().nth(1).copied(),
+            ..Backend::default()
+        };
+        assert!(
+            rebind(&backend, &old, &next)
+                .unwrap_err()
+                .contains("release")
+        );
+        assert_eq!(*backend.keys.borrow(), old.keys().copied().collect());
+    }
+
+    #[test]
+    fn failed_registration_reports_failure_to_clean_its_partial_grab() {
+        let next = bindings(&settings()).unwrap();
+        let failed = next.keys().next().copied();
+        let backend = Backend {
+            fail: failed,
+            fail_cleanup: failed,
+            ..Backend::default()
+        };
+        assert!(
+            rebind(&backend, &Bindings::new(), &next)
+                .unwrap_err()
+                .contains("cleanup failed")
+        );
     }
 
     #[test]
