@@ -355,7 +355,7 @@ impl Workbench {
             Ok(()) => self.shortcut_error = None,
             Err(error) => {
                 self.shortcut_error =
-                    Some(format!("Global screenshot shortcuts unavailable: {error}"));
+                    Some(format!("Global capture shortcuts unavailable: {error}"));
             }
         }
     }
@@ -367,7 +367,7 @@ impl Workbench {
         };
         self.shortcut_suspension_error = shortcuts.set_suspended(suspended).err().map(|error| {
             format!(
-                "Could not {} global screenshot shortcuts: {error}",
+                "Could not {} global capture shortcuts: {error}",
                 if suspended { "suspend" } else { "restore" }
             )
         });
@@ -816,13 +816,22 @@ impl eframe::App for Workbench {
             .as_ref()
             .and_then(CaptureShortcuts::next_action);
         if let (Some(action), Some(live)) = (shortcut_action, &mut self.live)
-            && !live.apply_selector_shortcut(action)
+            && !live.apply_selector_shortcut(action, ctx)
         {
             live.request_capture(match action {
                 CaptureShortcut::NewCapture => CaptureRequest::NewCapture,
                 CaptureShortcut::Region => CaptureRequest::Region,
                 CaptureShortcut::Window => CaptureRequest::Window,
                 CaptureShortcut::Display => CaptureRequest::Display,
+                CaptureShortcut::RecordRegion => {
+                    CaptureRequest::Recording(crate::capture_controls::TargetMode::Region)
+                }
+                CaptureShortcut::RecordWindow => {
+                    CaptureRequest::Recording(crate::capture_controls::TargetMode::Window)
+                }
+                CaptureShortcut::RecordDisplay => {
+                    CaptureRequest::Recording(crate::capture_controls::TargetMode::Display)
+                }
             });
         }
         let mut tray_actions = Vec::new();

@@ -326,12 +326,16 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         return true
     }
 
-    @discardableResult func newCapture() -> Bool {
+    @discardableResult func newCapture(recordingTarget: UnifiedCaptureTarget? = nil) -> Bool {
         let index = displayMenu.indexOfSelectedItem
         guard !capturing, displays.indices.contains(index), !historyRoot.isEmpty else { return false }
         windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
         let display = displays[index]
         unifiedControlsState = .initial
+        if let recordingTarget {
+            unifiedControlsState.mode = .record
+            unifiedControlsState.target = recordingTarget
+        }
         setBusy(true, message: "Preparing capture controls…")
         let request = unifiedPreparation.begin()
         run({ [settingsPath] in
@@ -1001,15 +1005,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }
     }
 
-    @discardableResult func selectUnifiedTargetFromShortcut(_ kind: StillCaptureKind) -> Bool {
-        guard let panel = unifiedPanel, selectorShortcutGeneration == flowGeneration else { return false }
-        let target: UnifiedCaptureTarget
-        switch kind {
-        case .region: target = .region
-        case .window: target = .window
-        case .display: target = .display
-        }
-        panel.selector.setTargetFromShortcut(target)
+    @discardableResult func selectUnifiedTargetFromShortcut(_ shortcut: CaptureShortcut) -> Bool {
+        guard let panel = unifiedPanel, selectorShortcutGeneration == flowGeneration,
+              let target = shortcut.target else { return false }
+        panel.selector.setTargetFromShortcut(target, mode: shortcut.mode)
         return true
     }
 

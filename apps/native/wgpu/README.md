@@ -15,14 +15,14 @@ plus direct full-display, region and window PNG, history, copy, export and delet
 flows; see the [live slice and limits](../README.md#live-display-capture-slice).
 Live mode also provides a native tray menu for New Capture, those three direct
 capture modes, History, Preferences, the output folder and Quit. Its persisted
-display, region, window and New Capture shortcuts work globally except while
+display, region, window, recording and New Capture shortcuts work globally except while
 capture is unavailable or a focused Preferences window is editing them. All seven
 shortcut rows can be edited from Preferences with
 physical-key recording, modifier previews, Escape/blur cancellation, and inline invalid
-chord errors; the three recording shortcuts remain visibly unavailable.
+chord errors. Recording keys open Record on the requested target without starting a take.
 Inside New Capture, Screenshot/Record and region/window/display controls share the
 existing prepared selector. Region/window/display keys switch the existing selector's
-target. Keyboard Full screen does not auto-start; preparation/countdown/capture
+mode and target. Screenshot keys return to Screenshot mode. Keyboard Full screen does not auto-start; preparation/countdown/capture
 reject target keys, and New Capture cannot re-enter the active selector.
 Fixture scenes can edit disposable shortcut settings but never register global shortcuts.
 Windows tray left-click opens Preferences.

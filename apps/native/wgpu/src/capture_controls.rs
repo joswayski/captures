@@ -166,21 +166,31 @@ impl CaptureControls {
         self.window.reset();
     }
 
+    pub fn select_recording_target(&mut self, target: TargetMode) {
+        self.action_mode = ActionMode::Recording;
+        self.mode = target;
+    }
+
     pub fn apply_target_shortcut(&mut self, shortcut: CaptureShortcut) {
         self.mode = match shortcut {
-            CaptureShortcut::Region => {
+            CaptureShortcut::Region | CaptureShortcut::RecordRegion => {
                 self.window.clear_selection_and_hover();
                 TargetMode::Region
             }
-            CaptureShortcut::Window => {
+            CaptureShortcut::Window | CaptureShortcut::RecordWindow => {
                 self.window.clear_hover();
                 TargetMode::Window
             }
-            CaptureShortcut::Display => {
+            CaptureShortcut::Display | CaptureShortcut::RecordDisplay => {
                 self.window.clear_selection_and_hover();
                 TargetMode::Display
             }
             CaptureShortcut::NewCapture => return,
+        };
+        self.action_mode = if shortcut.is_recording() {
+            ActionMode::Recording
+        } else {
+            ActionMode::Screenshot
         };
     }
 
@@ -864,6 +874,56 @@ mod tests {
         assert_eq!(controls.window(), None);
         assert_eq!(controls.window.hovered(), None);
         assert_eq!(controls.region(), settled_region);
+    }
+
+    #[test]
+    fn recording_shortcuts_switch_mode_preserve_region_and_require_confirmation() {
+        let mut controls = CaptureControls::default();
+        controls.region.exercise(
+            0,
+            Bounds {
+                width: 1000.,
+                height: 720.,
+            },
+        );
+        let region = controls.region();
+        for (shortcut, target) in [
+            (CaptureShortcut::RecordWindow, TargetMode::Window),
+            (CaptureShortcut::RecordDisplay, TargetMode::Display),
+            (CaptureShortcut::RecordRegion, TargetMode::Region),
+        ] {
+            controls.window.exercise(0, |_| Some(2));
+            controls.apply_target_shortcut(shortcut);
+            assert_eq!(controls.mode(), target);
+            assert_eq!(controls.action_mode, ActionMode::Recording);
+            assert_eq!(controls.region(), region);
+            assert_eq!(
+                controls.window(),
+                (target == TargetMode::Window).then_some(SelectionTarget::Window(2))
+            );
+            assert_eq!(controls.window.hovered(), None);
+            assert_eq!(
+                run_frame_with_auto_start(
+                    &egui::Context::default(),
+                    &mut controls,
+                    egui::vec2(1000., 720.),
+                    vec![],
+                    egui::Id::unique("record-shortcut"),
+                    true
+                ),
+                None
+            );
+        }
+        assert!(matches!(
+            run_input(&mut controls, vec![key(egui::Key::Enter)]),
+            Some(Action::StartRecording(Target::Region(_)))
+        ));
+        controls.apply_target_shortcut(CaptureShortcut::Display);
+        assert_eq!(controls.action_mode, ActionMode::Screenshot);
+        assert_eq!(
+            run_input(&mut controls, vec![key(egui::Key::Enter)]),
+            Some(Action::Capture(Target::Display))
+        );
     }
 
     #[test]

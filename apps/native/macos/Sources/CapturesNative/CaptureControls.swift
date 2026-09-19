@@ -529,7 +529,8 @@ final class UnifiedCaptureSelectionView: NSView {
         self.mode = mode; controls.selectMode(mode, notify: false); update()
     }
 
-    func setTargetFromShortcut(_ target: UnifiedCaptureTarget) {
+    func setTargetFromShortcut(_ target: UnifiedCaptureTarget, mode: UnifiedCaptureMode = .screenshot) {
+        setMode(mode)
         hoveredWindowIndex = -1
         if target != .window { selectedWindowIndex = nil }
         self.target = target

@@ -234,8 +234,10 @@ func liveReopenAction(hasVisibleWindows: Bool) -> LiveReopenAction {
 }
 
 func captureShortcutSignature(_ settings: [String: Any]) -> [String] {
-    [settings.string("new_capture_shortcut"), settings.string("region_shortcut"), settings.string("window_shortcut"),
-     settings.string("display_shortcut")]
+    let recording = settings["recording"] as? [String: Any] ?? [:]
+    return [settings.string("new_capture_shortcut"), settings.string("region_shortcut"), settings.string("window_shortcut"),
+        settings.string("display_shortcut"), recording.string("video_shortcut"),
+        recording.string("window_shortcut"), recording.string("display_shortcut")]
 }
 
 func captureShortcutsEnabled(captureBusy: Bool, selectorGeneration: UInt64? = nil) -> Bool {
@@ -251,7 +253,7 @@ func preferencesWindowFocused(scene: String, visible: Bool, key: Bool,
 
 func stillCaptureKind(for shortcut: CaptureShortcut) -> StillCaptureKind? {
     switch shortcut {
-    case .newCapture: return nil
+    case .newCapture, .recordRegion, .recordWindow, .recordDisplay: return nil
     case .region: return .region
     case .window: return .window
     case .display: return .display
@@ -698,13 +700,13 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
               let captureShortcuts else { return }
         do {
             while let action = try captureShortcuts.nextAction() {
-                if let kind = stillCaptureKind(for: action) {
-                    if shortcutSelectorGeneration != nil {
-                        _ = liveController?.selectUnifiedTargetFromShortcut(kind)
-                    } else {
-                        launchCapture(kind)
-                    }
-                } else if shortcutSelectorGeneration == nil {
+                if shortcutSelectorGeneration != nil {
+                    _ = liveController?.selectUnifiedTargetFromShortcut(action)
+                } else if action.mode == .record, let target = action.target {
+                    launchNewCapture(recordingTarget: target)
+                } else if let kind = stillCaptureKind(for: action) {
+                    launchCapture(kind)
+                } else {
                     launchNewCapture()
                 }
                 if captureBusy && shortcutSelectorGeneration == nil { break }
@@ -743,8 +745,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         }
     }
 
-    private func launchNewCapture() {
-        guard liveController?.newCapture() == true else {
+    private func launchNewCapture(recordingTarget: UnifiedCaptureTarget? = nil) {
+        guard liveController?.newCapture(recordingTarget: recordingTarget) == true else {
             presentHostError(title: "Capture Unavailable",
                 message: "The capture workspace is still loading or another capture is already active.")
             return

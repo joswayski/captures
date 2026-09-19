@@ -152,6 +152,20 @@ final class CaptureControlsTests: XCTestCase {
         XCTAssertEqual(view.aspectIndex, 4)
         XCTAssertTrue(confirmed.isEmpty,
             "the Display shortcut must not itself trigger automatic capture")
+        for target in UnifiedCaptureTarget.allCases {
+            view.setTargetFromShortcut(target, mode: .record)
+            XCTAssertEqual(view.mode, .record)
+            XCTAssertEqual(view.target, target)
+            XCTAssertEqual(view.region.rect.x, region.x)
+            XCTAssertEqual(view.region.rect.y, region.y)
+            XCTAssertEqual(view.region.rect.width, region.width)
+            XCTAssertEqual(view.region.rect.height, region.height)
+            XCTAssertEqual(view.aspectIndex, 4)
+            XCTAssertTrue(confirmed.isEmpty, "recording keys must not auto-start")
+        }
+        view.setTargetFromShortcut(.region)
+        XCTAssertEqual(view.mode, .screenshot, "screenshot keys leave Record mode")
+        XCTAssertTrue(confirmed.isEmpty)
     }
 
     func testEnterEscapeAndAutoStartRespectSelectionBoundaries() throws {

@@ -176,6 +176,7 @@ enum CapturePhase {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CaptureRequest {
     NewCapture,
+    Recording(capture_controls::TargetMode),
     Display,
     Region,
     Window,
@@ -766,7 +767,11 @@ impl Live {
         )
     }
 
-    pub fn apply_selector_shortcut(&mut self, shortcut: CaptureShortcut) -> bool {
+    pub fn apply_selector_shortcut(
+        &mut self,
+        shortcut: CaptureShortcut,
+        ctx: &egui::Context,
+    ) -> bool {
         if self.selector_generation().is_none() {
             return false;
         }
@@ -775,6 +780,7 @@ impl Live {
                 .lock()
                 .unwrap()
                 .apply_target_shortcut(shortcut);
+            ctx.request_repaint_of(egui::ViewportId::from_hash_of("capture-controls"));
         }
         true
     }
@@ -831,7 +837,7 @@ impl Live {
                 CaptureRequest::Display => {
                     "The selected display is no longer available for countdown.".into()
                 }
-                CaptureRequest::NewCapture => {
+                CaptureRequest::NewCapture | CaptureRequest::Recording(_) => {
                     "The selected display is no longer available for capture controls.".into()
                 }
                 CaptureRequest::Region => {
@@ -866,7 +872,7 @@ impl Live {
         self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
         self.include_cursor = settings.show_cursor_in_screenshots;
         match request {
-            CaptureRequest::NewCapture => {
+            CaptureRequest::NewCapture | CaptureRequest::Recording(_) => {
                 self.selector_scope_generation.store(0, Ordering::Release);
                 self.capture_phase = Some(CapturePhase::ControlsPreparing);
                 self.controls_freeze = settings.freeze_screen;
@@ -879,6 +885,9 @@ impl Live {
                     &settings.recording,
                     RecordingCapabilities::current(settings.include_recording_controls_in_captures),
                 );
+                if let CaptureRequest::Recording(target) = request {
+                    controls.select_recording_target(target);
+                }
                 drop(controls);
                 self.recording_toolchain_ready = false;
                 self.recording_toolchain_error = None;

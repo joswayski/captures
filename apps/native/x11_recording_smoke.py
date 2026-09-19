@@ -93,17 +93,29 @@ def main():
             # Discard/publication can remove the bundle between glob and read.
             return None
 
-    def select_recording(name):
+    def select_recording(name, shortcuts=False):
         selector = wait(lambda: windows("Captures Capture Controls"), "capture controls")[0]
         wait(lambda: int(run("import", "-window", selector, "-crop", "1280x96+0+804",
                              "-format", "%k", "info:")) > 16, "painted controls")
-        click(selector, 405, 811)
+        if shortcuts:
+            shot(selector, "record-window-shortcut")
+            run("xdotool", "key", "ctrl+alt+r", "sleep", ".2")
+        else:
+            click(selector, 405, 811)
         shot(selector, name)
         # egui must observe a held pointer, not press/release in one input batch.
         run("xdotool", "mousemove", "--sync", "--window", selector, "140", "180",
             "sleep", ".1", "mousedown", "1", "sleep", ".2",
             "mousemove", "--sync", "--window", selector, "450", "350",
-            "sleep", ".2", "mouseup", "1", "key", "Return")
+            "sleep", ".2", "mouseup", "1")
+        if shortcuts:
+            # Switching across every target must retain this asymmetric region,
+            # not replace the child or accidentally start a Display recording.
+            for chord in ("ctrl+alt+d", "ctrl+alt+w", "ctrl+alt+r"):
+                run("xdotool", "key", chord, "sleep", ".2")
+                assert windows("Captures Capture Controls") == [selector]
+                assert manifest() is None and not history()
+        run("xdotool", "key", "Return")
 
     def running_hud():
         wait(lambda: (value := manifest()) and value["state"] == "recording", "durable Recording")
@@ -147,6 +159,8 @@ def main():
             "auto_copy_to_clipboard": False, "auto_start_on_selection": False,
             "freeze_screen": True, "screenshot_countdown_seconds": 0,
             "recording": {"video_fps": 15, "countdown_seconds": 3, "show_cursor": False,
+                          "video_shortcut": "Ctrl+Alt+R", "window_shortcut": "Ctrl+Alt+W",
+                          "display_shortcut": "Ctrl+Alt+D",
                           "highlight_clicks": False, "capture_system_audio": False,
                           "microphone_device_id": None, "open_editor_after_recording": False},
         }))
@@ -154,12 +168,15 @@ def main():
                             "--settings-file", str(settings), "--quit-after", "120"])
         root = wait(lambda: windows("Captures"), "capture workspace")[0]
         time.sleep(1)
-        click(root, 341, 141)
-        select_recording("recording-selector")
+        run("xdotool", "key", "ctrl+alt+w")
+        select_recording("recording-selector", shortcuts=True)
         countdown = wait(lambda: windows("Captures Recording Countdown"), "recording countdown")[0]
         shot(countdown, "recording-countdown")
+        run("xdotool", "key", "ctrl+alt+d")
         hud = running_hud()
         shot(hud, "hud-running")
+        run("xdotool", "key", "ctrl+alt+r", "ctrl+shift+F9")
+        assert not windows("Captures Capture Controls")
         # Escape only cancels before engine handoff, not an accepted recording.
         run("xdotool", "key", "Escape")
         time.sleep(.3)
@@ -204,9 +221,14 @@ def main():
         assert not windows("Captures Capture Controls")
 
         # Explicit Discard removes a started take, leaving the prior MP4 untouched.
-        run("xdotool", "key", "ctrl+shift+F10")
-        select_recording("discard-selector")
+        run("xdotool", "key", "ctrl+alt+d")
+        selector = wait(lambda: windows("Captures Capture Controls"), "Record Display shortcut")[0]
+        time.sleep(.5)
+        shot(selector, "record-display-shortcut")
+        assert manifest() is None, "the Display shortcut must not start recording"
+        run("xdotool", "key", "Return")
         hud = running_hud()
+        assert manifest()["options"]["target"]["type"] == "display"
         click(hud, 358, 54)
         finished(1)
         assert history() == published and media.is_file()
@@ -240,6 +262,33 @@ def main():
         time.sleep(.3)
         shot(wait(lambda: windows("Captures"), "recording History")[0], "recording-history")
 
+        # A screenshot key must leave Record mode, not merely change its target.
+        published = history()
+        run("xdotool", "key", "ctrl+alt+r")
+        selector = wait(lambda: windows("Captures Capture Controls"), "Record Region shortcut")[0]
+        time.sleep(.5)
+        # On this fixed 1280x900 fixture only Record's taller toolbar covers
+        # (250,770); (100,770) is the same solid desktop outside either toolbar.
+        # Compare pixels before moving the pointer: stale child painting used
+        # to persist until a mouse event even though the mode had changed.
+        probe = "%[pixel:p{250,770}]|%[pixel:p{100,770}]"
+        before = run("import", "-window", selector, "-format", probe, "info:").split(b"|")
+        assert before[0] != before[1], "Record shortcut did not present recording controls"
+        run("xdotool", "key", "ctrl+shift+F7", "sleep", ".2")
+        assert windows("Captures Capture Controls") == [selector]
+        shot(selector, "record-to-screenshot-shortcut")
+        after = run("import", "-window", selector, "-format", probe, "info:").split(b"|")
+        assert after[0] == after[1], "shortcut mode change did not repaint the child"
+        run("xdotool", "mousemove", "--sync", "--window", selector, "140", "180",
+            "sleep", ".1", "mousedown", "1", "sleep", ".2",
+            "mousemove", "--sync", "--window", selector, "450", "350",
+            "sleep", ".2", "mouseup", "1", "key", "Return")
+        finished(4)
+        screenshot = history() - published
+        assert len(screenshot) == 1
+        image = next(iter(screenshot)).parent / "capture.png"
+        assert run("identify", "-format", "%wx%h", str(image)) == b"310x170"
+
         assert saver.queries > 0 and app.poll() is None
         # This fixture has no tray host: closing the root requests application
         # exit. Shutdown must drain accepted media, not merely stop the HUD.
@@ -264,7 +313,7 @@ def main():
         except subprocess.TimeoutExpired:
             shot("root", "timeout-recording-exit")
             raise
-        assert len(history()) == 4 and manifest() is None
+        assert len(history()) == 5 and manifest() is None
         saved_on_quit = history() - published
         assert len(saved_on_quit) == 1
         run("ffmpeg", "-v", "error", "-i", str(next(iter(saved_on_quit)).parent / "media.mp4"),
@@ -277,8 +326,9 @@ def main():
             "running_escape_ignored": True, "countdown_escape_discarded": True,
             "explicit_discard": True, "session_lock_preserved": True, "child_close_saved": True,
             "application_quit_saved": True,
+            "recording_shortcuts": True, "shortcut_mode_switch": True,
         }, indent=2))
-        print("PASS native recording: selector/countdown, pause/resume, MP4 pixels, History, "
+        print("PASS native recording: recording shortcuts/mode switching, selector/countdown, pause/resume, MP4 pixels, History, "
               "Escape scope, explicit discard, lock/child-close/application-quit preservation and source cleanup")
     finally:
         if loop is not None:

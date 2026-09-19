@@ -99,16 +99,33 @@ final class StatusItemTests: XCTestCase {
         let settings: [String: Any] = ["new_capture_shortcut": "Command+Shift+Space",
             "region_shortcut": "Command+Shift+4",
             "window_shortcut": "Command+Shift+W", "display_shortcut": "Command+Shift+3",
+            "recording": ["video_shortcut": "Control+F7", "window_shortcut": "Control+F8",
+                "display_shortcut": "Control+F9"],
             "appearance": "dark"]
         XCTAssertEqual(captureShortcutSignature(settings),
-            ["Command+Shift+Space", "Command+Shift+4", "Command+Shift+W", "Command+Shift+3"])
+            ["Command+Shift+Space", "Command+Shift+4", "Command+Shift+W", "Command+Shift+3",
+                "Control+F7", "Control+F8", "Control+F9"])
         var unrelated = settings
         unrelated["appearance"] = "light"
         XCTAssertEqual(captureShortcutSignature(unrelated), captureShortcutSignature(settings))
+        for field in ["video_shortcut", "window_shortcut", "display_shortcut"] {
+            var edited = settings
+            var recording = settings["recording"] as! [String: String]
+            recording[field] = "Control+F12"
+            edited["recording"] = recording
+            XCTAssertNotEqual(captureShortcutSignature(edited), captureShortcutSignature(settings))
+        }
         XCTAssertNil(stillCaptureKind(for: .newCapture))
         XCTAssertEqual(stillCaptureKind(for: .region), .region)
         XCTAssertEqual(stillCaptureKind(for: .window), .window)
         XCTAssertEqual(stillCaptureKind(for: .display), .display)
+        for (wire, target) in [("record_region", UnifiedCaptureTarget.region),
+                               ("record_window", .window), ("record_display", .display)] {
+            let action = CaptureShortcut(rawValue: wire)
+            XCTAssertEqual(action?.target, target)
+            XCTAssertEqual(action?.mode, .record)
+            XCTAssertNil(stillCaptureKind(for: action!))
+        }
         XCTAssertTrue(captureShortcutsEnabled(captureBusy: false, selectorGeneration: nil))
         XCTAssertFalse(captureShortcutsEnabled(captureBusy: true, selectorGeneration: nil),
             "capture-busy suppression remains independent of registration suspension")

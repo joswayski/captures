@@ -8,7 +8,8 @@
 /* Event-loop-thread-only native capture-launch shortcuts. One owner per process.
  * JSON requests: configure {settings: AppSettings}, enabled {enabled: bool},
  * next, close. Envelopes follow captures_app_request_v1. next returns
- * {action: "new_capture"|"region"|"window"|"display"|null}; consumes one launch.
+ * {action: "new_capture"|"region"|"window"|"display"|"record_region"|
+ * "record_window"|"record_display"|null}; consumes one launch.
  * Configure copies settings; conflicts retain the prior registered mapping.
  * wake is required on first configure, must remain callable for process lifetime,
  * may run on an OS worker thread, and must ONLY schedule host work (no synchronous

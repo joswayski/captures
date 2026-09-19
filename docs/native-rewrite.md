@@ -71,8 +71,8 @@ must be explicit, not silently successful.
   enables the current native capture slice. Both use separate development data,
   never installed settings/history. Fixture launches do not request capture
   access. Live captures register temporary global Escape for cancellation and
-  persisted New Capture/region/window/display launch shortcuts. Recording keys,
-  OS shortcut takeover and update installation are not connected yet.
+  persisted New Capture and region/window/display screenshot/recording launch
+  shortcuts. OS shortcut takeover and update installation are not connected yet.
   Production data migration requires backup, version checks and rollback tests.
 
 ## Reviewable stages and exit gates
@@ -218,6 +218,14 @@ test covers real input, collision rejection, persistence and global reactivation
 AppKit XCTest covers controller/bridge semantics and both-appearance renders.
 Physical Mac external/media keys, Windows real input, Wayland and screen-reader
 acceptance remain open; this does not close the full Preferences/input gate.
+
+The recording-shortcut follow-up connects all seven saved bindings to the shared
+dispatcher and both hosts. Idle recording keys open the existing selector in
+Record mode at the requested target. Within the selector, screenshot/recording
+keys switch mode and target without replacing the flow, discarding the settled
+region, or starting capture. Preparation, countdown and active recording remain
+blocked; focused Preferences releases all seven OS grabs. This does not add
+recording control keys or close physical platform/input acceptance gates.
 
 New Capture connects its persisted shortcut, tray action and workspace entry to
 fixed-glass screenshot controls on both hosts. Region, Window and Full screen
