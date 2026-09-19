@@ -152,6 +152,10 @@ final class NativeRecordingSession {
         try snapshot(request(["operation": "pause"]))
     }
 
+    func restart() throws -> NativeRecordingSnapshot {
+        try snapshot(request(["operation": "restart"]))
+    }
+
     func snapshot() throws -> NativeRecordingSnapshot {
         try snapshot(request(["operation": "snapshot"]))
     }

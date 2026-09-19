@@ -196,7 +196,7 @@ void captures_window_free_v1(CapturesWindowSession *session);
 /* Owned mutable recording lifecycle. Prepare and every request may block: run
  * them on one serialized worker, never AppKit's event thread. Prepare JSON is
  * {recovery_root,options,display}; success returns {snapshot}. Lifecycle request
- * operations are snapshot, start, pause, stop, finish and discard. Start accepts
+ * operations are snapshot, start, pause, restart, stop, finish and discard. Start accepts
  * generation/exclude_captures_app and requires an is_current callback, invoked
  * before and after engine opening together with the shared capture-flow gate;
  * it must only read a thread-safe host cancellation gate. Finish accepts
@@ -231,7 +231,8 @@ char *captures_settings_request_v1(const char *request_json);
  * Permission is prompted only by the explicit request_permission operation. */
 char *captures_app_request_v1(const char *request_json);
 /* Event-loop-thread ONLY: begin {seconds}, poll {generation},
- * disarm_escape {generation}, finish {generation}.
+ * disarm_escape {generation}, restart_countdown {generation,seconds},
+ * finish {generation}.
  * For selection, begin with seconds=0; start_countdown {generation,seconds} after
  * confirmation starts the delay without dropping Escape or changing generation.
  * begin returns {generation}; poll returns {current,remaining}. Escape is global

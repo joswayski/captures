@@ -213,15 +213,16 @@ and recording shortcuts. Recording keys open the selector without starting a tak
 a StatusNotifier tray host; without one,
 closing the window quits instead of leaving an unreachable background process.
 Native Record creates H.264 MP4 using the stored recording defaults and supported
-audio options. Its compact controls support pause/resume, stop/save to development
-History, and discard. FFmpeg and FFprobe must be installed separately for these
-development builds; native media-tool bundling is not connected. Started recordings
-are saved on session loss instead of being discarded; failed finalization retains
-recovery data. Linux cannot exclude the controls from captured pixels, and native
-Hide controls is not connected yet. Restart, mute, screenshots
-during recording, recording playback/editing/export and GIF conversion remain
-unconnected; History displays recording posters and metadata only. Real macOS and
-Windows recording, audio devices, multi-display and hardware acceptance remain open;
+audio options. Its compact controls support pause/resume, confirmed restart with
+the stored countdown, stop/save to development History, and discard. Restart
+replaces only the current take and resets its elapsed time. FFmpeg and FFprobe must
+be installed separately for these development builds; native media-tool bundling
+is not connected. Started recordings are saved on session loss instead of being
+discarded; failed finalization retains recovery data. Linux cannot exclude the
+controls from captured pixels, and native Hide controls is not connected yet.
+Mute and screenshots during recording, recording playback/editing/export and GIF
+conversion remain unconnected; History displays recording posters and metadata only.
+Real macOS and Windows recording, audio devices, multi-display and hardware acceptance remain open;
 Wayland recording is gated with the rest of native capture.
 Editing, OS shortcut takeover, login items,
 single-instance relaunch and updates are not connected to the native hosts yet. Windows/Linux

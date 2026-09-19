@@ -227,6 +227,18 @@ region, or starting capture. Preparation, countdown and active recording remain
 blocked; focused Preferences releases all seven OS grabs. This does not add
 recording control keys or close physical platform/input acceptance gates.
 
+The native recording Restart slice replaces the current running or paused take
+inside `captures-recording-platform`, retaining its target/options while deleting
+only that recovery bundle's active and completed segments and resetting elapsed
+time. AppKit and wgpu require confirmation, rearm global Escape on the accepted
+flow generation, run the stored countdown, and preserve stale-start checks before
+and after replacement-engine opening. Countdown cancellation discards the replaced
+session. Private X11 exercises running/paused restart and replacement-only decoded
+pixels; AppKit and Windows remain implemented but require native CI/hardware, and
+Wayland remains gated by the existing native recording limitation. This does not
+close the Recording HUD gate: mute, hide, in-recording screenshots, region
+indicator and physical accessibility/compositor acceptance remain open.
+
 New Capture connects its persisted shortcut, tray action and workspace entry to
 fixed-glass screenshot controls on both hosts. Region, Window and Full screen
 share one prepared Rust session and desktop snapshot, retaining selections across

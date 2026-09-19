@@ -6,6 +6,7 @@ use crate::tokens::Tokens;
 pub enum Action {
     Pause,
     Resume,
+    Restart,
     Stop,
     Discard,
 }
@@ -25,6 +26,7 @@ enum Icon {
 
 pub struct View<'a> {
     pub paused: bool,
+    pub busy: bool,
     pub elapsed_ms: u64,
     pub notice: &'a str,
     pub warning: bool,
@@ -78,8 +80,15 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                                 });
                             },
                         );
-                        if control(ui, Icon::Stop, "Stop and save recording", true, tokens)
-                            .clicked()
+                        if control(
+                            ui,
+                            Icon::Stop,
+                            "Stop and save recording",
+                            true,
+                            !view.busy,
+                            tokens,
+                        )
+                        .clicked()
                         {
                             action = Some(Action::Stop);
                         }
@@ -92,6 +101,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                                 "Pause recording"
                             },
                             false,
+                            !view.busy,
                             tokens,
                         )
                         .clicked()
@@ -102,12 +112,18 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                                 Action::Pause
                             });
                         }
-                        unavailable(
+                        if control(
                             ui,
                             Icon::Restart,
                             "Restart recording",
-                            "Restart is not available in this build",
-                        );
+                            false,
+                            !view.busy,
+                            tokens,
+                        )
+                        .clicked()
+                        {
+                            action = Some(Action::Restart);
+                        }
                         unavailable(
                             ui,
                             Icon::Screenshot,
@@ -126,7 +142,15 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                             "Microphone",
                             "Microphone controls are set before recording",
                         );
-                        if control(ui, Icon::Discard, "Discard recording", false, tokens).clicked()
+                        if control(
+                            ui,
+                            Icon::Discard,
+                            "Discard recording",
+                            false,
+                            !view.busy,
+                            tokens,
+                        )
+                        .clicked()
                         {
                             action = Some(Action::Discard);
                         }
@@ -148,14 +172,16 @@ fn control(
     icon: Icon,
     description: &str,
     signal: bool,
+    enabled: bool,
     tokens: &Tokens,
 ) -> egui::Response {
     let mut button = egui::Button::new("").min_size(Vec2::splat(32.));
     if signal {
         button = button.fill(tokens.color("theme-signal"));
     }
-    let response = ui.add(button).on_hover_text(description);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, description));
+    let response = ui.add_enabled(enabled, button).on_hover_text(description);
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, description));
     paint_icon(
         ui,
         response.rect,

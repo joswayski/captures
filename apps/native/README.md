@@ -48,21 +48,26 @@ physical Windows/macOS, Wayland and screen-reader acceptance remain open.
 ## Shared recording runtime
 
 `captures-recording-platform::RecordingSession` owns a durable recovery bundle
-and the existing platform engine across start, pause/resume, stop, discard and
+and the existing platform engine across start, pause/resume, restart, stop, discard and
 MP4/GIF finalization into private History. Run its blocking methods on a worker.
 Hosts still own permissions, countdown presentation, window exclusion and the
 capture-generation cancellation gate passed to `start`; `prepare` never records.
 Failed assembly/publication keeps source segments. Successful video publication
 removes the draft only after Ready metadata is saved; GIFs keep editable sources.
 Post-publication housekeeping failures return the saved artifact with a warning.
+Restart discards only that session's active and completed segments, retains its
+target/options, resets elapsed time, and returns to the stored countdown. The
+same capture generation rearms global Escape for that countdown before either
+host can open the replacement engine.
 Both hosts connect Video-only Record controls and region/window/display recording
 shortcuts. From idle the keys open Record on that target; in an open selector,
 screenshot and recording keys switch mode/target in place. Busy recording phases
 and focused Preferences suppress capture shortcuts. Native recording editing,
 GIF export and media-tool bundling remain unconnected.
 
-Linux CI records an asymmetric 310×170 region on a private Xvfb display, pauses
-and resumes, independently decodes the saved colors with FFmpeg, publishes video
+Linux CI records an asymmetric 310×170 region on a private Xvfb display, pauses,
+resumes and restarts from running/paused, independently decodes replacement pixels
+with FFmpeg, publishes video
 and GIF History entries, and exercises cancellation and persistence failures:
 
 ```sh

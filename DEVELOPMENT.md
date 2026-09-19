@@ -147,9 +147,13 @@ and `python3-xlib`, then run:
   --output /tmp/native-x11-recording
 ```
 
+Pass `--restart-only` for the focused running/paused Restart, restarted-countdown
+Escape, replacement-pixel decode and source-cleanup checkpoint.
+
 The output directory must not exist. The test drives real selector/HUD input,
-checks pause/resume, decodes saved MP4 pixels with FFmpeg, verifies History and
-source cleanup, and distinguishes countdown cancellation, running Escape,
+checks pause/resume plus running/paused restart, decodes replacement-only MP4
+pixels with FFmpeg, verifies History and source cleanup, and distinguishes initial
+and restarted countdown cancellation, running Escape,
 explicit discard, session-loss preservation, HUD close and whole-application quit.
 Session lock is simulated;
 physical keyboard/display/audio, permissions and hardware compositor acceptance

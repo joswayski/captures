@@ -169,6 +169,7 @@ enum CapturePhase {
     Recording,
     RecordingPausing,
     RecordingPaused,
+    RecordingRestarting,
     RecordingFinalizing,
     RecordingDiscarding,
 }
@@ -203,6 +204,15 @@ enum SelectorMessage {
         generation: u64,
     },
     ResumeRecording {
+        generation: u64,
+    },
+    RestartRecording {
+        generation: u64,
+    },
+    ConfirmRestartRecording {
+        generation: u64,
+    },
+    CancelRestartRecording {
         generation: u64,
     },
     StopRecording {
@@ -561,6 +571,7 @@ pub struct Live {
     recording_snapshot_poll_pending: bool,
     recording_last_snapshot_poll: Instant,
     recording_has_started: bool,
+    recording_restart_confirmation: bool,
     history_refresh_status: Option<String>,
     can_hide: Option<bool>,
     confirm_delete: Option<String>,
@@ -737,6 +748,7 @@ impl Live {
             recording_snapshot_poll_pending: false,
             recording_last_snapshot_poll: Instant::now(),
             recording_has_started: false,
+            recording_restart_confirmation: false,
             history_refresh_status: None,
             can_hide: None,
             confirm_delete: None,
@@ -1241,6 +1253,53 @@ impl Live {
                         ),
                     });
                 }
+                SelectorMessage::RestartRecording { generation }
+                    if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
+                        && matches!(
+                            self.capture_phase,
+                            Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
+                        ) =>
+                {
+                    self.recording_restart_confirmation = true;
+                    request_hidden_root_paint(ctx);
+                }
+                SelectorMessage::CancelRestartRecording { generation }
+                    if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation) =>
+                {
+                    self.recording_restart_confirmation = false;
+                    request_hidden_root_paint(ctx);
+                }
+                SelectorMessage::ConfirmRestartRecording { generation }
+                    if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
+                        && self.recording_restart_confirmation
+                        && matches!(
+                            self.capture_phase,
+                            Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
+                        ) =>
+                {
+                    self.recording_restart_confirmation = false;
+                    let seconds = self
+                        .recording_snapshot
+                        .as_ref()
+                        .map(|snapshot| snapshot.options.countdown_seconds)
+                        .unwrap_or(0);
+                    let Some(flow) = &mut self.flow else {
+                        continue;
+                    };
+                    match flow.restart_countdown(seconds) {
+                        Ok(()) => {
+                            self.capture_phase = Some(CapturePhase::RecordingRestarting);
+                            self.status = "Restarting recording…".into();
+                            self.recording_worker
+                                .send(recording::Command::Restart { generation });
+                            request_hidden_root_paint(ctx);
+                        }
+                        Err(error) => {
+                            self.error =
+                                Some(format!("Could not arm restarted recording Escape: {error}"));
+                        }
+                    }
+                }
                 SelectorMessage::StopRecording { generation }
                     if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
                         && matches!(
@@ -1311,6 +1370,9 @@ impl Live {
                 | SelectorMessage::StartRecording { .. }
                 | SelectorMessage::PauseRecording { .. }
                 | SelectorMessage::ResumeRecording { .. }
+                | SelectorMessage::RestartRecording { .. }
+                | SelectorMessage::ConfirmRestartRecording { .. }
+                | SelectorMessage::CancelRestartRecording { .. }
                 | SelectorMessage::StopRecording { .. }
                 | SelectorMessage::DiscardRecording { .. }
                 | SelectorMessage::SwitchControlsDisplay { .. }
@@ -1546,6 +1608,33 @@ impl Live {
                         }
                     }
                 }
+                recording::Event::Restarted { generation, result }
+                    if accepts_recording_event(
+                        self.flow.as_ref().map(CaptureFlow::generation),
+                        generation,
+                        self.flow.as_ref().is_some_and(CaptureFlow::is_current),
+                        self.capture_phase,
+                        |phase| phase == CapturePhase::RecordingRestarting,
+                    ) =>
+                {
+                    match result {
+                        Ok(snapshot) => {
+                            self.recording_has_started = false;
+                            self.recording_snapshot = Some(snapshot);
+                            self.recording_segment_started = None;
+                            self.recording_snapshot_poll_pending = false;
+                            self.capture_phase = Some(CapturePhase::RecordingCountdown);
+                            self.status = "Recording ready. Press Escape to cancel.".into();
+                            request_hidden_root_paint(ctx);
+                        }
+                        Err(error) => {
+                            self.error = Some(format!(
+                                "Could not restart recording; recovery files were preserved: {error}"
+                            ));
+                            self.finish_capture(ctx, false);
+                        }
+                    }
+                }
                 recording::Event::Finished { generation, result }
                     if accepts_recording_event(
                         self.flow.as_ref().map(CaptureFlow::generation),
@@ -1596,6 +1685,7 @@ impl Live {
                 | recording::Event::Prepared { .. }
                 | recording::Event::Started { .. }
                 | recording::Event::Paused { .. }
+                | recording::Event::Restarted { .. }
                 | recording::Event::Finished { .. }
                 | recording::Event::Discarded { .. } => {}
             }
@@ -1613,6 +1703,13 @@ impl Live {
         if let Some(flow) = &self.flow {
             if !flow.is_current() {
                 match self.capture_phase {
+                    Some(CapturePhase::RecordingRestarting) => {
+                        let generation = flow.generation();
+                        self.recording_worker
+                            .send(recording::Command::Discard { generation });
+                        self.capture_phase = Some(CapturePhase::RecordingDiscarding);
+                        self.status = "Discarding cancelled recording restart…".into();
+                    }
                     Some(
                         CapturePhase::Recording
                         | CapturePhase::RecordingPausing
@@ -2183,6 +2280,7 @@ impl Live {
         self.recording_segment_started = None;
         self.recording_snapshot_poll_pending = false;
         self.recording_has_started = false;
+        self.recording_restart_confirmation = false;
         self.root_hide_deferred = false;
         if !preserve_auto_copy {
             self.previews.restore_capture();
@@ -2616,8 +2714,10 @@ impl Live {
                     .map(|started| started.elapsed()),
             );
             let sender = self.selector_tx.clone();
+            let confirmation_sender = self.selector_tx.clone();
             let tokens = t.clone();
             let include_controls = self.include_recording_controls;
+            let restart_confirmation = self.recording_restart_confirmation;
             let warning = snapshot.warning.clone();
             let position = target.position
                 + egui::vec2(
@@ -2657,6 +2757,7 @@ impl Live {
                         &tokens,
                         recording_hud::View {
                             paused,
+                            busy: restart_confirmation,
                             elapsed_ms,
                             notice,
                             warning: warning.is_some(),
@@ -2668,6 +2769,9 @@ impl Live {
                             }
                             recording_hud::Action::Resume => {
                                 SelectorMessage::ResumeRecording { generation }
+                            }
+                            recording_hud::Action::Restart => {
+                                SelectorMessage::RestartRecording { generation }
                             }
                             recording_hud::Action::Stop => {
                                 SelectorMessage::StopRecording { generation }
@@ -2684,6 +2788,48 @@ impl Live {
                     }
                 },
             );
+            if restart_confirmation {
+                let tokens = t.clone();
+                ctx.show_viewport_deferred(
+                    egui::ViewportId::from_hash_of("recording-restart-confirmation"),
+                    egui::ViewportBuilder::default()
+                        .with_title("Restart recording?")
+                        .with_inner_size([360., 150.])
+                        .with_position(position + egui::vec2(35., -170.))
+                        .with_always_on_top()
+                        .with_resizable(false),
+                    move |ui, _| {
+                        tokens.glass_controls(ui);
+                        if ui.input(|input| input.viewport().close_requested()) {
+                            let _ = confirmation_sender
+                                .send(SelectorMessage::CancelRestartRecording { generation });
+                            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                            return;
+                        }
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(14.);
+                            ui.heading("Restart recording?");
+                            ui.label(
+                                "The current recording will be deleted and a new countdown will begin.",
+                            );
+                            ui.add_space(10.);
+                            ui.horizontal(|ui| {
+                                if ui.button("Cancel").clicked() {
+                                    let _ = confirmation_sender.send(
+                                        SelectorMessage::CancelRestartRecording { generation },
+                                    );
+                                }
+                                if ui.button("Restart").clicked() {
+                                    let _ = confirmation_sender.send(
+                                        SelectorMessage::ConfirmRestartRecording { generation },
+                                    );
+                                }
+                            });
+                        });
+                        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                    },
+                );
+            }
         }
         if self.capture_phase == Some(CapturePhase::ControlsSelecting) {
             let t = t.clone();
@@ -3491,6 +3637,7 @@ fn is_recording_phase(phase: Option<CapturePhase>) -> bool {
                 | CapturePhase::Recording
                 | CapturePhase::RecordingPausing
                 | CapturePhase::RecordingPaused
+                | CapturePhase::RecordingRestarting
                 | CapturePhase::RecordingFinalizing
                 | CapturePhase::RecordingDiscarding
         )

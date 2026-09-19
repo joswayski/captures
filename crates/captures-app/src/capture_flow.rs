@@ -74,6 +74,16 @@ impl Gate {
             Err(current) => current == generation | ESCAPE_DISARMED,
         }
     }
+    fn rearm_escape(&self, generation: u64) -> bool {
+        self.current
+            .compare_exchange(
+                generation | ESCAPE_DISARMED,
+                generation,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
     fn commit(&self, generation: u64) -> bool {
         generation != 0
             && self
@@ -214,6 +224,34 @@ impl CaptureFlow {
         if GATE.current.load(Ordering::Acquire) != self.generation {
             return Err("Capture is no longer pending".into());
         }
+        self.countdown = Countdown::new(Instant::now(), seconds);
+        Ok(())
+    }
+    /// Restart an accepted recording's countdown without yielding its process-wide
+    /// generation. Escape is registered before the atomic gate handoff, so a
+    /// successful return always makes the replacement take cancellable.
+    pub fn restart_countdown(&mut self, seconds: u8) -> Result<(), String> {
+        if seconds > 10 {
+            return Err("Unsupported recording countdown".into());
+        }
+        if self.escape_registered {
+            return Err("Recording countdown Escape is already armed".into());
+        }
+        self.manager
+            .register(HotKey::new(None, Code::Escape))
+            .map_err(|error| error.to_string())?;
+        captures_session::ensure_capture_escape_hook().inspect_err(|_| {
+            let _ = self.manager.unregister(HotKey::new(None, Code::Escape));
+        })?;
+        captures_session::set_capture_escape_handler(Some(escape));
+        captures_session::set_capture_escape_enabled(true);
+        if !GATE.rearm_escape(self.generation) {
+            captures_session::set_capture_escape_enabled(false);
+            captures_session::set_capture_escape_handler(None);
+            let _ = self.manager.unregister(HotKey::new(None, Code::Escape));
+            return Err("Capture is no longer pending".into());
+        }
+        self.escape_registered = true;
         self.countdown = Countdown::new(Instant::now(), seconds);
         Ok(())
     }
@@ -375,6 +413,24 @@ mod tests {
         assert!(
             !gate.is_current(next),
             "the next selector arms Escape again"
+        );
+    }
+
+    #[test]
+    fn recording_restart_rearms_escape_on_the_same_generation() {
+        let gate = Gate::default();
+        let recording = gate.begin().unwrap();
+        assert!(gate.disarm_escape(recording));
+        assert!(gate.rearm_escape(recording));
+        assert!(!gate.rearm_escape(recording), "rearm is a one-way handoff");
+        gate.escape();
+        assert!(
+            !gate.is_current(recording),
+            "Escape cancels the restarted countdown"
+        );
+        assert!(
+            !gate.rearm_escape(recording),
+            "a stale restart cannot reclaim the generation"
         );
     }
 }

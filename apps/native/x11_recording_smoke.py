@@ -8,6 +8,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import select
 import subprocess
 import threading
@@ -26,6 +27,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--restart-only", action="store_true",
+                        help="stop after running/paused Restart and replacement-media checks")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -61,7 +64,8 @@ def main():
         return subprocess.check_output(command, env=env, timeout=30)
 
     def windows(title):
-        result = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", f"^{title}$"],
+        result = subprocess.run(["xdotool", "search", "--onlyvisible", "--name",
+                                 f"^{re.escape(title)}$"],
                                 env=env, capture_output=True, text=True, timeout=5)
         assert result.returncode in (0, 1), result.stderr
         return result.stdout.split()
@@ -115,13 +119,30 @@ def main():
                 run("xdotool", "key", chord, "sleep", ".2")
                 assert windows("Captures Capture Controls") == [selector]
                 assert manifest() is None and not history()
-        run("xdotool", "key", "Return")
+            # Reassert the asymmetric region after global-key delivery so this
+            # recording acceptance does not depend on Xvfb pointer batching.
+            run("xdotool", "mousemove", "--sync", "--window", selector, "140", "180",
+                "sleep", ".1", "mousedown", "1", "sleep", ".2",
+                "mousemove", "--sync", "--window", selector, "450", "350",
+                "sleep", ".2", "mouseup", "1")
+        for _ in range(20):
+            run("xdotool", "windowactivate", "--sync", selector, "key", "Return")
+            time.sleep(.25)
+            if manifest() is not None:
+                break
+        assert manifest() is not None, "recording confirmation never reached preparation"
 
     def running_hud():
         wait(lambda: (value := manifest()) and value["state"] == "recording", "durable Recording")
         hud = wait(lambda: windows("Captures Recording Controls"), "running HUD")[0]
         time.sleep(.5)
         return hud
+
+    def restart(hud, name):
+        click(hud, 218, 54)
+        confirmation = wait(lambda: windows("Restart recording?"), "restart confirmation")[0]
+        shot(confirmation, name)
+        click(confirmation, 104, 115)
 
     def history():
         return set((output / "history").glob("*/metadata.json"))
@@ -133,6 +154,7 @@ def main():
         # Disk cleanup precedes the worker reply. Only the event-thread finish
         # restores the previously visible root and releases the capture flow.
         wait(lambda: windows("Captures"), "workspace restoration after worker completion")
+        time.sleep(.3)
 
     try:
         env["DISPLAY"] = ":" + spawn("xvfb", ["Xvfb", "-displayfd", "1", "-screen", "0",
@@ -184,13 +206,34 @@ def main():
         assert windows("Captures Recording Controls")
         click(hud, 178, 54)
         wait(lambda: (value := manifest()) and value["state"] == "paused", "pause completed")
-        hud = wait(lambda: windows("Captures Recording Controls"), "paused HUD")[0]
         time.sleep(.3)
+        hud = wait(lambda: windows("Captures Recording Controls"), "paused HUD")[0]
         shot(hud, "hud-paused")
+
+        # Paused Restart replaces the accepted take and rearms Escape for its
+        # stored countdown. Cancelling that countdown discards the replacement.
+        restart(hud, "restart-confirmation-paused")
+        countdown = wait(lambda: windows("Captures Recording Countdown"),
+                         "paused restart countdown")[0]
+        wait(lambda: (value := manifest()) and value["state"] == "countdown"
+             and not value["segments"], "paused restart reset")
+        shot(countdown, "recording-restart-countdown")
+        run("xdotool", "key", "Escape")
+        wait(lambda: not windows("Captures Recording Countdown"), "restart countdown cancellation")
+        finished(0)
+        assert not history()
+        time.sleep(.5)
+
+        # Running Restart also drops the old segment. The final MP4 must contain
+        # only blue replacement pixels, not the red media recorded before Restart.
+        run("xdotool", "key", "ctrl+shift+F10")
+        select_recording("running-restart-selector")
+        hud = running_hud()
+        restart(hud, "restart-confirmation-running")
+        wait(lambda: (value := manifest()) and value["state"] == "countdown"
+             and not value["segments"], "running restart reset")
         run("hsetroot", "-solid", "#2070c0")
-        click(hud, 178, 54)
-        wait(lambda: (value := manifest()) and value["state"] == "recording", "resume completed")
-        hud = wait(lambda: windows("Captures Recording Controls"), "resumed HUD")[0]
+        hud = running_hud()
         time.sleep(.5)
         click(hud, 142, 54)
         metadata = wait(lambda: list((output / "history").glob("*/metadata.json")), "History publication")
@@ -204,11 +247,22 @@ def main():
         frames = run("ffmpeg", "-v", "error", "-i", str(media), "-vf", "crop=2:2:40:40",
                      "-f", "rawvideo", "-pix_fmt", "rgb24", "-")
         assert len(frames) >= 24
-        for actual, expected in ((frames[:3], (192, 32, 64)), (frames[-3:], (32, 112, 192))):
+        for actual, expected in ((frames[:3], (32, 112, 192)), (frames[-3:], (32, 112, 192))):
             assert all(abs(a - e) <= 6 for a, e in zip(actual, expected)), (actual, expected)
         assert (metadata[0].parent / "preview.png").is_file()
         finished(1)
         published = history()
+        if args.restart_only:
+            (output / "acceptance-restart.json").write_text(json.dumps({
+                "region": entry["target"]["rect"], "duration_ms": entry["duration_ms"],
+                "first_pixel": list(frames[:3]), "last_pixel": list(frames[-3:]),
+                "paused_restart": True, "running_restart": True,
+                "restart_countdown_escape_discarded": True,
+                "replacement_only_media": True, "source_cleanup": True,
+            }, indent=2))
+            print("PASS native recording Restart: paused/running replacement, countdown Escape, "
+                  "replacement-only decoded pixels and source cleanup")
+            return
 
         # A countdown Escape discards only its prepared bundle, never an earlier take.
         run("xdotool", "key", "ctrl+shift+F10")
@@ -324,11 +378,13 @@ def main():
             "first_pixel": list(frames[:3]), "last_pixel": list(frames[-3:]),
             "pause_resume": True, "history_publication": True,
             "running_escape_ignored": True, "countdown_escape_discarded": True,
+            "paused_restart": True, "running_restart": True,
+            "restart_countdown_escape_discarded": True,
             "explicit_discard": True, "session_lock_preserved": True, "child_close_saved": True,
             "application_quit_saved": True,
             "recording_shortcuts": True, "shortcut_mode_switch": True,
         }, indent=2))
-        print("PASS native recording: recording shortcuts/mode switching, selector/countdown, pause/resume, MP4 pixels, History, "
+        print("PASS native recording: recording shortcuts/mode switching, selector/countdown, pause/resume/restart, replacement-only MP4 pixels, History, "
               "Escape scope, explicit discard, lock/child-close/application-quit preservation and source cleanup")
     finally:
         if loop is not None:

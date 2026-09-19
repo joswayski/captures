@@ -43,7 +43,8 @@ It is excluded from captures by default and retained when the include-in-capture
 preference is enabled.
 Record creates H.264 MP4 recordings with the stored FPS, maximum resolution,
 countdown, cursor, click-highlight, desktop-audio and microphone defaults where
-the current platform reports support. Pause/resume, Stop and Discard run from a
+the current platform reports support. Pause/resume, confirmed Restart using the
+stored countdown, Stop and Discard run from a
 fixed-glass native HUD; successful output is listed in native History with its
 poster and metadata. The native recording editor is not connected yet.
 Windows/X11 use the shipping
@@ -124,7 +125,7 @@ quits so the process cannot be stranded. Opening the output folder also requires
 | --- | --- | --- |
 | Preferences | Persisted appearance/presets/custom colors, capture/media defaults, folder picker, Find, save errors/retry | OS integrations, full font/visual/input parity |
 | History | Empty/100/1,000 rows, filters, virtualized scrolling, selection, image-backed rows | Real files, open/delete, thumbnail cache pressure: rows intentionally share one synthetic texture |
-| HUD | Running/paused fixture matching the bounded live controls; fixed glass palette even in light mode | Restart, screenshot-during-recording, microphone mute and Hide controls |
+| HUD | Running/paused fixture matching the bounded live controls; fixed glass palette even in light mode | Screenshot-during-recording, microphone mute and Hide controls |
 | Preview | Cold/reused texture, fade/settle, reset mid-animation, explicit Reduce motion, optional transparent native window | **Not the shipping dust effect**: no isolated-chip blur, dust trajectories, source treatment or pile/drag/hit-region parity |
 | Editor | 2048×1152 synthetic image, clipped canvas, pan/zoom/rotate, separate outline/text layers, editable text field | Real document, layer editing/undo/export; outlines/text do not rotate with the image |
 | Capture Controls | Unified Screenshot/Record and Region/Window/Full screen controls over one prepared session; recording options, frozen/live previews, aspect/display pickers, keyboard confirm/cancel and draggable toolbar | Fixture uses synthetic pixels; recording editor/export remains unconnected |

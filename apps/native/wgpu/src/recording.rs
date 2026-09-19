@@ -33,6 +33,9 @@ pub enum Command {
     Pause {
         generation: u64,
     },
+    Restart {
+        generation: u64,
+    },
     Resume {
         generation: u64,
         exclude_captures_app: bool,
@@ -69,6 +72,10 @@ pub enum Event {
         result: Result<RecordingSessionSnapshot, String>,
     },
     Paused {
+        generation: u64,
+        result: Result<RecordingSessionSnapshot, String>,
+    },
+    Restarted {
         generation: u64,
         result: Result<RecordingSessionSnapshot, String>,
     },
@@ -151,6 +158,13 @@ impl Worker {
                         result: session.as_mut().map_or_else(
                             || Err("Recording session is unavailable".into()),
                             RecordingSession::pause,
+                        ),
+                    },
+                    Command::Restart { generation } => Event::Restarted {
+                        generation,
+                        result: session.as_mut().map_or_else(
+                            || Err("Recording session is unavailable".into()),
+                            RecordingSession::restart,
                         ),
                     },
                     Command::Finish {

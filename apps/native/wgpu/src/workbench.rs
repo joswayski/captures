@@ -557,6 +557,7 @@ impl Workbench {
                 t,
                 recording_hud::View {
                     paused: self.paused,
+                    busy: false,
                     elapsed_ms: 24_000,
                     notice: "These controls won’t show in recordings",
                     warning: false,

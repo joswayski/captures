@@ -24,6 +24,7 @@ final class RecordingHUDView: NSView {
     private var timer: Timer?
     private(set) var paused = false
     var pauseOrResume: () -> Void = {}
+    var restart: () -> Void = {}
     var stop: () -> Void = {}
     var discard: () -> Void = {}
 
@@ -69,13 +70,16 @@ final class RecordingHUDView: NSView {
         pauseButton.frame = NSRect(x: 144, y: 35, width: 38, height: 42)
         pauseButton.actionBlock = { [weak self] in self?.pauseOrResume() }
         pauseButton.setAccessibilityLabel("Pause recording"); addSubview(pauseButton)
-        unavailable("↻", x: 184, label: "Restart recording is unavailable in this version")
+        let restart = hudButton("↻", x: 184, help: "Restart recording") {
+            [weak self] in self?.restart()
+        }
+        restart.setAccessibilityLabel("Restart recording")
         unavailable("⌗", x: 224, label: "Screenshot during recording is unavailable in this version")
         unavailable("—", x: 264, label: "Audio meter is unavailable in this version")
         unavailable("♩", x: 304, label: "Microphone mute is unavailable in this version")
         let trash = hudButton("⌫", x: 344, help: "Discard recording") { [weak self] in self?.discard() }
         trash.setAccessibilityLabel("Discard recording")
-        lifecycleButtons = [stop, pauseButton, trash]
+        lifecycleButtons = [stop, pauseButton, restart, trash]
         unavailable("◉̸", x: 384, label: "Hide controls is unavailable in this version")
         setPaused(false, elapsedMilliseconds: 0)
     }

@@ -122,6 +122,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var preparingRecording = false
     private var recordingPendingStart = false
     private var activeRecordingGeneration: UInt64?
+    private var recordingDisplay: DisplayItem?
+    private var recordingPreferences: CapturePreferences?
     private var selectorShortcutGeneration: UInt64? {
         didSet {
             if oldValue != selectorShortcutGeneration {
@@ -202,7 +204,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         deleteButton = button("Delete from history", frame: NSRect(x: 758, y: 594, width: 166, height: 34)) { [weak self] in self?.confirmDelete() }
         clearHistoryButton = button("Clear screenshots…", frame: NSRect(x: 28, y: 594, width: 180, height: 34)) { [weak self] in self?.confirmClearHistory() }
         status = title("Loading capture history…", frame: NSRect(x: 28, y: 642, width: 944, height: 24), muted: true)
-        let limits = title("Screenshots and H.264 MP4 recordings are kept in native History. Recording restart, mute, hide, and screenshots while recording remain unavailable in this first native slice.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
+        let limits = title("Screenshots and H.264 MP4 recordings are kept in native History. Recording mute, hide, and screenshots while recording remain unavailable in this native slice.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
         limits.maximumNumberOfLines = 2; updateActions()
     }
 
@@ -538,6 +540,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 do {
                     let (session, _) = try result.get()
                     self.recordingSession = session
+                    self.recordingDisplay = display
+                    self.recordingPreferences = preferences
                     self.recordingPendingStart = true
                     self.recordingGate.set(generation)
                     self.activeRecordingGeneration = generation
@@ -751,6 +755,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     let hud = RecordingHUDPanel(screen: screen, tokens: self.tokens,
                         excludedFromCapture: self.recordingCapabilities?.controlsExcluded == true)
                     hud.hud.pauseOrResume = { [weak self] in self?.pauseOrResumeRecording() }
+                    hud.hud.restart = { [weak self] in self?.confirmRestartRecording() }
                     hud.hud.stop = { [weak self] in self?.stopRecording() }
                     hud.hud.discard = { [weak self] in self?.discardRecording() }
                     hud.hud.setPaused(false, elapsedMilliseconds: snapshot.elapsedMilliseconds)
@@ -840,6 +845,74 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }
         recordingPollTimer = timer
         RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func restartRecording() {
+        guard let session = recordingSession, let hud = recordingHUD,
+              let generation = activeRecordingGeneration,
+              let display = recordingDisplay, let preferences = recordingPreferences,
+              recordingLifecycle.begin() else { return }
+        do {
+            _ = try AppBridge.flow([
+                "operation": "restart_countdown", "generation": generation,
+                "seconds": preferences.recording.countdown,
+            ])
+        } catch {
+            recordingLifecycle.end()
+            showError("Couldn’t restart recording", error)
+            return
+        }
+
+        hud.hud.setLifecycleActionsEnabled(false)
+        hud.isHidden = true
+        recordingPollTimer?.invalidate(); recordingPollTimer = nil
+        recordingPendingStart = true
+        snapshotPending = false
+        status.stringValue = "Restarting recording…"
+        run({ try session.restart() }) { [weak self] result in
+            guard let self, self.recordingSession === session else { return }
+            do {
+                let snapshot = try result.get()
+                let flow = try AppBridge.flow(["operation": "poll", "generation": generation])
+                guard flow["current"] as? Bool == true else {
+                    self.recordingLifecycle.end()
+                    self.discardRecording()
+                    return
+                }
+                self.recordingHUD?.close(); self.recordingHUD = nil
+                if preferences.recording.countdown > 0,
+                   let screen = self.screen(for: display) {
+                    let countdown = ScreenshotCountdownPanel(screen: screen, tokens: self.tokens,
+                        remaining: preferences.recording.countdown)
+                    self.countdownPanel = countdown; countdown.orderFrontRegardless()
+                }
+                let tick: () -> Void = { [weak self] in
+                    self?.tickCountdown(display: display, preferences: preferences,
+                        generation: generation)
+                }
+                let timer = Timer(timeInterval: 0.1, repeats: true) { _ in tick() }
+                self.countdownTimer = timer; RunLoop.main.add(timer, forMode: .common)
+                self.recordingLifecycle.end()
+                self.status.stringValue = snapshot.warning
+                    ?? "Recording ready. Press Escape to cancel."
+                tick()
+            } catch {
+                self.preserveFailedRecording(session, warning: error.localizedDescription)
+            }
+        }
+    }
+
+    private func confirmRestartRecording() {
+        guard !recordingLifecycle.busy else { return }
+        let alert = NSAlert()
+        alert.messageText = "Restart recording?"
+        alert.informativeText =
+            "The current recording will be deleted and a new countdown will begin."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Restart")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        restartRecording()
     }
 
     private func pollRecording() {
@@ -985,6 +1058,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         unifiedSession = nil; unifiedTarget = nil; unifiedDisplay = nil; unifiedScreen = nil
         unifiedControlsState = .initial
         preparingUnified = false; preparingRecording = false; recordingPendingStart = false
+        recordingDisplay = nil; recordingPreferences = nil
         recordingCapabilities = nil; microphoneDevices = []
         if let generation = flowGeneration {
             _ = try? AppBridge.flow(["operation": "finish", "generation": generation])

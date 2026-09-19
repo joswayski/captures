@@ -33,6 +33,7 @@ enum RecordingRequest {
         exclude_captures_app: bool,
     },
     Pause,
+    Restart,
     Stop,
     Finish {
         history_root: PathBuf,
@@ -174,6 +175,7 @@ pub unsafe extern "C" fn captures_recording_request_v1(
                 Ok(json!({"snapshot":snapshot}))
             }
             RecordingRequest::Pause => Ok(json!({"snapshot":session.pause()?})),
+            RecordingRequest::Restart => Ok(json!({"snapshot":session.restart()?})),
             RecordingRequest::Stop => Ok(json!({"snapshot":session.stop()?})),
             RecordingRequest::Finish {
                 history_root,
@@ -355,6 +357,30 @@ mod tests {
             !bundle.exists(),
             "cancelled start discards durable recovery state"
         );
+        unsafe { captures_recording_free_v1(handle) };
+    }
+
+    #[test]
+    fn restart_request_is_serialized_and_rejects_countdown_without_mutation() {
+        let root = tempfile::tempdir().unwrap();
+        let (handle, bundle) = prepared_session(root.path());
+        let restart = CString::new(r#"{"operation":"restart"}"#).unwrap();
+        let response = take(unsafe {
+            captures_recording_request_v1(handle, restart.as_ptr(), None, ptr::null_mut())
+        });
+        assert_eq!(response["ok"], false);
+        assert_eq!(
+            response["error"],
+            "Recording is not running, paused, or failed"
+        );
+        assert!(bundle.is_dir());
+
+        let discard = CString::new(r#"{"operation":"discard"}"#).unwrap();
+        let discarded = take(unsafe {
+            captures_recording_request_v1(handle, discard.as_ptr(), None, ptr::null_mut())
+        });
+        assert_eq!(discarded["ok"], true);
+        assert!(!bundle.exists());
         unsafe { captures_recording_free_v1(handle) };
     }
 
