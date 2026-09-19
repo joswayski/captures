@@ -251,6 +251,16 @@ final class MiniPreviewTests: XCTestCase {
         let single = fixturePanel(ids: ["asymmetric"], images: ["asymmetric": asymmetric])
         defer { single.close() }
         try write(render(single), name: "mini-preview-single-asymmetric.png")
+
+        let white = fixturePanel(ids: ["white"], images: ["white": solidImage(.white)])
+        defer { white.close() }
+        let whiteBitmap = try render(white)
+        let whiteImagePixel = try XCTUnwrap(whiteBitmap.colorAt(x: 170, y: 90))
+        let titleBackingPixel = try XCTUnwrap(whiteBitmap.colorAt(x: 180, y: 50))
+        XCTAssertGreaterThan(whiteImagePixel.brightnessComponent, 0.9)
+        XCTAssertLessThan(titleBackingPixel.brightnessComponent, 0.5,
+            "fixed dark-glass backing keeps title legible on white captures")
+        try write(whiteBitmap, name: "mini-preview-single-white.png")
     }
 
     func testCollapsedPileHidesActionsAndFrontHitTargetExpands() {
