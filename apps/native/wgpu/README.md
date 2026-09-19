@@ -194,7 +194,14 @@ sudo apt-get install xvfb dbus python3-dbus python3-gi openbox picom hsetroot xd
 /usr/bin/python3 apps/native/x11_capture_smoke.py \
   --binary apps/native/wgpu/target/release/captures-wgpu-workbench \
   --output /tmp/native-x11-capture
+/usr/bin/python3 apps/native/x11_capture_smoke.py --controls \
+  --binary apps/native/wgpu/target/release/captures-wgpu-workbench \
+  --output /tmp/native-x11-controls
 ```
+
+The `--controls` run uses New Capture instead of the direct selectors. It checks
+the same exact saved pixels, target switching/retention, blank-toolbar drag and
+empty-region confirmation guard. Both runs are part of Linux CI.
 
 Use system Python for the distro's D-Bus/GLib bindings. The test owns its display
 and D-Bus daemon; it never uses the caller's desktop/session or installed Captures
