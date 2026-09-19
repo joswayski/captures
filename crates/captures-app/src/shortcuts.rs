@@ -24,6 +24,18 @@ pub enum CaptureShortcut {
     Region,
     Window,
     Display,
+    RecordRegion,
+    RecordWindow,
+    RecordDisplay,
+}
+
+impl CaptureShortcut {
+    pub fn is_recording(self) -> bool {
+        matches!(
+            self,
+            Self::RecordRegion | Self::RecordWindow | Self::RecordDisplay
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,6 +52,18 @@ fn bindings(settings: &AppSettings) -> Result<Bindings, String> {
         (&settings.region_shortcut, CaptureShortcut::Region),
         (&settings.window_shortcut, CaptureShortcut::Window),
         (&settings.display_shortcut, CaptureShortcut::Display),
+        (
+            &settings.recording.video_shortcut,
+            CaptureShortcut::RecordRegion,
+        ),
+        (
+            &settings.recording.window_shortcut,
+            CaptureShortcut::RecordWindow,
+        ),
+        (
+            &settings.recording.display_shortcut,
+            CaptureShortcut::RecordDisplay,
+        ),
     ] {
         let key = text
             .parse::<HotKey>()
@@ -61,6 +85,7 @@ struct Routes {
     pending: Option<CaptureShortcut>,
     enabled: bool,
     suspended: bool,
+    restoring: bool,
     selector_generation: Option<u64>,
 }
 
@@ -78,7 +103,10 @@ impl Routes {
     }
 
     fn event(&mut self, id: u32, state: HotKeyState, blocked: bool) -> bool {
-        if !self.enabled || self.suspended || blocked || id == HotKey::new(None, Code::Escape).id()
+        if !self.enabled
+            || (self.suspended && !self.restoring)
+            || blocked
+            || id == HotKey::new(None, Code::Escape).id()
         {
             self.clear();
             return false;
@@ -97,7 +125,7 @@ impl Routes {
             HotKeyState::Released => {
                 if self.armed.remove(&id) && self.pending.is_none() {
                     self.pending = Some(binding.action);
-                    true
+                    !self.suspended
                 } else {
                     false
                 }
@@ -139,6 +167,20 @@ fn dispatch(event: GlobalHotKeyEvent) {
 trait Registration {
     fn register(&self, key: HotKey) -> Result<(), String>;
     fn unregister(&self, key: HotKey) -> Result<(), String>;
+    fn register_all(&self, keys: &[HotKey]) -> Result<(), String> {
+        let mut result = Ok(());
+        for key in keys {
+            result = result.and(self.register(*key));
+        }
+        result
+    }
+    fn unregister_all(&self, keys: &[HotKey]) -> Result<(), String> {
+        let mut result = Ok(());
+        for key in keys {
+            result = result.and(self.unregister(*key));
+        }
+        result
+    }
 }
 impl Registration for GlobalHotKeyManager {
     fn register(&self, key: HotKey) -> Result<(), String> {
@@ -147,59 +189,63 @@ impl Registration for GlobalHotKeyManager {
     fn unregister(&self, key: HotKey) -> Result<(), String> {
         GlobalHotKeyManager::unregister(self, key).map_err(|error| error.to_string())
     }
+    fn register_all(&self, keys: &[HotKey]) -> Result<(), String> {
+        GlobalHotKeyManager::register_all(self, keys).map_err(|error| error.to_string())
+    }
+    fn unregister_all(&self, keys: &[HotKey]) -> Result<(), String> {
+        GlobalHotKeyManager::unregister_all(self, keys).map_err(|error| error.to_string())
+    }
 }
 
 fn rebind(manager: &impl Registration, old: &Bindings, new: &Bindings) -> Result<(), String> {
-    let mut added = Vec::new();
-    for (id, binding) in new {
-        if old.contains_key(id) {
-            continue;
+    let added: Vec<_> = new
+        .iter()
+        .filter(|(id, _)| !old.contains_key(id))
+        .map(|(_, binding)| binding.key)
+        .collect();
+    let removed: Vec<_> = old
+        .iter()
+        .filter(|(id, _)| !new.contains_key(id))
+        .map(|(_, binding)| binding.key)
+        .collect();
+    // X11 processes one registration command per 50ms worker tick. Batching
+    // avoids seven serial ticks on focus changes, but is NOT transactional:
+    // later keys can be grabbed even after an earlier key fails.
+    if !added.is_empty()
+        && let Err(error) = manager.register_all(&added)
+    {
+        let mut rollback_failed = false;
+        for key in added {
+            rollback_failed |= manager.unregister(key).is_err();
         }
-        if let Err(error) = manager.register(binding.key) {
-            // X11 registration may have grabbed some modifier variants before
-            // failing. Unregister attempts every variant, even absent map state.
-            let mut rollback_failed = manager.unregister(binding.key).is_err();
-            for key in added.into_iter().rev() {
-                rollback_failed |= manager.unregister(key).is_err();
+        return Err(format!(
+            "Could not register capture shortcuts: {error}{}",
+            if rollback_failed {
+                "; shortcut cleanup failed; restart the native app"
+            } else {
+                ""
             }
-            return Err(format!(
-                "Could not register {:?}: {error}{}",
-                binding.action,
-                if rollback_failed {
-                    "; shortcut cleanup failed; restart the native app"
-                } else {
-                    ""
-                }
-            ));
-        }
-        added.push(binding.key);
+        ));
     }
-    let mut removed = Vec::new();
-    for (id, binding) in old {
-        if new.contains_key(id) {
-            continue;
+    if !removed.is_empty()
+        && let Err(error) = manager.unregister_all(&removed)
+    {
+        let mut rollback_failed = false;
+        // On failure attempt every rollback, including the partly removed key.
+        for key in removed {
+            rollback_failed |= manager.register(key).is_err();
         }
-        if let Err(error) = manager.unregister(binding.key) {
-            // A failing release may already have removed some OS grabs. Restore
-            // that chord too, not only earlier successfully removed chords.
-            let mut rollback_failed = manager.register(binding.key).is_err();
-            for key in removed {
-                rollback_failed |= manager.register(key).is_err();
-            }
-            for key in added {
-                rollback_failed |= manager.unregister(key).is_err();
-            }
-            return Err(format!(
-                "Could not release {:?}: {error}{}",
-                binding.action,
-                if rollback_failed {
-                    "; shortcut rollback failed; restart the native app"
-                } else {
-                    ""
-                }
-            ));
+        for key in added {
+            rollback_failed |= manager.unregister(key).is_err();
         }
-        removed.push(binding.key);
+        return Err(format!(
+            "Could not release capture shortcuts: {error}{}",
+            if rollback_failed {
+                "; shortcut rollback failed; restart the native app"
+            } else {
+                ""
+            }
+        ));
     }
     Ok(())
 }
@@ -234,13 +280,22 @@ fn suspend_routes(
             return Ok(());
         }
         routes.suspended = true;
+        // Grabs become live one at a time. Retain presses received while they
+        // are restored, but never wake/deliver until the full restore succeeds.
+        routes.restoring = !suspended;
         routes.clear();
         routes.bindings.clone()
     };
     // Never hold a callback's mutex while waiting on an OS hotkey worker.
-    sync_bindings(manager, registered, &desired, suspended)?;
-    routes.lock().unwrap().suspended = suspended;
-    Ok(())
+    let result = sync_bindings(manager, registered, &desired, suspended);
+    let mut routes = routes.lock().unwrap();
+    routes.restoring = false;
+    if result.is_ok() {
+        routes.suspended = suspended;
+    } else {
+        routes.clear();
+    }
+    result
 }
 
 /// One live host owns this object on the AppKit/winit event-loop thread. OS
@@ -316,7 +371,15 @@ impl CaptureShortcuts {
             &mut self.registered,
             &self.dispatcher.routes,
             suspended,
-        )
+        )?;
+        let pending = {
+            let routes = self.dispatcher.routes.lock().unwrap();
+            !routes.suspended && routes.pending.is_some()
+        };
+        if pending {
+            (self.dispatcher.wake)();
+        }
+        Ok(())
     }
 
     /// Disable while editing shortcuts or while the host is preparing capture.
@@ -395,6 +458,62 @@ mod tests {
         assert!(bindings(&settings).unwrap_err().contains("reserved"));
         settings.window_shortcut = "not a hotkey".into();
         assert!(bindings(&settings).is_err());
+    }
+
+    #[test]
+    fn recording_bindings_route_releases_in_idle_and_selector_but_not_busy_or_suspended() {
+        let settings = settings();
+        let mut routes = Routes {
+            bindings: bindings(&settings).unwrap(),
+            enabled: true,
+            ..Routes::default()
+        };
+        for (text, action, wire) in [
+            (
+                &settings.recording.video_shortcut,
+                CaptureShortcut::RecordRegion,
+                "record_region",
+            ),
+            (
+                &settings.recording.window_shortcut,
+                CaptureShortcut::RecordWindow,
+                "record_window",
+            ),
+            (
+                &settings.recording.display_shortcut,
+                CaptureShortcut::RecordDisplay,
+                "record_display",
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(action).unwrap(), wire);
+            let key = text.parse::<HotKey>().unwrap().id();
+            for scope in [None, Some(17)] {
+                routes.set_selector_generation(scope);
+                assert!(!routes.event(key, HotKeyState::Released, false));
+                assert!(!routes.event(key, HotKeyState::Pressed, false));
+                assert!(routes.event(key, HotKeyState::Released, false));
+                assert_eq!(routes.pending.take(), Some(action));
+                routes.event(key, HotKeyState::Pressed, false);
+                assert!(!routes.event(key, HotKeyState::Released, true));
+                assert!(routes.pending.is_none());
+                routes.suspended = true;
+                assert!(!routes.event(key, HotKeyState::Pressed, false));
+                routes.suspended = false;
+                assert!(!routes.event(key, HotKeyState::Released, false));
+                routes.enabled = false;
+                assert!(!routes.event(key, HotKeyState::Pressed, false));
+                routes.enabled = true;
+                assert!(!routes.event(key, HotKeyState::Released, false));
+            }
+        }
+        let mut conflicting = settings.clone();
+        conflicting
+            .recording
+            .window_shortcut
+            .clone_from(&settings.region_shortcut);
+        assert!(bindings(&conflicting).unwrap_err().contains("different"));
+        conflicting.recording.window_shortcut = "Escape".into();
+        assert!(bindings(&conflicting).unwrap_err().contains("reserved"));
     }
 
     #[test]
@@ -507,7 +626,7 @@ mod tests {
         let old_key = "Control+Alt+F10".parse::<HotKey>().unwrap().id();
         let new_key = "Control+Alt+F11".parse::<HotKey>().unwrap().id();
         let mut registered = bindings(&settings()).unwrap();
-        assert_eq!(registered.len(), 4);
+        assert_eq!(registered.len(), 7);
         let backend = Backend {
             keys: RefCell::new(registered.keys().copied().collect()),
             ..Backend::default()
@@ -607,6 +726,74 @@ mod tests {
                 .unwrap()
                 .event(new_key, HotKeyState::Released, false)
         );
+    }
+
+    #[test]
+    fn restore_retains_in_flight_chords_but_failure_discards_them_without_waking() {
+        struct BackendDuringRestore<'a> {
+            routes: &'a Mutex<Routes>,
+            chord: u32,
+            release: bool,
+            fail: bool,
+        }
+        impl Registration for BackendDuringRestore<'_> {
+            fn register(&self, key: HotKey) -> Result<(), String> {
+                if key.id() == self.chord {
+                    let mut routes = self.routes.lock().unwrap();
+                    assert!(routes.suspended && routes.restoring);
+                    assert!(!routes.event(self.chord, HotKeyState::Pressed, false));
+                    if self.release {
+                        assert!(
+                            !routes.event(self.chord, HotKeyState::Released, false),
+                            "a complete chord cannot wake before restore commits"
+                        );
+                    }
+                    if self.fail {
+                        return Err("partial grab failed".into());
+                    }
+                }
+                Ok(())
+            }
+            fn unregister(&self, _: HotKey) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        let chord = "Ctrl+Shift+1".parse::<HotKey>().unwrap().id();
+        for release in [false, true] {
+            for fail in [false, true] {
+                let routes = Mutex::new(Routes {
+                    bindings: bindings(&settings()).unwrap(),
+                    enabled: true,
+                    suspended: true,
+                    ..Routes::default()
+                });
+                let backend = BackendDuringRestore {
+                    routes: &routes,
+                    chord,
+                    release,
+                    fail,
+                };
+                let mut registered = Bindings::new();
+                assert_eq!(
+                    suspend_routes(&backend, &mut registered, &routes, false).is_err(),
+                    fail
+                );
+                let mut state = routes.lock().unwrap();
+                assert!(!state.restoring);
+                assert_eq!(state.suspended, fail);
+                if fail {
+                    assert!(state.armed.is_empty() && state.pending.is_none());
+                    assert!(registered.is_empty());
+                    state.suspended = false;
+                    assert!(!state.event(chord, HotKeyState::Released, false));
+                } else {
+                    if !release {
+                        assert!(state.event(chord, HotKeyState::Released, false));
+                    }
+                    assert_eq!(state.pending.take(), Some(CaptureShortcut::Region));
+                }
+            }
+        }
     }
 
     #[test]
@@ -753,11 +940,15 @@ mod tests {
         changed.window_shortcut = "Alt+5".into();
         changed.display_shortcut = "Alt+6".into();
         let next = bindings(&changed).unwrap();
-        let keys: Vec<_> = next.keys().copied().collect();
+        let keys: Vec<_> = next
+            .keys()
+            .filter(|key| !old.contains_key(key))
+            .copied()
+            .collect();
         let backend = Backend {
             keys: RefCell::new(old.keys().copied().collect()),
-            fail: Some(keys[2]),
-            fail_cleanup: Some(keys[1]),
+            fail: Some(keys[1]),
+            fail_cleanup: Some(keys[0]),
         };
         assert!(
             rebind(&backend, &old, &next)

@@ -203,16 +203,27 @@ a stack with expand/collapse, scrolling and Clear all; dismissing previews leave
 history and exports intact. Preview dragging, hover-fan animation and effects
 are still unconnected. Live native hosts expose menu-bar/tray New Capture,
 screenshot, History, Preferences, output-folder and Quit actions, plus configured
-New Capture and region/window/display global shortcuts. New Capture opens shared
-screenshot controls for Region, Window and Full screen, retaining selections when
+New Capture and region/window/display screenshot and recording global shortcuts. New Capture opens shared
+Screenshot and Record controls for Region, Window and Full screen, retaining selections when
 switching targets with the toolbar. While these controls are open, the configured
-region/window/display shortcuts switch targets in the same session; keyboard
+region/window/display shortcuts switch mode and target in the same session; keyboard
 Full screen does not auto-start capture. Focused Preferences and capture
-preparation/countdown suppress those shortcuts. Native Preferences can edit all seven stored capture
-and recording shortcuts; recording bindings remain unconnected. Linux requires
+preparation/countdown and active recording suppress those shortcuts. Native Preferences can edit all seven capture
+and recording shortcuts. Recording keys open the selector without starting a take. Linux requires
 a StatusNotifier tray host; without one,
 closing the window quits instead of leaving an unreachable background process.
-Recording, editing, OS shortcut takeover, login items,
+Native Record creates H.264 MP4 using the stored recording defaults and supported
+audio options. Its compact controls support pause/resume, stop/save to development
+History, and discard. FFmpeg and FFprobe must be installed separately for these
+development builds; native media-tool bundling is not connected. Started recordings
+are saved on session loss instead of being discarded; failed finalization retains
+recovery data. Linux cannot exclude the controls from captured pixels, and native
+Hide controls is not connected yet. Restart, mute, screenshots
+during recording, recording playback/editing/export and GIF conversion remain
+unconnected; History displays recording posters and metadata only. Real macOS and
+Windows recording, audio devices, multi-display and hardware acceptance remain open;
+Wayland recording is gated with the rest of native capture.
+Editing, OS shortcut takeover, login items,
 single-instance relaunch and updates are not connected to the native hosts yet. Windows/Linux
 renderer selection and full feature/design parity remain open. The
 [migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;

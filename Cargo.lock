@@ -681,7 +681,7 @@ dependencies = [
  "captures-media",
  "captures-recording",
  "captures-recording-macos",
- "captures-recording-xcap",
+ "captures-recording-platform",
  "captures-session",
  "captures-settings",
  "chrono",
@@ -801,6 +801,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "captures-recording-platform"
+version = "0.1.0"
+dependencies = [
+ "captures-capture",
+ "captures-history",
+ "captures-media",
+ "captures-recording",
+ "captures-recording-macos",
+ "captures-recording-xcap",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "captures-recording-xcap"
 version = "0.1.0"
 dependencies = [
@@ -846,9 +863,16 @@ name = "captures-settings-ffi"
 version = "0.1.0"
 dependencies = [
  "captures-app",
+ "captures-capture",
+ "captures-history",
+ "captures-media",
+ "captures-recording",
+ "captures-recording-platform",
  "captures-settings",
+ "chrono",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

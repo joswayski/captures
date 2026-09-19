@@ -4,6 +4,25 @@ import CCapturesSettings
 enum CaptureShortcut: String {
     case newCapture = "new_capture"
     case region, window, display
+    case recordRegion = "record_region"
+    case recordWindow = "record_window"
+    case recordDisplay = "record_display"
+
+    var mode: UnifiedCaptureMode {
+        switch self {
+        case .recordRegion, .recordWindow, .recordDisplay: return .record
+        default: return .screenshot
+        }
+    }
+
+    var target: UnifiedCaptureTarget? {
+        switch self {
+        case .newCapture: return nil
+        case .region, .recordRegion: return .region
+        case .window, .recordWindow: return .window
+        case .display, .recordDisplay: return .display
+        }
+    }
 }
 
 private func wakeCaptureShortcuts() {

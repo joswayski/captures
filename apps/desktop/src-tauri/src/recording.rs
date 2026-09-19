@@ -11,19 +11,16 @@ pub(crate) use captures_capture::RECORDING_REGION_INDICATOR_TITLE;
 use captures_capture::{CaptureMode, DisplayDescriptor};
 use captures_media::{
     ByteRange, CancelToken, EditSpec, ExportFormat, ExportProgress, ExportSpec, MediaToolError,
-    MediaToolchain, QualityPreset, RecordingAudioLayout, RecordingSegmentInput, TimelineSpriteSpec,
-    estimate_sample_windows, export_preserves_source_bytes, extrapolate_sampled_size,
-    visual_edit_is_identity,
+    MediaToolchain, QualityPreset, RecordingAssemblyKind, RecordingAudioLayout,
+    RecordingSegmentInput, TimelineSpriteSpec, estimate_sample_windows,
+    export_preserves_source_bytes, extrapolate_sampled_size, visual_edit_is_identity,
 };
 use captures_recording::{
     DraftStore, RecordingCoordinator, RecordingDraftManifest, RecordingKind, RecordingOptions,
     RecordingSegmentInfo, RecordingSegmentManifest, RecordingSessionSnapshot, RecordingState,
     RecordingTarget,
 };
-#[cfg(target_os = "macos")]
-use captures_recording_macos::MacRecordingSegment as NativeRecordingSegment;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
-use captures_recording_xcap::XcapRecordingSegment as NativeRecordingSegment;
+use captures_recording_platform::{NativeRecordingSegment, start_native_segment};
 use serde::{Deserialize, Serialize};
 use tauri::{
     AppHandle, CursorIcon, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
@@ -1078,14 +1075,7 @@ fn crop_window_from_display(
 
 #[tauri::command]
 pub fn list_recording_audio_devices() -> Vec<captures_recording::AudioDevice> {
-    #[cfg(target_os = "macos")]
-    {
-        captures_recording_macos::microphone_devices()
-    }
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
-    {
-        captures_recording_xcap::microphone_devices()
-    }
+    captures_recording_platform::microphone_devices()
 }
 
 #[tauri::command]
@@ -1348,25 +1338,6 @@ fn recording_segment_is_current(state: &AppState, session_id: &str, generation: 
             .coordinator
             .snapshot(now_ms())
             .is_some_and(|snapshot| snapshot.state == RecordingState::Recording)
-}
-
-fn start_native_segment(
-    options: &RecordingOptions,
-    path: &Path,
-    display: &DisplayDescriptor,
-    exclude_captures_app: bool,
-) -> Result<NativeRecordingSegment, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = display;
-        NativeRecordingSegment::start(options, path, exclude_captures_app)
-            .map_err(|error| error.to_string())
-    }
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
-    {
-        let _ = exclude_captures_app;
-        NativeRecordingSegment::start(options, path, display).map_err(|error| error.to_string())
-    }
 }
 
 async fn start_segment(
@@ -1880,10 +1851,6 @@ async fn stop_recording_inner(
             session.poster_png.clone(),
         )
     };
-    let has_microphone_audio = options.kind == RecordingKind::Video
-        && segments
-            .iter()
-            .any(|segment| segment.microphone_path.is_some());
     let extension = if options.kind == RecordingKind::Video {
         "mp4"
     } else {
@@ -1898,45 +1865,31 @@ async fn stop_recording_inner(
     let destination_for_task = assembled.clone();
     let options_for_task = options.clone();
     let directory_for_task = directory.clone();
-    let probe = tauri::async_runtime::spawn_blocking(move || {
-        if options_for_task.kind == RecordingKind::Video {
-            toolchain.assemble_recording_segments(
-                &segments,
-                &destination_for_task,
-                RecordingAudioLayout {
-                    system_audio: options_for_task.audio.capture_system_audio,
-                    microphone_audio: has_microphone_audio,
-                },
-                &cancel,
-            )?;
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let kind = if options_for_task.kind == RecordingKind::Video {
+            RecordingAssemblyKind::Video {
+                capture_system_audio: options_for_task.audio.capture_system_audio,
+            }
         } else {
-            let paths = segments
-                .iter()
-                .map(|segment| segment.video_path.clone())
-                .collect::<Vec<_>>();
-            let master = if paths.len() == 1 {
-                paths[0].clone()
-            } else {
-                let master = directory_for_task.join("master.mp4");
-                if !master.exists() {
-                    toolchain.concatenate_segments(&paths, &master, &cancel)?;
-                }
-                master
-            };
-            toolchain.create_gif(
-                &master,
-                &destination_for_task,
-                options_for_task.frames_per_second,
-                options_for_task.gif.max_width,
-                options_for_task.gif.max_colors,
-                &cancel,
-            )?;
-        }
-        toolchain.probe(&destination_for_task)
+            RecordingAssemblyKind::Gif {
+                frames_per_second: options_for_task.frames_per_second,
+                max_width: options_for_task.gif.max_width,
+                max_colors: options_for_task.gif.max_colors,
+            }
+        };
+        toolchain.assemble_recording(
+            &segments,
+            &destination_for_task,
+            &directory_for_task,
+            kind,
+            &cancel,
+        )
     })
     .await
     .map_err(|error| AppError::Task(error.to_string()))?
     .map_err(|error| AppError::Task(error.to_string()))?;
+    let probe = outcome.probe;
+    let has_microphone_audio = outcome.has_microphone_audio;
 
     let artifact_id = Uuid::new_v4().to_string();
     let dropped_frames = state

@@ -113,7 +113,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 ## Native frontend migration
 
 The browser-free macOS workbench is separate from the shipping Tauri app. On a
-Mac, run `bash apps/native/macos/build.sh`; this generates shared token resources,
+Mac with the macOS 26 SDK (Xcode 26+), run `bash apps/native/macos/build.sh`; this generates shared token resources,
 builds the Rust settings static library, runs Swift tests and builds the AppKit
 executable without installing it. Native Preferences uses a separate Captures Native
 development settings file; pass `--settings-file PATH` for disposable tests.
@@ -130,8 +130,30 @@ its resources with `node apps/native/prepare.mjs --output apps/native/wgpu/resou
 then run `cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --release`.
 Its README covers native build prerequisites, viewport smoke tests, hardware
 handoff and resource collection. Root `cargo test --workspace` does not include
-this experiment; run its manifest-specific checks too. It does not select a
-production renderer or integrate capture engines yet.
+this experiment; run its manifest-specific checks too. It connects capture and
+recording engines for development but does not select a production renderer.
+
+Native Record requires executable FFmpeg and FFprobe commands on `PATH`; native
+builds do not bundle their own media tools yet. AppKit also accepts `CAPTURES_FFMPEG`
+and `CAPTURES_FFPROBE` executable paths. Recording uses separate development
+History and a sibling `recording-recovery` directory. Do not point tests at real
+capture data. The Linux recording acceptance owns a private Xvfb desktop and D-Bus
+session; install the windowing dependencies from the wgpu README plus `ffmpeg`
+and `python3-xlib`, then run:
+
+```sh
+/usr/bin/python3 apps/native/x11_recording_smoke.py \
+  --binary apps/native/wgpu/target/release/captures-wgpu-workbench \
+  --output /tmp/native-x11-recording
+```
+
+The output directory must not exist. The test drives real selector/HUD input,
+checks pause/resume, decodes saved MP4 pixels with FFmpeg, verifies History and
+source cleanup, and distinguishes countdown cancellation, running Escape,
+explicit discard, session-loss preservation, HUD close and whole-application quit.
+Session lock is simulated;
+physical keyboard/display/audio, permissions and hardware compositor acceptance
+remain separate gates. Inspect its selector/HUD PNGs as well as the test result.
 
 ## Packaging
 

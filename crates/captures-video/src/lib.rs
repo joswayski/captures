@@ -109,7 +109,9 @@ impl H264Mp4Writer {
             .adaptive_quantization(false)
             .background_detection(false)
             .intra_frame_period(IntraFramePeriod::from_num_frames(u32::from(frame_rate) * 2))
-            .vui(VuiConfig::bt709_full());
+            // read_rgb8 produces BT.601 limited-range YUV. Label that actual
+            // buffer, otherwise players lift black and decode the wrong chroma.
+            .vui(VuiConfig::bt601());
         let encoder = Encoder::with_api_config(openh264::OpenH264API::from_source(), config)
             .map_err(|error| H264Mp4Error::Encoder(error.to_string()))?;
         let yuv = YUVBuffer::new(width as usize, height as usize);
@@ -361,5 +363,47 @@ mod tests {
         assert_eq!(track.media_type().expect("media type"), MediaType::H264);
         assert_eq!((track.width(), track.height()), (64, 64));
         assert!(track.sample_count() > 0);
+    }
+
+    #[test]
+    #[ignore = "requires FFmpeg; run explicitly in Linux CI"]
+    fn decoded_colors_match_rgb_input() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("colors.mp4");
+        let colors = [[0u8, 0, 0], [255, 255, 255], [192, 32, 64], [32, 112, 192]];
+        let mut rgb = Vec::with_capacity(64 * 64 * 3);
+        for y in 0..64 {
+            for x in 0..64 {
+                rgb.extend_from_slice(&colors[usize::from(x >= 32) + 2 * usize::from(y >= 32)]);
+            }
+        }
+        let mut writer = H264Mp4Writer::create(&path, 64, 64, 30, 500_000).unwrap();
+        writer.encode_rgb(&rgb, 0).unwrap();
+        writer.finish(100).unwrap();
+        let decoded = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(&path)
+            .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+            .output()
+            .expect("FFmpeg is installed");
+        assert!(
+            decoded.status.success(),
+            "{}",
+            String::from_utf8_lossy(&decoded.stderr)
+        );
+        assert_eq!(decoded.stdout.len(), rgb.len());
+        for ((x, y), expected) in [(16, 16), (48, 16), (16, 48), (48, 48)]
+            .into_iter()
+            .zip(colors)
+        {
+            let offset = (y * 64 + x) * 3;
+            let actual = &decoded.stdout[offset..offset + 3];
+            for (&actual, expected) in actual.iter().zip(expected) {
+                assert!(
+                    actual.abs_diff(expected) <= 6,
+                    "decoded {actual}, expected {expected} at ({x},{y})"
+                );
+            }
+        }
     }
 }

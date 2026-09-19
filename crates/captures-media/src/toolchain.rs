@@ -75,6 +75,24 @@ pub struct RecordingAudioLayout {
     pub microphone_audio: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecordingAssemblyKind {
+    Video {
+        capture_system_audio: bool,
+    },
+    Gif {
+        frames_per_second: u16,
+        max_width: u32,
+        max_colors: u16,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordingAssemblyOutcome {
+    pub probe: ProbeResult,
+    pub has_microphone_audio: bool,
+}
+
 #[derive(Debug, Error)]
 pub enum MediaToolError {
     #[error("the bundled {0} media tool is unavailable")]
@@ -188,6 +206,64 @@ impl MediaToolchain {
             },
             has_audio: audio_stream_count > 0,
             audio_stream_count,
+        })
+    }
+
+    pub fn assemble_recording(
+        &self,
+        segments: &[RecordingSegmentInput],
+        destination: &Path,
+        session_directory: &Path,
+        kind: RecordingAssemblyKind,
+        cancel: &CancelToken,
+    ) -> Result<RecordingAssemblyOutcome, MediaToolError> {
+        let has_microphone_audio = matches!(kind, RecordingAssemblyKind::Video { .. })
+            && segments
+                .iter()
+                .any(|segment| segment.microphone_path.is_some());
+        match kind {
+            RecordingAssemblyKind::Video {
+                capture_system_audio,
+            } => self.assemble_recording_segments(
+                segments,
+                destination,
+                RecordingAudioLayout {
+                    system_audio: capture_system_audio,
+                    microphone_audio: has_microphone_audio,
+                },
+                cancel,
+            )?,
+            RecordingAssemblyKind::Gif {
+                frames_per_second,
+                max_width,
+                max_colors,
+            } => {
+                let paths = segments
+                    .iter()
+                    .map(|segment| segment.video_path.clone())
+                    .collect::<Vec<_>>();
+                let master = if paths.len() == 1 {
+                    paths[0].clone()
+                } else {
+                    let master = session_directory.join("master.mp4");
+                    if !master.exists() {
+                        self.concatenate_segments(&paths, &master, cancel)?;
+                    }
+                    master
+                };
+                self.create_gif(
+                    &master,
+                    destination,
+                    frames_per_second,
+                    max_width,
+                    max_colors,
+                    cancel,
+                )?;
+            }
+        }
+        Ok(RecordingAssemblyOutcome {
+            probe: self.probe(destination)?,
+            has_microphone_audio,
         })
     }
 
@@ -1635,7 +1711,10 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::TimelineSpriteSpec;
     #[cfg(any(target_os = "windows", target_os = "linux"))]
-    use super::{CAPTURE_MASTER_BITS_PER_PIXEL_PERCENT, RecordingSegmentInput, openh264_bitrate};
+    use super::{
+        CAPTURE_MASTER_BITS_PER_PIXEL_PERCENT, RecordingAssemblyKind, RecordingSegmentInput,
+        openh264_bitrate,
+    };
     use super::{
         CancelToken, MediaToolchain, RecordingAudioLayout, VideoAttempt,
         aac_centered_stereo_layout_filter, aac_output_layout_filter, audio_edit_is_identity,
@@ -2298,8 +2377,7 @@ mod tests {
     }
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
-    #[test]
-    fn cross_platform_media_pipeline_encodes_and_muxes_audio_tracks() {
+    fn cross_platform_toolchain() -> Option<(MediaToolchain, std::path::PathBuf)> {
         let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .canonicalize()
@@ -2325,8 +2403,43 @@ mod tests {
             });
         if !ffmpeg.is_file() || !ffprobe.is_file() {
             eprintln!("cross-platform media sidecars are not prepared in this checkout");
-            return;
+            return None;
         }
+        Some((MediaToolchain::new(ffmpeg.clone(), ffprobe), ffmpeg))
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    fn create_cross_platform_segment(ffmpeg: &std::path::Path, path: &std::path::Path) {
+        let status = std::process::Command::new(ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=160x90:rate=10",
+                "-t",
+                "0.5",
+                "-c:v",
+                "mpeg4",
+                "-q:v",
+                "2",
+                "-an",
+            ])
+            .arg(path)
+            .status()
+            .expect("bundled FFmpeg starts");
+        assert!(status.success(), "test recording segment generated");
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn cross_platform_media_pipeline_encodes_and_muxes_audio_tracks() {
+        let Some((toolchain, ffmpeg)) = cross_platform_toolchain() else {
+            return;
+        };
 
         let directory = tempfile::tempdir().expect("temporary directory");
         let source = directory.path().join("source.mp4");
@@ -2370,7 +2483,6 @@ mod tests {
             ..EditSpec::default()
         };
         edit.audio.source_has_system_audio = true;
-        let toolchain = MediaToolchain::new(ffmpeg.clone(), ffprobe.clone());
         toolchain
             .export(
                 &source,
@@ -2391,7 +2503,7 @@ mod tests {
         let probe = toolchain.probe(&destination).expect("edited probe");
         assert_eq!((probe.metadata.width, probe.metadata.height), (300, 160));
         assert!(probe.has_audio);
-        let codec = std::process::Command::new(ffprobe)
+        let codec = std::process::Command::new(&toolchain.ffprobe)
             .args([
                 "-v",
                 "error",
@@ -2433,8 +2545,8 @@ mod tests {
             assert!(status.success());
         }
         let assembled = directory.path().join("assembled.mp4");
-        toolchain
-            .assemble_recording_segments(
+        let outcome = toolchain
+            .assemble_recording(
                 &[RecordingSegmentInput {
                     video_path: source.clone(),
                     system_audio_path: Some(system_audio),
@@ -2444,20 +2556,15 @@ mod tests {
                     duration_ms: 1_000,
                 }],
                 &assembled,
-                RecordingAudioLayout {
-                    system_audio: true,
-                    microphone_audio: true,
+                directory.path(),
+                RecordingAssemblyKind::Video {
+                    capture_system_audio: true,
                 },
                 &CancelToken::default(),
             )
             .expect("independent audio tracks assembled");
-        assert_eq!(
-            toolchain
-                .probe(&assembled)
-                .expect("assembled recording probe")
-                .audio_stream_count,
-            3
-        );
+        assert!(outcome.has_microphone_audio);
+        assert_eq!(outcome.probe.audio_stream_count, 3);
 
         let front_left_mic = directory.path().join("microphone-fl.wav");
         let status = std::process::Command::new(&ffmpeg)
@@ -2519,6 +2626,99 @@ mod tests {
             quieter / louder > 0.9,
             "Front Left microphone should be duplicated, not left-only, got L={left_rms} R={right_rms}"
         );
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn recording_assembly_produces_silent_video_and_multisegment_gif() {
+        let Some((toolchain, ffmpeg)) = cross_platform_toolchain() else {
+            return;
+        };
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let first = directory.path().join("first.mp4");
+        let second = directory.path().join("second.mp4");
+        create_cross_platform_segment(&ffmpeg, &first);
+        create_cross_platform_segment(&ffmpeg, &second);
+        let segment = |video_path| RecordingSegmentInput {
+            video_path,
+            system_audio_path: None,
+            system_audio_offset_ms: 37,
+            microphone_path: None,
+            microphone_offset_ms: -19,
+            duration_ms: 500,
+        };
+
+        let video = directory.path().join("assembled.mp4");
+        let video_outcome = toolchain
+            .assemble_recording(
+                &[segment(first.clone())],
+                &video,
+                directory.path(),
+                RecordingAssemblyKind::Video {
+                    capture_system_audio: false,
+                },
+                &CancelToken::default(),
+            )
+            .expect("silent video assembled");
+        assert!(!video_outcome.probe.has_audio);
+        assert!(!video_outcome.has_microphone_audio);
+        assert_eq!(video_outcome.probe.metadata.kind, MediaKind::Video);
+
+        let gif = directory.path().join("assembled.gif");
+        let gif_outcome = toolchain
+            .assemble_recording(
+                &[segment(first), segment(second)],
+                &gif,
+                directory.path(),
+                RecordingAssemblyKind::Gif {
+                    frames_per_second: 10,
+                    max_width: 120,
+                    max_colors: 64,
+                },
+                &CancelToken::default(),
+            )
+            .expect("multi-segment GIF assembled");
+        assert_eq!(gif_outcome.probe.metadata.kind, MediaKind::Gif);
+        assert_eq!(gif_outcome.probe.metadata.width, 120);
+        assert!(!gif_outcome.has_microphone_audio);
+        assert!(directory.path().join("master.mp4").is_file());
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn recording_assembly_cancellation_does_not_publish_gif() {
+        let Some((toolchain, ffmpeg)) = cross_platform_toolchain() else {
+            return;
+        };
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("source.mp4");
+        let destination = directory.path().join("assembled.gif");
+        create_cross_platform_segment(&ffmpeg, &source);
+        let cancel = CancelToken::default();
+        cancel.cancel();
+
+        let error = toolchain
+            .assemble_recording(
+                &[RecordingSegmentInput {
+                    video_path: source,
+                    system_audio_path: None,
+                    system_audio_offset_ms: 0,
+                    microphone_path: None,
+                    microphone_offset_ms: 0,
+                    duration_ms: 500,
+                }],
+                &destination,
+                directory.path(),
+                RecordingAssemblyKind::Gif {
+                    frames_per_second: 10,
+                    max_width: 120,
+                    max_colors: 64,
+                },
+                &cancel,
+            )
+            .expect_err("cancelled GIF assembly");
+        assert!(matches!(error, super::MediaToolError::Cancelled));
+        assert!(!destination.exists());
     }
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]

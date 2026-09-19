@@ -8,7 +8,8 @@
 /* Event-loop-thread-only native capture-launch shortcuts. One owner per process.
  * JSON requests: configure {settings: AppSettings}, enabled {enabled: bool},
  * next, close. Envelopes follow captures_app_request_v1. next returns
- * {action: "new_capture"|"region"|"window"|"display"|null}; consumes one launch.
+ * {action: "new_capture"|"region"|"window"|"display"|"record_region"|
+ * "record_window"|"record_display"|null}; consumes one launch.
  * Configure copies settings; conflicts retain the prior registered mapping.
  * wake is required on first configure, must remain callable for process lifetime,
  * may run on an OS worker thread, and must ONLY schedule host work (no synchronous
@@ -192,6 +193,30 @@ char *captures_window_capture_v1(const CapturesWindowSession *session,
  * Separately finish the event-loop capture-flow guard on every exit path. */
 void captures_window_free_v1(CapturesWindowSession *session);
 
+/* Owned mutable recording lifecycle. Prepare and every request may block: run
+ * them on one serialized worker, never AppKit's event thread. Prepare JSON is
+ * {recovery_root,options,display}; success returns {snapshot}. Lifecycle request
+ * operations are snapshot, start, pause, stop, finish and discard. Start accepts
+ * generation/exclude_captures_app and requires an is_current callback, invoked
+ * before and after engine opening together with the shared capture-flow gate;
+ * it must only read a thread-safe host cancellation gate. Finish accepts
+ * history_root/ffmpeg/ffprobe file paths and
+ * returns FinalizedRecording metadata/path, never media JSON/base64. Stop/discard
+ * an active handle before free. Info operations are capabilities,
+ * microphone_devices, and history {root}; history returns recording metadata and
+ * native media/poster paths only. Free may block while platform Drop aborts an
+ * active engine, but is not durable Stop/finalization: explicitly stop/discard
+ * first on the worker. The generation callback must not reenter this ABI. All
+ * responses use the standard owned envelope. */
+typedef struct CapturesRecordingSession CapturesRecordingSession;
+typedef bool (*CapturesRecordingIsCurrent)(void *context, uint64_t generation);
+char *captures_recording_info_v1(const char *request_json);
+CapturesRecordingSession *captures_recording_prepare_v1(const char *request_json,
+    char **output);
+char *captures_recording_request_v1(CapturesRecordingSession *handle,
+    const char *request_json, CapturesRecordingIsCurrent is_current, void *context);
+void captures_recording_free_v1(CapturesRecordingSession *handle);
+
 /* Versioned JSON ABI. Operations are load, save, default_path, and theme.
  * Theme accepts {"operation":"theme","accent":"#rgb","signal":"#rrggbb",
  * "light":true} and returns {"ok":true,"colors":{...}}.
@@ -205,11 +230,13 @@ char *captures_settings_request_v1(const char *request_json);
  * File paths, not image bytes, cross this ABI. The same free function owns both.
  * Permission is prompted only by the explicit request_permission operation. */
 char *captures_app_request_v1(const char *request_json);
-/* Event-loop-thread ONLY: begin {seconds}, poll {generation}, finish {generation}.
+/* Event-loop-thread ONLY: begin {seconds}, poll {generation},
+ * disarm_escape {generation}, finish {generation}.
  * For selection, begin with seconds=0; start_countdown {generation,seconds} after
  * confirmation starts the delay without dropping Escape or changing generation.
  * begin returns {generation}; poll returns {current,remaining}. Escape is global
- * only for this guard. Always finish, including on cancellation/quit. The guard
+ * only until disarm_escape hands an accepted recording to its session owner.
+ * Always finish, including on cancellation/quit. The guard
  * owns native handles on this thread; never dispatch these calls to a worker.
  * Uses the same {ok,result}/{ok,error} envelope and response ownership as above. */
 char *captures_flow_request_v1(const char *request_json);

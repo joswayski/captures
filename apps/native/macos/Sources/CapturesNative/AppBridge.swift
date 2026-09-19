@@ -29,6 +29,8 @@ struct CapturePreferences {
     let showMiniPreviews: Bool
     let miniPreviewPlacement: String
     let includeMiniPreviewsInCaptures: Bool
+    let includeRecordingControlsInCaptures: Bool
+    let recording: RecordingPreferences
 
     init(_ settings: [String: Any]) throws {
         guard let autoCopy = settings["auto_copy_to_clipboard"] as? Bool,
@@ -51,6 +53,8 @@ struct CapturePreferences {
         self.freezeScreen = freezeScreen; self.autoStart = autoStart
         self.showMiniPreviews = showMiniPreviews; self.miniPreviewPlacement = miniPreviewPlacement
         self.includeMiniPreviewsInCaptures = includeMiniPreviewsInCaptures
+        includeRecordingControlsInCaptures = settings["include_recording_controls_in_captures"] as? Bool ?? false
+        recording = try RecordingPreferences(settings["recording"] as? [String: Any] ?? [:])
     }
 
     var miniPreviewSettings: MiniPreviewSettings {
@@ -70,6 +74,99 @@ struct CapturePreferences {
         else { throw SettingsStoreError.invalidResponse }
         return try Self(settings)
     }
+}
+
+struct RecordingPreferences: Equatable {
+    let framesPerSecond: Int
+    let maxResolution: String
+    let countdown: Int
+    let showCursor: Bool
+    let highlightClicks: Bool
+    let captureSystemAudio: Bool
+    let microphoneDeviceID: String?
+    let monoAudio: Bool
+    let showKeystrokes: Bool
+    let gifMaxWidth: Int
+    let gifMaxColors: Int
+
+    init(_ value: [String: Any]) throws {
+        let framesPerSecond = value["video_fps"] as? Int ?? 60
+        let maxResolution = value["video_max_resolution"] as? String ?? "original"
+        let countdown = value["countdown_seconds"] as? Int ?? 3
+        let showCursor = value["show_cursor"] as? Bool ?? true
+        let highlightClicks = value["highlight_clicks"] as? Bool ?? false
+        let captureSystemAudio = value["capture_system_audio"] as? Bool ?? false
+        let monoAudio = value["mono_audio"] as? Bool ?? false
+        let showKeystrokes = value["show_keystrokes"] as? Bool ?? false
+        let gifMaxWidth = value["gif_max_width"] as? Int ?? 800
+        let gifMaxColors = value["gif_max_colors"] as? Int ?? 256
+        guard [15, 30, 60].contains(framesPerSecond),
+              ["original", "p1080", "p720"].contains(maxResolution),
+              (0...10).contains(countdown), gifMaxWidth >= 320,
+              (64...256).contains(gifMaxColors)
+        else { throw SettingsStoreError.invalidResponse }
+        self.framesPerSecond = framesPerSecond; self.maxResolution = maxResolution
+        self.countdown = countdown; self.showCursor = showCursor
+        self.highlightClicks = highlightClicks; self.captureSystemAudio = captureSystemAudio
+        microphoneDeviceID = value["microphone_device_id"] as? String
+        self.monoAudio = monoAudio; self.showKeystrokes = showKeystrokes
+        self.gifMaxWidth = gifMaxWidth
+        self.gifMaxColors = gifMaxColors
+    }
+
+    func options(target: [String: Any], capabilities: NativeRecordingCapabilities) -> [String: Any] {
+        [
+            "kind": "video", "target": target, "frames_per_second": framesPerSecond,
+            "max_resolution": maxResolution, "countdown_seconds": countdown,
+            "show_cursor": capabilities.cursorControl && showCursor,
+            "highlight_clicks": capabilities.clickHighlights && highlightClicks,
+            "show_keystrokes": showKeystrokes,
+            "audio": [
+                "capture_system_audio": capabilities.systemAudio && captureSystemAudio,
+                "microphone_device_id": capabilities.microphone ? microphoneDeviceID as Any : NSNull(),
+                "mono_output": monoAudio, "system_volume_percent": 100,
+                "microphone_volume_percent": 100, "microphone_muted": false,
+            ],
+            "gif": ["max_width": gifMaxWidth, "max_colors": gifMaxColors, "optimize": true],
+        ]
+    }
+}
+
+func nativeRecordingTarget(_ target: WindowSelectionChoice, displayID: String) throws -> [String: Any] {
+    switch target {
+    case .display:
+        return ["type": "display", "display_id": displayID]
+    case .window(_, let id):
+        return ["type": "window", "window_id": id]
+    case .region(let rect):
+        guard rect.width >= 1, rect.height >= 1 else {
+            throw AppBridgeError.backend("Select a valid recording region.")
+        }
+        return ["type": "region", "display_id": displayID, "rect": [
+            "x": Int(rect.x.rounded()), "y": Int(rect.y.rounded()),
+            "width": Int(rect.width.rounded()), "height": Int(rect.height.rounded()),
+        ]]
+    }
+}
+
+func nativeRecordingOptions(preferences: RecordingPreferences, target: [String: Any],
+                            capabilities: NativeRecordingCapabilities,
+                            controls: RecordingControlState) -> [String: Any] {
+    var options = preferences.options(target: target, capabilities: capabilities)
+    options["frames_per_second"] = controls.framesPerSecond
+    options["max_resolution"] = controls.maxResolution
+    options["show_cursor"] = capabilities.cursorControl && controls.showCursor
+    options["highlight_clicks"] = capabilities.clickHighlights && controls.highlightClicks
+    if var audio = options["audio"] as? [String: Any] {
+        audio["capture_system_audio"] = capabilities.systemAudio && controls.systemAudio
+        if capabilities.microphone, let microphoneDeviceID = controls.microphoneDeviceID {
+            audio["microphone_device_id"] = microphoneDeviceID
+        } else {
+            audio["microphone_device_id"] = NSNull()
+        }
+        options["audio"] = audio
+    }
+    return options
 }
 
 final class AppBridge: AppTransport {
@@ -249,10 +346,14 @@ final class NativeWindowSession {
 struct DisplayItem {
     let id: String
     let title: String
+    let descriptor: [String: Any]
     init?(_ value: [String: Any]) {
         guard let id = value["id"] as? String, let name = value["name"] as? String,
-              let width = value["width"] as? NSNumber, let height = value["height"] as? NSNumber else { return nil }
+              let width = value["width"] as? NSNumber, let height = value["height"] as? NSNumber,
+              value["x"] is NSNumber, value["y"] is NSNumber,
+              value["scale_factor"] is NSNumber, value["is_primary"] is Bool else { return nil }
         self.id = id
+        descriptor = value
         let primary = value["is_primary"] as? Bool == true ? " · Main" : ""
         title = "\(name) · \(width.intValue) × \(height.intValue)\(primary)"
     }
@@ -262,6 +363,8 @@ struct CaptureArtifact {
     let id: String
     let imagePath: String
     let previewPath: String
+    let mediaPath: String?
+    let kind: String
     let width: Int
     let height: Int
     let createdAt: String
@@ -269,11 +372,17 @@ struct CaptureArtifact {
 
     init?(_ value: [String: Any]) {
         guard let entry = value["entry"] as? [String: Any], let id = entry["id"] as? String,
-              let image = value["image_path"] as? String, let preview = value["preview_path"] as? String,
+              let preview = value["preview_path"] as? String,
               let width = entry["width"] as? NSNumber, let height = entry["height"] as? NSNumber,
               let created = entry["created_at"] as? String else { return nil }
+        kind = entry["kind"] as? String ?? "screenshot"
+        mediaPath = value["media_path"] as? String
+        guard let image = value["image_path"] as? String ?? (mediaPath == nil ? nil : preview)
+        else { return nil }
         self.id = id; imagePath = image; previewPath = preview
         self.width = width.intValue; self.height = height.intValue; createdAt = created
         savedPath = entry["saved_path"] as? String
     }
+
+    var isRecording: Bool { kind != "screenshot" }
 }

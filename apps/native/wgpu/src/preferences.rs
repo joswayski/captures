@@ -859,7 +859,7 @@ impl Preferences {
         });
     }
     fn shortcuts(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        self.card(ui,t,2,"Shortcuts","Select a shortcut, then press the key combination you want. Press Escape to cancel. New Capture, Region, Window, and Full Screen are active globally; recording remains unconnected.",|this,ui| {
+        self.card(ui,t,2,"Shortcuts","Select a shortcut, then press the key combination you want. Press Escape to cancel. Live mode registers New Capture, screenshot and recording shortcuts; fixture scenes only edit settings.",|this,ui| {
             for (index, field) in SHORTCUT_FIELDS.into_iter().enumerate() {
                 if index > 0 {
                     ui.separator();

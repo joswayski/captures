@@ -12,6 +12,7 @@ members = [
     "crates/captures-recording",
     "crates/captures-recording-xcap",
     "crates/captures-recording-macos",
+    "crates/captures-recording-platform",
     "crates/captures-settings",
     "crates/captures-settings-ffi",
     "crates/captures-session",

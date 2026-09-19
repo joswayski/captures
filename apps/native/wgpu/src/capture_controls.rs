@@ -1,6 +1,9 @@
 use captures_app::selection::{Bounds, Rect};
 use captures_app::shortcuts::CaptureShortcut;
 use captures_capture::{DisplayDescriptor, WindowDescriptor};
+use captures_recording::{AudioDevice, MaxResolution};
+use captures_recording_platform::RecordingCapabilities;
+use captures_settings::RecordingSettings;
 use eframe::egui::{self, Align2, RichText, Stroke, TextureHandle};
 
 use crate::{
@@ -17,6 +20,13 @@ pub enum TargetMode {
     Display,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ActionMode {
+    #[default]
+    Screenshot,
+    Recording,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Target {
     Region(Rect),
@@ -27,6 +37,7 @@ pub enum Target {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     Capture(Target),
+    StartRecording(Target),
     SwitchDisplay(String),
     Cancel,
 }
@@ -38,13 +49,53 @@ pub struct View<'a> {
     pub displays: &'a [DisplayDescriptor],
     pub windows: &'a [WindowDescriptor],
     pub auto_start: bool,
+    pub recording_available: bool,
+    pub recording_unavailable_reason: Option<&'a str>,
 }
 
-#[derive(Default)]
 pub struct CaptureControls {
+    action_mode: ActionMode,
     mode: TargetMode,
     region: Selector,
     window: WindowSelector,
+    recording: RecordingSelection,
+    recording_capabilities: RecordingCapabilities,
+    microphones: Vec<AudioDevice>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecordingSelection {
+    pub frames_per_second: u16,
+    pub max_resolution: MaxResolution,
+    pub countdown_seconds: u8,
+    pub show_cursor: bool,
+    pub highlight_clicks: bool,
+    pub capture_system_audio: bool,
+    pub microphone_device_id: Option<String>,
+    pub mono_audio: bool,
+}
+
+impl Default for CaptureControls {
+    fn default() -> Self {
+        Self {
+            action_mode: ActionMode::Screenshot,
+            mode: TargetMode::Region,
+            region: Selector::default(),
+            window: WindowSelector::default(),
+            recording: RecordingSelection {
+                frames_per_second: 60,
+                max_resolution: MaxResolution::Original,
+                countdown_seconds: 3,
+                show_cursor: true,
+                highlight_clicks: false,
+                capture_system_audio: false,
+                microphone_device_id: None,
+                mono_audio: false,
+            },
+            recording_capabilities: RecordingCapabilities::current(false),
+            microphones: vec![],
+        }
+    }
 }
 
 impl CaptureControls {
@@ -55,8 +106,45 @@ impl CaptureControls {
         }
     }
 
+    pub fn recording_fixture() -> Self {
+        Self {
+            action_mode: ActionMode::Recording,
+            window: WindowSelector::fixture(),
+            ..Self::default()
+        }
+    }
+
     pub fn mode(&self) -> TargetMode {
         self.mode
+    }
+
+    pub fn configure_recording(
+        &mut self,
+        settings: &RecordingSettings,
+        capabilities: RecordingCapabilities,
+    ) {
+        self.recording = RecordingSelection {
+            frames_per_second: settings.video_fps,
+            max_resolution: settings.video_max_resolution,
+            countdown_seconds: settings.countdown_seconds,
+            show_cursor: capabilities.cursor_control && settings.show_cursor,
+            highlight_clicks: capabilities.click_highlights && settings.highlight_clicks,
+            capture_system_audio: capabilities.system_audio && settings.capture_system_audio,
+            microphone_device_id: capabilities
+                .microphone
+                .then(|| settings.microphone_device_id.clone())
+                .flatten(),
+            mono_audio: settings.mono_audio,
+        };
+        self.recording_capabilities = capabilities;
+    }
+
+    pub fn set_microphones(&mut self, microphones: Vec<AudioDevice>) {
+        self.microphones = microphones;
+    }
+
+    pub fn recording_selection(&self) -> RecordingSelection {
+        self.recording.clone()
     }
 
     #[cfg(test)]
@@ -78,21 +166,31 @@ impl CaptureControls {
         self.window.reset();
     }
 
+    pub fn select_recording_target(&mut self, target: TargetMode) {
+        self.action_mode = ActionMode::Recording;
+        self.mode = target;
+    }
+
     pub fn apply_target_shortcut(&mut self, shortcut: CaptureShortcut) {
         self.mode = match shortcut {
-            CaptureShortcut::Region => {
+            CaptureShortcut::Region | CaptureShortcut::RecordRegion => {
                 self.window.clear_selection_and_hover();
                 TargetMode::Region
             }
-            CaptureShortcut::Window => {
+            CaptureShortcut::Window | CaptureShortcut::RecordWindow => {
                 self.window.clear_hover();
                 TargetMode::Window
             }
-            CaptureShortcut::Display => {
+            CaptureShortcut::Display | CaptureShortcut::RecordDisplay => {
                 self.window.clear_selection_and_hover();
                 TargetMode::Display
             }
             CaptureShortcut::NewCapture => return,
+        };
+        self.action_mode = if shortcut.is_recording() {
+            ActionMode::Recording
+        } else {
+            ActionMode::Screenshot
         };
     }
 
@@ -136,7 +234,7 @@ impl CaptureControls {
                 .region
                 .show_surface(ui, tokens, view.frozen, view.auto_start, Some(bounds))
                 .and_then(|action| match action {
-                    selector::Action::Confirm => self.current_target().map(Action::Capture),
+                    selector::Action::Confirm => self.current_action(),
                     selector::Action::Cancel => Some(Action::Cancel),
                 }),
             TargetMode::Window => {
@@ -156,7 +254,7 @@ impl CaptureControls {
                 {
                     self.mode = TargetMode::Display;
                 }
-                target.map(|target| Action::Capture(window_target(target)))
+                target.map(|target| self.action_for_target(window_target(target)))
             }
             TargetMode::Display => {
                 let clicked = window_selector::show_display_surface(
@@ -169,7 +267,7 @@ impl CaptureControls {
                         auto_start: view.auto_start,
                     },
                 );
-                (clicked && view.auto_start).then_some(Action::Capture(Target::Display))
+                (clicked && view.auto_start).then(|| self.action_for_target(Target::Display))
             }
         };
 
@@ -178,7 +276,7 @@ impl CaptureControls {
         } else if ui.input(|input| input.key_pressed(egui::Key::Enter))
             && let Some(target) = self.current_target()
         {
-            action = Some(Action::Capture(target));
+            action = Some(self.action_for_target(target));
         }
 
         let content_rect = ui.ctx().content_rect();
@@ -217,11 +315,43 @@ impl CaptureControls {
                                     action = Some(Action::Cancel);
                                 }
                                 ui.separator();
-                                let _ = segment(ui, tokens, true, "Screenshot");
-                                ui.add_enabled(false, egui::Button::new("Record"))
-                                    .on_disabled_hover_text(
-                                        "Screen recording is not available yet",
-                                    );
+                                if segment(
+                                    ui,
+                                    tokens,
+                                    self.action_mode == ActionMode::Screenshot,
+                                    "Screenshot",
+                                )
+                                .clicked()
+                                {
+                                    self.action_mode = ActionMode::Screenshot;
+                                }
+                                if ui
+                                    .add_enabled(
+                                        view.recording_available,
+                                        egui::Button::new(
+                                            RichText::new("Record").color(tokens.color(
+                                                if self.action_mode == ActionMode::Recording {
+                                                    "glass-text"
+                                                } else {
+                                                    "glass-text-muted"
+                                                },
+                                            )),
+                                        )
+                                        .fill(tokens.color(if self.action_mode
+                                            == ActionMode::Recording
+                                        {
+                                            "glass-raised"
+                                        } else {
+                                            "glass-strong"
+                                        })),
+                                    )
+                                    .on_disabled_hover_text(view.recording_unavailable_reason.unwrap_or(
+                                        "Screen recording is unavailable in this desktop session",
+                                    ))
+                                    .clicked()
+                                {
+                                    self.action_mode = ActionMode::Recording;
+                                }
                                 ui.separator();
                                 for (mode, label) in [
                                     (TargetMode::Region, "Region"),
@@ -233,12 +363,13 @@ impl CaptureControls {
                                         let same = self.mode == mode;
                                         self.mode = mode;
                                         if mode == TargetMode::Display && view.auto_start {
-                                            action = Some(Action::Capture(Target::Display));
+                                            action =
+                                                Some(self.action_for_target(Target::Display));
                                         } else if same
                                             && view.auto_start
                                             && let Some(target) = self.current_target()
                                         {
-                                            action = Some(Action::Capture(target));
+                                            action = Some(self.action_for_target(target));
                                         }
                                     }
                                 }
@@ -286,23 +417,47 @@ impl CaptureControls {
                                         .add_enabled(
                                             target.is_some(),
                                             egui::Button::new(
-                                                RichText::new("Capture")
+                                                RichText::new(if self.action_mode
+                                                    == ActionMode::Recording
+                                                {
+                                                    "Start recording"
+                                                } else {
+                                                    "Capture"
+                                                })
                                                     .color(tokens.color("theme-accent-ink")),
                                             )
                                             .fill(tokens.color("theme-accent"))
                                             .stroke(Stroke::NONE),
                                         )
-                                        .on_hover_text("Take screenshot (Enter)")
+                                        .on_hover_text(if self.action_mode
+                                            == ActionMode::Recording
+                                        {
+                                            "Start recording (Enter)"
+                                        } else {
+                                            "Take screenshot (Enter)"
+                                        })
                                         .clicked()
                                         && let Some(target) = target
                                     {
-                                        action = Some(Action::Capture(target));
+                                        action = Some(self.action_for_target(target));
                                     }
                                 }
                             });
+                            if self.action_mode == ActionMode::Recording {
+                                ui.separator();
+                                self.show_recording_options(ui, tokens);
+                            }
                             ui.horizontal(|ui| {
                                 ui.label(
-                                    RichText::new("Capture controls are excluded from screenshots")
+                                    RichText::new(if self.action_mode == ActionMode::Recording {
+                                        if self.recording_capabilities.controls_excluded {
+                                            "These controls won’t show in recordings"
+                                        } else {
+                                            "These controls will show in recordings"
+                                        }
+                                    } else {
+                                        "Capture controls are excluded from screenshots"
+                                    })
                                         .small()
                                         .color(tokens.color("glass-text-muted")),
                                 );
@@ -316,6 +471,13 @@ impl CaptureControls {
                                     .color(tokens.color("glass-text-subtle")),
                                 );
                             });
+                            if let Some(reason) = view.recording_unavailable_reason {
+                                ui.label(
+                                    RichText::new(reason)
+                                        .small()
+                                        .color(tokens.color("theme-signal")),
+                                );
+                            }
                         });
                     });
             });
@@ -340,6 +502,130 @@ impl CaptureControls {
             TargetMode::Display => Some(Target::Display),
         }
     }
+
+    fn current_action(&self) -> Option<Action> {
+        self.current_target()
+            .map(|target| self.action_for_target(target))
+    }
+
+    fn action_for_target(&self, target: Target) -> Action {
+        match self.action_mode {
+            ActionMode::Screenshot => Action::Capture(target),
+            ActionMode::Recording => Action::StartRecording(target),
+        }
+    }
+
+    fn show_recording_options(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("FPS")
+                    .small()
+                    .color(tokens.color("glass-text-muted")),
+            );
+            egui::ComboBox::from_id_salt("recording-fps")
+                .selected_text(self.recording.frames_per_second.to_string())
+                .show_ui(ui, |ui| {
+                    for fps in [60, 30, 15] {
+                        ui.selectable_value(
+                            &mut self.recording.frames_per_second,
+                            fps,
+                            fps.to_string(),
+                        );
+                    }
+                });
+            ui.label(
+                RichText::new("MAX RESOLUTION")
+                    .small()
+                    .color(tokens.color("glass-text-muted")),
+            );
+            egui::ComboBox::from_id_salt("recording-resolution")
+                .selected_text(match self.recording.max_resolution {
+                    MaxResolution::Original => "Original",
+                    MaxResolution::P1080 => "1080p",
+                    MaxResolution::P720 => "720p",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.recording.max_resolution,
+                        MaxResolution::Original,
+                        "Original",
+                    );
+                    ui.selectable_value(
+                        &mut self.recording.max_resolution,
+                        MaxResolution::P1080,
+                        "1080p",
+                    );
+                    ui.selectable_value(
+                        &mut self.recording.max_resolution,
+                        MaxResolution::P720,
+                        "720p",
+                    );
+                });
+            option_checkbox(
+                ui,
+                "Cursor",
+                &mut self.recording.show_cursor,
+                self.recording_capabilities.cursor_control,
+            );
+            if !self.recording.show_cursor {
+                self.recording.highlight_clicks = false;
+            }
+            option_checkbox(
+                ui,
+                "Clicks",
+                &mut self.recording.highlight_clicks,
+                self.recording_capabilities.click_highlights,
+            );
+            if self.recording.highlight_clicks {
+                self.recording.show_cursor = true;
+            }
+            option_checkbox(
+                ui,
+                "Desktop audio",
+                &mut self.recording.capture_system_audio,
+                self.recording_capabilities.system_audio,
+            );
+            ui.label(
+                RichText::new("MIC")
+                    .small()
+                    .color(tokens.color("glass-text-muted")),
+            );
+            let selected = self.recording.microphone_device_id.clone();
+            let selected_label = selected
+                .as_ref()
+                .and_then(|id| self.microphones.iter().find(|device| &device.id == id))
+                .map_or_else(
+                    || {
+                        if selected.is_some() {
+                            "Selected"
+                        } else {
+                            "Off"
+                        }
+                        .to_owned()
+                    },
+                    |device| device.name.clone(),
+                );
+            ui.add_enabled_ui(self.recording_capabilities.microphone, |ui| {
+                egui::ComboBox::from_id_salt("recording-microphone")
+                    .selected_text(truncate_label(&selected_label, 18))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.recording.microphone_device_id, None, "Off");
+                        for device in &self.microphones {
+                            ui.selectable_value(
+                                &mut self.recording.microphone_device_id,
+                                Some(device.id.clone()),
+                                &device.name,
+                            );
+                        }
+                    });
+            });
+        });
+    }
+}
+
+fn option_checkbox(ui: &mut egui::Ui, label: &str, value: &mut bool, enabled: bool) {
+    ui.add_enabled(enabled, egui::Checkbox::new(value, label))
+        .on_disabled_hover_text(format!("{label} is unavailable in this desktop session"));
 }
 
 fn window_target(target: SelectionTarget) -> Target {
@@ -464,6 +750,8 @@ mod tests {
                 displays: &displays,
                 windows: &[],
                 auto_start,
+                recording_available: true,
+                recording_unavailable_reason: None,
             },
             |_| None,
         );
@@ -586,6 +874,56 @@ mod tests {
         assert_eq!(controls.window(), None);
         assert_eq!(controls.window.hovered(), None);
         assert_eq!(controls.region(), settled_region);
+    }
+
+    #[test]
+    fn recording_shortcuts_switch_mode_preserve_region_and_require_confirmation() {
+        let mut controls = CaptureControls::default();
+        controls.region.exercise(
+            0,
+            Bounds {
+                width: 1000.,
+                height: 720.,
+            },
+        );
+        let region = controls.region();
+        for (shortcut, target) in [
+            (CaptureShortcut::RecordWindow, TargetMode::Window),
+            (CaptureShortcut::RecordDisplay, TargetMode::Display),
+            (CaptureShortcut::RecordRegion, TargetMode::Region),
+        ] {
+            controls.window.exercise(0, |_| Some(2));
+            controls.apply_target_shortcut(shortcut);
+            assert_eq!(controls.mode(), target);
+            assert_eq!(controls.action_mode, ActionMode::Recording);
+            assert_eq!(controls.region(), region);
+            assert_eq!(
+                controls.window(),
+                (target == TargetMode::Window).then_some(SelectionTarget::Window(2))
+            );
+            assert_eq!(controls.window.hovered(), None);
+            assert_eq!(
+                run_frame_with_auto_start(
+                    &egui::Context::default(),
+                    &mut controls,
+                    egui::vec2(1000., 720.),
+                    vec![],
+                    egui::Id::unique("record-shortcut"),
+                    true
+                ),
+                None
+            );
+        }
+        assert!(matches!(
+            run_input(&mut controls, vec![key(egui::Key::Enter)]),
+            Some(Action::StartRecording(Target::Region(_)))
+        ));
+        controls.apply_target_shortcut(CaptureShortcut::Display);
+        assert_eq!(controls.action_mode, ActionMode::Screenshot);
+        assert_eq!(
+            run_input(&mut controls, vec![key(egui::Key::Enter)]),
+            Some(Action::Capture(Target::Display))
+        );
     }
 
     #[test]

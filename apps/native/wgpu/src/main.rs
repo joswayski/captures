@@ -4,6 +4,8 @@ mod live;
 mod mini_preview;
 mod options;
 mod preferences;
+mod recording;
+mod recording_hud;
 mod selector;
 mod shortcut_input;
 mod tokens;
@@ -33,6 +35,7 @@ fn emit(event: &str, detail: serde_json::Value) {
 struct InputApplication<'a> {
     inner: eframe::EframeWinitApplication<'a>,
     shortcut_input: shortcut_input::Bridge,
+    shortcuts: workbench::ShortcutOwner,
     root_window: Option<WindowId>,
     root_focused: bool,
     modifiers: ModifiersState,
@@ -56,6 +59,7 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
                     self.root_focused = *focused;
                     if !focused {
                         self.shortcut_input.blur();
+                        self.shortcuts.resume_after_root_blur();
                     }
                 }
                 WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
@@ -125,8 +129,12 @@ fn main() -> eframe::Result {
     });
     let floating = options.floating;
     let idle = options.scene == Scene::Idle;
-    let size = if floating {
+    let size = if floating && options.scene == Scene::Hud {
+        [430., 102.]
+    } else if floating {
         [640., 620.]
+    } else if options.scene == Scene::CaptureControls && options.capture_controls_recording {
+        [1280., 900.]
     } else {
         [1000., 720.]
     };
@@ -160,6 +168,8 @@ fn main() -> eframe::Result {
     let event_loop = EventLoop::<eframe::UserEvent>::with_user_event().build()?;
     let shortcut_input = shortcut_input::Bridge::default();
     let workbench_input = shortcut_input.clone();
+    let shortcuts = workbench::ShortcutOwner::default();
+    let workbench_shortcuts = shortcuts.clone();
     let inner = eframe::create_native(
         "Captures renderer experiment",
         native,
@@ -168,6 +178,7 @@ fn main() -> eframe::Result {
                 cc,
                 options,
                 workbench_input,
+                workbench_shortcuts,
             )))
         }),
         &event_loop,
@@ -175,6 +186,7 @@ fn main() -> eframe::Result {
     let mut application = InputApplication {
         inner,
         shortcut_input,
+        shortcuts,
         root_window: None,
         root_focused: false,
         modifiers: ModifiersState::default(),

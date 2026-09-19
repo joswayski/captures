@@ -31,11 +31,10 @@ Preferences records all seven stored shortcut fields using the shared Rust
 key/modifier, display, cancellation and validation policy. Escape (including
 modified Escape), focus loss or leaving the recorder cancels without saving.
 Modifier-only input previews the chord; invalid keys show an inline error.
-Focused Preferences releases the four capture OS registrations so a recorder
+Focused Preferences releases all seven capture OS registrations so a recorder
 can receive an existing global chord. Edits remain unregistered until Preferences
 loses focus; registration failures are reported rather than treated as success.
-New Capture and the three screenshot actions are connected in live mode.
-Recording bindings can be saved but do not launch those unimplemented workflows.
+New Capture and all six screenshot/recording target actions are connected in live mode.
 Fixture Preferences never registers global keys. The shipping TypeScript policy
 supplies 390 recording and 195 platform-display differential test vectors.
 
@@ -45,6 +44,36 @@ duplicate rejection, restart persistence and a saved global launch chord. AppKit
 XCTest renders both appearances and checks controller/bridge input. Synthetic
 virtual-key mapping does not prove physical Mac media/external-keyboard input;
 physical Windows/macOS, Wayland and screen-reader acceptance remain open.
+
+## Shared recording runtime
+
+`captures-recording-platform::RecordingSession` owns a durable recovery bundle
+and the existing platform engine across start, pause/resume, stop, discard and
+MP4/GIF finalization into private History. Run its blocking methods on a worker.
+Hosts still own permissions, countdown presentation, window exclusion and the
+capture-generation cancellation gate passed to `start`; `prepare` never records.
+Failed assembly/publication keeps source segments. Successful video publication
+removes the draft only after Ready metadata is saved; GIFs keep editable sources.
+Post-publication housekeeping failures return the saved artifact with a warning.
+Both hosts connect Video-only Record controls and region/window/display recording
+shortcuts. From idle the keys open Record on that target; in an open selector,
+screenshot and recording keys switch mode/target in place. Busy recording phases
+and focused Preferences suppress capture shortcuts. Native recording editing,
+GIF export and media-tool bundling remain unconnected.
+
+Linux CI records an asymmetric 310×170 region on a private Xvfb display, pauses
+and resumes, independently decodes the saved colors with FFmpeg, publishes video
+and GIF History entries, and exercises cancellation and persistence failures:
+
+```sh
+env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 CAPTURES_TEST_PRIVATE_X11=1 \
+  xvfb-run -a -s '-screen 0 640x480x24 -nolisten tcp -noreset' \
+  cargo test -p captures-recording-platform \
+  private_x11_records_pause_resume_pixels_and_cancelled_start -- --ignored
+```
+
+This needs `xvfb`, `xauth`, `hsetroot`, FFmpeg and FFprobe. It is not physical
+Windows/macOS, audio-device, multi-display or Wayland acceptance.
 
 ## Resident lifecycle and screenshot shortcuts
 

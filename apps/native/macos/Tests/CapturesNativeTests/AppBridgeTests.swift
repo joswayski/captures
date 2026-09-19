@@ -45,6 +45,52 @@ final class AppBridgeTests: XCTestCase {
         XCTAssertEqual(response["path"] as? String, "/native/history")
     }
 
+    func testRecordingPreferencesBuildVideoOptionsWithoutDroppingStoredSettings() throws {
+        let preferences = try RecordingPreferences([
+            "video_fps": 30, "video_max_resolution": "p1080", "countdown_seconds": 7,
+            "show_cursor": false, "highlight_clicks": true, "show_keystrokes": true,
+            "capture_system_audio": true, "microphone_device_id": "studio-mic",
+            "mono_audio": true, "gif_max_width": 640, "gif_max_colors": 128,
+        ])
+        let options = preferences.options(target: ["type": "display", "display_id": "7"],
+            capabilities: NativeRecordingCapabilities([
+                "system_audio": true, "microphone": true, "cursor_control": true,
+                "click_highlights": true, "controls_excluded": true,
+            ])!)
+        XCTAssertEqual(options["kind"] as? String, "video")
+        XCTAssertEqual(options["frames_per_second"] as? Int, 30)
+        XCTAssertEqual(options["max_resolution"] as? String, "p1080")
+        XCTAssertEqual(options["show_keystrokes"] as? Bool, true)
+        let audio = try XCTUnwrap(options["audio"] as? [String: Any])
+        XCTAssertEqual(audio["capture_system_audio"] as? Bool, true)
+        XCTAssertEqual(audio["microphone_device_id"] as? String, "studio-mic")
+        XCTAssertEqual(audio["mono_output"] as? Bool, true)
+
+        var controls = RecordingControlState(framesPerSecond: 60, maxResolution: "original",
+            showCursor: true, highlightClicks: false, systemAudio: false,
+            microphoneDeviceID: nil)
+        let offOptions = nativeRecordingOptions(preferences: preferences,
+            target: ["type": "display", "display_id": "7"],
+            capabilities: NativeRecordingCapabilities([
+                "system_audio": true, "microphone": true, "cursor_control": true,
+                "click_highlights": true, "controls_excluded": true,
+            ])!, controls: controls)
+        let offAudio = try XCTUnwrap(offOptions["audio"] as? [String: Any])
+        XCTAssertTrue(offAudio["microphone_device_id"] is NSNull,
+            "choosing Off must override the stored microphone")
+
+        controls.microphoneDeviceID = "built-in-mic"
+        let selectedOptions = nativeRecordingOptions(preferences: preferences,
+            target: ["type": "display", "display_id": "7"],
+            capabilities: NativeRecordingCapabilities([
+                "system_audio": true, "microphone": true, "cursor_control": true,
+                "click_highlights": true, "controls_excluded": true,
+            ])!, controls: controls)
+        let selectedAudio = try XCTUnwrap(selectedOptions["audio"] as? [String: Any])
+        XCTAssertEqual(selectedAudio["microphone_device_id"] as? String, "built-in-mic",
+            "the picker must pass the actual selected device ID")
+    }
+
     func testBackendErrorIsPreserved() {
         XCTAssertThrowsError(try AppBridge.decode(Data(#"{"ok":false,"error":"screen access denied"}"#.utf8))) { error in
             XCTAssertEqual(error as? AppBridgeError, .backend("screen access denied"))

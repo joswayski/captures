@@ -338,23 +338,23 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
 
     private func shortcutsCard(_ y: CGFloat) -> CGFloat {
         let description = liveCaptureAvailable
-            ? "Edit saved shortcuts. Region, window and display screenshots are active in this native build."
+            ? "Edit saved shortcuts for New Capture, screenshots and recordings."
             : "Edit disposable fixture settings. Fixture scenes never register global keys."
         let card = card("shortcuts", title: "Shortcuts", description: description, y: y, height: 574)
         shortcutRecorders.removeAll(); shortcutErrors.removeAll()
         let rows = [
-            ("new_capture_shortcut", "New Capture", false, false),
-            ("region_shortcut", "Screenshot region", true, false),
-            ("window_shortcut", "Screenshot window", true, false),
-            ("display_shortcut", "Screenshot display", true, false),
-            ("video_shortcut", "Record region", false, true),
-            ("window_shortcut", "Record window", false, true),
-            ("display_shortcut", "Record display", false, true),
+            ("new_capture_shortcut", "New Capture", false),
+            ("region_shortcut", "Screenshot region", false),
+            ("window_shortcut", "Screenshot window", false),
+            ("display_shortcut", "Screenshot display", false),
+            ("video_shortcut", "Record region", true),
+            ("window_shortcut", "Record window", true),
+            ("display_shortcut", "Record display", true),
         ]
         for (index, row) in rows.enumerated() {
             shortcutRow(key: row.0, title: row.1,
-                detail: liveCaptureAvailable && row.2 ? "Active in the native workspace" : "Not connected in the native workspace",
-                recordingSetting: row.3, y: 84 + CGFloat(index) * 68, parent: card)
+                detail: liveCaptureAvailable ? "Active in the native workspace" : "Fixture settings only",
+                recordingSetting: row.2, y: 84 + CGFloat(index) * 68, parent: card)
         }
         return y + card.frame.height + 22
     }
