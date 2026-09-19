@@ -8,61 +8,52 @@ struct MiniPreviewSettings: Equatable {
     let includeInCaptures: Bool
 }
 
-final class MiniPreviewView: NSView {
+final class MiniPreviewCardView: NSView {
     private let tokens: Tokens
     private let imageView = NSImageView()
-    private let title = NSTextField(labelWithString: "Latest screenshot")
+    private let title = NSTextField(labelWithString: "Screenshot")
     private let status = NSTextField(labelWithString: "")
     private(set) var artifactID: String
-    var copyAction: () -> Void
-    var saveAction: () -> Void
-    var openAction: () -> Void
-    var dismissAction: () -> Void
     override var isFlipped: Bool { true }
 
-    init(geometry: CapturesPreviewGeometry, artifactID: String, image: NSImage, tokens: Tokens,
+    init(frame: NSRect, artifactID: String, image: NSImage, tokens: Tokens,
          copy: @escaping () -> Void, save: @escaping () -> Void,
          open: @escaping () -> Void, dismiss: @escaping () -> Void) {
         self.artifactID = artifactID; self.tokens = tokens
-        copyAction = copy; saveAction = save; openAction = open; dismissAction = dismiss
-        let frame = NSRect(x: 0, y: 0, width: geometry.width, height: geometry.height)
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = tokens.color("glass-strong").cgColor
-        layer?.cornerRadius = tokens.number("r-xl")
+        layer?.cornerRadius = tokens.number("r-lg")
         layer?.borderWidth = 1; layer?.borderColor = tokens.color("glass-border").cgColor
 
-        let padding = CGFloat(geometry.padding), cardHeight = CGFloat(geometry.card_height)
-        imageView.frame = NSRect(x: padding, y: padding, width: frame.width - padding * 2,
-                                 height: cardHeight)
+        imageView.frame = bounds
         imageView.image = image; imageView.imageScaling = .scaleProportionallyUpOrDown
         imageView.wantsLayer = true; imageView.layer?.cornerRadius = tokens.number("r-lg")
         imageView.layer?.masksToBounds = true
-        imageView.setAccessibilityLabel("Latest screenshot thumbnail")
+        imageView.setAccessibilityLabel("Screenshot thumbnail")
         addSubview(imageView)
 
-        title.frame = NSRect(x: padding, y: 5, width: 170, height: 19)
+        let inset = tokens.number("s-2")
+        title.frame = NSRect(x: inset, y: inset, width: 150, height: 19)
         title.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
         title.textColor = tokens.color("glass-text"); addSubview(title)
-        status.frame = NSRect(x: 198, y: 5, width: 114, height: 19)
+        status.frame = NSRect(x: bounds.width - 126, y: inset, width: 118, height: 19)
         status.alignment = .right; status.lineBreakMode = .byTruncatingTail
         status.font = .systemFont(ofSize: tokens.number("text-sm"))
         status.textColor = tokens.color("glass-text-muted"); addSubview(status)
 
         let actions: [(String, () -> Void)] = [("Copy", copy), ("Save", save),
             ("Open", open), ("Dismiss", dismiss)]
-        let buttonHeight = tokens.number("h-md")
-        let actionY = padding + cardHeight
-            + (CGFloat(geometry.control_gutter) - buttonHeight) / 2
-        let actionWidth = (frame.width - padding * 2 - 3 * tokens.number("s-2")) / 4
+        let buttonHeight = tokens.number("h-md"), gap = tokens.number("s-2")
+        let actionWidth = (bounds.width - inset * 2 - gap * 3) / 4
         for (index, action) in actions.enumerated() {
             let button = CaptureButton(action.0,
-                frame: NSRect(x: padding + CGFloat(index) * (actionWidth + tokens.number("s-2")),
-                    y: actionY, width: actionWidth, height: buttonHeight),
+                frame: NSRect(x: inset + CGFloat(index) * (actionWidth + gap),
+                    y: bounds.height - buttonHeight - inset, width: actionWidth, height: buttonHeight),
                 tokens: tokens, glass: true, action: action.1)
             addSubview(button)
         }
-        setAccessibilityRole(.group); setAccessibilityLabel("Latest screenshot mini preview")
+        setAccessibilityRole(.group); setAccessibilityLabel("Screenshot mini preview")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
@@ -72,54 +63,155 @@ final class MiniPreviewView: NSView {
     }
 }
 
+struct MiniPreviewResource {
+    let artifact: CaptureArtifact
+    let image: NSImage
+}
+
+private final class MiniPreviewDocumentView: NSView {
+    override var isFlipped: Bool { true }
+}
+
+final class MiniPreviewView: NSView {
+    private let geometry: CapturesPreviewGeometry
+    private let tokens: Tokens
+    private let scroll = NSScrollView()
+    private let document = MiniPreviewDocumentView()
+    private var cards: [String: MiniPreviewCardView] = [:]
+    private var expandButton: CaptureButton?
+    private var collapseButton: CaptureButton?
+    private var clearButton: CaptureButton?
+    private(set) var artifactIDs: [String] = []
+    override var isFlipped: Bool { true }
+
+    init(geometry: CapturesPreviewGeometry, resources: [String: MiniPreviewResource],
+         ids: [String], layouts: [String: CapturesPreviewCardLayout], collapsed: Bool,
+         topAnchor: Bool, tokens: Tokens, copy: @escaping (String) -> Void,
+         save: @escaping (String) -> Void, open: @escaping (String) -> Void,
+         dismiss: @escaping (String) -> Void, setCollapsed: @escaping (Bool) -> Void,
+         clearAll: @escaping () -> Void) {
+        self.geometry = geometry; self.tokens = tokens; artifactIDs = ids
+        super.init(frame: NSRect(x: 0, y: 0, width: geometry.width, height: geometry.height))
+        wantsLayer = true
+
+        scroll.frame = bounds; scroll.autoresizingMask = [.width, .height]
+        scroll.drawsBackground = false; scroll.hasVerticalScroller = !collapsed
+        scroll.scrollerStyle = .overlay; scroll.borderType = .noBorder
+        scroll.contentView.drawsBackground = false
+        addSubview(scroll)
+
+        let padding = CGFloat(geometry.padding), cardHeight = CGFloat(geometry.card_height)
+        let cardWidth = bounds.width - padding * 2
+        let contentBottom = layouts.values.map { CGFloat($0.y) + cardHeight }.max() ?? 0
+        document.frame = NSRect(x: 0, y: 0, width: bounds.width,
+            height: max(bounds.height, contentBottom + padding))
+        scroll.documentView = document
+
+        for id in ids {
+            guard let resource = resources[id], let layout = layouts[id] else { continue }
+            let card = MiniPreviewCardView(frame: NSRect(x: padding, y: CGFloat(layout.y),
+                width: cardWidth, height: cardHeight), artifactID: id,
+                image: resource.image, tokens: tokens,
+                copy: { copy(id) }, save: { save(id) }, open: { open(id) },
+                dismiss: { dismiss(id) })
+            card.layer?.zPosition = CGFloat(layout.depth)
+            card.isHidden = false
+            card.subviews.compactMap { $0 as? NSControl }.forEach { $0.isEnabled = layout.interactive }
+            card.setAccessibilityElement(layout.interactive)
+            document.addSubview(card); cards[id] = card
+        }
+
+        let controlY = topAnchor ? 16 : bounds.height - 44
+        if collapsed {
+            let button = CaptureButton(ids.count == 1 ? "Show preview" : "Show all",
+                frame: NSRect(x: padding, y: controlY, width: 100, height: 28),
+                tokens: tokens, glass: true) { setCollapsed(false) }
+            button.setAccessibilityLabel(ids.count == 1 ? "Expand preview" : "Expand \(ids.count) previews")
+            addSubview(button); expandButton = button
+        } else if ids.count >= 2 {
+            let collapse = CaptureButton("Show less",
+                frame: NSRect(x: padding, y: controlY, width: 92, height: 28),
+                tokens: tokens, glass: true) { setCollapsed(true) }
+            let clear = CaptureButton("Clear all",
+                frame: NSRect(x: padding + 100, y: controlY, width: 82, height: 28),
+                tokens: tokens, glass: true, action: clearAll)
+            addSubview(collapse); addSubview(clear)
+            collapseButton = collapse; clearButton = clear
+        }
+
+        if !collapsed {
+            let newestAtTop = topAnchor
+            let destinationY = newestAtTop ? 0 : max(0, document.bounds.height - scroll.contentView.bounds.height)
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: destinationY))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+        setAccessibilityRole(.group)
+        setAccessibilityLabel(ids.count == 1 ? "Screenshot mini preview" : "\(ids.count) screenshot mini previews")
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func setStatus(_ value: String, for artifactID: String) {
+        cards[artifactID]?.setStatus(value)
+    }
+}
+
 final class MiniPreviewPanel: NSPanel {
     let previewView: MiniPreviewView
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
     init(frame: NSRect, geometry: CapturesPreviewGeometry,
-         artifactID: String, image: NSImage, tokens: Tokens,
-         copy: @escaping () -> Void, save: @escaping () -> Void,
-         open: @escaping () -> Void, dismiss: @escaping () -> Void) {
-        previewView = MiniPreviewView(geometry: geometry, artifactID: artifactID,
-            image: image, tokens: tokens,
-            copy: copy, save: save, open: open, dismiss: dismiss)
+         resources: [String: MiniPreviewResource], ids: [String],
+         layouts: [String: CapturesPreviewCardLayout], collapsed: Bool,
+         topAnchor: Bool, tokens: Tokens, copy: @escaping (String) -> Void,
+         save: @escaping (String) -> Void, open: @escaping (String) -> Void,
+         dismiss: @escaping (String) -> Void, setCollapsed: @escaping (Bool) -> Void,
+         clearAll: @escaping () -> Void) {
+        previewView = MiniPreviewView(geometry: geometry, resources: resources, ids: ids,
+            layouts: layouts, collapsed: collapsed, topAnchor: topAnchor, tokens: tokens,
+            copy: copy, save: save, open: open, dismiss: dismiss,
+            setCollapsed: setCollapsed, clearAll: clearAll)
         super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
         isReleasedWhenClosed = false; isOpaque = false; backgroundColor = .clear
         hasShadow = true; level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         hidesOnDeactivate = false; isMovable = false; contentView = previewView
-        setAccessibilityLabel("Latest screenshot mini preview")
+        setAccessibilityLabel(ids.count == 1 ? "Screenshot mini preview" : "Screenshot mini previews")
     }
 }
 
-/// AppKit presentation for one latest screenshot. Rust owns visibility,
-/// replacement generations and monitor-relative placement policy.
+/// AppKit presentation for recent screenshots. Rust owns visibility,
+/// membership/order/collapse, card layout, and monitor-relative placement.
 final class MiniPreviewController {
     typealias ArtifactAction = (CaptureArtifact) -> Void
 
     private let policy: NativePreviewPolicy
+    private let stack: NativePreviewStack
     private let tokens: Tokens
     private let imageLoader: (String) throws -> NSImage
     private let screenProvider: () -> [NSScreen]
     private var panel: MiniPreviewPanel?
-    private var artifact: CaptureArtifact?
+    private var resources: [String: MiniPreviewResource] = [:]
     private var settings = MiniPreviewSettings(enabled: false, placement: "bottom_right",
                                                includeInCaptures: false)
     private var screenID: String?
-    private var pendingArtifactID: String?
-    private var decodeGeneration = 0
+    private var pendingDecodes: [String: Int] = [:]
+    private var visibilityPendingArtifactID: String?
+    private var nextDecodeToken = 0
     var copyArtifact: ArtifactAction = { _ in }
     var saveArtifact: ArtifactAction = { _ in }
     var openArtifact: ArtifactAction = { _ in }
-    var presentedArtifactID: String? { artifact?.id }
+    var presentedArtifactID: String? { stack.ids.last }
+    var presentedArtifactIDs: [String] { stack.ids }
+    var isCollapsed: Bool { stack.isCollapsed }
     var isPanelVisible: Bool { panel?.isVisible == true }
 
     init(tokens: Tokens, policy: NativePreviewPolicy = NativePreviewPolicy(),
+         stack: NativePreviewStack = NativePreviewStack(),
          screenProvider: @escaping () -> [NSScreen] = { NSScreen.screens },
          imageLoader: @escaping (String) throws -> NSImage = MiniPreviewController.loadImage) {
-        self.tokens = tokens; self.policy = policy
+        self.tokens = tokens; self.policy = policy; self.stack = stack
         self.screenProvider = screenProvider; self.imageLoader = imageLoader
     }
 
@@ -127,8 +219,6 @@ final class MiniPreviewController {
         precondition(Thread.isMainThread)
         self.settings = settings
         guard let generation = policy.beginCapture() else { return nil }
-        decodeGeneration += 1
-        pendingArtifactID = nil
         policy.suppressCaptureUI(true)
         updateVisibility()
         return generation
@@ -136,7 +226,9 @@ final class MiniPreviewController {
 
     func restoreCapture(generation: UInt64?) {
         precondition(Thread.isMainThread)
-        if let generation { _ = policy.restore(generation: generation) }
+        if let generation, policy.restore(generation: generation) {
+            visibilityPendingArtifactID = nil
+        }
         policy.suppressCaptureUI(false)
         updateVisibility()
     }
@@ -148,25 +240,37 @@ final class MiniPreviewController {
         guard let generation, policy.wait(generation: generation, artifact: artifact.id) else {
             restoreCapture(generation: generation); return
         }
-        pendingArtifactID = artifact.id
+        guard stack.insert(artifact.id) else {
+            restoreCapture(generation: generation); return
+        }
+        visibilityPendingArtifactID = artifact.id
+        nextDecodeToken &+= 1
+        let decodeToken = nextDecodeToken
+        pendingDecodes[artifact.id] = decodeToken
         policy.suppressCaptureUI(false)
-        decodeGeneration += 1
-        let decode = decodeGeneration
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
             let result = Result { try self.imageLoader(artifact.previewPath) }
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.decodeGeneration == decode else { return }
+                guard let self, self.pendingDecodes[artifact.id] == decodeToken,
+                      self.stack.ids.contains(artifact.id) else { return }
+                self.pendingDecodes[artifact.id] = nil
                 switch result {
                 case .success(let image):
-                    guard self.policy.ready(artifact: artifact.id) else { return }
-                    self.pendingArtifactID = nil
-                    self.artifact = artifact
-                    self.makePanel(image: image)
+                    if self.policy.ready(artifact: artifact.id) {
+                        self.visibilityPendingArtifactID = nil
+                    }
+                    self.resources[artifact.id] = MiniPreviewResource(artifact: artifact, image: image)
+                    self.makePanel()
                     self.updateVisibility()
                 case .failure:
-                    _ = self.policy.stopWaiting()
-                    self.pendingArtifactID = nil
+                    if self.visibilityPendingArtifactID == artifact.id,
+                       self.policy.stopWaiting() {
+                        self.visibilityPendingArtifactID = nil
+                    }
+                    _ = self.stack.remove(artifact.id)
+                    self.resources[artifact.id] = nil
+                    self.makePanel()
                     self.updateVisibility()
                 }
             }
@@ -176,55 +280,103 @@ final class MiniPreviewController {
     func updateSettings(_ settings: MiniPreviewSettings) {
         precondition(Thread.isMainThread)
         self.settings = settings
+        if !settings.enabled, stack.isCollapsed { stack.setCollapsed(false) }
+        if !stack.ids.isEmpty { makePanel() }
         updateVisibility()
     }
 
     func reconcileHistory(ids: Set<String>) {
         precondition(Thread.isMainThread)
-        if let pendingArtifactID, !ids.contains(pendingArtifactID) {
-            decodeGeneration += 1
-            self.pendingArtifactID = nil
-            _ = policy.stopWaiting()
-            updateVisibility()
+        for id in Array(pendingDecodes.keys) where !ids.contains(id) {
+            pendingDecodes[id] = nil
+            _ = stack.remove(id)
+            if visibilityPendingArtifactID == id, policy.stopWaiting() {
+                visibilityPendingArtifactID = nil
+            }
         }
-        if let artifact, !ids.contains(artifact.id) { dismiss() }
+        let removed = stack.ids.filter { !ids.contains($0) }
+        for id in removed {
+            _ = stack.remove(id); resources[id] = nil
+        }
+        if !removed.isEmpty { makePanel(); updateVisibility() }
     }
 
     func setStatus(_ value: String, for artifactID: String) {
-        guard artifact?.id == artifactID else { return }
-        panel?.previewView.setStatus(value)
+        guard resources[artifactID] != nil else { return }
+        panel?.previewView.setStatus(value, for: artifactID)
     }
 
-    func dismiss() {
+    func dismiss(_ artifactID: String) {
         precondition(Thread.isMainThread)
-        decodeGeneration += 1
-        _ = policy.stopWaiting()
-        artifact = nil; pendingArtifactID = nil; screenID = nil
+        guard stack.remove(artifactID) else { return }
+        pendingDecodes[artifactID] = nil
+        if visibilityPendingArtifactID == artifactID, policy.stopWaiting() {
+            visibilityPendingArtifactID = nil
+        }
+        resources[artifactID] = nil
+        if stack.ids.isEmpty { panel?.close(); panel = nil; screenID = nil }
+        else { makePanel(); updateVisibility() }
+    }
+
+    func clearAll() {
+        precondition(Thread.isMainThread)
+        let snapshot = stack.ids
+        guard !snapshot.isEmpty else { return }
+        _ = stack.removeAll(snapshot)
+        snapshot.forEach { id in resources[id] = nil; pendingDecodes[id] = nil }
+        if let pending = visibilityPendingArtifactID, snapshot.contains(pending),
+           policy.stopWaiting() {
+            visibilityPendingArtifactID = nil
+        }
+        if stack.ids.isEmpty { panel?.close(); panel = nil; screenID = nil }
+        else { makePanel(); updateVisibility() }
+    }
+
+    func setCollapsed(_ collapsed: Bool) {
+        precondition(Thread.isMainThread)
+        guard stack.isCollapsed != collapsed else { return }
+        stack.setCollapsed(collapsed)
+        makePanel(); updateVisibility()
+    }
+
+    func close() {
+        precondition(Thread.isMainThread)
+        _ = policy.stopWaiting(); visibilityPendingArtifactID = nil; screenID = nil
+        let ids = stack.ids; _ = stack.removeAll(ids)
+        resources.removeAll(); pendingDecodes.removeAll()
         panel?.close(); panel = nil
     }
 
-    func close() { dismiss() }
-
-    private func makePanel(image: NSImage) {
+    private func makePanel() {
         panel?.close(); panel = nil
-        guard let artifact, let screen = targetScreen(),
+        let ids = stack.ids
+        guard !ids.isEmpty, let screen = targetScreen(),
               let monitor = Self.monitor(for: screen),
-              let geometry = NativePreviewLayout.geometry(monitor: monitor, count: 1,
+              let geometry = NativePreviewLayout.geometry(monitor: monitor, count: ids.count,
+                  collapsed: stack.isCollapsed,
                   placement: settings.placement) else { return }
+        let topAnchor = settings.placement.hasPrefix("top_")
+        let layouts = Dictionary(uniqueKeysWithValues: ids.enumerated().compactMap { index, id in
+            stack.cardLayout(index: index, topAnchor: topAnchor).map { (id, $0) }
+        })
         let frame = Self.appKitFrame(geometry: geometry, monitor: monitor,
                                      screenFrame: screen.frame)
         let next = MiniPreviewPanel(frame: frame, geometry: geometry,
-            artifactID: artifact.id, image: image, tokens: tokens,
-            copy: { [weak self] in self?.perform(\.copyArtifact) },
-            save: { [weak self] in self?.perform(\.saveArtifact) },
-            open: { [weak self] in self?.perform(\.openArtifact) },
-            dismiss: { [weak self] in self?.dismiss() })
+            resources: resources, ids: ids, layouts: layouts,
+            collapsed: stack.isCollapsed, topAnchor: topAnchor, tokens: tokens,
+            copy: { [weak self] in self?.perform(\.copyArtifact, artifactID: $0) },
+            save: { [weak self] in self?.perform(\.saveArtifact, artifactID: $0) },
+            open: { [weak self] in self?.perform(\.openArtifact, artifactID: $0) },
+            dismiss: { [weak self] in self?.dismiss($0) },
+            setCollapsed: { [weak self] in self?.setCollapsed($0) },
+            clearAll: { [weak self] in self?.clearAll() })
         next.sharingType = settings.includeInCaptures ? .readOnly : .none
         panel = next
     }
 
-    private func perform(_ action: KeyPath<MiniPreviewController, ArtifactAction>) {
-        guard let artifact, panel?.previewView.artifactID == artifact.id else { return }
+    private func perform(_ action: KeyPath<MiniPreviewController, ArtifactAction>,
+                         artifactID: String) {
+        guard stack.ids.contains(artifactID), let artifact = resources[artifactID]?.artifact else { return }
         self[keyPath: action](artifact)
     }
 
@@ -240,7 +392,7 @@ final class MiniPreviewController {
         guard let panel else { return }
         panel.sharingType = settings.includeInCaptures ? .readOnly : .none
         if let screen = targetScreen() { position(panel: panel, on: screen) }
-        if policy.visible(count: artifact == nil ? 0 : 1, enabled: settings.enabled,
+        if policy.visible(count: stack.ids.count, enabled: settings.enabled,
                           includeInCaptures: settings.includeInCaptures) {
             panel.orderFrontRegardless()
         } else {
@@ -250,7 +402,8 @@ final class MiniPreviewController {
 
     private func position(panel: NSPanel, on screen: NSScreen) {
         guard let monitor = Self.monitor(for: screen),
-              let geometry = NativePreviewLayout.geometry(monitor: monitor, count: 1,
+              let geometry = NativePreviewLayout.geometry(monitor: monitor, count: stack.ids.count,
+                  collapsed: stack.isCollapsed,
                   placement: settings.placement) else { return }
         panel.setFrame(Self.appKitFrame(geometry: geometry, monitor: monitor,
                                        screenFrame: screen.frame), display: panel.isVisible)

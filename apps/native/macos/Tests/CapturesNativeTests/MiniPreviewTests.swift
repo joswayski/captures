@@ -22,18 +22,15 @@ final class MiniPreviewTests: XCTestCase {
         var actions: [String] = []
         let image = NSImage(cgImage: PreviewView.fixtureImage(scale: 1),
                             size: NSSize(width: 284, height: 160))
-        let geometry = fixtureGeometry()
-        let panel = MiniPreviewPanel(frame: NSRect(x: 0, y: 0,
-            width: geometry.width, height: geometry.height), geometry: geometry,
-            artifactID: "latest", image: image, tokens: tokens,
-            copy: { actions.append("copy") }, save: { actions.append("save") },
-            open: { actions.append("open") }, dismiss: { actions.append("dismiss") })
+        let panel = fixturePanel(ids: ["latest"], images: ["latest": image],
+            copy: { _ in actions.append("copy") }, save: { _ in actions.append("save") },
+            open: { _ in actions.append("open") }, dismiss: { _ in actions.append("dismiss") })
         defer { panel.close() }
 
         XCTAssertFalse(panel.canBecomeKey); XCTAssertFalse(panel.canBecomeMain)
         XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
-        XCTAssertEqual(panel.previewView.artifactID, "latest")
-        let buttons = panel.previewView.subviews.compactMap { $0 as? CaptureButton }
+        XCTAssertEqual(panel.previewView.artifactIDs, ["latest"])
+        let buttons = panel.previewView.subviewsRecursive.compactMap { $0 as? CaptureButton }
         XCTAssertEqual(buttons.map(\.title), ["Copy", "Save", "Open", "Dismiss"])
         XCTAssertTrue(buttons.allSatisfy(\.glass))
         buttons.forEach { $0.performClick(nil) }
@@ -93,7 +90,7 @@ final class MiniPreviewTests: XCTestCase {
             "Copy must publish the full-resolution PNG, not the thumbnail")
     }
 
-    func testReplacementRejectsLateDecodeAndCaptureCancellationRestoresPanel() throws {
+    func testOutOfOrderDecodesPreserveCaptureOrderAndCaptureCancellationRestoresPanel() throws {
         _ = NSApplication.shared
         let oldDecode = DispatchSemaphore(value: 0)
         let image = NSImage(cgImage: PreviewView.fixtureImage(scale: 1),
@@ -113,9 +110,9 @@ final class MiniPreviewTests: XCTestCase {
         controller.present(new, on: screenID(), settings: visible, generation: second)
         try waitUntil { controller.presentedArtifactID == "new" && controller.isPanelVisible }
         oldDecode.signal()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        try waitUntil { controller.presentedArtifactIDs == ["old", "new"] }
         XCTAssertEqual(controller.presentedArtifactID, "new",
-            "an obsolete decode cannot replace the current screenshot")
+            "decode completion order must not change chronological membership")
 
         let cancelled = try XCTUnwrap(controller.beginCapture(settings: visible))
         XCTAssertFalse(controller.isPanelVisible)
@@ -134,15 +131,69 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertNil(controller.presentedArtifactID)
     }
 
+    func testClearAllUsesSnapshotAndDoesNotRemoveLaterArrival() throws {
+        _ = NSApplication.shared
+        let oldDecode = DispatchSemaphore(value: 0)
+        let image = NSImage(cgImage: PreviewView.fixtureImage(scale: 1),
+                            size: NSSize(width: 284, height: 160))
+        let controller = MiniPreviewController(tokens: tokens, imageLoader: { path in
+            if path == "/old-preview.png" { oldDecode.wait() }
+            return image
+        })
+        let settings = MiniPreviewSettings(enabled: true, placement: "bottom_right",
+                                           includeInCaptures: false)
+        let first = try XCTUnwrap(controller.beginCapture(settings: settings))
+        controller.present(artifact(id: "old", previewPath: "/old-preview.png"),
+                           on: screenID(), settings: settings, generation: first)
+        XCTAssertEqual(controller.presentedArtifactIDs, ["old"])
+        controller.clearAll()
+        XCTAssertEqual(controller.presentedArtifactIDs, [])
+
+        let second = try XCTUnwrap(controller.beginCapture(settings: settings))
+        controller.present(artifact(id: "new", previewPath: "/new-preview.png"),
+                           on: screenID(), settings: settings, generation: second)
+        try waitUntil { controller.presentedArtifactIDs == ["new"] && controller.isPanelVisible }
+        oldDecode.signal()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.presentedArtifactIDs, ["new"],
+            "late decode from the cleared snapshot cannot remove or resurrect previews")
+    }
+
+    func testIncomingCapturePreservesCollapsedState() throws {
+        _ = NSApplication.shared
+        let image = NSImage(cgImage: PreviewView.fixtureImage(scale: 1),
+                            size: NSSize(width: 284, height: 160))
+        let controller = MiniPreviewController(tokens: tokens, imageLoader: { _ in image })
+        let settings = MiniPreviewSettings(enabled: true, placement: "top_left",
+                                           includeInCaptures: false)
+        let first = try XCTUnwrap(controller.beginCapture(settings: settings))
+        controller.present(artifact(id: "first", previewPath: "/first-preview.png"),
+                           on: screenID(), settings: settings, generation: first)
+        try waitUntil { controller.isPanelVisible }
+        controller.setCollapsed(true)
+
+        let second = try XCTUnwrap(controller.beginCapture(settings: settings))
+        controller.present(artifact(id: "second", previewPath: "/second-preview.png"),
+                           on: screenID(), settings: settings, generation: second)
+        try waitUntil { controller.presentedArtifactIDs == ["first", "second"] }
+        XCTAssertTrue(controller.isCollapsed)
+
+        controller.updateSettings(MiniPreviewSettings(enabled: false, placement: "top_left",
+                                                       includeInCaptures: false))
+        XCTAssertFalse(controller.isPanelVisible)
+        XCTAssertFalse(controller.isCollapsed)
+        XCTAssertEqual(controller.presentedArtifactIDs, ["first", "second"])
+        controller.updateSettings(settings)
+        XCTAssertTrue(controller.isPanelVisible)
+        XCTAssertEqual(controller.presentedArtifactIDs, ["first", "second"],
+            "hiding previews must retain membership for re-enable")
+    }
+
     func testRealThumbnailRendersRepresentativePanel() throws {
         _ = NSApplication.shared
         let image = NSImage(cgImage: PreviewView.fixtureImage(scale: 2),
                             size: NSSize(width: 284, height: 160))
-        let geometry = fixtureGeometry()
-        let panel = MiniPreviewPanel(frame: NSRect(x: 0, y: 0,
-            width: geometry.width, height: geometry.height), geometry: geometry,
-            artifactID: "fixture", image: image, tokens: tokens,
-            copy: {}, save: {}, open: {}, dismiss: {})
+        let panel = fixturePanel(ids: ["fixture"], images: ["fixture": image])
         defer { panel.close() }
         panel.display(); panel.previewView.layoutSubtreeIfNeeded()
         guard let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] else { return }
@@ -163,13 +214,9 @@ final class MiniPreviewTests: XCTestCase {
         let root = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),
             styleMask: [.titled, .closable], backing: .buffered, defer: false)
         root.isReleasedWhenClosed = false
-        let geometry = fixtureGeometry()
         let image = NSImage(cgImage: PreviewView.fixtureImage(scale: 1),
                             size: NSSize(width: 284, height: 160))
-        let panel = MiniPreviewPanel(frame: NSRect(x: 0, y: 0,
-            width: geometry.width, height: geometry.height), geometry: geometry,
-            artifactID: "latest", image: image, tokens: tokens,
-            copy: {}, save: {}, open: {}, dismiss: {})
+        let panel = fixturePanel(ids: ["latest"], images: ["latest": image])
         panel.orderFrontRegardless()
         var terminationRequests = 0
         let handler = RootWindowCloseHandler(rootWindow: root,
@@ -192,6 +239,28 @@ final class MiniPreviewTests: XCTestCase {
     private func fixtureGeometry() -> CapturesPreviewGeometry {
         CapturesPreviewGeometry(x: 0, y: 0, width: 340, height: 240,
             card_height: 160, padding: 28, control_gutter: 52, anchor: 0)
+    }
+
+    private func fixturePanel(ids: [String], images: [String: NSImage],
+                              collapsed: Bool = false, topAnchor: Bool = false,
+                              copy: @escaping (String) -> Void = { _ in },
+                              save: @escaping (String) -> Void = { _ in },
+                              open: @escaping (String) -> Void = { _ in },
+                              dismiss: @escaping (String) -> Void = { _ in }) -> MiniPreviewPanel {
+        let geometry = fixtureGeometry()
+        let resources = Dictionary(uniqueKeysWithValues: ids.compactMap { id in
+            images[id].map { (id, MiniPreviewResource(artifact: artifact(id: id,
+                previewPath: "/\(id)-preview.png"), image: $0)) }
+        })
+        let layouts = Dictionary(uniqueKeysWithValues: ids.enumerated().map { index, id in
+            (id, CapturesPreviewCardLayout(y: 28 + Double(index) * 184,
+                depth: ids.count - index - 1, interactive: true))
+        })
+        return MiniPreviewPanel(frame: NSRect(x: 0, y: 0,
+            width: geometry.width, height: geometry.height), geometry: geometry,
+            resources: resources, ids: ids, layouts: layouts, collapsed: collapsed,
+            topAnchor: topAnchor, tokens: tokens, copy: copy, save: save, open: open,
+            dismiss: dismiss, setCollapsed: { _ in }, clearAll: {})
     }
 
     private func preferences() throws -> CapturePreferences {
@@ -232,5 +301,11 @@ private final class MiniPreviewActionTransport: AppTransport {
         }
         saves += 1; root = object["root"] as? String
         return ["path": "/exports/latest.png"]
+    }
+}
+
+private extension NSView {
+    var subviewsRecursive: [NSView] {
+        subviews + subviews.flatMap(\.subviewsRecursive)
     }
 }
