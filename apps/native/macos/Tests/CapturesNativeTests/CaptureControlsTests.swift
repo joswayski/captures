@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import CCapturesSettings
 @testable import CapturesNative
 
 final class CaptureControlsTests: XCTestCase {
@@ -138,12 +139,19 @@ final class CaptureControlsTests: XCTestCase {
     func testNarrowMonitorKeepsPickerAndPrimaryActionVisibleWithoutOverlap() throws {
         _ = NSApplication.shared
         let narrowFrame = NSRect(x: 0, y: 0, width: 768, height: 600)
+        let window = NSWindow(contentRect: narrowFrame, styleMask: [.borderless],
+            backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
         let view = UnifiedCaptureSelectionView(frame: narrowFrame, image: nil, targets: targets,
             tokens: Tokens.variants["dark-mustard"]!, autoStart: false,
             hitTest: { _ in 0 }, displayTitles: ["Main display · 768 × 600"],
             selectedDisplay: 0, confirm: { _ in }, cancel: {}, changeDisplay: { _ in })
+        window.contentView = view
         XCTAssertEqual(view.controls.frame.width, 736)
+        try render(view, window: window, name: "capture-controls-dark-narrow-region")
         view.setTarget(.display)
+        try render(view, window: window, name: "capture-controls-dark-narrow-display")
 
         let capture = try XCTUnwrap(buttons(in: view.controls).first { $0.title == "Capture" })
         let picker = try XCTUnwrap(descendant(in: view.controls, accessibilityLabel: "Display"))

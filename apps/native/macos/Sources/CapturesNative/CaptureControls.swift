@@ -1,4 +1,5 @@
 import AppKit
+import CCapturesSettings
 
 enum UnifiedCaptureTarget: String, CaseIterable {
     case region
