@@ -22,6 +22,7 @@ captures-capture = { path = "../../../crates/captures-capture" }
 arboard = "3.6"
 rfd = "0.15"
 tempfile = "3"
+winit = { version = "=0.30.13", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus = "0.9"
