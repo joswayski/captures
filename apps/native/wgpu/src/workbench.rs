@@ -22,7 +22,7 @@ use crate::{
     live::{CaptureRequest, Live},
     options::{Options, Scene},
     preferences::Preferences,
-    shortcut_input,
+    recording_hud, shortcut_input,
     tokens::{self, Tokens},
     tray::{self, Action as TrayAction, Tray},
 };
@@ -551,34 +551,21 @@ impl Workbench {
     }
 
     fn hud(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        egui::Frame::new()
-            .fill(t.color("glass-strong"))
-            .stroke(Stroke::new(1., t.color("glass-border")))
-            .corner_radius(t.number("r-2xl") as u8)
-            .inner_margin(t.number("s-4") as i8)
-            .show(ui, |ui| {
-            ui.set_width(398.);
-            t.glass_controls(ui);
-            ui.label(
-                RichText::new("These controls won’t show in recordings")
-                    .small()
-                    .color(t.color("glass-text-muted")),
-            );
-            ui.horizontal(|ui| {
-                ui.colored_label(t.color("theme-signal"), if self.paused { "Ⅱ" } else { "●" });
-                ui.monospace("0:24");
-                ui.strong(if self.paused { "Paused" } else { "Recording" });
-                ui.add(egui::Button::new("■ Stop").fill(t.color("theme-signal")))
-                    .clicked();
-                if ui
-                    .button(if self.paused { "▶ Resume" } else { "Ⅱ Pause" })
-                    .clicked()
-                {
-                    self.paused = !self.paused;
-                }
-                ui.button("⌫ Discard").clicked();
-            });
-        });
+        if matches!(
+            recording_hud::show(
+                ui,
+                t,
+                recording_hud::View {
+                    paused: self.paused,
+                    elapsed_ms: 24_000,
+                    notice: "These controls won’t show in recordings",
+                    warning: false,
+                },
+            ),
+            Some(recording_hud::Action::Pause | recording_hud::Action::Resume)
+        ) {
+            self.paused = !self.paused;
+        }
     }
 
     fn dissolve(&mut self, ctx: &egui::Context, cold: bool) {
@@ -1057,10 +1044,12 @@ impl eframe::App for Workbench {
                 t.color("surface-canvas")
             })
             .inner_margin(
-                if matches!(
-                    self.options.scene,
-                    Scene::CaptureControls | Scene::Region | Scene::Window
-                ) {
+                if self.options.floating
+                    || matches!(
+                        self.options.scene,
+                        Scene::CaptureControls | Scene::Region | Scene::Window
+                    )
+                {
                     0
                 } else {
                     t.number("s-8") as i8
