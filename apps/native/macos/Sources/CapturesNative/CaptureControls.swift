@@ -124,7 +124,7 @@ final class CaptureControlsView: NSView {
         layer?.borderWidth = 1; layer?.borderColor = tokens.color("glass-border").cgColor
         layer?.shadowColor = NSColor.black.cgColor; layer?.shadowOpacity = 0.44
         layer?.shadowRadius = 22; layer?.shadowOffset = NSSize(width: 0, height: -8)
-        setAccessibilityRole(.group); setAccessibilityLabel("Screenshot controls")
+        setAccessibilityRole(.group); setAccessibilityLabel("Capture controls")
 
         note.frame = NSRect(x: 16, y: 60, width: frame.width - 32, height: 22)
         note.alignment = .center
@@ -207,7 +207,7 @@ final class CaptureControlsView: NSView {
         for button in subviews.compactMap({ $0 as? CaptureButton }) {
             button.escapeActionBlock = { [weak self] in self?.cancel() }
         }
-        fpsMenu.frame = NSRect(x: 16, y: 68, width: 62, height: 36)
+        fpsMenu.frame = NSRect(x: 16, y: 68, width: 80, height: 36)
         fpsMenu.tokens = tokens; fpsMenu.addItems(withTitles: ["15 FPS", "30 FPS", "60 FPS"])
         fpsMenu.selectItem(at: [15, 30, 60].firstIndex(of: recordingState.framesPerSecond) ?? 2)
         fpsMenu.setAccessibilityLabel("Recording frames per second")
@@ -217,7 +217,7 @@ final class CaptureControlsView: NSView {
             self.recordingControlsChanged(self.recordingState)
         }
         addSubview(fpsMenu)
-        resolutionMenu.frame = NSRect(x: 82, y: 68, width: 104, height: 36)
+        resolutionMenu.frame = NSRect(x: 100, y: 68, width: 110, height: 36)
         resolutionMenu.tokens = tokens
         resolutionMenu.addItems(withTitles: ["Original", "1080p", "720p"])
         resolutionMenu.selectItem(at: ["original", "p1080", "p720"]
@@ -229,13 +229,13 @@ final class CaptureControlsView: NSView {
             self.recordingControlsChanged(self.recordingState)
         }
         addSubview(resolutionMenu)
-        addRecordingControl("Cursor", x: 190, width: 82, keyPath: \.showCursor,
+        addRecordingControl("Cursor", x: 214, width: 78, keyPath: \.showCursor,
             available: recordingAvailability?.cursor ?? false)
-        addRecordingControl("Clicks", x: 276, width: 82, keyPath: \.highlightClicks,
+        addRecordingControl("Clicks", x: 296, width: 78, keyPath: \.highlightClicks,
             available: recordingAvailability?.clicks ?? false)
-        addRecordingControl("Desktop audio", x: 362, width: 116, keyPath: \.systemAudio,
+        addRecordingControl("Desktop audio", x: 378, width: 112, keyPath: \.systemAudio,
             available: recordingAvailability?.systemAudio ?? false)
-        addRecordingControl("Microphone", x: 482, width: max(116, frame.width - 498), keyPath: \.microphone,
+        addRecordingControl("Microphone", x: 494, width: max(116, frame.width - 510), keyPath: \.microphone,
             available: recordingAvailability?.microphone ?? false)
         selectTarget(.region, notify: false)
         selectMode(.screenshot, notify: false)
@@ -319,15 +319,23 @@ final class CaptureControlsView: NSView {
         self.mode = mode
         if let superview {
             let height: CGFloat = mode == .record ? 154 : 86
-            frame = NSRect(x: frame.minX, y: superview.bounds.height - height - 26,
-                width: frame.width, height: height)
+            let width = min(superview.bounds.width - 32, mode == .record ? 902 : 854)
+            let x = min(max(16, frame.midX - width / 2), superview.bounds.width - width - 16)
+            frame = NSRect(x: x, y: superview.bounds.height - height - 26,
+                width: width, height: height)
             note.frame = NSRect(x: 16, y: height - 26, width: frame.width - 32, height: 22)
+            captureButton.frame = mode == .record
+                ? NSRect(x: width - 162, y: 10, width: 152, height: 40)
+                : NSRect(x: width - 122, y: 10, width: 112, height: 40)
+            if let microphone = recordingButtons.last {
+                microphone.0.frame.size.width = max(116, width - microphone.0.frame.minX - 16)
+            }
         }
         screenshotButton.selected = mode == .screenshot
         recordButton.selected = mode == .record
         screenshotButton.setAccessibilityValue(mode == .screenshot ? 1 : 0)
         recordButton.setAccessibilityValue(mode == .record ? 1 : 0)
-        captureButton.title = mode == .record ? "Record" : "Capture"
+        captureButton.title = mode == .record ? "Start recording" : "Capture"
         captureButton.icon = mode == .record ? .record : .capture
         captureButton.setAccessibilityLabel(mode == .record ? "Start recording" : "Take screenshot")
         updateRecordingControls()
@@ -351,7 +359,7 @@ final class CaptureControlsView: NSView {
     func selectDisplay(_ index: Int) { displayMenu.selectItem(at: index) }
     func setCaptureEnabled(_ enabled: Bool) {
         captureButton.isEnabled = enabled
-        captureButton.isHidden = autoStart
+        captureButton.isHidden = autoStart && mode == .screenshot
         captureButton.needsDisplay = true
     }
 }

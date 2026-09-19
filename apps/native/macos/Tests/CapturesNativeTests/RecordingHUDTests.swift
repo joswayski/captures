@@ -27,6 +27,15 @@ final class RecordingHUDTests: XCTestCase {
         }
     }
 
+    func testPrivacyNoticeReflectsCaptureInclusionSetting() throws {
+        _ = NSApplication.shared
+        let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
+        let included = RecordingHUDView(frame: NSRect(x: 0, y: 0, width: 430, height: 102),
+            tokens: tokens, excludedFromCapture: false)
+        XCTAssertTrue(included.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
+            .contains("These controls will appear in recordings"))
+    }
+
     private func render(_ view: NSView, window: NSWindow, name: String) throws {
         window.display(); view.layoutSubtreeIfNeeded()
         guard let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] else { return }
