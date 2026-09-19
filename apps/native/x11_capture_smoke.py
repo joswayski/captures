@@ -253,7 +253,7 @@ def main():
             screenshot(root, f"{prefix}-workspace")
 
             def begin_selection():
-                click(root, 467 if mode == "region" else 575, 141)
+                click(root, 575 if mode == "region" else 696, 141)
                 selector = wait(lambda: windows(title), f"{mode} selector")[0]
                 if windows("Captures"):
                     raise RuntimeError("capture workspace was not hidden")

@@ -201,7 +201,7 @@ def main():
             def begin():
                 # Keep the capture control outside all four always-on-top cards.
                 run("xdotool", "windowmove", "--sync", root, "400", "280")
-                click(root, 467, 141)
+                click(root, 575, 141)
                 selector = wait(lambda: windows(SELECTOR), "region selector")[0]
                 wait(lambda: int(run("import", "-window", selector, "-crop", "1280x96+0+804",
                     "-format", "%k", "info:")) > 16, "painted region controls")
