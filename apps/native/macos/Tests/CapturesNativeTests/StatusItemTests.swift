@@ -109,9 +109,11 @@ final class StatusItemTests: XCTestCase {
         XCTAssertEqual(stillCaptureKind(for: .region), .region)
         XCTAssertEqual(stillCaptureKind(for: .window), .window)
         XCTAssertEqual(stillCaptureKind(for: .display), .display)
-        XCTAssertTrue(captureShortcutsEnabled(captureBusy: false))
-        XCTAssertFalse(captureShortcutsEnabled(captureBusy: true),
+        XCTAssertTrue(captureShortcutsEnabled(captureBusy: false, selectorGeneration: nil))
+        XCTAssertFalse(captureShortcutsEnabled(captureBusy: true, selectorGeneration: nil),
             "capture-busy suppression remains independent of registration suspension")
+        XCTAssertTrue(captureShortcutsEnabled(captureBusy: true, selectorGeneration: 42),
+            "the exact active selector scope keeps target shortcuts enabled")
         XCTAssertFalse(captureShortcutsSuspended(preferencesFocused: false),
             "hidden or unfocused Preferences must restore registered shortcuts")
         XCTAssertTrue(captureShortcutsSuspended(preferencesFocused: true),

@@ -232,7 +232,9 @@ func captureShortcutSignature(_ settings: [String: Any]) -> [String] {
      settings.string("display_shortcut")]
 }
 
-func captureShortcutsEnabled(captureBusy: Bool) -> Bool { !captureBusy }
+func captureShortcutsEnabled(captureBusy: Bool, selectorGeneration: UInt64? = nil) -> Bool {
+    !captureBusy || selectorGeneration != nil
+}
 
 func captureShortcutsSuspended(preferencesFocused: Bool) -> Bool { preferencesFocused }
 
@@ -290,6 +292,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var shortcutFocusObservers: [NSObjectProtocol] = []
     private var shortcutSignature: [String]?
     private var shortcutEnabled: Bool?
+    private var shortcutSelectorGeneration: UInt64?
     private var captureBusy = false
     private var terminating = false
     private var liveContent: Surface?
@@ -538,6 +541,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                             self?.rebuildRenderedLiveWorkspaceIfNeeded()
                         }
                     }
+                }, selectorGenerationChanged: { [weak self] generation in
+                    self?.shortcutSelectorGeneration = generation
+                    self?.updateShortcutState()
                 }, reportError: { [weak self] message in
                     self?.presentHostError(title: "Capture Failed", message: message)
                 }) { [weak self] in
@@ -666,11 +672,13 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         let suspended = captureShortcutsSuspended(preferencesFocused: preferencesFocused)
         do {
             try captureShortcuts.setSuspended(suspended)
+            try captureShortcuts.setSelectorGeneration(shortcutSelectorGeneration)
         } catch {
             reportShortcutError(error)
             return
         }
-        let enabled = captureShortcutsEnabled(captureBusy: captureBusy)
+        let enabled = captureShortcutsEnabled(captureBusy: captureBusy,
+            selectorGeneration: shortcutSelectorGeneration)
         if enabled != shortcutEnabled {
             captureShortcuts.setEnabled(enabled)
             shortcutEnabled = enabled
@@ -678,16 +686,22 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func drainCaptureShortcuts() {
-        guard !terminating, !preferencesFocused, !captureBusy,
+        guard !terminating, !preferencesFocused,
+              captureShortcutsEnabled(captureBusy: captureBusy,
+                  selectorGeneration: shortcutSelectorGeneration),
               let captureShortcuts else { return }
         do {
             while let action = try captureShortcuts.nextAction() {
                 if let kind = stillCaptureKind(for: action) {
-                    launchCapture(kind)
-                } else {
+                    if shortcutSelectorGeneration != nil {
+                        _ = liveController?.selectUnifiedTargetFromShortcut(kind)
+                    } else {
+                        launchCapture(kind)
+                    }
+                } else if shortcutSelectorGeneration == nil {
                     launchNewCapture()
                 }
-                if captureBusy { break }
+                if captureBusy && shortcutSelectorGeneration == nil { break }
             }
         } catch {
             reportShortcutError(error)
@@ -706,6 +720,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         captureShortcuts?.close()
         captureShortcuts = nil
         shortcutEnabled = nil
+        shortcutSelectorGeneration = nil
     }
 
     private func reportShortcutError(_ error: Error) {

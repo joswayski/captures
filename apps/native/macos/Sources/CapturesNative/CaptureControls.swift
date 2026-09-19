@@ -342,6 +342,14 @@ final class UnifiedCaptureSelectionView: NSView {
         update()
     }
 
+    func setTargetFromShortcut(_ target: UnifiedCaptureTarget) {
+        hoveredWindowIndex = -1
+        if target != .window { selectedWindowIndex = nil }
+        self.target = target
+        controls.selectTarget(target, notify: false)
+        update()
+    }
+
     func setAspect(_ index: Int) {
         guard RegionSelection.presets.indices.contains(index) else { return }
         aspectIndex = index

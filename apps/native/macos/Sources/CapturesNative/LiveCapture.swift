@@ -61,6 +61,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private let settingsPath: String?
     private let showPreferences: () -> Void
     private let captureStateChanged: (Bool) -> Void
+    private let selectorGenerationChanged: (UInt64?) -> Void
     private let reportError: (String) -> Void
     private weak var miniPreviews: MiniPreviewController?
     private weak var miniPreviewActions: MiniPreviewActions?
@@ -95,6 +96,13 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var unifiedDisplay: DisplayItem?
     private var unifiedScreen: NSScreen?
     private var unifiedControlsState = UnifiedCaptureControlsState.initial
+    private var selectorShortcutGeneration: UInt64? {
+        didSet {
+            if oldValue != selectorShortcutGeneration {
+                selectorGenerationChanged(selectorShortcutGeneration)
+            }
+        }
+    }
     private var displayMenu: ClosurePopUpButton!
     private var table: NSTableView!
     private var preview: NSImageView!
@@ -115,6 +123,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
          miniPreviewActions: MiniPreviewActions? = nil,
          initialSelectionID: String? = nil,
          captureStateChanged: @escaping (Bool) -> Void = { _ in },
+         selectorGenerationChanged: @escaping (UInt64?) -> Void = { _ in },
          reportError: @escaping (String) -> Void = { _ in },
          showPreferences: @escaping () -> Void) {
         self.root = root; self.window = window; self.tokens = tokens
@@ -123,6 +132,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         self.miniPreviewActions = miniPreviewActions
         self.initialSelectionID = initialSelectionID
         self.captureStateChanged = captureStateChanged
+        self.selectorGenerationChanged = selectorGenerationChanged
         self.reportError = reportError
         super.init(); build(); loadInitial()
     }
@@ -327,6 +337,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private func prepareUnified(display: DisplayItem, preferences: CapturePreferences,
                                 generation: UInt64) {
+        selectorShortcutGeneration = nil
         guard let screen = screen(for: display) else {
             finishCapture()
             showError("Couldn’t prepare capture controls",
@@ -391,6 +402,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     panel.selector.restoreControls(self.unifiedControlsState)
                     guard self.unifiedPanel === panel else { return }
                     panel.makeKeyAndOrderFront(nil)
+                    self.selectorShortcutGeneration = generation
                     NSApp.activate(ignoringOtherApps: true)
                     panel.selector.updatePointerLocation()
                 } catch {
@@ -406,6 +418,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         guard flowGeneration == generation, unifiedPanel != nil,
               let screen = unifiedScreen, let display = unifiedDisplay else { return }
         do {
+            selectorShortcutGeneration = nil
             unifiedTarget = target
             unifiedPanel?.close(); unifiedPanel = nil
             _ = try AppBridge.flow(["operation": "start_countdown", "generation": generation,
@@ -580,6 +593,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     func finishCapture(restoreWindow: Bool = true, restorePreview: Bool = true) {
+        selectorShortcutGeneration = nil
         countdownTimer?.invalidate(); countdownTimer = nil
         countdownPanel?.close(); countdownPanel = nil
         regionPanel?.close(); regionPanel = nil
@@ -608,6 +622,18 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    @discardableResult func selectUnifiedTargetFromShortcut(_ kind: StillCaptureKind) -> Bool {
+        guard let panel = unifiedPanel, selectorShortcutGeneration == flowGeneration else { return false }
+        let target: UnifiedCaptureTarget
+        switch kind {
+        case .region: target = .region
+        case .window: target = .window
+        case .display: target = .display
+        }
+        panel.selector.setTargetFromShortcut(target)
+        return true
     }
 
     private func setBusy(_ busy: Bool, message: String = "") {
