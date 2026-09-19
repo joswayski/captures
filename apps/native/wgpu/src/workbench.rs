@@ -54,6 +54,7 @@ pub struct Workbench {
     screenshot_tx: Sender<Arc<egui::ColorImage>>,
     screenshot_rx: Receiver<Arc<egui::ColorImage>>,
     preferences_state: Preferences,
+    capture_controls: crate::capture_controls::CaptureControls,
     region_selector: crate::selector::Selector,
     window_selector: crate::window_selector::WindowSelector,
     window_display: captures_capture::DisplayDescriptor,
@@ -178,6 +179,7 @@ impl Workbench {
             screenshot_tx,
             screenshot_rx,
             preferences_state,
+            capture_controls: crate::capture_controls::CaptureControls::fixture(),
             region_selector: crate::selector::Selector::default(),
             window_selector: crate::window_selector::WindowSelector::fixture(),
             window_display,
@@ -226,6 +228,11 @@ impl Workbench {
 
     fn handle_tray_action(&mut self, action: TrayAction, ctx: &egui::Context) {
         match action {
+            TrayAction::NewCapture => {
+                if let Some(live) = &mut self.live {
+                    live.request_capture(CaptureRequest::NewCapture);
+                }
+            }
             TrayAction::CaptureDisplay => {
                 if let Some(live) = &mut self.live {
                     live.request_capture(CaptureRequest::Display);
@@ -397,7 +404,7 @@ impl Workbench {
             let start = Instant::now();
             let size = if matches!(
                 self.options.scene,
-                Scene::Editor | Scene::Region | Scene::Window
+                Scene::Editor | Scene::CaptureControls | Scene::Region | Scene::Window
             ) {
                 [2048, 1152]
             } else {
@@ -682,6 +689,21 @@ impl Workbench {
                 };
                 self.rotation = self.cycle as f32 * 15.;
             }
+            Scene::CaptureControls => {
+                let (width, height) = self.window_display.overlay_size();
+                self.capture_controls.exercise(
+                    self.cycle,
+                    captures_app::selection::Bounds { width, height },
+                    |point| {
+                        fixture_window_hit_test(
+                            &self.window_targets,
+                            &self.window_shell,
+                            &self.window_display,
+                            point,
+                        )
+                    },
+                );
+            }
             Scene::Region => self.region_selector.exercise(
                 self.cycle,
                 captures_app::selection::Bounds {
@@ -761,6 +783,7 @@ impl eframe::App for Workbench {
         });
         if let (Some(action), Some(live)) = (shortcut_action, &mut self.live) {
             live.request_capture(match action {
+                CaptureShortcut::NewCapture => CaptureRequest::NewCapture,
                 CaptureShortcut::Region => CaptureRequest::Region,
                 CaptureShortcut::Window => CaptureRequest::Window,
                 CaptureShortcut::Display => CaptureRequest::Display,
@@ -927,7 +950,12 @@ impl eframe::App for Workbench {
             self.frames += 1;
             return;
         }
-        if !self.options.floating && !matches!(self.options.scene, Scene::Region | Scene::Window) {
+        if !self.options.floating
+            && !matches!(
+                self.options.scene,
+                Scene::CaptureControls | Scene::Region | Scene::Window
+            )
+        {
             egui::Panel::left("navigation")
                 .exact_size(196.)
                 .resizable(false)
@@ -977,7 +1005,10 @@ impl eframe::App for Workbench {
                 t.color("surface-canvas")
             })
             .inner_margin(
-                if matches!(self.options.scene, Scene::Region | Scene::Window) {
+                if matches!(
+                    self.options.scene,
+                    Scene::CaptureControls | Scene::Region | Scene::Window
+                ) {
                     0
                 } else {
                     t.number("s-8") as i8
@@ -987,7 +1018,7 @@ impl eframe::App for Workbench {
             if !self.options.floating
                 && !matches!(
                     self.options.scene,
-                    Scene::Preferences | Scene::Region | Scene::Window
+                    Scene::Preferences | Scene::CaptureControls | Scene::Region | Scene::Window
                 )
             {
                 ui.heading(self.options.scene.title());
@@ -1021,6 +1052,30 @@ impl eframe::App for Workbench {
                 Scene::Hud => self.hud(ui, &t),
                 Scene::Preview => self.preview(ui, &t),
                 Scene::Editor => self.editor(ui, &t),
+                Scene::CaptureControls => {
+                    let texture = self.texture(ui.ctx(), false);
+                    let texture = self.texture.as_ref().filter(|image| image.id() == texture);
+                    let windows = &self.window_targets;
+                    let shell = &self.window_shell;
+                    let display = &self.window_display;
+                    if let Some(action) = self.capture_controls.show(
+                        ui,
+                        &t,
+                        crate::capture_controls::View {
+                            frozen: texture,
+                            display,
+                            displays: std::slice::from_ref(display),
+                            windows,
+                            auto_start: false,
+                        },
+                        |point| fixture_window_hit_test(windows, shell, display, point),
+                    ) {
+                        emit(
+                            "capture-controls-action",
+                            json!({"action": format!("{action:?}")}),
+                        );
+                    }
+                }
                 Scene::Region => {
                     let texture = self.texture(ui.ctx(), false);
                     let texture = self.texture.as_ref().filter(|image| image.id() == texture);

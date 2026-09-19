@@ -1,3 +1,4 @@
+mod capture_controls;
 mod countdown;
 mod live;
 mod mini_preview;
