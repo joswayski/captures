@@ -85,6 +85,37 @@ final class ShortcutRecorderButton: NSButton {
         setAccessibilityHelp(error.isEmpty ? nil : error)
     }
 
+    private func chipLayout(_ values: [String]) -> (NSFont, [NSRect]) {
+        let available = max(0, bounds.width - 20)
+        let baseSize = tokens.number("text-sm")
+        var font = NSFont.systemFont(ofSize: baseSize, weight: .medium)
+        var widths = values.map { ($0 as NSString).size(withAttributes: [.font: font]).width }
+        let gap: CGFloat = 4
+        let minimumPadding: CGFloat = 4
+        let minimumFontSize: CGFloat = 9
+        let fixedWidth = CGFloat(values.count) * minimumPadding * 2
+            + CGFloat(max(0, values.count - 1)) * gap
+        let textWidth = widths.reduce(0, +)
+        if textWidth + fixedWidth > available, textWidth > 0 {
+            let scale = max(minimumFontSize / baseSize, (available - fixedWidth) / textWidth)
+            font = NSFont.systemFont(ofSize: min(baseSize, baseSize * scale), weight: .medium)
+            widths = values.map { ($0 as NSString).size(withAttributes: [.font: font]).width }
+        }
+        let remaining = available - widths.reduce(0, +)
+            - CGFloat(max(0, values.count - 1)) * gap
+        let padding = values.isEmpty ? minimumPadding
+            : max(minimumPadding, min(7, remaining / CGFloat(values.count * 2)))
+        var x: CGFloat = 10
+        let frames = widths.map { width -> NSRect in
+            defer { x += width + padding * 2 + gap }
+            return NSRect(x: x, y: 7, width: width + padding * 2, height: 24)
+        }
+        return (font, frames)
+    }
+
+    func displayedChipFrames() -> [NSRect] { chipLayout(keys).1 }
+    func displayedChipFontSize() -> CGFloat { chipLayout(keys).0.pointSize }
+
     override func draw(_ dirtyRect: NSRect) {
         let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
             xRadius: tokens.number("r-md"), yRadius: tokens.number("r-md"))
@@ -93,19 +124,18 @@ final class ShortcutRecorderButton: NSButton {
         outline.lineWidth = recording ? 2 : 1; outline.stroke()
 
         let values = keys.isEmpty ? [recording ? "Press shortcut…" : "None"] : keys
-        var x: CGFloat = 10
-        for value in values {
-            let font = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+        let (font, frames) = chipLayout(values)
+        for (value, frame) in zip(values, frames) {
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: font,
                 .foregroundColor: tokens.color(keys.isEmpty ? "text-muted" : "text"),
             ]
-            let textSize = (value as NSString).size(withAttributes: attributes)
-            let chip = NSBezierPath(roundedRect: NSRect(x: x, y: 7, width: textSize.width + 14, height: 24),
+            let chip = NSBezierPath(roundedRect: frame,
                 xRadius: tokens.number("r-sm"), yRadius: tokens.number("r-sm"))
             tokens.color("control").setFill(); chip.fill()
-            (value as NSString).draw(at: NSPoint(x: x + 7, y: 11), withAttributes: attributes)
-            x += textSize.width + 20
+            let textWidth = (value as NSString).size(withAttributes: attributes).width
+            (value as NSString).draw(at: NSPoint(x: frame.midX - textWidth / 2, y: 11),
+                withAttributes: attributes)
         }
     }
 }
@@ -335,13 +365,13 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         let shortcut = recordingSetting
             ? (settings["recording"] as? [String: Any] ?? [:]).string(key)
             : settings.string(key)
-        let titleLabel = addLabel(title, frame: NSRect(x: 22, y: y, width: 280, height: 20),
+        let titleLabel = addLabel(title, frame: NSRect(x: 22, y: y, width: 278, height: 20),
             size: 13, weight: .medium, parent: parent)
-        let detailLabel = addLabel(detail, frame: NSRect(x: 22, y: y + 20, width: 310, height: 20),
+        let detailLabel = addLabel(detail, frame: NSRect(x: 22, y: y + 20, width: 278, height: 20),
             size: 11, muted: true, parent: parent)
         searchable += [(titleLabel, title), (detailLabel, detail)]
         let keys = (try? shortcutDisplay(shortcut)) ?? [shortcut]
-        let recorder = ShortcutRecorderButton(frame: NSRect(x: 350, y: y, width: 328, height: 38),
+        let recorder = ShortcutRecorderButton(frame: NSRect(x: 320, y: y, width: 358, height: 38),
             tokens: tokens, label: title, keys: keys.filter { !$0.isEmpty })
         recorder.identifier = NSUserInterfaceItemIdentifier("shortcut.\(identifier)")
         recorder.beginRecording = { [weak self, weak recorder] in
@@ -354,7 +384,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             self.stopShortcutRecording(recorder, identifier: identifier)
         }
         parent.addSubview(recorder); shortcutRecorders[identifier] = recorder
-        let error = addLabel("", frame: NSRect(x: 350, y: y + 40, width: 328, height: 18),
+        let error = addLabel("", frame: NSRect(x: 320, y: y + 40, width: 358, height: 18),
             size: 11, parent: parent, color: "danger-text")
         error.identifier = NSUserInterfaceItemIdentifier("shortcut-error.\(identifier)")
         error.setAccessibilityRole(.staticText); error.setAccessibilityLabel("\(title) shortcut error")
@@ -400,20 +430,26 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         let identifier = shortcutIdentifier(recorder)
         do {
             let result = try shortcutPolicy(code, control, shift, alt, meta)
-            guard let kind = result["kind"] as? String,
-                  let keys = result["keys"] as? [String] else { throw AppBridgeError.invalidResponse }
+            guard let kind = result["kind"] as? String else { throw AppBridgeError.invalidResponse }
             switch kind {
             case "cancel":
                 stopShortcutRecording(recorder, identifier: identifier)
             case "waiting":
+                guard let keys = result["keys"] as? [String] else {
+                    throw AppBridgeError.invalidResponse
+                }
                 recorder.update(keys: keys)
                 shortcutErrors[identifier]?.stringValue = ""
             case "invalid":
+                guard let keys = result["keys"] as? [String] else {
+                    throw AppBridgeError.invalidResponse
+                }
                 let message = result["message"] as? String ?? "That shortcut is not supported."
                 recorder.update(keys: keys, error: message)
                 shortcutErrors[identifier]?.stringValue = message
             case "complete":
-                guard let shortcut = result["shortcut"] as? String else {
+                guard let keys = result["keys"] as? [String],
+                      let shortcut = result["shortcut"] as? String else {
                     throw AppBridgeError.invalidResponse
                 }
                 setShortcut(shortcut, identifier: identifier)
@@ -481,6 +517,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     }
 
     static func domCode(for event: NSEvent) -> String {
+        // Physical key codes follow Carbon Events.h and winit-appkit's inverse table.
         let codes: [UInt16: String] = [
             0: "KeyA", 1: "KeyS", 2: "KeyD", 3: "KeyF", 4: "KeyH", 5: "KeyG",
             6: "KeyZ", 7: "KeyX", 8: "KeyC", 9: "KeyV", 11: "KeyB", 12: "KeyQ",
@@ -494,11 +531,12 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             48: "Tab", 49: "Space", 50: "Backquote", 51: "Backspace", 53: "Escape",
             54: "MetaRight", 55: "MetaLeft", 56: "ShiftLeft", 57: "CapsLock",
             58: "AltLeft", 59: "ControlLeft", 60: "ShiftRight", 61: "AltRight",
-            62: "ControlRight", 65: "NumpadDecimal", 67: "NumpadMultiply",
+            62: "ControlRight", 64: "F17", 65: "NumpadDecimal", 67: "NumpadMultiply",
             69: "NumpadAdd", 71: "NumLock", 75: "NumpadDivide", 76: "NumpadEnter",
-            78: "NumpadSubtract", 81: "NumpadEqual", 82: "Numpad0", 83: "Numpad1",
+            78: "NumpadSubtract", 79: "F18", 80: "F19", 81: "NumpadEqual",
+            82: "Numpad0", 83: "Numpad1",
             84: "Numpad2", 85: "Numpad3", 86: "Numpad4", 87: "Numpad5",
-            88: "Numpad6", 89: "Numpad7", 91: "Numpad8", 92: "Numpad9",
+            88: "Numpad6", 89: "Numpad7", 90: "F20", 91: "Numpad8", 92: "Numpad9",
             96: "F5", 97: "F6", 98: "F7", 99: "F3", 100: "F8", 101: "F9",
             103: "F11", 105: "F13", 106: "F16", 107: "F14", 109: "F10",
             111: "F12", 113: "F15", 114: "Insert", 115: "Home", 116: "PageUp",

@@ -7,10 +7,10 @@ private final class ShortcutSettingsTransport: SettingsTransport {
     private var value: [String: Any]
     private(set) var saves: [[String: Any]] = []
 
-    init(appearance: String = "dark") {
+    init(appearance: String = "dark", newCaptureShortcut: String = "Command+Shift+Space") {
         value = [
             "appearance": appearance, "theme": "mustard", "custom_theme": [:],
-            "new_capture_shortcut": "Command+Shift+Space",
+            "new_capture_shortcut": newCaptureShortcut,
             "region_shortcut": "Command+Shift+Digit4",
             "window_shortcut": "Command+Shift+KeyW",
             "display_shortcut": "Command+Shift+Digit3",
@@ -89,7 +89,7 @@ final class ShortcutEditingTests: XCTestCase {
     func testInvalidStaysRecordingAndEscapeOrBlurCancelsWithoutSaving() throws {
         let transport = ShortcutSettingsTransport()
         let (controller, window) = try fixture(transport: transport) { code, _, _, _, _ in
-            if code == "Escape" { return ["kind": "cancel", "keys": []] }
+            if code == "Escape" { return ["kind": "cancel"] }
             return ["kind": "invalid", "keys": ["A"],
                 "message": "Include a modifier, or use Print Screen."]
         }
@@ -112,6 +112,42 @@ final class ShortcutEditingTests: XCTestCase {
         NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
         XCTAssertFalse(recorder.recording, "window focus loss cancels recording")
         XCTAssertNil(transport.latestSave())
+    }
+
+    func testRealBridgeCancelWithoutKeysStopsControllerRecording() throws {
+        let transport = ShortcutSettingsTransport()
+        let (controller, _) = try fixture(transport: transport)
+        let recorder = try XCTUnwrap(controller.shortcutRecorder(identifier: "region_shortcut"))
+        recorder.performClick(nil)
+
+        let response = try NativeCaptureShortcuts.record(code: "Escape", control: true,
+            shift: true, alt: true, meta: true)
+        XCTAssertEqual(response["kind"] as? String, "cancel")
+        XCTAssertNil(response["keys"], "shipping cancel responses intentionally omit keys")
+        controller.handleShortcutInput(code: "Escape", control: true, shift: true,
+            alt: true, meta: true)
+
+        XCTAssertFalse(recorder.recording)
+        XCTAssertNil(transport.latestSave())
+    }
+
+    func testRealBridgeLongestChordFitsAndPersists() throws {
+        let transport = ShortcutSettingsTransport()
+        let (controller, _) = try fixture(transport: transport)
+        let recorder = try XCTUnwrap(controller.shortcutRecorder(identifier: "new_capture_shortcut"))
+        recorder.performClick(nil)
+        controller.handleShortcutInput(code: "MediaTrackPrevious", control: true, shift: true,
+            alt: true, meta: true)
+
+        XCTAssertEqual(recorder.keys, ["Ctrl", "Shift", "Option", "Cmd", "MediaTrackPrevious"])
+        XCTAssertFalse(recorder.recording)
+        XCTAssertGreaterThanOrEqual(recorder.displayedChipFontSize(), 9)
+        XCTAssertLessThanOrEqual(try XCTUnwrap(recorder.displayedChipFrames().last).maxX,
+            recorder.bounds.maxX - 10)
+        controller.flush()
+        try waitUntil { transport.latestSave() != nil }
+        XCTAssertEqual(transport.latestSave()?.string("new_capture_shortcut"),
+            "Control+Shift+Alt+Super+MediaTrackPrevious")
     }
 
     func testEveryRecorderPersistsItsOwnStoredField() throws {
@@ -173,18 +209,22 @@ final class ShortcutEditingTests: XCTestCase {
     func testShortcutCardsRenderNormalRecordingAndInvalidInLightAndDark() throws {
         guard let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] else { return }
         for appearance in ["light", "dark"] {
-            let transport = ShortcutSettingsTransport(appearance: appearance)
-            let (controller, _) = try fixture(transport: transport, appearance: appearance) {
-                _, _, _, _, _ in ["kind": "invalid", "keys": ["Cmd", "A"],
-                    "message": "Choose a supported key with a modifier."]
-            }
+            let transport = ShortcutSettingsTransport(appearance: appearance,
+                newCaptureShortcut: "Control+Shift+Alt+Super+MediaTrackPrevious")
+            let (controller, _) = try fixture(transport: transport, appearance: appearance)
             let card = try XCTUnwrap(controller.shortcutCard())
             try render(card, name: "shortcuts-\(appearance)-normal.png", directory: directory)
             let recorder = try XCTUnwrap(controller.shortcutRecorder(identifier: "new_capture_shortcut"))
+            XCTAssertEqual(recorder.keys,
+                ["Ctrl", "Shift", "Option", "Cmd", "MediaTrackPrevious"])
+            XCTAssertLessThanOrEqual(try XCTUnwrap(recorder.displayedChipFrames().last).maxX,
+                recorder.bounds.maxX - 10)
             recorder.performClick(nil)
             try render(card, name: "shortcuts-\(appearance)-recording.png", directory: directory)
             controller.handleShortcutInput(code: "KeyA", control: false, shift: false,
                 alt: false, meta: false)
+            XCTAssertEqual(recorder.error,
+                "Include Ctrl, Shift, Option, or Command, or use Print Screen.")
             try render(card, name: "shortcuts-\(appearance)-invalid.png", directory: directory)
         }
     }
@@ -200,14 +240,20 @@ final class ShortcutEditingTests: XCTestCase {
                 isARepeat: false, keyCode: keyCode))
         }
         XCTAssertEqual(PreferencesController.domCode(for: try event(0)), "KeyA")
-        XCTAssertEqual(PreferencesController.domCode(for: try event(18)), "Digit1")
+        XCTAssertEqual(PreferencesController.domCode(for: try event(18)), "Digit1",
+            "ANSI number row must not be confused with the keypad")
+        XCTAssertEqual(PreferencesController.domCode(for: try event(83)), "Numpad1")
         XCTAssertEqual(PreferencesController.domCode(for: try event(53)), "Escape")
+        XCTAssertEqual(PreferencesController.domCode(for: try event(64)), "F17")
+        XCTAssertEqual(PreferencesController.domCode(for: try event(79)), "F18")
+        XCTAssertEqual(PreferencesController.domCode(for: try event(80)), "F19")
+        XCTAssertEqual(PreferencesController.domCode(for: try event(90)), "F20")
         XCTAssertEqual(PreferencesController.domCode(for: try event(123)), "ArrowLeft")
         XCTAssertEqual(PreferencesController.domCode(for: try event(255)), "Unidentified")
     }
 
     private func fixture(transport: ShortcutSettingsTransport, appearance: String = "dark",
-                         policy: @escaping PreferencesController.ShortcutPolicy)
+                         policy: PreferencesController.ShortcutPolicy? = nil)
         throws -> (PreferencesController, NSWindow) {
         _ = NSApplication.shared
         let root = Surface(frame: NSRect(x: 0, y: 0, width: 1000, height: 720))
@@ -219,10 +265,15 @@ final class ShortcutEditingTests: XCTestCase {
         let tokens = Tokens.variants["\(appearance)-mustard"]!
         let store = try SettingsStore(path: "/fixture/settings.json", transport: transport,
             debounceInterval: 0)
-        let controller = PreferencesController(root: root, store: store, tokens: { tokens },
-            appearanceChanged: { _, _, _ in }, shortcutPolicy: policy,
-            shortcutDisplay: { shortcut in shortcut.split(separator: "+").map(String.init) },
-            showHistory: {}, liveCaptureAvailable: true)
+        let controller: PreferencesController
+        if let policy {
+            controller = PreferencesController(root: root, store: store, tokens: { tokens },
+                appearanceChanged: { _, _, _ in }, shortcutPolicy: policy,
+                showHistory: {}, liveCaptureAvailable: true)
+        } else {
+            controller = PreferencesController(root: root, store: store, tokens: { tokens },
+                appearanceChanged: { _, _, _ in }, showHistory: {}, liveCaptureAvailable: true)
+        }
         try waitUntil { controller.shortcutRecorder(identifier: "region_shortcut") != nil }
         window.makeKeyAndOrderFront(nil)
         return (controller, window)
