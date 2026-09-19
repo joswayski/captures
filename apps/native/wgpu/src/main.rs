@@ -4,6 +4,8 @@ mod live;
 mod mini_preview;
 mod options;
 mod preferences;
+mod recording;
+mod recording_hud;
 mod selector;
 mod shortcut_input;
 mod tokens;
@@ -125,8 +127,12 @@ fn main() -> eframe::Result {
     });
     let floating = options.floating;
     let idle = options.scene == Scene::Idle;
-    let size = if floating {
+    let size = if floating && options.scene == Scene::Hud {
+        [430., 102.]
+    } else if floating {
         [640., 620.]
+    } else if options.scene == Scene::CaptureControls && options.capture_controls_recording {
+        [1280., 900.]
     } else {
         [1000., 720.]
     };
