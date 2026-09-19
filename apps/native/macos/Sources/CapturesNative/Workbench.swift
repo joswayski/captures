@@ -146,6 +146,15 @@ final class CaptureButton: NSButton {
             stand.move(to: NSPoint(x: rect.midX - 3, y: rect.minY))
             stand.line(to: NSPoint(x: rect.midX + 3, y: rect.minY)); stand.stroke()
         case .microphone(let muted):
+            // The geometry below is bottom-up; NSButton draws in flipped coordinates.
+            NSGraphicsContext.saveGraphicsState()
+            defer { NSGraphicsContext.restoreGraphicsState() }
+            if isFlipped {
+                let transform = NSAffineTransform()
+                transform.translateX(by: 0, yBy: rect.minY + rect.maxY)
+                transform.scaleX(by: 1, yBy: -1)
+                transform.concat()
+            }
             let capsule = NSBezierPath(roundedRect: NSRect(x: rect.midX - 2.5, y: rect.minY + 5,
                 width: 5, height: 8), xRadius: 2.5, yRadius: 2.5)
             capsule.lineWidth = 1.4; capsule.stroke()

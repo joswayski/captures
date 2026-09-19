@@ -50,6 +50,17 @@ final class RecordingHUDTests: XCTestCase {
             XCTAssertEqual(microphone.accessibilityLabel(), "Mute microphone")
             XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 5)
             try render(hud, window: window, name: "recording-hud-\(appearance)-unmuted")
+            let bitmap = try XCTUnwrap(microphone.bitmapImageRepForCachingDisplay(in: microphone.bounds))
+            microphone.cacheDisplay(in: microphone.bounds, to: bitmap)
+            let scale = CGFloat(bitmap.pixelsHigh) / microphone.bounds.height
+            let centerX = Int(microphone.bounds.midX * scale)
+            let iconTop = (microphone.bounds.height - 14) / 2
+            let capsuleInterior = try XCTUnwrap(bitmap.colorAt(x: centerX,
+                y: Int((iconTop + 3) * scale))?.usingColorSpace(.deviceRGB))
+            let stand = try XCTUnwrap(bitmap.colorAt(x: centerX,
+                y: Int((iconTop + 12) * scale))?.usingColorSpace(.deviceRGB))
+            XCTAssertGreaterThan(stand.redComponent, capsuleInterior.redComponent + 0.2,
+                "the microphone stand must be below its hollow capsule, not upside down")
             hud.setLifecycleActionsEnabled(false)
             // A snapshot queued before the mutation can arrive while it is busy.
             hud.setMicrophone(muted: true, available: true)
