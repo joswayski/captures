@@ -125,6 +125,22 @@ final class StatusItemTests: XCTestCase {
             key: true, attachedSheetKey: false))
     }
 
+    func testFailedSuspensionInvalidatesSettledStateForReverseTransition() {
+        var enteringPreferences = ShortcutSuspensionState(settled: false)
+        XCTAssertTrue(enteringPreferences.needsApply(true))
+        enteringPreferences.didFail()
+        XCTAssertNil(enteringPreferences.settled)
+        XCTAssertTrue(enteringPreferences.needsApply(false),
+            "blur must retry after releasing grabs failed and core stayed suspended")
+
+        var leavingPreferences = ShortcutSuspensionState(settled: true)
+        XCTAssertTrue(leavingPreferences.needsApply(false))
+        leavingPreferences.didFail()
+        XCTAssertNil(leavingPreferences.settled)
+        XCTAssertTrue(leavingPreferences.needsApply(true),
+            "refocus must retry after restoring grabs failed and core stayed suspended")
+    }
+
     func testQuitFlushesCancelsClosesAndDrainsBeforeCleanup() {
         var events: [String] = []
         performTermination(flushPreferences: { events.append("flush-preferences") },
