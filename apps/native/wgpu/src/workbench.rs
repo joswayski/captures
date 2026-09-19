@@ -2,7 +2,10 @@ use std::{
     collections::BTreeMap,
     fs,
     path::Path,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        Arc,
+        mpsc::{self, Receiver, Sender},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -17,6 +20,7 @@ use crate::{
     live::{CaptureRequest, Live},
     options::{Options, Scene},
     preferences::Preferences,
+    shortcut_input,
     tokens::{self, Tokens},
     tray::{self, Action as TrayAction, Tray},
 };
@@ -47,6 +51,8 @@ pub struct Workbench {
     annotation: String,
     screenshot_requested: bool,
     screenshot_saved: bool,
+    screenshot_tx: Sender<Arc<egui::ColorImage>>,
+    screenshot_rx: Receiver<Arc<egui::ColorImage>>,
     preferences_state: Preferences,
     region_selector: crate::selector::Selector,
     window_selector: crate::window_selector::WindowSelector,
@@ -62,6 +68,7 @@ pub struct Workbench {
     shortcuts: Option<CaptureShortcuts>,
     shortcuts_generation: u64,
     shortcut_error: Option<String>,
+    shortcut_suspension_error: Option<String>,
     action_tx: Sender<Result<(), String>>,
     action_rx: Receiver<Result<(), String>>,
     action_error: Option<String>,
@@ -69,7 +76,11 @@ pub struct Workbench {
 }
 
 impl Workbench {
-    pub fn new(cc: &eframe::CreationContext<'_>, options: Options) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        options: Options,
+        shortcut_input: shortcut_input::Bridge,
+    ) -> Self {
         if options.scene == Scene::Idle && cc.winit_window().and_then(|w| w.is_visible()).is_none()
         {
             // winit's Wayland root cannot be hidden with set_visible. Do not
@@ -112,13 +123,14 @@ impl Workbench {
                 .map(|dir| dir.path().join("settings.json"))
                 .unwrap_or_else(captures_settings::default_native_settings_path)
         });
-        let preferences_state = Preferences::new(
+        let preferences_state = Preferences::new_with_shortcut_input(
             cc.egui_ctx.clone(),
             settings_path,
             options
                 .appearance_override
                 .then(|| options.appearance.clone()),
             options.theme_override.then(|| options.theme.clone()),
+            shortcut_input,
         );
         let live = options
             .live
@@ -137,6 +149,7 @@ impl Workbench {
             (None, None)
         };
         let (action_tx, action_rx) = mpsc::channel();
+        let (screenshot_tx, screenshot_rx) = mpsc::channel();
         let (window_display, window_targets, window_shell) = window_fixture();
         let this = Self {
             options,
@@ -162,6 +175,8 @@ impl Workbench {
             annotation: "A capture worth keeping".into(),
             screenshot_requested: false,
             screenshot_saved: false,
+            screenshot_tx,
+            screenshot_rx,
             preferences_state,
             region_selector: crate::selector::Selector::default(),
             window_selector: crate::window_selector::WindowSelector::fixture(),
@@ -177,6 +192,7 @@ impl Workbench {
             shortcuts: None,
             shortcuts_generation: 0,
             shortcut_error: None,
+            shortcut_suspension_error: None,
             action_tx,
             action_rx,
             action_error: None,
@@ -305,6 +321,28 @@ impl Workbench {
                     Some(format!("Global screenshot shortcuts unavailable: {error}"));
             }
         }
+    }
+
+    fn sync_shortcut_suspension(&mut self, suspended: bool) {
+        let Some(shortcuts) = &mut self.shortcuts else {
+            return;
+        };
+        self.shortcut_suspension_error = shortcuts.set_suspended(suspended).err().map(|error| {
+            format!(
+                "Could not {} global screenshot shortcuts: {error}",
+                if suspended { "suspend" } else { "restore" }
+            )
+        });
+    }
+
+    fn request_screenshot(&mut self, ctx: &egui::Context) {
+        let output = self.screenshot_tx.clone();
+        let wake = ctx.clone();
+        ctx.request_screenshot(move |image| {
+            let _ = output.send(image);
+            wake.request_repaint();
+        });
+        self.screenshot_requested = true;
     }
 
     fn tokens(&mut self, ctx: &egui::Context) -> Tokens {
@@ -685,6 +723,11 @@ impl eframe::App for Workbench {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
+        self.preferences_state.set_presented(if self.options.live {
+            self.live_preferences && !self.root_hidden
+        } else {
+            self.options.scene == Scene::Preferences
+        });
         self.preferences_state.receive(ctx);
         while let Ok(result) = self.action_rx.try_recv() {
             self.action_error = result
@@ -707,12 +750,11 @@ impl eframe::App for Workbench {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             self.root_hidden = true;
         }
-        let shortcuts_enabled = shortcuts_should_be_enabled(
-            self.live.as_ref().is_some_and(Live::can_launch_capture),
-            self.live_preferences,
-            !self.root_hidden,
-            ctx.input(|input| input.viewport().focused.unwrap_or(false)),
-        );
+        let root_focused = ctx.input(|input| input.viewport().focused.unwrap_or(false));
+        let shortcuts_suspended =
+            shortcuts_should_be_suspended(self.live_preferences, !self.root_hidden, root_focused);
+        self.sync_shortcut_suspension(shortcuts_suspended);
+        let shortcuts_enabled = self.live.as_ref().is_some_and(Live::can_launch_capture);
         let shortcut_action = self.shortcuts.as_ref().and_then(|shortcuts| {
             shortcuts.set_enabled(shortcuts_enabled);
             shortcuts.next_action()
@@ -736,22 +778,15 @@ impl eframe::App for Workbench {
         if let Some(live) = &mut self.live {
             live.launch_requested_capture(ctx, frame, self.preferences_state.snapshot());
         }
-        let quit_key = ctx.input_mut(|input| {
-            input.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)
-                || input.consume_key(egui::Modifiers::CTRL, egui::Key::Q)
-        });
+        let quit_key = !self.preferences_state.is_recording_shortcut()
+            && ctx.input_mut(|input| {
+                input.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)
+                    || input.consume_key(egui::Modifiers::CTRL, egui::Key::Q)
+            });
         if self.options.live && quit_key {
             self.quit(ctx);
         }
-        let screenshot = ctx.input(|i| {
-            i.raw.events.iter().find_map(|event| {
-                if let egui::Event::Screenshot { image, .. } = event {
-                    Some(image.clone())
-                } else {
-                    None
-                }
-            })
-        });
+        let screenshot = self.screenshot_rx.try_recv().ok();
         if let (Some(image), Some(path)) = (screenshot, self.options.screenshot.as_ref()) {
             if let Err(error) = image::save_buffer(
                 path,
@@ -829,6 +864,7 @@ impl eframe::App for Workbench {
             }
             if self.tray_error.is_some()
                 || self.shortcut_error.is_some()
+                || self.shortcut_suspension_error.is_some()
                 || self.action_error.is_some()
             {
                 egui::Panel::bottom("live-lifecycle-errors").show(ui, |ui| {
@@ -836,6 +872,9 @@ impl eframe::App for Workbench {
                         ui.colored_label(t.color("theme-signal"), error);
                     }
                     if let Some(error) = &self.shortcut_error {
+                        ui.colored_label(t.color("theme-signal"), error);
+                    }
+                    if let Some(error) = &self.shortcut_suspension_error {
                         ui.colored_label(t.color("theme-signal"), error);
                     }
                     if let Some(error) = &self.action_error {
@@ -866,12 +905,21 @@ impl eframe::App for Workbench {
             } else {
                 live.ui(ui, &t, frame, || self.preferences_state.snapshot());
             }
+            // Navigation can change presentation after logic() has run. Apply
+            // that event's focus boundary before returning to the native loop
+            // so the next physical key sees the correct OS registration state.
+            let root_focused = ctx.input(|input| input.viewport().focused.unwrap_or(false));
+            let shortcuts_suspended = shortcuts_should_be_suspended(
+                self.live_preferences,
+                !self.root_hidden,
+                root_focused,
+            );
+            self.sync_shortcut_suspension(shortcuts_suspended);
             if self.options.screenshot.is_some()
                 && !self.screenshot_requested
                 && self.started.elapsed() >= self.options.screenshot_after
             {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
-                self.screenshot_requested = true;
+                self.request_screenshot(&ctx);
             }
             let elapsed = start.elapsed().as_secs_f64() * 1000.;
             self.ui_ms += elapsed;
@@ -1031,8 +1079,7 @@ impl eframe::App for Workbench {
             && !self.screenshot_requested
             && self.started.elapsed() >= self.options.screenshot_after
         {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
-            self.screenshot_requested = true;
+            self.request_screenshot(&ctx);
         }
         let elapsed = start.elapsed().as_secs_f64() * 1000.;
         self.frames += 1;
@@ -1214,13 +1261,12 @@ fn window_selection_name(
     }
 }
 
-fn shortcuts_should_be_enabled(
-    can_launch_capture: bool,
+fn shortcuts_should_be_suspended(
     preferences_selected: bool,
     root_visible: bool,
     root_focused: bool,
 ) -> bool {
-    can_launch_capture && !(preferences_selected && root_visible && root_focused)
+    preferences_selected && root_visible && root_focused
 }
 
 fn fixture_image([width, height]: [usize; 2]) -> egui::ColorImage {
@@ -1260,12 +1306,11 @@ mod tests {
     }
 
     #[test]
-    fn shortcuts_suppress_focused_preferences_but_not_hidden_or_unfocused_preferences() {
-        assert!(!shortcuts_should_be_enabled(true, true, true, true));
-        assert!(shortcuts_should_be_enabled(true, true, false, true));
-        assert!(shortcuts_should_be_enabled(true, true, true, false));
-        assert!(shortcuts_should_be_enabled(true, false, true, true));
-        assert!(!shortcuts_should_be_enabled(false, false, false, false));
+    fn shortcuts_suspend_focused_preferences_but_not_hidden_or_unfocused_preferences() {
+        assert!(shortcuts_should_be_suspended(true, true, true));
+        assert!(!shortcuts_should_be_suspended(true, false, true));
+        assert!(!shortcuts_should_be_suspended(true, true, false));
+        assert!(!shortcuts_should_be_suspended(false, true, true));
     }
     #[test]
     fn image_has_top_right_sun_and_bottom_green_strip() {

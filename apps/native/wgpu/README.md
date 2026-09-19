@@ -15,7 +15,11 @@ history, copy, export and delete flows; see the [live slice and limits](../READM
 Live mode also provides a native tray menu for those three capture modes, History,
 Preferences, the output folder and Quit. Its persisted display, region and window
 shortcuts work globally except while capture is unavailable or a focused Preferences
-window is editing them. Windows tray left-click opens Preferences.
+window is editing them. All seven shortcut rows can be edited from Preferences with
+physical-key recording, modifier previews, Escape/blur cancellation, and inline invalid
+chord errors; New Capture and the three recording shortcuts remain visibly unconnected.
+Fixture scenes can edit disposable shortcut settings but never register global shortcuts.
+Windows tray left-click opens Preferences.
 Live capture applies automatic copy, screenshot countdown, cursor inclusion, and
 PNG/JPEG/WebP output format/folder preferences. Region selection also applies
 freeze-screen and auto-start-on-selection preferences, retains one shared
@@ -51,8 +55,13 @@ Linux). Linux tray builds additionally require the D-Bus development package
 (`libdbus-1-dev` on Ubuntu). A working Vulkan or other wgpu-supported graphics
 driver is required.
 The isolated Cargo workspace/lockfile leaves the shipping Rust 1.94 workspace
-unchanged. eframe 0.36.2 includes the native idle-loop fix absent from 0.34.3;
-do not downgrade solely to match the shipping toolchain.
+unchanged. The egui/eframe stack is pinned to upstream
+[`60d7caae`](https://github.com/emilk/egui/commit/60d7caaea38a795618e842925061ad2210028a2a),
+after the 0.36.2 release. This adds `RequestPaintWhileHidden`, needed to create
+selectors and the first mini preview while the root stays hidden. Child-window
+transitions request one paint, not a recurring hidden repaint loop. Released
+0.36.2 lacks that API; 0.34.3 also lacks the native idle-loop fix. Do not downgrade
+solely to match the shipping toolchain.
 
 From the repository root, on either Windows or Linux:
 

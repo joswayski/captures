@@ -5,11 +5,17 @@ use std::{
     time::{Duration, Instant},
 };
 
+use captures_app::shortcuts::{
+    ShortcutKeyEvent, ShortcutPlatform, ShortcutRecording, record_shortcut, shortcut_display_tokens,
+};
 use captures_settings::{AppSettings, theme::normalize_hex_color};
 use eframe::egui::{self, RichText, Stroke};
 use serde_json::{Value, json};
 
-use crate::tokens::{self, Tokens};
+use crate::{
+    shortcut_input,
+    tokens::{self, Tokens},
+};
 
 const SECTIONS: [&str; 7] = [
     "Appearance",
@@ -32,6 +38,76 @@ const THEMES: [(&str, &str, &str); 10] = [
     ("mono", "Mono", "Vercel-like black and white"),
     ("custom", "Custom", "Build your own RGB palette"),
 ];
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum ShortcutField {
+    NewCapture,
+    Region,
+    Window,
+    Display,
+    RecordRegion,
+    RecordWindow,
+    RecordDisplay,
+}
+
+const SHORTCUT_FIELDS: [ShortcutField; 7] = [
+    ShortcutField::NewCapture,
+    ShortcutField::Region,
+    ShortcutField::Window,
+    ShortcutField::Display,
+    ShortcutField::RecordRegion,
+    ShortcutField::RecordWindow,
+    ShortcutField::RecordDisplay,
+];
+
+impl ShortcutField {
+    fn label(self) -> &'static str {
+        match self {
+            Self::NewCapture => "New Capture",
+            Self::Region => "Region",
+            Self::Window => "Window",
+            Self::Display => "Full Screen",
+            Self::RecordRegion => "Record Region",
+            Self::RecordWindow => "Record Window",
+            Self::RecordDisplay => "Record Full Screen",
+        }
+    }
+
+    fn path(self) -> &'static [&'static str] {
+        match self {
+            Self::NewCapture => &["new_capture_shortcut"],
+            Self::Region => &["region_shortcut"],
+            Self::Window => &["window_shortcut"],
+            Self::Display => &["display_shortcut"],
+            Self::RecordRegion => &["recording", "video_shortcut"],
+            Self::RecordWindow => &["recording", "window_shortcut"],
+            Self::RecordDisplay => &["recording", "display_shortcut"],
+        }
+    }
+}
+
+fn shortcut_scope_id(field: ShortcutField) -> egui::Id {
+    egui::Id::unique(("preferences-shortcut-recorder", field))
+}
+
+#[derive(Debug)]
+struct ShortcutRecorder {
+    field: ShortcutField,
+    keys: Vec<String>,
+    error: Option<String>,
+    super_held: bool,
+}
+
+impl ShortcutRecorder {
+    fn new(field: ShortcutField) -> Self {
+        Self {
+            field,
+            keys: Vec::new(),
+            error: None,
+            super_held: false,
+        }
+    }
+}
 
 enum Command {
     Save(u64, Box<AppSettings>),
@@ -133,15 +209,36 @@ pub struct Preferences {
     folder_open: bool,
     variants: std::collections::BTreeMap<String, Tokens>,
     persisted_generation: u64,
+    shortcut_recorder: Option<ShortcutRecorder>,
+    shortcut_input: shortcut_input::Bridge,
+    suppress_shortcut_commands: bool,
 }
 
 impl Preferences {
+    #[cfg(test)]
     pub fn new(
         ctx: egui::Context,
         path: PathBuf,
         appearance: Option<String>,
         theme: Option<String>,
     ) -> Self {
+        Self::new_with_shortcut_input(
+            ctx,
+            path,
+            appearance,
+            theme,
+            shortcut_input::Bridge::default(),
+        )
+    }
+
+    pub fn new_with_shortcut_input(
+        ctx: egui::Context,
+        path: PathBuf,
+        appearance: Option<String>,
+        theme: Option<String>,
+        shortcut_input: shortcut_input::Bridge,
+    ) -> Self {
+        shortcut_input.attach(ctx.clone());
         let (out, rx) = mpsc::channel();
         let io = SettingsIo::start(path, out.clone(), move || ctx.request_repaint());
         Self {
@@ -167,6 +264,9 @@ impl Preferences {
             folder_open: false,
             variants: tokens::load(),
             persisted_generation: 0,
+            shortcut_recorder: None,
+            shortcut_input,
+            suppress_shortcut_commands: false,
         }
     }
 
@@ -197,6 +297,16 @@ impl Preferences {
 
     pub fn persisted_generation(&self) -> u64 {
         self.persisted_generation
+    }
+
+    pub fn is_recording_shortcut(&self) -> bool {
+        self.shortcut_recorder.is_some()
+    }
+
+    pub fn set_presented(&mut self, presented: bool) {
+        if !presented {
+            self.cancel_shortcut_recording();
+        }
     }
 
     pub fn receive(&mut self, ctx: &egui::Context) {
@@ -302,6 +412,7 @@ impl Preferences {
 
     /// Returns true when the user requests the history window.
     pub fn ui(&mut self, ui: &mut egui::Ui, t: &Tokens) -> bool {
+        self.receive_shortcut_input();
         self.keyboard(ui);
         let mut history = false;
         ui.horizontal(|ui| {
@@ -388,9 +499,12 @@ impl Preferences {
     }
 
     fn keyboard(&mut self, ui: &egui::Ui) {
+        if self.is_recording_shortcut() || self.suppress_shortcut_commands {
+            return;
+        }
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F)) {
             self.find_open = true;
-            ui.memory_mut(|m| m.request_focus(egui::Id::new("settings-find")));
+            ui.memory_mut(|m| m.request_focus(egui::Id::unique("settings-find")));
         }
         if self.find_open
             && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
@@ -417,7 +531,7 @@ impl Preferences {
             if ui
                 .add(
                     egui::TextEdit::singleline(&mut self.query)
-                        .id(egui::Id::new("settings-find"))
+                        .id(egui::Id::unique("settings-find"))
                         .hint_text("Find settings")
                         .desired_width(300.),
                 )
@@ -745,12 +859,170 @@ impl Preferences {
         });
     }
     fn shortcuts(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        self.card(ui,t,2,"Shortcuts","Region, window, and display screenshot shortcuts are active globally. New Capture and recording shortcuts remain unavailable in this native development build.",|this,ui| {
-            for (path,title) in [(vec!["new_capture_shortcut"],"New capture"),(vec!["region_shortcut"],"Capture region"),(vec!["window_shortcut"],"Capture window"),(vec!["display_shortcut"],"Capture display"),(vec!["recording","video_shortcut"],"Record region"),(vec!["recording","window_shortcut"],"Record window"),(vec!["recording","display_shortcut"],"Record display")] {
-                let value=string_at(&this.value,&path);
-                this.row(ui,title,"",|_,ui| { ui.add_enabled(false,egui::Button::new(value)); });
+        self.card(ui,t,2,"Shortcuts","Select a shortcut, then press the key combination you want. Press Escape to cancel. Region, Window, and Full Screen are active globally; New Capture and recording remain unconnected.",|this,ui| {
+            for (index, field) in SHORTCUT_FIELDS.into_iter().enumerate() {
+                if index > 0 {
+                    ui.separator();
+                }
+                ui.scope_builder(
+                    egui::UiBuilder::new().scope_id(shortcut_scope_id(field)),
+                    |ui| this.shortcut_row(ui, t, field),
+                );
             }
         });
+    }
+
+    fn shortcut_row(&mut self, ui: &mut egui::Ui, t: &Tokens, field: ShortcutField) {
+        let recording = self
+            .shortcut_recorder
+            .as_ref()
+            .is_some_and(|recorder| recorder.field == field);
+        let keys = if recording {
+            self.shortcut_recorder
+                .as_ref()
+                .map(|recorder| recorder.keys.clone())
+                .unwrap_or_default()
+        } else {
+            shortcut_display_tokens(&string_at(&self.value, field.path()), shortcut_platform())
+        };
+        let error = recording
+            .then(|| {
+                self.shortcut_recorder
+                    .as_ref()
+                    .and_then(|recorder| recorder.error.clone())
+            })
+            .flatten();
+        self.row(ui, field.label(), "", |this, ui| {
+            let response = ui
+                .vertical(|ui| {
+                    ui.set_width(230.);
+                    let label = if keys.is_empty() {
+                        "Press shortcut…".to_owned()
+                    } else {
+                        keys.join("  +  ")
+                    };
+                    let response = ui.add_sized(
+                        [230., t.number("h-md")],
+                        egui::Button::new(label).selected(recording),
+                    );
+                    if let Some(error) = &error {
+                        ui.colored_label(t.color("danger-text"), error);
+                    }
+                    response
+                })
+                .inner;
+            let started = response.clicked() && !recording;
+            if started {
+                this.shortcut_recorder = Some(ShortcutRecorder::new(field));
+                this.shortcut_input.start();
+                response.request_focus();
+            }
+            let active = this
+                .shortcut_recorder
+                .as_ref()
+                .is_some_and(|recorder| recorder.field == field);
+            if shortcut_recording_lost_focus(active, started, response.has_focus()) {
+                this.cancel_shortcut_recording();
+            } else if active || this.suppress_shortcut_commands {
+                ui.input_mut(|input| {
+                    input.events.retain(|event| {
+                        !matches!(
+                            event,
+                            egui::Event::Key { .. }
+                                | egui::Event::Copy
+                                | egui::Event::Cut
+                                | egui::Event::Paste(_)
+                                | egui::Event::Text(_)
+                        )
+                    });
+                });
+            }
+        });
+    }
+
+    fn receive_shortcut_input(&mut self) {
+        let events = self.shortcut_input.drain();
+        self.suppress_shortcut_commands = !events.is_empty();
+        for event in events {
+            match event {
+                shortcut_input::Event::Blur => self.cancel_shortcut_recording(),
+                shortcut_input::Event::Key {
+                    code,
+                    pressed,
+                    repeat,
+                    modifiers,
+                } if !repeat => {
+                    if !self.apply_shortcut_key(&code, pressed, modifiers) {
+                        break;
+                    }
+                }
+                shortcut_input::Event::Key { .. } => {}
+            }
+        }
+    }
+
+    fn apply_shortcut_key(
+        &mut self,
+        code: &str,
+        pressed: bool,
+        modifiers: shortcut_input::Modifiers,
+    ) -> bool {
+        let Some(recorder) = &mut self.shortcut_recorder else {
+            return false;
+        };
+        let modifier = modifier_kind(code);
+        if modifier == Some(ShortcutModifier::Super) {
+            recorder.super_held = pressed;
+        }
+        if !pressed && modifier.is_none() {
+            return true;
+        }
+        let event = ShortcutKeyEvent {
+            code: code.to_owned(),
+            ctrl_key: if modifier == Some(ShortcutModifier::Control) {
+                pressed
+            } else {
+                modifiers.ctrl
+            },
+            shift_key: if modifier == Some(ShortcutModifier::Shift) {
+                pressed
+            } else {
+                modifiers.shift
+            },
+            alt_key: if modifier == Some(ShortcutModifier::Alt) {
+                pressed
+            } else {
+                modifiers.alt
+            },
+            meta_key: modifiers.meta || recorder.super_held,
+        };
+        match record_shortcut(&event, shortcut_platform()) {
+            ShortcutRecording::Cancel => {
+                self.cancel_shortcut_recording();
+                false
+            }
+            ShortcutRecording::Waiting { keys } => {
+                recorder.keys = keys;
+                recorder.error = None;
+                true
+            }
+            ShortcutRecording::Invalid { keys, message } => {
+                recorder.keys = keys;
+                recorder.error = Some(message);
+                true
+            }
+            ShortcutRecording::Complete { shortcut, .. } => {
+                let field = recorder.field;
+                self.set(field.path(), json!(shortcut));
+                self.cancel_shortcut_recording();
+                false
+            }
+        }
+    }
+
+    fn cancel_shortcut_recording(&mut self) {
+        self.shortcut_recorder = None;
+        self.shortcut_input.stop();
     }
     fn recording(&mut self, ui: &mut egui::Ui, t: &Tokens) {
         self.card(ui,t,3,"Recording","Defaults for new screen recordings. You can still change them in the capture menu.",|this,ui| {
@@ -826,6 +1098,40 @@ impl Preferences {
         });
     }
 }
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ShortcutModifier {
+    Control,
+    Shift,
+    Alt,
+    Super,
+}
+
+fn modifier_kind(code: &str) -> Option<ShortcutModifier> {
+    match code {
+        "ControlLeft" | "ControlRight" => Some(ShortcutModifier::Control),
+        "ShiftLeft" | "ShiftRight" => Some(ShortcutModifier::Shift),
+        "AltLeft" | "AltRight" => Some(ShortcutModifier::Alt),
+        "MetaLeft" | "MetaRight" => Some(ShortcutModifier::Super),
+        _ => None,
+    }
+}
+
+fn shortcut_recording_lost_focus(active: bool, just_started: bool, has_focus: bool) -> bool {
+    active && !just_started && !has_focus
+}
+
+fn shortcut_platform() -> ShortcutPlatform {
+    #[cfg(target_os = "windows")]
+    return ShortcutPlatform::Windows;
+    #[cfg(target_os = "linux")]
+    return ShortcutPlatform::Linux;
+    #[cfg(target_os = "macos")]
+    return ShortcutPlatform::Macos;
+    #[allow(unreachable_code)]
+    ShortcutPlatform::Linux
+}
+
 fn choices(values: &[(&str, &str)]) -> Vec<(Value, String)> {
     values
         .iter()
@@ -872,6 +1178,156 @@ fn set(v: &mut Value, path: &[&str], value: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn render_shortcut_button(ctx: &egui::Context, show_error: bool, focus: bool) -> egui::Id {
+        let mut button_id = None;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            if show_error {
+                ui.label("Couldn’t save changes");
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("preferences-scroll")
+                .show(ui, |ui| {
+                    egui::Frame::new().show(ui, |ui| {
+                        ui.scope_builder(
+                            egui::UiBuilder::new()
+                                .scope_id(shortcut_scope_id(ShortcutField::Window)),
+                            |ui| {
+                                ui.horizontal(|ui| {
+                                    let response = ui.button("Window shortcut");
+                                    if focus {
+                                        response.request_focus();
+                                    }
+                                    button_id = Some(response.id);
+                                });
+                            },
+                        );
+                    });
+                });
+        });
+        output.textures_delta.clear();
+        button_id.unwrap()
+    }
+
+    #[test]
+    fn recorder_uses_physical_codes_and_keeps_invalid_chords_active() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        captures_settings::save(&path, &AppSettings::default()).unwrap();
+        let ctx = egui::Context::default();
+        let mut prefs = Preferences::new(ctx.clone(), path, None, None);
+        prefs.io.flush();
+        prefs.receive(&ctx);
+        let original = string_at(&prefs.value, ShortcutField::Region.path());
+
+        prefs.shortcut_recorder = Some(ShortcutRecorder::new(ShortcutField::Region));
+        prefs.shortcut_input.start();
+        assert!(prefs.apply_shortcut_key("KeyP", true, shortcut_input::Modifiers::default()));
+        let recorder = prefs.shortcut_recorder.as_ref().unwrap();
+        assert!(recorder.error.is_some());
+        assert_eq!(
+            string_at(&prefs.value, ShortcutField::Region.path()),
+            original
+        );
+
+        assert!(prefs.apply_shortcut_key(
+            "Unidentified",
+            true,
+            shortcut_input::Modifiers {
+                ctrl: true,
+                ..Default::default()
+            }
+        ));
+        let recorder = prefs.shortcut_recorder.as_ref().unwrap();
+        assert_eq!(recorder.keys, ["Ctrl", "Unidentified"]);
+        assert_eq!(
+            recorder.error.as_deref(),
+            Some("That key cannot be used as a global shortcut.")
+        );
+
+        assert!(!prefs.apply_shortcut_key(
+            "Escape",
+            true,
+            shortcut_input::Modifiers {
+                ctrl: true,
+                ..Default::default()
+            }
+        ));
+        assert!(prefs.shortcut_recorder.is_none());
+
+        prefs.shortcut_recorder = Some(ShortcutRecorder::new(ShortcutField::Region));
+        prefs.shortcut_input.start();
+        assert!(!prefs.apply_shortcut_key(
+            "KeyD",
+            true,
+            shortcut_input::Modifiers {
+                ctrl: true,
+                shift: true,
+                ..Default::default()
+            }
+        ));
+        assert_eq!(
+            string_at(&prefs.value, ShortcutField::Region.path()),
+            "Control+Shift+KeyD"
+        );
+        assert!(prefs.shortcut_recorder.is_none());
+    }
+
+    #[test]
+    fn recorder_focus_is_acquired_before_blur_can_cancel() {
+        assert!(!shortcut_recording_lost_focus(true, true, false));
+        assert!(!shortcut_recording_lost_focus(true, false, true));
+        assert!(shortcut_recording_lost_focus(true, false, false));
+        assert!(!shortcut_recording_lost_focus(false, false, false));
+    }
+
+    #[test]
+    fn recorder_button_id_and_focus_survive_error_ui_above_scroll() {
+        let ctx = egui::Context::default();
+        let before = render_shortcut_button(&ctx, false, true);
+        assert!(ctx.memory(|memory| memory.has_focus(before)));
+
+        let after = render_shortcut_button(&ctx, true, false);
+        assert_eq!(after, before);
+        assert!(ctx.memory(|memory| memory.has_focus(after)));
+    }
+
+    #[test]
+    fn leaving_preferences_cancels_shortcut_recording_and_raw_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        captures_settings::save(&path, &AppSettings::default()).unwrap();
+        let mut prefs = Preferences::new(egui::Context::default(), path, None, None);
+        prefs.shortcut_recorder = Some(ShortcutRecorder::new(ShortcutField::Window));
+        prefs.shortcut_input.start();
+
+        prefs.set_presented(false);
+
+        assert!(!prefs.is_recording_shortcut());
+        assert!(!prefs.shortcut_input.is_active());
+    }
+
+    #[test]
+    fn failed_shortcut_save_keeps_the_edit_and_reports_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::create_dir(&path).unwrap();
+        let ctx = egui::Context::default();
+        let mut prefs = Preferences::new(ctx.clone(), path, None, None);
+        prefs.value = serde_json::to_value(AppSettings::default()).unwrap();
+        prefs.load_error = None;
+
+        prefs.set(ShortcutField::Window.path(), json!("Alt+KeyW"));
+        prefs.io.flush();
+        prefs.receive(&ctx);
+
+        assert_eq!(
+            string_at(&prefs.value, ShortcutField::Window.path()),
+            "Alt+KeyW"
+        );
+        assert!(prefs.save_error.is_some());
+    }
+
     #[test]
     fn capture_snapshot_uses_current_edits_not_last_disk_save() {
         let dir = tempfile::tempdir().unwrap();

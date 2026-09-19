@@ -168,9 +168,9 @@ func captureShortcutSignature(_ settings: [String: Any]) -> [String] {
      settings.string("display_shortcut")]
 }
 
-func captureShortcutsEnabled(preferencesFocused: Bool, captureBusy: Bool) -> Bool {
-    !preferencesFocused && !captureBusy
-}
+func captureShortcutsEnabled(captureBusy: Bool) -> Bool { !captureBusy }
+
+func captureShortcutsSuspended(preferencesFocused: Bool) -> Bool { preferencesFocused }
 
 func preferencesWindowFocused(scene: String, visible: Bool, key: Bool,
                               attachedSheetKey: Bool) -> Bool {
@@ -224,6 +224,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var shortcutWakeObserver: NSObjectProtocol?
     private var shortcutFocusObservers: [NSObjectProtocol] = []
     private var shortcutSignature: [String]?
+    private var shortcutEnabled: Bool?
     private var captureBusy = false
     private var terminating = false
     private var liveContent: Surface?
@@ -466,7 +467,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 initialSelectionID: previewSelectionID,
                 captureStateChanged: { [weak self] busy in
                     self?.captureBusy = busy
-                    self?.updateShortcutEnabled()
+                    self?.updateShortcutState()
                     if !busy {
                         DispatchQueue.main.async { [weak self] in
                             self?.rebuildRenderedLiveWorkspaceIfNeeded()
@@ -557,7 +558,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             ) { [weak self] notification in
                 guard let self, let changed = notification.object as? NSWindow,
                       changed === self.window || changed.sheetParent === self.window else { return }
-                self.updateShortcutEnabled()
+                self.updateShortcutState()
             })
         }
         do {
@@ -583,17 +584,29 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 try captureShortcuts.update(settings: settings)
             } else {
                 captureShortcuts = try NativeCaptureShortcuts(settings: settings)
+                shortcutEnabled = nil
             }
             shortcutSignature = signature
-            updateShortcutEnabled()
+            updateShortcutState()
         } catch {
             reportShortcutError(error)
         }
     }
 
-    private func updateShortcutEnabled() {
-        captureShortcuts?.setEnabled(captureShortcutsEnabled(
-            preferencesFocused: preferencesFocused, captureBusy: captureBusy))
+    private func updateShortcutState() {
+        guard let captureShortcuts else { return }
+        let suspended = captureShortcutsSuspended(preferencesFocused: preferencesFocused)
+        do {
+            try captureShortcuts.setSuspended(suspended)
+        } catch {
+            reportShortcutError(error)
+            return
+        }
+        let enabled = captureShortcutsEnabled(captureBusy: captureBusy)
+        if enabled != shortcutEnabled {
+            captureShortcuts.setEnabled(enabled)
+            shortcutEnabled = enabled
+        }
     }
 
     private func drainCaptureShortcuts() {
@@ -620,6 +633,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         shortcutFocusObservers.removeAll()
         captureShortcuts?.close()
         captureShortcuts = nil
+        shortcutEnabled = nil
     }
 
     private func reportShortcutError(_ error: Error) {
@@ -644,7 +658,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         scene = "live"
         _ = discardLiveWorkspaceForStyleChange()
         render()
-        updateShortcutEnabled()
+        updateShortcutState()
         liveController?.refreshHistory()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -656,7 +670,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         render()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        updateShortcutEnabled()
+        updateShortcutState()
     }
 
     private func openOutputFolder() {

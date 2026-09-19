@@ -117,7 +117,7 @@ impl WindowSelector {
         }
 
         if !view.auto_start {
-            egui::Area::new("window-selector-toolbar".into())
+            egui::Area::new(egui::Id::unique("window-selector-toolbar"))
                 .anchor(Align2::CENTER_BOTTOM, egui::vec2(0., -26.))
                 .order(egui::Order::Foreground)
                 .show(ui.ctx(), |ui| {
@@ -488,7 +488,7 @@ mod tests {
         ctx.begin_pass(raw(screen, events));
         let mut ui = egui::Ui::new(
             ctx.clone(),
-            egui::Id::new("window-selector-input-test"),
+            egui::Id::unique("window-selector-input-test"),
             egui::UiBuilder::new().max_rect(screen),
         );
         let action = selector.show(

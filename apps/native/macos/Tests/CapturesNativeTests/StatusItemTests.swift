@@ -106,11 +106,13 @@ final class StatusItemTests: XCTestCase {
         XCTAssertEqual(stillCaptureKind(for: .region), .region)
         XCTAssertEqual(stillCaptureKind(for: .window), .window)
         XCTAssertEqual(stillCaptureKind(for: .display), .display)
-        XCTAssertTrue(captureShortcutsEnabled(preferencesFocused: false, captureBusy: false),
-            "hidden or unfocused Preferences must allow background shortcuts")
-        XCTAssertFalse(captureShortcutsEnabled(preferencesFocused: true, captureBusy: false),
-            "the focused Preferences window suppresses shortcuts, including blank-area focus")
-        XCTAssertFalse(captureShortcutsEnabled(preferencesFocused: false, captureBusy: true))
+        XCTAssertTrue(captureShortcutsEnabled(captureBusy: false))
+        XCTAssertFalse(captureShortcutsEnabled(captureBusy: true),
+            "capture-busy suppression remains independent of registration suspension")
+        XCTAssertFalse(captureShortcutsSuspended(preferencesFocused: false),
+            "hidden or unfocused Preferences must restore registered shortcuts")
+        XCTAssertTrue(captureShortcutsSuspended(preferencesFocused: true),
+            "focused Preferences releases OS grabs before recorder input")
         XCTAssertTrue(preferencesWindowFocused(scene: "preferences", visible: true,
             key: true, attachedSheetKey: false))
         XCTAssertTrue(preferencesWindowFocused(scene: "preferences", visible: true,

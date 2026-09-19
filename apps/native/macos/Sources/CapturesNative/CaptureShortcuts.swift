@@ -19,6 +19,20 @@ final class NativeCaptureShortcuts {
     static let wakeNotification = Notification.Name("CapturesNativeShortcutWake")
     private var closed = true
 
+    // Pure policy requests are also safe for fixture Preferences; no live owner
+    // is constructed and no global shortcut is registered by these methods.
+    static func record(code: String, control: Bool, shift: Bool, alt: Bool, meta: Bool) throws -> [String: Any] {
+        try request(["operation": "record", "platform": "macos", "event": [
+            "code": code, "ctrlKey": control, "shiftKey": shift, "altKey": alt, "metaKey": meta,
+        ]])
+    }
+
+    static func display(_ shortcut: String) throws -> [String] {
+        let result = try request(["operation": "display", "platform": "macos", "shortcut": shortcut])
+        guard let keys = result["keys"] as? [String] else { throw AppBridgeError.invalidResponse }
+        return keys
+    }
+
     init(settings: [String: Any]) throws {
         precondition(Thread.isMainThread)
         _ = try Self.request(["operation": "configure", "settings": settings])
@@ -34,6 +48,11 @@ final class NativeCaptureShortcuts {
     func setEnabled(_ enabled: Bool) {
         guard !closed else { return }
         _ = try? Self.request(["operation": "enabled", "enabled": enabled])
+    }
+
+    func setSuspended(_ suspended: Bool) throws {
+        guard !closed else { return }
+        _ = try Self.request(["operation": "suspended", "suspended": suspended])
     }
 
     func nextAction() throws -> CaptureShortcut? {

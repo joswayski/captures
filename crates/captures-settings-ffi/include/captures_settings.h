@@ -15,6 +15,11 @@
  * reentry). Drain next on the native thread after waking. No timer is required.
  * Disabling/reconfiguring/closing discards queued and held-key launch intent.
  * Close before app teardown. Do not configure synthetic fixture scenes.
+ * Pure recorder requests also work without a configured owner or wake callback:
+ * record {event: {code, ctrlKey, shiftKey, altKey, metaKey}, platform} returns
+ * {kind: "cancel"|"waiting"|"invalid"|"complete", keys?, message?, shortcut?}.
+ * display {shortcut, platform} returns {keys: string[]}. Platform is
+ * "macos"|"windows"|"linux". Neither operation registers or saves anything.
  * request_json is readable NUL-terminated UTF-8 during the call. Free returned
  * owned JSON with captures_settings_free_v1 exactly once. */
 typedef void (*CapturesShortcutWake)(void);
