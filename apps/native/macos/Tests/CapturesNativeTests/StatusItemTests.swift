@@ -24,7 +24,7 @@ final class StatusItemTests: XCTestCase {
             menu.performActionForItem(at: index)
         }
         XCTAssertEqual(captures, [.region, .window, .display])
-        XCTAssertEqual(actions, ["history", "preferences", "folder", "quit"])
+        XCTAssertEqual(actions, ["history", "folder", "preferences", "quit"])
     }
 
     func testLiveRootCloseHidesWithoutClosingPreviewsOrTerminating() {
@@ -71,17 +71,21 @@ final class StatusItemTests: XCTestCase {
 
     func testCaptureOnlyRestoresAWorkspaceThatWasPreviouslyVisible() {
         var restoration = CaptureWindowRestoration()
-        restoration.begin(windowIsVisible: false)
-        XCTAssertFalse(restoration.finish(restoreRequested: true),
+        restoration.begin(windowIsVisible: false, windowIsKey: false)
+        XCTAssertEqual(restoration.finish(restoreRequested: true), .none,
             "background status-item captures must remain backgrounded")
 
-        restoration.begin(windowIsVisible: true)
-        XCTAssertTrue(restoration.finish(restoreRequested: true))
+        restoration.begin(windowIsVisible: true, windowIsKey: false)
+        XCTAssertEqual(restoration.finish(restoreRequested: true), .visible,
+            "an unfocused visible workspace must reappear without activation")
 
-        restoration.begin(windowIsVisible: true)
-        XCTAssertFalse(restoration.finish(restoreRequested: false),
+        restoration.begin(windowIsVisible: true, windowIsKey: true)
+        XCTAssertEqual(restoration.finish(restoreRequested: true), .key)
+
+        restoration.begin(windowIsVisible: true, windowIsKey: true)
+        XCTAssertEqual(restoration.finish(restoreRequested: false), .none,
             "termination and scene teardown must override restoration")
-        XCTAssertFalse(restoration.finish(restoreRequested: true),
+        XCTAssertEqual(restoration.finish(restoreRequested: true), .none,
             "finishing consumes the prior visibility state")
     }
 
@@ -102,9 +106,21 @@ final class StatusItemTests: XCTestCase {
         XCTAssertEqual(stillCaptureKind(for: .region), .region)
         XCTAssertEqual(stillCaptureKind(for: .window), .window)
         XCTAssertEqual(stillCaptureKind(for: .display), .display)
-        XCTAssertTrue(captureShortcutsEnabled(scene: "live", captureBusy: false))
-        XCTAssertFalse(captureShortcutsEnabled(scene: "preferences", captureBusy: false))
-        XCTAssertFalse(captureShortcutsEnabled(scene: "live", captureBusy: true))
+        XCTAssertTrue(captureShortcutsEnabled(preferencesFocused: false, captureBusy: false),
+            "hidden or unfocused Preferences must allow background shortcuts")
+        XCTAssertFalse(captureShortcutsEnabled(preferencesFocused: true, captureBusy: false),
+            "the focused Preferences window suppresses shortcuts, including blank-area focus")
+        XCTAssertFalse(captureShortcutsEnabled(preferencesFocused: false, captureBusy: true))
+        XCTAssertTrue(preferencesWindowFocused(scene: "preferences", visible: true,
+            key: true, attachedSheetKey: false))
+        XCTAssertTrue(preferencesWindowFocused(scene: "preferences", visible: true,
+            key: false, attachedSheetKey: true))
+        XCTAssertFalse(preferencesWindowFocused(scene: "preferences", visible: true,
+            key: false, attachedSheetKey: false), "unfocused Preferences allows shortcuts")
+        XCTAssertFalse(preferencesWindowFocused(scene: "preferences", visible: false,
+            key: true, attachedSheetKey: false), "hidden Preferences allows shortcuts")
+        XCTAssertFalse(preferencesWindowFocused(scene: "live", visible: true,
+            key: true, attachedSheetKey: false))
     }
 
     func testQuitFlushesCancelsClosesAndDrainsBeforeCleanup() {
