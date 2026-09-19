@@ -58,7 +58,7 @@ final class RecordingHUDTests: XCTestCase {
             let capsuleInterior = try XCTUnwrap(bitmap.colorAt(x: centerX,
                 y: Int((iconTop + 3) * scale))?.usingColorSpace(.deviceRGB))
             let stand = try XCTUnwrap(bitmap.colorAt(x: centerX,
-                y: Int((iconTop + 12) * scale))?.usingColorSpace(.deviceRGB))
+                y: Int((iconTop + 11) * scale))?.usingColorSpace(.deviceRGB))
             XCTAssertGreaterThan(stand.redComponent, capsuleInterior.redComponent + 0.2,
                 "the microphone stand must be below its hollow capsule, not upside down")
             hud.setLifecycleActionsEnabled(false)
