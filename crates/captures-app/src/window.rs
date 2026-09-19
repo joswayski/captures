@@ -1,4 +1,4 @@
-//! Native window selection owns one optional frozen desktop, its target snapshot,
+//! Native target selection owns one optional frozen desktop, its window snapshot,
 //! and the original window stack. Hosts own presentation, not source selection.
 use crate::{
     Artifact, Error, capture_flow, persist_screenshot,
@@ -6,11 +6,12 @@ use crate::{
     selection::Point,
 };
 use captures_capture::{
-    CaptureError, CaptureMode, CaptureResult, DisplayDescriptor, DisplayFrame, PointerCursor,
-    WindowDescriptor, WindowSelectionTargets, XcapBackend, classify_windows_for_display,
-    overlay_pointer_cursor, overlay_pointer_cursor_in_crop, overlay_pointer_cursor_on_window,
-    pointer_cursor, refine_window_chrome_from_snapshot, resolve_window_capture,
-    screenshot_pointer_scale, window_display_crop_is_safe, window_physical_rect,
+    CaptureError, CaptureMode, CaptureResult, DisplayDescriptor, DisplayFrame, LogicalRect,
+    PointerCursor, WindowDescriptor, WindowSelectionTargets, XcapBackend,
+    classify_windows_for_display, overlay_pointer_cursor, overlay_pointer_cursor_in_crop,
+    overlay_pointer_cursor_on_window, pointer_cursor, refine_window_chrome_from_snapshot,
+    resolve_window_capture, screenshot_pointer_scale, window_display_crop_is_safe,
+    window_physical_rect,
 };
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,10 @@ pub use captures_capture::macos_window_corner_radius_for_major_version;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Target {
+    /// Capture controls share the same prepared desktop across target switches.
+    Region {
+        rect: LogicalRect,
+    },
     /// Empty desktop and shell-chrome selections capture the whole display.
     Display,
     Window {
@@ -199,6 +204,22 @@ impl WindowSession {
         source: &impl Source,
     ) -> Result<(RgbaImage, CaptureMode), Error> {
         let frozen = self.frozen.as_ref().filter(|_| !after_countdown);
+        if let Target::Region { rect } = target {
+            crate::region::validate_rect(&self.display, *rect)?;
+            let image = if let Some(frame) = frozen {
+                crate::region::crop(
+                    frame,
+                    *rect,
+                    self.cursor.as_ref().filter(|_| self.include_cursor),
+                )?
+            } else {
+                let cursor = self.include_cursor.then(|| source.cursor()).flatten();
+                let frame = source.display(&self.display.id)?;
+                validate_display(&self.display, &frame.descriptor)?;
+                crate::region::crop(&frame, *rect, cursor.as_ref())?
+            };
+            return Ok((image, CaptureMode::Region));
+        }
         let Target::Window { id } = target else {
             let (mut image, cursor) = if let Some(frame) = frozen {
                 (frame.image.clone(), self.cursor.clone())
@@ -507,6 +528,118 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn region_target_reuses_snapshot_and_refreshes_only_for_live_or_countdown() {
+        let target: Target = serde_json::from_value(serde_json::json!({
+            "kind":"region", "rect":{"x":23.,"y":25.,"width":31.,"height":17.}
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&target).unwrap(),
+            serde_json::json!({
+                "kind":"region", "rect":{"x":23.,"y":25.,"width":31.,"height":17.}
+            })
+        );
+        for freeze in [false, true] {
+            for countdown in [false, true] {
+                for include_cursor in [false, true] {
+                    let mut session = session(freeze);
+                    session.include_cursor = include_cursor;
+                    let source = Fake::default();
+                    let (image, mode) = session.image(&target, countdown, &source).unwrap();
+                    let frozen = freeze && !countdown;
+                    let blue = if frozen { 11 } else { 97 };
+                    assert_eq!(mode, CaptureMode::Region);
+                    assert_eq!(image.dimensions(), (31, 17));
+                    assert_eq!(image.get_pixel(0, 0).0, [23, 25, blue, 255]);
+                    assert_eq!(image.get_pixel(30, 16).0, [53, 41, blue, 255]);
+                    assert_eq!(
+                        image.get_pixel(3, 2).0,
+                        if include_cursor && frozen {
+                            [233, 17, 201, 255]
+                        } else {
+                            [26, 27, blue, 255]
+                        }
+                    );
+                    assert_eq!(
+                        image.get_pixel(12, 6).0,
+                        if include_cursor && !frozen {
+                            [233, 17, 201, 255]
+                        } else {
+                            [35, 31, blue, 255]
+                        }
+                    );
+                    let calls = source.calls.borrow();
+                    assert_eq!(
+                        calls.as_slice(),
+                        if frozen {
+                            &[][..]
+                        } else if include_cursor {
+                            &["cursor", "display"][..]
+                        } else {
+                            &["display"][..]
+                        }
+                    );
+                    if let Some(frame) = session.frozen_image() {
+                        assert_eq!(frame.get_pixel(26, 27).0, [26, 27, 11, 255]);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn region_target_rejects_bad_bounds_before_capture_and_changed_display_before_crop() {
+        let session = session(true);
+        let mut source = Fake::default();
+        for rect in [
+            LogicalRect {
+                x: -1.,
+                y: 3.,
+                width: 7.,
+                height: 9.,
+            },
+            LogicalRect {
+                x: 197.,
+                y: 3.,
+                width: 7.,
+                height: 9.,
+            },
+            LogicalRect {
+                x: 3.,
+                y: f64::NAN,
+                width: 7.,
+                height: 9.,
+            },
+            LogicalRect {
+                x: 3.,
+                y: 3.,
+                width: 0.,
+                height: 9.,
+            },
+        ] {
+            assert!(matches!(
+                session.image(&Target::Region { rect }, true, &source),
+                Err(Error::InvalidRegion)
+            ));
+        }
+        assert!(source.calls.borrow().is_empty());
+        source.frame.descriptor.x += 1;
+        let target = Target::Region {
+            rect: LogicalRect {
+                x: 3.,
+                y: 5.,
+                width: 7.,
+                height: 9.,
+            },
+        };
+        assert!(matches!(
+            session.image(&target, true, &source),
+            Err(Error::DisplayChanged)
+        ));
+        assert_eq!(*source.calls.borrow(), ["display"]);
     }
 
     #[test]

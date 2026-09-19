@@ -8,7 +8,7 @@
 /* Event-loop-thread-only native capture-launch shortcuts. One owner per process.
  * JSON requests: configure {settings: AppSettings}, enabled {enabled: bool},
  * next, close. Envelopes follow captures_app_request_v1. next returns
- * {action: "region"|"window"|"display"|null}; it consumes one pending launch.
+ * {action: "new_capture"|"region"|"window"|"display"|null}; consumes one launch.
  * Configure copies settings; conflicts retain the prior registered mapping.
  * wake is required on first configure, must remain callable for process lifetime,
  * may run on an OS worker thread, and must ONLY schedule host work (no synchronous
@@ -176,7 +176,10 @@ bool captures_window_pixels_v1(const CapturesWindowSession *session, CapturesWin
  * must be aligned writable int64_t storage. No pointer-event JSON is needed. */
 bool captures_window_hit_test_v1(const CapturesWindowSession *session,
     CapturesSelectionPoint point, int64_t *output);
-/* target_json: {"kind":"window","id":"..."} or {"kind":"display"}.
+/* target_json: {"kind":"window","id":"..."}, {"kind":"display"}, or
+ * {"kind":"region","rect":{"x":N,"y":N,"width":N,"height":N}}.
+ * Region coordinates are display-local logical units, using the same prepared
+ * desktop and cursor snapshot as the other targets; no second session is needed.
  * Both strings are readable UTF-8/NUL-terminated for the call. Window IDs must
  * belong to the prepared picker. Display captures cover desktop/shell targets.
  * Nonzero countdown requires after_countdown=true: fresh geometry and pixels,

@@ -122,9 +122,11 @@ pub unsafe extern "C" fn captures_window_hit_test_v1(
     true
 }
 
-/// Capture/save after hiding the selector/countdown. Target JSON is either
-/// {"kind":"window","id":"…"} or {"kind":"display"}. Only listed window IDs
-/// are accepted. A countdown refreshes source geometry/pixels/cursor.
+/// Capture/save after hiding the selector/countdown. Target JSON is
+/// {"kind":"window","id":"…"}, {"kind":"display"}, or
+/// {"kind":"region","rect":{"x":N,"y":N,"width":N,"height":N}} in
+/// display-local logical units. Only listed window IDs are accepted. A countdown
+/// refreshes source geometry/pixels/cursor for every target.
 ///
 /// # Safety
 /// Non-null session remains alive throughout this call; root and target_json are

@@ -1,4 +1,4 @@
-//! Event-loop-owned screenshot shortcuts. The process-wide dispatcher also
+//! Event-loop-owned capture shortcuts. The process-wide dispatcher also
 //! serves temporary capture Escape; hosts wake on events, never poll a timer.
 mod recording;
 pub use recording::{
@@ -20,6 +20,7 @@ use std::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptureShortcut {
+    NewCapture,
     Region,
     Window,
     Display,
@@ -35,6 +36,7 @@ type Bindings = BTreeMap<u32, Binding>;
 fn bindings(settings: &AppSettings) -> Result<Bindings, String> {
     let mut result = Bindings::new();
     for (text, action) in [
+        (&settings.new_capture_shortcut, CaptureShortcut::NewCapture),
         (&settings.region_shortcut, CaptureShortcut::Region),
         (&settings.window_shortcut, CaptureShortcut::Window),
         (&settings.display_shortcut, CaptureShortcut::Display),
@@ -46,7 +48,7 @@ fn bindings(settings: &AppSettings) -> Result<Bindings, String> {
             return Err("Escape is reserved for capture cancellation".into());
         }
         if result.insert(key.id(), Binding { key, action }).is_some() {
-            return Err("Screenshot shortcuts must use different keys".into());
+            return Err("Capture shortcuts must use different keys".into());
         }
     }
     Ok(result)
@@ -345,6 +347,7 @@ mod tests {
 
     fn settings() -> AppSettings {
         AppSettings {
+            new_capture_shortcut: "Ctrl+Alt+F10".into(),
             region_shortcut: "Ctrl+Shift+1".into(),
             window_shortcut: "Ctrl+Shift+2".into(),
             display_shortcut: "Ctrl+Shift+3".into(),
@@ -355,6 +358,11 @@ mod tests {
     #[test]
     fn aliases_conflict_and_escape_is_reserved_before_registration() {
         let mut settings = settings();
+        settings.new_capture_shortcut = "Control+Shift+1".into();
+        assert!(bindings(&settings).unwrap_err().contains("different"));
+        settings.new_capture_shortcut = "Escape".into();
+        assert!(bindings(&settings).unwrap_err().contains("reserved"));
+        settings.new_capture_shortcut = "Control+Alt+F10".into();
         settings.window_shortcut = "Control+Shift+1".into();
         assert!(bindings(&settings).unwrap_err().contains("different"));
         settings.window_shortcut = "Escape".into();
@@ -426,6 +434,56 @@ mod tests {
                 Ok(())
             }
         }
+    }
+
+    #[test]
+    fn new_capture_has_distinct_release_routing_and_restores_edited_binding() {
+        let old_key = "Control+Alt+F10".parse::<HotKey>().unwrap().id();
+        let new_key = "Control+Alt+F11".parse::<HotKey>().unwrap().id();
+        let mut registered = bindings(&settings()).unwrap();
+        assert_eq!(registered.len(), 4);
+        let backend = Backend {
+            keys: RefCell::new(registered.keys().copied().collect()),
+            ..Backend::default()
+        };
+        let routes = Mutex::new(Routes {
+            bindings: registered.clone(),
+            enabled: true,
+            ..Routes::default()
+        });
+        {
+            let mut state = routes.lock().unwrap();
+            assert!(!state.event(old_key, HotKeyState::Released, false));
+            assert!(!state.event(old_key, HotKeyState::Pressed, false));
+            assert!(state.event(old_key, HotKeyState::Released, false));
+            assert_eq!(state.pending.take(), Some(CaptureShortcut::NewCapture));
+        }
+        assert_eq!(
+            serde_json::to_value(CaptureShortcut::NewCapture).unwrap(),
+            "new_capture"
+        );
+
+        suspend_routes(&backend, &mut registered, &routes, true).unwrap();
+        let mut settings = settings();
+        settings.new_capture_shortcut = "Control+Alt+F11".into();
+        let desired = bindings(&settings).unwrap();
+        sync_bindings(&backend, &mut registered, &desired, true).unwrap();
+        routes.lock().unwrap().bindings = desired;
+        assert!(backend.keys.borrow().is_empty());
+        assert!(
+            !routes
+                .lock()
+                .unwrap()
+                .event(new_key, HotKeyState::Pressed, false)
+        );
+        suspend_routes(&backend, &mut registered, &routes, false).unwrap();
+        assert!(!backend.keys.borrow().contains(&old_key));
+        assert!(backend.keys.borrow().contains(&new_key));
+        let mut state = routes.lock().unwrap();
+        assert!(!state.event(new_key, HotKeyState::Released, false));
+        assert!(!state.event(new_key, HotKeyState::Pressed, false));
+        assert!(state.event(new_key, HotKeyState::Released, false));
+        assert_eq!(state.pending.take(), Some(CaptureShortcut::NewCapture));
     }
 
     #[test]
@@ -594,7 +652,7 @@ mod tests {
         let next = bindings(&changed).unwrap();
         let backend = Backend {
             keys: RefCell::new(old.keys().copied().collect()),
-            fail_cleanup: old.keys().nth(1).copied(),
+            fail_cleanup: old.keys().find(|id| !next.contains_key(id)).copied(),
             ..Backend::default()
         };
         assert!(
