@@ -1867,6 +1867,82 @@ mod tests {
     }
 
     #[test]
+    fn exact_palette_preserves_runs_revisited_colors_and_alpha() {
+        let palette = vec![[0, 0, 0, 0], [0, 0, 0, 255], [7, 13, 19, 127]];
+        let indices = vec![0, 0, 1, 1, 0, 0, 2, 2, 0, 1, 2, 2];
+        let image = RgbaImage::from_fn(6, 2, |x, y| {
+            Rgba(palette[usize::from(indices[(y * 6 + x) as usize])])
+        });
+        assert_eq!(super::exact_indexed_rgba(&image, 0), None);
+        assert_eq!(super::exact_indexed_rgba(&image, 2), None);
+        assert_eq!(
+            super::exact_indexed_rgba(&image, 3),
+            Some((palette, indices))
+        );
+        assert_eq!(
+            super::exact_indexed_rgba(&RgbaImage::new(0, 0), 0),
+            Some((vec![], vec![]))
+        );
+
+        for colors in [256, 257] {
+            let image = RgbaImage::from_fn(colors * 2, 1, |x, _| {
+                Rgba([(x / 2) as u8, (x / 512) as u8, 3, 255])
+            });
+            let expected = (colors == 256).then(|| {
+                (
+                    (0..256).map(|i| [i as u8, 0, 3, 255]).collect(),
+                    (0..512).map(|i| (i / 2) as u8).collect(),
+                )
+            });
+            assert_eq!(super::exact_indexed_rgba(&image, 256), expected);
+        }
+    }
+
+    #[test]
+    #[ignore = "manual release benchmark: --release --ignored --nocapture"]
+    fn benchmark_flat_png_export() {
+        use std::{hint::black_box, time::Instant};
+
+        for (name, width, height, run_length) in [
+            ("1080p-solid", 1920, 1080, u32::MAX),
+            ("4k-solid", 3840, 2160, u32::MAX),
+            ("1080p-runs-64", 1920, 1080, 64),
+            ("1080p-runs-8", 1920, 1080, 8),
+            ("1080p-alternating", 1920, 1080, 1),
+            ("540p-over-budget", 960, 540, 0),
+        ] {
+            let image = RgbaImage::from_fn(width, height, |x, y| {
+                if run_length == 0 {
+                    let mixed = x.wrapping_mul(73) ^ y.wrapping_mul(151) ^ (x * y);
+                    Rgba([mixed as u8, (mixed >> 5) as u8, (mixed >> 11) as u8, 255])
+                } else {
+                    let shade = ((y * width + x) / run_length % 4) as u8;
+                    Rgba([shade * 61, shade * 37, shade * 19, 255])
+                }
+            });
+            let mut samples = Vec::new();
+            for iteration in 0..4 {
+                let start = Instant::now();
+                let bytes = encode_png_export(black_box(&image), true, Some(256)).unwrap();
+                black_box(&bytes);
+                let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+                if iteration > 0 {
+                    samples.push(elapsed);
+                } else {
+                    let checksum = bytes.iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
+                        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+                    });
+                    eprintln!("{name}: bytes={} fnv1a={checksum:016x}", bytes.len());
+                    if run_length != 0 {
+                        assert_eq!(image::load_from_memory(&bytes).unwrap().to_rgba8(), image);
+                    }
+                }
+            }
+            eprintln!("{name}: samples_ms={samples:?}");
+        }
+    }
+
+    #[test]
     #[ignore = "manual release benchmark: --release --ignored --nocapture"]
     fn benchmark_partial_alpha_png_export() {
         use std::{hint::black_box, time::Instant};
