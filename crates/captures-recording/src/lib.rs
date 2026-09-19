@@ -4,7 +4,9 @@ mod draft;
 mod model;
 mod session;
 
-pub use draft::{DraftStore, RecordingDraftManifest, RecordingSegmentManifest, RecoveryError};
+pub use draft::{
+    DraftSegmentError, DraftStore, RecordingDraftManifest, RecordingSegmentManifest, RecoveryError,
+};
 pub use model::{
     AudioDevice, AudioDeviceKind, AudioOptions, CaptureRect, GifOptions, MaxResolution,
     RecordingKind, RecordingOptions, RecordingSegmentInfo, RecordingSessionSnapshot,
