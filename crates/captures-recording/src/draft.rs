@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::{RecordingKind, RecordingOptions, RecordingState};
+use crate::{RecordingKind, RecordingOptions, RecordingSegmentInfo, RecordingState};
 
 const MANIFEST_FILE: &str = "manifest.json";
 
@@ -72,6 +72,82 @@ impl RecordingDraftManifest {
     pub fn retains_source_master(&self) -> bool {
         self.options.kind == RecordingKind::Gif
     }
+
+    pub fn complete_segment(
+        &mut self,
+        session_directory: &Path,
+        info: RecordingSegmentInfo,
+        started_at_ms: u64,
+        updated_at_ms: u64,
+    ) -> Result<(), DraftSegmentError> {
+        let relative_path = info
+            .path
+            .strip_prefix(session_directory)
+            .map_err(|_| DraftSegmentError::VideoOutsideBundle)?
+            .to_string_lossy()
+            .into_owned();
+        let microphone_relative_path = info
+            .microphone_path
+            .as_ref()
+            .map(|path| {
+                path.strip_prefix(session_directory)
+                    .map(|relative| relative.to_string_lossy().into_owned())
+                    .map_err(|_| DraftSegmentError::MicrophoneOutsideBundle)
+            })
+            .transpose()?;
+        let system_audio_relative_path = info
+            .system_audio_path
+            .as_ref()
+            .map(|path| {
+                path.strip_prefix(session_directory)
+                    .map(|relative| relative.to_string_lossy().into_owned())
+                    .map_err(|_| DraftSegmentError::SystemAudioOutsideBundle)
+            })
+            .transpose()?;
+        let segment = RecordingSegmentManifest {
+            index: u32::try_from(self.segments.len())
+                .map_err(|_| DraftSegmentError::TooManySegments)?,
+            relative_path,
+            system_audio_relative_path,
+            system_audio_offset_ms: info.system_audio_offset_ms,
+            system_audio_warning: info.system_audio_warning,
+            microphone_relative_path,
+            microphone_offset_ms: info.microphone_offset_ms,
+            microphone_warning: info.microphone_warning,
+            started_at_ms,
+            duration_ms: info.duration_ms,
+            width: info.width,
+            height: info.height,
+            size_bytes: info.size_bytes,
+            dropped_frames: info.dropped_frames,
+            complete: true,
+        };
+        if let Some(pending) = self
+            .segments
+            .iter_mut()
+            .rev()
+            .find(|pending| !pending.complete && pending.relative_path == segment.relative_path)
+        {
+            let index = pending.index;
+            *pending = RecordingSegmentManifest { index, ..segment };
+        } else {
+            self.segments.push(segment);
+        }
+        self.updated_at_ms = updated_at_ms;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum DraftSegmentError {
+    #[error("recording segment escaped its recovery bundle")]
+    VideoOutsideBundle,
+    #[error("microphone segment escaped its recovery bundle")]
+    MicrophoneOutsideBundle,
+    #[error("desktop audio segment escaped its recovery bundle")]
+    SystemAudioOutsideBundle,
+    #[error("recording has too many segments")]
+    TooManySegments,
 }
 
 #[derive(Debug, Error)]
@@ -199,6 +275,8 @@ fn tempfile_path(directory: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use tempfile::tempdir;
     use uuid::Uuid;
 
@@ -207,7 +285,11 @@ mod tests {
         RecordingState, RecordingTarget,
     };
 
-    use super::{DraftStore, RecordingDraftManifest, RecordingSegmentManifest, RecoveryError};
+    use super::{
+        DraftSegmentError, DraftStore, RecordingDraftManifest, RecordingSegmentManifest,
+        RecoveryError,
+    };
+    use crate::RecordingSegmentInfo;
 
     fn options(kind: RecordingKind) -> RecordingOptions {
         RecordingOptions {
@@ -229,6 +311,154 @@ mod tests {
             show_keystrokes: false,
             audio: AudioOptions::default(),
             gif: GifOptions::default(),
+        }
+    }
+
+    fn pending_segment(index: u32, relative_path: &str) -> RecordingSegmentManifest {
+        RecordingSegmentManifest {
+            index,
+            relative_path: relative_path.to_owned(),
+            system_audio_relative_path: None,
+            system_audio_offset_ms: 0,
+            system_audio_warning: None,
+            microphone_relative_path: None,
+            microphone_offset_ms: 0,
+            microphone_warning: None,
+            started_at_ms: 1,
+            duration_ms: 0,
+            width: 640,
+            height: 360,
+            size_bytes: 0,
+            dropped_frames: 0,
+            complete: false,
+        }
+    }
+
+    fn segment_info(directory: &Path) -> RecordingSegmentInfo {
+        RecordingSegmentInfo {
+            path: directory.join("segment-001.mp4"),
+            system_audio_path: Some(directory.join("segment-001.system.wav")),
+            system_audio_offset_ms: -17,
+            system_audio_warning: Some("desktop audio drift".to_owned()),
+            microphone_path: Some(directory.join("segment-001.mic.wav")),
+            microphone_offset_ms: 23,
+            microphone_warning: Some("microphone started late".to_owned()),
+            width: 1_920,
+            height: 1_080,
+            duration_ms: 4_321,
+            size_bytes: 98_765,
+            dropped_frames: 12,
+        }
+    }
+
+    #[test]
+    fn completes_the_last_matching_pending_segment_without_reordering() {
+        let directory = tempdir().expect("temporary directory");
+        let mut manifest = RecordingDraftManifest::new(
+            Uuid::new_v4().to_string(),
+            options(RecordingKind::Video),
+            10,
+        );
+        manifest.segments = vec![
+            pending_segment(4, "segment-001.mp4"),
+            pending_segment(9, "segment-001.mp4"),
+        ];
+
+        manifest
+            .complete_segment(directory.path(), segment_info(directory.path()), 123, 456)
+            .expect("segment completed");
+
+        assert_eq!(manifest.segments.len(), 2);
+        assert_eq!(manifest.segments[0], pending_segment(4, "segment-001.mp4"));
+        assert_eq!(
+            manifest.segments[1],
+            RecordingSegmentManifest {
+                index: 9,
+                relative_path: "segment-001.mp4".to_owned(),
+                system_audio_relative_path: Some("segment-001.system.wav".to_owned()),
+                system_audio_offset_ms: -17,
+                system_audio_warning: Some("desktop audio drift".to_owned()),
+                microphone_relative_path: Some("segment-001.mic.wav".to_owned()),
+                microphone_offset_ms: 23,
+                microphone_warning: Some("microphone started late".to_owned()),
+                started_at_ms: 123,
+                duration_ms: 4_321,
+                width: 1_920,
+                height: 1_080,
+                size_bytes: 98_765,
+                dropped_frames: 12,
+                complete: true,
+            }
+        );
+        assert_eq!(manifest.updated_at_ms, 456);
+    }
+
+    #[test]
+    fn appends_a_nonmatching_segment_at_the_current_length() {
+        let directory = tempdir().expect("temporary directory");
+        let mut manifest = RecordingDraftManifest::new(
+            Uuid::new_v4().to_string(),
+            options(RecordingKind::Video),
+            10,
+        );
+        manifest.segments = vec![pending_segment(27, "segment-000.mp4")];
+
+        manifest
+            .complete_segment(directory.path(), segment_info(directory.path()), 123, 456)
+            .expect("segment appended");
+
+        assert_eq!(manifest.segments.len(), 2);
+        assert_eq!(manifest.segments[0], pending_segment(27, "segment-000.mp4"));
+        assert_eq!(manifest.segments[1].index, 1);
+        assert_eq!(manifest.segments[1].relative_path, "segment-001.mp4");
+        assert!(manifest.segments[1].complete);
+        assert_eq!(manifest.updated_at_ms, 456);
+    }
+
+    #[test]
+    fn out_of_bundle_segment_paths_leave_the_manifest_unchanged() {
+        let directory = tempdir().expect("temporary directory");
+        let outside = tempdir().expect("outside directory");
+        let manifest = RecordingDraftManifest::new(
+            Uuid::new_v4().to_string(),
+            options(RecordingKind::Video),
+            10,
+        );
+        let cases = [
+            (
+                DraftSegmentError::VideoOutsideBundle,
+                "recording segment escaped its recovery bundle",
+                RecordingSegmentInfo {
+                    path: outside.path().join("segment.mp4"),
+                    ..segment_info(directory.path())
+                },
+            ),
+            (
+                DraftSegmentError::MicrophoneOutsideBundle,
+                "microphone segment escaped its recovery bundle",
+                RecordingSegmentInfo {
+                    microphone_path: Some(outside.path().join("segment.mic.wav")),
+                    ..segment_info(directory.path())
+                },
+            ),
+            (
+                DraftSegmentError::SystemAudioOutsideBundle,
+                "desktop audio segment escaped its recovery bundle",
+                RecordingSegmentInfo {
+                    system_audio_path: Some(outside.path().join("segment.system.wav")),
+                    ..segment_info(directory.path())
+                },
+            ),
+        ];
+
+        for (expected, message, info) in cases {
+            let mut actual = manifest.clone();
+            let error = actual
+                .complete_segment(directory.path(), info, 123, 456)
+                .expect_err("outside path rejected");
+            assert_eq!(error, expected);
+            assert_eq!(error.to_string(), message);
+            assert_eq!(actual, manifest);
         }
     }
 

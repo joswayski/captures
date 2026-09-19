@@ -3583,66 +3583,10 @@ fn append_segment(
     started_at_ms: u64,
     now: u64,
 ) -> Result<(), AppError> {
-    let relative_path = info
-        .path
-        .strip_prefix(&session.directory)
-        .map_err(|_| AppError::Task("recording segment escaped its recovery bundle".to_owned()))?
-        .to_string_lossy()
-        .into_owned();
-    let microphone_relative_path = info
-        .microphone_path
-        .as_ref()
-        .map(|path| {
-            path.strip_prefix(&session.directory)
-                .map(|relative| relative.to_string_lossy().into_owned())
-                .map_err(|_| {
-                    AppError::Task("microphone segment escaped its recovery bundle".to_owned())
-                })
-        })
-        .transpose()?;
-    let system_audio_relative_path = info
-        .system_audio_path
-        .as_ref()
-        .map(|path| {
-            path.strip_prefix(&session.directory)
-                .map(|relative| relative.to_string_lossy().into_owned())
-                .map_err(|_| {
-                    AppError::Task("desktop audio segment escaped its recovery bundle".to_owned())
-                })
-        })
-        .transpose()?;
-    let segment = RecordingSegmentManifest {
-        index: u32::try_from(session.manifest.segments.len())
-            .map_err(|_| AppError::Task("recording has too many segments".to_owned()))?,
-        relative_path,
-        system_audio_relative_path,
-        system_audio_offset_ms: info.system_audio_offset_ms,
-        system_audio_warning: info.system_audio_warning,
-        microphone_relative_path,
-        microphone_offset_ms: info.microphone_offset_ms,
-        microphone_warning: info.microphone_warning,
-        started_at_ms,
-        duration_ms: info.duration_ms,
-        width: info.width,
-        height: info.height,
-        size_bytes: info.size_bytes,
-        dropped_frames: info.dropped_frames,
-        complete: true,
-    };
-    if let Some(pending) = session
+    session
         .manifest
-        .segments
-        .iter_mut()
-        .rev()
-        .find(|pending| !pending.complete && pending.relative_path == segment.relative_path)
-    {
-        let index = pending.index;
-        *pending = RecordingSegmentManifest { index, ..segment };
-    } else {
-        session.manifest.segments.push(segment);
-    }
-    session.manifest.updated_at_ms = now;
-    Ok(())
+        .complete_segment(&session.directory, info, started_at_ms, now)
+        .map_err(|error| AppError::Task(error.to_string()))
 }
 
 fn fail_session(app: &AppHandle, state: &AppState, session_id: &str, message: String) {
