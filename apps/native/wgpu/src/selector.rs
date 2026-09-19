@@ -77,11 +77,86 @@ impl Selector {
         self.rect
     }
 
+    pub fn can_confirm(&self) -> bool {
+        self.drag.is_none() && selection::capturable(self.rect)
+    }
+
     pub fn reset(&mut self) {
         *self = Self::default();
     }
 
+    pub fn clear_selection(&mut self) {
+        self.rect = None;
+        self.drag = None;
+    }
+
+    pub fn cancel_drag(&mut self) {
+        if let Some(drag) = self.drag.take() {
+            self.rect = selection::capturable(Some(drag.initial)).then_some(drag.initial);
+        }
+    }
+
     pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        tokens: &Tokens,
+        frozen: Option<&TextureHandle>,
+        auto_start: bool,
+        overlay_bounds: Option<Bounds>,
+    ) -> Option<Action> {
+        let bounds = overlay_bounds.unwrap_or(Bounds {
+            width: ui.max_rect().width().into(),
+            height: ui.max_rect().height().into(),
+        });
+        let mut action = self.show_surface(ui, tokens, frozen, auto_start, overlay_bounds);
+        if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+            action = Some(Action::Cancel);
+        } else if ui.input(|input| input.key_pressed(egui::Key::Enter)) && self.can_confirm() {
+            action = Some(Action::Confirm);
+        }
+
+        let panel = egui::Area::new(egui::Id::unique("region-selector-toolbar"))
+            .anchor(Align2::CENTER_BOTTOM, egui::vec2(0., -26.))
+            .order(egui::Order::Foreground)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::new()
+                    .fill(tokens.color("glass-strong"))
+                    .stroke(Stroke::new(1., tokens.color("glass-border")))
+                    .corner_radius(tokens.number("r-2xl") as u8)
+                    .inner_margin(tokens.number("s-4") as i8)
+                    .show(ui, |ui| {
+                        tokens.glass_controls(ui);
+                        ui.horizontal(|ui| {
+                            if ui.button("×").on_hover_text("Cancel (Esc)").clicked() {
+                                action = Some(Action::Cancel);
+                            }
+                            ui.separator();
+                            self.show_aspect_picker(ui, tokens, bounds);
+                            if ui
+                                .add_enabled(
+                                    self.can_confirm(),
+                                    egui::Button::new(
+                                        RichText::new("Capture region")
+                                            .color(tokens.color("theme-accent-ink")),
+                                    )
+                                    .fill(tokens.color("theme-accent"))
+                                    .stroke(Stroke::NONE),
+                                )
+                                .on_hover_text("Capture region (Enter)")
+                                .clicked()
+                            {
+                                action = Some(Action::Confirm);
+                            }
+                        });
+                    });
+            });
+        if panel.response.contains_pointer() && ui.input(|input| input.pointer.any_pressed()) {
+            self.drag = None;
+        }
+        action
+    }
+
+    pub fn show_surface(
         &mut self,
         ui: &mut egui::Ui,
         tokens: &Tokens,
@@ -117,74 +192,35 @@ impl Selector {
         let created = self.drag_creates_selection();
         let capturable = drag_stopped && self.end();
         let auto_confirm = drag_stopped && created && capturable && auto_start;
-        let can_confirm = self.drag.is_none() && selection::capturable(self.rect);
 
-        paint_surface(ui, coordinates, tokens, frozen, self.rect);
-        let mut action = auto_confirm.then_some(Action::Confirm);
-        if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
-            action = Some(Action::Cancel);
-        } else if ui.input(|input| input.key_pressed(egui::Key::Enter)) && can_confirm {
-            action = Some(Action::Confirm);
-        }
+        paint_surface(
+            ui,
+            coordinates,
+            tokens,
+            frozen,
+            self.rect,
+            self.drag.is_some(),
+        );
+        auto_confirm.then_some(Action::Confirm)
+    }
 
-        let panel = egui::Area::new(egui::Id::unique("region-selector-toolbar"))
-            .anchor(Align2::CENTER_BOTTOM, egui::vec2(0., -26.))
-            .order(egui::Order::Foreground)
-            .show(ui.ctx(), |ui| {
-                egui::Frame::new()
-                    .fill(tokens.color("glass-strong"))
-                    .stroke(Stroke::new(1., tokens.color("glass-border")))
-                    .corner_radius(tokens.number("r-2xl") as u8)
-                    .inner_margin(tokens.number("s-4") as i8)
-                    .show(ui, |ui| {
-                        tokens.glass_controls(ui);
-                        ui.horizontal(|ui| {
-                            if ui.button("×").on_hover_text("Cancel (Esc)").clicked() {
-                                action = Some(Action::Cancel);
-                            }
-                            ui.separator();
-                            ui.label(
-                                RichText::new("Aspect")
-                                    .small()
-                                    .color(tokens.color("glass-text-subtle")),
-                            );
-                            let previous = self.aspect;
-                            egui::ComboBox::from_id_salt("region-aspect")
-                                .selected_text(self.aspect.label())
-                                .show_ui(ui, |ui| {
-                                    for aspect in Aspect::ALL {
-                                        ui.selectable_value(
-                                            &mut self.aspect,
-                                            aspect,
-                                            aspect.label(),
-                                        );
-                                    }
-                                });
-                            if previous != self.aspect {
-                                self.apply_aspect(bounds);
-                            }
-                            if ui
-                                .add_enabled(
-                                    can_confirm,
-                                    egui::Button::new(
-                                        RichText::new("Capture region")
-                                            .color(tokens.color("theme-accent-ink")),
-                                    )
-                                    .fill(tokens.color("theme-accent"))
-                                    .stroke(Stroke::NONE),
-                                )
-                                .on_hover_text("Capture region (Enter)")
-                                .clicked()
-                            {
-                                action = Some(Action::Confirm);
-                            }
-                        });
-                    });
+    pub fn show_aspect_picker(&mut self, ui: &mut egui::Ui, tokens: &Tokens, bounds: Bounds) {
+        ui.label(
+            RichText::new("Aspect")
+                .small()
+                .color(tokens.color("glass-text-subtle")),
+        );
+        let previous = self.aspect;
+        egui::ComboBox::from_id_salt("region-aspect")
+            .selected_text(self.aspect.label())
+            .show_ui(ui, |ui| {
+                for aspect in Aspect::ALL {
+                    ui.selectable_value(&mut self.aspect, aspect, aspect.label());
+                }
             });
-        if panel.response.contains_pointer() && response.drag_started() {
-            self.drag = None;
+        if previous != self.aspect {
+            self.apply_aspect(bounds);
         }
-        action
     }
 
     fn begin(&mut self, point: Point) {
@@ -360,6 +396,7 @@ fn paint_surface(
     tokens: &Tokens,
     frozen: Option<&TextureHandle>,
     selection: Option<Rect>,
+    dragging: bool,
 ) {
     let surface = coordinates.surface;
     let painter = ui.painter();
@@ -432,7 +469,7 @@ fn paint_surface(
             tokens.color("glass-strong"),
         );
         painter.galley(label_center - galley.size() / 2., galley, Color32::WHITE);
-    } else {
+    } else if !dragging {
         painter.rect_filled(surface, 0., veil);
         painter.text(
             surface.center() - egui::vec2(0., 28.),
@@ -448,6 +485,8 @@ fn paint_surface(
             FontId::proportional(tokens.number("text-sm")),
             tokens.color("glass-text-muted"),
         );
+    } else {
+        painter.rect_filled(surface, 0., veil);
     }
 }
 
@@ -574,6 +613,25 @@ mod tests {
         assert_eq!(selector.rect(), None);
         assert!(selector.drag.is_none());
         assert_eq!(selector.aspect, Aspect::Free);
+    }
+
+    #[test]
+    fn display_change_clears_selection_but_preserves_aspect() {
+        let mut selector = Selector {
+            rect: Some(Rect {
+                x: 10.,
+                y: 20.,
+                width: 100.,
+                height: 80.,
+            }),
+            aspect: Aspect::SixteenNine,
+            drag: None,
+        };
+        selector.begin(Point { x: 30., y: 40. });
+        selector.clear_selection();
+        assert_eq!(selector.rect, None);
+        assert!(selector.drag.is_none());
+        assert_eq!(selector.aspect, Aspect::SixteenNine);
     }
 
     #[test]

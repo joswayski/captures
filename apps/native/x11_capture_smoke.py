@@ -117,6 +117,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--controls", action="store_true",
+                        help="Exercise the same capture oracles through New Capture controls")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -163,7 +165,7 @@ def main():
                 return result
             time.sleep(.05)
         for title in ("Captures", "Captures Region Selection", "Captures Window Selection",
-                      "Captures Screenshot Countdown"):
+                      "Captures Capture Controls", "Captures Screenshot Countdown"):
             for window in windows(title):
                 screenshot(window, f"timeout-{title}")
                 print(run("xdotool", "getwindowgeometry", window).decode(), flush=True)
@@ -218,7 +220,7 @@ def main():
                  ("window", True, 0, False, True)]
         for mode, freeze, countdown, occluded, auto_start in cases:
             prefix = f"{mode}-freeze-{freeze}-countdown-{countdown}-occluded-{occluded}-auto-{auto_start}"
-            title = f"Captures {mode.title()} Selection"
+            title = "Captures Capture Controls" if args.controls else f"Captures {mode.title()} Selection"
             fixture = cover = None
             if mode == "window":
                 fixture = WindowFixture(env["DISPLAY"], "Captures X11 pixel fixture", 610, 290)
@@ -239,6 +241,7 @@ def main():
             settings.write_text(json.dumps({
                 "settings_schema_version": 5, "appearance": "dark", "theme": "mustard",
                 "output_directory": str(output / prefix / "exports"),
+                "new_capture_shortcut": "Ctrl+Shift+F10",
                 "region_shortcut": "Super+Shift+S", "window_shortcut": "Alt+PrintScreen",
                 "display_shortcut": "Shift+PrintScreen", "launch_at_login": False,
                 "auto_copy_to_clipboard": False, "auto_start_on_selection": auto_start,
@@ -251,17 +254,42 @@ def main():
             root = wait(lambda: windows("Captures"), "capture workspace")[0]
             time.sleep(2)
             screenshot(root, f"{prefix}-workspace")
+            checked_toolbar_drag = False
 
-            def begin_selection():
-                click(root, 467 if mode == "region" else 575, 141)
+            def begin_selection(full_display=False):
+                nonlocal checked_toolbar_drag
+                click(root, 341 if args.controls else (575 if mode == "region" else 696), 141)
                 selector = wait(lambda: windows(title), f"{mode} selector")[0]
                 if windows("Captures"):
                     raise RuntimeError("capture workspace was not hidden")
                 # Mapping precedes the first GL paint. Do not inject a complete
                 # drag into an unpainted window during cold texture preparation.
-                paint_crop = "1280x96+0+804" if mode == "region" else "1280x120+0+0"
+                paint_crop = "1280x96+0+804" if mode == "region" or args.controls else "1280x120+0+0"
                 wait(lambda: int(run("import", "-window", selector, "-crop", paint_crop,
                                      "-format", "%k", "info:")) > 16, "selector controls paint")
+                if args.controls and mode == "region" and not checked_toolbar_drag:
+                    previous = entries()
+                    # The trailing footer is noninteractive. Drag to both
+                    # bounds, then return to the original 26px-bottom position.
+                    for start, end, label in [
+                        ((1010, 850), (0, 0), "top-left"),
+                        ((813, 79), (1279, 899), "bottom-right"),
+                        ((1207, 859), (1010, 850), "restored"),
+                    ]:
+                        run("xdotool", "windowfocus", "--sync", selector,
+                            "mousemove", "--window", selector, *map(str, start),
+                            "sleep", ".2", "mousedown", "1", "sleep", ".2",
+                            "mousemove", "--window", selector, *map(str, end),
+                            "sleep", ".2", "mouseup", "1", "sleep", ".2")
+                        screenshot(selector, f"{prefix}-toolbar-{label}")
+                    run("xdotool", "key", "Return", "sleep", ".3")
+                    assert windows(title) and entries() == previous, "toolbar drag created a region"
+                    checked_toolbar_drag = True
+                if args.controls and full_display:
+                    click(selector, 653, 811)
+                    return selector
+                if args.controls and mode == "window":
+                    click(selector, 568, 811)
                 if mode == "region":
                     run("xdotool", "windowfocus", "--sync", selector, "mousemove", "--window",
                         selector, "140", "180", "sleep", ".1", "mousedown", "1", "sleep", ".2", "mousemove",
@@ -277,6 +305,15 @@ def main():
                     # the underlying pixels. Cancellation tests must not click.
                     run("xdotool", "windowfocus", "--sync", selector, "mousemove",
                         "--window", selector, "660", "360", "sleep", ".2")
+                if args.controls and not auto_start:
+                    # Returning to each target must retain its settled choice.
+                    # The independent pixel/size oracle below catches a reset
+                    # or accidental capture of the temporary Full screen target.
+                    click(selector, 653, 811)
+                    click(selector, 492 if mode == "region" else 568, 811)
+                    # Release queues the target change; let the compositor
+                    # present it before collecting the selection screenshot.
+                    time.sleep(.2)
                 return selector
 
             def entries():
@@ -334,7 +371,9 @@ def main():
                 fixture.hide()
                 background(0)
                 captured = entries()
-                selector = begin_selection()  # Same point now hits empty desktop.
+                # Direct window picking falls back on empty desktop; unified
+                # controls expose a dedicated Full screen target instead.
+                selector = begin_selection(full_display=args.controls)
                 screenshot(selector, f"{prefix}-display-selection")
                 background(1)
                 run("xdotool", "key", "Return")
@@ -397,6 +436,7 @@ def main():
         (output / "result.json").write_text(json.dumps({
             "passed": True, "screenSaverQueries": saver.queries,
             "scenarios": len(cases),
+            "newCaptureControls": args.controls,
             "savedCaptures": sum(1 for _ in output.glob("*/history/*/metadata.json")),
             "scope": "Real capture/persistence and X11 input on private Xvfb; simulated session state, software GL; not hardware, OS login/lock, Wayland or accessibility acceptance.",
         }, indent=2))

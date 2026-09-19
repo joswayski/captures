@@ -44,8 +44,7 @@ impl WindowSelector {
         self.hovered
     }
 
-    #[cfg(test)]
-    fn selected(&self) -> Option<SelectionTarget> {
+    pub fn selected(&self) -> Option<SelectionTarget> {
         self.selected
     }
 
@@ -64,56 +63,14 @@ impl WindowSelector {
         view: View<'_>,
         hit_test: impl Fn(Point) -> Option<usize>,
     ) -> Option<Action> {
-        let surface = ui.max_rect();
-        let coordinates = CoordinateMap::new(surface, view.display);
-        let response = ui.allocate_rect(surface, Sense::click());
-        if self.scripted
-            && ui.input(|input| {
-                input.events.iter().any(|event| {
-                    matches!(
-                        event,
-                        egui::Event::PointerButton { .. } | egui::Event::Key { .. }
-                    )
-                })
-            })
-        {
-            self.scripted = false;
-        }
-        if !self.scripted {
-            if let Some(position) = response.hover_pos() {
-                self.hovered = Some(match hit_test(coordinates.point(position)) {
-                    Some(index) if index < view.windows.len() => SelectionTarget::Window(index),
-                    _ => SelectionTarget::Display,
-                });
-            } else if ui.input(|input| input.pointer.latest_pos()).is_none() {
-                self.hovered = None;
-            }
-        }
-
-        paint_surface(
-            ui,
-            tokens,
-            &view,
-            coordinates,
-            self.presentation_target(),
-            self.selected.is_some(),
-        );
-
-        let mut action = None;
+        let auto_confirm = self.show_surface(ui, tokens, &view, hit_test);
+        let mut action = auto_confirm.map(Action::Confirm);
         if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
             action = Some(Action::Cancel);
         } else if ui.input(|input| input.key_pressed(egui::Key::Enter))
             && let Some(target) = self.selected
         {
             action = Some(Action::Confirm(target));
-        } else if response.clicked()
-            && let Some(target) = self.hovered
-        {
-            if view.auto_start {
-                action = Some(Action::Confirm(target));
-            } else {
-                self.selected = Some(target);
-            }
         }
 
         if !view.auto_start {
@@ -161,6 +118,60 @@ impl WindowSelector {
         action
     }
 
+    pub fn show_surface(
+        &mut self,
+        ui: &mut egui::Ui,
+        tokens: &Tokens,
+        view: &View<'_>,
+        hit_test: impl Fn(Point) -> Option<usize>,
+    ) -> Option<SelectionTarget> {
+        let surface = ui.max_rect();
+        let coordinates = CoordinateMap::new(surface, view.display);
+        let response = ui.allocate_rect(surface, Sense::click());
+        if self.scripted
+            && ui.input(|input| {
+                input.events.iter().any(|event| {
+                    matches!(
+                        event,
+                        egui::Event::PointerButton { .. } | egui::Event::Key { .. }
+                    )
+                })
+            })
+        {
+            self.scripted = false;
+        }
+        if !self.scripted {
+            if let Some(position) = response.hover_pos() {
+                self.hovered = Some(match hit_test(coordinates.point(position)) {
+                    Some(index) if index < view.windows.len() => SelectionTarget::Window(index),
+                    _ => SelectionTarget::Display,
+                });
+            } else if ui.input(|input| input.pointer.latest_pos()).is_none() {
+                self.hovered = None;
+            }
+        }
+
+        paint_surface(
+            ui,
+            tokens,
+            view,
+            coordinates,
+            self.presentation_target(),
+            self.selected.is_some(),
+        );
+
+        if response.clicked()
+            && let Some(target) = self.hovered
+        {
+            if view.auto_start {
+                return Some(target);
+            } else {
+                self.selected = Some(target);
+            }
+        }
+        None
+    }
+
     pub fn exercise(&mut self, cycle: usize, hit_test: impl Fn(Point) -> Option<usize>) {
         let point = match cycle {
             0 => Some(Point { x: 210., y: 130. }),
@@ -181,6 +192,21 @@ impl WindowSelector {
         self.selected = self.hovered;
         self.scripted = true;
     }
+}
+
+pub fn show_display_surface(ui: &mut egui::Ui, tokens: &Tokens, view: &View<'_>) -> bool {
+    let surface = ui.max_rect();
+    let coordinates = CoordinateMap::new(surface, view.display);
+    let response = ui.allocate_rect(surface, Sense::click());
+    paint_surface(
+        ui,
+        tokens,
+        view,
+        coordinates,
+        Some(SelectionTarget::Display),
+        true,
+    );
+    response.clicked()
 }
 
 #[derive(Clone, Copy)]

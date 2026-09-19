@@ -39,6 +39,18 @@ struct CaptureWindowRestoration {
     }
 }
 
+struct CapturePreparationGate {
+    private(set) var current = 0
+
+    mutating func begin() -> Int {
+        current += 1
+        return current
+    }
+
+    mutating func invalidate() { current += 1 }
+    func accepts(_ request: Int) -> Bool { request == current }
+}
+
 final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     private let root: Surface
     private let window: NSWindow
@@ -75,6 +87,14 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var windowSession: NativeWindowSession?
     private var windowPanel: WindowSelectionPanel?
     private var windowTarget: WindowSelectionChoice?
+    private var unifiedPreparation = CapturePreparationGate()
+    private var preparingUnified = false
+    private var unifiedSession: NativeWindowSession?
+    private var unifiedPanel: UnifiedCapturePanel?
+    private var unifiedTarget: WindowSelectionChoice?
+    private var unifiedDisplay: DisplayItem?
+    private var unifiedScreen: NSScreen?
+    private var unifiedControlsState = UnifiedCaptureControlsState.initial
     private var displayMenu: ClosurePopUpButton!
     private var table: NSTableView!
     private var preview: NSImageView!
@@ -88,6 +108,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var revealButton: CaptureButton!
     private var deleteButton: CaptureButton!
     private var clearHistoryButton: CaptureButton!
+    private var newCaptureButton: CaptureButton!
 
     init(root: Surface, window: NSWindow, tokens: Tokens, historyRoot: String?, settingsPath: String?,
          transport: AppTransport = AppBridge(), miniPreviews: MiniPreviewController? = nil,
@@ -117,6 +138,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         root.addSubview(displayMenu)
         button("Refresh", frame: NSRect(x: 340, y: 90, width: 90, height: 34)) { [weak self] in self?.loadHistory(); self?.loadDisplays() }
         button("Screen access", frame: NSRect(x: 442, y: 90, width: 148, height: 34)) { [weak self] in self?.requestPermission() }
+        newCaptureButton = button("New Capture…", frame: NSRect(x: 708, y: 24, width: 126, height: 34)) { [weak self] in self?.newCapture() }
+        newCaptureButton.primary = true
         captureButton = button("Capture display", frame: NSRect(x: 602, y: 90, width: 116, height: 34)) { [weak self] in self?.capture(.display) }
         captureButton.selected = true
         regionButton = button("Capture region", frame: NSRect(x: 730, y: 90, width: 116, height: 34)) { [weak self] in self?.capture(.region) }
@@ -262,6 +285,151 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         return true
     }
 
+    @discardableResult func newCapture() -> Bool {
+        let index = displayMenu.indexOfSelectedItem
+        guard !capturing, displays.indices.contains(index), !historyRoot.isEmpty else { return false }
+        windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
+        let display = displays[index]
+        unifiedControlsState = .initial
+        setBusy(true, message: "Preparing capture controls…")
+        let request = unifiedPreparation.begin()
+        run({ [settingsPath] in try CapturePreferences.load(path: settingsPath) }) { [weak self] result in
+            guard let self, self.capturing, self.unifiedPreparation.accepts(request) else { return }
+            do {
+                let preferences = try result.get()
+                let response = try AppBridge.flow(["operation": "begin", "seconds": 0])
+                guard let generation = response["generation"] as? NSNumber else {
+                    throw AppBridgeError.invalidResponse
+                }
+                self.flowGeneration = generation.uint64Value
+                self.snapshotPending = false
+                self.previewCaptureGeneration = self.miniPreviews?.beginCapture(
+                    settings: preferences.miniPreviewSettings)
+                self.window.orderOut(nil)
+                let tick: () -> Void = { [weak self] in
+                    guard let self, let display = self.unifiedDisplay else { return }
+                    self.tickCountdown(display: display, preferences: preferences,
+                        generation: generation.uint64Value)
+                }
+                let timer = Timer(timeInterval: 0.1, repeats: true) { _ in tick() }
+                self.countdownTimer = timer
+                RunLoop.main.add(timer, forMode: .common)
+                self.prepareUnified(display: display, preferences: preferences,
+                    generation: generation.uint64Value)
+                tick()
+            } catch {
+                self.finishCapture()
+                self.showError("Couldn’t start New Capture", error)
+            }
+        }
+        return true
+    }
+
+    private func prepareUnified(display: DisplayItem, preferences: CapturePreferences,
+                                generation: UInt64) {
+        guard let screen = screen(for: display) else {
+            finishCapture()
+            showError("Couldn’t prepare capture controls",
+                AppBridgeError.backend("The selected display is no longer available."))
+            return
+        }
+        if let selector = unifiedPanel?.selector {
+            unifiedControlsState = selector.controlsState
+        }
+        unifiedPanel?.close(); unifiedPanel = nil
+        unifiedSession = nil; unifiedTarget = nil
+        unifiedDisplay = display; unifiedScreen = screen
+        preparingUnified = true
+        status.stringValue = "Preparing capture controls…"
+        let request = unifiedPreparation.begin()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, self.flowGeneration == generation,
+                  self.unifiedPreparation.accepts(request) else { return }
+            self.run({
+                let session = try NativeWindowSession.prepare(display: display.id,
+                    generation: generation, preferences: preferences)
+                return (session, try session.image())
+            }) { [weak self] result in
+                guard let self, self.flowGeneration == generation,
+                      self.unifiedPreparation.accepts(request) else { return }
+                do {
+                    let state = try AppBridge.flow(["operation": "poll", "generation": generation])
+                    guard state["current"] as? Bool == true else {
+                        self.finishCapture()
+                        self.status.stringValue = "Capture cancelled."
+                        return
+                    }
+                    let (session, image) = try result.get()
+                    guard session.display.size == screen.frame.size else {
+                        throw AppBridgeError.backend(
+                            "The selected display changed. Open New Capture again.")
+                    }
+                    self.unifiedSession = session
+                    let selectedDisplay = self.displays.firstIndex(where: { $0.id == display.id }) ?? 0
+                    let panel = UnifiedCapturePanel(screen: screen, image: image,
+                        targets: session.windows, tokens: self.tokens,
+                        autoStart: preferences.autoStart,
+                        hitTest: { [weak session] point in session?.hitTest(point) },
+                        displayTitles: self.displays.map(\.title), selectedDisplay: selectedDisplay,
+                        confirm: { [weak self] target in
+                            self?.confirmUnified(target, preferences: preferences,
+                                generation: generation)
+                        }, cancel: { [weak self] in
+                            guard let self, self.flowGeneration == generation,
+                                  self.unifiedPanel != nil else { return }
+                            self.finishCapture()
+                            self.status.stringValue = "Capture cancelled."
+                        }, changeDisplay: { [weak self] index in
+                            guard let self, self.flowGeneration == generation,
+                                  self.displays.indices.contains(index),
+                                  self.displays[index].id != self.unifiedDisplay?.id else { return }
+                            self.prepareUnified(display: self.displays[index],
+                                preferences: preferences, generation: generation)
+                        })
+                    self.unifiedPanel = panel
+                    self.preparingUnified = false
+                    panel.selector.restoreControls(self.unifiedControlsState)
+                    guard self.unifiedPanel === panel else { return }
+                    panel.makeKeyAndOrderFront(nil)
+                    NSApp.activate(ignoringOtherApps: true)
+                    panel.selector.updatePointerLocation()
+                } catch {
+                    self.finishCapture()
+                    self.showError("Couldn’t prepare capture controls", error)
+                }
+            }
+        }
+    }
+
+    private func confirmUnified(_ target: WindowSelectionChoice,
+                                preferences: CapturePreferences, generation: UInt64) {
+        guard flowGeneration == generation, unifiedPanel != nil,
+              let screen = unifiedScreen, let display = unifiedDisplay else { return }
+        do {
+            unifiedTarget = target
+            unifiedPanel?.close(); unifiedPanel = nil
+            _ = try AppBridge.flow(["operation": "start_countdown", "generation": generation,
+                "seconds": preferences.countdown])
+            if preferences.countdown > 0 {
+                let countdown = ScreenshotCountdownPanel(screen: screen, tokens: tokens,
+                    remaining: preferences.countdown)
+                countdownPanel = countdown
+                countdown.orderFrontRegardless()
+            }
+            tickCountdown(display: display, preferences: preferences, generation: generation)
+        } catch {
+            finishCapture()
+            showError("Capture failed", error)
+        }
+    }
+
+    private func screen(for display: DisplayItem) -> NSScreen? {
+        NSScreen.screens.first {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.stringValue
+                == display.id
+        }
+    }
+
     private func prepareRegion(display: DisplayItem, screen: NSScreen, preferences: CapturePreferences, generation: UInt64) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self, self.flowGeneration == generation else { return }
@@ -363,17 +531,24 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             guard state["current"] as? Bool == true else {
                 finishCapture(); status.stringValue = "Capture cancelled (Escape or desktop session unavailable)."; return
             }
-            guard !preparingRegion, !preparingWindow, regionPanel == nil, windowPanel == nil else { return }
+            guard !preparingRegion, !preparingWindow, !preparingUnified,
+                  regionPanel == nil, windowPanel == nil, unifiedPanel == nil else { return }
             guard let remaining = state["remaining"] as? Int else { throw AppBridgeError.invalidResponse }
             countdownPanel?.countdownContent.setRemaining(remaining)
             guard remaining == 0, !snapshotPending else { return }
             snapshotPending = true; countdownPanel?.close(); countdownPanel = nil
-            if windowSession != nil { status.stringValue = "Capturing window…" }
+            if unifiedSession != nil { status.stringValue = "Capturing screenshot…" }
+            else if windowSession != nil { status.stringValue = "Capturing window…" }
             else if regionSession != nil { status.stringValue = "Capturing region…" }
             else { status.stringValue = "Capturing display…" }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 guard let self, self.flowGeneration == generation else { return }
-                self.run({ [transport, historyRoot, regionSession, regionRect, windowSession, windowTarget] in
+                self.run({ [transport, historyRoot, regionSession, regionRect, windowSession, windowTarget,
+                            unifiedSession, unifiedTarget] in
+                    if let unifiedSession, let unifiedTarget {
+                        return try unifiedSession.capture(root: historyRoot, target: unifiedTarget,
+                            afterCountdown: preferences.countdown > 0)
+                    }
                     if let windowSession, let windowTarget {
                         return try windowSession.capture(root: historyRoot, target: windowTarget,
                             afterCountdown: preferences.countdown > 0)
@@ -409,8 +584,13 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         countdownPanel?.close(); countdownPanel = nil
         regionPanel?.close(); regionPanel = nil
         windowPanel?.close(); windowPanel = nil
+        unifiedPanel?.close(); unifiedPanel = nil
+        unifiedPreparation.invalidate()
         regionSession = nil; regionRect = nil; preparingRegion = false
         windowSession = nil; windowTarget = nil; preparingWindow = false
+        unifiedSession = nil; unifiedTarget = nil; unifiedDisplay = nil; unifiedScreen = nil
+        unifiedControlsState = .initial
+        preparingUnified = false
         if let generation = flowGeneration {
             _ = try? AppBridge.flow(["operation": "finish", "generation": generation])
             flowGeneration = nil
@@ -455,6 +635,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         captureButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
         regionButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
         windowButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
+        newCaptureButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { artifacts.count }

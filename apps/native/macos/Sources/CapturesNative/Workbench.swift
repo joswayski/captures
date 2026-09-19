@@ -20,13 +20,24 @@ final class Surface: NSView {
     override var isFlipped: Bool { true }
 }
 
+enum CaptureButtonIcon {
+    case capture
+    case record
+    case window
+    case display
+}
+
 // NSButton keeps keyboard activation, target/action and accessibility behavior;
 // only the visual treatment is custom. No stock Aqua bezel in the content UI.
 final class CaptureButton: NSButton {
     var tokens: Tokens!
     var selected = false
     var glass = false
+    var primary = false
+    var icon: CaptureButtonIcon?
     var actionBlock: (() -> Void)?
+    var enterActionBlock: (() -> Void)?
+    var escapeActionBlock: (() -> Void)?
 
     init(_ title: String, frame: NSRect, tokens: Tokens, glass: Bool = false, action: @escaping () -> Void) {
         super.init(frame: frame)
@@ -55,28 +66,78 @@ final class CaptureButton: NSButton {
         return accepted
     }
 
+    override func keyDown(with event: NSEvent) {
+        if (event.keyCode == 36 || event.keyCode == 76), let enterActionBlock {
+            enterActionBlock()
+        } else if event.keyCode == 53, let escapeActionBlock {
+            escapeActionBlock()
+        } else {
+            super.keyDown(with: event)
+        }
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
             xRadius: tokens.number("r-md"), yRadius: tokens.number("r-md"))
         let fill = !isEnabled ? (glass ? "glass" : "surface-sunken")
+            : primary ? "theme-accent"
             : cell?.isHighlighted == true ? (glass ? "glass-active" : "surface-active")
             : selected ? (glass ? "glass-active" : "surface-selected") : (glass ? "glass-raised" : "control")
         tokens.color(fill).setFill()
         path.fill()
-        tokens.color(selected && isEnabled ? "theme-accent" : (glass ? "glass-border" : "control-border")).setStroke()
+        tokens.color(primary && isEnabled ? "theme-accent" : selected && isEnabled ? "theme-accent" : (glass ? "glass-border" : "control-border")).setStroke()
         path.lineWidth = 1
         path.stroke()
         let font = NSFont.systemFont(ofSize: tokens.number("text-md"), weight: .medium)
+        let foreground = tokens.color(isEnabled
+            ? (primary ? "theme-accent-ink" : glass ? "glass-text" : "text")
+            : (glass ? "glass-text-subtle" : "text-faint"))
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: font, .foregroundColor: tokens.color(isEnabled ? (glass ? "glass-text" : "text") : (glass ? "glass-text-subtle" : "text-faint")),
+            .font: font, .foregroundColor: foreground,
         ]
         let size = (title as NSString).size(withAttributes: attributes)
-        (title as NSString).draw(at: CGPoint(x: (bounds.width - size.width) / 2,
+        let iconWidth: CGFloat = icon == nil ? 0 : 20
+        let startX = (bounds.width - size.width - iconWidth) / 2
+        if let icon { draw(icon, in: NSRect(x: startX, y: (bounds.height - 14) / 2,
+            width: 14, height: 14), color: foreground) }
+        (title as NSString).draw(at: CGPoint(x: startX + iconWidth,
             y: (bounds.height - size.height) / 2), withAttributes: attributes)
         if window?.firstResponder === self {
             tokens.color("theme-accent").setStroke()
             path.lineWidth = 2
             path.stroke()
+        }
+    }
+
+    private func draw(_ icon: CaptureButtonIcon, in rect: NSRect, color: NSColor) {
+        color.setStroke(); color.setFill()
+        switch icon {
+        case .record:
+            NSBezierPath(ovalIn: rect.insetBy(dx: 3, dy: 3)).fill()
+        case .capture:
+            let path = NSBezierPath(); path.lineWidth = 1.5
+            let length: CGFloat = 5
+            for (origin, dx, dy) in [(NSPoint(x: rect.minX, y: rect.minY), length, length),
+                                     (NSPoint(x: rect.maxX, y: rect.minY), -length, length),
+                                     (NSPoint(x: rect.minX, y: rect.maxY), length, -length),
+                                     (NSPoint(x: rect.maxX, y: rect.maxY), -length, -length)] {
+                path.move(to: NSPoint(x: origin.x + dx, y: origin.y))
+                path.line(to: origin); path.line(to: NSPoint(x: origin.x, y: origin.y + dy))
+            }
+            path.stroke()
+        case .window:
+            let path = NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 2), xRadius: 2, yRadius: 2)
+            path.lineWidth = 1.4; path.stroke()
+            let divider = NSBezierPath(); divider.move(to: NSPoint(x: rect.minX + 1, y: rect.minY + 5))
+            divider.line(to: NSPoint(x: rect.maxX - 1, y: rect.minY + 5)); divider.stroke()
+        case .display:
+            let screen = NSBezierPath(roundedRect: NSRect(x: rect.minX, y: rect.minY + 3,
+                width: rect.width, height: 10), xRadius: 2, yRadius: 2)
+            screen.lineWidth = 1.4; screen.stroke()
+            let stand = NSBezierPath(); stand.move(to: NSPoint(x: rect.midX, y: rect.minY + 3))
+            stand.line(to: NSPoint(x: rect.midX, y: rect.minY))
+            stand.move(to: NSPoint(x: rect.midX - 3, y: rect.minY))
+            stand.line(to: NSPoint(x: rect.midX + 3, y: rect.minY)); stand.stroke()
         }
     }
 }
@@ -111,20 +172,22 @@ final class RootWindowCloseHandler: NSObject, NSWindowDelegate {
 }
 
 final class LiveStatusActions: NSObject {
+    private let newCaptureAction: () -> Void
     private let captureAction: (StillCaptureKind) -> Void
     private let historyAction: () -> Void
     private let preferencesAction: () -> Void
     private let outputFolderAction: () -> Void
     private let quitAction: () -> Void
 
-    init(capture: @escaping (StillCaptureKind) -> Void,
+    init(newCapture: @escaping () -> Void, capture: @escaping (StillCaptureKind) -> Void,
          history: @escaping () -> Void, preferences: @escaping () -> Void,
          outputFolder: @escaping () -> Void, quit: @escaping () -> Void) {
-        captureAction = capture; historyAction = history
+        newCaptureAction = newCapture; captureAction = capture; historyAction = history
         preferencesAction = preferences; outputFolderAction = outputFolder
         quitAction = quit
     }
 
+    @objc func newCapture() { newCaptureAction() }
     @objc func captureRegion() { captureAction(.region) }
     @objc func captureWindow() { captureAction(.window) }
     @objc func captureDisplay() { captureAction(.display) }
@@ -135,6 +198,7 @@ final class LiveStatusActions: NSObject {
 
     func makeMenu() -> NSMenu {
         let menu = NSMenu()
+        add("New Capture…", action: #selector(newCapture), to: menu)
         add("Screenshot Region", action: #selector(captureRegion), to: menu)
         add("Screenshot Window", action: #selector(captureWindow), to: menu)
         add("Screenshot Display", action: #selector(captureDisplay), to: menu)
@@ -164,7 +228,7 @@ func liveReopenAction(hasVisibleWindows: Bool) -> LiveReopenAction {
 }
 
 func captureShortcutSignature(_ settings: [String: Any]) -> [String] {
-    [settings.string("region_shortcut"), settings.string("window_shortcut"),
+    [settings.string("new_capture_shortcut"), settings.string("region_shortcut"), settings.string("window_shortcut"),
      settings.string("display_shortcut")]
 }
 
@@ -177,8 +241,9 @@ func preferencesWindowFocused(scene: String, visible: Bool, key: Bool,
     scene == "preferences" && visible && (key || attachedSheetKey)
 }
 
-func stillCaptureKind(for shortcut: CaptureShortcut) -> StillCaptureKind {
+func stillCaptureKind(for shortcut: CaptureShortcut) -> StillCaptureKind? {
     switch shortcut {
+    case .newCapture: return nil
     case .region: return .region
     case .window: return .window
     case .display: return .display
@@ -527,7 +592,10 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func installStatusItem() {
-        let actions = LiveStatusActions(capture: { [weak self] kind in
+        let actions = LiveStatusActions(newCapture: { [weak self] in
+            self?.preferencesController?.flush()
+            self?.launchNewCapture()
+        }, capture: { [weak self] kind in
             self?.preferencesController?.flush()
             self?.launchCapture(kind)
         }, history: { [weak self] in
@@ -614,7 +682,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
               let captureShortcuts else { return }
         do {
             while let action = try captureShortcuts.nextAction() {
-                launchCapture(stillCaptureKind(for: action))
+                if let kind = stillCaptureKind(for: action) {
+                    launchCapture(kind)
+                } else {
+                    launchNewCapture()
+                }
                 if captureBusy { break }
             }
         } catch {
@@ -644,6 +716,14 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     private func launchCapture(_ kind: StillCaptureKind) {
         guard liveController?.capture(kind) == true else {
+            presentHostError(title: "Capture Unavailable",
+                message: "The capture workspace is still loading or another capture is already active.")
+            return
+        }
+    }
+
+    private func launchNewCapture() {
+        guard liveController?.newCapture() == true else {
             presentHostError(title: "Capture Unavailable",
                 message: "The capture workspace is still loading or another capture is already active.")
             return

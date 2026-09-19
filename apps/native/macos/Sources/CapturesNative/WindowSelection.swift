@@ -68,7 +68,20 @@ struct WindowSelectionTarget: Equatable {
 
 enum WindowSelectionChoice: Equatable {
     case display
+    case region(CapturesSelectionRect)
     case window(index: Int, id: String)
+
+    static func == (lhs: WindowSelectionChoice, rhs: WindowSelectionChoice) -> Bool {
+        switch (lhs, rhs) {
+        case (.display, .display): return true
+        case (.region(let lhs), .region(let rhs)):
+            return lhs.x == rhs.x && lhs.y == rhs.y
+                && lhs.width == rhs.width && lhs.height == rhs.height
+        case (.window(let lhsIndex, let lhsID), .window(let rhsIndex, let rhsID)):
+            return lhsIndex == rhsIndex && lhsID == rhsID
+        default: return false
+        }
+    }
 }
 
 private final class WindowSelectionCanvas: NSView {

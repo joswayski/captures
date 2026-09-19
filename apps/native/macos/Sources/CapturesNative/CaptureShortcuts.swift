@@ -2,6 +2,7 @@ import Foundation
 import CCapturesSettings
 
 enum CaptureShortcut: String {
+    case newCapture = "new_capture"
     case region, window, display
 }
 

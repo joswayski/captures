@@ -24,6 +24,7 @@ from x11_capture_smoke import BACKGROUNDS, ScreenSaver
 
 PREVIEW = "Captures Mini Preview"
 SELECTOR = "Captures Region Selection"
+CONTROLS = "Captures Capture Controls"
 
 
 def main():
@@ -177,6 +178,7 @@ def main():
             settings.write_text(json.dumps({
                 "settings_schema_version": 5, "appearance": "dark", "theme": "mustard",
                 "output_directory": str(output / prefix / "exports"),
+                "new_capture_shortcut": "Ctrl+Shift+F10",
                 "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
                 "display_shortcut": "Ctrl+Shift+F9", "launch_at_login": False,
                 "auto_copy_to_clipboard": False, "auto_start_on_selection": False,
@@ -197,9 +199,11 @@ def main():
                 return set(history.glob("*/metadata.json"))
 
             def begin():
-                # Keep the capture control outside all four always-on-top cards.
-                run("xdotool", "windowmove", "--sync", root, "400", "280")
-                click(root, 467, 141)
+                # Region is root-local x=575. Keep its desktop x=875 between
+                # the always-on-top preview windows at x=0..340 and 940..1280,
+                # including their transparent margins and expanded stacks.
+                run("xdotool", "windowmove", "--sync", root, "300", "280")
+                click(root, 575, 141)
                 selector = wait(lambda: windows(SELECTOR), "region selector")[0]
                 wait(lambda: int(run("import", "-window", selector, "-crop", "1280x96+0+804",
                     "-format", "%k", "info:")) > 16, "painted region controls")
@@ -399,7 +403,10 @@ def main():
                 assert watcher.Get("org.kde.StatusNotifierWatcher", "IsStatusNotifierHostRegistered")
                 shot("root", "lifecycle-tray-visible")
 
-                def menu_action(index, screenshot=False):
+                def menu_action(label, screenshot=False):
+                    labels = ["New Capture", "Capture display", "Capture region", "Capture window",
+                              "History", "Preferences", "Open output folder", "Quit Captures"]
+                    index = labels.index(label)
                     panel_ids = run("xdotool", "search", "--onlyvisible", "--class", "xfce4-panel").decode().split()
                     tray = next(window for window in panel_ids
                                 if int(window_geometry(window)["WIDTH"]) >= 24)
@@ -409,13 +416,13 @@ def main():
                     if screenshot:
                         shot("root", "lifecycle-open-tray-menu")
                     # Resolve the actual GTK popup, not a fixed desktop point.
-                    # This fixture's native menu has seven non-separator rows.
+                    # These native menu entries have equal-height, non-separator rows.
                     popup_ids = run("xdotool", "search", "--onlyvisible", "--class", ".*").decode().split()
                     popup = next(window for window in popup_ids
                                  if b"_MENU" in run("xprop", "-id", window, "_NET_WM_WINDOW_TYPE"))
                     popup_geometry = window_geometry(popup)
                     click(popup, int(popup_geometry["WIDTH"]) // 2,
-                          int((index + .5) * int(popup_geometry["HEIGHT"]) / 7), activate=False)
+                          int((index + .5) * int(popup_geometry["HEIGHT"]) / len(labels)), activate=False)
 
                 run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
                 wait(lambda: not windows("Captures"), "close hides resident workspace")
@@ -449,9 +456,9 @@ def main():
                 wait(lambda: windows(PREVIEW), "display preview")
                 assert not windows("Captures"), "display capture reopened workspace"
 
-                menu_action(3, screenshot=True)  # Real GTK/DBusMenu History item.
+                menu_action("History", screenshot=True)  # Real GTK/DBusMenu item.
                 wait(lambda: windows("Captures"), "tray History reopens workspace")
-                menu_action(4)
+                menu_action("Preferences")
                 time.sleep(.3)
                 shot("root", "lifecycle-preferences")
                 run("xdotool", "windowactivate", "--sync", root, "key", "ctrl+shift+F7")
@@ -482,18 +489,30 @@ def main():
                 wait(lambda: not windows(SELECTOR) and not windows("Captures Screenshot Countdown"),
                      "cancel hidden Preferences countdown")
                 assert not windows("Captures") and entries() == previous
-                for index, title in [(1, SELECTOR), (2, "Captures Window Selection")]:
-                    menu_action(index)
+                for label, title in [("Capture region", SELECTOR), ("Capture window", "Captures Window Selection")]:
+                    menu_action(label)
                     wait(lambda: windows(title), "tray selector launches from hidden Preferences")
                     run("xdotool", "key", "Escape")
                     wait(lambda: not windows(title), "cancel tray capture")
                     assert not windows("Captures")
-                menu_action(6)
+                menu_action("New Capture")
+                controls = wait(lambda: windows(CONTROLS), "tray New Capture opens unified controls")[0]
+                shot(controls, "controls-tray-empty")
+                run("xdotool", "key", "Return", "sleep", ".3")
+                assert windows(CONTROLS) and entries() == previous, "empty Region captured"
+                run("xdotool", "windowactivate", "--sync", other, "key", "Escape")
+                wait(lambda: not windows(CONTROLS), "cross-app Escape cancels New Capture")
+                assert not windows("Captures"), "New Capture cancel reopened hidden Preferences"
+                menu_action("Quit Captures")
                 other_app.terminate()
                 other_app.wait(timeout=5)
             else:
                 run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
-            assert app.wait(timeout=10) == 0, "unclean exit"
+            try:
+                assert app.wait(timeout=10) == 0, "unclean exit"
+            except subprocess.TimeoutExpired:
+                shot("root", "timeout-exit")
+                raise
             assert not windows(PREVIEW), "preview outlived application"
             print(f"PASS {prefix}: pixels, placement/visibility, cancellation, clean exit", flush=True)
         if args.lifecycle:
@@ -606,6 +625,9 @@ def main():
                     (6, "ctrl+shift+alt+super+XF86AudioPrev", "Control+Shift+Alt+Super+MediaTrackPrevious"),
                 ]:
                     record(index, chord, expected)
+                # New Capture is now registered, so do not leave it on the
+                # workspace Quit chord after proving recorder interception.
+                record(0, "ctrl+alt+n", "Control+Alt+KeyN")
                 expected = stored_keys()
                 shot(root, "shortcuts-all-seven-edited")
                 click(root, 80, 18)
@@ -634,6 +656,13 @@ def main():
                 wait(lambda: windows(SELECTOR), "edited Region chord restored after Preferences blur")
                 run("xdotool", "key", "Escape")
                 wait(lambda: not windows(SELECTOR) and windows("Captures"), "edited shortcut cancellation")
+                run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
+                time.sleep(.3)
+                run("xdotool", "key", "ctrl+alt+n")
+                controls = wait(lambda: windows(CONTROLS), "edited New Capture chord after restart and blur")[0]
+                shot(controls, "controls-edited-shortcut")
+                run("xdotool", "key", "Escape")
+                wait(lambda: not windows(CONTROLS) and windows("Captures"), "New Capture restores visible Preferences")
                 # No retained child viewport may bootstrap the hidden root's
                 # UI incidentally. This is the first preview after restart.
                 assert not windows(PREVIEW)
@@ -652,7 +681,7 @@ def main():
                 assert not windows("Captures"), "first preview reopened hidden Preferences"
                 assert rgb(entry.parent / "capture.png") == wallpaper_crop(140, 180, 310, 170)
                 shot(preview, "shortcuts-first-background-preview")
-                menu_action(6)
+                menu_action("Quit Captures")
                 assert editor.wait(timeout=10) == 0
                 other_app.terminate()
                 other_app.wait(timeout=5)
@@ -707,6 +736,7 @@ def main():
                   "focused Preferences suppression and unfocused/hidden Preferences launch",
                   "hidden Preferences countdown and cancellation",
                   "tray region/window capture from hidden Preferences",
+                  "tray New Capture, empty-region guard and cross-app Escape preserve hidden root",
                   "timed/framebuffer completion quits with real tray",
                   "tray host loss restores/focuses hidden root and restores normal close"] if args.lifecycle else []) +
                 (["all seven shortcut persistence paths", "registered chord reaches recorder",
@@ -714,6 +744,7 @@ def main():
                   "duplicate save rejection", "Ctrl-F/Q interception while recording",
                   "raw PrintScreen/keypad/Super/media input", "leaving Preferences restores Quit",
                   "restart persistence and edited global launch after blur",
+                  "edited New Capture launches unified controls after restart and blur",
                   "hidden root creates first selector and mini preview without reopening"] if args.shortcut_editing else []),
             "scope": "Private X11/software GL, simulated session; not hardware, real lock, Wayland or accessibility acceptance."}, indent=2))
     finally:

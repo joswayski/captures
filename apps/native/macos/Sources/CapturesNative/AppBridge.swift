@@ -225,6 +225,9 @@ final class NativeWindowSession {
         let targetValue: [String: Any]
         switch target {
         case .display: targetValue = ["kind": "display"]
+        case .region(let rect): targetValue = ["kind": "region", "rect": [
+            "x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height,
+        ]]
         case .window(_, let id): targetValue = ["kind": "window", "id": id]
         }
         let data = try JSONSerialization.data(withJSONObject: targetValue, options: [.sortedKeys])

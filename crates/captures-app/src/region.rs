@@ -142,7 +142,7 @@ pub(super) fn validate_display(
     Ok(())
 }
 
-fn validate_rect(display: &DisplayDescriptor, rect: LogicalRect) -> Result<(), Error> {
+pub(super) fn validate_rect(display: &DisplayDescriptor, rect: LogicalRect) -> Result<(), Error> {
     let (width, height) = display.overlay_size();
     if ![rect.x, rect.y, rect.width, rect.height]
         .into_iter()
@@ -159,7 +159,7 @@ fn validate_rect(display: &DisplayDescriptor, rect: LogicalRect) -> Result<(), E
     Ok(())
 }
 
-fn crop(
+pub(super) fn crop(
     frame: &DisplayFrame,
     rect: LogicalRect,
     cursor: Option<&PointerCursor>,

@@ -14,6 +14,7 @@ use tray_icon::{MouseButton, MouseButtonState};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Action {
+    NewCapture,
     CaptureDisplay,
     CaptureRegion,
     CaptureWindow,
@@ -32,6 +33,7 @@ pub struct Tray {
 
 impl Tray {
     pub fn new(ctx: egui::Context) -> Result<Self, String> {
+        let new_capture = MenuItem::with_id("new-capture", "New Capture", true, None);
         let capture_display = MenuItem::with_id("capture-display", "Capture display", true, None);
         let capture_region = MenuItem::with_id("capture-region", "Capture region", true, None);
         let capture_window = MenuItem::with_id("capture-window", "Capture window", true, None);
@@ -41,6 +43,7 @@ impl Tray {
         let quit = MenuItem::with_id("quit", "Quit Captures", true, None);
         let menu = Menu::new();
         for item in [
+            &new_capture,
             &capture_display,
             &capture_region,
             &capture_window,
@@ -75,6 +78,7 @@ impl Tray {
         let menu_ctx = ctx.clone();
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             let action = match event.id.0.as_str() {
+                "new-capture" => Some(Action::NewCapture),
                 "capture-display" => Some(Action::CaptureDisplay),
                 "capture-region" => Some(Action::CaptureRegion),
                 "capture-window" => Some(Action::CaptureWindow),

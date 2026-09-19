@@ -7,24 +7,25 @@ final class StatusItemTests: XCTestCase {
         _ = NSApplication.shared
         var captures: [StillCaptureKind] = []
         var actions: [String] = []
-        let target = LiveStatusActions(capture: { captures.append($0) },
+        let target = LiveStatusActions(newCapture: { actions.append("new") },
+            capture: { captures.append($0) },
             history: { actions.append("history") },
             preferences: { actions.append("preferences") },
             outputFolder: { actions.append("folder") },
             quit: { actions.append("quit") })
 
         let menu = target.makeMenu()
-        XCTAssertEqual(menu.items.map(\.title), ["Screenshot Region", "Screenshot Window",
-            "Screenshot Display", "", "Capture History…", "Open Save Location",
-            "Preferences…", "", "Quit Captures"])
+        XCTAssertEqual(menu.items.map(\.title), ["New Capture…", "Screenshot Region",
+            "Screenshot Window", "Screenshot Display", "", "Capture History…",
+            "Open Save Location", "Preferences…", "", "Quit Captures"])
         XCTAssertFalse(menu.items.contains { $0.title.localizedCaseInsensitiveContains("record") })
         XCTAssertFalse(menu.items.contains { $0.title.localizedCaseInsensitiveContains("update") })
 
-        for index in [0, 1, 2, 4, 5, 6, 8] {
+        for index in [0, 1, 2, 3, 5, 6, 7, 9] {
             menu.performActionForItem(at: index)
         }
         XCTAssertEqual(captures, [.region, .window, .display])
-        XCTAssertEqual(actions, ["history", "folder", "preferences", "quit"])
+        XCTAssertEqual(actions, ["new", "history", "folder", "preferences", "quit"])
     }
 
     func testLiveRootCloseHidesWithoutClosingPreviewsOrTerminating() {
@@ -95,14 +96,16 @@ final class StatusItemTests: XCTestCase {
     }
 
     func testShortcutHostPolicyUsesOnlyCaptureBindingsAndSuppressesBlockedScenes() {
-        let settings: [String: Any] = ["region_shortcut": "Command+Shift+4",
+        let settings: [String: Any] = ["new_capture_shortcut": "Command+Shift+Space",
+            "region_shortcut": "Command+Shift+4",
             "window_shortcut": "Command+Shift+W", "display_shortcut": "Command+Shift+3",
             "appearance": "dark"]
         XCTAssertEqual(captureShortcutSignature(settings),
-            ["Command+Shift+4", "Command+Shift+W", "Command+Shift+3"])
+            ["Command+Shift+Space", "Command+Shift+4", "Command+Shift+W", "Command+Shift+3"])
         var unrelated = settings
         unrelated["appearance"] = "light"
         XCTAssertEqual(captureShortcutSignature(unrelated), captureShortcutSignature(settings))
+        XCTAssertNil(stillCaptureKind(for: .newCapture))
         XCTAssertEqual(stillCaptureKind(for: .region), .region)
         XCTAssertEqual(stillCaptureKind(for: .window), .window)
         XCTAssertEqual(stillCaptureKind(for: .display), .display)
