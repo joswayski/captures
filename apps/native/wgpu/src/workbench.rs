@@ -1,6 +1,9 @@
 use std::{
     collections::BTreeMap,
+    fs,
     path::Path,
+    sync::mpsc::{self, Receiver, Sender},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -58,6 +61,9 @@ pub struct Workbench {
     shortcuts: Option<CaptureShortcuts>,
     shortcuts_generation: u64,
     shortcut_error: Option<String>,
+    action_tx: Sender<Result<(), String>>,
+    action_rx: Receiver<Result<(), String>>,
+    action_error: Option<String>,
     quitting: bool,
 }
 
@@ -119,11 +125,17 @@ impl Workbench {
         let (tray, tray_error) = if options.live {
             match Tray::new(cc.egui_ctx.clone()) {
                 Ok(tray) => (Some(tray), None),
-                Err(error) => (None, Some(error)),
+                Err(error) => (
+                    None,
+                    Some(format!(
+                        "Tray unavailable; closing this window will quit Captures. {error}"
+                    )),
+                ),
             }
         } else {
             (None, None)
         };
+        let (action_tx, action_rx) = mpsc::channel();
         let (window_display, window_targets, window_shell) = window_fixture();
         let this = Self {
             options,
@@ -163,6 +175,9 @@ impl Workbench {
             shortcuts: None,
             shortcuts_generation: 0,
             shortcut_error: None,
+            action_tx,
+            action_rx,
+            action_error: None,
             quitting: false,
         };
         this.schedule(&cc.egui_ctx);
@@ -217,17 +232,29 @@ impl Workbench {
             }
             TrayAction::OpenOutputFolder => match self.preferences_state.snapshot() {
                 Ok(settings) => {
-                    if let Err(error) = tray::open_directory(Path::new(&settings.output_directory))
-                    {
-                        self.tray_error = Some(format!("Could not open output folder: {error}"));
-                        Self::show_root(ctx);
-                    }
+                    let output = self.action_tx.clone();
+                    let wake = ctx.clone();
+                    thread::spawn(move || {
+                        let path = Path::new(&settings.output_directory);
+                        let result = fs::create_dir_all(path)
+                            .map_err(|error| error.to_string())
+                            .and_then(|()| tray::open_directory(path));
+                        let _ = output.send(result);
+                        wake.request_repaint();
+                    });
                 }
                 Err(error) => {
-                    self.tray_error = Some(format!("Could not read output folder: {error}"));
+                    self.action_error = Some(format!("Could not read output folder: {error}"));
                     Self::show_root(ctx);
                 }
             },
+            TrayAction::Unavailable => {
+                self.tray_error = Some(
+                    "The system tray host stopped. Closing this window will quit Captures.".into(),
+                );
+                self.tray.take();
+                Self::show_root(ctx);
+            }
             TrayAction::Quit => self.quit(ctx),
         }
     }
@@ -650,13 +677,28 @@ impl eframe::App for Workbench {
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if self.quitting {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
         self.preferences_state.receive(ctx);
+        while let Ok(result) = self.action_rx.try_recv() {
+            self.action_error = result
+                .err()
+                .map(|error| format!("Output folder action failed: {error}"));
+            if self.action_error.is_some() {
+                Self::show_root(ctx);
+            }
+        }
         if let Some(live) = &mut self.live {
             live.logic(ctx, frame);
         }
         self.sync_shortcuts(ctx);
-        let shortcuts_enabled = self.live.as_ref().is_some_and(Live::can_launch_capture)
-            && !(self.live_preferences && ctx.memory(|memory| memory.focused().is_some()));
+        let shortcuts_enabled = shortcuts_should_be_enabled(
+            self.live.as_ref().is_some_and(Live::can_launch_capture),
+            self.live_preferences,
+            ctx.input(|input| input.viewport().focused.unwrap_or(false)),
+        );
         let shortcut_action = self.shortcuts.as_ref().and_then(|shortcuts| {
             shortcuts.set_enabled(shortcuts_enabled);
             shortcuts.next_action()
@@ -676,6 +718,9 @@ impl eframe::App for Workbench {
         }
         for action in tray_actions {
             self.handle_tray_action(action, ctx);
+        }
+        if let Some(live) = &mut self.live {
+            live.launch_requested_capture(ctx, frame, self.preferences_state.snapshot());
         }
         let quit_key = ctx.input_mut(|input| {
             input.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)
@@ -713,8 +758,12 @@ impl eframe::App for Workbench {
                 std::process::exit(1);
             }
             emit("screenshot-saved", json!({"path": self.options.screenshot}));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             self.screenshot_saved = true;
+            if self.options.live {
+                self.quit(ctx);
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         }
         if self
             .options
@@ -732,7 +781,11 @@ impl eframe::App for Workbench {
                     "nativeVisible": frame.winit_window().and_then(|window| window.is_visible())
                 }),
             );
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            if self.options.live {
+                self.quit(ctx);
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         }
         if self.options.exercise
             && self.cycle < 6
@@ -768,6 +821,22 @@ impl eframe::App for Workbench {
             if live.take_open_history_requested() {
                 self.live_preferences = false;
             }
+            if self.tray_error.is_some()
+                || self.shortcut_error.is_some()
+                || self.action_error.is_some()
+            {
+                egui::Panel::bottom("live-lifecycle-errors").show(ui, |ui| {
+                    if let Some(error) = &self.tray_error {
+                        ui.colored_label(t.color("theme-signal"), error);
+                    }
+                    if let Some(error) = &self.shortcut_error {
+                        ui.colored_label(t.color("theme-signal"), error);
+                    }
+                    if let Some(error) = &self.action_error {
+                        ui.colored_label(t.color("theme-signal"), error);
+                    }
+                });
+            }
             egui::Panel::top("live-navigation").show(ui, |ui| {
                 if live.is_capturing() {
                     ui.disable();
@@ -776,17 +845,6 @@ impl eframe::App for Workbench {
                     ui.selectable_value(&mut self.live_preferences, false, "Capture workspace");
                     ui.selectable_value(&mut self.live_preferences, true, "Preferences");
                 });
-                if let Some(error) = &self.tray_error {
-                    ui.colored_label(
-                        t.color("theme-signal"),
-                        format!(
-                            "Tray unavailable; closing this window will quit Captures. {error}"
-                        ),
-                    );
-                }
-                if let Some(error) = &self.shortcut_error {
-                    ui.colored_label(t.color("theme-signal"), error);
-                }
             });
             if self.live_preferences {
                 egui::Panel::left("live-preferences-sidebar")
@@ -981,6 +1039,8 @@ impl eframe::App for Workbench {
         if let Some(live) = &mut self.live {
             live.flush();
         }
+        self.shortcuts.take();
+        self.tray.take();
         emit(
             "exit",
             json!({"uiPasses": self.frames, "totalUiConstructionWallMs": self.ui_ms,
@@ -1148,6 +1208,14 @@ fn window_selection_name(
     }
 }
 
+fn shortcuts_should_be_enabled(
+    can_launch_capture: bool,
+    preferences_visible: bool,
+    root_focused: bool,
+) -> bool {
+    can_launch_capture && !(preferences_visible && root_focused)
+}
+
 fn fixture_image([width, height]: [usize; 2]) -> egui::ColorImage {
     // Asymmetric synthetic content, same layout as the AppKit fixture. No file
     // reads, screen capture, personal images, or per-frame texture allocation.
@@ -1182,6 +1250,14 @@ mod tests {
         assert!(history_rows(0, 0).is_empty());
         assert_eq!(history_rows(1, 2), vec![0]);
         assert!(history_rows(1, 1).is_empty());
+    }
+
+    #[test]
+    fn shortcuts_suppress_focused_preferences_but_not_hidden_or_unfocused_preferences() {
+        assert!(!shortcuts_should_be_enabled(true, true, true));
+        assert!(shortcuts_should_be_enabled(true, true, false));
+        assert!(shortcuts_should_be_enabled(true, false, true));
+        assert!(!shortcuts_should_be_enabled(false, false, false));
     }
     #[test]
     fn image_has_top_right_sun_and_bottom_green_strip() {
