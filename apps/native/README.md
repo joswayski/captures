@@ -91,8 +91,16 @@ validation without another full-screen copy. A nonzero countdown refreshes pixel
 for all three targets. The Record control is visibly disabled: recording selector,
 HUD and editor integration remain separate slices. Existing direct screenshot
 actions remain available. Native controls are not yet full capture-menu UI/input
-parity; physical displays, global target switching while the menu is open, and
+parity; physical displays, platform input and
 accessibility acceptance remain open.
+
+Configured Region/Window/Full screen global shortcuts switch the open selector's
+target without replacing its session. Like the shipping keyboard path, every
+target key clears hover; Region/Full screen clear the selected window, while
+Window retains it. Settled region/aspect remain. Keyboard Full screen does not
+auto-start; pointer selection still follows that preference. New Capture cannot
+re-enter an open selector. Shared generation checks reject queued/held keys when
+selection ends or display preparation starts; countdown and capture stay blocked.
 
 The toolbar drags from blank/footer space, clamps inside the display, and fits a
 768-point viewport without hiding the picker or Capture action. Region guidance
@@ -102,7 +110,9 @@ and narrow controls; inspect those native pixels alongside the assertions.
 New Capture, including target retention, toolbar drag, frozen/live/countdown
 sources, occluded windows, full-screen capture and cancellation. Its seven
 scenarios persist 15 captures using real X11 input and simulated session state;
-this is not hardware or physical multi-display acceptance.
+add `--target-shortcuts` to exercise target keys, window clearing/reselection,
+same-selector identity, keyboard auto-start suppression and countdown isolation.
+This is not hardware or physical multi-display acceptance.
 
 ## Live display-capture slice
 
