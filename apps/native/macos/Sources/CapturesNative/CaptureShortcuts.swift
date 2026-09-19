@@ -56,6 +56,12 @@ final class NativeCaptureShortcuts {
         _ = try Self.request(["operation": "suspended", "suspended": suspended])
     }
 
+    func setSelectorGeneration(_ generation: UInt64?) throws {
+        guard !closed else { return }
+        _ = try Self.request(["operation": "selector",
+                              "generation": generation.map { $0 as Any } ?? NSNull()])
+    }
+
     func nextAction() throws -> CaptureShortcut? {
         guard !closed else { return nil }
         let result = try Self.request(["operation": "next"])

@@ -61,12 +61,20 @@ struct Routes {
     pending: Option<CaptureShortcut>,
     enabled: bool,
     suspended: bool,
+    selector_generation: Option<u64>,
 }
 
 impl Routes {
     fn clear(&mut self) {
         self.armed.clear();
         self.pending = None;
+    }
+
+    fn set_selector_generation(&mut self, generation: Option<u64>) {
+        if self.selector_generation != generation {
+            self.clear();
+            self.selector_generation = generation;
+        }
     }
 
     fn event(&mut self, id: u32, state: HotKeyState, blocked: bool) -> bool {
@@ -78,6 +86,9 @@ impl Routes {
         let Some(binding) = self.bindings.get(&id) else {
             return false;
         };
+        if self.selector_generation.is_some() && binding.action == CaptureShortcut::NewCapture {
+            return false;
+        }
         match state {
             HotKeyState::Pressed => {
                 self.armed.insert(id);
@@ -114,11 +125,11 @@ fn dispatch(event: GlobalHotKeyEvent) {
     }
     let dispatcher = DISPATCHER.lock().unwrap().clone();
     if let Some(dispatcher) = dispatcher {
-        let wake = dispatcher.routes.lock().unwrap().event(
-            event.id,
-            event.state,
-            crate::capture_flow::active(),
-        );
+        let wake = {
+            let mut routes = dispatcher.routes.lock().unwrap();
+            let blocked = !crate::capture_flow::shortcuts_allowed(routes.selector_generation);
+            routes.event(event.id, event.state, blocked)
+        };
         if wake {
             (dispatcher.wake)();
         }
@@ -318,12 +329,27 @@ impl CaptureShortcuts {
         }
     }
 
+    /// Route target shortcuts to an already-open New Capture selector, never
+    /// to a new capture. Set only during selection, and clear before countdown,
+    /// display preparation or cancellation. Scope changes discard held/queued
+    /// chords. A stale generation cannot route after cancellation or commit.
+    /// Callback enablement and Preferences registration suspension still apply.
+    pub fn set_selector_generation(&self, generation: Option<u64>) {
+        self.dispatcher
+            .routes
+            .lock()
+            .unwrap()
+            .set_selector_generation(generation);
+    }
+
     pub fn next_action(&self) -> Option<CaptureShortcut> {
         let mut routes = self.dispatcher.routes.lock().unwrap();
         let pending = routes.pending.take();
-        (routes.enabled && !routes.suspended && !crate::capture_flow::active())
-            .then_some(pending)
-            .flatten()
+        (routes.enabled
+            && !routes.suspended
+            && crate::capture_flow::shortcuts_allowed(routes.selector_generation))
+        .then_some(pending)
+        .flatten()
     }
 }
 
@@ -408,6 +434,46 @@ mod tests {
         routes.enabled = true;
         assert!(routes.pending.is_none());
         assert!(!routes.event(region, HotKeyState::Released, false));
+    }
+
+    #[test]
+    fn selector_routes_targets_but_scope_changes_discard_held_and_pending_chords() {
+        let mut routes = Routes {
+            bindings: bindings(&settings()).unwrap(),
+            enabled: true,
+            ..Routes::default()
+        };
+        let region = "Control+Shift+1".parse::<HotKey>().unwrap().id();
+        let window = "Control+Shift+2".parse::<HotKey>().unwrap().id();
+        let display = "Control+Shift+3".parse::<HotKey>().unwrap().id();
+        let new_capture = "Control+Alt+F10".parse::<HotKey>().unwrap().id();
+        routes.event(region, HotKeyState::Pressed, false);
+        routes.set_selector_generation(Some(2));
+        assert!(!routes.event(region, HotKeyState::Released, false));
+        for (key, action) in [
+            (region, CaptureShortcut::Region),
+            (window, CaptureShortcut::Window),
+            (display, CaptureShortcut::Display),
+        ] {
+            assert!(!routes.event(key, HotKeyState::Pressed, false));
+            routes.set_selector_generation(Some(2));
+            assert!(routes.event(key, HotKeyState::Released, false));
+            assert_eq!(routes.pending.take(), Some(action));
+        }
+        assert!(!routes.event(new_capture, HotKeyState::Pressed, false));
+        assert!(!routes.event(new_capture, HotKeyState::Released, false));
+        assert!(routes.pending.is_none());
+        routes.event(window, HotKeyState::Pressed, false);
+        routes.event(window, HotKeyState::Released, false);
+        routes.set_selector_generation(None);
+        assert!(routes.pending.is_none());
+        routes.set_selector_generation(Some(4));
+        routes.event(display, HotKeyState::Pressed, false);
+        routes.set_selector_generation(None);
+        assert!(!routes.event(display, HotKeyState::Released, false));
+        routes.event(new_capture, HotKeyState::Pressed, false);
+        assert!(routes.event(new_capture, HotKeyState::Released, false));
+        assert_eq!(routes.pending.take(), Some(CaptureShortcut::NewCapture));
     }
 
     #[derive(Default)]
