@@ -10,6 +10,8 @@ on:
       - 'crates/captures-image/**'
       - 'crates/captures-capture/**'
       - 'crates/captures-session/**'
+      - 'crates/captures-recording*/**'
+      - 'crates/captures-media/**'
       - 'Cargo.lock'
       - 'shared/**'
       - 'apps/desktop/ui/src/lib/thumbnailExit.ts'
@@ -21,7 +23,8 @@ permissions:
 
 jobs:
   build-and-test:
-    runs-on: macos-15
+    # Recording's apple-metal bridge needs the macOS 26 SDK, like the desktop CI.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
