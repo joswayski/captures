@@ -63,6 +63,7 @@ pub struct Workbench {
     shortcuts: Option<CaptureShortcuts>,
     shortcuts_generation: u64,
     shortcut_error: Option<String>,
+    shortcut_suspension_error: Option<String>,
     action_tx: Sender<Result<(), String>>,
     action_rx: Receiver<Result<(), String>>,
     action_error: Option<String>,
@@ -183,6 +184,7 @@ impl Workbench {
             shortcuts: None,
             shortcuts_generation: 0,
             shortcut_error: None,
+            shortcut_suspension_error: None,
             action_tx,
             action_rx,
             action_error: None,
@@ -311,6 +313,18 @@ impl Workbench {
                     Some(format!("Global screenshot shortcuts unavailable: {error}"));
             }
         }
+    }
+
+    fn sync_shortcut_suspension(&mut self, suspended: bool) {
+        let Some(shortcuts) = &mut self.shortcuts else {
+            return;
+        };
+        self.shortcut_suspension_error = shortcuts.set_suspended(suspended).err().map(|error| {
+            format!(
+                "Could not {} global screenshot shortcuts: {error}",
+                if suspended { "suspend" } else { "restore" }
+            )
+        });
     }
 
     fn tokens(&mut self, ctx: &egui::Context) -> Tokens {
@@ -718,11 +732,15 @@ impl eframe::App for Workbench {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             self.root_hidden = true;
         }
+        let root_focused = ctx.input(|input| input.viewport().focused.unwrap_or(false));
+        let shortcuts_suspended =
+            shortcuts_should_be_suspended(self.live_preferences, !self.root_hidden, root_focused);
+        self.sync_shortcut_suspension(shortcuts_suspended);
         let shortcuts_enabled = shortcuts_should_be_enabled(
             self.live.as_ref().is_some_and(Live::can_launch_capture),
             self.live_preferences,
             !self.root_hidden,
-            ctx.input(|input| input.viewport().focused.unwrap_or(false)),
+            root_focused,
         );
         let shortcut_action = self.shortcuts.as_ref().and_then(|shortcuts| {
             shortcuts.set_enabled(shortcuts_enabled);
@@ -841,6 +859,7 @@ impl eframe::App for Workbench {
             }
             if self.tray_error.is_some()
                 || self.shortcut_error.is_some()
+                || self.shortcut_suspension_error.is_some()
                 || self.action_error.is_some()
             {
                 egui::Panel::bottom("live-lifecycle-errors").show(ui, |ui| {
@@ -848,6 +867,9 @@ impl eframe::App for Workbench {
                         ui.colored_label(t.color("theme-signal"), error);
                     }
                     if let Some(error) = &self.shortcut_error {
+                        ui.colored_label(t.color("theme-signal"), error);
+                    }
+                    if let Some(error) = &self.shortcut_suspension_error {
                         ui.colored_label(t.color("theme-signal"), error);
                     }
                     if let Some(error) = &self.action_error {
@@ -878,6 +900,16 @@ impl eframe::App for Workbench {
             } else {
                 live.ui(ui, &t, frame, || self.preferences_state.snapshot());
             }
+            // Navigation can change presentation after logic() has run. Apply
+            // that event's focus boundary before returning to the native loop
+            // so the next physical key sees the correct OS registration state.
+            let root_focused = ctx.input(|input| input.viewport().focused.unwrap_or(false));
+            let shortcuts_suspended = shortcuts_should_be_suspended(
+                self.live_preferences,
+                !self.root_hidden,
+                root_focused,
+            );
+            self.sync_shortcut_suspension(shortcuts_suspended);
             if self.options.screenshot.is_some()
                 && !self.screenshot_requested
                 && self.started.elapsed() >= self.options.screenshot_after
@@ -1232,7 +1264,16 @@ fn shortcuts_should_be_enabled(
     root_visible: bool,
     root_focused: bool,
 ) -> bool {
-    can_launch_capture && !(preferences_selected && root_visible && root_focused)
+    can_launch_capture
+        && !shortcuts_should_be_suspended(preferences_selected, root_visible, root_focused)
+}
+
+fn shortcuts_should_be_suspended(
+    preferences_selected: bool,
+    root_visible: bool,
+    root_focused: bool,
+) -> bool {
+    preferences_selected && root_visible && root_focused
 }
 
 fn fixture_image([width, height]: [usize; 2]) -> egui::ColorImage {
@@ -1273,6 +1314,10 @@ mod tests {
 
     #[test]
     fn shortcuts_suppress_focused_preferences_but_not_hidden_or_unfocused_preferences() {
+        assert!(shortcuts_should_be_suspended(true, true, true));
+        assert!(!shortcuts_should_be_suspended(true, false, true));
+        assert!(!shortcuts_should_be_suspended(true, true, false));
+        assert!(!shortcuts_should_be_suspended(false, true, true));
         assert!(!shortcuts_should_be_enabled(true, true, true, true));
         assert!(shortcuts_should_be_enabled(true, true, false, true));
         assert!(shortcuts_should_be_enabled(true, true, true, false));
