@@ -273,6 +273,8 @@ final class MiniPreviewTests: XCTestCase {
             setCollapsed: { expanded = !$0 })
         defer { panel.close() }
         XCTAssertEqual(panel.previewView.visibleCardActionTitles, [])
+        XCTAssertTrue(panel.previewView.subviewsRecursive.compactMap { $0 as? CaptureButton }
+            .filter { !$0.isHidden }.isEmpty)
         XCTAssertEqual(panel.previewView.pileExpandAccessibilityLabel, "Expand 2 previews")
         panel.previewView.activatePileExpand()
         XCTAssertTrue(expanded)
