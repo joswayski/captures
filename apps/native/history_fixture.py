@@ -8,6 +8,11 @@ import uuid
 import zlib
 
 
+def history_entries(root: Path):
+    """Observe committed entries, never hidden atomic-write staging/backup paths."""
+    return {path for path in root.glob("*/metadata.json") if not path.parent.name.startswith(".")}
+
+
 def write_history(root: Path):
     root.mkdir(parents=True, exist_ok=False)
     width, height = 640, 360

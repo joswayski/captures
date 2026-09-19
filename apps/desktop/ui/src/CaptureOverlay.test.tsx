@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -165,6 +165,9 @@ describe("CaptureOverlay guidance", () => {
   });
 
   afterEach(() => {
+    // Flush/unmount effects before resetting shared command mocks. A rendered
+    // prompt is not proof that its passive wake effect has already run.
+    cleanup();
     window.history.replaceState({}, "", "/");
     document.documentElement.classList.remove(
       "capture-region-cursor",
@@ -677,7 +680,9 @@ describe("CaptureOverlay guidance", () => {
     render(<App />);
     await screen.findByText("Drag to select a region");
 
-    expect(invoke).toHaveBeenCalledWith("show_capture_overlay", { sessionId: "capture-1" });
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("show_capture_overlay", { sessionId: "capture-1" });
+    });
     expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
       command === "reveal_capture_overlay"
     ))).toHaveLength(0);

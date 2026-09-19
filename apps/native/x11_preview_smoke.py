@@ -19,6 +19,7 @@ import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 
+from history_fixture import history_entries
 from x11_capture_smoke import BACKGROUNDS, ScreenSaver
 
 
@@ -196,7 +197,7 @@ def main():
             time.sleep(1)
 
             def entries():
-                return set(history.glob("*/metadata.json"))
+                return history_entries(history)
 
             def begin():
                 # Region is root-local x=575. Keep its desktop x=875 between
