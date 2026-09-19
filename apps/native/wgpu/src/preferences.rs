@@ -86,6 +86,10 @@ impl ShortcutField {
     }
 }
 
+fn shortcut_scope_id(field: ShortcutField) -> egui::Id {
+    egui::Id::new(("preferences-shortcut-recorder", field))
+}
+
 #[derive(Debug)]
 struct ShortcutRecorder {
     field: ShortcutField,
@@ -206,7 +210,6 @@ pub struct Preferences {
     variants: std::collections::BTreeMap<String, Tokens>,
     persisted_generation: u64,
     shortcut_recorder: Option<ShortcutRecorder>,
-    shortcut_focus: Option<ShortcutField>,
     shortcut_input: shortcut_input::Bridge,
     suppress_shortcut_commands: bool,
 }
@@ -262,7 +265,6 @@ impl Preferences {
             variants: tokens::load(),
             persisted_generation: 0,
             shortcut_recorder: None,
-            shortcut_focus: None,
             shortcut_input,
             suppress_shortcut_commands: false,
         }
@@ -304,7 +306,6 @@ impl Preferences {
     pub fn set_presented(&mut self, presented: bool) {
         if !presented {
             self.cancel_shortcut_recording();
-            self.shortcut_focus = None;
         }
     }
 
@@ -863,9 +864,10 @@ impl Preferences {
                 if index > 0 {
                     ui.separator();
                 }
-                ui.push_id(("shortcut-recorder-row", field), |ui| {
-                    this.shortcut_row(ui, t, field);
-                });
+                ui.scope_builder(
+                    egui::UiBuilder::new().id(shortcut_scope_id(field)),
+                    |ui| this.shortcut_row(ui, t, field),
+                );
             }
         });
     }
@@ -892,30 +894,23 @@ impl Preferences {
             .flatten();
         self.row(ui, field.label(), "", |this, ui| {
             let response = ui
-                .push_id(("shortcut-recorder", field), |ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width(230.);
-                        let label = if keys.is_empty() {
-                            "Press shortcut…".to_owned()
-                        } else {
-                            keys.join("  +  ")
-                        };
-                        let response = ui.add_sized(
-                            [230., t.number("h-md")],
-                            egui::Button::new(label).selected(recording),
-                        );
-                        if let Some(error) = &error {
-                            ui.colored_label(t.color("danger-text"), error);
-                        }
-                        response
-                    })
-                    .inner
+                .vertical(|ui| {
+                    ui.set_width(230.);
+                    let label = if keys.is_empty() {
+                        "Press shortcut…".to_owned()
+                    } else {
+                        keys.join("  +  ")
+                    };
+                    let response = ui.add_sized(
+                        [230., t.number("h-md")],
+                        egui::Button::new(label).selected(recording),
+                    );
+                    if let Some(error) = &error {
+                        ui.colored_label(t.color("danger-text"), error);
+                    }
+                    response
                 })
                 .inner;
-            if this.shortcut_focus == Some(field) {
-                response.request_focus();
-                this.shortcut_focus = None;
-            }
             let started = response.clicked() && !recording;
             if started {
                 this.shortcut_recorder = Some(ShortcutRecorder::new(field));
@@ -1018,7 +1013,6 @@ impl Preferences {
             }
             ShortcutRecording::Complete { shortcut, .. } => {
                 let field = recorder.field;
-                self.shortcut_focus = Some(field);
                 self.set(field.path(), json!(shortcut));
                 self.cancel_shortcut_recording();
                 false
@@ -1185,6 +1179,35 @@ fn set(v: &mut Value, path: &[&str], value: Value) {
 mod tests {
     use super::*;
 
+    fn render_shortcut_button(ctx: &egui::Context, show_error: bool, focus: bool) -> egui::Id {
+        let mut button_id = None;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            if show_error {
+                ui.label("Couldn’t save changes");
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("preferences-scroll")
+                .show(ui, |ui| {
+                    egui::Frame::new().show(ui, |ui| {
+                        ui.scope_builder(
+                            egui::UiBuilder::new().id(shortcut_scope_id(ShortcutField::Window)),
+                            |ui| {
+                                ui.horizontal(|ui| {
+                                    let response = ui.button("Window shortcut");
+                                    if focus {
+                                        response.request_focus();
+                                    }
+                                    button_id = Some(response.id);
+                                });
+                            },
+                        );
+                    });
+                });
+        });
+        output.textures_delta.clear();
+        button_id.unwrap()
+    }
+
     #[test]
     fn recorder_uses_physical_codes_and_keeps_invalid_chords_active() {
         let dir = tempfile::tempdir().unwrap();
@@ -1247,7 +1270,6 @@ mod tests {
             "Control+Shift+KeyD"
         );
         assert!(prefs.shortcut_recorder.is_none());
-        assert_eq!(prefs.shortcut_focus, Some(ShortcutField::Region));
     }
 
     #[test]
@@ -1256,6 +1278,17 @@ mod tests {
         assert!(!shortcut_recording_lost_focus(true, false, true));
         assert!(shortcut_recording_lost_focus(true, false, false));
         assert!(!shortcut_recording_lost_focus(false, false, false));
+    }
+
+    #[test]
+    fn recorder_button_id_and_focus_survive_error_ui_above_scroll() {
+        let ctx = egui::Context::default();
+        let before = render_shortcut_button(&ctx, false, true);
+        assert!(ctx.memory(|memory| memory.has_focus(before)));
+
+        let after = render_shortcut_button(&ctx, true, false);
+        assert_eq!(after, before);
+        assert!(ctx.memory(|memory| memory.has_focus(after)));
     }
 
     #[test]
