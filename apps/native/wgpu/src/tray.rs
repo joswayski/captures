@@ -20,6 +20,7 @@ pub enum Action {
     History,
     Preferences,
     OpenOutputFolder,
+    Unavailable,
     Quit,
 }
 
@@ -68,6 +69,8 @@ impl Tray {
             .build()
             .map_err(|error| format!("Tray is unavailable: {error}"))?;
         let (actions, receiver) = mpsc::channel();
+        #[cfg(target_os = "linux")]
+        monitor_backend(actions.clone(), ctx.clone());
         let menu_actions = actions.clone();
         let menu_ctx = ctx.clone();
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
@@ -124,7 +127,7 @@ fn ensure_backend_available() -> Result<(), String> {
 fn ensure_backend_available() -> Result<(), String> {
     use std::time::Duration;
 
-    use dbus::blocking::Connection;
+    use dbus::blocking::{Connection, stdintf::org_freedesktop_dbus::Properties};
 
     let connection = Connection::new_session()
         .map_err(|error| format!("Could not connect to the desktop session bus: {error}"))?;
@@ -142,7 +145,90 @@ fn ensure_backend_available() -> Result<(), String> {
         .map_err(|error| format!("Could not query the system tray host: {error}"))?;
     available
         .then_some(())
-        .ok_or_else(|| "No StatusNotifier tray host is running on this desktop.".into())
+        .ok_or_else(|| "No StatusNotifier watcher is running on this desktop.".to_owned())?;
+    let watcher = connection.with_proxy(
+        "org.kde.StatusNotifierWatcher",
+        "/StatusNotifierWatcher",
+        Duration::from_secs(2),
+    );
+    watcher
+        .get::<bool>(
+            "org.kde.StatusNotifierWatcher",
+            "IsStatusNotifierHostRegistered",
+        )
+        .map_err(|error| format!("Could not query the system tray host: {error}"))?
+        .then_some(())
+        .ok_or_else(|| "The StatusNotifier watcher has no registered tray host.".into())
+}
+
+#[cfg(target_os = "linux")]
+fn monitor_backend(actions: mpsc::Sender<Action>, ctx: egui::Context) {
+    use std::{thread, time::Duration};
+
+    use dbus::{arg::PropMap, blocking::Connection, message::MatchRule};
+
+    thread::spawn(move || {
+        let Ok(connection) = Connection::new_session() else {
+            let _ = actions.send(Action::Unavailable);
+            ctx.request_repaint();
+            return;
+        };
+        let owner_actions = actions.clone();
+        let owner_ctx = ctx.clone();
+        let mut owner_rule = MatchRule::new_signal("org.freedesktop.DBus", "NameOwnerChanged");
+        owner_rule.sender = Some("org.freedesktop.DBus".into());
+        owner_rule.path = Some("/org/freedesktop/DBus".into());
+        if connection
+            .add_match(
+                owner_rule,
+                move |(name, _, new_owner): (String, String, String), _, _| {
+                    if name == "org.kde.StatusNotifierWatcher" && new_owner.is_empty() {
+                        let _ = owner_actions.send(Action::Unavailable);
+                        owner_ctx.request_repaint();
+                    }
+                    true
+                },
+            )
+            .is_err()
+        {
+            let _ = actions.send(Action::Unavailable);
+            ctx.request_repaint();
+            return;
+        }
+        let host_actions = actions.clone();
+        let host_ctx = ctx.clone();
+        let host_rule =
+            MatchRule::new_signal("org.freedesktop.DBus.Properties", "PropertiesChanged")
+                .with_path("/StatusNotifierWatcher");
+        if connection
+            .add_match(
+                host_rule,
+                move |(interface, changed, _): (String, PropMap, Vec<String>), _, _| {
+                    let host_registered = changed
+                        .get("IsStatusNotifierHostRegistered")
+                        .and_then(|value| value.0.as_i64())
+                        .is_none_or(|value| value != 0);
+                    if interface == "org.kde.StatusNotifierWatcher" && !host_registered {
+                        let _ = host_actions.send(Action::Unavailable);
+                        host_ctx.request_repaint();
+                    }
+                    true
+                },
+            )
+            .is_err()
+        {
+            let _ = actions.send(Action::Unavailable);
+            ctx.request_repaint();
+            return;
+        }
+        loop {
+            if connection.process(Duration::from_secs(86_400)).is_err() {
+                let _ = actions.send(Action::Unavailable);
+                ctx.request_repaint();
+                return;
+            }
+        }
+    });
 }
 
 impl Drop for Tray {

@@ -664,6 +664,10 @@ impl Live {
         self.pending == 0 && !self.is_capturing() && self.requested_capture.is_none()
     }
 
+    fn can_start_capture(&self) -> bool {
+        self.can_launch_capture() && self.display_id.is_some() && self.can_hide == Some(true)
+    }
+
     pub fn take_open_history_requested(&mut self) -> bool {
         std::mem::take(&mut self.open_history_requested)
     }
@@ -673,6 +677,98 @@ impl Live {
             self.error = Some("Another capture or history action is still in progress.".into());
         } else {
             self.requested_capture = Some(request);
+        }
+    }
+
+    pub fn launch_requested_capture(
+        &mut self,
+        ctx: &egui::Context,
+        frame: &eframe::Frame,
+        settings: Result<AppSettings, String>,
+    ) {
+        let Some(request) = self.requested_capture.take() else {
+            return;
+        };
+        if !self.can_start_capture() {
+            self.error = Some(
+                "Capture is unavailable until the current action finishes and a display is ready."
+                    .into(),
+            );
+            return;
+        }
+        let settings = match settings {
+            Ok(settings) => settings,
+            Err(error) => {
+                self.error = Some(error);
+                return;
+            }
+        };
+        let target = capture_target(frame, &self.displays, self.display_id.as_deref());
+        self.countdown_target = target;
+        let countdown = matches!(request, CaptureRequest::Display)
+            .then_some(settings.screenshot_countdown_seconds)
+            .unwrap_or(0);
+        if target.is_none()
+            && (!matches!(request, CaptureRequest::Display)
+                || settings.screenshot_countdown_seconds > 0)
+        {
+            self.error = Some(match request {
+                CaptureRequest::Display => {
+                    "The selected display is no longer available for countdown.".into()
+                }
+                CaptureRequest::Region => {
+                    "The selected display is no longer available for region selection.".into()
+                }
+                CaptureRequest::Window => {
+                    "The selected display is no longer available for window selection.".into()
+                }
+            });
+            return;
+        }
+        let flow = match CaptureFlow::begin(countdown) {
+            Ok(flow) => flow,
+            Err(error) => {
+                self.error = Some(format!("Could not arm capture Escape: {error}"));
+                return;
+            }
+        };
+        if let Err(error) =
+            self.previews
+                .begin_capture(&settings, target, ctx.cumulative_frame_nr())
+        {
+            flow.cancel();
+            self.error = Some(error);
+            return;
+        }
+        self.restore_root_visible = frame
+            .winit_window()
+            .and_then(|window| window.is_visible())
+            .unwrap_or(true);
+        self.flow = Some(flow);
+        self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
+        self.include_cursor = settings.show_cursor_in_screenshots;
+        match request {
+            CaptureRequest::Display => {
+                self.capture_phase = Some(CapturePhase::DisplayCountdown);
+                self.status = "Preparing screenshot… Press Escape to cancel.".into();
+                ctx.request_repaint();
+            }
+            CaptureRequest::Region => {
+                self.capture_phase = Some(CapturePhase::RegionPreparing);
+                self.region_freeze = settings.freeze_screen;
+                self.region_auto_start = settings.auto_start_on_selection;
+                self.region_countdown_seconds = settings.screenshot_countdown_seconds;
+                self.status = "Preparing region selector… Press Escape to cancel.".into();
+                self.hide_for_capture(ctx);
+            }
+            CaptureRequest::Window => {
+                self.capture_phase = Some(CapturePhase::WindowPreparing);
+                self.window_freeze = settings.freeze_screen;
+                self.window_auto_start = settings.auto_start_on_selection;
+                self.window_countdown_seconds = settings.screenshot_countdown_seconds;
+                self.status = "Preparing window selector… Press Escape to cancel.".into();
+                self.hide_for_capture(ctx);
+            }
         }
     }
 
@@ -1752,21 +1848,6 @@ impl Live {
         frame: &eframe::Frame,
         settings: impl Fn() -> Result<AppSettings, String>,
     ) {
-        let can_start_capture = self.pending == 0
-            && self.display_id.is_some()
-            && self.can_hide == Some(true)
-            && !self.is_capturing();
-        let requested_capture = self.requested_capture.take().filter(|_| {
-            if can_start_capture {
-                true
-            } else {
-                self.error = Some(
-                    "Capture is unavailable until the current action finishes and a display is ready."
-                        .into(),
-                );
-                false
-            }
-        });
         if self.capture_phase == Some(CapturePhase::RegionSelecting) {
             let t = t.clone();
             let generation = self
@@ -1948,134 +2029,18 @@ impl Live {
                         ui.selectable_value(&mut self.display_id, Some(display.id.clone()), format!("{} — {}×{}{}", display.name, display.width, display.height, if display.is_primary { " (Primary)" } else { "" }));
                     });
                 if ui.button("Refresh displays").clicked() { self.send(Request::Displays); }
-                let capture = ui.add_enabled(can_start_capture, egui::Button::new("Capture display"));
-                if capture.clicked() || requested_capture == Some(CaptureRequest::Display) {
-                    match settings() {
-                        Ok(settings) => {
-                            let target = capture_target(frame, &self.displays, self.display_id.as_deref());
-                            self.countdown_target = target;
-                            if settings.screenshot_countdown_seconds > 0 && target.is_none() {
-                                self.error = Some("The selected display is no longer available for countdown.".into());
-                            } else {
-                                match CaptureFlow::begin(settings.screenshot_countdown_seconds) {
-                                    Ok(flow) => {
-                                        match self.previews.begin_capture(
-                                            &settings,
-                                            target,
-                                            ui.ctx().cumulative_frame_nr(),
-                                        ) {
-                                            Ok(()) => {
-                                                self.restore_root_visible = frame
-                                                    .winit_window()
-                                                    .and_then(|window| window.is_visible())
-                                                    .unwrap_or(true);
-                                                self.flow = Some(flow);
-                                                self.capture_phase = Some(CapturePhase::DisplayCountdown);
-                                                self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
-                                                self.include_cursor = settings.show_cursor_in_screenshots;
-                                                self.status = "Preparing screenshot… Press Escape to cancel.".into();
-                                                ui.ctx().request_repaint();
-                                            }
-                                            Err(error) => {
-                                                flow.cancel();
-                                                self.error = Some(error);
-                                            }
-                                        }
-                                    }
-                                    Err(error) => self.error = Some(format!("Could not arm capture Escape: {error}")),
-                                }
-                            }
-                        }
-                        Err(error) => self.error = Some(error),
-                    }
+                let can_start_capture = self.can_start_capture();
+                if ui.add_enabled(can_start_capture, egui::Button::new("Capture display")).clicked() {
+                    self.request_capture(CaptureRequest::Display);
+                    self.launch_requested_capture(ui.ctx(), frame, settings());
                 }
-                let region = ui.add_enabled(can_start_capture, egui::Button::new("Capture region"));
-                if region.clicked() || requested_capture == Some(CaptureRequest::Region) {
-                    match settings() {
-                        Ok(settings) => {
-                            let target = capture_target(frame, &self.displays, self.display_id.as_deref());
-                            self.countdown_target = target;
-                            if target.is_none() {
-                                self.error = Some("The selected display is no longer available for region selection.".into());
-                            } else {
-                                match CaptureFlow::begin(0) {
-                                    Ok(flow) => {
-                                        match self.previews.begin_capture(
-                                            &settings,
-                                            target,
-                                            ui.ctx().cumulative_frame_nr(),
-                                        ) {
-                                            Ok(()) => {
-                                                self.restore_root_visible = frame
-                                                    .winit_window()
-                                                    .and_then(|window| window.is_visible())
-                                                    .unwrap_or(true);
-                                                self.flow = Some(flow);
-                                                self.capture_phase = Some(CapturePhase::RegionPreparing);
-                                                self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
-                                                self.include_cursor = settings.show_cursor_in_screenshots;
-                                                self.region_freeze = settings.freeze_screen;
-                                                self.region_auto_start = settings.auto_start_on_selection;
-                                                self.region_countdown_seconds = settings.screenshot_countdown_seconds;
-                                                self.status = "Preparing region selector… Press Escape to cancel.".into();
-                                                self.hide_for_capture(ui.ctx());
-                                            }
-                                            Err(error) => {
-                                                flow.cancel();
-                                                self.error = Some(error);
-                                            }
-                                        }
-                                    }
-                                    Err(error) => self.error = Some(format!("Could not arm capture Escape: {error}")),
-                                }
-                            }
-                        }
-                        Err(error) => self.error = Some(error),
-                    }
+                if ui.add_enabled(can_start_capture, egui::Button::new("Capture region")).clicked() {
+                    self.request_capture(CaptureRequest::Region);
+                    self.launch_requested_capture(ui.ctx(), frame, settings());
                 }
-                let window = ui.add_enabled(can_start_capture, egui::Button::new("Capture window"));
-                if window.clicked() || requested_capture == Some(CaptureRequest::Window) {
-                    match settings() {
-                        Ok(settings) => {
-                            let target = capture_target(frame, &self.displays, self.display_id.as_deref());
-                            self.countdown_target = target;
-                            if target.is_none() {
-                                self.error = Some("The selected display is no longer available for window selection.".into());
-                            } else {
-                                match CaptureFlow::begin(0) {
-                                    Ok(flow) => {
-                                        match self.previews.begin_capture(
-                                            &settings,
-                                            target,
-                                            ui.ctx().cumulative_frame_nr(),
-                                        ) {
-                                            Ok(()) => {
-                                                self.restore_root_visible = frame
-                                                    .winit_window()
-                                                    .and_then(|window| window.is_visible())
-                                                    .unwrap_or(true);
-                                                self.flow = Some(flow);
-                                                self.capture_phase = Some(CapturePhase::WindowPreparing);
-                                                self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
-                                                self.include_cursor = settings.show_cursor_in_screenshots;
-                                                self.window_freeze = settings.freeze_screen;
-                                                self.window_auto_start = settings.auto_start_on_selection;
-                                                self.window_countdown_seconds = settings.screenshot_countdown_seconds;
-                                                self.status = "Preparing window selector… Press Escape to cancel.".into();
-                                                self.hide_for_capture(ui.ctx());
-                                            }
-                                            Err(error) => {
-                                                flow.cancel();
-                                                self.error = Some(error);
-                                            }
-                                        }
-                                    }
-                                    Err(error) => self.error = Some(format!("Could not arm capture Escape: {error}")),
-                                }
-                            }
-                        }
-                        Err(error) => self.error = Some(error),
-                    }
+                if ui.add_enabled(can_start_capture, egui::Button::new("Capture window")).clicked() {
+                    self.request_capture(CaptureRequest::Window);
+                    self.launch_requested_capture(ui.ctx(), frame, settings());
                 }
                 if ui.button("Request permission").clicked() { self.send(Request::RequestPermission); }
             });
