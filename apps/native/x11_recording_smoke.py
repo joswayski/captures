@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """Record native controls on a private X11 desktop; never the caller's display.
 
-Requires system Python dbus/gi, Xvfb, Openbox, picom, hsetroot, xdotool,
+Requires system Python dbus/gi/Xlib, Xvfb, Openbox, picom, hsetroot, xdotool,
 ImageMagick, FFmpeg and FFprobe. Uses actual input and persisted media, no app hook.
 """
 import argparse
@@ -17,6 +17,7 @@ import dbus
 import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
+from Xlib import X, display, protocol
 
 from x11_capture_smoke import ScreenSaver
 
@@ -240,15 +241,45 @@ def main():
         shot(wait(lambda: windows("Captures"), "recording History")[0], "recording-history")
 
         assert saver.queries > 0 and app.poll() is None
+        # This fixture has no tray host: closing the root requests application
+        # exit. Shutdown must drain accepted media, not merely stop the HUD.
+        published = history()
+        run("xdotool", "key", "ctrl+shift+F10")
+        select_recording("quit-selector")
+        running_hud()
+        # Address the root directly: mapping it then Alt+F4 can still close the
+        # focused HUD instead. xdotool windowclose destroys the drawable rather
+        # than delivering the normal WM protocol request needed for media drain.
+        connection = display.Display(env["DISPLAY"])
+        try:
+            window = connection.create_resource_object("window", int(root))
+            window.send_event(protocol.event.ClientMessage(
+                window=window, client_type=connection.intern_atom("WM_PROTOCOLS"),
+                data=(32, [connection.intern_atom("WM_DELETE_WINDOW"), X.CurrentTime, 0, 0, 0])))
+            connection.sync()
+        finally:
+            connection.close()
+        try:
+            assert app.wait(timeout=10) == 0, "unclean recording shutdown"
+        except subprocess.TimeoutExpired:
+            shot("root", "timeout-recording-exit")
+            raise
+        assert len(history()) == 4 and manifest() is None
+        saved_on_quit = history() - published
+        assert len(saved_on_quit) == 1
+        run("ffmpeg", "-v", "error", "-i", str(next(iter(saved_on_quit)).parent / "media.mp4"),
+            "-f", "null", "-")
+        assert not windows("Captures Recording Controls")
         (output / "acceptance.json").write_text(json.dumps({
             "region": entry["target"]["rect"], "duration_ms": entry["duration_ms"],
             "first_pixel": list(frames[:3]), "last_pixel": list(frames[-3:]),
             "pause_resume": True, "history_publication": True,
             "running_escape_ignored": True, "countdown_escape_discarded": True,
             "explicit_discard": True, "session_lock_preserved": True, "child_close_saved": True,
+            "application_quit_saved": True,
         }, indent=2))
         print("PASS native recording: selector/countdown, pause/resume, MP4 pixels, History, "
-              "Escape scope, explicit discard, session-lock/child-close preservation and source cleanup")
+              "Escape scope, explicit discard, lock/child-close/application-quit preservation and source cleanup")
     finally:
         if loop is not None:
             loop.quit()

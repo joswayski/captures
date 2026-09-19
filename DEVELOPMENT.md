@@ -138,7 +138,8 @@ builds do not bundle their own media tools yet. AppKit also accepts `CAPTURES_FF
 and `CAPTURES_FFPROBE` executable paths. Recording uses separate development
 History and a sibling `recording-recovery` directory. Do not point tests at real
 capture data. The Linux recording acceptance owns a private Xvfb desktop and D-Bus
-session; install the windowing dependencies from the wgpu README plus `ffmpeg`, then run:
+session; install the windowing dependencies from the wgpu README plus `ffmpeg`
+and `python3-xlib`, then run:
 
 ```sh
 /usr/bin/python3 apps/native/x11_recording_smoke.py \
@@ -149,7 +150,8 @@ session; install the windowing dependencies from the wgpu README plus `ffmpeg`, 
 The output directory must not exist. The test drives real selector/HUD input,
 checks pause/resume, decodes saved MP4 pixels with FFmpeg, verifies History and
 source cleanup, and distinguishes countdown cancellation, running Escape,
-explicit discard and session-loss preservation. Session lock is simulated;
+explicit discard, session-loss preservation, HUD close and whole-application quit.
+Session lock is simulated;
 physical keyboard/display/audio, permissions and hardware compositor acceptance
 remain separate gates. Inspect its selector/HUD PNGs as well as the test result.
 
