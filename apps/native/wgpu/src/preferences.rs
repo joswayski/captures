@@ -863,7 +863,9 @@ impl Preferences {
                 if index > 0 {
                     ui.separator();
                 }
-                this.shortcut_row(ui, t, field);
+                ui.push_id(("shortcut-recorder-row", field), |ui| {
+                    this.shortcut_row(ui, t, field);
+                });
             }
         });
     }
