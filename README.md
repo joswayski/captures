@@ -201,9 +201,13 @@ with Copy, Save, History/Open and nondestructive Dismiss, respecting the four
 corner placements and capture-inclusion preference. Multiple captures remain in
 a stack with expand/collapse, scrolling and Clear all; dismissing previews leaves
 history and exports intact. Preview dragging, hover-fan animation and effects
-are still unconnected. Recording,
-editing, capture-launch global shortcuts, login items, and updates are not
-connected to the native hosts yet. Windows/Linux
+are still unconnected. Live native hosts now expose menu-bar/tray screenshot,
+History, Preferences, output-folder and Quit actions, plus the three configured
+region/window/display global shortcuts. Focused Preferences and active captures
+suppress those shortcuts. Linux requires a StatusNotifier tray host; without one,
+closing the window quits instead of leaving an unreachable background process.
+Recording, editing, New Capture shortcuts, OS shortcut takeover, login items,
+single-instance relaunch and updates are not connected to the native hosts yet. Windows/Linux
 renderer selection and full feature/design parity remain open. The
 [migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;
 existing Preview features remain available during development. The wgpu candidate

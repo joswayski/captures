@@ -70,8 +70,9 @@ must be explicit, not silently successful.
 - Default workbench scenes use synthetic capture fixtures; `--live` explicitly
   enables the current native capture slice. Both use separate development data,
   never installed settings/history. Fixture launches do not request capture
-  access. Live captures register temporary global Escape for cancellation;
-  capture-launch shortcuts and update installation are not connected yet.
+  access. Live captures register temporary global Escape for cancellation and
+  persisted region/window/display launch shortcuts. New Capture/recording keys,
+  OS shortcut takeover and update installation are not connected yet.
   Production data migration requires backup, version checks and rollback tests.
 
 ## Reviewable stages and exit gates
@@ -182,6 +183,20 @@ lifecycles and fixed-glass rendering. Windows runtime, physical macOS, mixed-DPI
 screen-reader and compositor acceptance remain open; Wayland stays unsupported.
 Drag, hover-fan/transition animation, transparent hit regions and dust remain
 future slices. Static piles and scroll controls do not close the effects gate.
+
+The resident lifecycle slice adds live-only menu-bar/tray actions and three
+persisted screenshot shortcuts. One Rust dispatcher owns capture-launch and
+temporary Escape delivery; native event loops drain queued actions. Focused
+Preferences and capture preparation suppress launch keys. Hidden capture restores
+hidden state; explicit Quit drains accepted work and drops shortcuts/tray.
+Linux uses session D-Bus SNI/KSNI, requires a registered host before close-to-hide,
+and recovers a hidden root when the host disappears. No watcher/host gives a
+visible close-to-quit fallback. The private-X11 `--lifecycle` test uses real Xfce
+SNI/DBusMenu and global input, not fake tray dispatch. AppKit has native menu,
+focus, restoration and ordered-cleanup tests. Windows compilation/fixtures do
+not replace real tray/input testing; physical Mac, Windows, Wayland, mixed-DPI
+and accessibility acceptance remain open. Single-instance relaunch, login items,
+OS shortcut takeover and the other lifecycle checklist requirements remain open.
 
 Region preparation starts with `captures-app::selection`: shared create/move/
 corner-resize and settled-aspect geometry, including Shift precedence, fractional
