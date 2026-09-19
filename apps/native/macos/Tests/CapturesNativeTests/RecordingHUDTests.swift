@@ -3,6 +3,15 @@ import XCTest
 @testable import CapturesNative
 
 final class RecordingHUDTests: XCTestCase {
+    func testEveryHUDColorTokenExistsInEveryTheme() {
+        for (theme, tokens) in Tokens.variants {
+            let missing = RecordingHUDColorToken.allCases
+                .map(\.rawValue)
+                .filter { tokens.colors[$0] == nil }
+            XCTAssertEqual(missing, [], "\(theme) is missing Recording HUD color tokens")
+        }
+    }
+
     func testCompactHUDRunningPausedAndUnavailableControlsFit() throws {
         _ = NSApplication.shared
         for appearance in ["dark", "light"] {
