@@ -551,8 +551,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         ) { [weak self] _ in
             self?.drainCaptureShortcuts()
         }
-        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification,
-                     NSWindow.didOrderOnScreenNotification, NSWindow.didOrderOffScreenNotification] {
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
             shortcutFocusObservers.append(NotificationCenter.default.addObserver(
                 forName: name, object: nil, queue: .main
             ) { [weak self] notification in
