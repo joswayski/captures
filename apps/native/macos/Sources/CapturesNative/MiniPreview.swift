@@ -109,7 +109,6 @@ final class MiniPreviewView: NSView {
     private let document = MiniPreviewDocumentView()
     private var cards: [String: MiniPreviewCardView] = [:]
     private var pileExpandButton: MiniPreviewExpandButton?
-    private var expandButton: CaptureButton?
     private var collapseButton: CaptureButton?
     private var clearButton: CaptureButton?
     private(set) var artifactIDs: [String] = []
@@ -125,6 +124,7 @@ final class MiniPreviewView: NSView {
     }
     var pileExpandAccessibilityLabel: String? { pileExpandButton?.accessibilityLabel() }
     var documentHeight: CGFloat { document.frame.height }
+    var viewportHeight: CGFloat { scroll.contentView.bounds.height }
     var scrollOffsetY: CGFloat { scroll.contentView.bounds.minY }
     override var isFlipped: Bool { true }
 
@@ -175,13 +175,7 @@ final class MiniPreviewView: NSView {
         }
 
         let controlY = topAnchor ? 16 : bounds.height - 44
-        if collapsed {
-            let button = CaptureButton(ids.count == 1 ? "Show preview" : "Show all",
-                frame: NSRect(x: padding, y: controlY, width: 100, height: 28),
-                tokens: tokens, glass: true) { setCollapsed(false) }
-            button.setAccessibilityLabel(ids.count == 1 ? "Expand preview" : "Expand \(ids.count) previews")
-            addSubview(button); expandButton = button
-        } else if ids.count >= 2 {
+        if !collapsed && ids.count >= 2 {
             let collapse = CaptureButton("Show less",
                 frame: NSRect(x: padding, y: controlY, width: 92, height: 28),
                 tokens: tokens, glass: true) { setCollapsed(true) }
