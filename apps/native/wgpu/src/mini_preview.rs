@@ -23,6 +23,10 @@ pub enum Busy {
     Save,
 }
 
+pub fn stack_controls_visible(count: usize, collapsed: bool) -> bool {
+    !collapsed && count >= 2
+}
+
 pub struct View<'a> {
     pub artifact_id: &'a str,
     pub texture: &'a egui::TextureHandle,
@@ -298,6 +302,14 @@ mod tests {
         let tall = cover_uv(egui::vec2(100., 400.), egui::vec2(100., 200.));
         assert_eq!(tall.min, egui::pos2(0., 0.25));
         assert_eq!(tall.max, egui::pos2(1., 0.75));
+    }
+
+    #[test]
+    fn stack_toolbar_only_appears_for_expanded_multi_card_stacks() {
+        assert!(!stack_controls_visible(0, false));
+        assert!(!stack_controls_visible(1, false));
+        assert!(stack_controls_visible(2, false));
+        assert!(!stack_controls_visible(2, true));
     }
 
     #[test]
