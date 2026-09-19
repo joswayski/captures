@@ -352,6 +352,16 @@ impl Workbench {
         });
     }
 
+    fn sync_shortcut_routing(&self) {
+        let (enabled, selector_generation) = self.live.as_ref().map_or((false, None), |live| {
+            shortcut_routing_state(live.can_launch_capture(), live.selector_generation())
+        });
+        if let Some(shortcuts) = &self.shortcuts {
+            shortcuts.set_selector_generation(selector_generation);
+            shortcuts.set_enabled(enabled);
+        }
+    }
+
     fn request_screenshot(&mut self, ctx: &egui::Context) {
         let output = self.screenshot_tx.clone();
         let wake = ctx.clone();
@@ -786,12 +796,14 @@ impl eframe::App for Workbench {
         let shortcuts_suspended =
             shortcuts_should_be_suspended(self.live_preferences, !self.root_hidden, root_focused);
         self.sync_shortcut_suspension(shortcuts_suspended);
-        let shortcuts_enabled = self.live.as_ref().is_some_and(Live::can_launch_capture);
-        let shortcut_action = self.shortcuts.as_ref().and_then(|shortcuts| {
-            shortcuts.set_enabled(shortcuts_enabled);
-            shortcuts.next_action()
-        });
-        if let (Some(action), Some(live)) = (shortcut_action, &mut self.live) {
+        self.sync_shortcut_routing();
+        let shortcut_action = self
+            .shortcuts
+            .as_ref()
+            .and_then(CaptureShortcuts::next_action);
+        if let (Some(action), Some(live)) = (shortcut_action, &mut self.live)
+            && !live.apply_selector_shortcut(action)
+        {
             live.request_capture(match action {
                 CaptureShortcut::NewCapture => CaptureRequest::NewCapture,
                 CaptureShortcut::Region => CaptureRequest::Region,
@@ -948,6 +960,9 @@ impl eframe::App for Workbench {
                 root_focused,
             );
             self.sync_shortcut_suspension(shortcuts_suspended);
+            // Child viewport actions can leave selector scope after logic() ran.
+            // Publish that boundary before returning to the native event loop.
+            self.sync_shortcut_routing();
             if self.options.screenshot.is_some()
                 && !self.screenshot_requested
                 && self.started.elapsed() >= self.options.screenshot_after
@@ -1335,6 +1350,16 @@ fn shortcuts_should_be_suspended(
     preferences_selected && root_visible && root_focused
 }
 
+fn shortcut_routing_state(
+    can_launch_capture: bool,
+    selector_generation: Option<u64>,
+) -> (bool, Option<u64>) {
+    (
+        can_launch_capture || selector_generation.is_some(),
+        selector_generation,
+    )
+}
+
 fn fixture_image([width, height]: [usize; 2]) -> egui::ColorImage {
     // Asymmetric synthetic content, same layout as the AppKit fixture. No file
     // reads, screen capture, personal images, or per-frame texture allocation.
@@ -1377,6 +1402,12 @@ mod tests {
         assert!(!shortcuts_should_be_suspended(true, false, true));
         assert!(!shortcuts_should_be_suspended(true, true, false));
         assert!(!shortcuts_should_be_suspended(false, true, true));
+    }
+    #[test]
+    fn shortcuts_enable_idle_launch_or_the_current_selector_only() {
+        assert_eq!(shortcut_routing_state(true, None), (true, None));
+        assert_eq!(shortcut_routing_state(false, Some(42)), (true, Some(42)));
+        assert_eq!(shortcut_routing_state(false, None), (false, None));
     }
     #[test]
     fn image_has_top_right_sun_and_bottom_green_strip() {

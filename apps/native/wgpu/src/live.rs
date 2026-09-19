@@ -5,6 +5,7 @@ use std::{
     process::Command,
     sync::{
         Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender},
     },
     thread,
@@ -16,6 +17,7 @@ use captures_app::{
     capture_flow::CaptureFlow,
     region::RegionSession,
     selection::Rect as SelectionRect,
+    shortcuts::CaptureShortcut,
     window::{Target as WindowCaptureTarget, WindowSession},
 };
 use captures_capture::{DisplayDescriptor, LogicalRect};
@@ -510,6 +512,7 @@ pub struct Live {
     window_auto_start: bool,
     window_countdown_seconds: u8,
     controls: Arc<Mutex<CaptureControls>>,
+    selector_scope_generation: Arc<AtomicU64>,
     controls_freeze: bool,
     controls_auto_start: bool,
     controls_countdown_seconds: u8,
@@ -673,6 +676,7 @@ impl Live {
             window_auto_start: false,
             window_countdown_seconds: 0,
             controls: Arc::new(Mutex::new(CaptureControls::default())),
+            selector_scope_generation: Arc::new(AtomicU64::new(0)),
             controls_freeze: false,
             controls_auto_start: false,
             controls_countdown_seconds: 0,
@@ -695,6 +699,29 @@ impl Live {
 
     pub fn can_launch_capture(&self) -> bool {
         self.pending == 0 && !self.is_capturing() && self.requested_capture.is_none()
+    }
+
+    pub fn selector_generation(&self) -> Option<u64> {
+        let generation = self.selector_scope_generation.load(Ordering::Acquire);
+        active_selector_generation(
+            generation,
+            self.capture_phase,
+            self.flow.as_ref().map(CaptureFlow::generation),
+            self.flow.as_ref().is_some_and(CaptureFlow::is_current),
+        )
+    }
+
+    pub fn apply_selector_shortcut(&mut self, shortcut: CaptureShortcut) -> bool {
+        if self.selector_generation().is_none() {
+            return false;
+        }
+        if shortcut != CaptureShortcut::NewCapture {
+            self.controls
+                .lock()
+                .unwrap()
+                .apply_target_shortcut(shortcut);
+        }
+        true
     }
 
     fn can_start_capture(&self) -> bool {
@@ -785,6 +812,7 @@ impl Live {
         self.include_cursor = settings.show_cursor_in_screenshots;
         match request {
             CaptureRequest::NewCapture => {
+                self.selector_scope_generation.store(0, Ordering::Release);
                 self.capture_phase = Some(CapturePhase::ControlsPreparing);
                 self.controls_freeze = settings.freeze_screen;
                 self.controls_auto_start = settings.auto_start_on_selection;
@@ -821,6 +849,7 @@ impl Live {
     pub fn flush(&mut self) {
         // Cancel preparation/countdown before draining work. CaptureFlow::cancel
         // leaves a capture that already crossed its persistence commit point alone.
+        self.selector_scope_generation.store(0, Ordering::Release);
         if let Some(flow) = &self.flow {
             flow.cancel();
         }
@@ -1016,6 +1045,8 @@ impl Live {
                 ) =>
                 {
                     if !self.displays.iter().any(|display| display.id == display_id) {
+                        self.selector_scope_generation
+                            .store(generation, Ordering::Release);
                         self.error = Some("The selected display is no longer available.".into());
                         continue;
                     }
@@ -1031,6 +1062,7 @@ impl Live {
                     };
                     self.countdown_target = Some(target);
                     self.previews.capture_target = Some(target);
+                    self.selector_scope_generation.store(0, Ordering::Release);
                     self.controls.lock().unwrap().reset_for_display_change();
                     self.window_session = None;
                     self.window_texture = None;
@@ -1636,6 +1668,7 @@ impl Live {
     }
 
     fn finish_capture(&mut self, ctx: &egui::Context, preserve_auto_copy: bool) {
+        self.selector_scope_generation.store(0, Ordering::Release);
         self.flow = None;
         self.capture_phase = None;
         self.capture_waiting_for_hide = false;
@@ -2063,10 +2096,15 @@ impl Live {
                 .as_ref()
                 .expect("capture controls own flow")
                 .generation();
+            // Publish selector shortcut scope only in the UI pass that declares
+            // the child, never during an earlier hidden-root logic-only pass.
+            self.selector_scope_generation
+                .store(generation, Ordering::Release);
             let target = self
                 .countdown_target
                 .expect("capture-controls target validated");
             let controls = Arc::clone(&self.controls);
+            let selector_scope_generation = Arc::clone(&self.selector_scope_generation);
             let sender = self.selector_tx.clone();
             let texture = self.window_texture.clone();
             let auto_start = self.controls_auto_start;
@@ -2086,6 +2124,12 @@ impl Live {
                 ),
                 move |ui, _| {
                     if ui.input(|input| input.viewport().close_requested()) {
+                        let _ = selector_scope_generation.compare_exchange(
+                            generation,
+                            0,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        );
                         captures_app::capture_flow::cancel(generation);
                         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
                         return;
@@ -2104,6 +2148,12 @@ impl Live {
                         |point| session.hit_test(point),
                     );
                     if let Some(action) = action {
+                        let _ = selector_scope_generation.compare_exchange(
+                            generation,
+                            0,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        );
                         let message = match action {
                             capture_controls::Action::Capture(target) => {
                                 SelectorMessage::ConfirmControls { generation, target }
@@ -2659,6 +2709,19 @@ fn same_display_geometry(left: &DisplayDescriptor, right: &DisplayDescriptor) ->
         && left.scale_factor == right.scale_factor
 }
 
+fn active_selector_generation(
+    scoped_generation: u64,
+    phase: Option<CapturePhase>,
+    flow_generation: Option<u64>,
+    flow_is_current: bool,
+) -> Option<u64> {
+    (scoped_generation != 0
+        && phase == Some(CapturePhase::ControlsSelecting)
+        && flow_generation == Some(scoped_generation)
+        && flow_is_current)
+        .then_some(scoped_generation)
+}
+
 fn accepts_prepare_reply(
     active_generation: Option<u64>,
     reply_generation: u64,
@@ -3190,6 +3253,40 @@ mod tests {
             Some(CapturePhase::ControlsPreparing),
             CapturePhase::ControlsPreparing
         ));
+    }
+
+    #[test]
+    fn shortcut_scope_exists_only_for_the_matching_presented_selector() {
+        assert_eq!(
+            active_selector_generation(12, Some(CapturePhase::ControlsSelecting), Some(12), true,),
+            Some(12)
+        );
+        for phase in [
+            CapturePhase::ControlsPreparing,
+            CapturePhase::ControlsCountdown {
+                target: capture_controls::Target::Display,
+                after_countdown: false,
+            },
+            CapturePhase::ControlsCapturing,
+        ] {
+            assert_eq!(
+                active_selector_generation(12, Some(phase), Some(12), true),
+                None
+            );
+        }
+        assert_eq!(
+            active_selector_generation(0, Some(CapturePhase::ControlsSelecting), Some(12), true,),
+            None,
+            "same-frame child transitions clear scope before logic changes phase",
+        );
+        assert_eq!(
+            active_selector_generation(10, Some(CapturePhase::ControlsSelecting), Some(12), true,),
+            None,
+        );
+        assert_eq!(
+            active_selector_generation(12, Some(CapturePhase::ControlsSelecting), Some(12), false,),
+            None,
+        );
     }
 
     #[test]

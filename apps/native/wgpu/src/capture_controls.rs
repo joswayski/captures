@@ -1,4 +1,5 @@
 use captures_app::selection::{Bounds, Rect};
+use captures_app::shortcuts::CaptureShortcut;
 use captures_capture::{DisplayDescriptor, WindowDescriptor};
 use eframe::egui::{self, Align2, RichText, Stroke, TextureHandle};
 
@@ -75,6 +76,24 @@ impl CaptureControls {
     pub fn reset_for_display_change(&mut self) {
         self.region.clear_selection();
         self.window.reset();
+    }
+
+    pub fn apply_target_shortcut(&mut self, shortcut: CaptureShortcut) {
+        self.mode = match shortcut {
+            CaptureShortcut::Region => {
+                self.window.clear_selection_and_hover();
+                TargetMode::Region
+            }
+            CaptureShortcut::Window => {
+                self.window.clear_hover();
+                TargetMode::Window
+            }
+            CaptureShortcut::Display => {
+                self.window.clear_selection_and_hover();
+                TargetMode::Display
+            }
+            CaptureShortcut::NewCapture => return,
+        };
     }
 
     pub fn exercise(
@@ -401,6 +420,17 @@ mod tests {
         events: Vec<egui::Event>,
         panel_id: egui::Id,
     ) -> Option<Action> {
+        run_frame_with_auto_start(ctx, controls, size, events, panel_id, false)
+    }
+
+    fn run_frame_with_auto_start(
+        ctx: &egui::Context,
+        controls: &mut CaptureControls,
+        size: egui::Vec2,
+        events: Vec<egui::Event>,
+        panel_id: egui::Id,
+        auto_start: bool,
+    ) -> Option<Action> {
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
         let display = display();
         let displays = [
@@ -433,7 +463,7 @@ mod tests {
                 display: &display,
                 displays: &displays,
                 windows: &[],
-                auto_start: false,
+                auto_start,
             },
             |_| None,
         );
@@ -513,6 +543,49 @@ mod tests {
         assert!(matches!(controls.current_target(), Some(Target::Region(_))));
         controls.mode = TargetMode::Display;
         assert_eq!(controls.current_target(), Some(Target::Display));
+    }
+
+    #[test]
+    fn keyboard_target_shortcuts_apply_shipping_selection_policy_without_auto_start() {
+        let bounds = Bounds {
+            width: 1000.,
+            height: 720.,
+        };
+        let mut controls = CaptureControls::default();
+        controls.region.exercise(0, bounds);
+        let settled_region = controls.region();
+        controls.window.exercise(0, |_| Some(2));
+
+        controls.apply_target_shortcut(CaptureShortcut::Window);
+        assert_eq!(controls.mode(), TargetMode::Window);
+        assert_eq!(controls.window(), Some(SelectionTarget::Window(2)));
+        assert_eq!(controls.window.hovered(), None);
+        assert_eq!(controls.region(), settled_region);
+
+        controls.apply_target_shortcut(CaptureShortcut::Display);
+        assert_eq!(controls.mode(), TargetMode::Display);
+        assert_eq!(controls.window(), None);
+        assert_eq!(controls.window.hovered(), None);
+        assert_eq!(controls.region(), settled_region);
+        assert_eq!(
+            run_frame_with_auto_start(
+                &egui::Context::default(),
+                &mut controls,
+                egui::vec2(1000., 720.),
+                vec![],
+                egui::Id::unique("capture-controls-shortcut-auto-start"),
+                true,
+            ),
+            None,
+            "keyboard target changes must not arm pointer auto-start",
+        );
+
+        controls.window.exercise(0, |_| Some(1));
+        controls.apply_target_shortcut(CaptureShortcut::Region);
+        assert_eq!(controls.mode(), TargetMode::Region);
+        assert_eq!(controls.window(), None);
+        assert_eq!(controls.window.hovered(), None);
+        assert_eq!(controls.region(), settled_region);
     }
 
     #[test]
