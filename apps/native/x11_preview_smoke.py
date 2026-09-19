@@ -506,7 +506,11 @@ def main():
                 other_app.wait(timeout=5)
             else:
                 run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
-            assert app.wait(timeout=10) == 0, "unclean exit"
+            try:
+                assert app.wait(timeout=10) == 0, "unclean exit"
+            except subprocess.TimeoutExpired:
+                shot("root", "timeout-exit")
+                raise
             assert not windows(PREVIEW), "preview outlived application"
             print(f"PASS {prefix}: pixels, placement/visibility, cancellation, clean exit", flush=True)
         if args.lifecycle:

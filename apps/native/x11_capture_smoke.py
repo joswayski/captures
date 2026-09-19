@@ -340,6 +340,9 @@ def main():
                         assert windows(title) == [selector] and entries() == previous
                         click(selector, 660, 360)
                         select_target(selector, "window")  # Same-target shortcut retains this choice.
+                    # Release queues the target change; let the compositor
+                    # present it before collecting the selection screenshot.
+                    time.sleep(.2)
                 return selector
 
             def entries():
