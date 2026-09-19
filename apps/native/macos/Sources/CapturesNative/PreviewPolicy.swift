@@ -16,7 +16,8 @@ final class NativePreviewStack {
         precondition(Thread.isMainThread)
         return (0..<captures_preview_stack_count_v1(handle)).map { index in
             var bytes = CapturesPreviewID()
-            precondition(captures_preview_stack_id_v1(handle, index, &bytes))
+            let found = captures_preview_stack_id_v1(handle, index, &bytes)
+            precondition(found)
             return String(decoding: UnsafeBufferPointer(start: bytes.data, count: bytes.length), as: UTF8.self)
         }
     }
@@ -49,7 +50,8 @@ final class NativePreviewStack {
 
     func setCollapsed(_ collapsed: Bool) {
         precondition(Thread.isMainThread)
-        precondition(captures_preview_stack_set_collapsed_v1(handle, collapsed))
+        let updated = captures_preview_stack_set_collapsed_v1(handle, collapsed)
+        precondition(updated)
     }
 
     func cardLayout(index: Int, topAnchor: Bool) -> CapturesPreviewCardLayout? {
