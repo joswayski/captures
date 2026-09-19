@@ -681,7 +681,7 @@ dependencies = [
  "captures-media",
  "captures-recording",
  "captures-recording-macos",
- "captures-recording-xcap",
+ "captures-recording-platform",
  "captures-session",
  "captures-settings",
  "chrono",
@@ -798,6 +798,18 @@ dependencies = [
  "hound",
  "screencapturekit",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "captures-recording-platform"
+version = "0.1.0"
+dependencies = [
+ "captures-capture",
+ "captures-recording",
+ "captures-recording-macos",
+ "captures-recording-xcap",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -20,10 +20,7 @@ use captures_recording::{
     RecordingSegmentInfo, RecordingSegmentManifest, RecordingSessionSnapshot, RecordingState,
     RecordingTarget,
 };
-#[cfg(target_os = "macos")]
-use captures_recording_macos::MacRecordingSegment as NativeRecordingSegment;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
-use captures_recording_xcap::XcapRecordingSegment as NativeRecordingSegment;
+use captures_recording_platform::{NativeRecordingSegment, start_native_segment};
 use serde::{Deserialize, Serialize};
 use tauri::{
     AppHandle, CursorIcon, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
@@ -1078,14 +1075,7 @@ fn crop_window_from_display(
 
 #[tauri::command]
 pub fn list_recording_audio_devices() -> Vec<captures_recording::AudioDevice> {
-    #[cfg(target_os = "macos")]
-    {
-        captures_recording_macos::microphone_devices()
-    }
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
-    {
-        captures_recording_xcap::microphone_devices()
-    }
+    captures_recording_platform::microphone_devices()
 }
 
 #[tauri::command]
@@ -1348,25 +1338,6 @@ fn recording_segment_is_current(state: &AppState, session_id: &str, generation: 
             .coordinator
             .snapshot(now_ms())
             .is_some_and(|snapshot| snapshot.state == RecordingState::Recording)
-}
-
-fn start_native_segment(
-    options: &RecordingOptions,
-    path: &Path,
-    display: &DisplayDescriptor,
-    exclude_captures_app: bool,
-) -> Result<NativeRecordingSegment, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = display;
-        NativeRecordingSegment::start(options, path, exclude_captures_app)
-            .map_err(|error| error.to_string())
-    }
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
-    {
-        let _ = exclude_captures_app;
-        NativeRecordingSegment::start(options, path, display).map_err(|error| error.to_string())
-    }
 }
 
 async fn start_segment(
