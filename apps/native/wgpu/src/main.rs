@@ -4,6 +4,7 @@ mod live;
 mod mini_preview;
 mod options;
 mod preferences;
+mod recording;
 mod selector;
 mod shortcut_input;
 mod tokens;
