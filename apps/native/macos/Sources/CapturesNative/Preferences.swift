@@ -517,6 +517,10 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     }
 
     static func domCode(for event: NSEvent) -> String {
+        domCode(forKeyCode: event.keyCode)
+    }
+
+    static func domCode(forKeyCode keyCode: UInt16) -> String {
         // Physical key codes follow Carbon Events.h and winit-appkit's inverse table.
         let codes: [UInt16: String] = [
             0: "KeyA", 1: "KeyS", 2: "KeyD", 3: "KeyF", 4: "KeyH", 5: "KeyG",
@@ -544,7 +548,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             122: "F1", 123: "ArrowLeft", 124: "ArrowRight", 125: "ArrowDown",
             126: "ArrowUp",
         ]
-        return codes[event.keyCode] ?? "Unidentified"
+        return codes[keyCode] ?? "Unidentified"
     }
 
     private func recordingCard(_ y: CGFloat) -> CGFloat {
