@@ -61,19 +61,21 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
                 WindowEvent::KeyboardInput { event, .. }
                     if self.root_focused && self.shortcut_input.is_active() =>
                 {
-                    if let PhysicalKey::Code(code) = event.physical_key {
-                        self.shortcut_input.key(
-                            code,
-                            event.state,
-                            event.repeat,
-                            shortcut_input::Modifiers {
-                                ctrl: self.modifiers.control_key(),
-                                shift: self.modifiers.shift_key(),
-                                alt: self.modifiers.alt_key(),
-                                meta: self.modifiers.super_key(),
-                            },
-                        );
-                    }
+                    let code = match event.physical_key {
+                        PhysicalKey::Code(code) => shortcut_input::physical_code(code),
+                        PhysicalKey::Unidentified(_) => "Unidentified".into(),
+                    };
+                    self.shortcut_input.key(
+                        code,
+                        event.state,
+                        event.repeat,
+                        shortcut_input::Modifiers {
+                            ctrl: self.modifiers.control_key(),
+                            shift: self.modifiers.shift_key(),
+                            alt: self.modifiers.alt_key(),
+                            meta: self.modifiers.super_key(),
+                        },
+                    );
                 }
                 _ => {}
             }

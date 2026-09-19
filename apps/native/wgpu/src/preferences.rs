@@ -299,6 +299,12 @@ impl Preferences {
         self.shortcut_recorder.is_some()
     }
 
+    pub fn set_presented(&mut self, presented: bool) {
+        if !presented {
+            self.cancel_shortcut_recording();
+        }
+    }
+
     pub fn receive(&mut self, ctx: &egui::Context) {
         while let Ok(message) = self.rx.try_recv() {
             match message {
@@ -1187,6 +1193,21 @@ mod tests {
             original
         );
 
+        assert!(prefs.apply_shortcut_key(
+            "Unidentified",
+            true,
+            shortcut_input::Modifiers {
+                ctrl: true,
+                ..Default::default()
+            }
+        ));
+        let recorder = prefs.shortcut_recorder.as_ref().unwrap();
+        assert_eq!(recorder.keys, ["Ctrl", "Unidentified"]);
+        assert_eq!(
+            recorder.error.as_deref(),
+            Some("That key cannot be used as a global shortcut.")
+        );
+
         assert!(!prefs.apply_shortcut_key(
             "Escape",
             true,
@@ -1221,6 +1242,21 @@ mod tests {
         assert!(!shortcut_recording_lost_focus(true, false, true));
         assert!(shortcut_recording_lost_focus(true, false, false));
         assert!(!shortcut_recording_lost_focus(false, false, false));
+    }
+
+    #[test]
+    fn leaving_preferences_cancels_shortcut_recording_and_raw_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        captures_settings::save(&path, &AppSettings::default()).unwrap();
+        let mut prefs = Preferences::new(egui::Context::default(), path, None, None);
+        prefs.shortcut_recorder = Some(ShortcutRecorder::new(ShortcutField::Window));
+        prefs.shortcut_input.start();
+
+        prefs.set_presented(false);
+
+        assert!(!prefs.is_recording_shortcut());
+        assert!(!prefs.shortcut_input.is_active());
     }
 
     #[test]

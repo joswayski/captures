@@ -691,6 +691,11 @@ impl eframe::App for Workbench {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
+        self.preferences_state.set_presented(if self.options.live {
+            self.live_preferences && !self.root_hidden
+        } else {
+            self.options.scene == Scene::Preferences
+        });
         self.preferences_state.receive(ctx);
         while let Ok(result) = self.action_rx.try_recv() {
             self.action_error = result
