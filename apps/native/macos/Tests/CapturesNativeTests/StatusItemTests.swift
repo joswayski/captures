@@ -24,7 +24,7 @@ final class StatusItemTests: XCTestCase {
             menu.performActionForItem(at: index)
         }
         XCTAssertEqual(captures, [.region, .window, .display])
-        XCTAssertEqual(actions, ["history", "preferences", "folder", "quit"])
+        XCTAssertEqual(actions, ["history", "folder", "preferences", "quit"])
     }
 
     func testLiveRootCloseHidesWithoutClosingPreviewsOrTerminating() {
