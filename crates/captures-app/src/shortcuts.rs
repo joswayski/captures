@@ -58,6 +58,7 @@ struct Routes {
     armed: BTreeSet<u32>,
     pending: Option<CaptureShortcut>,
     enabled: bool,
+    suspended: bool,
 }
 
 impl Routes {
@@ -67,7 +68,8 @@ impl Routes {
     }
 
     fn event(&mut self, id: u32, state: HotKeyState, blocked: bool) -> bool {
-        if !self.enabled || blocked || id == HotKey::new(None, Code::Escape).id() {
+        if !self.enabled || self.suspended || blocked || id == HotKey::new(None, Code::Escape).id()
+        {
             self.clear();
             return false;
         }
@@ -189,12 +191,52 @@ fn rebind(manager: &impl Registration, old: &Bindings, new: &Bindings) -> Result
     Ok(())
 }
 
+fn sync_bindings(
+    manager: &impl Registration,
+    registered: &mut Bindings,
+    desired: &Bindings,
+    suspended: bool,
+) -> Result<(), String> {
+    let empty = Bindings::new();
+    let next = if suspended { &empty } else { desired };
+    rebind(manager, registered, next)?;
+    registered.clone_from(next);
+    Ok(())
+}
+
+fn suspend_routes(
+    manager: &impl Registration,
+    registered: &mut Bindings,
+    routes: &Mutex<Routes>,
+    suspended: bool,
+) -> Result<(), String> {
+    let desired = {
+        let mut routes = routes.lock().unwrap();
+        let settled = if suspended {
+            registered.is_empty()
+        } else {
+            *registered == routes.bindings
+        };
+        if routes.suspended == suspended && settled {
+            return Ok(());
+        }
+        routes.suspended = true;
+        routes.clear();
+        routes.bindings.clone()
+    };
+    // Never hold a callback's mutex while waiting on an OS hotkey worker.
+    sync_bindings(manager, registered, &desired, suspended)?;
+    routes.lock().unwrap().suspended = suspended;
+    Ok(())
+}
+
 /// One live host owns this object on the AppKit/winit event-loop thread. OS
 /// callbacks only queue an action and call `wake`; invoke `next_action` on the
 /// host thread. Never configure fixture scenes or change OS screenshot settings.
 pub struct CaptureShortcuts {
     manager: GlobalHotKeyManager,
     dispatcher: Arc<Dispatcher>,
+    registered: Bindings,
     _event_loop_thread: PhantomData<Rc<()>>,
 }
 
@@ -221,6 +263,7 @@ impl CaptureShortcuts {
         let mut shortcuts = Self {
             manager,
             dispatcher,
+            registered: Bindings::new(),
             _event_loop_thread: PhantomData,
         };
         shortcuts.update(settings)?;
@@ -232,7 +275,7 @@ impl CaptureShortcuts {
     /// the old mapping; OS rollback failure is reported, never silently ignored.
     pub fn update(&mut self, settings: &AppSettings) -> Result<(), String> {
         let next = bindings(settings)?;
-        let (old, enabled) = {
+        let (enabled, suspended) = {
             let mut routes = self.dispatcher.routes.lock().unwrap();
             if routes.bindings == next {
                 return Ok(());
@@ -240,15 +283,27 @@ impl CaptureShortcuts {
             let enabled = routes.enabled;
             routes.enabled = false;
             routes.clear();
-            (routes.bindings.clone(), enabled)
+            (enabled, routes.suspended)
         };
-        let result = rebind(&self.manager, &old, &next);
+        let result = sync_bindings(&self.manager, &mut self.registered, &next, suspended);
         let mut routes = self.dispatcher.routes.lock().unwrap();
         if result.is_ok() {
             routes.bindings = next;
         }
         routes.enabled = enabled;
         result
+    }
+
+    /// Release OS grabs while Preferences owns keyboard focus so its recorder
+    /// can receive existing chords. Keep desired bindings across edits, then
+    /// restore them on blur. Failure leaves routing suspended and is retryable.
+    pub fn set_suspended(&mut self, suspended: bool) -> Result<(), String> {
+        suspend_routes(
+            &self.manager,
+            &mut self.registered,
+            &self.dispatcher.routes,
+            suspended,
+        )
     }
 
     /// Disable while editing shortcuts or while the host is preparing capture.
@@ -264,7 +319,7 @@ impl CaptureShortcuts {
     pub fn next_action(&self) -> Option<CaptureShortcut> {
         let mut routes = self.dispatcher.routes.lock().unwrap();
         let pending = routes.pending.take();
-        (routes.enabled && !crate::capture_flow::active())
+        (routes.enabled && !routes.suspended && !crate::capture_flow::active())
             .then_some(pending)
             .flatten()
     }
@@ -277,8 +332,7 @@ impl Drop for CaptureShortcuts {
         // Explicitly unregister before manager teardown; X11 manager Drop only
         // queues connection shutdown rather than waiting for its worker to exit.
         // Do not hold a callback's mutex while waiting for the X11 worker.
-        let bindings = self.dispatcher.routes.lock().unwrap().bindings.clone();
-        for binding in bindings.values() {
+        for binding in self.registered.values() {
             let _ = self.manager.unregister(binding.key);
         }
     }
@@ -372,6 +426,112 @@ mod tests {
                 Ok(())
             }
         }
+    }
+
+    #[test]
+    fn suspension_releases_grabs_defers_edits_and_restores_only_latest_bindings() {
+        let old = bindings(&settings()).unwrap();
+        let key = "Ctrl+Shift+1".parse::<HotKey>().unwrap().id();
+        let backend = Backend {
+            keys: RefCell::new(old.keys().copied().collect()),
+            ..Backend::default()
+        };
+        let mut registered = old.clone();
+        let routes = Mutex::new(Routes {
+            bindings: old,
+            enabled: true,
+            ..Routes::default()
+        });
+        routes
+            .lock()
+            .unwrap()
+            .event(key, HotKeyState::Pressed, false);
+        suspend_routes(&backend, &mut registered, &routes, true).unwrap();
+        assert!(backend.keys.borrow().is_empty());
+        assert!(registered.is_empty());
+        assert!(
+            !routes
+                .lock()
+                .unwrap()
+                .event(key, HotKeyState::Released, false)
+        );
+
+        let mut edited = settings();
+        edited.region_shortcut = "Alt+F10".into();
+        let next = bindings(&edited).unwrap();
+        sync_bindings(&backend, &mut registered, &next, true).unwrap();
+        routes.lock().unwrap().bindings = next.clone();
+        assert!(
+            backend.keys.borrow().is_empty(),
+            "editing must not reclaim grabs"
+        );
+        suspend_routes(&backend, &mut registered, &routes, false).unwrap();
+        assert_eq!(*backend.keys.borrow(), next.keys().copied().collect());
+        assert!(!backend.keys.borrow().contains(&key));
+        assert!(!routes.lock().unwrap().suspended);
+
+        // Settled calls must not clear a legitimate press before its release.
+        let new_key = "Alt+F10".parse::<HotKey>().unwrap().id();
+        routes
+            .lock()
+            .unwrap()
+            .event(new_key, HotKeyState::Pressed, false);
+        suspend_routes(&backend, &mut registered, &routes, false).unwrap();
+        assert!(
+            routes
+                .lock()
+                .unwrap()
+                .event(new_key, HotKeyState::Released, false)
+        );
+    }
+
+    #[test]
+    fn failed_suspend_and_resume_block_routing_until_successful_retry() {
+        let desired = bindings(&settings()).unwrap();
+        let key = *desired.keys().next().unwrap();
+        let mut backend = Backend {
+            keys: RefCell::new(desired.keys().copied().collect()),
+            fail_cleanup: Some(key),
+            ..Backend::default()
+        };
+        let mut registered = desired.clone();
+        let routes = Mutex::new(Routes {
+            bindings: desired.clone(),
+            enabled: true,
+            ..Routes::default()
+        });
+        assert!(suspend_routes(&backend, &mut registered, &routes, true).is_err());
+        assert!(routes.lock().unwrap().suspended);
+        assert!(
+            !routes
+                .lock()
+                .unwrap()
+                .event(key, HotKeyState::Pressed, false)
+        );
+        assert!(
+            !routes
+                .lock()
+                .unwrap()
+                .event(key, HotKeyState::Released, false)
+        );
+        assert!(routes.lock().unwrap().pending.is_none());
+        backend.fail_cleanup = None;
+        suspend_routes(&backend, &mut registered, &routes, true).unwrap();
+        backend.fail = Some(key);
+        assert!(suspend_routes(&backend, &mut registered, &routes, false).is_err());
+        assert!(backend.keys.borrow().is_empty());
+        assert!(registered.is_empty());
+        assert!(routes.lock().unwrap().suspended);
+        backend.fail = None;
+        suspend_routes(&backend, &mut registered, &routes, false).unwrap();
+        assert_eq!(*backend.keys.borrow(), desired.keys().copied().collect());
+        assert!(!routes.lock().unwrap().suspended);
+        assert!(
+            !routes
+                .lock()
+                .unwrap()
+                .event(key, HotKeyState::Released, false)
+        );
     }
 
     #[test]

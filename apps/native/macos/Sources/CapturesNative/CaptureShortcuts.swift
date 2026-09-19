@@ -50,6 +50,11 @@ final class NativeCaptureShortcuts {
         _ = try? Self.request(["operation": "enabled", "enabled": enabled])
     }
 
+    func setSuspended(_ suspended: Bool) throws {
+        guard !closed else { return }
+        _ = try Self.request(["operation": "suspended", "suspended": suspended])
+    }
+
     func nextAction() throws -> CaptureShortcut? {
         guard !closed else { return nil }
         let result = try Self.request(["operation": "next"])

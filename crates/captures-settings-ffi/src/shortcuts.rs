@@ -23,6 +23,9 @@ enum Request {
     Enabled {
         enabled: bool,
     },
+    Suspended {
+        suspended: bool,
+    },
     Next,
     Close,
     Record {
@@ -52,6 +55,12 @@ fn response(request: Request, wake: Option<extern "C" fn()>) -> Result<Value, St
                 slot.as_ref()
                     .ok_or("Capture shortcuts are not configured")?
                     .set_enabled(enabled);
+                Ok(json!({}))
+            }
+            Request::Suspended { suspended } => {
+                slot.as_mut()
+                    .ok_or("Capture shortcuts are not configured")?
+                    .set_suspended(suspended)?;
                 Ok(json!({}))
             }
             Request::Next => {
@@ -130,6 +139,10 @@ mod tests {
         assert_eq!(
             call(r#"{"operation":"enabled","enabled":true}"#)["ok"],
             false
+        );
+        assert_eq!(
+            call(r#"{"operation":"suspended","suspended":true}"#)["error"],
+            "Capture shortcuts are not configured"
         );
         assert_eq!(call(r#"{"operation":"close"}"#)["ok"], true);
         assert_eq!(call(r#"{"operation":"unsupported"}"#)["ok"], false);
