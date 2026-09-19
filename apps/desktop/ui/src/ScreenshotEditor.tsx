@@ -989,7 +989,7 @@ function paintShapeGeometry(
       context.closePath();
     }
     if (style.fill) context.fill();
-    context.stroke();
+    if (style.strokeEnabled !== false) context.stroke();
     return;
   }
 
@@ -1799,7 +1799,8 @@ export function ScreenshotEditor() {
   const [liveTransparentCanvas, setLiveTransparentCanvas] = useState(false);
   const [defaultStyle, setDefaultStyle] = useState<ElementStyle>({
     color: "#ff3b5c",
-    fill: null,
+    fill: "#ff3b5c",
+    strokeEnabled: false,
     strokeWidth: 8,
     dropShadow: false,
   });
@@ -7089,33 +7090,52 @@ export function ScreenshotEditor() {
 
         {(selected?.kind === "shape" || selected?.kind === "path") && (
           <section className="screenshot-property-section">
-            <ColorField
-              label="Stroke color"
-              value={selected.style.color}
-              onChange={(color) => updateSelected((element) => (
-                element.kind === "shape" || element.kind === "path"
-                  ? { ...element, style: { ...element.style, color } }
-                  : element
-              ))}
-            />
-            <label>
-              Stroke width
-              <RangeSlider
-                ariaLabel="Stroke width"
-                min={2}
-                max={40}
-                value={Math.round(selected.style.strokeWidth)}
-                valueText={`${Math.round(selected.style.strokeWidth)} px`}
-                onChange={(strokeWidth) => updateSelected((element) => (
-                  element.kind === "shape" || element.kind === "path"
-                    ? {
-                      ...element,
-                      style: { ...element.style, strokeWidth },
-                    }
-                    : element
-                ))}
-              />
-            </label>
+            {selected.kind === "shape" && isClosedShapeKind(selected.shape) && (
+              <label className="screenshot-check-row">
+                <input
+                  type="checkbox"
+                  checked={selected.style.strokeEnabled !== false}
+                  onChange={(event) => updateSelected((element) => (
+                    element.kind === "shape"
+                      ? { ...element, style: { ...element.style, strokeEnabled: event.target.checked } }
+                      : element
+                  ))}
+                />
+                Stroke
+              </label>
+            )}
+            {(selected.kind === "path" || !isClosedShapeKind(selected.shape)
+              || selected.style.strokeEnabled !== false) && (
+              <>
+                <ColorField
+                  label="Stroke color"
+                  value={selected.style.color}
+                  onChange={(color) => updateSelected((element) => (
+                    element.kind === "shape" || element.kind === "path"
+                      ? { ...element, style: { ...element.style, color } }
+                      : element
+                  ))}
+                />
+                <label>
+                  Stroke width
+                  <RangeSlider
+                    ariaLabel="Stroke width"
+                    min={2}
+                    max={40}
+                    value={Math.round(selected.style.strokeWidth)}
+                    valueText={`${Math.round(selected.style.strokeWidth)} px`}
+                    onChange={(strokeWidth) => updateSelected((element) => (
+                      element.kind === "shape" || element.kind === "path"
+                        ? {
+                          ...element,
+                          style: { ...element.style, strokeWidth },
+                        }
+                        : element
+                    ))}
+                  />
+                </label>
+              </>
+            )}
             <label>
               Opacity
               <RangeSlider
@@ -7151,7 +7171,7 @@ export function ScreenshotEditor() {
                           ...element,
                           style: {
                             ...element.style,
-                            fill: event.target.checked ? `${element.style.color}55` : null,
+                            fill: event.target.checked ? element.style.color : null,
                           },
                         }
                         : element
@@ -7165,7 +7185,7 @@ export function ScreenshotEditor() {
                     value={selected.style.fill.slice(0, 7)}
                     onChange={(fill) => updateSelected((element) => (
                       element.kind === "shape"
-                        ? { ...element, style: { ...element.style, fill: `${fill}88` } }
+                        ? { ...element, style: { ...element.style, fill } }
                         : element
                     ))}
                   />
@@ -7274,29 +7294,47 @@ export function ScreenshotEditor() {
                   color={defaultStyle.color}
                   fill={isClosedShapeTool(tool) ? defaultStyle.fill : null}
                   strokeWidth={defaultStyle.strokeWidth}
+                  strokeEnabled={!isClosedShapeTool(tool) || defaultStyle.strokeEnabled !== false}
                   brushSize={defaultStyle.strokeWidth}
                   brushSoftness={0}
                   opacity={defaultOpacity}
                 />
-                <ColorField
-                  label="Color"
-                  value={defaultStyle.color}
-                  onChange={(color) => setDefaultStyle((style) => ({ ...style, color }))}
-                />
-                <label>
-                  Size
-                  <RangeSlider
-                    ariaLabel="Stroke width"
-                    min={2}
-                    max={40}
-                    value={Math.round(defaultStyle.strokeWidth)}
-                    valueText={`${Math.round(defaultStyle.strokeWidth)} px`}
-                    onChange={(strokeWidth) => setDefaultStyle((style) => ({
-                      ...style,
-                      strokeWidth,
-                    }))}
-                  />
-                </label>
+                {isClosedShapeTool(tool) && (
+                  <label className="screenshot-check-row">
+                    <input
+                      type="checkbox"
+                      checked={defaultStyle.strokeEnabled !== false}
+                      onChange={(event) => setDefaultStyle((style) => ({
+                        ...style,
+                        strokeEnabled: event.target.checked,
+                      }))}
+                    />
+                    Stroke
+                  </label>
+                )}
+                {(!isClosedShapeTool(tool) || defaultStyle.strokeEnabled !== false) && (
+                  <>
+                    <ColorField
+                      label={isClosedShapeTool(tool) ? "Stroke color" : "Color"}
+                      value={defaultStyle.color}
+                      onChange={(color) => setDefaultStyle((style) => ({ ...style, color }))}
+                    />
+                    <label>
+                      Size
+                      <RangeSlider
+                        ariaLabel="Stroke width"
+                        min={2}
+                        max={40}
+                        value={Math.round(defaultStyle.strokeWidth)}
+                        valueText={`${Math.round(defaultStyle.strokeWidth)} px`}
+                        onChange={(strokeWidth) => setDefaultStyle((style) => ({
+                          ...style,
+                          strokeWidth,
+                        }))}
+                      />
+                    </label>
+                  </>
+                )}
                 <label>
                   Opacity
                   <RangeSlider
@@ -7316,7 +7354,7 @@ export function ScreenshotEditor() {
                         checked={defaultStyle.fill !== null}
                         onChange={(event) => setDefaultStyle((style) => ({
                           ...style,
-                          fill: event.target.checked ? `${style.color}55` : null,
+                          fill: event.target.checked ? style.color : null,
                         }))}
                       />
                       Filled shape
@@ -7327,7 +7365,7 @@ export function ScreenshotEditor() {
                         value={defaultStyle.fill.slice(0, 7)}
                         onChange={(fill) => setDefaultStyle((style) => ({
                           ...style,
-                          fill: `${fill}88`,
+                          fill,
                         }))}
                       />
                     )}
@@ -8477,6 +8515,7 @@ function DrawToolPreview({
   color,
   fill,
   strokeWidth,
+  strokeEnabled = true,
   brushSize,
   brushSoftness,
   opacity,
@@ -8485,11 +8524,12 @@ function DrawToolPreview({
   color: string;
   fill: string | null;
   strokeWidth: number;
+  strokeEnabled?: boolean;
   brushSize: number;
   brushSoftness: number;
   opacity: number;
 }) {
-  const previewStroke = Math.max(1.75, Math.min(12, strokeWidth * 0.42));
+  const previewStroke = strokeEnabled ? Math.max(1.75, Math.min(12, strokeWidth * 0.42)) : 0;
   const brushRadius = 8 + ((brushSize - 4) / 116) * 22;
   const hardStop = Math.max(4, (1 - brushSoftness / 100) * 72);
 
