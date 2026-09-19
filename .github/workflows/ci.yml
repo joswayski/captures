@@ -60,6 +60,7 @@ jobs:
             build-essential \
             curl \
             file \
+            ffmpeg \
             libayatana-appindicator3-dev \
             libasound2-dev \
             libclang-dev \
@@ -84,6 +85,9 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo check --workspace --all-targets
       - run: cargo test --workspace
+      - name: Decode recorded colors with an independent player
+        if: runner.os == 'Linux'
+        run: cargo test -p captures-video decoded_colors_match_rgb_input -- --ignored
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   macos-app:
