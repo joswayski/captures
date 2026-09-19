@@ -1113,6 +1113,7 @@ impl eframe::App for Workbench {
                             displays: &self.capture_control_displays,
                             windows,
                             auto_start: false,
+                            recording_available: true,
                         },
                         |point| fixture_window_hit_test(windows, shell, display, point),
                     ) {
