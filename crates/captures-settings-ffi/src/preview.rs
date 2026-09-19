@@ -366,6 +366,17 @@ pub unsafe extern "C" fn captures_preview_stack_count_v1(
     unsafe { handle.as_ref() }.map_or(0, |handle| handle.0.ids().len())
 }
 
+/// Unclamped logical content height, including the control gutter; zero if empty.
+/// # Safety
+/// Handle is null or live and not concurrently mutated/freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_stack_height_v1(
+    handle: *const CapturesPreviewStack,
+) -> f64 {
+    // SAFETY: Caller guarantees shared access to a live handle or null.
+    unsafe { handle.as_ref() }.map_or(0., |handle| handle.0.content_height())
+}
+
 /// Borrow an ID until the next mutation/free. Output is unchanged on failure.
 /// # Safety
 /// Handle is null or live without concurrent mutation/free. Output is null or
@@ -467,6 +478,7 @@ mod tests {
             assert!(captures_preview_stack_insert_v1(stack, c"new".as_ptr()));
             assert!(!captures_preview_stack_insert_v1(stack, c"古い".as_ptr()));
             assert_eq!(captures_preview_stack_count_v1(stack), 2);
+            assert_eq!(captures_preview_stack_height_v1(stack), 424.);
             let mut id = CapturesPreviewID {
                 data: null(),
                 length: 0,

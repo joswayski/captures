@@ -75,6 +75,18 @@ impl PreviewStack {
         self.collapsed = collapsed && !self.ids.is_empty();
     }
 
+    /// Unclamped document height, including the shared control gutter. Native
+    /// window height may be smaller; scroll the document rather than its toolbar.
+    pub fn content_height(&self) -> f64 {
+        if self.ids.is_empty() {
+            0.0
+        } else if self.collapsed {
+            collapsed_frame_height(self.ids.len())
+        } else {
+            stack_height(self.ids.len())
+        }
+    }
+
     /// Index is chronological, never visual. Top-anchored expanded piles put
     /// newest first; collapsed piles draw oldest first and newest on top.
     /// Hosts clip/scroll expanded content rather than capping membership.
@@ -559,9 +571,11 @@ mod tests {
     #[test]
     fn stack_layout_reverses_only_top_expansion_and_front_is_the_only_pile_target() {
         let mut stack = PreviewStack::default();
+        assert_eq!(stack.content_height(), 0.);
         for id in ["A", "B", "C"] {
             stack.insert(id.into());
         }
+        assert_eq!(stack.content_height(), 608.);
         assert_eq!(stack.card_layout(0, false).unwrap().y, 28.);
         assert_eq!(stack.card_layout(2, false).unwrap().y, 396.);
         assert_eq!(stack.card_layout(0, true).unwrap().y, 420.);
@@ -574,6 +588,7 @@ mod tests {
         let peek = 25.1;
         // Frame reserves hover peeks, even though this pose uses idle peeks.
         let padding = 28. + 16. * 2. * 25.1 / 26.;
+        assert!((stack.content_height() - (160. + 2. * padding)).abs() < 1e-9);
         assert!((stack.card_layout(0, false).unwrap().y - (padding - peek)).abs() < 1e-9);
         assert!((stack.card_layout(0, true).unwrap().y - (padding + peek)).abs() < 1e-9);
         assert!(!stack.card_layout(0, false).unwrap().interactive);

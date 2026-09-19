@@ -10,6 +10,7 @@ final class PreviewPolicyTests: XCTestCase {
         for id in ["古い", "middle", "latest"] { XCTAssertTrue(stack.insert(id)) }
         XCTAssertFalse(stack.insert("古い"))
         XCTAssertEqual(stack.ids, ["古い", "middle", "latest"])
+        XCTAssertEqual(stack.contentHeight, 608)
         XCTAssertEqual(try XCTUnwrap(stack.cardLayout(index: 0, topAnchor: false)).y, 28)
         XCTAssertEqual(try XCTUnwrap(stack.cardLayout(index: 0, topAnchor: true)).y, 420)
         XCTAssertEqual(try XCTUnwrap(stack.cardLayout(index: 2, topAnchor: true)).y, 52)
