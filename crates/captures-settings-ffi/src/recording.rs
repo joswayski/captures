@@ -168,7 +168,8 @@ pub unsafe extern "C" fn captures_recording_request_v1(
                 let callback = is_current.ok_or("start requires an is_current callback")?;
                 let snapshot = session.start(exclude_captures_app, || {
                     // SAFETY: callback/context validity is part of this function's contract.
-                    unsafe { callback(context, generation) }
+                    let host_current = unsafe { callback(context, generation) };
+                    host_current && captures_app::capture_flow::is_current(generation)
                 })?;
                 Ok(json!({"snapshot":snapshot}))
             }
@@ -271,11 +272,18 @@ mod tests {
         false
     }
 
-    #[test]
-    fn owned_session_cancels_before_engine_open_and_removes_recovery_bundle() {
-        let root = tempfile::tempdir().unwrap();
+    unsafe extern "C" fn accept_start(context: *mut c_void, generation: u64) -> bool {
+        assert!(!context.is_null());
+        // SAFETY: the test retains this state through the synchronous request.
+        let state = unsafe { &mut *context.cast::<CallbackState>() };
+        state.calls += 1;
+        state.generation = generation;
+        true
+    }
+
+    fn prepared_session(root: &Path) -> (*mut RecordingSession, PathBuf) {
         let request = json!({
-            "recovery_root": root.path(),
+            "recovery_root": root,
             "options": {
                 "kind":"video",
                 "target":{"type":"display","display_id":"fixture"},
@@ -307,8 +315,15 @@ mod tests {
         let prepared = take(output);
         assert_eq!(prepared["ok"], true);
         let id = prepared["result"]["snapshot"]["id"].as_str().unwrap();
-        let bundle = root.path().join(id);
+        let bundle = root.join(id);
         assert!(bundle.is_dir());
+        (handle, bundle)
+    }
+
+    #[test]
+    fn owned_session_cancels_before_engine_open_and_removes_recovery_bundle() {
+        let root = tempfile::tempdir().unwrap();
+        let (handle, bundle) = prepared_session(root.path());
 
         let generation = 0x1234_5678_u64;
         let start = CString::new(
@@ -340,6 +355,40 @@ mod tests {
             !bundle.exists(),
             "cancelled start discards durable recovery state"
         );
+        unsafe { captures_recording_free_v1(handle) };
+    }
+
+    #[test]
+    fn shared_flow_cancellation_rejects_start_even_when_host_gate_accepts() {
+        let root = tempfile::tempdir().unwrap();
+        let (handle, bundle) = prepared_session(root.path());
+        let generation = 0x1234_567c_u64;
+        assert!(!captures_app::capture_flow::is_current(generation));
+        let start = CString::new(
+            json!({"operation":"start","generation":generation,
+                "exclude_captures_app":true})
+            .to_string(),
+        )
+        .unwrap();
+        let mut callback = CallbackState {
+            calls: 0,
+            generation: 0,
+        };
+        let cancelled = take(unsafe {
+            captures_recording_request_v1(
+                handle,
+                start.as_ptr(),
+                Some(accept_start),
+                (&raw mut callback).cast(),
+            )
+        });
+        assert_eq!(cancelled["ok"], false);
+        assert_eq!(cancelled["error"], "Recording cancelled");
+        assert_eq!(
+            callback.calls, 1,
+            "host and shared cancellation gates are both checked"
+        );
+        assert!(!bundle.exists());
         unsafe { captures_recording_free_v1(handle) };
     }
 }

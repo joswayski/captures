@@ -8,6 +8,7 @@ final class RecordingHUDView: NSView {
     private let statusLabel = NSTextField(labelWithString: "RECORDING")
     private let noticeLabel = NSTextField(labelWithString: "These controls won’t show in recordings")
     private let pauseButton: CaptureButton
+    private var lifecycleButtons: [CaptureButton] = []
     private var elapsedMilliseconds: UInt64 = 0
     private var resumedAt: Date?
     private var timer: Timer?
@@ -62,6 +63,7 @@ final class RecordingHUDView: NSView {
         unavailable("♩", x: 304, label: "Microphone mute is unavailable in this version")
         let trash = hudButton("⌫", x: 344, help: "Discard recording") { [weak self] in self?.discard() }
         trash.setAccessibilityLabel("Discard recording")
+        lifecycleButtons = [stop, pauseButton, trash]
         unavailable("◉̸", x: 384, label: "Hide controls is unavailable in this version")
         setPaused(false, elapsedMilliseconds: 0)
     }
@@ -98,6 +100,13 @@ final class RecordingHUDView: NSView {
         noticeLabel.textColor = tokens.color(warning == nil ? "glass-text-subtle" : "signal")
         noticeLabel.toolTip = warning
         noticeLabel.setAccessibilityLabel(noticeLabel.stringValue)
+    }
+
+    func setLifecycleActionsEnabled(_ enabled: Bool) {
+        lifecycleButtons.forEach {
+            $0.isEnabled = enabled
+            $0.needsDisplay = true
+        }
     }
 
     private func updateTimer() {
