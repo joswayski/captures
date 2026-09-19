@@ -132,6 +132,7 @@ pub struct Preferences {
     custom_signal: String,
     folder_open: bool,
     variants: std::collections::BTreeMap<String, Tokens>,
+    persisted_generation: u64,
 }
 
 impl Preferences {
@@ -165,6 +166,7 @@ impl Preferences {
             custom_signal: String::new(),
             folder_open: false,
             variants: tokens::load(),
+            persisted_generation: 0,
         }
     }
 
@@ -193,6 +195,10 @@ impl Preferences {
         self.io.flush();
     }
 
+    pub fn persisted_generation(&self) -> u64 {
+        self.persisted_generation
+    }
+
     pub fn receive(&mut self, ctx: &egui::Context) {
         while let Ok(message) = self.rx.try_recv() {
             match message {
@@ -208,6 +214,7 @@ impl Preferences {
                     }
                     self.sync_colors();
                     self.load_error = None;
+                    self.persisted_generation = self.persisted_generation.wrapping_add(1);
                 }
                 Message::Loaded(Err(error)) => self.load_error = Some(error),
                 Message::Saved(revision, result) => {
@@ -221,6 +228,7 @@ impl Preferences {
                                 serde_json::to_value(settings).expect("settings serialize");
                             self.save_error = None;
                             self.saved_until = Some(Instant::now() + Duration::from_secs(2));
+                            self.persisted_generation = self.persisted_generation.wrapping_add(1);
                             ctx.request_repaint_after(Duration::from_secs(2));
                         }
                         Err(error) => self.save_error = Some(error),
@@ -737,7 +745,7 @@ impl Preferences {
         });
     }
     fn shortcuts(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        self.card(ui,t,2,"Shortcuts","Global capture shortcut registration is not connected in this native development build.",|this,ui| {
+        self.card(ui,t,2,"Shortcuts","Region, window, and display screenshot shortcuts are active globally. New Capture and recording shortcuts remain unavailable in this native development build.",|this,ui| {
             for (path,title) in [(vec!["new_capture_shortcut"],"New capture"),(vec!["region_shortcut"],"Capture region"),(vec!["window_shortcut"],"Capture window"),(vec!["display_shortcut"],"Capture display"),(vec!["recording","video_shortcut"],"Record region"),(vec!["recording","window_shortcut"],"Record window"),(vec!["recording","display_shortcut"],"Record display")] {
                 let value=string_at(&this.value,&path);
                 this.row(ui,title,"",|_,ui| { ui.add_enabled(false,egui::Button::new(value)); });

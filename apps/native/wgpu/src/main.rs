@@ -5,6 +5,7 @@ mod options;
 mod preferences;
 mod selector;
 mod tokens;
+mod tray;
 mod window_selector;
 mod work_area;
 mod workbench;
