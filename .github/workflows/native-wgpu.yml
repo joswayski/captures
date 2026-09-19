@@ -61,6 +61,9 @@ jobs:
       - name: Exercise unified New Capture targets and toolbar on private X11
         if: runner.os == 'Linux'
         run: /usr/bin/python3 apps/native/x11_capture_smoke.py --controls --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-controls
+      - name: Exercise registered target keys inside New Capture on private X11
+        if: runner.os == 'Linux'
+        run: /usr/bin/python3 apps/native/x11_capture_smoke.py --controls --target-shortcuts --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-target-shortcuts
       - name: Exercise native history deletion on private X11
         if: runner.os == 'Linux'
         run: python apps/native/x11_history_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-history
@@ -81,6 +84,7 @@ jobs:
             native-smoke
             native-x11-capture
             native-x11-controls
+            native-x11-target-shortcuts
             native-x11-history
             native-x11-preview
             native-x11-lifecycle
