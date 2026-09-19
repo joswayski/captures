@@ -29,6 +29,13 @@ impl Gate {
     fn is_current(&self, generation: u64) -> bool {
         generation != 0 && self.current.load(Ordering::Acquire) & !1 == generation
     }
+    fn shortcuts_allowed(&self, selector_generation: Option<u64>) -> bool {
+        let current = self.current.load(Ordering::Acquire);
+        match selector_generation {
+            None => current == 0,
+            Some(generation) => generation != 0 && generation & 1 == 0 && current == generation,
+        }
+    }
     fn cancel(&self, generation: u64) {
         let _ = self
             .current
@@ -71,8 +78,8 @@ pub(crate) fn commit(generation: u64) -> bool {
     GATE.commit(generation)
 }
 
-pub(crate) fn active() -> bool {
-    GATE.current.load(Ordering::Acquire) != 0
+pub(crate) fn shortcuts_allowed(selector_generation: Option<u64>) -> bool {
+    GATE.shortcuts_allowed(selector_generation)
 }
 
 pub(crate) fn escape() {
@@ -233,6 +240,28 @@ mod tests {
         assert!(gate.is_current(new));
         gate.cancel(new);
         assert!(!gate.is_current(new));
+    }
+
+    #[test]
+    fn shortcut_scope_requires_idle_or_the_exact_uncommitted_selector() {
+        let gate = Gate::default();
+        assert!(gate.shortcuts_allowed(None));
+        assert!(!gate.shortcuts_allowed(Some(0)));
+        let old = gate.begin().unwrap();
+        assert!(!gate.shortcuts_allowed(None));
+        assert!(gate.shortcuts_allowed(Some(old)));
+        gate.cancel(old);
+        assert!(!gate.shortcuts_allowed(Some(old)));
+        let new = gate.begin().unwrap();
+        assert!(!gate.shortcuts_allowed(Some(old)));
+        assert!(gate.shortcuts_allowed(Some(new)));
+        assert!(gate.commit(new));
+        assert!(!gate.shortcuts_allowed(Some(new)));
+        assert!(!gate.shortcuts_allowed(Some(new | 1)));
+        assert!(!gate.shortcuts_allowed(None));
+        gate.finish(new);
+        assert!(!gate.shortcuts_allowed(Some(new)));
+        assert!(gate.shortcuts_allowed(None));
     }
 
     #[test]

@@ -20,6 +20,9 @@ capture is unavailable or a focused Preferences window is editing them. All seve
 shortcut rows can be edited from Preferences with
 physical-key recording, modifier previews, Escape/blur cancellation, and inline invalid
 chord errors; the three recording shortcuts remain visibly unavailable.
+Inside New Capture, region/window/display keys switch the existing selector's
+target. Keyboard Full screen does not auto-start; preparation/countdown/capture
+reject target keys, and New Capture cannot re-enter the active selector.
 Fixture scenes can edit disposable shortcut settings but never register global shortcuts.
 Windows tray left-click opens Preferences.
 Live capture applies automatic copy, screenshot countdown, cursor inclusion, and

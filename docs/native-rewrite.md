@@ -220,7 +220,10 @@ selections. Region confirmation reuses the existing audited crop/cursor policy;
 countdown refresh and the cancellation/commit boundary are unchanged. The
 controls include aspect selection, Enter/Escape and auto-start behavior, while
 Record remains explicitly disabled. Existing direct screenshot paths remain
-available. Recording, global target switching inside the open menu, physical
+available. Global region/window/display keys now switch targets inside the open
+menu under its exact capture generation, without a new session or keyboard
+Full screen auto-start. Leaving selection clears held/pending target keys before
+preparation or countdown. Recording, physical
 platform input/display acceptance and full capture-menu visual/accessibility
 parity remain open.
 

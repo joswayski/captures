@@ -26,6 +26,9 @@ enum Request {
     Suspended {
         suspended: bool,
     },
+    Selector {
+        generation: Option<u64>,
+    },
     Next,
     Close,
     Record {
@@ -61,6 +64,12 @@ fn response(request: Request, wake: Option<extern "C" fn()>) -> Result<Value, St
                 slot.as_mut()
                     .ok_or("Capture shortcuts are not configured")?
                     .set_suspended(suspended)?;
+                Ok(json!({}))
+            }
+            Request::Selector { generation } => {
+                slot.as_ref()
+                    .ok_or("Capture shortcuts are not configured")?
+                    .set_selector_generation(generation);
                 Ok(json!({}))
             }
             Request::Next => {
@@ -144,6 +153,12 @@ mod tests {
             call(r#"{"operation":"suspended","suspended":true}"#)["error"],
             "Capture shortcuts are not configured"
         );
+        for generation in [json!(2), Value::Null] {
+            assert_eq!(
+                call(&json!({"operation":"selector","generation":generation}).to_string())["error"],
+                "Capture shortcuts are not configured"
+            );
+        }
         assert_eq!(call(r#"{"operation":"close"}"#)["ok"], true);
         assert_eq!(call(r#"{"operation":"unsupported"}"#)["ok"], false);
         assert_eq!(call("not JSON")["ok"], false);

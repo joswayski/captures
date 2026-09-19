@@ -205,8 +205,10 @@ are still unconnected. Live native hosts expose menu-bar/tray New Capture,
 screenshot, History, Preferences, output-folder and Quit actions, plus configured
 New Capture and region/window/display global shortcuts. New Capture opens shared
 screenshot controls for Region, Window and Full screen, retaining selections when
-switching targets. Focused Preferences and active captures
-suppress those shortcuts. Native Preferences can edit all seven stored capture
+switching targets with the toolbar. While these controls are open, the configured
+region/window/display shortcuts switch targets in the same session; keyboard
+Full screen does not auto-start capture. Focused Preferences and capture
+preparation/countdown suppress those shortcuts. Native Preferences can edit all seven stored capture
 and recording shortcuts; recording bindings remain unconnected. Linux requires
 a StatusNotifier tray host; without one,
 closing the window quits instead of leaving an unreachable background process.

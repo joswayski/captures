@@ -185,7 +185,7 @@ impl Selector {
         if (response.dragged() || response.drag_stopped())
             && let Some(point) = pointer
         {
-            let shift = ui.input(|input| input.modifiers.shift);
+            let shift = ui.input(|input| drag_shift(input, response.drag_stopped()));
             self.update(point, bounds, shift);
         }
         let drag_stopped = response.drag_stopped();
@@ -335,6 +335,23 @@ impl Selector {
             _ => {}
         }
     }
+}
+
+fn drag_shift(input: &egui::InputState, drag_stopped: bool) -> bool {
+    if drag_stopped
+        && let Some(shift) = input.events.iter().rev().find_map(|event| match event {
+            egui::Event::PointerButton {
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers,
+                ..
+            } => Some(modifiers.shift),
+            _ => None,
+        })
+    {
+        return shift;
+    }
+    input.modifiers.shift
 }
 
 #[derive(Clone, Copy)]
@@ -771,6 +788,39 @@ mod tests {
             )],
             false,
         );
+    }
+
+    #[test]
+    fn shortcut_shift_after_mouse_up_does_not_rewrite_completed_region() {
+        let ctx = egui::Context::default();
+        let mut selector = Selector::default();
+        run_input(&ctx, &mut selector, vec![], false);
+        run_input(
+            &ctx,
+            &mut selector,
+            vec![
+                egui::Event::PointerMoved(egui::pos2(140., 180.)),
+                pointer(egui::pos2(140., 180.), true, egui::Modifiers::NONE),
+            ],
+            false,
+        );
+        run_input(
+            &ctx,
+            &mut selector,
+            vec![egui::Event::PointerMoved(egui::pos2(450., 350.))],
+            false,
+        );
+        run_input(
+            &ctx,
+            &mut selector,
+            vec![
+                pointer(egui::pos2(450., 350.), false, egui::Modifiers::NONE),
+                egui::Event::ModifiersChanged(egui::Modifiers::SHIFT),
+            ],
+            false,
+        );
+
+        assert_rect(selector.rect().unwrap(), [140., 180., 310., 170.]);
     }
 
     #[test]

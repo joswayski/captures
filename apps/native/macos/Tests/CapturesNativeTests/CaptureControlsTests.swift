@@ -99,6 +99,61 @@ final class CaptureControlsTests: XCTestCase {
         XCTAssertEqual(view.choice, .display)
     }
 
+    func testKeyboardTargetSwitchesMatchShippingSelectionAndAutoStartBoundaries() {
+        _ = NSApplication.shared
+        var confirmed: [WindowSelectionChoice] = []
+        let view = makeView(autoStart: true, confirm: { confirmed.append($0) })
+
+        view.setTargetFromShortcut(.display)
+        XCTAssertEqual(view.target, .display)
+        XCTAssertTrue(confirmed.isEmpty,
+            "a target shortcut changes mode but never arms automatic capture")
+
+        view.setTarget(.window)
+        view.selectWindow(NSPoint(x: 24, y: 40))
+        XCTAssertEqual(confirmed, [.window(index: 1, id: "back")])
+        confirmed.removeAll()
+        XCTAssertTrue(view.hoverWindow(NSPoint(x: 100, y: 240)))
+        XCTAssertGreaterThanOrEqual(view.hoveredWindowIndex, 0)
+        view.setTarget(.region)
+        XCTAssertEqual(view.selectedWindowIndex, 1,
+            "pointer target buttons retain the settled window")
+
+        view.setTargetFromShortcut(.window)
+        XCTAssertEqual(view.selectedWindowIndex, 1,
+            "the Window shortcut retains the settled window")
+        XCTAssertEqual(view.hoveredWindowIndex, -1)
+        XCTAssertTrue(confirmed.isEmpty)
+
+        view.setTargetFromShortcut(.region)
+        XCTAssertNil(view.selectedWindowIndex)
+        XCTAssertEqual(view.hoveredWindowIndex, -1)
+        view.setAspect(4)
+        view.beginRegion(NSPoint(x: 90, y: 70))
+        view.dragRegion(NSPoint(x: 410, y: 250)); view.endRegion()
+        XCTAssertEqual(confirmed.count, 1,
+            "pointer selection still honors automatic capture")
+        confirmed.removeAll()
+        let region = view.region.rect
+
+        view.setTarget(.window)
+        view.selectWindow(NSPoint(x: 24, y: 40))
+        XCTAssertEqual(view.selectedWindowIndex, 1)
+        confirmed.removeAll()
+
+        view.setTargetFromShortcut(.display)
+        XCTAssertNil(view.selectedWindowIndex)
+        XCTAssertEqual(view.hoveredWindowIndex, -1)
+        XCTAssertEqual(view.region.rect.x, region.x)
+        XCTAssertEqual(view.region.rect.y, region.y)
+        XCTAssertEqual(view.region.rect.width, region.width)
+        XCTAssertEqual(view.region.rect.height, region.height,
+            "keyboard target changes retain the settled region and aspect")
+        XCTAssertEqual(view.aspectIndex, 4)
+        XCTAssertTrue(confirmed.isEmpty,
+            "the Display shortcut must not itself trigger automatic capture")
+    }
+
     func testEnterEscapeAndAutoStartRespectSelectionBoundaries() throws {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: frame, styleMask: [.borderless],
