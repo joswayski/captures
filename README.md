@@ -196,11 +196,12 @@ and auto-start to shared Rust capture logic. Window selection uses the same Rust
 targeting and pixel-source policy, with window/desktop confirmation, freeze/live
 selection, countdown and cancellation. Real desktop, mixed-DPI and accessibility
 acceptance is still open; private-X11 tests check saved region/window pixels and
-simulated session cancellation. Both native hosts connect a latest-screenshot
-mini preview with Copy, Save, History/Open and nondestructive Dismiss, respecting
-the four corner placements and capture-inclusion preference. This first slice
-replaces the transient card; older captures remain in history. Preview stacking,
-dragging, collapse and effects are still unconnected. Recording,
+simulated session cancellation. Both native hosts connect screenshot mini previews
+with Copy, Save, History/Open and nondestructive Dismiss, respecting the four
+corner placements and capture-inclusion preference. Multiple captures remain in
+a stack with expand/collapse, scrolling and Clear all; dismissing previews leaves
+history and exports intact. Preview dragging, hover-fan animation and effects
+are still unconnected. Recording,
 editing, capture-launch global shortcuts, login items, and updates are not
 connected to the native hosts yet. Windows/Linux
 renderer selection and full feature/design parity remain open. The

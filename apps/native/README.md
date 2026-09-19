@@ -124,24 +124,32 @@ active, unlocked desktop session; bare Xvfb normally has no session service and
 must refuse capture. Verify real permission, clipboard ownership, multi-display
 behavior and exported pixels on each OS before accepting the slice.
 
-## Latest-screenshot mini preview
+## Screenshot mini-preview stack
 
-Both live workbenches can show one latest screenshot in a fixed-glass native
-card. Copy uses full-resolution pixels, Save uses current screenshot preferences,
+Both live workbenches retain recent screenshots in fixed-glass native cards.
+Copy uses full-resolution pixels, Save uses current screenshot preferences,
 History/Open selects the capture in the workspace, and Dismiss closes only the
-card. A new screenshot replaces the card; prior images and exports remain in
-history/on disk. There is no automatic dismissal timer. Stacking, collapse,
-repositioning by drag, native file drag, trash/reveal and dust are not connected.
+targeted card. Clear all dismisses a snapshot of the stack, preserving history,
+exports and any later capture. There is no automatic dismissal timer or count cap.
+
+Stacks start expanded, with newest cards nearest the configured top/bottom edge.
+Overflow scrolls without dropping captures. Show less parks a compact pile with
+the newest card in front; clicking it expands the stack. Incoming captures and
+capture cancellation preserve the parked state. Dragging, native file drag,
+hover-fan/transition animation, trash/reveal and dust are not connected.
 
 Show mini previews, all four placement corners and Include mini previews in
-captures use the shared settings. By default the host hides the card before
-preparing/capturing pixels, restoring it on cancellation/error. Late decodes and
-action results cannot change a replaced/dismissed card. AppKit keeps actions alive
+captures use the shared settings. Turning previews off hides retained cards and
+resets collapse; enabling them restores an expanded stack. By default the host
+hides the stack before preparing/capturing pixels, restoring it on cancellation/
+error. Out-of-order decodes preserve capture order; late results cannot resurrect
+dismissed cards. AppKit keeps actions alive
 when Preferences replaces the workspace; closing the app closes the panel too.
 
 The implementation reuses `captures-app::preview` for corner placement,
-work-area/DPI math and capture/decode visibility generations. AppKit calls this
-policy through the versioned `captures_preview_*_v1` ABI and `NativePreviewPolicy`;
+work-area/DPI math, membership, card poses, scroll content height and capture/
+decode visibility generations. AppKit calls this policy through the versioned
+`captures_preview_*_v1` ABI, `NativePreviewStack` and `NativePreviewPolicy`;
 Windows/Linux calls Rust directly. Work areas come from `NSScreen.visibleFrame`,
 the audited Windows `rcWork` query, or X11 EWMH properties clipped to the monitor.
 If the candidate cannot query usable bounds, the screenshot stays in history and
@@ -149,7 +157,10 @@ the host reports that it cannot position a preview rather than guessing.
 
 macOS uses a nonactivating panel; X11 uses an unmanaged notification window to
 avoid activation by the window manager. Private-X11 tests cover real pixels,
-placement, focus and actions; macOS CI covers AppKit/ABI lifecycles and renders.
+placement, focus and actions; `x11_preview_smoke.py --stack` additionally checks
+per-card routing, compact arrivals/cancellation and nondestructive Clear all in
+all four corners, plus eight-card overflow at bottom-left. CI runs this stack
+mode. macOS CI covers AppKit/ABI lifecycles and renders.
 Physical macOS/Windows desktops, mixed-DPI monitors, compositor behavior,
 transparent hit-region parity and screen-reader/keyboard access still need
 acceptance. Wayland live capture/preview positioning remain unsupported.
