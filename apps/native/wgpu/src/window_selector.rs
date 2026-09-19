@@ -56,6 +56,16 @@ impl WindowSelector {
         *self = Self::default();
     }
 
+    pub fn clear_hover(&mut self) {
+        self.hovered = None;
+        self.scripted = false;
+    }
+
+    pub fn clear_selection_and_hover(&mut self) {
+        self.selected = None;
+        self.clear_hover();
+    }
+
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
