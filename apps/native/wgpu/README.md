@@ -20,7 +20,8 @@ capture is unavailable or a focused Preferences window is editing them. All seve
 shortcut rows can be edited from Preferences with
 physical-key recording, modifier previews, Escape/blur cancellation, and inline invalid
 chord errors; the three recording shortcuts remain visibly unavailable.
-Inside New Capture, region/window/display keys switch the existing selector's
+Inside New Capture, Screenshot/Record and region/window/display controls share the
+existing prepared selector. Region/window/display keys switch the existing selector's
 target. Keyboard Full screen does not auto-start; preparation/countdown/capture
 reject target keys, and New Capture cannot re-enter the active selector.
 Fixture scenes can edit disposable shortcut settings but never register global shortcuts.
@@ -40,11 +41,16 @@ Save, history selection and nondestructive Dismiss actions. Expanded overflow sc
 without dropping cards; the stack can collapse or be cleared without deleting captures.
 It is excluded from captures by default and retained when the include-in-captures
 preference is enabled.
+Record creates H.264 MP4 recordings with the stored FPS, maximum resolution,
+countdown, cursor, click-highlight, desktop-audio and microphone defaults where
+the current platform reports support. Pause/resume, Stop and Discard run from a
+fixed-glass native HUD; successful output is listed in native History with its
+poster and metadata. The native recording editor is not connected yet.
 Windows/X11 use the shipping
 synthetic cursor arrow, not the actual system cursor image. Other capture defaults remain unconnected;
 other scenes remain fixtures. The selector fixture handles window-focused Escape
 only, while live capture uses the shared process-wide Escape cancellation handler.
-Login, microphone discovery, feedback, recording and updating remain visibly unavailable.
+Login, feedback and updating remain visibly unavailable.
 
 The candidate tests whether shared custom components are viable. It is not a
 retained widget renderer: egui rebuilds the visible UI on an event-driven repaint,
@@ -59,6 +65,11 @@ Windows; a C compiler, pkg-config, Wayland/X11/xkbcommon development libraries o
 Linux). Linux tray builds additionally require the D-Bus development package
 (`libdbus-1-dev` on Ubuntu). A working Vulkan or other wgpu-supported graphics
 driver is required.
+This development host does not bundle the Tauri app's media sidecars. Recording is
+enabled only after `ffmpeg` and `ffprobe` are both verified from `PATH` on its worker;
+install compatible command-line builds before launching. Missing tools are reported
+in New Capture before recording can start. This is a development dependency, not
+distribution or packaging parity.
 The isolated Cargo workspace/lockfile leaves the shipping Rust 1.94 workspace
 unchanged. The egui/eframe stack is pinned to upstream
 [`60d7caae`](https://github.com/emilk/egui/commit/60d7caaea38a795618e842925061ad2210028a2a),
@@ -91,6 +102,7 @@ apps/native/wgpu/target/release/captures-wgpu-workbench --scene preview --floati
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene editor
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene region --exercise
 apps/native/wgpu/target/release/captures-wgpu-workbench --scene window --exercise
+apps/native/wgpu/target/release/captures-wgpu-workbench --scene capture-controls --capture-controls-recording
 ```
 
 Appearance: `--appearance system|light|dark`; palettes: `--theme cobalt` (or any
@@ -112,10 +124,10 @@ quits so the process cannot be stranded. Opening the output folder also requires
 | --- | --- | --- |
 | Preferences | Persisted appearance/presets/custom colors, capture/media defaults, folder picker, Find, save errors/retry | OS integrations, full font/visual/input parity |
 | History | Empty/100/1,000 rows, filters, virtualized scrolling, selection, image-backed rows | Real files, open/delete, thumbnail cache pressure: rows intentionally share one synthetic texture |
-| HUD | Running/paused/muted fixture; fixed glass palette even in light mode | Real timer/recording; recording exclusion; tray or hidden-controls notice |
+| HUD | Running/paused fixture matching the bounded live controls; fixed glass palette even in light mode | Restart, screenshot-during-recording, microphone mute and Hide controls |
 | Preview | Cold/reused texture, fade/settle, reset mid-animation, explicit Reduce motion, optional transparent native window | **Not the shipping dust effect**: no isolated-chip blur, dust trajectories, source treatment or pile/drag/hit-region parity |
 | Editor | 2048×1152 synthetic image, clipped canvas, pan/zoom/rotate, separate outline/text layers, editable text field | Real document, layer editing/undo/export; outlines/text do not rotate with the image |
-| Capture Controls | Unified Region/Window/Full screen screenshot target controls over one prepared session; frozen/live previews, aspect/display pickers, keyboard confirm/cancel and draggable toolbar | Recording remains visibly unavailable; fixture uses synthetic pixels |
+| Capture Controls | Unified Screenshot/Record and Region/Window/Full screen controls over one prepared session; recording options, frozen/live previews, aspect/display pickers, keyboard confirm/cancel and draggable toolbar | Fixture uses synthetic pixels; recording editor/export remains unconnected |
 | Region | Deterministic blank/draw/move/corner-resize/aspect/Shift/cancel selector fixture using the live component | Fixture uses synthetic pixels and does not request screen permission |
 | Window | Deterministic blank/frontmost-overlap/window/shell/display/cancel fixture using the live component and shared hit testing | Fixture uses synthetic pixels and does not request screen permission |
 | Idle | Hidden native window; no scheduled application work except optional quit deadline | Process/GPU teardown after last window; production tray lifecycle |

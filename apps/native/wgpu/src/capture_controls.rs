@@ -50,6 +50,7 @@ pub struct View<'a> {
     pub windows: &'a [WindowDescriptor],
     pub auto_start: bool,
     pub recording_available: bool,
+    pub recording_unavailable_reason: Option<&'a str>,
 }
 
 pub struct CaptureControls {
@@ -100,6 +101,14 @@ impl Default for CaptureControls {
 impl CaptureControls {
     pub fn fixture() -> Self {
         Self {
+            window: WindowSelector::fixture(),
+            ..Self::default()
+        }
+    }
+
+    pub fn recording_fixture() -> Self {
+        Self {
+            action_mode: ActionMode::Recording,
             window: WindowSelector::fixture(),
             ..Self::default()
         }
@@ -327,9 +336,9 @@ impl CaptureControls {
                                             "glass-strong"
                                         })),
                                     )
-                                    .on_disabled_hover_text(
+                                    .on_disabled_hover_text(view.recording_unavailable_reason.unwrap_or(
                                         "Screen recording is unavailable in this desktop session",
-                                    )
+                                    ))
                                     .clicked()
                                 {
                                     self.action_mode = ActionMode::Recording;
@@ -399,13 +408,25 @@ impl CaptureControls {
                                         .add_enabled(
                                             target.is_some(),
                                             egui::Button::new(
-                                                RichText::new("Capture")
+                                                RichText::new(if self.action_mode
+                                                    == ActionMode::Recording
+                                                {
+                                                    "Start recording"
+                                                } else {
+                                                    "Capture"
+                                                })
                                                     .color(tokens.color("theme-accent-ink")),
                                             )
                                             .fill(tokens.color("theme-accent"))
                                             .stroke(Stroke::NONE),
                                         )
-                                        .on_hover_text("Take screenshot (Enter)")
+                                        .on_hover_text(if self.action_mode
+                                            == ActionMode::Recording
+                                        {
+                                            "Start recording (Enter)"
+                                        } else {
+                                            "Take screenshot (Enter)"
+                                        })
                                         .clicked()
                                         && let Some(target) = target
                                     {
@@ -441,6 +462,13 @@ impl CaptureControls {
                                     .color(tokens.color("glass-text-subtle")),
                                 );
                             });
+                            if let Some(reason) = view.recording_unavailable_reason {
+                                ui.label(
+                                    RichText::new(reason)
+                                        .small()
+                                        .color(tokens.color("theme-signal")),
+                                );
+                            }
                         });
                     });
             });
@@ -707,6 +735,7 @@ mod tests {
                 windows: &[],
                 auto_start,
                 recording_available: true,
+                recording_unavailable_reason: None,
             },
             |_| None,
         );

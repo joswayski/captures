@@ -11,7 +11,13 @@ use captures_recording_platform::{FinalizedRecording, RecordingSession};
 use eframe::egui;
 
 pub enum Command {
+    VerifyToolchain {
+        generation: u64,
+    },
     ListMicrophones {
+        generation: u64,
+    },
+    Snapshot {
         generation: u64,
     },
     Prepare {
@@ -42,9 +48,17 @@ pub enum Command {
 }
 
 pub enum Event {
+    ToolchainVerified {
+        generation: u64,
+        result: Result<(), String>,
+    },
     Microphones {
         generation: u64,
         devices: Vec<AudioDevice>,
+    },
+    Snapshot {
+        generation: u64,
+        result: Result<RecordingSessionSnapshot, String>,
     },
     Prepared {
         generation: u64,
@@ -80,11 +94,27 @@ impl Worker {
         let (events, rx) = mpsc::channel();
         let thread = thread::spawn(move || {
             let mut session: Option<RecordingSession> = None;
+            let tools = MediaToolchain::from_command_names();
             while let Ok(command) = commands.recv() {
                 let event = match command {
+                    Command::VerifyToolchain { generation } => Event::ToolchainVerified {
+                        generation,
+                        result: tools.verify().map_err(|error| {
+                            format!(
+                                "Native recording requires FFmpeg and ffprobe on PATH: {error}"
+                            )
+                        }),
+                    },
                     Command::ListMicrophones { generation } => Event::Microphones {
                         generation,
                         devices: captures_recording_platform::microphone_devices(),
+                    },
+                    Command::Snapshot { generation } => Event::Snapshot {
+                        generation,
+                        result: session.as_ref().map_or_else(
+                            || Err("Recording session is unavailable".into()),
+                            |session| Ok(session.snapshot()),
+                        ),
                     },
                     Command::Prepare {
                         generation,
@@ -134,11 +164,7 @@ impl Worker {
                             || Err("Recording session is unavailable".into()),
                             |session| {
                                 session.stop()?;
-                                session.finish(
-                                    &history_root,
-                                    &MediaToolchain::from_command_names(),
-                                    &CancelToken::default(),
-                                )
+                                session.finish(&history_root, &tools, &CancelToken::default())
                             },
                         ),
                     },
