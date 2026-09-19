@@ -257,8 +257,7 @@ impl CaptureControls {
                         auto_start: view.auto_start,
                     },
                 );
-                (clicked && view.auto_start)
-                    .then(|| self.action_for_target(Target::Display))
+                (clicked && view.auto_start).then(|| self.action_for_target(Target::Display))
             }
         };
 
@@ -508,7 +507,11 @@ impl CaptureControls {
 
     fn show_recording_options(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
         ui.horizontal(|ui| {
-            ui.label(RichText::new("FPS").small().color(tokens.color("glass-text-muted")));
+            ui.label(
+                RichText::new("FPS")
+                    .small()
+                    .color(tokens.color("glass-text-muted")),
+            );
             egui::ComboBox::from_id_salt("recording-fps")
                 .selected_text(self.recording.frames_per_second.to_string())
                 .show_ui(ui, |ui| {
@@ -582,18 +585,21 @@ impl CaptureControls {
                 .as_ref()
                 .and_then(|id| self.microphones.iter().find(|device| &device.id == id))
                 .map_or_else(
-                    || if selected.is_some() { "Selected" } else { "Off" }.to_owned(),
+                    || {
+                        if selected.is_some() {
+                            "Selected"
+                        } else {
+                            "Off"
+                        }
+                        .to_owned()
+                    },
                     |device| device.name.clone(),
                 );
             ui.add_enabled_ui(self.recording_capabilities.microphone, |ui| {
                 egui::ComboBox::from_id_salt("recording-microphone")
                     .selected_text(truncate_label(&selected_label, 18))
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut self.recording.microphone_device_id,
-                            None,
-                            "Off",
-                        );
+                        ui.selectable_value(&mut self.recording.microphone_device_id, None, "Off");
                         for device in &self.microphones {
                             ui.selectable_value(
                                 &mut self.recording.microphone_device_id,

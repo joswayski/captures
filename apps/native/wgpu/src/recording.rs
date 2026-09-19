@@ -100,9 +100,7 @@ impl Worker {
                     Command::VerifyToolchain { generation } => Event::ToolchainVerified {
                         generation,
                         result: tools.verify().map_err(|error| {
-                            format!(
-                                "Native recording requires FFmpeg and ffprobe on PATH: {error}"
-                            )
+                            format!("Native recording requires FFmpeg and ffprobe on PATH: {error}")
                         }),
                     },
                     Command::ListMicrophones { generation } => Event::Microphones {
