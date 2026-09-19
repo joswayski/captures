@@ -70,7 +70,7 @@ final class ShortcutEditingTests: XCTestCase {
         recorder.performClick(nil)
         XCTAssertTrue(recorder.recording)
         XCTAssertTrue(window.firstResponder === recorder)
-        XCTAssertEqual(recorder.accessibilitySelected(), true)
+        XCTAssertTrue(recorder.isAccessibilitySelected())
         controller.handleShortcutInput(code: "MetaLeft", control: false, shift: false,
             alt: false, meta: true)
         XCTAssertEqual(recorder.keys, ["Cmd"])
