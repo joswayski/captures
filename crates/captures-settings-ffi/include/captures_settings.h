@@ -200,7 +200,12 @@ void captures_window_free_v1(CapturesWindowSession *session);
  * before and after engine opening; it must only read a thread-safe host
  * cancellation gate. Finish accepts history_root/ffmpeg/ffprobe file paths and
  * returns FinalizedRecording metadata/path, never media JSON/base64. Stop/discard
- * an active handle before free. All responses use the standard owned envelope. */
+ * an active handle before free. Info operations are capabilities,
+ * microphone_devices, and history {root}; history returns recording metadata and
+ * native media/poster paths only. Free may block while platform Drop aborts an
+ * active engine, but is not durable Stop/finalization: explicitly stop/discard
+ * first on the worker. The generation callback must not reenter this ABI. All
+ * responses use the standard owned envelope. */
 typedef struct CapturesRecordingSession CapturesRecordingSession;
 typedef bool (*CapturesRecordingIsCurrent)(void *context, uint64_t generation);
 char *captures_recording_info_v1(const char *request_json);
@@ -223,11 +228,13 @@ char *captures_settings_request_v1(const char *request_json);
  * File paths, not image bytes, cross this ABI. The same free function owns both.
  * Permission is prompted only by the explicit request_permission operation. */
 char *captures_app_request_v1(const char *request_json);
-/* Event-loop-thread ONLY: begin {seconds}, poll {generation}, finish {generation}.
+/* Event-loop-thread ONLY: begin {seconds}, poll {generation},
+ * disarm_escape {generation}, finish {generation}.
  * For selection, begin with seconds=0; start_countdown {generation,seconds} after
  * confirmation starts the delay without dropping Escape or changing generation.
  * begin returns {generation}; poll returns {current,remaining}. Escape is global
- * only for this guard. Always finish, including on cancellation/quit. The guard
+ * only until disarm_escape hands an accepted recording to its session owner.
+ * Always finish, including on cancellation/quit. The guard
  * owns native handles on this thread; never dispatch these calls to a worker.
  * Uses the same {ok,result}/{ok,error} envelope and response ownership as above. */
 char *captures_flow_request_v1(const char *request_json);

@@ -50,6 +50,9 @@ enum InfoRequest {
         include_recording_controls_in_captures: bool,
     },
     MicrophoneDevices,
+    History {
+        root: PathBuf,
+    },
 }
 
 /// Query platform recording capabilities/devices off the UI thread. The result
@@ -70,6 +73,23 @@ pub unsafe extern "C" fn captures_recording_info_v1(request_json: *const c_char)
                 include_recording_controls_in_captures
             )}),
             InfoRequest::MicrophoneDevices => json!({"devices": microphone_devices()}),
+            InfoRequest::History { root } => {
+                let recordings = captures_history::load(&root, chrono::Utc::now())
+                    .map_err(|error| error.to_string())?
+                    .into_iter()
+                    .filter(|entry| entry.kind.is_recording())
+                    .filter_map(|entry| {
+                        let directory = captures_history::entry_directory(&root, &entry.id).ok()?;
+                        let media_path = entry.recording_media_path(&root)?;
+                        Some(json!({
+                            "entry": entry,
+                            "media_path": media_path,
+                            "preview_path": directory.join(captures_history::HISTORY_PREVIEW_FILE),
+                        }))
+                    })
+                    .collect::<Vec<_>>();
+                json!({"recordings":recordings})
+            }
         })
     }))
     .unwrap_or_else(|_| Err("internal panic".into()));
@@ -174,8 +194,9 @@ pub unsafe extern "C" fn captures_recording_request_v1(
     })
 }
 
-/// Free once after all worker calls return. Null is permitted. This does not stop
-/// an active engine; hosts must stop/discard before teardown.
+/// Free once after all worker calls return. Null is permitted. Platform segment
+/// Drop aborts/discards an active engine and may block, but this is not durable
+/// Stop/finalization; hosts must explicitly stop/discard on their worker first.
 ///
 /// # Safety
 /// A non-null handle came from prepare, has not been freed, and is not in use.
@@ -233,5 +254,92 @@ mod tests {
         assert!(
             unsafe { captures_recording_prepare_v1(request.as_ptr(), ptr::null_mut()) }.is_null()
         );
+    }
+
+    #[repr(C)]
+    struct CallbackState {
+        calls: usize,
+        generation: u64,
+    }
+
+    unsafe extern "C" fn cancel_start(context: *mut c_void, generation: u64) -> bool {
+        assert!(!context.is_null());
+        // SAFETY: the test retains this state through the synchronous request.
+        let state = unsafe { &mut *context.cast::<CallbackState>() };
+        state.calls += 1;
+        state.generation = generation;
+        false
+    }
+
+    #[test]
+    fn owned_session_cancels_before_engine_open_and_removes_recovery_bundle() {
+        let root = tempfile::tempdir().unwrap();
+        let request = json!({
+            "recovery_root": root.path(),
+            "options": {
+                "kind":"video",
+                "target":{"type":"display","display_id":"fixture"},
+                "frames_per_second":30,
+                "max_resolution":"original",
+                "countdown_seconds":0,
+                "show_cursor":true,
+                "highlight_clicks":false,
+                "show_keystrokes":false,
+                "audio":{
+                    "capture_system_audio":false,
+                    "microphone_device_id":null,
+                    "mono_output":false,
+                    "system_volume_percent":100,
+                    "microphone_volume_percent":100,
+                    "microphone_muted":false
+                },
+                "gif":{"max_width":800,"max_colors":256,"optimize":true}
+            },
+            "display":{
+                "id":"fixture","name":"Fixture","x":0,"y":0,
+                "width":1280,"height":720,"scale_factor":1.0,"is_primary":true
+            }
+        });
+        let request = CString::new(request.to_string()).unwrap();
+        let mut output = ptr::null_mut();
+        let handle = unsafe { captures_recording_prepare_v1(request.as_ptr(), &mut output) };
+        assert!(!handle.is_null());
+        let prepared = take(output);
+        assert_eq!(prepared["ok"], true);
+        let id = prepared["result"]["snapshot"]["id"].as_str().unwrap();
+        let bundle = root.path().join(id);
+        assert!(bundle.is_dir());
+
+        let generation = 0x1234_5678_u64;
+        let start = CString::new(
+            json!({"operation":"start","generation":generation,
+                "exclude_captures_app":true})
+            .to_string(),
+        )
+        .unwrap();
+        let mut callback = CallbackState {
+            calls: 0,
+            generation: 0,
+        };
+        let cancelled = take(unsafe {
+            captures_recording_request_v1(
+                handle,
+                start.as_ptr(),
+                Some(cancel_start),
+                (&raw mut callback).cast(),
+            )
+        });
+        assert_eq!(cancelled["ok"], false);
+        assert_eq!(cancelled["error"], "Recording cancelled");
+        assert_eq!(
+            callback.calls, 1,
+            "engine must not open after the first stale check"
+        );
+        assert_eq!(callback.generation, generation);
+        assert!(
+            !bundle.exists(),
+            "cancelled start discards durable recovery state"
+        );
+        unsafe { captures_recording_free_v1(handle) };
     }
 }

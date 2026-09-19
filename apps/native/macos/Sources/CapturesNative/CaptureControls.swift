@@ -15,11 +15,33 @@ enum UnifiedCaptureTarget: String, CaseIterable {
     }
 }
 
+enum UnifiedCaptureMode: String, Equatable {
+    case screenshot
+    case record
+}
+
+struct RecordingControlState: Equatable {
+    var framesPerSecond: Int
+    var maxResolution: String
+    var showCursor: Bool
+    var highlightClicks: Bool
+    var systemAudio: Bool
+    var microphone: Bool
+}
+
+struct RecordingControlAvailability: Equatable {
+    let cursor: Bool
+    let clicks: Bool
+    let systemAudio: Bool
+    let microphone: Bool
+}
+
 struct UnifiedCaptureControlsState: Equatable {
+    var mode: UnifiedCaptureMode
     var target: UnifiedCaptureTarget
     var aspectIndex: Int
 
-    static let initial = UnifiedCaptureControlsState(target: .region, aspectIndex: 0)
+    static let initial = UnifiedCaptureControlsState(mode: .screenshot, target: .region, aspectIndex: 0)
 }
 
 private final class GlassPopUpButton: NSPopUpButton {
@@ -57,22 +79,44 @@ final class CaptureControlsView: NSView {
     private let aspectMenu: GlassPopUpButton
     private let displayMenu: GlassPopUpButton
     private let captureButton: CaptureButton
+    private let screenshotButton: CaptureButton
+    private let recordButton: CaptureButton
+    private let recordingAvailability: RecordingControlAvailability?
+    private var recordingButtons: [(CaptureButton, WritableKeyPath<RecordingControlState, Bool>)] = []
+    private let note: NSTextField
+    private let fpsMenu: GlassPopUpButton
+    private let resolutionMenu: GlassPopUpButton
     private var panelDragOffset: NSPoint?
     var switchTarget: (UnifiedCaptureTarget) -> Void = { _ in }
+    var switchMode: (UnifiedCaptureMode) -> Void = { _ in }
+    var recordingControlsChanged: (RecordingControlState) -> Void = { _ in }
     var changeAspect: (Int) -> Void = { _ in }
     var changeDisplay: (Int) -> Void = { _ in }
     var confirm: () -> Void = {}
     var cancel: () -> Void = {}
     private(set) var target: UnifiedCaptureTarget = .region
+    private(set) var mode: UnifiedCaptureMode = .screenshot
+    private(set) var recordingState: RecordingControlState
 
     override var isFlipped: Bool { true }
 
     init(frame: NSRect, tokens: Tokens, autoStart: Bool, displayTitles: [String],
-         selectedDisplay: Int) {
+         selectedDisplay: Int, recordingState: RecordingControlState = RecordingControlState(
+            framesPerSecond: 60, maxResolution: "original", showCursor: true,
+            highlightClicks: false, systemAudio: false, microphone: false),
+         recordingAvailability: RecordingControlAvailability? = nil) {
         self.tokens = tokens; self.autoStart = autoStart
+        self.recordingState = recordingState; self.recordingAvailability = recordingAvailability
         aspectMenu = GlassPopUpButton(frame: .zero, pullsDown: false)
         displayMenu = GlassPopUpButton(frame: .zero, pullsDown: false)
+        fpsMenu = GlassPopUpButton(frame: .zero, pullsDown: false)
+        resolutionMenu = GlassPopUpButton(frame: .zero, pullsDown: false)
         captureButton = CaptureButton("Capture", frame: .zero, tokens: tokens, glass: true) {}
+        screenshotButton = CaptureButton("Screenshot", frame: .zero, tokens: tokens, glass: true) {}
+        recordButton = CaptureButton("Record", frame: .zero, tokens: tokens, glass: true) {}
+        note = NSTextField(labelWithString: autoStart
+            ? "Controls are hidden from screenshots  ·  Auto-capture is on. Selecting a target starts immediately."
+            : "Controls are hidden from screenshots  ·  Press Enter to confirm")
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = tokens.color("glass-strong").cgColor
@@ -82,9 +126,6 @@ final class CaptureControlsView: NSView {
         layer?.shadowRadius = 22; layer?.shadowOffset = NSSize(width: 0, height: -8)
         setAccessibilityRole(.group); setAccessibilityLabel("Screenshot controls")
 
-        let note = NSTextField(labelWithString: autoStart
-            ? "Controls are hidden from screenshots  ·  Auto-capture is on. Selecting a target starts immediately."
-            : "Controls are hidden from screenshots  ·  Press Enter to confirm")
         note.frame = NSRect(x: 16, y: 60, width: frame.width - 32, height: 22)
         note.alignment = .center
         note.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
@@ -95,16 +136,20 @@ final class CaptureControlsView: NSView {
         let narrow = frame.width < 820
         let close = control("×", x: 8, width: 32) { [weak self] in self?.cancel() }
         close.setAccessibilityLabel("Close capture controls")
-        let screenshot = control("Screenshot", x: 48, width: narrow ? 88 : 92) {}
+        let screenshot = screenshotButton
+        screenshot.frame = NSRect(x: 48, y: 12, width: narrow ? 88 : 92, height: 36)
+        addSubview(screenshot)
         screenshot.icon = .capture
-        screenshot.selected = true; screenshot.setAccessibilityValue(1)
+        screenshot.actionBlock = { [weak self] in self?.selectMode(.screenshot, notify: true) }
+        screenshot.setAccessibilityRole(.radioButton); screenshot.setAccessibilityLabel("Screenshot")
         screenshot.enterActionBlock = { [weak self] in self?.confirm() }
         let recordX = screenshot.frame.maxX + 4
-        let record = control("Record", x: recordX, width: narrow ? 64 : 76) {}
+        let record = recordButton
+        record.frame = NSRect(x: recordX, y: 12, width: narrow ? 64 : 76, height: 36)
+        addSubview(record)
         record.icon = .record
-        record.isEnabled = false
-        record.toolTip = "Recording is not available in this native build"
-        record.setAccessibilityHelp("Recording is not available yet")
+        record.actionBlock = { [weak self] in self?.selectMode(.record, notify: true) }
+        record.setAccessibilityRole(.radioButton); record.setAccessibilityLabel("Record video")
 
         let dividerX = record.frame.maxX + 8
         let divider = NSView(frame: NSRect(x: dividerX, y: 18, width: 1, height: 24))
@@ -162,7 +207,38 @@ final class CaptureControlsView: NSView {
         for button in subviews.compactMap({ $0 as? CaptureButton }) {
             button.escapeActionBlock = { [weak self] in self?.cancel() }
         }
+        fpsMenu.frame = NSRect(x: 16, y: 68, width: 62, height: 36)
+        fpsMenu.tokens = tokens; fpsMenu.addItems(withTitles: ["15 FPS", "30 FPS", "60 FPS"])
+        fpsMenu.selectItem(at: [15, 30, 60].firstIndex(of: recordingState.framesPerSecond) ?? 2)
+        fpsMenu.setAccessibilityLabel("Recording frames per second")
+        fpsMenu.bindChange { [weak self] index in
+            guard let self, [15, 30, 60].indices.contains(index) else { return }
+            self.recordingState.framesPerSecond = [15, 30, 60][index]
+            self.recordingControlsChanged(self.recordingState)
+        }
+        addSubview(fpsMenu)
+        resolutionMenu.frame = NSRect(x: 82, y: 68, width: 104, height: 36)
+        resolutionMenu.tokens = tokens
+        resolutionMenu.addItems(withTitles: ["Original", "1080p", "720p"])
+        resolutionMenu.selectItem(at: ["original", "p1080", "p720"]
+            .firstIndex(of: recordingState.maxResolution) ?? 0)
+        resolutionMenu.setAccessibilityLabel("Maximum recording resolution")
+        resolutionMenu.bindChange { [weak self] index in
+            guard let self, ["original", "p1080", "p720"].indices.contains(index) else { return }
+            self.recordingState.maxResolution = ["original", "p1080", "p720"][index]
+            self.recordingControlsChanged(self.recordingState)
+        }
+        addSubview(resolutionMenu)
+        addRecordingControl("Cursor", x: 190, width: 82, keyPath: \.showCursor,
+            available: recordingAvailability?.cursor ?? false)
+        addRecordingControl("Clicks", x: 276, width: 82, keyPath: \.highlightClicks,
+            available: recordingAvailability?.clicks ?? false)
+        addRecordingControl("Desktop audio", x: 362, width: 116, keyPath: \.systemAudio,
+            available: recordingAvailability?.systemAudio ?? false)
+        addRecordingControl("Microphone", x: 482, width: max(116, frame.width - 498), keyPath: \.microphone,
+            available: recordingAvailability?.microphone ?? false)
         selectTarget(.region, notify: false)
+        selectMode(.screenshot, notify: false)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
@@ -203,6 +279,59 @@ final class CaptureControlsView: NSView {
         let button = CaptureButton(title, frame: NSRect(x: x, y: 12, width: width, height: 36),
             tokens: tokens, glass: true, action: action)
         addSubview(button); return button
+    }
+
+    private func addRecordingControl(_ title: String, x: CGFloat, width: CGFloat,
+                                     keyPath: WritableKeyPath<RecordingControlState, Bool>,
+                                     available: Bool) {
+        let button = CaptureButton(title, frame: NSRect(x: x, y: 68, width: width, height: 36),
+            tokens: tokens, glass: true) {}
+        button.setAccessibilityRole(.checkBox); button.setAccessibilityLabel(title)
+        button.isEnabled = available
+        button.actionBlock = { [weak self, weak button] in
+            guard let self, let button, button.isEnabled else { return }
+            self.recordingState[keyPath: keyPath].toggle()
+            self.updateRecordingControls()
+            self.recordingControlsChanged(self.recordingState)
+        }
+        recordingButtons.append((button, keyPath)); addSubview(button)
+    }
+
+    private func updateRecordingControls() {
+        let recording = mode == .record
+        note.stringValue = recording
+            ? "These controls won’t show in recordings  ·  Press Enter to confirm"
+            : autoStart
+                ? "Controls are hidden from screenshots  ·  Auto-capture is on. Selecting a target starts immediately."
+                : "Controls are hidden from screenshots  ·  Press Enter to confirm"
+        note.setAccessibilityLabel(note.stringValue)
+        fpsMenu.isHidden = !recording
+        resolutionMenu.isHidden = !recording
+        for (button, keyPath) in recordingButtons {
+            button.isHidden = mode != .record
+            button.selected = mode == .record && recordingState[keyPath: keyPath]
+            button.setAccessibilityValue(button.selected ? 1 : 0)
+            button.needsDisplay = true
+        }
+    }
+
+    func selectMode(_ mode: UnifiedCaptureMode, notify: Bool) {
+        self.mode = mode
+        if let superview {
+            let height: CGFloat = mode == .record ? 154 : 86
+            frame = NSRect(x: frame.minX, y: superview.bounds.height - height - 26,
+                width: frame.width, height: height)
+            note.frame = NSRect(x: 16, y: height - 26, width: frame.width - 32, height: 22)
+        }
+        screenshotButton.selected = mode == .screenshot
+        recordButton.selected = mode == .record
+        screenshotButton.setAccessibilityValue(mode == .screenshot ? 1 : 0)
+        recordButton.setAccessibilityValue(mode == .record ? 1 : 0)
+        captureButton.title = mode == .record ? "Record" : "Capture"
+        captureButton.icon = mode == .record ? .record : .capture
+        captureButton.setAccessibilityLabel(mode == .record ? "Start recording" : "Take screenshot")
+        updateRecordingControls()
+        if notify { switchMode(mode) }
     }
 
     func selectTarget(_ target: UnifiedCaptureTarget, notify: Bool) {
@@ -252,6 +381,7 @@ final class UnifiedCaptureSelectionView: NSView {
     private(set) var selectedWindowIndex: Int64?
     private(set) var hoveredWindowIndex: Int64 = -1
     private(set) var target: UnifiedCaptureTarget = .region
+    private(set) var mode: UnifiedCaptureMode = .screenshot
     private(set) var aspectIndex = 0
     let controls: CaptureControlsView
     private let selectionLabel = NSTextField(labelWithString: "")
@@ -270,7 +400,11 @@ final class UnifiedCaptureSelectionView: NSView {
     init(frame: NSRect, image: CGImage?, targets: [WindowSelectionTarget], tokens: Tokens,
          autoStart: Bool, hitTest: @escaping HitTest, displayTitles: [String],
          selectedDisplay: Int, confirm: @escaping (WindowSelectionChoice) -> Void,
-         cancel: @escaping () -> Void, changeDisplay: @escaping (Int) -> Void) {
+         cancel: @escaping () -> Void, changeDisplay: @escaping (Int) -> Void,
+         recordingState: RecordingControlState = RecordingControlState(
+            framesPerSecond: 60, maxResolution: "original", showCursor: true, highlightClicks: false,
+            systemAudio: false, microphone: false),
+         recordingAvailability: RecordingControlAvailability? = nil) {
         self.tokens = tokens; self.autoStart = autoStart; self.targets = targets
         self.hitTest = hitTest; self.confirm = confirm; self.cancel = cancel
         self.changeDisplay = changeDisplay
@@ -280,7 +414,8 @@ final class UnifiedCaptureSelectionView: NSView {
         let controlsWidth = min(frame.width - 32, 854)
         controls = CaptureControlsView(frame: NSRect(x: (frame.width - controlsWidth) / 2,
             y: frame.height - 112, width: controlsWidth, height: 86), tokens: tokens,
-            autoStart: autoStart, displayTitles: displayTitles, selectedDisplay: selectedDisplay)
+            autoStart: autoStart, displayTitles: displayTitles, selectedDisplay: selectedDisplay,
+            recordingState: recordingState, recordingAvailability: recordingAvailability)
         super.init(frame: frame)
         wantsLayer = true; layer?.backgroundColor = NSColor.clear.cgColor
         if let image {
@@ -311,6 +446,7 @@ final class UnifiedCaptureSelectionView: NSView {
         selectionLabel.layer?.cornerRadius = tokens.number("r-sm")
         addSubview(selectionLabel)
         controls.switchTarget = { [weak self] target in self?.setTarget(target) }
+        controls.switchMode = { [weak self] mode in self?.setMode(mode) }
         controls.changeAspect = { [weak self] index in self?.setAspect(index) }
         controls.changeDisplay = { [weak self] index in self?.changeDisplay(index) }
         controls.confirm = { [weak self] in self?.confirmSelection() }
@@ -323,7 +459,7 @@ final class UnifiedCaptureSelectionView: NSView {
 
     var isGuidanceVisible: Bool { !guidance.isHidden }
     var controlsState: UnifiedCaptureControlsState {
-        UnifiedCaptureControlsState(target: target, aspectIndex: aspectIndex)
+        UnifiedCaptureControlsState(mode: mode, target: target, aspectIndex: aspectIndex)
     }
 
     var choice: WindowSelectionChoice? {
@@ -338,8 +474,12 @@ final class UnifiedCaptureSelectionView: NSView {
 
     func setTarget(_ target: UnifiedCaptureTarget) {
         self.target = target; controls.selectTarget(target, notify: false)
-        if target == .display && autoStart { confirmSelection(); return }
+        if target == .display && autoStart && mode == .screenshot { confirmSelection(); return }
         update()
+    }
+
+    func setMode(_ mode: UnifiedCaptureMode) {
+        self.mode = mode; controls.selectMode(mode, notify: false); update()
     }
 
     func setTargetFromShortcut(_ target: UnifiedCaptureTarget) {
@@ -359,6 +499,7 @@ final class UnifiedCaptureSelectionView: NSView {
 
     func restoreControls(_ state: UnifiedCaptureControlsState) {
         setAspect(state.aspectIndex)
+        setMode(state.mode)
         setTarget(state.target)
     }
 
@@ -374,7 +515,7 @@ final class UnifiedCaptureSelectionView: NSView {
         guard target == .region, region.mode != nil else { return }
         let created = region.mode == 0
         region.end(); update()
-        if autoStart && created { confirmSelection() }
+        if autoStart && mode == .screenshot && created { confirmSelection() }
     }
 
     @discardableResult func hoverWindow(_ point: NSPoint) -> Bool {
@@ -390,7 +531,7 @@ final class UnifiedCaptureSelectionView: NSView {
             selectedWindowIndex = nil; setTarget(.display)
         } else {
             selectedWindowIndex = hoveredWindowIndex; update()
-            if autoStart { confirmSelection() }
+            if autoStart && mode == .screenshot { confirmSelection() }
         }
     }
 
@@ -408,7 +549,7 @@ final class UnifiedCaptureSelectionView: NSView {
             regionGestureActive = true
             beginRegion(point, shift: event.modifierFlags.contains(.shift))
         case .window: selectWindow(point)
-        case .display: if autoStart { confirmSelection() }
+        case .display: if autoStart && mode == .screenshot { confirmSelection() }
         }
     }
     override func mouseDragged(with event: NSEvent) {
@@ -542,11 +683,16 @@ final class UnifiedCapturePanel: NSPanel {
          autoStart: Bool, hitTest: @escaping UnifiedCaptureSelectionView.HitTest,
          displayTitles: [String], selectedDisplay: Int,
          confirm: @escaping (WindowSelectionChoice) -> Void, cancel: @escaping () -> Void,
-         changeDisplay: @escaping (Int) -> Void) {
+         changeDisplay: @escaping (Int) -> Void,
+         recordingState: RecordingControlState = RecordingControlState(
+            framesPerSecond: 60, maxResolution: "original", showCursor: true,
+            highlightClicks: false, systemAudio: false, microphone: false),
+         recordingAvailability: RecordingControlAvailability? = nil) {
         selector = UnifiedCaptureSelectionView(frame: NSRect(origin: .zero, size: screen.frame.size),
             image: image, targets: targets, tokens: tokens, autoStart: autoStart,
             hitTest: hitTest, displayTitles: displayTitles, selectedDisplay: selectedDisplay,
-            confirm: confirm, cancel: cancel, changeDisplay: changeDisplay)
+            confirm: confirm, cancel: cancel, changeDisplay: changeDisplay,
+            recordingState: recordingState, recordingAvailability: recordingAvailability)
         super.init(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         title = "Captures Capture Controls"
         isReleasedWhenClosed = false; isOpaque = false; backgroundColor = .clear; hasShadow = false

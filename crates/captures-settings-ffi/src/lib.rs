@@ -30,6 +30,7 @@ enum FlowRequest {
     Begin { seconds: u8 },
     StartCountdown { generation: u64, seconds: u8 },
     Poll { generation: u64 },
+    DisarmEscape { generation: u64 },
     Finish { generation: u64 },
 }
 
@@ -54,6 +55,12 @@ fn flow_response(request: FlowRequest) -> Result<Value, String> {
                 let flow = slot.as_ref().filter(|flow| flow.generation() == generation)
                     .ok_or("Capture is no longer active")?;
                 Ok(json!({"current":flow.is_current(),"remaining":flow.countdown().remaining(Instant::now())}))
+            }
+            FlowRequest::DisarmEscape { generation } => {
+                let flow = slot.as_mut().filter(|flow| flow.generation() == generation)
+                    .ok_or("Capture is no longer active")?;
+                flow.disarm_escape()?;
+                Ok(json!({}))
             }
             FlowRequest::Finish { generation } => {
                 if slot.as_ref().is_some_and(|flow| flow.generation() == generation) { *slot = None; }
@@ -222,6 +229,7 @@ mod tests {
                 r#"{"operation":"start_countdown","generation":999,"seconds":3}"#,
                 false,
             ),
+            (r#"{"operation":"disarm_escape","generation":999}"#, false),
             (r#"{"operation":"finish","generation":999}"#, true),
             ("not json", false),
         ] {
