@@ -551,6 +551,7 @@ pub struct Live {
     recording_segment_started: Option<Instant>,
     recording_snapshot_poll_pending: bool,
     recording_last_snapshot_poll: Instant,
+    recording_has_started: bool,
     history_refresh_status: Option<String>,
     can_hide: Option<bool>,
     confirm_delete: Option<String>,
@@ -726,6 +727,7 @@ impl Live {
             recording_segment_started: None,
             recording_snapshot_poll_pending: false,
             recording_last_snapshot_poll: Instant::now(),
+            recording_has_started: false,
             history_refresh_status: None,
             can_hide: None,
             confirm_delete: None,
@@ -875,6 +877,7 @@ impl Live {
                 drop(controls);
                 self.recording_toolchain_ready = false;
                 self.recording_toolchain_error = None;
+                self.recording_has_started = false;
                 self.recording_worker
                     .send(recording::Command::VerifyToolchain {
                         generation: self
@@ -924,18 +927,50 @@ impl Live {
         // leaves a capture that already crossed its persistence commit point alone.
         self.selector_scope_generation.store(0, Ordering::Release);
         if let Some(flow) = &self.flow {
-            flow.cancel();
+            let generation = flow.generation();
+            if self.recording_has_started
+                && matches!(
+                    self.capture_phase,
+                    Some(
+                        CapturePhase::RecordingStarting
+                            | CapturePhase::Recording
+                            | CapturePhase::RecordingPausing
+                            | CapturePhase::RecordingPaused
+                    )
+                )
+            {
+                // A take that crossed the Escape handoff is user media. Finish
+                // it before process teardown instead of deleting accepted segments.
+                self.recording_worker.send(recording::Command::Finish {
+                    generation,
+                    history_root: self.root.clone(),
+                });
+            } else if is_recording_phase(self.capture_phase)
+                && !matches!(
+                    self.capture_phase,
+                    Some(
+                        CapturePhase::RecordingFinalizing
+                            | CapturePhase::RecordingDiscarding
+                    )
+                )
+            {
+                flow.cancel();
+                self.recording_worker
+                    .send(recording::Command::Discard { generation });
+            } else {
+                flow.cancel();
+            }
         }
         // Finish accepted capture/export/delete operations before process teardown.
         let _ = self.tx.send(Job::Shutdown);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+        self.recording_worker.shutdown();
         self.flow = None;
         self.capture_phase = None;
         self.region_session = None;
         self.window_session = None;
-        self.recording_worker.shutdown();
     }
 
     fn send(&mut self, request: Request) {
@@ -1420,6 +1455,31 @@ impl Live {
                 {
                     match result {
                         Ok(snapshot) => {
+                            let disarmed = self
+                                .flow
+                                .as_mut()
+                                .expect("accepted recording start owns flow")
+                                .disarm_escape();
+                            if let Err(error) = disarmed {
+                                self.error = Some(format!(
+                                    "Recording Escape handoff failed: {error}"
+                                ));
+                                if self.recording_has_started {
+                                    self.capture_phase =
+                                        Some(CapturePhase::RecordingFinalizing);
+                                    self.recording_worker.send(recording::Command::Finish {
+                                        generation,
+                                        history_root: self.root.clone(),
+                                    });
+                                } else {
+                                    self.capture_phase =
+                                        Some(CapturePhase::RecordingDiscarding);
+                                    self.recording_worker
+                                        .send(recording::Command::Discard { generation });
+                                }
+                                continue;
+                            }
+                            self.recording_has_started = true;
                             self.recording_snapshot = Some(snapshot);
                             self.recording_segment_started = Some(Instant::now());
                             self.recording_snapshot_poll_pending = false;
@@ -1526,8 +1586,9 @@ impl Live {
                     Some(
                         CapturePhase::Recording
                         | CapturePhase::RecordingPausing
-                        | CapturePhase::RecordingPaused,
-                    ) => {
+                        | CapturePhase::RecordingPaused
+                        | CapturePhase::RecordingStarting,
+                    ) if self.recording_has_started => {
                         let generation = flow.generation();
                         self.recording_worker.send(recording::Command::Finish {
                             generation,
@@ -2078,6 +2139,7 @@ impl Live {
         self.recording_snapshot = None;
         self.recording_segment_started = None;
         self.recording_snapshot_poll_pending = false;
+        self.recording_has_started = false;
         self.root_hide_deferred = false;
         if !preserve_auto_copy {
             self.previews.restore_capture();
@@ -2541,6 +2603,7 @@ impl Live {
                         .corner_radius(tokens.number("r-2xl") as u8)
                         .inner_margin(tokens.number("s-4") as i8)
                         .show(ui, |ui| {
+                            ui.set_min_width(398.);
                             ui.label(
                                 RichText::new(warning.as_deref().unwrap_or({
                                     if cfg!(target_os = "linux") {
@@ -2567,7 +2630,18 @@ impl Live {
                                 ui.monospace(format_duration(elapsed_ms));
                                 ui.separator();
                                 if ui
-                                    .button(if paused { "Resume" } else { "Pause" })
+                                    .add(
+                                        egui::Button::new("■ Stop")
+                                            .fill(tokens.color("theme-signal")),
+                                    )
+                                    .clicked()
+                                {
+                                    let _ = sender.send(SelectorMessage::StopRecording {
+                                        generation,
+                                    });
+                                }
+                                if ui
+                                    .button(if paused { "▶ Resume" } else { "Ⅱ Pause" })
                                     .clicked()
                                 {
                                     let _ = sender.send(if paused {
@@ -2576,12 +2650,7 @@ impl Live {
                                         SelectorMessage::PauseRecording { generation }
                                     });
                                 }
-                                if ui.button("Stop").clicked() {
-                                    let _ = sender.send(SelectorMessage::StopRecording {
-                                        generation,
-                                    });
-                                }
-                                if ui.button("Discard").clicked() {
+                                if ui.button("⌫ Discard").clicked() {
                                     let _ = sender.send(SelectorMessage::DiscardRecording {
                                         generation,
                                     });

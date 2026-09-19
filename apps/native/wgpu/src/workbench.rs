@@ -533,7 +533,12 @@ impl Workbench {
     }
 
     fn hud(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        glass(t).show(ui, |ui| {
+        egui::Frame::new()
+            .fill(t.color("glass-strong"))
+            .stroke(Stroke::new(1., t.color("glass-border")))
+            .corner_radius(t.number("r-2xl") as u8)
+            .inner_margin(t.number("s-4") as i8)
+            .show(ui, |ui| {
             ui.set_width(398.);
             t.glass_controls(ui);
             ui.label(
@@ -545,14 +550,15 @@ impl Workbench {
                 ui.colored_label(t.color("theme-signal"), if self.paused { "Ⅱ" } else { "●" });
                 ui.monospace("0:24");
                 ui.strong(if self.paused { "Paused" } else { "Recording" });
-                ui.button("Stop").clicked();
+                ui.add(egui::Button::new("■ Stop").fill(t.color("theme-signal")))
+                    .clicked();
                 if ui
-                    .button(if self.paused { "Resume" } else { "Pause" })
+                    .button(if self.paused { "▶ Resume" } else { "Ⅱ Pause" })
                     .clicked()
                 {
                     self.paused = !self.paused;
                 }
-                ui.button("Discard").clicked();
+                ui.button("⌫ Discard").clicked();
             });
         });
     }
@@ -1056,7 +1062,7 @@ impl eframe::App for Workbench {
                     .color(t.color("text-muted")),
                 );
                 ui.add_space(t.number("s-6"));
-            } else if self.options.floating {
+            } else if self.options.floating && self.options.scene != Scene::Hud {
                 glass(&t).show(ui, |ui| {
                     t.glass_controls(ui);
                     ui.horizontal(|ui| {
