@@ -177,7 +177,8 @@ def main():
                 "display_shortcut": "Ctrl+Shift+F9", "launch_at_login": False,
                 "auto_copy_to_clipboard": False, "auto_start_on_selection": False,
                 "freeze_screen": True, "show_cursor_in_screenshots": False,
-                "screenshot_countdown_seconds": 0, "show_mini_previews": enabled,
+                "screenshot_countdown_seconds": 1 if args.lifecycle else 0,
+                "show_mini_previews": enabled,
                 "include_mini_previews_in_captures": include, "mini_preview_placement": placement,
             }))
             app = spawn(prefix, [str(binary), "--live", "--history-root", str(history),
@@ -403,10 +404,14 @@ def main():
                         str(int(geometry["HEIGHT"]) // 2), "click", "3", "sleep", ".4")
                     if screenshot:
                         shot("root", "lifecycle-open-tray-menu")
-                    run("xdotool", "key", "Home")
-                    for _ in range(index):
-                        run("xdotool", "key", "Down")
-                    run("xdotool", "key", "Return")
+                    # Resolve the actual GTK popup, not a fixed desktop point.
+                    # This fixture's native menu has seven non-separator rows.
+                    popup_ids = run("xdotool", "search", "--onlyvisible", "--class", ".*").decode().split()
+                    popup = next(window for window in popup_ids
+                                 if b"_MENU" in run("xprop", "-id", window, "_NET_WM_WINDOW_TYPE"))
+                    popup_geometry = window_geometry(popup)
+                    click(popup, int(popup_geometry["WIDTH"]) // 2,
+                          int((index + .5) * int(popup_geometry["HEIGHT"]) / 7), activate=False)
 
                 run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
                 wait(lambda: not windows("Captures"), "close hides resident workspace")
@@ -461,15 +466,24 @@ def main():
                 run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
                 wait(lambda: not windows("Captures"), "hide Preferences")
                 run("xdotool", "windowactivate", "--sync", other, "key", "ctrl+shift+F7")
-                wait(lambda: windows(SELECTOR), "hidden Preferences does not block background shortcut")
+                selector = wait(lambda: windows(SELECTOR), "hidden Preferences does not block background shortcut")[0]
+                previous = entries()
+                run("xdotool", "windowfocus", "--sync", selector, "mousemove", "--window", selector,
+                    "140", "180", "mousedown", "1", "sleep", ".15", "mousemove", "--window", selector,
+                    "450", "350", "sleep", ".15", "mouseup", "1", "key", "Return")
+                countdown = wait(lambda: windows("Captures Screenshot Countdown"),
+                                 "countdown from hidden Preferences")[0]
+                shot(countdown, "lifecycle-hidden-preferences-countdown")
                 run("xdotool", "key", "Escape")
-                wait(lambda: not windows(SELECTOR), "cancel hidden Preferences capture")
-                assert not windows("Captures")
-                menu_action(1)
-                wait(lambda: windows(SELECTOR), "tray region launches from hidden Preferences")
-                run("xdotool", "key", "Escape")
-                wait(lambda: not windows(SELECTOR), "cancel tray region capture")
-                assert not windows("Captures")
+                wait(lambda: not windows(SELECTOR) and not windows("Captures Screenshot Countdown"),
+                     "cancel hidden Preferences countdown")
+                assert not windows("Captures") and entries() == previous
+                for index, title in [(1, SELECTOR), (2, "Captures Window Selection")]:
+                    menu_action(index)
+                    wait(lambda: windows(title), "tray selector launches from hidden Preferences")
+                    run("xdotool", "key", "Escape")
+                    wait(lambda: not windows(title), "cancel tray capture")
+                    assert not windows("Captures")
                 menu_action(6)
                 other_app.terminate()
                 other_app.wait(timeout=5)
@@ -528,7 +542,8 @@ def main():
                 (["real SNI menu History/Preferences/Quit", "close-to-background keeps previews",
                   "region/window/display global shortcuts", "release-only launch", "hidden root stays hidden",
                   "focused Preferences suppression and unfocused/hidden Preferences launch",
-                  "tray region capture from hidden Preferences",
+                  "hidden Preferences countdown and cancellation",
+                  "tray region/window capture from hidden Preferences",
                   "timed/framebuffer completion quits with real tray",
                   "tray host loss restores/focuses hidden root and restores normal close"] if args.lifecycle else []),
             "scope": "Private X11/software GL, simulated session; not hardware, real lock, Wayland or accessibility acceptance."}, indent=2))
