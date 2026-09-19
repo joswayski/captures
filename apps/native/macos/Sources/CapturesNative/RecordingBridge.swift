@@ -21,6 +21,19 @@ struct NativeRecordingCapabilities: Equatable {
     }
 }
 
+struct NativeMicrophoneDevice: Equatable {
+    let id: String
+    let name: String
+    let isDefault: Bool
+
+    init?(_ value: [String: Any]) {
+        guard let id = value["id"] as? String,
+              let name = value["name"] as? String,
+              let isDefault = value["is_default"] as? Bool else { return nil }
+        self.id = id; self.name = name; self.isDefault = isDefault
+    }
+}
+
 struct NativeRecordingSnapshot: Equatable {
     let id: String
     let state: String
@@ -84,6 +97,16 @@ struct NativeRecordingInfo {
               let capabilities = NativeRecordingCapabilities(value)
         else { throw AppBridgeError.invalidResponse }
         return capabilities
+    }
+
+    static func microphoneDevices() throws -> [NativeMicrophoneDevice] {
+        let result = try request(["operation": "microphone_devices"])
+        guard let values = result["devices"] as? [[String: Any]] else {
+            throw AppBridgeError.invalidResponse
+        }
+        let devices = values.compactMap(NativeMicrophoneDevice.init)
+        guard devices.count == values.count else { throw AppBridgeError.invalidResponse }
+        return devices
     }
 }
 

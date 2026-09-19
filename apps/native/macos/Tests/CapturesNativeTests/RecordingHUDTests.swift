@@ -27,6 +27,11 @@ final class RecordingHUDTests: XCTestCase {
                 "compact controls must not clip")
             XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 3,
                 "only Stop, Pause/Resume, and Trash are connected in this slice")
+            let buttons = hud.subviews.compactMap { $0 as? CaptureButton }
+            XCTAssertEqual(buttons.filter(\.signal).compactMap { $0.accessibilityLabel() },
+                ["Stop recording"])
+            XCTAssertTrue(buttons.filter { $0.accessibilityLabel() != "Stop recording" }
+                .allSatisfy { !$0.signal }, "non-destructive HUD actions stay neutral")
             hud.setLifecycleActionsEnabled(false)
             XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 0)
             hud.setLifecycleActionsEnabled(true)

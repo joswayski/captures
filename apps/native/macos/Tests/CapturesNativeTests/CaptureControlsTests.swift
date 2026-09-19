@@ -241,15 +241,30 @@ final class CaptureControlsTests: XCTestCase {
             hitTest: { _ in 0 }, displayTitles: ["Main display · 768 × 600"],
             selectedDisplay: 0, confirm: { _ in }, cancel: {}, changeDisplay: { _ in },
             recordingState: RecordingControlState(framesPerSecond: 60, maxResolution: "original",
-                showCursor: true, highlightClicks: true, systemAudio: true, microphone: true),
+                showCursor: true, highlightClicks: true, systemAudio: true,
+                microphoneDeviceID: "stored-mic"),
             recordingAvailability: RecordingControlAvailability(cursor: true, clicks: false,
-                systemAudio: true, microphone: false))
+                systemAudio: true, microphone: true),
+            microphoneDevices: [
+                NativeMicrophoneDevice(["id": "built-in", "name": "MacBook Microphone",
+                    "is_default": true])!,
+            ])
         window.contentView = view; view.setMode(.record)
         let buttons = buttons(in: view.controls)
         XCTAssertTrue(buttons.first { $0.accessibilityLabel() == "Cursor" }?.isEnabled == true)
         XCTAssertTrue(buttons.first { $0.accessibilityLabel() == "Clicks" }?.isEnabled == false)
         XCTAssertTrue(buttons.first { $0.accessibilityLabel() == "Desktop audio" }?.isEnabled == true)
-        XCTAssertTrue(buttons.first { $0.accessibilityLabel() == "Microphone" }?.isEnabled == false)
+        let microphone = try XCTUnwrap(descendant(in: view.controls,
+            accessibilityLabel: "Microphone") as? NSPopUpButton)
+        XCTAssertTrue(microphone.isEnabled)
+        XCTAssertEqual(microphone.titleOfSelectedItem, "Selected microphone",
+            "a stored device remains selected while temporarily absent from discovery")
+        var changes: [RecordingControlState] = []
+        view.controls.recordingControlsChanged = { changes.append($0) }
+        view.controls.selectMicrophone(0, notify: true)
+        XCTAssertNil(changes.last?.microphoneDeviceID)
+        view.controls.selectMicrophone(2, notify: true)
+        XCTAssertEqual(changes.last?.microphoneDeviceID, "built-in")
         XCTAssertEqual(view.controlsState.mode, .record)
         XCTAssertEqual(view.controls.frame.width, 736)
         XCTAssertEqual(view.controls.frame.height, 154)
