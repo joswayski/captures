@@ -154,6 +154,13 @@ their own history root and presentation URLs. Native capture integration can use
 the same lifecycle without accessing installed history. This extraction alone
 adds no native capture UI and closes no platform gate.
 
+Recording platform dispatch, microphone enumeration and capability/exclusion
+policy now live in `captures-recording-platform`; the shipping host delegates to the
+same macOS ScreenCaptureKit and Windows/Linux xcap engines. Hosts still own
+permissions, worker scheduling, window exclusion, recording lifecycle and media
+finalization. This behavior-preserving extraction does not connect the native
+Record button or close a recording acceptance gate.
+
 The opt-in `--live` workspace now connects full-display PNG capture and local
 screenshot history on both native hosts through `captures-app`. It includes
 explicit copy, export, reveal and history deletion while keeping exports and the

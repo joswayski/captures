@@ -23,6 +23,7 @@ captures-history = { path = "../../../crates/captures-history" }
 captures-image = { path = "../../../crates/captures-image" }
 captures-media = { path = "../../../crates/captures-media" }
 captures-recording = { path = "../../../crates/captures-recording" }
+captures-recording-platform = { path = "../../../crates/captures-recording-platform" }
 captures-settings = { path = "../../../crates/captures-settings" }
 captures-session = { path = "../../../crates/captures-session" }
 anyhow = "1"
@@ -59,7 +60,6 @@ captures-recording-macos = { path = "../../../crates/captures-recording-macos" }
 libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-captures-recording-xcap = { path = "../../../crates/captures-recording-xcap" }
 clipboard-win = { version = "5", default-features = false }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
@@ -72,7 +72,6 @@ windows-sys = { version = "0.61", features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = { version = "3", features = ["wayland-data-control"] }
-captures-recording-xcap = { path = "../../../crates/captures-recording-xcap" }
 
 [lints.rust]
 unsafe_code = "deny"
