@@ -2,7 +2,10 @@ use std::{
     collections::BTreeMap,
     fs,
     path::Path,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        Arc,
+        mpsc::{self, Receiver, Sender},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -48,6 +51,8 @@ pub struct Workbench {
     annotation: String,
     screenshot_requested: bool,
     screenshot_saved: bool,
+    screenshot_tx: Sender<Arc<egui::ColorImage>>,
+    screenshot_rx: Receiver<Arc<egui::ColorImage>>,
     preferences_state: Preferences,
     region_selector: crate::selector::Selector,
     window_selector: crate::window_selector::WindowSelector,
@@ -144,6 +149,7 @@ impl Workbench {
             (None, None)
         };
         let (action_tx, action_rx) = mpsc::channel();
+        let (screenshot_tx, screenshot_rx) = mpsc::channel();
         let (window_display, window_targets, window_shell) = window_fixture();
         let this = Self {
             options,
@@ -169,6 +175,8 @@ impl Workbench {
             annotation: "A capture worth keeping".into(),
             screenshot_requested: false,
             screenshot_saved: false,
+            screenshot_tx,
+            screenshot_rx,
             preferences_state,
             region_selector: crate::selector::Selector::default(),
             window_selector: crate::window_selector::WindowSelector::fixture(),
@@ -325,6 +333,16 @@ impl Workbench {
                 if suspended { "suspend" } else { "restore" }
             )
         });
+    }
+
+    fn request_screenshot(&mut self, ctx: &egui::Context) {
+        let output = self.screenshot_tx.clone();
+        let wake = ctx.clone();
+        ctx.request_screenshot(move |image| {
+            let _ = output.send(image);
+            wake.request_repaint();
+        });
+        self.screenshot_requested = true;
     }
 
     fn tokens(&mut self, ctx: &egui::Context) -> Tokens {
@@ -768,15 +786,7 @@ impl eframe::App for Workbench {
         if self.options.live && quit_key {
             self.quit(ctx);
         }
-        let screenshot = ctx.input(|i| {
-            i.raw.events.iter().find_map(|event| {
-                if let egui::Event::Screenshot { image, .. } = event {
-                    Some(image.clone())
-                } else {
-                    None
-                }
-            })
-        });
+        let screenshot = self.screenshot_rx.try_recv().ok();
         if let (Some(image), Some(path)) = (screenshot, self.options.screenshot.as_ref()) {
             if let Err(error) = image::save_buffer(
                 path,
@@ -909,8 +919,7 @@ impl eframe::App for Workbench {
                 && !self.screenshot_requested
                 && self.started.elapsed() >= self.options.screenshot_after
             {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
-                self.screenshot_requested = true;
+                self.request_screenshot(&ctx);
             }
             let elapsed = start.elapsed().as_secs_f64() * 1000.;
             self.ui_ms += elapsed;
@@ -1070,8 +1079,7 @@ impl eframe::App for Workbench {
             && !self.screenshot_requested
             && self.started.elapsed() >= self.options.screenshot_after
         {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
-            self.screenshot_requested = true;
+            self.request_screenshot(&ctx);
         }
         let elapsed = start.elapsed().as_secs_f64() * 1000.;
         self.frames += 1;

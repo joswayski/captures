@@ -416,6 +416,13 @@ enum SelectorKind {
     Window,
 }
 
+fn request_hidden_root_paint(ctx: &egui::Context) {
+    ctx.send_viewport_cmd_to(
+        egui::ViewportId::ROOT,
+        egui::ViewportCommand::RequestPaintWhileHidden,
+    );
+}
+
 /// The nonvisual state machine is intentionally independent of egui so stale
 /// worker replies can be tested without constructing a renderer.
 #[derive(Default)]
@@ -751,6 +758,7 @@ impl Live {
             CaptureRequest::Display => {
                 self.capture_phase = Some(CapturePhase::DisplayCountdown);
                 self.status = "Preparing screenshot… Press Escape to cancel.".into();
+                request_hidden_root_paint(ctx);
                 ctx.request_repaint();
             }
             CaptureRequest::Region => {
@@ -893,6 +901,7 @@ impl Live {
                                 after_countdown: self.region_countdown_seconds > 0,
                             });
                             self.status = "Region confirmed. Press Escape to cancel.".into();
+                            request_hidden_root_paint(ctx);
                             ctx.request_repaint();
                         }
                         Err(error) => {
@@ -920,6 +929,7 @@ impl Live {
                                 after_countdown: self.window_countdown_seconds > 0,
                             });
                             self.status = "Window confirmed. Press Escape to cancel.".into();
+                            request_hidden_root_paint(ctx);
                             ctx.request_repaint();
                         }
                         Err(error) => {
@@ -1001,6 +1011,7 @@ impl Live {
                     generation,
                 } => {
                     if self.previews.dismiss(&artifact_id, generation) {
+                        request_hidden_root_paint(ctx);
                         ctx.request_repaint();
                     }
                 }
@@ -1012,6 +1023,7 @@ impl Live {
                 }
                 PreviewMessage::ClearAll { artifact_ids } => {
                     if self.previews.clear(&artifact_ids) > 0 {
+                        request_hidden_root_paint(ctx);
                         ctx.request_repaint();
                     }
                 }
@@ -1279,6 +1291,7 @@ impl Live {
                             self.region_selector.lock().unwrap().reset();
                             self.capture_phase = Some(CapturePhase::RegionSelecting);
                             self.status = "Select a region. Press Escape to cancel.".into();
+                            request_hidden_root_paint(ctx);
                             ctx.request_repaint();
                         }
                         Err(error) => {
@@ -1347,6 +1360,7 @@ impl Live {
                             self.capture_phase = Some(CapturePhase::WindowSelecting);
                             self.status =
                                 "Choose a window or the display. Press Escape to cancel.".into();
+                            request_hidden_root_paint(ctx);
                             ctx.request_repaint();
                         }
                         Err(error) => {
@@ -1412,6 +1426,7 @@ impl Live {
                             decoded.image,
                             egui::TextureOptions::LINEAR,
                         ));
+                        request_hidden_root_paint(ctx);
                         ctx.request_repaint();
                     }
                     Err(error) => {
@@ -1443,6 +1458,7 @@ impl Live {
         self.window_texture = None;
         self.window_selector.lock().unwrap().reset();
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.restore_root_visible));
+        request_hidden_root_paint(ctx);
         ctx.request_repaint();
     }
 
@@ -2530,6 +2546,25 @@ mod tests {
                 .any(|command| matches!(command, egui::ViewportCommand::Visible(true)))
         );
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn hidden_root_bootstrap_requests_one_ui_pass_without_showing_root() {
+        let ctx = egui::Context::default();
+        let first = ctx.run_logic(&egui::RawInput::default(), request_hidden_root_paint);
+        let commands = first
+            .viewport_commands
+            .get(&egui::ViewportId::ROOT)
+            .expect("hidden-paint command targets root");
+        assert_eq!(commands, &[egui::ViewportCommand::RequestPaintWhileHidden]);
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Visible(_)))
+        );
+
+        let next = ctx.run_logic(&egui::RawInput::default(), |_| {});
+        assert!(next.viewport_commands.is_empty());
     }
 
     #[test]
