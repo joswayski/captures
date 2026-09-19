@@ -65,7 +65,8 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         if view.interactive {
             let response = ui.interact(
                 card,
-                ui.id().with(("expand-preview-stack", view.artifact_id)),
+                ui.scope_id()
+                    .with(("expand-preview-stack", view.artifact_id)),
                 egui::Sense::click(),
             );
             response.widget_info(|| {
@@ -248,7 +249,7 @@ mod tests {
         ctx.begin_pass(raw(screen, events));
         let mut ui = egui::Ui::new(
             ctx.clone(),
-            egui::Id::new(("preview-card-input-test", interactive)),
+            egui::Id::unique(("preview-card-input-test", interactive)),
             egui::UiBuilder::new().max_rect(screen),
         );
         let action = show(
@@ -284,7 +285,7 @@ mod tests {
         ctx.begin_pass(raw(screen, events));
         let mut ui = egui::Ui::new(
             ctx.clone(),
-            egui::Id::new("preview-controls-input-test"),
+            egui::Id::unique("preview-controls-input-test"),
             egui::UiBuilder::new().max_rect(screen),
         );
         let action = show_stack_controls(&mut ui, &tokens, 3, false);

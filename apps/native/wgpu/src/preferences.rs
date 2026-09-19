@@ -87,7 +87,7 @@ impl ShortcutField {
 }
 
 fn shortcut_scope_id(field: ShortcutField) -> egui::Id {
-    egui::Id::new(("preferences-shortcut-recorder", field))
+    egui::Id::unique(("preferences-shortcut-recorder", field))
 }
 
 #[derive(Debug)]
@@ -504,7 +504,7 @@ impl Preferences {
         }
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F)) {
             self.find_open = true;
-            ui.memory_mut(|m| m.request_focus(egui::Id::new("settings-find")));
+            ui.memory_mut(|m| m.request_focus(egui::Id::unique("settings-find")));
         }
         if self.find_open
             && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
@@ -531,7 +531,7 @@ impl Preferences {
             if ui
                 .add(
                     egui::TextEdit::singleline(&mut self.query)
-                        .id(egui::Id::new("settings-find"))
+                        .id(egui::Id::unique("settings-find"))
                         .hint_text("Find settings")
                         .desired_width(300.),
                 )
@@ -865,7 +865,7 @@ impl Preferences {
                     ui.separator();
                 }
                 ui.scope_builder(
-                    egui::UiBuilder::new().id(shortcut_scope_id(field)),
+                    egui::UiBuilder::new().scope_id(shortcut_scope_id(field)),
                     |ui| this.shortcut_row(ui, t, field),
                 );
             }
@@ -1190,7 +1190,8 @@ mod tests {
                 .show(ui, |ui| {
                     egui::Frame::new().show(ui, |ui| {
                         ui.scope_builder(
-                            egui::UiBuilder::new().id(shortcut_scope_id(ShortcutField::Window)),
+                            egui::UiBuilder::new()
+                                .scope_id(shortcut_scope_id(ShortcutField::Window)),
                             |ui| {
                                 ui.horizontal(|ui| {
                                     let response = ui.button("Window shortcut");

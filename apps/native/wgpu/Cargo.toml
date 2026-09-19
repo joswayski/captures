@@ -11,7 +11,7 @@ publish = false
 [workspace]
 
 [dependencies]
-eframe = { version = "=0.36.2", default-features = false, features = ["wgpu", "x11", "wayland", "accesskit", "default_fonts"] }
+eframe = { git = "https://github.com/emilk/egui", rev = "60d7caaea38a795618e842925061ad2210028a2a", default-features = false, features = ["wgpu", "x11", "wayland", "accesskit", "default_fonts"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

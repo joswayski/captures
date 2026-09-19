@@ -127,7 +127,7 @@ impl Selector {
             action = Some(Action::Confirm);
         }
 
-        let panel = egui::Area::new("region-selector-toolbar".into())
+        let panel = egui::Area::new(egui::Id::unique("region-selector-toolbar"))
             .anchor(Align2::CENTER_BOTTOM, egui::vec2(0., -26.))
             .order(egui::Order::Foreground)
             .show(ui.ctx(), |ui| {
@@ -507,7 +507,7 @@ mod tests {
         ctx.begin_pass(raw(screen, events));
         let mut ui = egui::Ui::new(
             ctx.clone(),
-            egui::Id::new("selector-input-test"),
+            egui::Id::unique("selector-input-test"),
             egui::UiBuilder::new().max_rect(screen),
         );
         let action = selector.show(&mut ui, &tokens, None, auto_start, None);
