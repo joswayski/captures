@@ -273,11 +273,21 @@ final class MiniPreviewTests: XCTestCase {
             setCollapsed: { expanded = !$0 })
         defer { panel.close() }
         XCTAssertEqual(panel.previewView.visibleCardActionTitles, [])
+        XCTAssertEqual(panel.previewView.visibleCardLabelCount, 0)
+        panel.previewView.setStatus("Copied", for: "newer")
+        XCTAssertEqual(panel.previewView.visibleCardLabelCount, 0,
+            "late action feedback cannot restore compact labels")
         XCTAssertTrue(panel.previewView.subviewsRecursive.compactMap { $0 as? CaptureButton }
             .filter { !$0.isHidden }.isEmpty)
         XCTAssertEqual(panel.previewView.pileExpandAccessibilityLabel, "Expand 2 previews")
         panel.previewView.activatePileExpand()
         XCTAssertTrue(expanded)
+
+        let expandedPanel = fixturePanel(ids: ids,
+            images: Dictionary(uniqueKeysWithValues: ids.map { ($0, image) }))
+        defer { expandedPanel.close() }
+        XCTAssertEqual(expandedPanel.previewView.visibleCardLabelCount, ids.count,
+            "expanded cards retain readable title chrome")
     }
 
     func testOverflowUsesSharedLayoutsAndReservesBottomControlGutter() throws {

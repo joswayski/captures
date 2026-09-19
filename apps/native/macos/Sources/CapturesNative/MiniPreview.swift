@@ -14,7 +14,9 @@ final class MiniPreviewCardView: NSView {
     private let title = NSTextField(labelWithString: "Screenshot")
     private let status = NSTextField(labelWithString: "")
     private var actionButtons: [CaptureButton] = []
+    private var compact = false
     private(set) var artifactID: String
+    var hasVisibleLabels: Bool { !title.isHidden || !status.isHidden }
     override var isFlipped: Bool { true }
 
     init(frame: NSRect, artifactID: String, image: NSImage, tokens: Tokens,
@@ -62,12 +64,15 @@ final class MiniPreviewCardView: NSView {
 
     func setStatus(_ value: String) {
         status.stringValue = value
-        status.isHidden = value.isEmpty
+        status.isHidden = compact || value.isEmpty
         status.setAccessibilityLabel(value.isEmpty ? nil : value)
     }
 
-    func setActionsVisible(_ visible: Bool) {
-        actionButtons.forEach { $0.isHidden = !visible }
+    func setCompact(_ compact: Bool) {
+        self.compact = compact
+        title.isHidden = compact
+        status.isHidden = compact || status.stringValue.isEmpty
+        actionButtons.forEach { $0.isHidden = compact }
     }
 
     private func styleLabelBacking(_ label: NSTextField) {
@@ -122,6 +127,7 @@ final class MiniPreviewView: NSView {
                 .filter { !$0.isHidden }.map(\.title)
         }
     }
+    var visibleCardLabelCount: Int { cards.values.filter(\.hasVisibleLabels).count }
     var pileExpandAccessibilityLabel: String? { pileExpandButton?.accessibilityLabel() }
     var documentHeight: CGFloat { document.frame.height }
     var viewportHeight: CGFloat { scroll.contentView.bounds.height }
@@ -160,7 +166,7 @@ final class MiniPreviewView: NSView {
                 copy: { copy(id) }, save: { save(id) }, open: { open(id) },
                 dismiss: { dismiss(id) })
             card.isHidden = false
-            card.setActionsVisible(!collapsed)
+            card.setCompact(collapsed)
             card.setAccessibilityElement(layout.interactive)
             document.addSubview(card); cards[id] = card
         }
