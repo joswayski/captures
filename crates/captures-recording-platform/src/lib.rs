@@ -4,6 +4,9 @@
 
 #![forbid(unsafe_code)]
 
+mod session;
+pub use session::{FinalizedRecording, RecordingSession};
+
 use std::path::Path;
 
 use captures_capture::DisplayDescriptor;

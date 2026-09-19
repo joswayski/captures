@@ -8,8 +8,12 @@ publish = false
 
 [dependencies]
 captures-capture = { path = "../captures-capture" }
+captures-history = { path = "../captures-history" }
+captures-media = { path = "../captures-media" }
 captures-recording = { path = "../captures-recording" }
+chrono.workspace = true
 serde.workspace = true
+uuid.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 captures-recording-macos = { path = "../captures-recording-macos" }
@@ -19,6 +23,7 @@ captures-recording-xcap = { path = "../captures-recording-xcap" }
 
 [dev-dependencies]
 serde_json.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true
