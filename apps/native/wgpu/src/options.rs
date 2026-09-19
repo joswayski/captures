@@ -2,7 +2,7 @@ use std::{path::PathBuf, time::Duration};
 
 pub const USAGE: &str = "Captures wgpu native host\n\
   --live [--history-root PATH]\n\
-  --scene preferences|history|hud|preview|editor|region|window|countdown|idle\n\
+  --scene preferences|history|hud|preview|editor|capture-controls|region|window|countdown|idle\n\
   --appearance light|dark|system --theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono\n\
   --history-count 0..10000 --exercise --quit-after SECONDS\n\
   --settings-file PATH\n\
@@ -20,6 +20,7 @@ pub enum Scene {
     Hud,
     Preview,
     Editor,
+    CaptureControls,
     Region,
     Window,
     Countdown,
@@ -27,12 +28,13 @@ pub enum Scene {
 }
 
 impl Scene {
-    pub const VISIBLE: [Self; 7] = [
+    pub const VISIBLE: [Self; 8] = [
         Self::Preferences,
         Self::History,
         Self::Hud,
         Self::Preview,
         Self::Editor,
+        Self::CaptureControls,
         Self::Region,
         Self::Window,
     ];
@@ -43,6 +45,7 @@ impl Scene {
             Self::Hud => "hud",
             Self::Preview => "preview",
             Self::Editor => "editor",
+            Self::CaptureControls => "capture-controls",
             Self::Region => "region",
             Self::Window => "window",
             Self::Countdown => "countdown",
@@ -56,6 +59,7 @@ impl Scene {
             Self::Hud => "Recording controls",
             Self::Preview => "Mini previews",
             Self::Editor => "Editor rendering probe",
+            Self::CaptureControls => "New Capture controls",
             Self::Region => "Region selector fixture",
             Self::Window => "Window selector fixture",
             Self::Countdown => "Screenshot countdown",

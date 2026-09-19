@@ -24,6 +24,7 @@ use eframe::egui::{self, RichText};
 
 use crate::tokens::Tokens;
 use crate::{
+    capture_controls::{self, CaptureControls},
     selector,
     selector::Selector,
     window_selector::{self, SelectionTarget, WindowSelector},
@@ -142,10 +143,18 @@ enum CapturePhase {
         after_countdown: bool,
     },
     WindowCapturing,
+    ControlsPreparing,
+    ControlsSelecting,
+    ControlsCountdown {
+        target: capture_controls::Target,
+        after_countdown: bool,
+    },
+    ControlsCapturing,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CaptureRequest {
+    NewCapture,
     Display,
     Region,
     Window,
@@ -159,6 +168,14 @@ enum SelectorMessage {
     ConfirmWindow {
         generation: u64,
         target: SelectionTarget,
+    },
+    ConfirmControls {
+        generation: u64,
+        target: capture_controls::Target,
+    },
+    SwitchControlsDisplay {
+        generation: u64,
+        display_id: String,
     },
     Cancel {
         generation: u64,
@@ -414,6 +431,7 @@ impl MiniPreviews {
 enum SelectorKind {
     Region,
     Window,
+    Controls,
 }
 
 fn request_hidden_root_paint(ctx: &egui::Context) {
@@ -491,6 +509,10 @@ pub struct Live {
     window_freeze: bool,
     window_auto_start: bool,
     window_countdown_seconds: u8,
+    controls: Arc<Mutex<CaptureControls>>,
+    controls_freeze: bool,
+    controls_auto_start: bool,
+    controls_countdown_seconds: u8,
     can_hide: Option<bool>,
     confirm_delete: Option<String>,
     confirm_clear_history: bool,
@@ -650,6 +672,10 @@ impl Live {
             window_freeze: false,
             window_auto_start: false,
             window_countdown_seconds: 0,
+            controls: Arc::new(Mutex::new(CaptureControls::default())),
+            controls_freeze: false,
+            controls_auto_start: false,
+            controls_countdown_seconds: 0,
             can_hide: None,
             confirm_delete: None,
             confirm_clear_history: false,
@@ -723,6 +749,9 @@ impl Live {
                 CaptureRequest::Display => {
                     "The selected display is no longer available for countdown.".into()
                 }
+                CaptureRequest::NewCapture => {
+                    "The selected display is no longer available for capture controls.".into()
+                }
                 CaptureRequest::Region => {
                     "The selected display is no longer available for region selection.".into()
                 }
@@ -755,6 +784,15 @@ impl Live {
         self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
         self.include_cursor = settings.show_cursor_in_screenshots;
         match request {
+            CaptureRequest::NewCapture => {
+                self.capture_phase = Some(CapturePhase::ControlsPreparing);
+                self.controls_freeze = settings.freeze_screen;
+                self.controls_auto_start = settings.auto_start_on_selection;
+                self.controls_countdown_seconds = settings.screenshot_countdown_seconds;
+                self.controls.lock().unwrap().reset();
+                self.status = "Preparing capture controls… Press Escape to cancel.".into();
+                self.hide_for_capture(ctx);
+            }
             CaptureRequest::Display => {
                 self.capture_phase = Some(CapturePhase::DisplayCountdown);
                 self.status = "Preparing screenshot… Press Escape to cancel.".into();
@@ -938,8 +976,73 @@ impl Live {
                         }
                     }
                 }
+                SelectorMessage::ConfirmControls { generation, target }
+                    if accepts_selector_action(
+                        self.flow.as_ref().map(CaptureFlow::generation),
+                        generation,
+                        self.flow.as_ref().is_some_and(CaptureFlow::is_current),
+                        self.capture_phase,
+                        SelectorKind::Controls,
+                    ) =>
+                {
+                    let Some(flow) = &mut self.flow else {
+                        continue;
+                    };
+                    match flow.start_countdown(self.controls_countdown_seconds) {
+                        Ok(()) => {
+                            self.capture_phase = Some(CapturePhase::ControlsCountdown {
+                                target,
+                                after_countdown: self.controls_countdown_seconds > 0,
+                            });
+                            self.status = "Target confirmed. Press Escape to cancel.".into();
+                            request_hidden_root_paint(ctx);
+                            ctx.request_repaint();
+                        }
+                        Err(error) => {
+                            self.error = Some(error);
+                            self.finish_capture(ctx, false);
+                        }
+                    }
+                }
+                SelectorMessage::SwitchControlsDisplay {
+                    generation,
+                    display_id,
+                } if accepts_selector_action(
+                    self.flow.as_ref().map(CaptureFlow::generation),
+                    generation,
+                    self.flow.as_ref().is_some_and(CaptureFlow::is_current),
+                    self.capture_phase,
+                    SelectorKind::Controls,
+                ) =>
+                {
+                    if !self.displays.iter().any(|display| display.id == display_id) {
+                        self.error = Some("The selected display is no longer available.".into());
+                        continue;
+                    }
+                    self.display_id = Some(display_id);
+                    let Some(target) =
+                        capture_target(frame, &self.displays, self.display_id.as_deref())
+                    else {
+                        self.error = Some(
+                            "The selected display is unavailable for capture controls.".into(),
+                        );
+                        self.finish_capture(ctx, false);
+                        continue;
+                    };
+                    self.countdown_target = Some(target);
+                    self.previews.capture_target = Some(target);
+                    self.controls.lock().unwrap().reset();
+                    self.window_session = None;
+                    self.window_texture = None;
+                    self.capture_phase = Some(CapturePhase::ControlsPreparing);
+                    self.status = "Switching capture controls to the selected display…".into();
+                    request_hidden_root_paint(ctx);
+                    self.begin_root_hide(ctx);
+                }
                 SelectorMessage::ConfirmRegion { .. }
                 | SelectorMessage::ConfirmWindow { .. }
+                | SelectorMessage::ConfirmControls { .. }
+                | SelectorMessage::SwitchControlsDisplay { .. }
                 | SelectorMessage::Cancel { .. } => {}
             }
         }
@@ -1099,6 +1202,15 @@ impl Live {
                             include_cursor: self.include_cursor,
                         });
                     }
+                    Some(CapturePhase::ControlsPreparing) => {
+                        self.pending += 1;
+                        let _ = self.tx.send(Job::PrepareWindow {
+                            display_id,
+                            generation,
+                            freeze: self.controls_freeze,
+                            include_cursor: self.include_cursor,
+                        });
+                    }
                     Some(CapturePhase::RegionCountdown {
                         rect,
                         after_countdown,
@@ -1146,6 +1258,45 @@ impl Live {
                         self.window_texture = None;
                         self.capture_in_flight = true;
                         self.capture_phase = Some(CapturePhase::WindowCapturing);
+                        self.pending += 1;
+                        let _ = self.tx.send(Job::CaptureWindow {
+                            root: self.root.clone(),
+                            generation,
+                            session,
+                            target,
+                            after_countdown,
+                        });
+                    }
+                    Some(CapturePhase::ControlsCountdown {
+                        target,
+                        after_countdown,
+                    }) => {
+                        let Some(session) = self.window_session.take() else {
+                            self.error =
+                                Some("Capture-control preparation was lost before capture.".into());
+                            self.finish_capture(ctx, false);
+                            return;
+                        };
+                        let target = match target {
+                            capture_controls::Target::Region(rect) => {
+                                WindowCaptureTarget::Region { rect }
+                            }
+                            capture_controls::Target::Display => WindowCaptureTarget::Display,
+                            capture_controls::Target::Window(index) => {
+                                let Some(window) = session.windows().get(index) else {
+                                    self.error =
+                                        Some("The selected window changed before capture.".into());
+                                    self.finish_capture(ctx, false);
+                                    return;
+                                };
+                                WindowCaptureTarget::Window {
+                                    id: window.id.clone(),
+                                }
+                            }
+                        };
+                        self.window_texture = None;
+                        self.capture_in_flight = true;
+                        self.capture_phase = Some(CapturePhase::ControlsCapturing);
                         self.pending += 1;
                         let _ = self.tx.send(Job::CaptureWindow {
                             root: self.root.clone(),
@@ -1320,14 +1471,21 @@ impl Live {
                 }
                 Reply::WindowPrepared { generation, result } => {
                     self.pending = self.pending.saturating_sub(1);
-                    let accepted = accepts_prepare_reply(
+                    let direct = accepts_prepare_reply(
                         self.flow.as_ref().map(CaptureFlow::generation),
                         generation,
                         self.flow.as_ref().is_some_and(CaptureFlow::is_current),
                         self.capture_phase,
                         CapturePhase::WindowPreparing,
                     );
-                    if !accepted {
+                    let controls = accepts_prepare_reply(
+                        self.flow.as_ref().map(CaptureFlow::generation),
+                        generation,
+                        self.flow.as_ref().is_some_and(CaptureFlow::is_current),
+                        self.capture_phase,
+                        CapturePhase::ControlsPreparing,
+                    );
+                    if !direct && !controls {
                         continue;
                     }
                     match result {
@@ -1356,10 +1514,18 @@ impl Live {
                                 )
                             });
                             self.window_session = Some(session);
-                            self.window_selector.lock().unwrap().reset();
-                            self.capture_phase = Some(CapturePhase::WindowSelecting);
-                            self.status =
-                                "Choose a window or the display. Press Escape to cancel.".into();
+                            if controls {
+                                self.controls.lock().unwrap().reset();
+                                self.capture_phase = Some(CapturePhase::ControlsSelecting);
+                                self.status =
+                                    "Choose a screenshot target. Press Escape to cancel.".into();
+                            } else {
+                                self.window_selector.lock().unwrap().reset();
+                                self.capture_phase = Some(CapturePhase::WindowSelecting);
+                                self.status =
+                                    "Choose a window or the display. Press Escape to cancel."
+                                        .into();
+                            }
                             request_hidden_root_paint(ctx);
                             ctx.request_repaint();
                         }
@@ -1371,11 +1537,15 @@ impl Live {
                 }
                 Reply::WindowCaptured { generation, result } => {
                     self.pending = self.pending.saturating_sub(1);
+                    let controls = self.capture_phase == Some(CapturePhase::ControlsCapturing);
                     let accepted = self
                         .flow
                         .as_ref()
                         .is_some_and(|flow| flow.generation() == generation)
-                        && self.capture_phase == Some(CapturePhase::WindowCapturing);
+                        && matches!(
+                            self.capture_phase,
+                            Some(CapturePhase::WindowCapturing | CapturePhase::ControlsCapturing)
+                        );
                     if !accepted {
                         continue;
                     }
@@ -1383,9 +1553,14 @@ impl Live {
                     let captured = result.is_ok();
                     self.finish_capture(ctx, captured);
                     match result {
-                        Ok(artifact) => {
-                            self.accept_artifact(*artifact, "Window selection captured as PNG")
-                        }
+                        Ok(artifact) => self.accept_artifact(
+                            *artifact,
+                            if controls {
+                                "Screenshot captured as PNG"
+                            } else {
+                                "Window selection captured as PNG"
+                            },
+                        ),
                         Err(error) => self.error = Some(error),
                     }
                 }
@@ -1457,6 +1632,7 @@ impl Live {
         self.window_session = None;
         self.window_texture = None;
         self.window_selector.lock().unwrap().reset();
+        self.controls.lock().unwrap().reset();
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.restore_root_visible));
         request_hidden_root_paint(ctx);
         ctx.request_repaint();
@@ -1859,6 +2035,74 @@ impl Live {
     }
 
     fn capture_viewports(&mut self, ctx: &egui::Context, t: &Tokens) {
+        if self.capture_phase == Some(CapturePhase::ControlsSelecting) {
+            let t = t.clone();
+            let generation = self
+                .flow
+                .as_ref()
+                .expect("capture controls own flow")
+                .generation();
+            let target = self
+                .countdown_target
+                .expect("capture-controls target validated");
+            let controls = Arc::clone(&self.controls);
+            let sender = self.selector_tx.clone();
+            let texture = self.window_texture.clone();
+            let auto_start = self.controls_auto_start;
+            let displays = self.displays.clone();
+            let session = Arc::clone(
+                self.window_session
+                    .as_ref()
+                    .expect("capture controls own window session"),
+            );
+            ctx.show_viewport_deferred(
+                egui::ViewportId::from_hash_of("capture-controls"),
+                capture_viewport(
+                    "Captures Capture Controls",
+                    target.monitor,
+                    target.position,
+                    target.size,
+                ),
+                move |ui, _| {
+                    if ui.input(|input| input.viewport().close_requested()) {
+                        captures_app::capture_flow::cancel(generation);
+                        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                        return;
+                    }
+                    let action = controls.lock().unwrap().show(
+                        ui,
+                        &t,
+                        capture_controls::View {
+                            frozen: texture.as_ref(),
+                            display: session.display(),
+                            displays: &displays,
+                            windows: session.windows(),
+                            auto_start,
+                        },
+                        |point| session.hit_test(point),
+                    );
+                    if let Some(action) = action {
+                        let message = match action {
+                            capture_controls::Action::Capture(target) => {
+                                SelectorMessage::ConfirmControls { generation, target }
+                            }
+                            capture_controls::Action::SwitchDisplay(display_id) => {
+                                SelectorMessage::SwitchControlsDisplay {
+                                    generation,
+                                    display_id,
+                                }
+                            }
+                            capture_controls::Action::Cancel => SelectorMessage::Cancel {
+                                generation,
+                                kind: SelectorKind::Controls,
+                            },
+                        };
+                        let _ = sender.send(message);
+                        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                    }
+                },
+            );
+        }
         if self.capture_phase == Some(CapturePhase::RegionSelecting) {
             let t = t.clone();
             let generation = self
@@ -1989,6 +2233,7 @@ impl Live {
                     CapturePhase::DisplayCountdown
                         | CapturePhase::RegionCountdown { .. }
                         | CapturePhase::WindowCountdown { .. }
+                        | CapturePhase::ControlsCountdown { .. }
                 )
             )
         {
@@ -2050,6 +2295,10 @@ impl Live {
                     });
                 if ui.button("Refresh displays").clicked() { self.send(Request::Displays); }
                 let can_start_capture = self.can_start_capture();
+                if ui.add_enabled(can_start_capture, egui::Button::new("New Capture")).clicked() {
+                    self.request_capture(CaptureRequest::NewCapture);
+                    self.launch_requested_capture(ui.ctx(), frame, settings());
+                }
                 if ui.add_enabled(can_start_capture, egui::Button::new("Capture display")).clicked() {
                     self.request_capture(CaptureRequest::Display);
                     self.launch_requested_capture(ui.ctx(), frame, settings());
@@ -2411,6 +2660,7 @@ fn accepts_selector_action(
             == Some(match kind {
                 SelectorKind::Region => CapturePhase::RegionSelecting,
                 SelectorKind::Window => CapturePhase::WindowSelecting,
+                SelectorKind::Controls => CapturePhase::ControlsSelecting,
             })
 }
 
@@ -2904,6 +3154,20 @@ mod tests {
             phase,
             CapturePhase::WindowPreparing
         ));
+        assert!(accepts_prepare_reply(
+            Some(12),
+            12,
+            true,
+            Some(CapturePhase::ControlsPreparing),
+            CapturePhase::ControlsPreparing
+        ));
+        assert!(!accepts_prepare_reply(
+            Some(12),
+            11,
+            true,
+            Some(CapturePhase::ControlsPreparing),
+            CapturePhase::ControlsPreparing
+        ));
     }
 
     #[test]
@@ -2915,6 +3179,20 @@ mod tests {
             true,
             phase,
             SelectorKind::Region
+        ));
+        assert!(accepts_selector_action(
+            Some(12),
+            12,
+            true,
+            Some(CapturePhase::ControlsSelecting),
+            SelectorKind::Controls
+        ));
+        assert!(!accepts_selector_action(
+            Some(12),
+            10,
+            true,
+            Some(CapturePhase::ControlsSelecting),
+            SelectorKind::Controls
         ));
         assert!(!accepts_selector_action(
             Some(12),
