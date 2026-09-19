@@ -18,13 +18,24 @@ enum StillCaptureKind: Equatable {
     case window
 }
 
+enum CaptureWindowRestoreAction: Equatable {
+    case none
+    case visible
+    case key
+}
+
 struct CaptureWindowRestoration {
     private var wasVisible = false
+    private var wasKey = false
 
-    mutating func begin(windowIsVisible: Bool) { wasVisible = windowIsVisible }
-    mutating func finish(restoreRequested: Bool) -> Bool {
-        defer { wasVisible = false }
-        return restoreRequested && wasVisible
+    mutating func begin(windowIsVisible: Bool, windowIsKey: Bool) {
+        wasVisible = windowIsVisible
+        wasKey = windowIsKey
+    }
+    mutating func finish(restoreRequested: Bool) -> CaptureWindowRestoreAction {
+        defer { wasVisible = false; wasKey = false }
+        guard restoreRequested, wasVisible else { return .none }
+        return wasKey ? .key : .visible
     }
 }
 
@@ -212,7 +223,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     @discardableResult func capture(_ kind: StillCaptureKind) -> Bool {
         let index = displayMenu.indexOfSelectedItem
         guard !capturing, displays.indices.contains(index), !historyRoot.isEmpty else { return false }
-        windowRestoration.begin(windowIsVisible: window.isVisible)
+        windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
         let display = displays[index]; setBusy(true, message: "Preparing capture…")
         run({ [settingsPath] in try CapturePreferences.load(path: settingsPath) }) { [weak self] result in
             guard let self else { return }
@@ -409,8 +420,11 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             previewCaptureGeneration = nil
         }
         snapshotPending = false; setBusy(false)
-        let shouldRestoreWindow = windowRestoration.finish(restoreRequested: restoreWindow)
-        if shouldRestoreWindow {
+        switch windowRestoration.finish(restoreRequested: restoreWindow) {
+        case .none: break
+        case .visible:
+            window.orderFront(nil)
+        case .key:
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }

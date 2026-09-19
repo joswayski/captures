@@ -168,8 +168,13 @@ func captureShortcutSignature(_ settings: [String: Any]) -> [String] {
      settings.string("display_shortcut")]
 }
 
-func captureShortcutsEnabled(scene: String, captureBusy: Bool) -> Bool {
-    scene != "preferences" && !captureBusy
+func captureShortcutsEnabled(preferencesFocused: Bool, captureBusy: Bool) -> Bool {
+    !preferencesFocused && !captureBusy
+}
+
+func preferencesWindowFocused(scene: String, visible: Bool, key: Bool,
+                              attachedSheetKey: Bool) -> Bool {
+    scene == "preferences" && visible && (key || attachedSheetKey)
 }
 
 func stillCaptureKind(for shortcut: CaptureShortcut) -> StillCaptureKind {
@@ -217,6 +222,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var statusActions: LiveStatusActions?
     private var captureShortcuts: NativeCaptureShortcuts?
     private var shortcutWakeObserver: NSObjectProtocol?
+    private var shortcutFocusObservers: [NSObjectProtocol] = []
     private var shortcutSignature: [String]?
     private var captureBusy = false
     private var terminating = false
@@ -545,6 +551,16 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         ) { [weak self] _ in
             self?.drainCaptureShortcuts()
         }
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification,
+                     NSWindow.didOrderOnScreenNotification, NSWindow.didOrderOffScreenNotification] {
+            shortcutFocusObservers.append(NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] notification in
+                guard let self, let changed = notification.object as? NSWindow,
+                      changed === self.window || changed.sheetParent === self.window else { return }
+                self.updateShortcutEnabled()
+            })
+        }
         do {
             let store = try SettingsStore(path: options.settingsFile)
             store.load { [weak self] result in
@@ -577,11 +593,12 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func updateShortcutEnabled() {
-        captureShortcuts?.setEnabled(captureShortcutsEnabled(scene: scene, captureBusy: captureBusy))
+        captureShortcuts?.setEnabled(captureShortcutsEnabled(
+            preferencesFocused: preferencesFocused, captureBusy: captureBusy))
     }
 
     private func drainCaptureShortcuts() {
-        guard !terminating, scene != "preferences", !captureBusy,
+        guard !terminating, !preferencesFocused, !captureBusy,
               let captureShortcuts else { return }
         do {
             while let action = try captureShortcuts.nextAction() {
@@ -598,6 +615,10 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             NotificationCenter.default.removeObserver(shortcutWakeObserver)
             self.shortcutWakeObserver = nil
         }
+        for observer in shortcutFocusObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        shortcutFocusObservers.removeAll()
         captureShortcuts?.close()
         captureShortcuts = nil
     }
@@ -633,10 +654,10 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private func showPreferences() {
         preferencesController?.flush()
         scene = "preferences"
-        updateShortcutEnabled()
         render()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        updateShortcutEnabled()
     }
 
     private func openOutputFolder() {
@@ -693,6 +714,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             NSApp.activate(ignoringOtherApps: true)
         }
         alert.beginSheetModal(for: window)
+    }
+
+    private var preferencesFocused: Bool {
+        preferencesWindowFocused(scene: scene, visible: window.isVisible,
+            key: window.isKeyWindow, attachedSheetKey: window.attachedSheet?.isKeyWindow == true)
     }
 
     private func exerciseSettingsPath() -> String {
