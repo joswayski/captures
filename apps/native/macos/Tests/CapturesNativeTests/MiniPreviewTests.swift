@@ -223,30 +223,34 @@ final class MiniPreviewTests: XCTestCase {
         let ids = ["oldest", "middle", "newest"]
         let images = ["oldest": solidImage(.systemRed), "middle": solidImage(.systemGreen),
                       "newest": solidImage(.systemBlue)]
-        let expanded = fixturePanel(ids: ids, images: images, topAnchor: true)
-        let collapsed = fixturePanel(ids: ids, images: images, collapsed: true, topAnchor: true)
-        defer { expanded.close(); collapsed.close() }
+        let panels: [(MiniPreviewPanel, String)] = [
+            (fixturePanel(ids: ids, images: images, topAnchor: true), "top-expanded"),
+            (fixturePanel(ids: ids, images: images, collapsed: true, topAnchor: true),
+             "top-collapsed"),
+            (fixturePanel(ids: ids, images: images), "bottom-expanded"),
+            (fixturePanel(ids: ids, images: images, collapsed: true), "bottom-collapsed")
+        ]
+        defer { panels.forEach { $0.0.close() } }
 
-        for (panel, name) in [(expanded, "expanded"), (collapsed, "collapsed")] {
-            panel.display(); panel.previewView.layoutSubtreeIfNeeded()
+        for (panel, name) in panels {
             XCTAssertEqual(panel.previewView.cardPaintOrder, ids,
                 "chronological subview order paints newest on top")
-            let view = panel.previewView
-            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
-            view.cacheDisplay(in: view.bounds, to: bitmap)
+            let bitmap = try render(panel)
             XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 10, y: 10)).alphaComponent, 0,
                            accuracy: 0.01, "stack padding remains transparent")
-            let frontPixel = try XCTUnwrap(bitmap.colorAt(x: 170, y: 90))
+            let newestSampleY = name == "bottom-expanded" ? 436 : 90
+            let frontPixel = try XCTUnwrap(bitmap.colorAt(x: 170, y: newestSampleY))
             XCTAssertGreaterThan(frontPixel.alphaComponent, 0.9)
             XCTAssertGreaterThan(frontPixel.blueComponent, frontPixel.redComponent,
                 "the newest blue capture must paint over older cards")
-            guard let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] else { continue }
-            let url = URL(fileURLWithPath: directory)
-                .appendingPathComponent("mini-preview-stack-\(name).png")
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                    withIntermediateDirectories: true)
-            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: url)
+            try write(bitmap, name: "mini-preview-stack-\(name).png")
         }
+
+        let asymmetric = NSImage(cgImage: PreviewView.fixtureImage(scale: 2),
+                                 size: NSSize(width: 284, height: 160))
+        let single = fixturePanel(ids: ["asymmetric"], images: ["asymmetric": asymmetric])
+        defer { single.close() }
+        try write(render(single), name: "mini-preview-single-asymmetric.png")
     }
 
     func testCollapsedPileHidesActionsAndFrontHitTargetExpands() {
@@ -281,6 +285,17 @@ final class MiniPreviewTests: XCTestCase {
         defer { collapsed.close() }
         XCTAssertEqual(collapsed.previewView.documentHeight, collapsed.previewView.bounds.height,
             "collapsed piles never create a hidden scroll range")
+
+        let distinct = Dictionary(uniqueKeysWithValues: ids.enumerated().map { index, id in
+            (id, solidImage(NSColor(calibratedHue: CGFloat(index) / CGFloat(ids.count),
+                saturation: 0.8, brightness: 0.9, alpha: 1)))
+        })
+        let renderPanel = fixturePanel(ids: ids, images: distinct)
+        defer { renderPanel.close() }
+        XCTAssertEqual(renderPanel.previewView.scrollOffsetY,
+            renderPanel.previewView.documentHeight - renderPanel.previewView.bounds.height,
+            accuracy: 0.5, "bottom overflow opens with newest capture visible")
+        try write(render(renderPanel), name: "mini-preview-stack-bottom-overflow.png")
     }
 
     func testClosingRootWindowClosesOpenPanelAndRequestsTermination() {
@@ -345,6 +360,22 @@ final class MiniPreviewTests: XCTestCase {
         NSImage(size: NSSize(width: 284, height: 160), flipped: true) { rect in
             color.setFill(); rect.fill(); return true
         }
+    }
+
+    private func render(_ panel: MiniPreviewPanel) throws -> NSBitmapImageRep {
+        panel.display(); panel.previewView.layoutSubtreeIfNeeded()
+        let view = panel.previewView
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        return bitmap
+    }
+
+    private func write(_ bitmap: NSBitmapImageRep, name: String) throws {
+        guard let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] else { return }
+        let url = URL(fileURLWithPath: directory).appendingPathComponent(name)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: url)
     }
 
     private func preferences() throws -> CapturePreferences {
