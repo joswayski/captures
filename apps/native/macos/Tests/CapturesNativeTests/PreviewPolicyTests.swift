@@ -3,6 +3,34 @@ import CCapturesSettings
 @testable import CapturesNative
 
 final class PreviewPolicyTests: XCTestCase {
+    func testStackSnapshotAndMirroredLayoutUseRustPolicy() throws {
+        let stack = NativePreviewStack()
+        XCTAssertFalse(stack.insert(""))
+        XCTAssertFalse(stack.insert("bad\0id"))
+        for id in ["古い", "middle", "latest"] { XCTAssertTrue(stack.insert(id)) }
+        XCTAssertFalse(stack.insert("古い"))
+        XCTAssertEqual(stack.ids, ["古い", "middle", "latest"])
+        XCTAssertEqual(try XCTUnwrap(stack.cardLayout(index: 0, topAnchor: false)).y, 28)
+        XCTAssertEqual(try XCTUnwrap(stack.cardLayout(index: 0, topAnchor: true)).y, 420)
+        XCTAssertEqual(try XCTUnwrap(stack.cardLayout(index: 2, topAnchor: true)).y, 52)
+        XCTAssertNil(stack.cardLayout(index: -1, topAnchor: false))
+        XCTAssertNil(stack.cardLayout(index: 3, topAnchor: false))
+        let snapshot = stack.ids
+        stack.setCollapsed(true)
+        XCTAssertFalse(try XCTUnwrap(stack.cardLayout(index: 0, topAnchor: false)).interactive)
+        XCTAssertTrue(try XCTUnwrap(stack.cardLayout(index: 2, topAnchor: false)).interactive)
+        XCTAssertTrue(stack.insert("incoming"))
+        XCTAssertTrue(stack.isCollapsed)
+        XCTAssertEqual(stack.removeAll(snapshot), 3)
+        XCTAssertEqual(stack.ids, ["incoming"])
+        XCTAssertTrue(stack.isCollapsed)
+        XCTAssertTrue(stack.remove("incoming"))
+        XCTAssertFalse(stack.isCollapsed)
+        XCTAssertFalse(stack.remove("incoming"))
+        XCTAssertTrue(stack.insert("fresh"))
+        XCTAssertFalse(stack.isCollapsed)
+    }
+
     func testRetinaNegativeOriginAndAllCornerMappingsThroughCABI() throws {
         let monitor = CapturesPreviewMonitor(work_x: -2400, work_y: 120,
             work_width: 2400, work_height: 1500, full_x: -2400, full_y: 40,
