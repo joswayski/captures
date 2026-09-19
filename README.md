@@ -220,8 +220,10 @@ development builds; native media-tool bundling is not connected. Started recordi
 are saved on session loss instead of being discarded; failed finalization retains
 recovery data. Linux cannot exclude the controls from captured pixels, and native
 Hide controls is not connected yet. Restart, mute, screenshots
-during recording, recording playback/editing/export and GIF conversion remain
-unconnected; History displays recording posters and metadata only. Both native
+during recording, recording playback/editing, transcoded export and GIF conversion
+remain unconnected. History displays recording posters and metadata; **Save file**
+copies the original media to the output folder without re-encoding, and
+**Show in Folder** reveals that saved copy. Both native
 hosts offer counted All, Screenshots, Video and GIF history filters; filtering
 does not delete captures or exports. Real macOS and
 Windows recording, audio devices, multi-display and hardware acceptance remain open;
