@@ -3100,11 +3100,8 @@ impl Live {
                 }
                 if ui
                     .add_enabled(
-                        self.pending == 0
-                            && self.artifacts.iter().any(|item| {
-                                item.entry.kind == captures_history::ArtifactKind::Screenshot
-                            }),
-                        egui::Button::new("Clear screenshots…"),
+                        self.pending == 0 && !self.artifacts.is_empty(),
+                        egui::Button::new("Clear history…"),
                     )
                     .clicked()
                 {
@@ -3114,7 +3111,7 @@ impl Live {
                 if self.confirm_clear_history {
                     ui.group(|ui| {
                         ui.label(
-                            "Delete all screenshots from history? Exported files stay on disk.",
+                            "Delete all screenshots, videos and GIFs from history, including captures outside this filter? Exported files and recovery drafts stay on disk.",
                         );
                         ui.horizontal(|ui| {
                             if ui.button("Cancel").clicked()
@@ -4315,13 +4312,27 @@ mod tests {
             captures_capture::CaptureMode::Window,
         )
         .unwrap();
+        let source = root.path().join("export.mp4");
+        std::fs::write(&source, b"exported recording").unwrap();
+        let mut recording = artifact.entry.clone();
+        recording.id = "67e55044-10b1-426f-9247-bb680e5fe0c8".into();
+        recording.kind = captures_history::ArtifactKind::Video;
+        recording.mime_type = Some("video/mp4".into());
+        recording.duration_ms = Some(1_200);
+        recording.target = Some(RecordingTarget::Display {
+            display_id: "fixture".into(),
+        });
+        let poster = std::fs::read(&artifact.preview_path).unwrap();
+        captures_history::save_recording(root.path(), &recording, &poster, &source).unwrap();
         let mut live = Live::new(egui::Context::default(), Some(root.path().into()));
+        live.history_filter = HistoryFilter::Screenshots;
         live.apply(
             Response::History {
-                artifacts: captures_app::list(root.path()).unwrap(),
+                artifacts: load_history(root.path()).unwrap(),
             },
             true,
         );
+        assert_eq!(live.artifacts.len(), 2);
         let decoding = live.selection.generation;
         live.decoded_path = Some(artifact.image_path);
         live.confirm_delete = Some(artifact.entry.id);
@@ -4340,7 +4351,9 @@ mod tests {
             .expect("dedicated clear response");
         live.apply(*response, true);
         assert!(live.artifacts.is_empty());
-        assert!(captures_app::list(root.path()).unwrap().is_empty());
+        assert!(load_history(root.path()).unwrap().is_empty());
+        assert_eq!(std::fs::read(source).unwrap(), b"exported recording");
+        assert_eq!(live.history_filter, HistoryFilter::Screenshots);
         assert!(!live.selection.accepts(decoding));
         assert!(live.selection.id.is_none());
         assert!(live.decoded_path.is_none());

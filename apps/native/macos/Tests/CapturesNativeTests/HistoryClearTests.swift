@@ -95,16 +95,20 @@ final class HistoryClearTests: XCTestCase {
             let root = Surface(frame: frame); window.contentView = root
             root.wantsLayer = true; root.layer!.backgroundColor = tokens.color("surface-canvas").cgColor
             window.appearance = NSAppearance(named: failPartway ? .darkAqua : .aqua)
-            let transport = HistoryTransport(path: path.path, width: image.width, height: image.height, failPartway: failPartway)
+            let transport = HistoryTransport(path: path.path, width: image.width, height: image.height,
+                failPartway: failPartway, kinds: failPartway ? ["screenshot", "video", "gif"] : ["video", "gif"])
             let controller = LiveCaptureController(root: root, window: window,
                 tokens: tokens, historyRoot: directory.path,
                 settingsPath: nil, transport: transport, showPreferences: {})
             defer { withExtendedLifetime(controller) {} }
             window.makeKeyAndOrderFront(nil)
-            let clear = try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }.first { $0.title == "Clear screenshots…" })
+            let clear = try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }.first { $0.title == "Clear history…" })
             let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? NSTableView)
-            try waitUntil { table.numberOfRows == 2 && clear.isEnabled }
-            XCTAssertEqual(clear.accessibilityLabel(), "Clear screenshots…")
+            try waitUntil { table.numberOfRows == (failPartway ? 3 : 2) && clear.isEnabled }
+            XCTAssertEqual(clear.accessibilityLabel(), "Clear history…")
+            let gif = try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }.first { $0.title == "GIF 1" })
+            gif.performClick(nil)
+            try waitUntil { table.numberOfRows == 1 }
 
             clear.performClick(nil)
             try waitUntil { window.attachedSheet != nil }
@@ -112,7 +116,7 @@ final class HistoryClearTests: XCTestCase {
             window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertSecondButtonReturn)
             try waitUntil { window.attachedSheet == nil }
             XCTAssertEqual(transport.clearCount, 0)
-            XCTAssertEqual(table.numberOfRows, 2)
+            XCTAssertEqual(table.numberOfRows, 1)
 
             clear.performClick(nil)
             try waitUntil { window.attachedSheet != nil }

@@ -232,7 +232,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         copyButton = button("Copy image", frame: NSRect(x: 500, y: 594, width: 118, height: 34)) { [weak self] in self?.copyImage() }
         revealButton = button("Reveal export", frame: NSRect(x: 628, y: 594, width: 120, height: 34)) { [weak self] in self?.reveal() }
         deleteButton = button("Delete from history", frame: NSRect(x: 758, y: 594, width: 166, height: 34)) { [weak self] in self?.confirmDelete() }
-        clearHistoryButton = button("Clear screenshots…", frame: NSRect(x: 28, y: 594, width: 180, height: 34)) { [weak self] in self?.confirmClearHistory() }
+        clearHistoryButton = button("Clear history…", frame: NSRect(x: 28, y: 594, width: 180, height: 34)) { [weak self] in self?.confirmClearHistory() }
         status = title("Loading capture history…", frame: NSRect(x: 28, y: 642, width: 944, height: 24), muted: true)
         let limits = title("Screenshots and H.264 MP4 recordings are kept in native History. Recording restart, mute, hide, and screenshots while recording remain unavailable in this first native slice.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
         limits.maximumNumberOfLines = 2; updateActions()
@@ -1093,7 +1093,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         revealButton?.isEnabled = selected && selectedIndex.flatMap {
             artifacts[$0].mediaPath ?? artifacts[$0].savedPath
         } != nil
-        clearHistoryButton?.isEnabled = artifacts.contains { !$0.isRecording } && !busy
+        clearHistoryButton?.isEnabled = !artifacts.isEmpty && !busy
         captureButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
         regionButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
         windowButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
@@ -1225,8 +1225,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private func confirmClearHistory() {
         guard !artifacts.isEmpty, !capturing, !clearingHistory else { return }
-        let alert = NSAlert(); alert.messageText = "Clear screenshot history?"
-        alert.informativeText = "This deletes all screenshots in native history. Exported files stay on disk."
+        let alert = NSAlert(); alert.messageText = "Clear all capture history?"
+        alert.informativeText = "This deletes all screenshots, videos and GIFs in native history, including captures outside this filter. Exported files and recovery drafts stay on disk."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Delete All"); alert.addButton(withTitle: "Cancel")
         alert.buttons[0].keyEquivalent = ""; alert.buttons[1].keyEquivalent = "\r"

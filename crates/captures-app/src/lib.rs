@@ -168,10 +168,11 @@ pub fn execute(request: Request) -> Result<Response, Error> {
             Ok(Response::Deleted { id })
         }
         Request::ClearHistory { root } => {
-            // Clear only the screenshots exposed by this workspace, never exports
-            // or another data root. Hosts refresh even on error: deletion can be partial.
-            for item in list(&root)? {
-                captures_history::delete(&root, &item.entry.id)?;
+            // Both hosts confirm clearing every capture kind, independent of the
+            // selected filter. Never follow export paths or remove another root.
+            // Hosts refresh even on error: deletion can be partial.
+            for entry in captures_history::load(&root, Utc::now())? {
+                captures_history::delete(&root, &entry.id)?;
             }
             Ok(Response::History {
                 artifacts: list(&root)?,
@@ -438,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn clear_history_removes_all_local_screenshots_but_keeps_exports_and_other_roots() {
+    fn clear_history_removes_all_kinds_but_keeps_exports_recovery_and_other_roots() {
         let data = tempfile::tempdir().unwrap();
         let exports = tempfile::tempdir().unwrap();
         let other = tempfile::tempdir().unwrap();
@@ -457,8 +458,8 @@ mod tests {
         .unwrap() else {
             panic!("saved response")
         };
-        // The native workspace exposes screenshots only. Hidden recording entries
-        // must not be swept up by a screenshot-history confirmation.
+        // Both referenced exports and history-owned recording copies are visible.
+        // Clearing history removes only the copies inside this history root.
         let media = exports.path().join("keep.mp4");
         fs::write(&media, b"recording fixture").unwrap();
         let mut recording = first.entry.clone();
@@ -474,14 +475,26 @@ mod tests {
             .unwrap(),
         );
         captures_history::save_recording_reference(data.path(), &recording, b"preview").unwrap();
+        let gif_source = exports.path().join("keep.gif");
+        fs::write(&gif_source, b"GIF fixture").unwrap();
+        let mut gif = recording.clone();
+        gif.id = uuid::Uuid::new_v4().to_string();
+        gif.kind = ArtifactKind::Gif;
+        gif.mime_type = Some("image/gif".into());
+        gif.saved_path = Some(gif_source.to_string_lossy().into());
+        let gif_copy =
+            captures_history::save_recording(data.path(), &gif, b"poster", &gif_source).unwrap();
         assert_eq!(
             captures_history::load(data.path(), Utc::now())
                 .unwrap()
                 .len(),
-            3
+            4
         );
         // A non-history file in the root is not permission to recursively remove it.
         fs::write(data.path().join("keep.txt"), b"keep").unwrap();
+        let recovery = data.path().join(".recovery");
+        fs::create_dir(&recovery).unwrap();
+        fs::write(recovery.join("segment.mp4"), b"unfinished take").unwrap();
         let request = serde_json::from_value(serde_json::json!({
             "operation": "clear_history", "root": data.path(),
         }))
@@ -495,9 +508,15 @@ mod tests {
         assert_eq!(image::open(&path).unwrap().into_rgba8(), pixels);
         assert!(untouched.image_path.is_file());
         let remaining = captures_history::load(data.path(), Utc::now()).unwrap();
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].id, recording.id);
+        assert!(remaining.is_empty());
+        assert!(!data.path().join(&recording.id).exists());
+        assert!(!gif_copy.exists());
         assert_eq!(fs::read(media).unwrap(), b"recording fixture");
+        assert_eq!(fs::read(gif_source).unwrap(), b"GIF fixture");
+        assert_eq!(
+            fs::read(recovery.join("segment.mp4")).unwrap(),
+            b"unfinished take"
+        );
         assert_eq!(fs::read(data.path().join("keep.txt")).unwrap(), b"keep");
         assert!(
             execute(Request::ClearHistory {
