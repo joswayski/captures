@@ -41,7 +41,6 @@ pub struct Workbench {
     history_end: bool,
     selected_row: Option<usize>,
     paused: bool,
-    muted: bool,
     texture: Option<egui::TextureHandle>,
     animation: Option<Instant>,
     deleted: bool,
@@ -161,6 +160,11 @@ impl Workbench {
             is_primary: false,
             ..window_display.clone()
         });
+        let capture_controls = if options.capture_controls_recording {
+            crate::capture_controls::CaptureControls::recording_fixture()
+        } else {
+            crate::capture_controls::CaptureControls::fixture()
+        };
         let this = Self {
             options,
             variants: tokens::load(),
@@ -175,7 +179,6 @@ impl Workbench {
             history_end: false,
             selected_row: None,
             paused: false,
-            muted: false,
             texture: None,
             animation: None,
             deleted: false,
@@ -188,7 +191,7 @@ impl Workbench {
             screenshot_tx,
             screenshot_rx,
             preferences_state,
-            capture_controls: crate::capture_controls::CaptureControls::fixture(),
+            capture_controls,
             region_selector: crate::selector::Selector::default(),
             window_selector: crate::window_selector::WindowSelector::fixture(),
             window_display,
@@ -531,28 +534,26 @@ impl Workbench {
 
     fn hud(&mut self, ui: &mut egui::Ui, t: &Tokens) {
         glass(t).show(ui, |ui| {
-            ui.set_width(520.);
+            ui.set_width(398.);
             t.glass_controls(ui);
+            ui.label(
+                RichText::new("These controls won’t show in recordings")
+                    .small()
+                    .color(t.color("glass-text-muted")),
+            );
             ui.horizontal(|ui| {
                 ui.colored_label(t.color("theme-signal"), if self.paused { "Ⅱ" } else { "●" });
-                ui.heading(if self.paused {
-                    "Paused · 00:24"
-                } else {
-                    "Recording · 00:24"
-                });
+                ui.monospace("0:24");
+                ui.strong(if self.paused { "Paused" } else { "Recording" });
+                ui.button("Stop").clicked();
                 if ui
                     .button(if self.paused { "Resume" } else { "Pause" })
                     .clicked()
                 {
                     self.paused = !self.paused;
                 }
-                ui.checkbox(&mut self.muted, "Muted");
+                ui.button("Discard").clicked();
             });
-            ui.label(
-                RichText::new("Static timer fixture — no recording engine")
-                    .small()
-                    .color(t.color("glass-text-muted")),
-            );
         });
     }
 
@@ -1094,6 +1095,7 @@ impl eframe::App for Workbench {
                             windows,
                             auto_start: false,
                             recording_available: true,
+                            recording_unavailable_reason: None,
                         },
                         |point| fixture_window_hit_test(windows, shell, display, point),
                     ) {

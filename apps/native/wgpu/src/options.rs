@@ -5,6 +5,7 @@ pub const USAGE: &str = "Captures wgpu native host\n\
   --scene preferences|history|hud|preview|editor|capture-controls|region|window|countdown|idle\n\
   --appearance light|dark|system --theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono\n\
   --history-count 0..10000 --exercise --quit-after SECONDS\n\
+  --capture-controls-recording\n\
   --settings-file PATH\n\
   --floating (HUD/preview only) --reduced-motion\n\
   --screenshot FILE.png --screenshot-after SECONDS";
@@ -82,6 +83,7 @@ pub struct Options {
     pub screenshot_after: Duration,
     pub floating: bool,
     pub reduced_motion: bool,
+    pub capture_controls_recording: bool,
     pub settings_file: Option<PathBuf>,
     pub appearance_override: bool,
     pub theme_override: bool,
@@ -102,6 +104,7 @@ impl Options {
             screenshot_after: Duration::from_secs(1),
             floating: false,
             reduced_motion: false,
+            capture_controls_recording: false,
             settings_file: None,
             appearance_override: false,
             theme_override: false,
@@ -116,6 +119,7 @@ impl Options {
                 "--exercise" => options.exercise = true,
                 "--floating" => options.floating = true,
                 "--reduced-motion" => options.reduced_motion = true,
+                "--capture-controls-recording" => options.capture_controls_recording = true,
                 "--scene" => {
                     let value = args.next().ok_or("Missing scene")?;
                     options.scene = Scene::VISIBLE

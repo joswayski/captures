@@ -857,6 +857,7 @@ dependencies = [
  "arboard",
  "captures-app",
  "captures-capture",
+ "captures-history",
  "captures-media",
  "captures-recording",
  "captures-recording-platform",

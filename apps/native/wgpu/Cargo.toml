@@ -19,6 +19,7 @@ chrono = "0.4"
 captures-settings = { path = "../../../crates/captures-settings" }
 captures-app = { path = "../../../crates/captures-app" }
 captures-capture = { path = "../../../crates/captures-capture" }
+captures-history = { path = "../../../crates/captures-history" }
 captures-media = { path = "../../../crates/captures-media" }
 captures-recording = { path = "../../../crates/captures-recording" }
 captures-recording-platform = { path = "../../../crates/captures-recording-platform" }

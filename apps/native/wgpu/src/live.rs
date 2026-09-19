@@ -38,6 +38,9 @@ use crate::{
 };
 
 enum Job {
+    LoadHistory {
+        root: PathBuf,
+    },
     Execute {
         request: Request,
         preview: Option<PreviewGuard>,
@@ -85,6 +88,7 @@ enum Job {
 }
 
 enum Reply {
+    HistoryLoaded(Result<Vec<Artifact>, String>),
     Executed {
         preview: Option<PreviewGuard>,
         result: Result<Box<Response>, String>,
@@ -540,9 +544,14 @@ pub struct Live {
     controls_auto_start: bool,
     controls_countdown_seconds: u8,
     recording_worker: recording::Worker,
+    recording_toolchain_ready: bool,
+    recording_toolchain_error: Option<String>,
     include_recording_controls: bool,
     recording_snapshot: Option<RecordingSessionSnapshot>,
     recording_segment_started: Option<Instant>,
+    recording_snapshot_poll_pending: bool,
+    recording_last_snapshot_poll: Instant,
+    history_refresh_status: Option<String>,
     can_hide: Option<bool>,
     confirm_delete: Option<String>,
     confirm_clear_history: bool,
@@ -565,6 +574,7 @@ impl Live {
             while let Ok(job) = jobs.recv() {
                 let reply = match job {
                     Job::Shutdown => break,
+                    Job::LoadHistory { root } => Reply::HistoryLoaded(load_history(&root)),
                     Job::Execute { request, preview } => {
                         let clearing = matches!(request, Request::ClearHistory { .. });
                         let result = captures_app::execute(request)
@@ -709,18 +719,21 @@ impl Live {
             controls_auto_start: false,
             controls_countdown_seconds: 0,
             recording_worker: recording::Worker::new(ctx.clone()),
+            recording_toolchain_ready: false,
+            recording_toolchain_error: None,
             include_recording_controls: false,
             recording_snapshot: None,
             recording_segment_started: None,
+            recording_snapshot_poll_pending: false,
+            recording_last_snapshot_poll: Instant::now(),
+            history_refresh_status: None,
             can_hide: None,
             confirm_delete: None,
             confirm_clear_history: false,
             requested_capture: None,
             restore_root_visible: true,
         };
-        live.send(Request::History {
-            root: live.root.clone(),
-        });
+        live.load_history();
         live.send(Request::Displays);
         live
     }
@@ -860,6 +873,16 @@ impl Live {
                     ),
                 );
                 drop(controls);
+                self.recording_toolchain_ready = false;
+                self.recording_toolchain_error = None;
+                self.recording_worker
+                    .send(recording::Command::VerifyToolchain {
+                        generation: self
+                            .flow
+                            .as_ref()
+                            .expect("new capture owns flow")
+                            .generation(),
+                    });
                 self.recording_worker
                     .send(recording::Command::ListMicrophones {
                         generation: self
@@ -921,6 +944,13 @@ impl Live {
         let _ = self.tx.send(Job::Execute {
             request,
             preview: None,
+        });
+    }
+
+    fn load_history(&mut self) {
+        self.pending += 1;
+        let _ = self.tx.send(Job::LoadHistory {
+            root: self.root.clone(),
         });
     }
 
@@ -1093,6 +1123,12 @@ impl Live {
                         SelectorKind::Controls,
                     ) =>
                 {
+                    if !self.recording_toolchain_ready {
+                        self.error = Some(self.recording_toolchain_error.clone().unwrap_or_else(
+                            || "FFmpeg and ffprobe verification is still in progress.".into(),
+                        ));
+                        continue;
+                    }
                     let Some(display) = self
                         .displays
                         .iter()
@@ -1316,11 +1352,26 @@ impl Live {
         }
         while let Some(event) = self.recording_worker.try_recv() {
             match event {
+                recording::Event::ToolchainVerified { generation, result }
+                    if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation) =>
+                {
+                    self.recording_toolchain_ready = result.is_ok();
+                    self.recording_toolchain_error = result.err();
+                }
                 recording::Event::Microphones {
                     generation,
                     devices,
                 } if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation) => {
                     self.controls.lock().unwrap().set_microphones(devices);
+                }
+                recording::Event::Snapshot { generation, result }
+                    if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation) =>
+                {
+                    self.recording_snapshot_poll_pending = false;
+                    match result {
+                        Ok(snapshot) => self.recording_snapshot = Some(snapshot),
+                        Err(error) => self.error = Some(error),
+                    }
                 }
                 recording::Event::Prepared { generation, result }
                     if accepts_recording_event(
@@ -1371,6 +1422,8 @@ impl Live {
                         Ok(snapshot) => {
                             self.recording_snapshot = Some(snapshot);
                             self.recording_segment_started = Some(Instant::now());
+                            self.recording_snapshot_poll_pending = false;
+                            self.recording_last_snapshot_poll = Instant::now();
                             self.capture_phase = Some(CapturePhase::Recording);
                             self.status = "Recording in progress".into();
                             request_hidden_root_paint(ctx);
@@ -1399,7 +1452,7 @@ impl Live {
                         }
                         Err(error) => {
                             self.error = Some(error);
-                            self.capture_phase = Some(CapturePhase::Recording);
+                            self.finish_capture(ctx, false);
                         }
                     }
                 }
@@ -1407,7 +1460,7 @@ impl Live {
                     if accepts_recording_event(
                         self.flow.as_ref().map(CaptureFlow::generation),
                         generation,
-                        self.flow.as_ref().is_some_and(CaptureFlow::is_current),
+                        true,
                         self.capture_phase,
                         |phase| phase == CapturePhase::RecordingFinalizing,
                     ) =>
@@ -1423,10 +1476,9 @@ impl Live {
                                     )
                                 },
                             );
+                            self.history_refresh_status = Some(self.status.clone());
                             self.finish_capture(ctx, false);
-                            self.send(Request::History {
-                                root: self.root.clone(),
-                            });
+                            self.load_history();
                         }
                         Err(error) => {
                             self.error = Some(error);
@@ -1448,7 +1500,9 @@ impl Live {
                     }
                     self.finish_capture(ctx, false);
                 }
-                recording::Event::Microphones { .. }
+                recording::Event::ToolchainVerified { .. }
+                | recording::Event::Microphones { .. }
+                | recording::Event::Snapshot { .. }
                 | recording::Event::Prepared { .. }
                 | recording::Event::Started { .. }
                 | recording::Event::Paused { .. }
@@ -1468,20 +1522,51 @@ impl Live {
         }
         if let Some(flow) = &self.flow {
             if !flow.is_current() {
-                if is_recording_phase(self.capture_phase)
-                    && self.capture_phase != Some(CapturePhase::RecordingDiscarding)
-                {
-                    let generation = flow.generation();
-                    self.recording_worker
-                        .send(recording::Command::Discard { generation });
-                    self.capture_phase = Some(CapturePhase::RecordingDiscarding);
-                    self.status = "Discarding recording…".into();
-                } else if self.capture_phase != Some(CapturePhase::RecordingDiscarding) {
-                    self.status =
-                        "Capture cancelled (Escape or desktop session unavailable).".into();
-                    self.finish_capture(ctx, false);
+                match self.capture_phase {
+                    Some(
+                        CapturePhase::Recording
+                        | CapturePhase::RecordingPausing
+                        | CapturePhase::RecordingPaused,
+                    ) => {
+                        let generation = flow.generation();
+                        self.recording_worker.send(recording::Command::Finish {
+                            generation,
+                            history_root: self.root.clone(),
+                        });
+                        self.capture_phase = Some(CapturePhase::RecordingFinalizing);
+                        self.status = "Desktop session changed; preserving recording…".into();
+                    }
+                    Some(
+                        CapturePhase::RecordingFinalizing
+                        | CapturePhase::RecordingDiscarding,
+                    ) => {}
+                    Some(phase) if is_recording_phase(Some(phase)) => {
+                        let generation = flow.generation();
+                        self.recording_worker
+                            .send(recording::Command::Discard { generation });
+                        self.capture_phase = Some(CapturePhase::RecordingDiscarding);
+                        self.status = "Discarding cancelled recording…".into();
+                    }
+                    _ => {
+                        self.status =
+                            "Capture cancelled (Escape or desktop session unavailable).".into();
+                        self.finish_capture(ctx, false);
+                    }
                 }
             } else {
+                if matches!(
+                    self.capture_phase,
+                    Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
+                ) && !self.recording_snapshot_poll_pending
+                    && self.recording_last_snapshot_poll.elapsed()
+                        >= Duration::from_millis(250)
+                {
+                    self.recording_snapshot_poll_pending = true;
+                    self.recording_last_snapshot_poll = Instant::now();
+                    self.recording_worker.send(recording::Command::Snapshot {
+                        generation: flow.generation(),
+                    });
+                }
                 // Only active captures poll; settled history/preferences stay event-driven.
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
@@ -1664,6 +1749,13 @@ impl Live {
         }
         while let Ok(reply) = self.rx.try_recv() {
             match reply {
+                Reply::HistoryLoaded(result) => {
+                    self.pending = self.pending.saturating_sub(1);
+                    match result {
+                        Ok(artifacts) => self.apply(Response::History { artifacts }, false),
+                        Err(error) => self.error = Some(error),
+                    }
+                }
                 Reply::HistoryCleared(result) => {
                     self.pending = self.pending.saturating_sub(1);
                     match result {
@@ -1671,9 +1763,7 @@ impl Live {
                         Err(error) => {
                             // Some files may already have been deleted. Refresh the
                             // remaining history without concealing the operation error.
-                            self.send(Request::History {
-                                root: self.root.clone(),
-                            });
+                            self.load_history();
                             self.error = Some(format!("Could not clear history: {error}"));
                         }
                     }
@@ -1987,6 +2077,7 @@ impl Live {
         self.capture_in_flight = false;
         self.recording_snapshot = None;
         self.recording_segment_started = None;
+        self.recording_snapshot_poll_pending = false;
         self.root_hide_deferred = false;
         if !preserve_auto_copy {
             self.previews.restore_capture();
@@ -2072,7 +2163,10 @@ impl Live {
                 if let Some(id) = self.artifacts.first().map(|item| item.entry.id.clone()) {
                     self.select(id);
                 }
-                self.status = "History loaded".into();
+                self.status = self
+                    .history_refresh_status
+                    .take()
+                    .unwrap_or_else(|| "History loaded".into());
             }
             Response::Captured { artifact } => {
                 self.accept_artifact(artifact, "Full display captured as PNG");
@@ -2437,6 +2531,9 @@ impl Live {
                         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
                         return;
                     }
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::ContentProtected(
+                        recording_controls_are_excluded(include_controls),
+                    ));
                     tokens.glass_controls(ui);
                     egui::Frame::new()
                         .fill(tokens.color("glass-strong"))
@@ -2516,6 +2613,11 @@ impl Live {
             let texture = self.window_texture.clone();
             let auto_start = self.controls_auto_start;
             let displays = self.displays.clone();
+            let recording_unavailable_reason = (!self.recording_toolchain_ready).then(|| {
+                self.recording_toolchain_error.clone().unwrap_or_else(|| {
+                    "Checking FFmpeg and ffprobe availability…".to_owned()
+                })
+            });
             let session = Arc::clone(
                 self.window_session
                     .as_ref()
@@ -2551,7 +2653,8 @@ impl Live {
                             displays: &displays,
                             windows: session.windows(),
                             auto_start,
-                            recording_available: true,
+                            recording_available: recording_unavailable_reason.is_none(),
+                            recording_unavailable_reason: recording_unavailable_reason.as_deref(),
                         },
                         |point| session.hit_test(point),
                     );
@@ -2881,8 +2984,15 @@ impl Live {
                                 .add_sized(
                                     [ui.available_width(), 40.],
                                     egui::Button::new(format!(
-                                        "{}×{}\n{}",
-                                        item.width, item.height, date
+                                        "{} · {}×{}\n{}",
+                                        match item.kind {
+                                            captures_history::ArtifactKind::Screenshot => "Screenshot",
+                                            captures_history::ArtifactKind::Video => "Video",
+                                            captures_history::ArtifactKind::Gif => "GIF",
+                                        },
+                                        item.width,
+                                        item.height,
+                                        date
                                     ))
                                     .wrap_mode(egui::TextWrapMode::Extend)
                                     .selected(self.selection.id.as_deref() == Some(&id)),
@@ -2898,10 +3008,21 @@ impl Live {
 
         egui::CentralPanel::default().show(ui, |ui| {
             let selected = self.selection.id.clone();
+            let selected_entry = selected.as_ref().and_then(|id| {
+                self.artifacts
+                    .iter()
+                    .find(|artifact| &artifact.entry.id == id)
+                    .map(|artifact| artifact.entry.clone())
+            });
+            let selected_is_screenshot = selected_entry
+                .as_ref()
+                .is_some_and(|entry| entry.kind == captures_history::ArtifactKind::Screenshot);
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(
-                        self.decoded_path.is_some() && self.pending == 0,
+                        selected_is_screenshot
+                            && self.decoded_path.is_some()
+                            && self.pending == 0,
                         egui::Button::new("Copy pixels"),
                     )
                     .clicked()
@@ -2910,7 +3031,7 @@ impl Live {
                 }
                 if ui
                     .add_enabled(
-                        selected.is_some() && self.pending == 0,
+                        selected_is_screenshot && self.pending == 0,
                         egui::Button::new("Save image"),
                     )
                     .clicked()
@@ -2950,6 +3071,23 @@ impl Live {
                     self.error = Some(format!("Could not reveal export: {error}"));
                 }
             });
+            if let Some(entry) = selected_entry.filter(|entry| entry.kind.is_recording()) {
+                ui.label(
+                    RichText::new(format!(
+                        "{} · {}×{} · {}",
+                        if entry.kind == captures_history::ArtifactKind::Video {
+                            "H.264 MP4 recording"
+                        } else {
+                            "GIF recording"
+                        },
+                        entry.width,
+                        entry.height,
+                        format_duration(entry.duration_ms.unwrap_or_default())
+                    ))
+                    .color(t.color("text-muted")),
+                );
+                ui.label("The native recording editor is not connected yet. History is showing the saved poster frame.");
+            }
             if let Some(id) = self.confirm_delete.clone() {
                 ui.group(|ui| {
                     ui.label("Delete this capture from history? Exported files are never deleted.");
@@ -3276,6 +3414,30 @@ fn format_duration(elapsed_ms: u64) -> String {
     format!("{}:{:02}", elapsed_seconds / 60, elapsed_seconds % 60)
 }
 
+fn load_history(root: &Path) -> Result<Vec<Artifact>, String> {
+    captures_history::load(root, chrono::Utc::now())
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|entry| {
+            let directory = captures_history::entry_directory(root, &entry.id)
+                .map_err(|error| error.to_string())?;
+            let preview_path = directory.join(captures_history::HISTORY_PREVIEW_FILE);
+            let image_path = if entry.kind == captures_history::ArtifactKind::Screenshot {
+                directory.join(captures_history::HISTORY_IMAGE_FILE)
+            } else {
+                // Native recording editing is not connected yet. The History
+                // canvas renders the persisted poster and never decodes media.mp4.
+                preview_path.clone()
+            };
+            Ok(Artifact {
+                entry,
+                image_path,
+                preview_path,
+            })
+        })
+        .collect()
+}
+
 fn decode(path: &Path) -> Result<Decoded, String> {
     let rgba = image::open(path)
         .map_err(|error| format!("Could not decode {}: {error}", path.display()))?
@@ -3547,6 +3709,46 @@ mod tests {
                 height: 450,
             }
         );
+    }
+
+    #[test]
+    fn recording_history_uses_poster_without_decoding_media() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.mp4");
+        std::fs::write(&source, b"not image pixels").unwrap();
+        let poster = captures_history::encode_png(&image::RgbaImage::from_pixel(
+            4,
+            3,
+            image::Rgba([18, 92, 173, 255]),
+        ))
+        .unwrap();
+        let entry = captures_history::HistoryEntry {
+            id: "67e55044-10b1-426f-9247-bb680e5fe0c8".into(),
+            kind: captures_history::ArtifactKind::Video,
+            preview_url: "poster".into(),
+            full_url: "media".into(),
+            width: 4,
+            height: 3,
+            size_bytes: 16,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            mode: None,
+            saved_path: None,
+            mime_type: Some("video/mp4".into()),
+            duration_ms: Some(1_200),
+            target: Some(RecordingTarget::Display {
+                display_id: "display".into(),
+            }),
+            has_system_audio: false,
+            has_microphone_audio: false,
+            dropped_frames: 0,
+        };
+        captures_history::save_recording(root.path(), &entry, &poster, &source).unwrap();
+
+        let artifacts = load_history(root.path()).unwrap();
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].entry.kind, captures_history::ArtifactKind::Video);
+        assert_eq!(artifacts[0].image_path, artifacts[0].preview_path);
+        assert_eq!(decode(&artifacts[0].image_path).unwrap().image.size, [4, 3]);
     }
 
     #[test]
