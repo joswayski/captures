@@ -31,6 +31,7 @@ pub enum Action {
 }
 
 pub struct View<'a> {
+    pub panel_id: egui::Id,
     pub frozen: Option<&'a TextureHandle>,
     pub display: &'a DisplayDescriptor,
     pub displays: &'a [DisplayDescriptor],
@@ -53,8 +54,7 @@ impl CaptureControls {
         }
     }
 
-    #[cfg(test)]
-    fn mode(&self) -> TargetMode {
+    pub fn mode(&self) -> TargetMode {
         self.mode
     }
 
@@ -70,6 +70,11 @@ impl CaptureControls {
 
     pub fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    pub fn reset_for_display_change(&mut self) {
+        self.region.clear_selection();
+        self.window.reset();
     }
 
     pub fn exercise(
@@ -115,9 +120,8 @@ impl CaptureControls {
                     selector::Action::Confirm => self.current_target().map(Action::Capture),
                     selector::Action::Cancel => Some(Action::Cancel),
                 }),
-            TargetMode::Window => self
-                .window
-                .show_surface(
+            TargetMode::Window => {
+                let target = self.window.show_surface(
                     ui,
                     tokens,
                     &window_selector::View {
@@ -127,8 +131,14 @@ impl CaptureControls {
                         auto_start: view.auto_start,
                     },
                     hit_test,
-                )
-                .map(|target| Action::Capture(window_target(target))),
+                );
+                if target == Some(SelectionTarget::Display)
+                    || self.window.selected() == Some(SelectionTarget::Display)
+                {
+                    self.mode = TargetMode::Display;
+                }
+                target.map(|target| Action::Capture(window_target(target)))
+            }
             TargetMode::Display => {
                 let clicked = window_selector::show_display_surface(
                     ui,
@@ -152,10 +162,18 @@ impl CaptureControls {
             action = Some(Action::Capture(target));
         }
 
-        let panel = egui::Area::new(egui::Id::unique("capture-controls-toolbar"))
-            .anchor(Align2::CENTER_BOTTOM, egui::vec2(0., -26.))
+        let content_rect = ui.ctx().content_rect();
+        let panel_bounds = content_rect.shrink(16.);
+        let panel = egui::Area::new(view.panel_id)
+            .pivot(Align2::CENTER_BOTTOM)
+            .default_pos(content_rect.center_bottom() - egui::vec2(0., 26.))
+            .constrain_to(panel_bounds)
+            .movable(true)
             .order(egui::Order::Foreground)
             .show(ui.ctx(), |ui| {
+                // Match the shipping toolbar's stable width while retaining a
+                // sixteen-point margin on narrow displays.
+                ui.set_min_width((content_rect.width() - 32.).min(854.));
                 egui::Frame::new()
                     .fill(tokens.color("glass-strong"))
                     .stroke(Stroke::new(1., tokens.color("glass-border")))
@@ -163,6 +181,10 @@ impl CaptureControls {
                     .inner_margin(tokens.number("s-4") as i8)
                     .show(ui, |ui| {
                         tokens.glass_controls(ui);
+                        if content_rect.width() <= 800. {
+                            ui.spacing_mut().item_spacing.x = tokens.number("s-2");
+                            ui.spacing_mut().button_padding.x = tokens.number("s-4");
+                        }
                         ui.spacing_mut().item_spacing.y = tokens.number("s-3");
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
@@ -185,15 +207,7 @@ impl CaptureControls {
                                     (TargetMode::Window, "Window"),
                                     (TargetMode::Display, "Full screen"),
                                 ] {
-                                    let enabled = mode != TargetMode::Window || !view.windows.is_empty();
-                                    let response = ui.add_enabled_ui(enabled, |ui| {
-                                        segment(ui, tokens, self.mode == mode, label)
-                                    }).inner;
-                                    if !enabled {
-                                        response.clone().on_disabled_hover_text(
-                                            "Window capture is not available in this desktop session",
-                                        );
-                                    }
+                                    let response = segment(ui, tokens, self.mode == mode, label);
                                     if response.clicked() {
                                         let same = self.mode == mode;
                                         self.mode = mode;
@@ -210,13 +224,15 @@ impl CaptureControls {
                                 if self.mode == TargetMode::Region {
                                     ui.separator();
                                     self.region.show_aspect_picker(ui, tokens, bounds);
-                                } else if self.mode == TargetMode::Display
-                                    && view.displays.len() > 1
-                                {
+                                } else if self.mode == TargetMode::Display {
                                     ui.separator();
                                     let mut display_id = view.display.id.clone();
+                                    let mut selected = display_label(view.display, view.displays);
+                                    if content_rect.width() <= 800. {
+                                        selected = truncate_label(&selected, 14);
+                                    }
                                     egui::ComboBox::from_id_salt("capture-controls-display")
-                                        .selected_text(display_label(view.display, view.displays))
+                                        .selected_text(selected)
                                         .show_ui(ui, |ui| {
                                             for (index, display) in view.displays.iter().enumerate()
                                             {
@@ -346,6 +362,19 @@ fn display_label(display: &DisplayDescriptor, displays: &[DisplayDescriptor]) ->
     }
 }
 
+fn truncate_label(label: &str, maximum_characters: usize) -> String {
+    if label.chars().count() <= maximum_characters {
+        return label.into();
+    }
+
+    let mut truncated = label
+        .chars()
+        .take(maximum_characters.saturating_sub(1))
+        .collect::<String>();
+    truncated.push('…');
+    truncated
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,10 +392,25 @@ mod tests {
         }
     }
 
-    fn run_input(controls: &mut CaptureControls, events: Vec<egui::Event>) -> Option<Action> {
-        let ctx = egui::Context::default();
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000., 720.));
+    fn run_frame(
+        ctx: &egui::Context,
+        controls: &mut CaptureControls,
+        size: egui::Vec2,
+        events: Vec<egui::Event>,
+        panel_id: egui::Id,
+    ) -> Option<Action> {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
         let display = display();
+        let displays = [
+            display.clone(),
+            DisplayDescriptor {
+                id: "display-2".into(),
+                name: "Secondary".into(),
+                x: display.width as i32,
+                is_primary: false,
+                ..display.clone()
+            },
+        ];
         let tokens = crate::tokens::load()["dark-mustard"].clone();
         ctx.begin_pass(egui::RawInput {
             screen_rect: Some(screen),
@@ -382,9 +426,10 @@ mod tests {
             &mut ui,
             &tokens,
             View {
+                panel_id,
                 frozen: None,
                 display: &display,
-                displays: std::slice::from_ref(&display),
+                displays: &displays,
                 windows: &[],
                 auto_start: false,
             },
@@ -395,6 +440,16 @@ mod tests {
         action
     }
 
+    fn run_input(controls: &mut CaptureControls, events: Vec<egui::Event>) -> Option<Action> {
+        run_frame(
+            &egui::Context::default(),
+            controls,
+            egui::vec2(1000., 720.),
+            events,
+            egui::Id::unique("capture-controls-input-toolbar"),
+        )
+    }
+
     fn key(key: egui::Key) -> egui::Event {
         egui::Event::Key {
             key,
@@ -403,6 +458,40 @@ mod tests {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         }
+    }
+
+    fn pointer_button(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    fn click(
+        ctx: &egui::Context,
+        controls: &mut CaptureControls,
+        position: egui::Pos2,
+        panel_id: egui::Id,
+    ) {
+        run_frame(
+            ctx,
+            controls,
+            egui::vec2(1000., 720.),
+            vec![
+                egui::Event::PointerMoved(position),
+                pointer_button(position, true),
+            ],
+            panel_id,
+        );
+        run_frame(
+            ctx,
+            controls,
+            egui::vec2(1000., 720.),
+            vec![pointer_button(position, false)],
+            panel_id,
+        );
     }
 
     #[test]
@@ -443,6 +532,44 @@ mod tests {
     }
 
     #[test]
+    fn display_change_retains_mode_but_clears_display_local_choices() {
+        let mut controls = CaptureControls::default();
+        controls.region.exercise(
+            0,
+            Bounds {
+                width: 1000.,
+                height: 720.,
+            },
+        );
+        controls.window.exercise(0, |_| Some(1));
+        controls.mode = TargetMode::Window;
+        controls.reset_for_display_change();
+        assert_eq!(controls.mode(), TargetMode::Window);
+        assert!(controls.region().is_none());
+        assert!(controls.window().is_none());
+    }
+
+    #[test]
+    fn empty_desktop_click_changes_window_segment_to_full_screen() {
+        let ctx = egui::Context::default();
+        let panel_id = egui::Id::unique("capture-controls-desktop-click");
+        let mut controls = CaptureControls {
+            mode: TargetMode::Window,
+            ..Default::default()
+        };
+        run_frame(
+            &ctx,
+            &mut controls,
+            egui::vec2(1000., 720.),
+            vec![],
+            panel_id,
+        );
+        click(&ctx, &mut controls, egui::pos2(100., 100.), panel_id);
+        assert_eq!(controls.mode(), TargetMode::Display);
+        assert_eq!(controls.current_target(), Some(Target::Display));
+    }
+
+    #[test]
     fn escape_cancels_but_enter_requires_a_valid_target() {
         let mut controls = CaptureControls::default();
         assert_eq!(run_input(&mut controls, vec![key(egui::Key::Enter)]), None);
@@ -462,5 +589,102 @@ mod tests {
             run_input(&mut controls, vec![key(egui::Key::Enter)]),
             Some(Action::Capture(Target::Region(_)))
         ));
+    }
+
+    #[test]
+    fn narrow_toolbar_stays_inside_sixteen_point_monitor_margins() {
+        let ctx = egui::Context::default();
+        let panel_id = egui::Id::unique("capture-controls-narrow-toolbar");
+        let mut controls = CaptureControls {
+            mode: TargetMode::Display,
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            run_frame(
+                &ctx,
+                &mut controls,
+                egui::vec2(768., 720.),
+                vec![],
+                panel_id,
+            );
+        }
+        let rect = ctx
+            .memory(|memory| memory.area_rect(panel_id))
+            .expect("capture toolbar area");
+        assert!(rect.left() >= 16., "left edge was {}", rect.left());
+        assert!(rect.right() <= 752., "right edge was {}", rect.right());
+        assert!(rect.bottom() <= 704., "bottom edge was {}", rect.bottom());
+    }
+
+    #[test]
+    fn wide_toolbar_keeps_shipping_width_and_center_across_targets() {
+        let ctx = egui::Context::default();
+        let panel_id = egui::Id::unique("capture-controls-wide-toolbar");
+        let size = egui::vec2(1280., 900.);
+        let mut controls = CaptureControls::default();
+        let mut rects = Vec::new();
+        for mode in [TargetMode::Region, TargetMode::Window, TargetMode::Display] {
+            controls.mode = mode;
+            for _ in 0..2 {
+                run_frame(&ctx, &mut controls, size, vec![], panel_id);
+            }
+            rects.push(ctx.memory(|memory| memory.area_rect(panel_id)).unwrap());
+        }
+
+        for rect in &rects {
+            assert!((rect.width() - 854.).abs() <= 1., "width was {rect:?}");
+            assert!((rect.center().x - 640.).abs() <= 1., "center was {rect:?}");
+            assert!((rect.bottom() - 874.).abs() <= 1., "bottom was {rect:?}");
+        }
+    }
+
+    #[test]
+    fn toolbar_background_drag_moves_and_clamps_without_starting_region() {
+        let ctx = egui::Context::default();
+        let panel_id = egui::Id::unique("capture-controls-movable-toolbar");
+        let size = egui::vec2(1000., 720.);
+        let mut controls = CaptureControls::default();
+        for _ in 0..2 {
+            run_frame(&ctx, &mut controls, size, vec![], panel_id);
+        }
+        let original = ctx.memory(|memory| memory.area_rect(panel_id)).unwrap();
+        let start = egui::pos2(original.center().x, original.bottom() - 10.);
+        run_frame(
+            &ctx,
+            &mut controls,
+            size,
+            vec![
+                egui::Event::PointerMoved(start),
+                pointer_button(start, true),
+            ],
+            panel_id,
+        );
+        let destination = egui::pos2(4., 4.);
+        run_frame(
+            &ctx,
+            &mut controls,
+            size,
+            vec![egui::Event::PointerMoved(destination)],
+            panel_id,
+        );
+        run_frame(
+            &ctx,
+            &mut controls,
+            size,
+            vec![pointer_button(destination, false)],
+            panel_id,
+        );
+
+        let moved = ctx.memory(|memory| memory.area_rect(panel_id)).unwrap();
+        assert_ne!(moved, original);
+        assert!(moved.left() >= 16., "left edge was {}", moved.left());
+        assert!(moved.top() >= 16., "top edge was {}", moved.top());
+        assert!(controls.region().is_none());
+    }
+
+    #[test]
+    fn narrow_display_label_is_unicode_safe() {
+        assert_eq!(truncate_label("Built-in display", 8), "Built-i…");
+        assert_eq!(truncate_label("主ディスプレイ", 8), "主ディスプレイ");
     }
 }

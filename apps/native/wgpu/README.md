@@ -10,14 +10,16 @@ Preferences now uses shared Rust settings persistence and custom-theme math,
 including automatic save, retry, and a flush when the window closes. It uses a
 separate Captures Native development identity; pass `--settings-file PATH` to
 use an explicit test file. Screenshots and scripted exercises without that flag
-use disposable settings. `--live` opts into the shared Rust full-display, region and window PNG,
-history, copy, export and delete flows; see the [live slice and limits](../README.md#live-display-capture-slice).
-Live mode also provides a native tray menu for those three capture modes, History,
-Preferences, the output folder and Quit. Its persisted display, region and window
-shortcuts work globally except while capture is unavailable or a focused Preferences
-window is editing them. All seven shortcut rows can be edited from Preferences with
+use disposable settings. `--live` opts into the shared Rust New Capture controls
+plus direct full-display, region and window PNG, history, copy, export and delete
+flows; see the [live slice and limits](../README.md#live-display-capture-slice).
+Live mode also provides a native tray menu for New Capture, those three direct
+capture modes, History, Preferences, the output folder and Quit. Its persisted
+display, region, window and New Capture shortcuts work globally except while
+capture is unavailable or a focused Preferences window is editing them. All seven
+shortcut rows can be edited from Preferences with
 physical-key recording, modifier previews, Escape/blur cancellation, and inline invalid
-chord errors; New Capture and the three recording shortcuts remain visibly unconnected.
+chord errors; the three recording shortcuts remain visibly unavailable.
 Fixture scenes can edit disposable shortcut settings but never register global shortcuts.
 Windows tray left-click opens Preferences.
 Live capture applies automatic copy, screenshot countdown, cursor inclusion, and
@@ -110,6 +112,7 @@ quits so the process cannot be stranded. Opening the output folder also requires
 | HUD | Running/paused/muted fixture; fixed glass palette even in light mode | Real timer/recording; recording exclusion; tray or hidden-controls notice |
 | Preview | Cold/reused texture, fade/settle, reset mid-animation, explicit Reduce motion, optional transparent native window | **Not the shipping dust effect**: no isolated-chip blur, dust trajectories, source treatment or pile/drag/hit-region parity |
 | Editor | 2048×1152 synthetic image, clipped canvas, pan/zoom/rotate, separate outline/text layers, editable text field | Real document, layer editing/undo/export; outlines/text do not rotate with the image |
+| Capture Controls | Unified Region/Window/Full screen screenshot target controls over one prepared session; frozen/live previews, aspect/display pickers, keyboard confirm/cancel and draggable toolbar | Recording remains visibly unavailable; fixture uses synthetic pixels |
 | Region | Deterministic blank/draw/move/corner-resize/aspect/Shift/cancel selector fixture using the live component | Fixture uses synthetic pixels and does not request screen permission |
 | Window | Deterministic blank/frontmost-overlap/window/shell/display/cancel fixture using the live component and shared hit testing | Fixture uses synthetic pixels and does not request screen permission |
 | Idle | Hidden native window; no scheduled application work except optional quit deadline | Process/GPU teardown after last window; production tray lifecycle |

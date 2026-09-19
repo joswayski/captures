@@ -58,6 +58,7 @@ pub struct Workbench {
     region_selector: crate::selector::Selector,
     window_selector: crate::window_selector::WindowSelector,
     window_display: captures_capture::DisplayDescriptor,
+    capture_control_displays: Vec<captures_capture::DisplayDescriptor>,
     window_targets: Vec<captures_capture::WindowDescriptor>,
     window_shell: Vec<captures_capture::WindowDescriptor>,
     _temporary_settings: Option<tempfile::TempDir>,
@@ -152,6 +153,14 @@ impl Workbench {
         let (action_tx, action_rx) = mpsc::channel();
         let (screenshot_tx, screenshot_rx) = mpsc::channel();
         let (window_display, window_targets, window_shell) = window_fixture();
+        let mut capture_control_displays = vec![window_display.clone()];
+        capture_control_displays.push(captures_capture::DisplayDescriptor {
+            id: "fixture-display-2".into(),
+            name: "Secondary fixture display".into(),
+            x: 900,
+            is_primary: false,
+            ..window_display.clone()
+        });
         let this = Self {
             options,
             variants: tokens::load(),
@@ -183,6 +192,7 @@ impl Workbench {
             region_selector: crate::selector::Selector::default(),
             window_selector: crate::window_selector::WindowSelector::fixture(),
             window_display,
+            capture_control_displays,
             window_targets,
             window_shell,
             _temporary_settings: temporary_settings,
@@ -1062,9 +1072,10 @@ impl eframe::App for Workbench {
                         ui,
                         &t,
                         crate::capture_controls::View {
+                            panel_id: egui::Id::unique("capture-controls-fixture-toolbar"),
                             frozen: texture,
                             display,
-                            displays: std::slice::from_ref(display),
+                            displays: &self.capture_control_displays,
                             windows,
                             auto_start: false,
                         },
