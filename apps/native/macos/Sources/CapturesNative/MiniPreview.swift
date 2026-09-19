@@ -13,6 +13,7 @@ final class MiniPreviewCardView: NSView {
     private let imageView = NSImageView()
     private let title = NSTextField(labelWithString: "Screenshot")
     private let status = NSTextField(labelWithString: "")
+    private var actionButtons: [CaptureButton] = []
     private(set) var artifactID: String
     override var isFlipped: Bool { true }
 
@@ -52,6 +53,7 @@ final class MiniPreviewCardView: NSView {
                     y: bounds.height - buttonHeight - inset, width: actionWidth, height: buttonHeight),
                 tokens: tokens, glass: true, action: action.1)
             addSubview(button)
+            actionButtons.append(button)
         }
         setAccessibilityRole(.group); setAccessibilityLabel("Screenshot mini preview")
     }
@@ -60,6 +62,10 @@ final class MiniPreviewCardView: NSView {
     func setStatus(_ value: String) {
         status.stringValue = value
         status.setAccessibilityLabel(value.isEmpty ? nil : value)
+    }
+
+    func setActionsVisible(_ visible: Bool) {
+        actionButtons.forEach { $0.isHidden = !visible }
     }
 }
 
@@ -72,16 +78,45 @@ private final class MiniPreviewDocumentView: NSView {
     override var isFlipped: Bool { true }
 }
 
+private final class MiniPreviewExpandButton: NSButton {
+    private let actionBlock: () -> Void
+
+    init(frame: NSRect, count: Int, action: @escaping () -> Void) {
+        actionBlock = action
+        super.init(frame: frame)
+        title = ""; isBordered = false; setButtonType(.momentaryPushIn)
+        target = self; self.action = #selector(activate)
+        setAccessibilityLabel(count == 1 ? "Expand preview" : "Expand \(count) previews")
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    @objc private func activate() { actionBlock() }
+    override func draw(_ dirtyRect: NSRect) {}
+}
+
 final class MiniPreviewView: NSView {
     private let geometry: CapturesPreviewGeometry
     private let tokens: Tokens
     private let scroll = NSScrollView()
     private let document = MiniPreviewDocumentView()
     private var cards: [String: MiniPreviewCardView] = [:]
+    private var pileExpandButton: MiniPreviewExpandButton?
     private var expandButton: CaptureButton?
     private var collapseButton: CaptureButton?
     private var clearButton: CaptureButton?
     private(set) var artifactIDs: [String] = []
+    var renderedArtifactIDs: [String] { artifactIDs.filter { cards[$0] != nil } }
+    var cardPaintOrder: [String] {
+        document.subviews.compactMap { ($0 as? MiniPreviewCardView)?.artifactID }
+    }
+    var visibleCardActionTitles: [String] {
+        cards.values.flatMap { card in
+            card.subviews.compactMap { $0 as? CaptureButton }
+                .filter { !$0.isHidden }.map(\.title)
+        }
+    }
+    var pileExpandAccessibilityLabel: String? { pileExpandButton?.accessibilityLabel() }
+    var documentHeight: CGFloat { document.frame.height }
+    var scrollOffsetY: CGFloat { scroll.contentView.bounds.minY }
     override var isFlipped: Bool { true }
 
     init(geometry: CapturesPreviewGeometry, resources: [String: MiniPreviewResource],
@@ -103,8 +138,10 @@ final class MiniPreviewView: NSView {
         let padding = CGFloat(geometry.padding), cardHeight = CGFloat(geometry.card_height)
         let cardWidth = bounds.width - padding * 2
         let contentBottom = layouts.values.map { CGFloat($0.y) + cardHeight }.max() ?? 0
+        let trailingGutter = topAnchor ? padding : CGFloat(geometry.control_gutter)
+        let documentHeight = collapsed ? bounds.height : max(bounds.height, contentBottom + trailingGutter)
         document.frame = NSRect(x: 0, y: 0, width: bounds.width,
-            height: max(bounds.height, contentBottom + padding))
+            height: documentHeight)
         scroll.documentView = document
 
         for id in ids {
@@ -114,11 +151,19 @@ final class MiniPreviewView: NSView {
                 image: resource.image, tokens: tokens,
                 copy: { copy(id) }, save: { save(id) }, open: { open(id) },
                 dismiss: { dismiss(id) })
-            card.layer?.zPosition = CGFloat(layout.depth)
             card.isHidden = false
-            card.subviews.compactMap { $0 as? NSControl }.forEach { $0.isEnabled = layout.interactive }
+            card.setActionsVisible(!collapsed)
             card.setAccessibilityElement(layout.interactive)
             document.addSubview(card); cards[id] = card
+        }
+
+        if collapsed, let front = ids.compactMap({ id in
+            layouts[id].map { (id, $0) }
+        }).first(where: { $0.1.interactive }), let card = cards[front.0] {
+            let expand = MiniPreviewExpandButton(frame: card.frame, count: ids.count) {
+                setCollapsed(false)
+            }
+            document.addSubview(expand); pileExpandButton = expand
         }
 
         let controlY = topAnchor ? 16 : bounds.height - 44
@@ -153,6 +198,8 @@ final class MiniPreviewView: NSView {
     func setStatus(_ value: String, for artifactID: String) {
         cards[artifactID]?.setStatus(value)
     }
+
+    func activatePileExpand() { pileExpandButton?.performClick(nil) }
 }
 
 final class MiniPreviewPanel: NSPanel {
@@ -204,6 +251,7 @@ final class MiniPreviewController {
     var openArtifact: ArtifactAction = { _ in }
     var presentedArtifactID: String? { stack.ids.last }
     var presentedArtifactIDs: [String] { stack.ids }
+    var decodedArtifactIDs: [String] { stack.ids.filter { resources[$0] != nil } }
     var isCollapsed: Bool { stack.isCollapsed }
     var isPanelVisible: Bool { panel?.isVisible == true }
 
@@ -287,18 +335,20 @@ final class MiniPreviewController {
 
     func reconcileHistory(ids: Set<String>) {
         precondition(Thread.isMainThread)
+        var changed = false
         for id in Array(pendingDecodes.keys) where !ids.contains(id) {
             pendingDecodes[id] = nil
-            _ = stack.remove(id)
+            changed = stack.remove(id) || changed
             if visibilityPendingArtifactID == id, policy.stopWaiting() {
                 visibilityPendingArtifactID = nil
+                changed = true
             }
         }
         let removed = stack.ids.filter { !ids.contains($0) }
         for id in removed {
             _ = stack.remove(id); resources[id] = nil
         }
-        if !removed.isEmpty { makePanel(); updateVisibility() }
+        if changed || !removed.isEmpty { makePanel(); updateVisibility() }
     }
 
     func setStatus(_ value: String, for artifactID: String) {
