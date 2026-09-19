@@ -15,7 +15,11 @@ history, copy, export and delete flows; see the [live slice and limits](../READM
 Live mode also provides a native tray menu for those three capture modes, History,
 Preferences, the output folder and Quit. Its persisted display, region and window
 shortcuts work globally except while capture is unavailable or a focused Preferences
-window is editing them. Windows tray left-click opens Preferences.
+window is editing them. All seven shortcut rows can be edited from Preferences with
+physical-key recording, modifier previews, Escape/blur cancellation, and inline invalid
+chord errors; New Capture and the three recording shortcuts remain visibly unconnected.
+Fixture scenes can edit disposable shortcut settings but never register global shortcuts.
+Windows tray left-click opens Preferences.
 Live capture applies automatic copy, screenshot countdown, cursor inclusion, and
 PNG/JPEG/WebP output format/folder preferences. Region selection also applies
 freeze-screen and auto-start-on-selection preferences, retains one shared

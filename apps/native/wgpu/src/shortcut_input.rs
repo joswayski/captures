@@ -59,12 +59,12 @@ impl Bridge {
         self.active.load(Ordering::Acquire)
     }
 
-    pub fn key(&self, code: KeyCode, state: ElementState, repeat: bool, modifiers: Modifiers) {
+    pub fn key(&self, code: String, state: ElementState, repeat: bool, modifiers: Modifiers) {
         if !self.is_active() {
             return;
         }
         self.push(Event::Key {
-            code: physical_code(code),
+            code,
             pressed: state == ElementState::Pressed,
             repeat,
             modifiers,
@@ -93,7 +93,7 @@ impl Bridge {
     }
 }
 
-fn physical_code(code: KeyCode) -> String {
+pub fn physical_code(code: KeyCode) -> String {
     match code {
         KeyCode::SuperLeft => "MetaLeft".into(),
         KeyCode::SuperRight => "MetaRight".into(),
@@ -118,7 +118,7 @@ mod tests {
     fn inactive_input_is_discarded_and_blur_stops_before_waking_ui() {
         let bridge = Bridge::default();
         bridge.key(
-            KeyCode::KeyA,
+            physical_code(KeyCode::KeyA),
             ElementState::Pressed,
             false,
             Modifiers::default(),
@@ -127,14 +127,14 @@ mod tests {
 
         bridge.start();
         bridge.key(
-            KeyCode::KeyA,
+            physical_code(KeyCode::KeyA),
             ElementState::Pressed,
             false,
             Modifiers::default(),
         );
         bridge.blur();
         bridge.key(
-            KeyCode::KeyB,
+            physical_code(KeyCode::KeyB),
             ElementState::Pressed,
             false,
             Modifiers::default(),
