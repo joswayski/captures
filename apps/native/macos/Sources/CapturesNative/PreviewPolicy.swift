@@ -1,6 +1,72 @@
 import Foundation
 import CCapturesSettings
 
+/// Rust owns preview membership/order/collapse; Swift keeps images and native
+/// resources keyed by these IDs. Calls are serialized on the UI thread.
+final class NativePreviewStack {
+    private let handle: OpaquePointer
+
+    init() {
+        precondition(Thread.isMainThread)
+        handle = captures_preview_stack_new_v1()!
+    }
+    deinit { captures_preview_stack_free_v1(handle) }
+
+    var ids: [String] {
+        precondition(Thread.isMainThread)
+        return (0..<captures_preview_stack_count_v1(handle)).map { index in
+            var bytes = CapturesPreviewID()
+            let found = captures_preview_stack_id_v1(handle, index, &bytes)
+            precondition(found)
+            return String(decoding: UnsafeBufferPointer(start: bytes.data, count: bytes.length), as: UTF8.self)
+        }
+    }
+
+    @discardableResult
+    func insert(_ id: String) -> Bool {
+        precondition(Thread.isMainThread)
+        guard !id.utf8.contains(0) else { return false }
+        return id.withCString { captures_preview_stack_insert_v1(handle, $0) }
+    }
+
+    @discardableResult
+    func remove(_ id: String) -> Bool {
+        precondition(Thread.isMainThread)
+        guard !id.utf8.contains(0) else { return false }
+        return id.withCString { captures_preview_stack_remove_v1(handle, $0) }
+    }
+
+    /// Remove only the caller's snapshot; later arrivals survive.
+    @discardableResult
+    func removeAll(_ ids: [String]) -> Int {
+        precondition(Thread.isMainThread)
+        return ids.reduce(0) { $0 + (remove($1) ? 1 : 0) }
+    }
+
+    var isCollapsed: Bool {
+        precondition(Thread.isMainThread)
+        return captures_preview_stack_collapsed_v1(handle)
+    }
+
+    var contentHeight: Double {
+        precondition(Thread.isMainThread)
+        return captures_preview_stack_height_v1(handle)
+    }
+
+    func setCollapsed(_ collapsed: Bool) {
+        precondition(Thread.isMainThread)
+        let updated = captures_preview_stack_set_collapsed_v1(handle, collapsed)
+        precondition(updated)
+    }
+
+    func cardLayout(index: Int, topAnchor: Bool) -> CapturesPreviewCardLayout? {
+        precondition(Thread.isMainThread)
+        guard index >= 0 else { return nil }
+        var output = CapturesPreviewCardLayout()
+        return captures_preview_stack_card_v1(handle, index, topAnchor, &output) ? output : nil
+    }
+}
+
 /// UI-thread ownership of the shipping Rust policy. Generation values belong
 /// to this object, not the separate global capture-flow guard.
 final class NativePreviewPolicy {

@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    collections::HashMap,
     path::{Path, PathBuf},
     process::Command,
     sync::{
@@ -31,7 +32,7 @@ use crate::{
 enum Job {
     Execute {
         request: Request,
-        preview_generation: Option<u64>,
+        preview: Option<PreviewGuard>,
     },
     PrepareRegion {
         display_id: String,
@@ -70,14 +71,14 @@ enum Job {
     },
     Copy {
         path: PathBuf,
-        preview_generation: Option<u64>,
+        preview: Option<PreviewGuard>,
     },
     Shutdown,
 }
 
 enum Reply {
     Executed {
-        preview_generation: Option<u64>,
+        preview: Option<PreviewGuard>,
         result: Result<Box<Response>, String>,
     },
     HistoryCleared(Result<Box<Response>, String>),
@@ -98,7 +99,7 @@ enum Reply {
         result: Result<Box<Artifact>, String>,
     },
     Copied {
-        preview_generation: Option<u64>,
+        preview: Option<PreviewGuard>,
         result: Result<(), String>,
     },
     HistoryDecoded {
@@ -115,6 +116,12 @@ enum Reply {
 
 struct Decoded {
     image: egui::ColorImage,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PreviewGuard {
+    artifact_id: String,
+    generation: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -155,18 +162,26 @@ enum SelectorMessage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum PreviewMessage {
     Copy {
+        artifact_id: String,
         generation: u64,
     },
     Save {
+        artifact_id: String,
         generation: u64,
         directory: PathBuf,
         format: captures_settings::ScreenshotFormat,
     },
     OpenHistory {
+        artifact_id: String,
         generation: u64,
     },
     Dismiss {
+        artifact_id: String,
         generation: u64,
+    },
+    ToggleCollapsed,
+    ClearAll {
+        artifact_ids: Vec<String>,
     },
 }
 
@@ -184,16 +199,30 @@ struct PreviewCard {
     image_path: PathBuf,
     width: u32,
     height: u32,
-    target: CaptureTarget,
     texture: Option<egui::TextureHandle>,
     busy: Option<crate::mini_preview::Busy>,
     message: Option<String>,
 }
 
+#[derive(Clone)]
+struct PreviewRenderCard {
+    artifact_id: String,
+    generation: u64,
+    width: u32,
+    height: u32,
+    texture: egui::TextureHandle,
+    busy: Option<crate::mini_preview::Busy>,
+    message: Option<String>,
+    layout: captures_app::preview::PreviewCardLayout,
+}
+
 struct MiniPreviews {
     visibility: captures_app::preview::ThumbnailVisibility,
+    stack: captures_app::preview::PreviewStack,
     next_generation: u64,
-    card: Option<PreviewCard>,
+    cards: HashMap<String, PreviewCard>,
+    stack_target: Option<CaptureTarget>,
+    waiting_artifact: Option<String>,
     capture_generation: Option<u64>,
     capture_target: Option<CaptureTarget>,
     show: bool,
@@ -206,8 +235,11 @@ impl Default for MiniPreviews {
     fn default() -> Self {
         Self {
             visibility: captures_app::preview::ThumbnailVisibility::default(),
+            stack: captures_app::preview::PreviewStack::default(),
             next_generation: 0,
-            card: None,
+            cards: HashMap::new(),
+            stack_target: None,
+            waiting_artifact: None,
             capture_generation: None,
             capture_target: None,
             show: true,
@@ -248,25 +280,21 @@ impl MiniPreviews {
         self.omission_frame = None;
     }
 
-    fn start_artifact(&mut self, artifact: &Artifact) -> Result<Option<(u64, PathBuf)>, String> {
+    fn start_artifact(
+        &mut self,
+        artifact: &Artifact,
+    ) -> Result<Option<(PreviewGuard, PathBuf)>, String> {
         let Some(capture_generation) = self.capture_generation.take() else {
             return Err("Mini-preview capture state was lost before persistence.".into());
         };
         self.omission_frame = None;
-        if !self.show {
+        let target = self.capture_target.take();
+        if self.show && target.is_none() {
             self.visibility.restore_capture(capture_generation);
-            self.capture_target = None;
-            self.card = None;
-            return Ok(None);
-        }
-        let Some(target) = self.capture_target.take() else {
-            self.visibility.restore_capture(capture_generation);
-            self.card = None;
             return Err("Mini-preview monitor state was lost before persistence.".into());
-        };
-        if target.preview_bounds.is_none() {
+        }
+        if self.show && target.is_some_and(|target| target.preview_bounds.is_none()) {
             self.visibility.restore_capture(capture_generation);
-            self.card = None;
             return Err("Mini-preview positioning is unavailable for this display.".into());
         }
         let artifact_id = artifact.entry.id.clone();
@@ -276,44 +304,98 @@ impl MiniPreviews {
         {
             return Err("Mini-preview capture generation changed before persistence.".into());
         }
+        if !self.stack.insert(artifact_id.clone()) {
+            self.visibility.restore_capture(capture_generation);
+            return Err("Mini-preview artifact was already present in the stack.".into());
+        }
         self.next_generation = self.next_generation.wrapping_add(1);
         let generation = self.next_generation;
-        self.card = Some(PreviewCard {
-            generation,
-            artifact_id,
-            image_path: artifact.image_path.clone(),
-            width: artifact.entry.width,
-            height: artifact.entry.height,
-            target,
-            texture: None,
-            busy: None,
-            message: None,
-        });
-        Ok(Some((generation, artifact.preview_path.clone())))
+        self.cards.insert(
+            artifact_id.clone(),
+            PreviewCard {
+                generation,
+                artifact_id: artifact_id.clone(),
+                image_path: artifact.image_path.clone(),
+                width: artifact.entry.width,
+                height: artifact.entry.height,
+                texture: None,
+                busy: None,
+                message: None,
+            },
+        );
+        if target.is_some() {
+            self.stack_target = target;
+        }
+        self.waiting_artifact = Some(artifact_id.clone());
+        Ok(Some((
+            PreviewGuard {
+                artifact_id,
+                generation,
+            },
+            artifact.preview_path.clone(),
+        )))
     }
 
-    fn accepts(&self, generation: u64) -> bool {
-        self.card
-            .as_ref()
+    fn accepts(&self, artifact_id: &str, generation: u64) -> bool {
+        self.cards
+            .get(artifact_id)
             .is_some_and(|card| card.generation == generation)
     }
 
-    fn dismiss(&mut self, generation: u64) -> bool {
-        if !self.accepts(generation) {
+    fn dismiss(&mut self, artifact_id: &str, generation: u64) -> bool {
+        if !self.accepts(artifact_id, generation) {
             return false;
         }
-        self.card = None;
-        self.visibility.stop_waiting_for_artifact();
+        self.remove(artifact_id)
+    }
+
+    fn remove(&mut self, artifact_id: &str) -> bool {
+        if !self.stack.remove(artifact_id) {
+            return false;
+        }
+        self.cards.remove(artifact_id);
+        if self.waiting_artifact.as_deref() == Some(artifact_id) {
+            self.waiting_artifact = None;
+            self.visibility.stop_waiting_for_artifact();
+        }
+        if self.stack.ids().is_empty() {
+            self.stack_target = None;
+        }
         true
+    }
+
+    fn clear(&mut self, artifact_ids: &[String]) -> usize {
+        let removed = self.stack.remove_all(artifact_ids);
+        for artifact_id in artifact_ids {
+            self.cards.remove(artifact_id);
+        }
+        if self
+            .waiting_artifact
+            .as_ref()
+            .is_some_and(|waiting| artifact_ids.contains(waiting))
+        {
+            self.waiting_artifact = None;
+            self.visibility.stop_waiting_for_artifact();
+        }
+        if self.stack.ids().is_empty() {
+            self.stack_target = None;
+        }
+        removed
+    }
+
+    fn mark_ready(&mut self, artifact_id: &str) {
+        if self.waiting_artifact.as_deref() == Some(artifact_id) {
+            self.visibility.mark_artifact_ready(artifact_id);
+            self.waiting_artifact = None;
+        }
     }
 
     fn is_visible(&self) -> bool {
         captures_app::preview::stack_should_be_visible(
-            usize::from(
-                self.card
-                    .as_ref()
-                    .is_some_and(|card| card.texture.is_some()),
-            ),
+            self.cards
+                .values()
+                .filter(|card| card.texture.is_some())
+                .count(),
             self.visibility.is_suppressed(),
             self.show,
             self.include_in_captures,
@@ -414,10 +496,7 @@ impl Live {
             while let Ok(job) = jobs.recv() {
                 let reply = match job {
                     Job::Shutdown => break,
-                    Job::Execute {
-                        request,
-                        preview_generation,
-                    } => {
+                    Job::Execute { request, preview } => {
                         let clearing = matches!(request, Request::ClearHistory { .. });
                         let result = captures_app::execute(request)
                             .map(Box::new)
@@ -425,10 +504,7 @@ impl Live {
                         if clearing {
                             Reply::HistoryCleared(result)
                         } else {
-                            Reply::Executed {
-                                preview_generation,
-                                result,
-                            }
+                            Reply::Executed { preview, result }
                         }
                     }
                     Job::PrepareRegion {
@@ -504,11 +580,8 @@ impl Live {
                         artifact_id,
                         result: decode(&path),
                     },
-                    Job::Copy {
-                        path,
-                        preview_generation,
-                    } => Reply::Copied {
-                        preview_generation,
+                    Job::Copy { path, preview } => Reply::Copied {
+                        preview,
                         result: copy_image(&path, &mut clipboard),
                     },
                 };
@@ -602,15 +675,15 @@ impl Live {
         self.error = None;
         let _ = self.tx.send(Job::Execute {
             request,
-            preview_generation: None,
+            preview: None,
         });
     }
 
-    fn send_preview(&mut self, request: Request, generation: u64) {
+    fn send_preview(&mut self, request: Request, preview: PreviewGuard) {
         self.pending += 1;
         let _ = self.tx.send(Job::Execute {
             request,
-            preview_generation: Some(generation),
+            preview: Some(preview),
         });
     }
 
@@ -743,12 +816,15 @@ impl Live {
         }
         while let Ok(message) = self.preview_rx.try_recv() {
             match message {
-                PreviewMessage::Copy { generation } if self.previews.accepts(generation) => {
+                PreviewMessage::Copy {
+                    artifact_id,
+                    generation,
+                } if self.previews.accepts(&artifact_id, generation) => {
                     let path = {
                         let card = self
                             .previews
-                            .card
-                            .as_mut()
+                            .cards
+                            .get_mut(&artifact_id)
                             .expect("accepted preview exists");
                         card.busy = Some(crate::mini_preview::Busy::Copy);
                         card.message = Some("Copying full-resolution pixels…".into());
@@ -757,19 +833,23 @@ impl Live {
                     self.pending += 1;
                     let _ = self.tx.send(Job::Copy {
                         path,
-                        preview_generation: Some(generation),
+                        preview: Some(PreviewGuard {
+                            artifact_id,
+                            generation,
+                        }),
                     });
                 }
                 PreviewMessage::Save {
+                    artifact_id,
                     generation,
                     directory,
                     format,
-                } if self.previews.accepts(generation) => {
+                } if self.previews.accepts(&artifact_id, generation) => {
                     let id = {
                         let card = self
                             .previews
-                            .card
-                            .as_mut()
+                            .cards
+                            .get_mut(&artifact_id)
                             .expect("accepted preview exists");
                         card.busy = Some(crate::mini_preview::Busy::Save);
                         card.message = Some("Saving with current preferences…".into());
@@ -782,24 +862,37 @@ impl Live {
                             directory,
                             format,
                         },
-                        generation,
+                        PreviewGuard {
+                            artifact_id,
+                            generation,
+                        },
                     );
                 }
-                PreviewMessage::OpenHistory { generation } if self.previews.accepts(generation) => {
-                    let id = self
-                        .previews
-                        .card
-                        .as_ref()
-                        .expect("accepted preview exists")
-                        .artifact_id
-                        .clone();
-                    self.select(id);
+                PreviewMessage::OpenHistory {
+                    artifact_id,
+                    generation,
+                } if self.previews.accepts(&artifact_id, generation) => {
+                    self.select(artifact_id);
                     self.open_history_requested = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                     ctx.request_repaint();
                 }
-                PreviewMessage::Dismiss { generation } => {
-                    if self.previews.dismiss(generation) {
+                PreviewMessage::Dismiss {
+                    artifact_id,
+                    generation,
+                } => {
+                    if self.previews.dismiss(&artifact_id, generation) {
+                        ctx.request_repaint();
+                    }
+                }
+                PreviewMessage::ToggleCollapsed => {
+                    self.previews
+                        .stack
+                        .set_collapsed(!self.previews.stack.is_collapsed());
+                    ctx.request_repaint();
+                }
+                PreviewMessage::ClearAll { artifact_ids } => {
+                    if self.previews.clear(&artifact_ids) > 0 {
                         ctx.request_repaint();
                     }
                 }
@@ -961,17 +1054,14 @@ impl Live {
                         }
                     }
                 }
-                Reply::Copied {
-                    preview_generation,
-                    result,
-                } => {
+                Reply::Copied { preview, result } => {
                     self.pending = self.pending.saturating_sub(1);
-                    if let Some(generation) = preview_generation {
+                    if let Some(preview) = preview {
                         if let Some(card) = self
                             .previews
-                            .card
-                            .as_mut()
-                            .filter(|card| card.generation == generation)
+                            .cards
+                            .get_mut(&preview.artifact_id)
+                            .filter(|card| card.generation == preview.generation)
                         {
                             card.busy = None;
                             card.message = Some(match result {
@@ -986,10 +1076,7 @@ impl Live {
                         }
                     }
                 }
-                Reply::Executed {
-                    preview_generation,
-                    result,
-                } => {
+                Reply::Executed { preview, result } => {
                     self.pending = self.pending.saturating_sub(1);
                     if self.capture_phase == Some(CapturePhase::DisplayCapturing) {
                         self.capture_in_flight = false;
@@ -998,12 +1085,12 @@ impl Live {
                     }
                     match result {
                         Err(error) => {
-                            if let Some(generation) = preview_generation {
+                            if let Some(preview) = preview {
                                 if let Some(card) = self
                                     .previews
-                                    .card
-                                    .as_mut()
-                                    .filter(|card| card.generation == generation)
+                                    .cards
+                                    .get_mut(&preview.artifact_id)
+                                    .filter(|card| card.generation == preview.generation)
                                 {
                                     card.busy = None;
                                     card.message = Some(format!("Save failed: {error}"));
@@ -1013,15 +1100,17 @@ impl Live {
                             }
                         }
                         Ok(response) => {
-                            let announce = preview_generation
-                                .is_none_or(|generation| self.previews.accepts(generation));
+                            let announce = preview.as_ref().is_none_or(|preview| {
+                                self.previews
+                                    .accepts(&preview.artifact_id, preview.generation)
+                            });
                             self.apply(*response, announce);
-                            if let Some(generation) = preview_generation
+                            if let Some(preview) = preview
                                 && let Some(card) = self
                                     .previews
-                                    .card
-                                    .as_mut()
-                                    .filter(|card| card.generation == generation)
+                                    .cards
+                                    .get_mut(&preview.artifact_id)
+                                    .filter(|card| card.generation == preview.generation)
                             {
                                 card.busy = None;
                                 card.message = Some("Saved with current preferences".into());
@@ -1191,36 +1280,26 @@ impl Live {
                     generation,
                     artifact_id,
                     result,
-                } if self.previews.accepts(generation)
-                    && self
-                        .previews
-                        .card
-                        .as_ref()
-                        .is_some_and(|card| card.artifact_id == artifact_id) =>
-                {
-                    match result {
-                        Ok(decoded)
-                            if self.previews.visibility.mark_artifact_ready(&artifact_id) =>
-                        {
-                            let card = self
-                                .previews
-                                .card
-                                .as_mut()
-                                .expect("accepted preview exists");
-                            card.texture = Some(ctx.load_texture(
-                                format!("mini-preview:{generation}:{artifact_id}"),
-                                decoded.image,
-                                egui::TextureOptions::LINEAR,
-                            ));
-                            ctx.request_repaint();
-                        }
-                        Ok(_) => {}
-                        Err(error) => {
-                            self.previews.dismiss(generation);
-                            self.error = Some(format!("Could not load mini preview: {error}"));
-                        }
+                } if self.previews.accepts(&artifact_id, generation) => match result {
+                    Ok(decoded) => {
+                        self.previews.mark_ready(&artifact_id);
+                        let card = self
+                            .previews
+                            .cards
+                            .get_mut(&artifact_id)
+                            .expect("accepted preview exists");
+                        card.texture = Some(ctx.load_texture(
+                            format!("mini-preview:{generation}:{artifact_id}"),
+                            decoded.image,
+                            egui::TextureOptions::LINEAR,
+                        ));
+                        ctx.request_repaint();
                     }
-                }
+                    Err(error) => {
+                        self.previews.dismiss(&artifact_id, generation);
+                        self.error = Some(format!("Could not load mini preview: {error}"));
+                    }
+                },
                 Reply::PreviewDecoded { .. } => {}
             }
         }
@@ -1256,17 +1335,10 @@ impl Live {
         self.select(id);
         self.status = status.into();
         match preview {
-            Ok(Some((generation, path))) => {
-                let artifact_id = self
-                    .previews
-                    .card
-                    .as_ref()
-                    .expect("preview was just prepared")
-                    .artifact_id
-                    .clone();
+            Ok(Some((preview, path))) => {
                 let _ = self.tx.send(Job::DecodePreview {
-                    generation,
-                    artifact_id,
+                    generation: preview.generation,
+                    artifact_id: preview.artifact_id,
                     path,
                 });
             }
@@ -1277,7 +1349,7 @@ impl Live {
             self.pending += 1;
             let _ = self.tx.send(Job::Copy {
                 path,
-                preview_generation: None,
+                preview: None,
             });
         }
     }
@@ -1300,15 +1372,19 @@ impl Live {
                 self.status = "Displays refreshed".into();
             }
             Response::History { artifacts } => {
-                let preview_kept = self.previews.card.as_ref().is_none_or(|card| {
-                    artifacts
-                        .iter()
-                        .any(|artifact| artifact.entry.id == card.artifact_id)
-                });
-                if !preview_kept {
-                    self.previews.card = None;
-                    self.previews.visibility.stop_waiting_for_artifact();
-                }
+                let removed = self
+                    .previews
+                    .stack
+                    .ids()
+                    .iter()
+                    .filter(|id| {
+                        !artifacts
+                            .iter()
+                            .any(|artifact| artifact.entry.id == id.as_str())
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                self.previews.clear(&removed);
                 self.confirm_clear_history = false;
                 self.confirm_delete = None;
                 self.selection.clear();
@@ -1337,15 +1413,7 @@ impl Live {
                 }
             }
             Response::Deleted { id } => {
-                if self
-                    .previews
-                    .card
-                    .as_ref()
-                    .is_some_and(|card| card.artifact_id == id)
-                {
-                    self.previews.card = None;
-                    self.previews.visibility.stop_waiting_for_artifact();
-                }
+                self.previews.remove(&id);
                 self.artifacts.retain(|item| item.entry.id != id);
                 self.confirm_delete = None;
                 self.selection.clear();
@@ -1374,6 +1442,10 @@ impl Live {
         if self.flow.is_none()
             && let Ok(settings) = &settings
         {
+            if self.previews.show && !settings.show_mini_previews {
+                self.previews.stack.set_collapsed(false);
+                self.previews.visibility.reset_session_placement();
+            }
             self.previews.show = settings.show_mini_previews;
             self.previews.include_in_captures = settings.include_mini_previews_in_captures;
             self.previews.placement = settings.mini_preview_placement;
@@ -1381,30 +1453,52 @@ impl Live {
         if !self.previews.is_visible() {
             return;
         }
-        let Some(card) = self.previews.card.as_ref() else {
+        let Some(target) = self.previews.stack_target else {
             return;
         };
-        let Some(texture) = card.texture.clone() else {
+        let Some(preview_bounds) = target.preview_bounds else {
             return;
         };
-        let generation = card.generation;
-        let width = card.width;
-        let height = card.height;
-        let target = card.target;
-        let busy = card.busy;
-        let message = card.message.clone();
+        let count = self.previews.stack.ids().len();
+        let collapsed = self.previews.stack.is_collapsed();
         let placement = self.previews.placement;
+        let top_anchor = placement.is_top();
+        let cards = self
+            .previews
+            .stack
+            .ids()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, artifact_id)| {
+                let card = self.previews.cards.get(artifact_id)?;
+                Some(PreviewRenderCard {
+                    artifact_id: artifact_id.clone(),
+                    generation: card.generation,
+                    width: card.width,
+                    height: card.height,
+                    texture: card.texture.clone()?,
+                    busy: card.busy,
+                    message: card.message.clone(),
+                    layout: self.previews.stack.card_layout(index, top_anchor)?,
+                })
+            })
+            .collect::<Vec<_>>();
+        if cards.is_empty() {
+            return;
+        }
         let tokens = tokens.clone();
         let geometry = captures_app::preview::thumbnail_geometry(
-            target
-                .preview_bounds
-                .expect("visible preview has validated monitor bounds"),
-            1,
-            false,
+            preview_bounds,
+            count,
+            collapsed,
             None,
             placement,
         );
         let sender = self.preview_tx.clone();
+        let clear_ids = self.previews.stack.ids().to_vec();
+        let scroll_content_height = (self.previews.stack.content_height()
+            - captures_app::preview::THUMBNAIL_CONTROL_GUTTER)
+            .max(0.) as f32;
         let save = settings.ok().map(|settings| {
             (
                 PathBuf::from(settings.output_directory),
@@ -1457,43 +1551,169 @@ impl Live {
                         geometry.y as f32,
                     )));
                 if ui.input(|input| input.viewport().close_requested()) {
-                    let _ = sender.send(PreviewMessage::Dismiss { generation });
+                    let _ = sender.send(PreviewMessage::ClearAll {
+                        artifact_ids: clear_ids.clone(),
+                    });
                     ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
                     return;
                 }
-                let action = crate::mini_preview::show(
-                    ui,
-                    &tokens,
-                    crate::mini_preview::View {
-                        texture: &texture,
-                        width,
-                        height,
-                        busy,
-                        message: message.as_deref(),
-                        can_save: save.is_some(),
-                    },
-                );
-                let message = match action {
-                    Some(crate::mini_preview::Action::Copy) => {
-                        Some(PreviewMessage::Copy { generation })
-                    }
-                    Some(crate::mini_preview::Action::Save) => {
-                        save.as_ref()
-                            .map(|(directory, format)| PreviewMessage::Save {
-                                generation,
-                                directory: directory.clone(),
-                                format: *format,
+                let mut message = None;
+                let mut show_card = |ui: &mut egui::Ui, card: &PreviewRenderCard| {
+                    let action = crate::mini_preview::show(
+                        ui,
+                        &tokens,
+                        crate::mini_preview::View {
+                            artifact_id: &card.artifact_id,
+                            texture: &card.texture,
+                            width: card.width,
+                            height: card.height,
+                            busy: card.busy,
+                            message: card.message.as_deref(),
+                            can_save: save.is_some(),
+                            interactive: card.layout.interactive,
+                            collapsed,
+                            stack_count: count,
+                        },
+                    );
+                    let next_message = match action {
+                        Some(crate::mini_preview::Action::ExpandStack) => {
+                            Some(PreviewMessage::ToggleCollapsed)
+                        }
+                        Some(crate::mini_preview::Action::Copy) => Some(PreviewMessage::Copy {
+                            artifact_id: card.artifact_id.clone(),
+                            generation: card.generation,
+                        }),
+                        Some(crate::mini_preview::Action::Save) => {
+                            save.as_ref()
+                                .map(|(directory, format)| PreviewMessage::Save {
+                                    artifact_id: card.artifact_id.clone(),
+                                    generation: card.generation,
+                                    directory: directory.clone(),
+                                    format: *format,
+                                })
+                        }
+                        Some(crate::mini_preview::Action::OpenHistory) => {
+                            restore_root_for_history(ui.ctx());
+                            Some(PreviewMessage::OpenHistory {
+                                artifact_id: card.artifact_id.clone(),
+                                generation: card.generation,
                             })
+                        }
+                        Some(crate::mini_preview::Action::Dismiss) => {
+                            Some(PreviewMessage::Dismiss {
+                                artifact_id: card.artifact_id.clone(),
+                                generation: card.generation,
+                            })
+                        }
+                        None => None,
+                    };
+                    if next_message.is_some() {
+                        message = next_message;
                     }
-                    Some(crate::mini_preview::Action::OpenHistory) => {
-                        restore_root_for_history(ui.ctx());
-                        Some(PreviewMessage::OpenHistory { generation })
-                    }
-                    Some(crate::mini_preview::Action::Dismiss) => {
-                        Some(PreviewMessage::Dismiss { generation })
-                    }
-                    None => None,
                 };
+                if collapsed {
+                    for card in &cards {
+                        let rect = egui::Rect::from_min_size(
+                            egui::pos2(
+                                captures_app::preview::THUMBNAIL_PADDING as f32,
+                                card.layout.y as f32,
+                            ),
+                            egui::vec2(
+                                (captures_app::preview::THUMBNAIL_WIDTH
+                                    - captures_app::preview::THUMBNAIL_PADDING * 2.)
+                                    as f32,
+                                captures_app::preview::THUMBNAIL_CARD_HEIGHT as f32,
+                            ),
+                        );
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                            show_card(ui, card);
+                        });
+                    }
+                } else {
+                    let gutter = captures_app::preview::THUMBNAIL_CONTROL_GUTTER as f32;
+                    let card_area = if top_anchor {
+                        egui::Rect::from_min_max(
+                            egui::pos2(0., gutter),
+                            egui::pos2(
+                                captures_app::preview::THUMBNAIL_WIDTH as f32,
+                                geometry.height as f32,
+                            ),
+                        )
+                    } else {
+                        egui::Rect::from_min_max(
+                            egui::Pos2::ZERO,
+                            egui::pos2(
+                                captures_app::preview::THUMBNAIL_WIDTH as f32,
+                                geometry.height as f32 - gutter,
+                            ),
+                        )
+                    };
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(card_area), |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("preview-stack-scroll")
+                            .auto_shrink([false, false])
+                            .stick_to_bottom(!top_anchor)
+                            .show(ui, |ui| {
+                                let (content, _) = ui.allocate_exact_size(
+                                    egui::vec2(ui.available_width(), scroll_content_height),
+                                    egui::Sense::hover(),
+                                );
+                                for card in &cards {
+                                    let y =
+                                        card.layout.y as f32 - if top_anchor { gutter } else { 0. };
+                                    let rect = egui::Rect::from_min_size(
+                                        content.min
+                                            + egui::vec2(
+                                                captures_app::preview::THUMBNAIL_PADDING as f32,
+                                                y,
+                                            ),
+                                        egui::vec2(
+                                            (captures_app::preview::THUMBNAIL_WIDTH
+                                                - captures_app::preview::THUMBNAIL_PADDING * 2.)
+                                                as f32,
+                                            captures_app::preview::THUMBNAIL_CARD_HEIGHT as f32,
+                                        ),
+                                    );
+                                    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                                        show_card(ui, card)
+                                    });
+                                }
+                            });
+                    });
+                }
+                if crate::mini_preview::stack_controls_visible(count, collapsed) {
+                    let gutter = captures_app::preview::THUMBNAIL_CONTROL_GUTTER as f32;
+                    let padding = captures_app::preview::THUMBNAIL_PADDING as f32;
+                    let controls = egui::Rect::from_min_size(
+                        egui::pos2(
+                            padding,
+                            if top_anchor {
+                                0.
+                            } else {
+                                geometry.height as f32 - gutter
+                            },
+                        ),
+                        egui::vec2(
+                            captures_app::preview::THUMBNAIL_WIDTH as f32 - padding * 2.,
+                            gutter,
+                        ),
+                    );
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(controls), |ui| {
+                        match crate::mini_preview::show_stack_controls(
+                            ui, &tokens, count, collapsed,
+                        ) {
+                            Some(crate::mini_preview::StackAction::ToggleCollapsed) => {
+                                message = Some(PreviewMessage::ToggleCollapsed);
+                            }
+                            Some(crate::mini_preview::StackAction::ClearAll) => {
+                                message = Some(PreviewMessage::ClearAll {
+                                    artifact_ids: clear_ids.clone(),
+                                });
+                            }
+                            None => {}
+                        }
+                    });
+                }
                 if let Some(message) = message {
                     let _ = sender.send(message);
                     ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
@@ -1999,7 +2219,7 @@ impl Live {
             self.error = None;
             let _ = self.tx.send(Job::Copy {
                 path: path.clone(),
-                preview_generation: None,
+                preview: None,
             });
         }
     }
@@ -2305,13 +2525,13 @@ mod tests {
 
         previews.restore_capture();
         assert!(!previews.visibility.is_suppressed());
-        assert!(previews.card.is_none());
+        assert!(previews.cards.is_empty());
         assert_eq!(captures_app::list(root.path()).unwrap().len(), 1);
         assert!(artifact.image_path.exists());
     }
 
     #[test]
-    fn replacement_and_dismiss_reject_stale_preview_work() {
+    fn persisted_order_and_per_id_guards_survive_out_of_order_decode() {
         let root = tempfile::tempdir().unwrap();
         let first = preview_artifact(root.path(), [10, 20, 30, 255]);
         let second = preview_artifact(root.path(), [90, 80, 70, 255]);
@@ -2321,24 +2541,83 @@ mod tests {
         previews
             .begin_capture(&settings, Some(preview_target()), 1)
             .unwrap();
-        let (first_generation, _) = previews.start_artifact(&first).unwrap().unwrap();
+        let (first_guard, _) = previews.start_artifact(&first).unwrap().unwrap();
         previews
             .begin_capture(&settings, Some(preview_target()), 2)
             .unwrap();
-        let (second_generation, _) = previews.start_artifact(&second).unwrap().unwrap();
+        let (second_guard, _) = previews.start_artifact(&second).unwrap().unwrap();
 
-        assert!(!previews.accepts(first_generation));
-        assert!(!previews.dismiss(first_generation));
-        assert!(previews.accepts(second_generation));
-        assert!(previews.dismiss(second_generation));
-        assert!(!previews.accepts(second_generation));
+        assert_eq!(
+            previews.stack.ids(),
+            [first.entry.id.clone(), second.entry.id.clone()]
+        );
+        previews.mark_ready(&second_guard.artifact_id);
+        assert!(previews.accepts(&first_guard.artifact_id, first_guard.generation));
+        assert!(previews.accepts(&second_guard.artifact_id, second_guard.generation));
+        assert!(!previews.dismiss(&first_guard.artifact_id, second_guard.generation));
+        assert!(previews.dismiss(&first_guard.artifact_id, first_guard.generation));
+        assert!(!previews.accepts(&first_guard.artifact_id, first_guard.generation));
+        assert!(previews.accepts(&second_guard.artifact_id, second_guard.generation));
         assert_eq!(captures_app::list(root.path()).unwrap().len(), 2);
         assert!(first.image_path.exists());
         assert!(second.image_path.exists());
     }
 
     #[test]
-    fn disabled_mini_previews_skip_card_without_losing_capture() {
+    fn incoming_capture_preserves_collapse_and_clear_snapshot_spares_later_arrival() {
+        let root = tempfile::tempdir().unwrap();
+        let first = preview_artifact(root.path(), [10, 10, 10, 255]);
+        let second = preview_artifact(root.path(), [20, 20, 20, 255]);
+        let later = preview_artifact(root.path(), [30, 30, 30, 255]);
+        let settings = AppSettings::default();
+        let mut previews = MiniPreviews::default();
+
+        previews
+            .begin_capture(&settings, Some(preview_target()), 1)
+            .unwrap();
+        let (first_guard, _) = previews.start_artifact(&first).unwrap().unwrap();
+        previews.mark_ready(&first_guard.artifact_id);
+        previews.stack.set_collapsed(true);
+        previews
+            .begin_capture(&settings, Some(preview_target()), 2)
+            .unwrap();
+        let (second_guard, _) = previews.start_artifact(&second).unwrap().unwrap();
+        previews.mark_ready(&second_guard.artifact_id);
+        assert!(previews.stack.is_collapsed());
+        let clear_snapshot = previews.stack.ids().to_vec();
+
+        previews
+            .begin_capture(&settings, Some(preview_target()), 3)
+            .unwrap();
+        let (later_guard, _) = previews.start_artifact(&later).unwrap().unwrap();
+        assert_eq!(previews.clear(&clear_snapshot), 2);
+
+        assert_eq!(previews.stack.ids(), std::slice::from_ref(&later.entry.id));
+        assert!(previews.accepts(&later_guard.artifact_id, later_guard.generation));
+        assert_eq!(captures_app::list(root.path()).unwrap().len(), 3);
+        assert!(first.image_path.exists());
+        assert!(second.image_path.exists());
+        assert!(later.image_path.exists());
+    }
+
+    #[test]
+    fn clearing_pending_card_rejects_its_late_decode() {
+        let root = tempfile::tempdir().unwrap();
+        let artifact = preview_artifact(root.path(), [44, 55, 66, 255]);
+        let mut previews = MiniPreviews::default();
+        previews
+            .begin_capture(&AppSettings::default(), Some(preview_target()), 1)
+            .unwrap();
+        let (guard, _) = previews.start_artifact(&artifact).unwrap().unwrap();
+
+        assert_eq!(previews.clear(std::slice::from_ref(&guard.artifact_id)), 1);
+        assert!(!previews.accepts(&guard.artifact_id, guard.generation));
+        assert!(!previews.visibility.is_suppressed());
+        assert!(artifact.image_path.exists());
+    }
+
+    #[test]
+    fn disabled_mini_previews_retain_card_for_reenable_without_showing_it() {
         let root = tempfile::tempdir().unwrap();
         let artifact = preview_artifact(root.path(), [40, 50, 60, 255]);
         let settings = AppSettings {
@@ -2346,11 +2625,29 @@ mod tests {
             ..AppSettings::default()
         };
         let mut previews = MiniPreviews::default();
-        previews.begin_capture(&settings, None, 1).unwrap();
+        previews
+            .begin_capture(&settings, Some(preview_target()), 1)
+            .unwrap();
 
-        assert!(previews.start_artifact(&artifact).unwrap().is_none());
-        assert!(previews.card.is_none());
+        let (guard, _) = previews.start_artifact(&artifact).unwrap().unwrap();
+        assert_eq!(
+            previews.stack.ids(),
+            std::slice::from_ref(&artifact.entry.id)
+        );
+        assert!(previews.accepts(&guard.artifact_id, guard.generation));
+        assert!(!previews.is_visible());
+        previews.mark_ready(&guard.artifact_id);
         assert!(!previews.visibility.is_suppressed());
+        previews.show = true;
+        assert!(!previews.is_visible(), "decode still gates presentation");
+        let context = egui::Context::default();
+        let texture = context.load_texture(
+            "disabled-preview-test",
+            egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]),
+            egui::TextureOptions::LINEAR,
+        );
+        previews.cards.get_mut(&guard.artifact_id).unwrap().texture = Some(texture);
+        assert!(previews.is_visible());
         assert_eq!(captures_app::list(root.path()).unwrap().len(), 1);
     }
 
@@ -2369,7 +2666,7 @@ mod tests {
             previews.start_artifact(&artifact).unwrap_err(),
             "Mini-preview positioning is unavailable for this display."
         );
-        assert!(previews.card.is_none());
+        assert!(previews.cards.is_empty());
         assert!(!previews.visibility.is_suppressed());
         assert_eq!(captures_app::list(root.path()).unwrap().len(), 1);
     }

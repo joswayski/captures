@@ -63,7 +63,7 @@ jobs:
         run: python apps/native/x11_history_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-history
       - name: Exercise real native mini previews on private X11
         if: runner.os == 'Linux'
-        run: /usr/bin/python3 apps/native/x11_preview_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-preview
+        run: /usr/bin/python3 apps/native/x11_preview_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-preview --stack
       - name: Exercise native Windows windows
         if: runner.os == 'Windows'
         run: python apps/native/wgpu/smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench.exe --output native-smoke

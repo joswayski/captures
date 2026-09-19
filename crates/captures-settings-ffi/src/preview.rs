@@ -280,10 +280,278 @@ pub unsafe extern "C" fn captures_preview_visible_v1(
     })
 }
 
+/// Owned chronological membership and compact/expanded presentation policy.
+pub struct CapturesPreviewStack(preview::PreviewStack);
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CapturesPreviewCardLayout {
+    pub y: f64,
+    pub depth: usize,
+    pub interactive: bool,
+}
+
+#[repr(C)]
+pub struct CapturesPreviewID {
+    pub data: *const u8,
+    pub length: usize,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_stack_new_v1() -> *mut CapturesPreviewStack {
+    Box::into_raw(Box::new(CapturesPreviewStack(
+        preview::PreviewStack::default(),
+    )))
+}
+
+/// # Safety
+/// Handle is null or a live, uniquely owned handle freed exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_stack_free_v1(handle: *mut CapturesPreviewStack) {
+    if !handle.is_null() {
+        // SAFETY: Caller transfers exclusive ownership of this live allocation.
+        drop(unsafe { Box::from_raw(handle) });
+    }
+}
+
+/// Append a nonempty ID; duplicates do not reorder or expand the pile.
+/// # Safety
+/// Handle is null or live/exclusive. ID is null or readable NUL-terminated UTF-8.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_stack_insert_v1(
+    handle: *mut CapturesPreviewStack,
+    id: *const c_char,
+) -> bool {
+    if id.is_null() {
+        return false;
+    }
+    // SAFETY: Non-null pointers satisfy the documented handle/string contract.
+    let Some(handle) = (unsafe { handle.as_mut() }) else {
+        return false;
+    };
+    let Ok(id) = (unsafe { CStr::from_ptr(id) }).to_str() else {
+        return false;
+    };
+    handle.0.insert(id.to_owned())
+}
+
+/// Remove membership only, never files/history. False for an absent/invalid ID.
+/// # Safety
+/// Same handle/string contract as captures_preview_stack_insert_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_stack_remove_v1(
+    handle: *mut CapturesPreviewStack,
+    id: *const c_char,
+) -> bool {
+    if id.is_null() {
+        return false;
+    }
+    // SAFETY: Non-null pointers satisfy the documented handle/string contract.
+    let Some(handle) = (unsafe { handle.as_mut() }) else {
+        return false;
+    };
+    let Ok(id) = (unsafe { CStr::from_ptr(id) }).to_str() else {
+        return false;
+    };
+    handle.0.remove(id)
+}
+
+/// # Safety
+/// Handle is null or live and not concurrently mutated/freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_stack_count_v1(
+    handle: *const CapturesPreviewStack,
+) -> usize {
+    // SAFETY: Caller guarantees shared access to a live handle or null.
+    unsafe { handle.as_ref() }.map_or(0, |handle| handle.0.ids().len())
+}
+
+/// Unclamped logical content height, including the control gutter; zero if empty.
+/// # Safety
+/// Handle is null or live and not concurrently mutated/freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_stack_height_v1(
+    handle: *const CapturesPreviewStack,
+) -> f64 {
+    // SAFETY: Caller guarantees shared access to a live handle or null.
+    unsafe { handle.as_ref() }.map_or(0., |handle| handle.0.content_height())
+}
+
+/// Borrow an ID until the next mutation/free. Output is unchanged on failure.
+/// # Safety
+/// Handle is null or live without concurrent mutation/free. Output is null or
+/// aligned writable storage. Never free the returned bytes; copy before mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_stack_id_v1(
+    handle: *const CapturesPreviewStack,
+    index: usize,
+    output: *mut CapturesPreviewID,
+) -> bool {
+    if output.is_null() {
+        return false;
+    }
+    // SAFETY: Caller guarantees shared access to live handle or null.
+    let Some(id) = (unsafe { handle.as_ref() }).and_then(|handle| handle.0.ids().get(index)) else {
+        return false;
+    };
+    // SAFETY: Validated writable output; bytes stay owned by the live handle.
+    unsafe {
+        output.write(CapturesPreviewID {
+            data: id.as_ptr(),
+            length: id.len(),
+        });
+    }
+    true
+}
+
+/// # Safety
+/// Handle is null or live and exclusively borrowed for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_stack_set_collapsed_v1(
+    handle: *mut CapturesPreviewStack,
+    collapsed: bool,
+) -> bool {
+    // SAFETY: Caller guarantees exclusive access to live handle or null.
+    let Some(handle) = (unsafe { handle.as_mut() }) else {
+        return false;
+    };
+    handle.0.set_collapsed(collapsed);
+    true
+}
+
+/// # Safety
+/// Handle is null or live without concurrent mutation/free.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_stack_collapsed_v1(
+    handle: *const CapturesPreviewStack,
+) -> bool {
+    // SAFETY: Caller guarantees shared access to live handle or null.
+    unsafe { handle.as_ref() }.is_some_and(|handle| handle.0.is_collapsed())
+}
+
+/// Allocation-free card pose for a chronological index, in unscrolled content.
+/// # Safety
+/// Handle is null or live without concurrent mutation/free. Output is null or
+/// aligned writable storage. False leaves output unchanged.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_stack_card_v1(
+    handle: *const CapturesPreviewStack,
+    index: usize,
+    top_anchor: bool,
+    output: *mut CapturesPreviewCardLayout,
+) -> bool {
+    if output.is_null() {
+        return false;
+    }
+    // SAFETY: Caller guarantees shared access to live handle or null.
+    let Some(card) =
+        (unsafe { handle.as_ref() }).and_then(|handle| handle.0.card_layout(index, top_anchor))
+    else {
+        return false;
+    };
+    // SAFETY: Validated writable output.
+    unsafe {
+        output.write(CapturesPreviewCardLayout {
+            y: card.y,
+            depth: card.depth,
+            interactive: card.interactive,
+        });
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::ptr::{null, null_mut};
+
+    #[test]
+    fn stack_membership_poses_and_borrowed_utf8_cross_the_abi() {
+        let stack = captures_preview_stack_new_v1();
+        // SAFETY: Sequential access to one owned handle, valid C strings/local
+        // outputs; borrowed bytes are copied before membership is mutated.
+        unsafe {
+            assert!(!captures_preview_stack_insert_v1(stack, null()));
+            assert!(!captures_preview_stack_insert_v1(stack, c"\xff".as_ptr()));
+            assert!(!captures_preview_stack_insert_v1(stack, c"".as_ptr()));
+            assert!(captures_preview_stack_insert_v1(stack, c"古い".as_ptr()));
+            assert!(captures_preview_stack_insert_v1(stack, c"new".as_ptr()));
+            assert!(!captures_preview_stack_insert_v1(stack, c"古い".as_ptr()));
+            assert_eq!(captures_preview_stack_count_v1(stack), 2);
+            assert_eq!(captures_preview_stack_height_v1(stack), 424.);
+            let mut id = CapturesPreviewID {
+                data: null(),
+                length: 0,
+            };
+            assert!(captures_preview_stack_id_v1(stack, 0, &mut id));
+            assert_eq!(
+                std::slice::from_raw_parts(id.data, id.length),
+                "古い".as_bytes()
+            );
+            let copied = std::slice::from_raw_parts(id.data, id.length).to_vec();
+            let mut card = CapturesPreviewCardLayout::default();
+            assert!(captures_preview_stack_card_v1(stack, 0, true, &mut card));
+            assert_eq!(
+                card,
+                CapturesPreviewCardLayout {
+                    y: 236.,
+                    depth: 1,
+                    interactive: true
+                }
+            );
+            assert!(captures_preview_stack_set_collapsed_v1(stack, true));
+            assert!(captures_preview_stack_collapsed_v1(stack));
+            assert!(captures_preview_stack_card_v1(stack, 0, false, &mut card));
+            assert!(!card.interactive);
+            assert!(captures_preview_stack_insert_v1(
+                stack,
+                c"incoming".as_ptr()
+            ));
+            assert!(captures_preview_stack_collapsed_v1(stack));
+            assert!(captures_preview_stack_remove_v1(stack, c"古い".as_ptr()));
+            assert!(captures_preview_stack_remove_v1(stack, c"new".as_ptr()));
+            assert!(!captures_preview_stack_remove_v1(stack, c"new".as_ptr()));
+            assert_eq!(copied, "古い".as_bytes());
+            assert_eq!(captures_preview_stack_count_v1(stack), 1);
+            assert!(captures_preview_stack_remove_v1(
+                stack,
+                c"incoming".as_ptr()
+            ));
+            assert!(!captures_preview_stack_collapsed_v1(stack));
+            captures_preview_stack_free_v1(stack);
+        }
+    }
+
+    #[test]
+    fn invalid_stack_queries_preserve_outputs() {
+        let stack = captures_preview_stack_new_v1();
+        let sentinel = CapturesPreviewCardLayout {
+            y: 999.,
+            depth: 7,
+            interactive: true,
+        };
+        let mut card = sentinel;
+        let mut id = CapturesPreviewID {
+            data: null(),
+            length: 42,
+        };
+        // SAFETY: Nulls are explicitly permitted; locals and owned handle valid.
+        unsafe {
+            assert!(!captures_preview_stack_card_v1(stack, 0, false, &mut card));
+            assert!(!captures_preview_stack_card_v1(null(), 0, false, &mut card));
+            assert!(!captures_preview_stack_card_v1(stack, 0, false, null_mut()));
+            assert_eq!(card, sentinel);
+            assert!(!captures_preview_stack_id_v1(stack, 0, &mut id));
+            assert!(!captures_preview_stack_id_v1(null(), 0, &mut id));
+            assert_eq!(id.length, 42);
+            assert!(id.data.is_null());
+            assert!(!captures_preview_stack_set_collapsed_v1(null_mut(), true));
+            assert!(!captures_preview_stack_collapsed_v1(null()));
+            assert_eq!(captures_preview_stack_count_v1(null()), 0);
+            captures_preview_stack_free_v1(stack);
+            captures_preview_stack_free_v1(null_mut());
+        }
+    }
 
     fn monitor() -> CapturesPreviewMonitor {
         CapturesPreviewMonitor {

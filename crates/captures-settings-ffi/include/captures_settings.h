@@ -74,6 +74,33 @@ bool captures_preview_capture_ui_v1(CapturesPreviewVisibility *handle, bool supp
 bool captures_preview_visible_v1(const CapturesPreviewVisibility *handle, size_t count,
     bool enabled, bool include_in_captures);
 
+/* Session-only chronological membership, initially expanded; no history/file
+ * operations. Serialize all calls and free exactly once. Null handles return
+ * false/zero. Insert copies nonempty UTF-8 IDs; duplicates do not reorder.
+ * Clear all by removing a SNAPSHOT of IDs, never by draining a changing list.
+ * An empty stack resets collapsed state; new captures preserve nonempty state. */
+typedef struct CapturesPreviewStack CapturesPreviewStack;
+typedef struct { double y; size_t depth; bool interactive; } CapturesPreviewCardLayout;
+typedef struct { const uint8_t *data; size_t length; } CapturesPreviewID;
+CapturesPreviewStack *captures_preview_stack_new_v1(void);
+void captures_preview_stack_free_v1(CapturesPreviewStack *handle);
+bool captures_preview_stack_insert_v1(CapturesPreviewStack *handle, const char *id);
+bool captures_preview_stack_remove_v1(CapturesPreviewStack *handle, const char *id);
+size_t captures_preview_stack_count_v1(const CapturesPreviewStack *handle);
+/* Unclamped logical document height, including the control gutter; zero empty. */
+double captures_preview_stack_height_v1(const CapturesPreviewStack *handle);
+/* Borrowed UTF-8 bytes, not NUL terminated; copy before next mutation/free.
+ * Outputs require aligned writable storage. Null/invalid index leaves outputs
+ * unchanged. Layout index is chronological. y is in logical unscrolled content;
+ * top_anchor mirrors expanded order and compact peeks. Paint oldest first so
+ * newest (depth zero) is on top. Scroll expanded overflow instead of truncating. */
+bool captures_preview_stack_id_v1(const CapturesPreviewStack *handle, size_t index,
+    CapturesPreviewID *output);
+bool captures_preview_stack_set_collapsed_v1(CapturesPreviewStack *handle, bool collapsed);
+bool captures_preview_stack_collapsed_v1(const CapturesPreviewStack *handle);
+bool captures_preview_stack_card_v1(const CapturesPreviewStack *handle, size_t index,
+    bool top_anchor, CapturesPreviewCardLayout *output);
+
 /* Owned immutable region session. Prepare/capture may block; use a worker after
  * hiding capture windows. Begin/retain a capture-flow guard on the event-loop
  * thread first. Freeze and cursor settings are fixed at prepare. No pixel data

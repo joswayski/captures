@@ -17,6 +17,100 @@ pub const THUMBNAIL_SYSTEM_CHROME_GAP: f64 = 12.0;
 /// reserve this many logical pixels so revealing chrome cannot cover cards.
 pub const THUMBNAIL_AUTO_HIDE_RESERVE: f64 = 48.0;
 
+/// Session-only preview membership, oldest first. Removing a preview never
+/// removes a history entry or file. Hosts retain media resources keyed by ID.
+#[derive(Default)]
+pub struct PreviewStack {
+    ids: Vec<String>,
+    collapsed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PreviewCardLayout {
+    /// Logical top-left position in the unscrolled stack content.
+    pub y: f64,
+    /// Newest is depth zero and must paint above older cards when collapsed.
+    pub depth: usize,
+    pub interactive: bool,
+}
+
+impl PreviewStack {
+    pub fn ids(&self) -> &[String] {
+        &self.ids
+    }
+
+    /// Duplicate delivery neither reorders an existing card nor expands a pile.
+    pub fn insert(&mut self, id: String) -> bool {
+        if id.is_empty() || self.ids.contains(&id) {
+            return false;
+        }
+        self.ids.push(id);
+        true
+    }
+
+    pub fn remove(&mut self, id: &str) -> bool {
+        let before = self.ids.len();
+        self.ids.retain(|existing| existing != id);
+        if self.ids.is_empty() {
+            self.collapsed = false;
+        }
+        self.ids.len() != before
+    }
+
+    /// Clear the caller's snapshot only: a capture arriving later must survive.
+    pub fn remove_all(&mut self, ids: &[String]) -> usize {
+        let before = self.ids.len();
+        self.ids.retain(|existing| !ids.contains(existing));
+        if self.ids.is_empty() {
+            self.collapsed = false;
+        }
+        before - self.ids.len()
+    }
+
+    pub fn is_collapsed(&self) -> bool {
+        self.collapsed
+    }
+
+    pub fn set_collapsed(&mut self, collapsed: bool) {
+        self.collapsed = collapsed && !self.ids.is_empty();
+    }
+
+    /// Unclamped document height, including the shared control gutter. Native
+    /// window height may be smaller; scroll the document rather than its toolbar.
+    pub fn content_height(&self) -> f64 {
+        if self.ids.is_empty() {
+            0.0
+        } else if self.collapsed {
+            collapsed_frame_height(self.ids.len())
+        } else {
+            stack_height(self.ids.len())
+        }
+    }
+
+    /// Index is chronological, never visual. Top-anchored expanded piles put
+    /// newest first; collapsed piles draw oldest first and newest on top.
+    /// Hosts clip/scroll expanded content rather than capping membership.
+    pub fn card_layout(&self, index: usize, top_anchor: bool) -> Option<PreviewCardLayout> {
+        let depth = self.ids.len().checked_sub(index.checked_add(1)?)?;
+        let y = if self.collapsed {
+            let direction = if top_anchor { 1.0 } else { -1.0 };
+            collapsed_padding(self.ids.len()) + direction * collapsed_peek(depth + 1, false)
+        } else {
+            let (padding, slot) = if top_anchor {
+                (THUMBNAIL_CONTROL_GUTTER, depth)
+            } else {
+                (THUMBNAIL_PADDING, index)
+            };
+            padding + slot as f64 * (THUMBNAIL_CARD_HEIGHT + THUMBNAIL_GAP)
+        };
+        Some(PreviewCardLayout {
+            y,
+            depth,
+            interactive: !self.collapsed || depth == 0,
+        })
+    }
+}
+
 /// Which edge of the visible pile stays put when the stack opens or closes.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -449,6 +543,69 @@ pub fn thumbnail_geometry(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stack_snapshot_clear_preserves_new_capture_and_empty_resets_parking() {
+        let mut stack = PreviewStack::default();
+        assert!(!stack.insert(String::new()));
+        for id in ["older", "middle", "latest"] {
+            assert!(stack.insert(id.into()));
+        }
+        assert!(!stack.insert("older".into()));
+        stack.set_collapsed(true);
+        let snapshot = stack.ids().to_vec();
+        assert!(stack.insert("incoming".into()));
+        assert!(stack.is_collapsed());
+        assert!(stack.remove("middle"));
+        assert!(!stack.remove("middle"));
+        assert_eq!(stack.remove_all(&snapshot), 2);
+        assert_eq!(stack.ids(), &["incoming"]);
+        assert!(stack.is_collapsed());
+        assert!(stack.remove("incoming"));
+        assert!(!stack.is_collapsed());
+        stack.set_collapsed(true);
+        stack.insert("fresh".into());
+        assert!(!stack.is_collapsed());
+    }
+
+    #[test]
+    fn stack_layout_reverses_only_top_expansion_and_front_is_the_only_pile_target() {
+        let mut stack = PreviewStack::default();
+        assert_eq!(stack.content_height(), 0.);
+        for id in ["A", "B", "C"] {
+            stack.insert(id.into());
+        }
+        assert_eq!(stack.content_height(), 608.);
+        assert_eq!(stack.card_layout(0, false).unwrap().y, 28.);
+        assert_eq!(stack.card_layout(2, false).unwrap().y, 396.);
+        assert_eq!(stack.card_layout(0, true).unwrap().y, 420.);
+        assert_eq!(stack.card_layout(2, true).unwrap().y, 52.);
+        assert!(stack.card_layout(0, true).unwrap().interactive);
+        assert!(stack.card_layout(3, true).is_none());
+        assert!(stack.card_layout(usize::MAX, false).is_none());
+        stack.set_collapsed(true);
+        // Independent shipping peek: 13 * 2 * (24 + .55 * 2) / (2 + 24).
+        let peek = 25.1;
+        // Frame reserves hover peeks, even though this pose uses idle peeks.
+        let padding = 28. + 16. * 2. * 25.1 / 26.;
+        assert!((stack.content_height() - (160. + 2. * padding)).abs() < 1e-9);
+        assert!((stack.card_layout(0, false).unwrap().y - (padding - peek)).abs() < 1e-9);
+        assert!((stack.card_layout(0, true).unwrap().y - (padding + peek)).abs() < 1e-9);
+        assert!(!stack.card_layout(0, false).unwrap().interactive);
+        assert_eq!(
+            stack.card_layout(2, false).unwrap(),
+            PreviewCardLayout {
+                y: padding,
+                depth: 0,
+                interactive: true,
+            }
+        );
+        for index in 3..40 {
+            stack.insert(format!("capture-{index}"));
+        }
+        assert_eq!(stack.ids().len(), 40);
+        assert_eq!(stack.card_layout(39, true).unwrap().depth, 0);
+    }
 
     fn bounds(
         work: (i32, i32, u32, u32),

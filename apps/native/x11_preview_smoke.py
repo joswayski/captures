@@ -29,6 +29,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--stack", action="store_true", help="Also exercise retained multi-card previews")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -67,6 +68,10 @@ def main():
         run("import", "-window", window, str(path))
         return path
 
+    def window_geometry(window):
+        return dict(line.split("=", 1) for line in
+                    run("xdotool", "getwindowgeometry", "--shell", window).decode().splitlines())
+
     def wait(predicate, description):
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
@@ -87,6 +92,13 @@ def main():
 
     def rgb(path):
         return run("convert", str(path), "-depth", "8", "rgb:-")
+
+    def clipboard_pixels():
+        value = subprocess.run(["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
+                               env=env, capture_output=True, timeout=5)
+        if value.returncode != 0:
+            return None
+        return subprocess.check_output(["convert", "png:-", "-depth", "8", "rgb:-"], input=value.stdout)
 
     def wallpaper_crop(x, y, width, height):
         # Independent pixel oracle: asymmetric desktop split at (300,270).
@@ -130,7 +142,7 @@ def main():
                 "include_mini_previews_in_captures": include, "mini_preview_placement": placement,
             }))
             app = spawn(prefix, [str(binary), "--live", "--history-root", str(history),
-                "--settings-file", str(settings), "--quit-after", "90"])
+                "--settings-file", str(settings), "--quit-after", "180"])
             root = wait(lambda: windows("Captures"), "root workspace")[0]
             # Leave the left-hand preview/capture area unobstructed. Both root
             # capture buttons still fit on this desktop after moving the window.
@@ -166,12 +178,13 @@ def main():
                 return entry
 
             first = capture((140, 180, 310, 170))
+            stack_entries = [first]
             assert rgb(first.parent / "capture.png") == wallpaper_crop(140, 180, 310, 170)
             if enabled:
                 preview = wait(lambda: windows(PREVIEW), "mini preview")[0]
                 wait(lambda: int(run("import", "-window", preview, "-format", "%k", "info:")) > 16,
                      "painted preview")
-                geometry = dict(line.split("=", 1) for line in run("xdotool", "getwindowgeometry", "--shell", preview).decode().splitlines())
+                geometry = window_geometry(preview)
                 shot("root", f"{prefix}-placed")
                 focus = run("xdotool", "getwindowfocus").decode().strip()
                 assert focus != preview, "preview stole focus"
@@ -186,7 +199,7 @@ def main():
                         "-geometry", "220x70+900+20", "Keep this application focused"])
                     other = wait(lambda: windows("Preview action focus fixture"), "other app focus")[0]
                     run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
-                    click(preview, 34, 201, activate=False)  # Measured Copy center.
+                    click(preview, 63, 169, activate=False)  # Padded card Copy center.
 
                     def clipboard_png():
                         value = subprocess.run(["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
@@ -200,24 +213,24 @@ def main():
                     assert pixels == rgb(first.parent / "capture.png"), "Copy changed full-resolution pixels"
                     assert run("xdotool", "getwindowfocus").decode().strip() == other, "Copy activated Captures"
 
-                    click(preview, 94, 201, activate=False)  # Measured Save center.
+                    click(preview, 122, 169, activate=False)  # Padded card Save center.
                     exported = Path(wait(lambda: json.loads(first.read_text()).get("saved_path"), "saved export metadata"))
                     assert rgb(exported) == rgb(first.parent / "capture.png"), "Save changed full-resolution PNG pixels"
                     export_bytes = exported.read_bytes()
                     shot("root", f"{prefix}-saved")
                     assert run("xdotool", "getwindowfocus").decode().strip() == other, "Save activated Captures"
                     assert not windows("Captures"), "Copy/Save unexpectedly restored workspace"
-                    click(preview, 159, 201, activate=False)  # Measured History center.
+                    click(preview, 189, 169, activate=False)  # Padded card History center.
                     wait(lambda: windows("Captures"), "History restores workspace")
                     preserved = entries()
-                    click(preview, 216, 201, activate=False)  # Measured Dismiss center.
+                    click(preview, 288, 169, activate=False)  # Padded card Dismiss center.
                     wait(lambda: not windows(PREVIEW), "Dismiss closes only the card")
                     time.sleep(.3)
                     assert entries() == preserved and exported.read_bytes() == export_bytes, "Dismiss deleted history or export"
                     assert not windows(PREVIEW), "dismissed card reappeared"
                     other_app.terminate()
                     other_app.wait(timeout=5)
-                    capture((140, 180, 310, 170))
+                    stack_entries = [capture((140, 180, 310, 170))]
                     preview = wait(lambda: windows(PREVIEW), "new capture after dismissal")[0]
                     wait(lambda: int(run("import", "-window", preview, "-format", "%k", "info:")) > 16,
                          "replacement paints after dismissal")
@@ -230,6 +243,7 @@ def main():
                     run("import", "-window", "root", "-crop", "360x330+8+552", str(before))
                     assert rgb(before) != wallpaper_crop(8, 552, 360, 330), "preview was not on desktop"
                     second = capture((8, 552, 360, 330))
+                    stack_entries.append(second)
                     expected = rgb(before) if include else wallpaper_crop(8, 552, 360, 330)
                     assert rgb(second.parent / "capture.png") == expected, "preview capture inclusion mismatch"
                     wait(lambda: windows(PREVIEW), "replacement preview")
@@ -246,6 +260,90 @@ def main():
                 saver.locked = False
                 wait(lambda: windows(PREVIEW), "unlock restores preview")
                 assert entries() == saved, "session cancellation persisted an artifact"
+                if args.stack and not include:
+                    # These asymmetric captures distinguish retained cards from
+                    # duplicate thumbnails and wrong per-card action routing.
+                    rectangles = [(45, 55, 230, 110), (260, 240, 200, 140)]
+                    while len(stack_entries) < 3:
+                        rect = rectangles[len(stack_entries) - 1]
+                        entry = capture(rect)
+                        assert rgb(entry.parent / "capture.png") == wallpaper_crop(*rect)
+                        stack_entries.append(entry)
+                    preview = wait(lambda: windows(PREVIEW), "three-card preview")[0]
+                    wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 608,
+                         "three retained cards (240 + 2 × 184)")
+                    geometry = window_geometry(preview)
+                    assert int(geometry["X"]) == expected_x, geometry
+                    assert int(geometry["Y"]) == (12 if placement.startswith("top") else 232), geometry
+                    shot(preview, f"{prefix}-three-cards")
+                    assert run("xdotool", "getwindowfocus").decode().strip() != preview
+
+                    def card_action(index, x, count=None):
+                        count = len(stack_entries) if count is None else count
+                        slot = count - 1 - index if placement.startswith("top") else index
+                        y = (52 if placement.startswith("top") else 28) + slot * 184 + 141
+                        click(preview, x, y, activate=False)
+
+                    # Oldest and newest have different dimensions and pixels;
+                    # copying only the latest card cannot pass both assertions.
+                    for index in (0, 2):
+                        card_action(index, 63)
+                        expected_pixels = rgb(stack_entries[index].parent / "capture.png")
+                        wait(lambda: clipboard_pixels() == expected_pixels, f"Copy routes to card {index}")
+
+                    preserved = {path: (path.parent / "capture.png").read_bytes() for path in entries()}
+                    card_action(1, 288)
+                    stack_entries.pop(1)
+                    wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 424, "middle dismissal leaves two cards")
+                    assert all((path.parent / "capture.png").read_bytes() == data for path, data in preserved.items())
+
+                    def toggle():
+                        height = int(window_geometry(preview)["HEIGHT"])
+                        click(preview, 65, 26 if placement.startswith("top") else height - 26, activate=False)
+
+                    toggle()
+                    wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 264, "two-card compact pile")
+                    shot(preview, f"{prefix}-collapsed")
+                    third = capture((80, 90, 180, 100))
+                    stack_entries.append(third)
+                    preview = wait(lambda: windows(PREVIEW), "incoming capture retains pile")[0]
+                    # Third card increases reserved peek padding: rounded
+                    # 160 + 2 × (28 + 16 × 2 × 25.1 / 26) = 278 px.
+                    wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 278, "incoming capture stays collapsed")
+                    begin()
+                    run("xdotool", "key", "Escape")
+                    preview = wait(lambda: windows(PREVIEW) and not windows(SELECTOR) and windows(PREVIEW),
+                                   "cancel restores compact pile")[0]
+                    assert int(window_geometry(preview)["HEIGHT"]) == 278
+                    click(preview, 170, 132, activate=False)
+                    wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 608, "front card expands all previews")
+
+                    if placement == "bottom_left":
+                        # Overflow is not a membership cap. Reveal newest, then
+                        # scroll back and Copy the oldest retained capture.
+                        while len(stack_entries) < 8:
+                            index = len(stack_entries)
+                            stack_entries.append(capture((30 + index * 9, 40, 120 + index * 7, 100)))
+                        preview = wait(lambda: windows(PREVIEW), "eight-card preview")[0]
+                        wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 812, "bounded overflow viewport")
+                        shot(preview, f"{prefix}-overflow-newest")
+                        run("xdotool", "mousemove", "--window", preview, "170", "400", "click", "--repeat", "30", "--delay", "30", "4")
+                        time.sleep(.5)
+                        shot(preview, f"{prefix}-overflow-oldest")
+                        click(preview, 63, 169, activate=False)
+                        expected_pixels = rgb(stack_entries[0].parent / "capture.png")
+                        wait(lambda: clipboard_pixels() == expected_pixels, "overflow retains actionable oldest card")
+
+                    preserved = {path: (path.parent / "capture.png").read_bytes() for path in entries()}
+                    height = int(window_geometry(preview)["HEIGHT"])
+                    click(preview, 250, 26 if placement.startswith("top") else height - 26, activate=False)
+                    wait(lambda: not windows(PREVIEW), "Clear all empties previews")
+                    assert entries() == set(preserved), "Clear all removed history"
+                    assert all((path.parent / "capture.png").read_bytes() == data for path, data in preserved.items())
+                    capture((170, 190, 110, 80))
+                    preview = wait(lambda: windows(PREVIEW), "later capture survives Clear all")[0]
+                    wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 240, "new stack after Clear all")
+                    print(f"PASS {placement} stack: per-card Copy/Dismiss, compact arrival/cancel/expand, nondestructive Clear all", flush=True)
             else:
                 time.sleep(1)
                 assert not windows(PREVIEW), "disabled previews still appeared"
@@ -254,11 +352,15 @@ def main():
             assert not windows(PREVIEW), "preview outlived application"
             print(f"PASS {prefix}: pixels, placement/visibility, cancellation, clean exit", flush=True)
         (output / "result.json").write_text(json.dumps({"passed": True, "scenarios": len(cases),
+            "multiCard": args.stack,
             "checks": ["four corner positions and dimensions", "nonactivating map",
                 "minimized-root full-pixel Copy and Save without activation",
                 "History restores minimized workspace", "Dismiss preserves history and export",
                 "new capture after dismissal", "exact inclusion and exclusion pixels",
-                "Escape and simulated-lock restoration", "disabled previews", "clean exit"],
+                "Escape and simulated-lock restoration", "disabled previews", "clean exit"] +
+                (["three-card retention and per-card Copy", "middle-card dismissal preserves files",
+                  "collapsed arrival/cancel/front-card expand", "eight-card overflow retains oldest",
+                  "Clear all preserves files and later arrivals"] if args.stack else []),
             "scope": "Private X11/software GL, simulated session; not hardware, real lock, Wayland or accessibility acceptance."}, indent=2))
     finally:
         for child in reversed(children):
