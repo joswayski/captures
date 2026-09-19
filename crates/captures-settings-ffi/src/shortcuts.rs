@@ -1,4 +1,6 @@
-use captures_app::shortcuts::CaptureShortcuts;
+use captures_app::shortcuts::{
+    CaptureShortcuts, ShortcutKeyEvent, ShortcutPlatform, record_shortcut, shortcut_display_tokens,
+};
 use captures_settings::AppSettings;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -15,10 +17,22 @@ thread_local! {
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 enum Request {
-    Configure { settings: Box<AppSettings> },
-    Enabled { enabled: bool },
+    Configure {
+        settings: Box<AppSettings>,
+    },
+    Enabled {
+        enabled: bool,
+    },
     Next,
     Close,
+    Record {
+        event: ShortcutKeyEvent,
+        platform: ShortcutPlatform,
+    },
+    Display {
+        shortcut: String,
+        platform: ShortcutPlatform,
+    },
 }
 
 fn response(request: Request, wake: Option<extern "C" fn()>) -> Result<Value, String> {
@@ -47,6 +61,10 @@ fn response(request: Request, wake: Option<extern "C" fn()>) -> Result<Value, St
                 *slot = None;
                 Ok(json!({}))
             }
+            Request::Record { event, platform } => Ok(json!(record_shortcut(&event, platform))),
+            Request::Display { shortcut, platform } => {
+                Ok(json!({"keys": shortcut_display_tokens(&shortcut, platform)}))
+            }
         }
     })
 }
@@ -55,6 +73,7 @@ fn response(request: Request, wake: Option<extern "C" fn()>) -> Result<Value, St
 /// it must only schedule host work and must never synchronously reenter this ABI.
 /// Configure copies settings. Close before app teardown; late wakes are harmless
 /// because Next reads the current queue, not a callback's old action payload.
+/// Record/Display are pure and work in fixture Preferences without an OS owner.
 ///
 /// # Safety
 /// `request_json` must be readable NUL-terminated UTF-8 for this call. `wake`
@@ -119,6 +138,32 @@ mod tests {
         assert_eq!(
             call(&request.to_string())["error"],
             "A shortcut wake callback is required"
+        );
+    }
+
+    #[test]
+    fn fixture_recording_and_display_need_neither_registration_nor_wake_callback() {
+        let mut request = json!({"operation":"record", "platform":"macos", "event": {
+            "code":"KeyQ", "ctrlKey":false, "shiftKey":true, "altKey":false, "metaKey":true
+        }});
+        assert_eq!(
+            call(&request.to_string())["result"],
+            json!({
+                "kind":"complete", "keys":["Shift","Cmd","Q"], "shortcut":"Shift+Super+KeyQ"
+            })
+        );
+        request["event"]["code"] = json!("Escape");
+        assert_eq!(
+            call(&request.to_string())["result"],
+            json!({"kind":"cancel"})
+        );
+        assert_eq!(
+            call(r#"{"operation":"display","platform":"windows","shortcut":"Super+Shift+KeyS"}"#)["result"],
+            json!({"keys":["Win","Shift","S"]})
+        );
+        assert_eq!(
+            call(r#"{"operation":"enabled","enabled":true}"#)["ok"],
+            false
         );
     }
 }

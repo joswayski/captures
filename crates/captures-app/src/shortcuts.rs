@@ -1,5 +1,10 @@
 //! Event-loop-owned screenshot shortcuts. The process-wide dispatcher also
 //! serves temporary capture Escape; hosts wake on events, never poll a timer.
+mod recording;
+pub use recording::{
+    ShortcutKeyEvent, ShortcutPlatform, ShortcutRecording, record_shortcut, shortcut_display_tokens,
+};
+
 use captures_settings::AppSettings;
 use global_hotkey::{
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
