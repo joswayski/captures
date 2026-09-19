@@ -931,6 +931,7 @@ impl Live {
         // Cancel preparation/countdown before draining work. CaptureFlow::cancel
         // leaves a capture that already crossed its persistence commit point alone.
         self.selector_scope_generation.store(0, Ordering::Release);
+        let drain_recording_worker = is_recording_phase(self.capture_phase);
         if let Some(flow) = &self.flow {
             let generation = flow.generation();
             if self.recording_has_started
@@ -968,7 +969,15 @@ impl Live {
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
-        self.recording_worker.shutdown();
+        if drain_recording_worker {
+            // Recording phases own draft media or an accepted take, so process
+            // the queued Finish/Discard before allowing process teardown.
+            self.recording_worker.shutdown();
+        } else {
+            // Selector startup may still be inside blocking ALSA device discovery.
+            // It owns no media, so do not make tray Quit wait for that unrelated call.
+            self.recording_worker.shutdown_detached();
+        }
         self.flow = None;
         self.capture_phase = None;
         self.region_session = None;

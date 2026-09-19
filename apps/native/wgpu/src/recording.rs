@@ -202,6 +202,13 @@ impl Worker {
             let _ = thread.join();
         }
     }
+
+    /// Request worker shutdown without waiting for a blocking device discovery
+    /// call. The caller must ensure that the worker owns no recording media.
+    pub fn shutdown_detached(&mut self) {
+        let _ = self.tx.send(Command::Shutdown);
+        drop(self.thread.take());
+    }
 }
 
 impl Drop for Worker {
