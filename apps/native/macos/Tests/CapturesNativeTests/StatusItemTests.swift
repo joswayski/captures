@@ -49,6 +49,26 @@ final class StatusItemTests: XCTestCase {
         withExtendedLifetime(handler) {}
     }
 
+    func testStatusItemUsesNativeTemplateIconAndCanEmitPixelEvidence() throws {
+        _ = NSApplication.shared
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        defer { NSStatusBar.system.removeStatusItem(item) }
+        let button = try XCTUnwrap(item.button)
+        configureStatusItemButton(button)
+        XCTAssertEqual(button.accessibilityLabel(), "Captures")
+        XCTAssertTrue(button.image?.isTemplate == true || button.title == "C")
+
+        guard let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] else { return }
+        button.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(button.bitmapImageRepForCachingDisplay(in: button.bounds))
+        button.cacheDisplay(in: button.bounds, to: bitmap)
+        let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let url = URL(fileURLWithPath: directory).appendingPathComponent("status-item-button.png")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try data.write(to: url)
+    }
+
     func testCaptureOnlyRestoresAWorkspaceThatWasPreviouslyVisible() {
         var restoration = CaptureWindowRestoration()
         restoration.begin(windowIsVisible: false)
@@ -70,15 +90,33 @@ final class StatusItemTests: XCTestCase {
         XCTAssertEqual(liveReopenAction(hasVisibleWindows: false), .showPreferences)
     }
 
+    func testShortcutHostPolicyUsesOnlyCaptureBindingsAndSuppressesBlockedScenes() {
+        let settings: [String: Any] = ["region_shortcut": "Command+Shift+4",
+            "window_shortcut": "Command+Shift+W", "display_shortcut": "Command+Shift+3",
+            "appearance": "dark"]
+        XCTAssertEqual(captureShortcutSignature(settings),
+            ["Command+Shift+4", "Command+Shift+W", "Command+Shift+3"])
+        var unrelated = settings
+        unrelated["appearance"] = "light"
+        XCTAssertEqual(captureShortcutSignature(unrelated), captureShortcutSignature(settings))
+        XCTAssertEqual(stillCaptureKind(for: .region), .region)
+        XCTAssertEqual(stillCaptureKind(for: .window), .window)
+        XCTAssertEqual(stillCaptureKind(for: .display), .display)
+        XCTAssertTrue(captureShortcutsEnabled(scene: "live", captureBusy: false))
+        XCTAssertFalse(captureShortcutsEnabled(scene: "preferences", captureBusy: false))
+        XCTAssertFalse(captureShortcutsEnabled(scene: "live", captureBusy: true))
+    }
+
     func testQuitFlushesCancelsClosesAndDrainsBeforeCleanup() {
         var events: [String] = []
         performTermination(flushPreferences: { events.append("flush-preferences") },
             cancelCapture: { events.append("cancel-capture") },
+            closeShortcuts: { events.append("close-shortcuts") },
             closePreviews: { events.append("close-previews") },
             drainActions: { events.append("drain-actions") },
             removeExerciseDirectory: { events.append("remove-exercise-directory") })
 
-        XCTAssertEqual(events, ["flush-preferences", "cancel-capture", "close-previews",
-            "drain-actions", "remove-exercise-directory"])
+        XCTAssertEqual(events, ["flush-preferences", "cancel-capture", "close-shortcuts",
+            "close-previews", "drain-actions", "remove-exercise-directory"])
     }
 }
