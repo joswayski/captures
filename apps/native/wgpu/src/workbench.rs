@@ -56,6 +56,7 @@ pub struct Workbench {
     _temporary_settings: Option<tempfile::TempDir>,
     live: Option<Live>,
     live_preferences: bool,
+    root_hidden: bool,
     tray: Option<Tray>,
     tray_error: Option<String>,
     shortcuts: Option<CaptureShortcuts>,
@@ -170,6 +171,7 @@ impl Workbench {
             _temporary_settings: temporary_settings,
             live,
             live_preferences: false,
+            root_hidden: false,
             tray,
             tray_error,
             shortcuts: None,
@@ -199,7 +201,8 @@ impl Workbench {
         }
     }
 
-    fn show_root(ctx: &egui::Context) {
+    fn show_root(&mut self, ctx: &egui::Context) {
+        self.root_hidden = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -224,11 +227,11 @@ impl Workbench {
             }
             TrayAction::History => {
                 self.live_preferences = false;
-                Self::show_root(ctx);
+                self.show_root(ctx);
             }
             TrayAction::Preferences => {
                 self.live_preferences = true;
-                Self::show_root(ctx);
+                self.show_root(ctx);
             }
             TrayAction::OpenOutputFolder => match self.preferences_state.snapshot() {
                 Ok(settings) => {
@@ -245,15 +248,16 @@ impl Workbench {
                 }
                 Err(error) => {
                     self.action_error = Some(format!("Could not read output folder: {error}"));
-                    Self::show_root(ctx);
+                    self.show_root(ctx);
                 }
             },
+            #[cfg(target_os = "linux")]
             TrayAction::Unavailable => {
                 self.tray_error = Some(
                     "The system tray host stopped. Closing this window will quit Captures.".into(),
                 );
                 self.tray.take();
-                Self::show_root(ctx);
+                self.show_root(ctx);
             }
             TrayAction::Quit => self.quit(ctx),
         }
@@ -687,16 +691,26 @@ impl eframe::App for Workbench {
                 .err()
                 .map(|error| format!("Output folder action failed: {error}"));
             if self.action_error.is_some() {
-                Self::show_root(ctx);
+                self.show_root(ctx);
             }
         }
         if let Some(live) = &mut self.live {
             live.logic(ctx, frame);
         }
         self.sync_shortcuts(ctx);
+        if self.options.live
+            && self.tray.is_some()
+            && !self.quitting
+            && ctx.input(|input| input.viewport().close_requested())
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.root_hidden = true;
+        }
         let shortcuts_enabled = shortcuts_should_be_enabled(
             self.live.as_ref().is_some_and(Live::can_launch_capture),
             self.live_preferences,
+            !self.root_hidden,
             ctx.input(|input| input.viewport().focused.unwrap_or(false)),
         );
         let shortcut_action = self.shortcuts.as_ref().and_then(|shortcuts| {
@@ -728,14 +742,6 @@ impl eframe::App for Workbench {
         });
         if self.options.live && quit_key {
             self.quit(ctx);
-        }
-        if self.options.live
-            && self.tray.is_some()
-            && !self.quitting
-            && ctx.input(|input| input.viewport().close_requested())
-        {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
         let screenshot = ctx.input(|i| {
             i.raw.events.iter().find_map(|event| {
@@ -1210,10 +1216,11 @@ fn window_selection_name(
 
 fn shortcuts_should_be_enabled(
     can_launch_capture: bool,
-    preferences_visible: bool,
+    preferences_selected: bool,
+    root_visible: bool,
     root_focused: bool,
 ) -> bool {
-    can_launch_capture && !(preferences_visible && root_focused)
+    can_launch_capture && !(preferences_selected && root_visible && root_focused)
 }
 
 fn fixture_image([width, height]: [usize; 2]) -> egui::ColorImage {
@@ -1254,10 +1261,11 @@ mod tests {
 
     #[test]
     fn shortcuts_suppress_focused_preferences_but_not_hidden_or_unfocused_preferences() {
-        assert!(!shortcuts_should_be_enabled(true, true, true));
-        assert!(shortcuts_should_be_enabled(true, true, false));
-        assert!(shortcuts_should_be_enabled(true, false, true));
-        assert!(!shortcuts_should_be_enabled(false, false, false));
+        assert!(!shortcuts_should_be_enabled(true, true, true, true));
+        assert!(shortcuts_should_be_enabled(true, true, false, true));
+        assert!(shortcuts_should_be_enabled(true, true, true, false));
+        assert!(shortcuts_should_be_enabled(true, false, true, true));
+        assert!(!shortcuts_should_be_enabled(false, false, false, false));
     }
     #[test]
     fn image_has_top_right_sun_and_bottom_green_strip() {

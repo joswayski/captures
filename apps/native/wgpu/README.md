@@ -12,6 +12,10 @@ separate Captures Native development identity; pass `--settings-file PATH` to
 use an explicit test file. Screenshots and scripted exercises without that flag
 use disposable settings. `--live` opts into the shared Rust full-display, region and window PNG,
 history, copy, export and delete flows; see the [live slice and limits](../README.md#live-display-capture-slice).
+Live mode also provides a native tray menu for those three capture modes, History,
+Preferences, the output folder and Quit. Its persisted display, region and window
+shortcuts work globally except while capture is unavailable or a focused Preferences
+window is editing them. Windows tray left-click opens Preferences.
 Live capture applies automatic copy, screenshot countdown, cursor inclusion, and
 PNG/JPEG/WebP output format/folder preferences. Region selection also applies
 freeze-screen and auto-start-on-selection preferences, retains one shared
@@ -21,16 +25,17 @@ frontmost-window/shell hit testing and source-safety policy, and treats shell or
 empty-desktop clicks as display capture. It applies freeze-screen and
 auto-start-on-selection preferences; otherwise a clicked target stays selected
 until Capture or Enter confirms it. Frozen and live window selection both refresh
-after a nonzero countdown. A successful screenshot can show one fixed-glass native
-mini preview in any preference-selected corner, with full-resolution Copy, Save,
-history selection, and nondestructive Dismiss actions. The card is excluded from
-captures by default and retained when the include-in-captures preference is enabled.
+after a nonzero countdown. A successful screenshot can join a fixed-glass native
+preview stack in any preference-selected corner, with per-card full-resolution Copy,
+Save, history selection and nondestructive Dismiss actions. Expanded overflow scrolls
+without dropping cards; the stack can collapse or be cleared without deleting captures.
+It is excluded from captures by default and retained when the include-in-captures
+preference is enabled.
 Windows/X11 use the shipping
 synthetic cursor arrow, not the actual system cursor image. Other capture defaults remain unconnected;
-other scenes remain fixtures. System-wide global shortcuts remain unavailable except
-for temporary Escape cancellation during an active live capture; the selector
-fixture handles window-focused Escape only. Login, microphone discovery, feedback,
-and updating remain visibly unavailable.
+other scenes remain fixtures. The selector fixture handles window-focused Escape
+only, while live capture uses the shared process-wide Escape cancellation handler.
+Login, microphone discovery, feedback, recording and updating remain visibly unavailable.
 
 The candidate tests whether shared custom components are viable. It is not a
 retained widget renderer: egui rebuilds the visible UI on an event-driven repaint,
@@ -42,7 +47,9 @@ Windows and GTK4 custom snapshots on Linux before selecting a renderer.
 
 Requires Node 24, Rust **1.95.0**, and native build tools (MSVC/Windows SDK on
 Windows; a C compiler, pkg-config, Wayland/X11/xkbcommon development libraries on
-Linux). A working Vulkan or other wgpu-supported graphics driver is required.
+Linux). Linux tray builds additionally require the D-Bus development package
+(`libdbus-1-dev` on Ubuntu). A working Vulkan or other wgpu-supported graphics
+driver is required.
 The isolated Cargo workspace/lockfile leaves the shipping Rust 1.94 workspace
 unchanged. eframe 0.36.2 includes the native idle-loop fix absent from 0.34.3;
 do not downgrade solely to match the shipping toolchain.
@@ -73,8 +80,17 @@ apps/native/wgpu/target/release/captures-wgpu-workbench --scene window --exercis
 ```
 
 Appearance: `--appearance system|light|dark`; palettes: `--theme cobalt` (or any
-existing preset). Close the native window to quit; floating fixtures have Close
-and Move window controls. Launch one instance at a time for measurements.
+existing preset). In live mode, closing the root hides it only while a working tray
+reopen route exists; explicit Quit drains accepted work. Without a tray backend the
+root remains visible and closable with an explanatory error. Floating fixtures have
+Close and Move window controls. Launch one instance at a time for measurements.
+
+On Linux, live tray residency uses StatusNotifierItem (SNI), not an XEmbed fallback.
+It requires a session D-Bus and a registered SNI host, such as Xfce Panel's built-in
+systray. `trayer` or `tint2` alone is insufficient without an SNI bridge. If no host
+is available, or the watcher/last host disappears, the root is restored and close
+quits so the process cannot be stranded. Opening the output folder also requires
+`xdg-open` (provided by `xdg-utils`).
 
 ## Implemented probes and deliberate gaps
 
@@ -95,8 +111,8 @@ enabled, but screen-reader navigation and IME need real platform testing; painte
 images/canvas layers lack full semantic nodes. Reduce motion is an explicit probe
 switch, not yet connected to each OS setting. Transparency does not imply desktop
 blur, click-through, topmost behavior, or correct Wayland overlay placement.
-The live mini preview currently retains only the latest successful screenshot;
-stacking, drag placement, collapse and dust remain open. winit exposes full monitor
+Live previews support stacking, collapse and overflow; drag placement, hover fan
+motion and dust remain open. winit exposes full monitor
 bounds but not the OS work area, so X11 intersects EWMH `_NET_WORKAREA` with the
 target monitor and Windows uses the shared audited `rcWork` query. If usable bounds
 cannot be resolved, capture still succeeds but no preview is shown. Multi-monitor
@@ -108,8 +124,8 @@ unverified beyond compilation and focused host tests.
 hide/query the root there; live capture is disabled, and `--scene idle` exits with an explicit unsupported event
 and status 3 rather than measuring a visible window. On X11/Windows the workbench
 re-hides the root after eframe's automatic first paint and verifies visibility at
-the quit deadline. A transient startup map remains possible; this is not a
-production background/tray implementation. Resolving this is a renderer gate.
+the quit deadline. A transient startup map remains possible. Resolving this is a
+renderer gate.
 
 **Transparent Vulkan windows failed under the orb's Xvfb/Mesa llvmpipe setup.**
 The countdown's GPU readback was correct, but the compositor displayed no content.
@@ -127,6 +143,10 @@ cargo +1.95.0 clippy --manifest-path apps/native/wgpu/Cargo.toml --locked --all-
 python -m unittest discover -s apps/native -p 'test_*.py'
 python apps/native/wgpu/smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-smoke
 python apps/native/profile.py --renderer wgpu --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-resources
+sudo apt-get install xfce4-panel xdg-utils
+/usr/bin/python3 apps/native/x11_preview_smoke.py --lifecycle \
+  --binary apps/native/wgpu/target/release/captures-wgpu-workbench \
+  --output /tmp/native-x11-lifecycle
 ```
 
 Add `.exe` to both binary paths on Windows. Output directories must not exist.
