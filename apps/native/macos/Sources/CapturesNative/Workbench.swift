@@ -219,6 +219,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var shortcutWakeObserver: NSObjectProtocol?
     private var shortcutSignature: [String]?
     private var captureBusy = false
+    private var terminating = false
     private var liveContent: Surface?
     private var liveStyleRevision = 0
     private var renderedLiveStyleRevision = -1
@@ -324,6 +325,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !options.live }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        terminating = true
         performTermination(flushPreferences: { [weak self] in self?.preferencesController?.flush() },
             cancelCapture: { [weak self] in self?.liveController?.finishCapture(restoreWindow: false) },
             closeShortcuts: { [weak self] in self?.closeCaptureShortcuts() },
@@ -558,6 +560,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func updateCaptureShortcuts(settings: [String: Any]) {
+        guard !terminating else { return }
         let signature = captureShortcutSignature(settings)
         guard signature != shortcutSignature else { return }
         do {
@@ -578,7 +581,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func drainCaptureShortcuts() {
-        guard scene != "preferences", !captureBusy, let captureShortcuts else { return }
+        guard !terminating, scene != "preferences", !captureBusy,
+              let captureShortcuts else { return }
         do {
             while let action = try captureShortcuts.nextAction() {
                 launchCapture(stillCaptureKind(for: action))
