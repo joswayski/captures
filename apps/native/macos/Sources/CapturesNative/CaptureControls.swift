@@ -49,6 +49,7 @@ final class CaptureControlsView: NSView {
     private let aspectMenu: GlassPopUpButton
     private let displayMenu: GlassPopUpButton
     private let captureButton: CaptureButton
+    private var panelDragOffset: NSPoint?
     var switchTarget: (UnifiedCaptureTarget) -> Void = { _ in }
     var changeAspect: (Int) -> Void = { _ in }
     var changeDisplay: (Int) -> Void = { _ in }
@@ -83,25 +84,33 @@ final class CaptureControlsView: NSView {
         note.setAccessibilityLabel(note.stringValue)
         addSubview(note)
 
+        let narrow = frame.width < 820
         let close = control("×", x: 8, width: 32) { [weak self] in self?.cancel() }
         close.setAccessibilityLabel("Close capture controls")
-        let screenshot = control("Screenshot", x: 48, width: 92) {}
+        let screenshot = control("Screenshot", x: 48, width: narrow ? 88 : 92) {}
         screenshot.icon = .capture
         screenshot.selected = true; screenshot.setAccessibilityValue(1)
         screenshot.enterActionBlock = { [weak self] in self?.confirm() }
-        let record = control("Record", x: 144, width: 76) {}
+        let recordX = screenshot.frame.maxX + 4
+        let record = control("Record", x: recordX, width: narrow ? 64 : 76) {}
         record.icon = .record
         record.isEnabled = false
         record.toolTip = "Recording is not available in this native build"
         record.setAccessibilityHelp("Recording is not available yet")
 
-        let divider = NSView(frame: NSRect(x: 228, y: 18, width: 1, height: 24))
+        let dividerX = record.frame.maxX + 8
+        let divider = NSView(frame: NSRect(x: dividerX, y: 18, width: 1, height: 24))
         divider.wantsLayer = true; divider.layer?.backgroundColor = tokens.color("glass-border").cgColor
         addSubview(divider)
 
-        var x: CGFloat = 237
+        var x = dividerX + 9
         for mode in UnifiedCaptureTarget.allCases {
-            let width: CGFloat = mode == .display ? 106 : 78
+            let width: CGFloat
+            if narrow {
+                width = mode == .region ? 62 : mode == .window ? 68 : 94
+            } else {
+                width = mode == .display ? 106 : 78
+            }
             let button = control(mode.title, x: x, width: width) { [weak self] in
                 self?.selectTarget(mode, notify: true)
             }
@@ -113,18 +122,21 @@ final class CaptureControlsView: NSView {
             x += width + 4
         }
 
-        aspectLabel.frame = NSRect(x: x + 4, y: 21, width: 42, height: 18)
+        let pickerX = x + 4
+        let pickerWidth = frame.width - 122 - 8 - pickerX
+        aspectLabel.frame = NSRect(x: pickerX, y: 21, width: 42, height: 18)
         aspectLabel.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
         aspectLabel.textColor = tokens.color("glass-text-subtle")
         addSubview(aspectLabel)
-        aspectMenu.frame = NSRect(x: x + 48, y: 12, width: 102, height: 36)
+        aspectMenu.frame = NSRect(x: pickerX + 44, y: 12,
+            width: pickerWidth - 44, height: 36)
         aspectMenu.tokens = tokens
         aspectMenu.addItems(withTitles: RegionSelection.presets.map { $0.0 })
         aspectMenu.setAccessibilityLabel("Region aspect ratio")
         aspectMenu.bindChange { [weak self] index in self?.changeAspect(index) }
         addSubview(aspectMenu)
 
-        displayMenu.frame = NSRect(x: x + 4, y: 12, width: 190, height: 36)
+        displayMenu.frame = NSRect(x: pickerX, y: 12, width: pickerWidth, height: 36)
         displayMenu.tokens = tokens; displayMenu.addItems(withTitles: displayTitles)
         displayMenu.selectItem(at: selectedDisplay)
         displayMenu.setAccessibilityLabel("Display")
@@ -145,6 +157,38 @@ final class CaptureControlsView: NSView {
         selectTarget(.region, notify: false)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }
+        return hit is CaptureButton || hit is GlassPopUpButton ? hit : self
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let superview else { return }
+        beginPanelDrag(at: superview.convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let superview else { return }
+        dragPanel(to: superview.convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseUp(with event: NSEvent) { endPanelDrag() }
+
+    func beginPanelDrag(at point: NSPoint) {
+        panelDragOffset = NSPoint(x: point.x - frame.minX, y: point.y - frame.minY)
+    }
+
+    func dragPanel(to point: NSPoint) {
+        guard let superview, let offset = panelDragOffset else { return }
+        let inset: CGFloat = 16
+        let maxX = max(inset, superview.bounds.width - frame.width - inset)
+        let maxY = max(inset, superview.bounds.height - frame.height - inset)
+        frame.origin = NSPoint(x: min(max(inset, point.x - offset.x), maxX),
+            y: min(max(inset, point.y - offset.y), maxY))
+    }
+
+    func endPanelDrag() { panelDragOffset = nil }
 
     private func control(_ title: String, x: CGFloat, width: CGFloat,
                          action: @escaping () -> Void) -> CaptureButton {
@@ -206,6 +250,7 @@ final class UnifiedCaptureSelectionView: NSView {
     private let guidanceTitle = NSTextField(labelWithString: "")
     private let guidanceDetail = NSTextField(labelWithString: "")
     private let currentDisplayTitle: String
+    private var regionGestureActive = false
     var confirm: (WindowSelectionChoice) -> Void
     var cancel: () -> Void
     var changeDisplay: (Int) -> Void
@@ -267,6 +312,8 @@ final class UnifiedCaptureSelectionView: NSView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    var isGuidanceVisible: Bool { !guidance.isHidden }
+
     var choice: WindowSelectionChoice? {
         switch target {
         case .region: return region.capturable && region.mode == nil ? .region(region.rect) : nil
@@ -326,23 +373,30 @@ final class UnifiedCaptureSelectionView: NSView {
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         let point = convert(event.locationInWindow, from: nil)
+        guard !controls.frame.contains(point) else {
+            regionGestureActive = false
+            return
+        }
         switch target {
-        case .region: beginRegion(point, shift: event.modifierFlags.contains(.shift))
+        case .region:
+            regionGestureActive = true
+            beginRegion(point, shift: event.modifierFlags.contains(.shift))
         case .window: selectWindow(point)
         case .display: if autoStart { confirmSelection() }
         }
     }
     override func mouseDragged(with event: NSEvent) {
-        if target == .region {
+        if target == .region && regionGestureActive {
             dragRegion(convert(event.locationInWindow, from: nil),
                 shift: event.modifierFlags.contains(.shift))
         }
     }
     override func mouseUp(with event: NSEvent) {
-        if target == .region {
+        if target == .region && regionGestureActive {
             dragRegion(convert(event.locationInWindow, from: nil),
                 shift: event.modifierFlags.contains(.shift)); endRegion()
         }
+        regionGestureActive = false
     }
     override func mouseMoved(with event: NSEvent) {
         if target == .window { _ = hoverWindow(convert(event.locationInWindow, from: nil)) }
@@ -369,7 +423,7 @@ final class UnifiedCaptureSelectionView: NSView {
         let rect: NSRect?
         switch target {
         case .region:
-            guidance.isHidden = false
+            guidance.isHidden = region.mode != nil
             guidanceTitle.stringValue = "Drag to select a region"
             guidanceDetail.stringValue = "Shift for square  ·  Esc to cancel"
             label = region.capturable

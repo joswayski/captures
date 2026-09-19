@@ -22,8 +22,11 @@ final class CaptureControlsTests: XCTestCase {
         XCTAssertFalse(capture.isEnabled)
 
         view.beginRegion(NSPoint(x: 91, y: 77))
+        XCTAssertFalse(view.isGuidanceVisible,
+            "shipping guidance hides while a region gesture is active")
         view.dragRegion(NSPoint(x: 432, y: 268))
         view.endRegion()
+        XCTAssertTrue(view.isGuidanceVisible)
         let region = try XCTUnwrap(view.choice)
         guard case .region(let rect) = region else { return XCTFail("expected region") }
         XCTAssertEqual(rect.x, 91); XCTAssertEqual(rect.y, 77)
@@ -93,6 +96,66 @@ final class CaptureControlsTests: XCTestCase {
         XCTAssertFalse(gate.accepts(replacement), "cancel must prevent a late preparation from reopening controls")
     }
 
+    func testBlankControlsSpaceDragsAndClampsWithoutStartingARegion() throws {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: frame, styleMask: [.borderless],
+            backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let view = makeView()
+        window.contentView = view
+        let original = view.controls.frame
+
+        let controlsPoint = NSPoint(x: view.controls.frame.midX, y: view.controls.frame.midY)
+        view.mouseDown(with: try mouseEvent(.leftMouseDown, window: window,
+            x: controlsPoint.x, y: controlsPoint.y))
+        view.mouseDragged(with: try mouseEvent(.leftMouseDragged, window: window,
+            x: 120, y: 100))
+        view.mouseUp(with: try mouseEvent(.leftMouseUp, window: window, x: 120, y: 100))
+        XCTAssertNil(view.choice)
+        XCTAssertNil(view.region.mode)
+        XCTAssertEqual(view.region.rect.width, 0,
+            "a controls-origin gesture must never leak into region selection")
+
+        view.controls.beginPanelDrag(at: NSPoint(x: original.midX, y: original.midY))
+        view.controls.dragPanel(to: NSPoint(x: -500, y: -500))
+        XCTAssertEqual(view.controls.frame.origin, NSPoint(x: 16, y: 16))
+        view.controls.endPanelDrag()
+
+        view.controls.beginPanelDrag(at: NSPoint(x: 26, y: 26))
+        view.controls.dragPanel(to: NSPoint(x: 5_000, y: 5_000))
+        XCTAssertEqual(view.controls.frame.maxX, frame.width - 16)
+        XCTAssertEqual(view.controls.frame.maxY, frame.height - 16)
+        view.controls.endPanelDrag()
+
+        XCTAssertTrue(view.controls.hitTest(NSPoint(x: 20, y: 70)) === view.controls,
+            "the blank footer is the drag target")
+        let capture = try XCTUnwrap(buttons(in: view.controls).first { $0.title == "Capture" })
+        XCTAssertTrue(view.controls.hitTest(NSPoint(x: capture.frame.midX,
+            y: capture.frame.midY)) === capture, "interactive controls do not begin a panel drag")
+    }
+
+    func testNarrowMonitorKeepsPickerAndPrimaryActionVisibleWithoutOverlap() throws {
+        _ = NSApplication.shared
+        let narrowFrame = NSRect(x: 0, y: 0, width: 768, height: 600)
+        let view = UnifiedCaptureSelectionView(frame: narrowFrame, image: nil, targets: targets,
+            tokens: Tokens.variants["dark-mustard"]!, autoStart: false,
+            hitTest: { _ in 0 }, displayTitles: ["Main display · 768 × 600"],
+            selectedDisplay: 0, confirm: { _ in }, cancel: {}, changeDisplay: { _ in })
+        XCTAssertEqual(view.controls.frame.width, 736)
+        view.setTarget(.display)
+
+        let capture = try XCTUnwrap(buttons(in: view.controls).first { $0.title == "Capture" })
+        let picker = try XCTUnwrap(descendant(in: view.controls, accessibilityLabel: "Display"))
+        XCTAssertTrue(view.controls.bounds.contains(capture.frame))
+        XCTAssertTrue(view.controls.bounds.contains(picker.frame))
+        XCTAssertFalse(capture.frame.intersects(picker.frame))
+        for subview in view.controls.subviews where !subview.isHidden {
+            XCTAssertTrue(view.controls.bounds.contains(subview.frame),
+                "\(subview) clips on a 768-point monitor")
+        }
+    }
+
     func testPanelIsExcludedFromCapturedPixels() throws {
         _ = NSApplication.shared
         let screen = try XCTUnwrap(NSScreen.main)
@@ -159,6 +222,21 @@ final class CaptureControlsTests: XCTestCase {
         view.subviews.flatMap { subview in
             (subview as? CaptureButton).map { [$0] } ?? buttons(in: subview)
         }
+    }
+
+    private func descendant(in view: NSView, accessibilityLabel: String) -> NSView? {
+        if view.accessibilityLabel() == accessibilityLabel { return view }
+        return view.subviews.lazy.compactMap {
+            descendant(in: $0, accessibilityLabel: accessibilityLabel)
+        }.first
+    }
+
+    private func mouseEvent(_ type: NSEvent.EventType, window: NSWindow,
+                            x: CGFloat, y: CGFloat) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.mouseEvent(with: type,
+            location: NSPoint(x: x, y: frame.height - y), modifierFlags: [],
+            timestamp: 0, windowNumber: window.windowNumber, context: nil,
+            eventNumber: 1, clickCount: 1, pressure: 1))
     }
 
     private func keyEvent(window: NSWindow, keyCode: UInt16, characters: String) throws -> NSEvent {
