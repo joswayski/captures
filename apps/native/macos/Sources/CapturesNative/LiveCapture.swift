@@ -51,6 +51,18 @@ struct CapturePreparationGate {
     func accepts(_ request: Int) -> Bool { request == current }
 }
 
+struct RecordingLifecycleGate {
+    private(set) var busy = false
+
+    mutating func begin() -> Bool {
+        guard !busy else { return false }
+        busy = true
+        return true
+    }
+
+    mutating func end() { busy = false }
+}
+
 final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     private let root: Surface
     private let window: NSWindow
@@ -105,6 +117,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var recordingHUD: RecordingHUDPanel?
     private var recordingPollTimer: Timer?
     private var recordingPollPending = false
+    private var recordingLifecycle = RecordingLifecycleGate()
     private var preparingRecording = false
     private var recordingPendingStart = false
     private var activeRecordingGeneration: UInt64?
@@ -730,8 +743,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                         _ = try AppBridge.flow(["operation": "disarm_escape",
                             "generation": generation])
                     } catch {
-                        self.recordingPendingStart = false
-                        self.stopRecording()
+                        self.discardRecording()
                         self.showError("Recording start was cancelled", error)
                         return
                     }
@@ -771,7 +783,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private func pauseOrResumeRecording() {
         guard let session = recordingSession, let hud = recordingHUD,
-              let generation = activeRecordingGeneration else { return }
+              let generation = activeRecordingGeneration,
+              recordingLifecycle.begin() else { return }
+        hud.hud.setLifecycleActionsEnabled(false)
         let wasPaused = hud.hud.paused
         let excludeCapturesApp = recordingCapabilities?.controlsExcluded == true
         status.stringValue = wasPaused ? "Resuming recording…" : "Pausing recording…"
@@ -784,6 +798,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             return try session.pause()
         }) { [weak self] result in
             guard let self, self.recordingSession === session else { return }
+            self.recordingLifecycle.end()
+            hud.hud.setLifecycleActionsEnabled(true)
             do {
                 let snapshot = try result.get()
                 guard snapshot.state != "failed" else {
@@ -805,10 +821,15 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 self.status.stringValue = snapshot.warning
                     ?? (snapshot.state == "paused" ? "Recording paused." : "Recording in progress…")
             } catch {
-                // A platform pause failure transitions the shared owner to Failed.
-                // Preserve its durable recovery bundle instead of offering controls
-                // that can no longer operate on a live engine.
-                self.preserveFailedRecording(session, warning: error.localizedDescription)
+                if wasPaused {
+                    // Resume cancellation retains the already accepted segments.
+                    // Finalize them rather than treating the whole take as disposable.
+                    self.stopRecording()
+                    self.showError("Couldn’t resume recording; saving the existing take", error)
+                } else {
+                    // A platform pause failure transitions the shared owner to Failed.
+                    self.preserveFailedRecording(session, warning: error.localizedDescription)
+                }
             }
         }
     }
@@ -823,7 +844,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     private func pollRecording() {
-        guard !recordingPollPending, let session = recordingSession,
+        guard !recordingPollPending, !recordingLifecycle.busy,
+              let session = recordingSession,
               let generation = activeRecordingGeneration else { return }
         do {
             let flow = try AppBridge.flow(["operation": "poll", "generation": generation])
@@ -863,6 +885,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         guard recordingSession === session else { return }
         recordingPollTimer?.invalidate(); recordingPollTimer = nil
         recordingGate.set(nil); activeRecordingGeneration = nil
+        recordingLifecycle.end()
         recordingSession = nil
         recordingHUD?.close(); recordingHUD = nil
         Self.queue.async { withExtendedLifetime(session) {} }
@@ -872,7 +895,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     private func stopRecording() {
-        guard let session = recordingSession else { return }
+        guard let session = recordingSession, recordingLifecycle.begin() else { return }
+        recordingHUD?.hud.setLifecycleActionsEnabled(false)
         recordingPollTimer?.invalidate(); recordingPollTimer = nil
         status.stringValue = "Finalizing recording…"
         recordingHUD?.hud.isHidden = true
@@ -887,10 +911,15 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 Self.queue.async { withExtendedLifetime(session) {} }
                 self.recordingHUD?.close(); self.recordingHUD = nil
                 self.recordingGate.set(nil); self.activeRecordingGeneration = nil
+                self.recordingLifecycle.end()
                 self.finishCapture()
-                self.status.stringValue = finalized.warning
+                let finalStatus = finalized.warning
                     ?? "Recording saved to \(finalized.path)"
-                self.loadHistory(select: finalized.id)
+                self.loadHistory(select: finalized.id) { [weak self] in
+                    guard let self,
+                          self.artifacts.contains(where: { $0.id == finalized.id }) else { return }
+                    self.status.stringValue = finalStatus
+                }
             case .failure(let error):
                 self.preserveFailedRecording(session, warning: error.localizedDescription)
             }
@@ -898,7 +927,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     private func discardRecording() {
-        guard let session = recordingSession else { return }
+        guard let session = recordingSession, recordingLifecycle.begin() else { return }
+        recordingHUD?.hud.setLifecycleActionsEnabled(false)
         recordingPollTimer?.invalidate(); recordingPollTimer = nil
         status.stringValue = "Discarding recording…"
         recordingHUD?.hud.isHidden = true
@@ -910,10 +940,17 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 Self.queue.async { withExtendedLifetime(session) {} }
                 self.recordingHUD?.close(); self.recordingHUD = nil
                 self.recordingGate.set(nil); self.activeRecordingGeneration = nil
+                self.recordingLifecycle.end()
                 self.finishCapture(); self.status.stringValue = "Recording discarded."
             case .failure(let error):
-                self.recordingHUD?.hud.isHidden = false
-                self.showError("Couldn’t discard recording", error)
+                self.recordingLifecycle.end()
+                if let hud = self.recordingHUD {
+                    hud.hud.isHidden = false
+                    hud.hud.setLifecycleActionsEnabled(true)
+                    self.showError("Couldn’t discard recording", error)
+                } else {
+                    self.preserveFailedRecording(session, warning: error.localizedDescription)
+                }
             }
         }
     }
@@ -922,6 +959,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         if let session = recordingSession {
             recordingPollTimer?.invalidate(); recordingPollTimer = nil
             recordingGate.set(nil); activeRecordingGeneration = nil
+            recordingLifecycle.end()
             recordingSession = nil
             recordingHUD?.close(); recordingHUD = nil
             if recordingPendingStart {

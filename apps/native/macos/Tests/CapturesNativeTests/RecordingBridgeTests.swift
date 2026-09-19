@@ -3,6 +3,16 @@ import XCTest
 @testable import CapturesNative
 
 final class RecordingBridgeTests: XCTestCase {
+    func testLifecycleGateRejectsRapidAndConflictingActionsUntilCompletion() {
+        var gate = RecordingLifecycleGate()
+        XCTAssertTrue(gate.begin())
+        XCTAssertTrue(gate.busy)
+        XCTAssertFalse(gate.begin(), "a second Pause, Stop, or Discard cannot queue")
+        gate.end()
+        XCTAssertFalse(gate.busy)
+        XCTAssertTrue(gate.begin(), "the next lifecycle action is allowed after completion")
+    }
+
     func testGenerationGateChangesWithoutReentrantBridgeWork() {
         let gate = RecordingGenerationGate()
         XCTAssertFalse(gate.accepts(41))

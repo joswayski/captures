@@ -18,6 +18,10 @@ final class RecordingHUDTests: XCTestCase {
                 "compact controls must not clip")
             XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 3,
                 "only Stop, Pause/Resume, and Trash are connected in this slice")
+            hud.setLifecycleActionsEnabled(false)
+            XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 0)
+            hud.setLifecycleActionsEnabled(true)
+            XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 3)
             hud.setPaused(false, elapsedMilliseconds: 94_000)
             XCTAssertFalse(hud.paused)
             try render(hud, window: window, name: "recording-hud-\(appearance)-running")
