@@ -1031,7 +1031,7 @@ impl Live {
                     };
                     self.countdown_target = Some(target);
                     self.previews.capture_target = Some(target);
-                    self.controls.lock().unwrap().reset();
+                    self.controls.lock().unwrap().reset_for_display_change();
                     self.window_session = None;
                     self.window_texture = None;
                     self.capture_phase = Some(CapturePhase::ControlsPreparing);
@@ -1515,10 +1515,31 @@ impl Live {
                             });
                             self.window_session = Some(session);
                             if controls {
-                                self.controls.lock().unwrap().reset();
-                                self.capture_phase = Some(CapturePhase::ControlsSelecting);
-                                self.status =
-                                    "Choose a screenshot target. Press Escape to cancel.".into();
+                                let auto_capture_display = self.controls_auto_start
+                                    && self.controls.lock().unwrap().mode()
+                                        == capture_controls::TargetMode::Display;
+                                if auto_capture_display {
+                                    let Some(flow) = &mut self.flow else {
+                                        continue;
+                                    };
+                                    if let Err(error) =
+                                        flow.start_countdown(self.controls_countdown_seconds)
+                                    {
+                                        self.error = Some(error);
+                                        self.finish_capture(ctx, false);
+                                        continue;
+                                    }
+                                    self.capture_phase = Some(CapturePhase::ControlsCountdown {
+                                        target: capture_controls::Target::Display,
+                                        after_countdown: self.controls_countdown_seconds > 0,
+                                    });
+                                    self.status = "Display changed. Press Escape to cancel.".into();
+                                } else {
+                                    self.capture_phase = Some(CapturePhase::ControlsSelecting);
+                                    self.status =
+                                        "Choose a screenshot target. Press Escape to cancel."
+                                            .into();
+                                }
                             } else {
                                 self.window_selector.lock().unwrap().reset();
                                 self.capture_phase = Some(CapturePhase::WindowSelecting);
@@ -2073,6 +2094,7 @@ impl Live {
                         ui,
                         &t,
                         capture_controls::View {
+                            panel_id: egui::Id::unique(("capture-controls-toolbar", generation)),
                             frozen: texture.as_ref(),
                             display: session.display(),
                             displays: &displays,

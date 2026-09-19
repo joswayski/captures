@@ -130,6 +130,11 @@ fn main() -> eframe::Result {
     } else {
         [1000., 720.]
     };
+    let minimum_size = if options.scene == Scene::CaptureControls {
+        [640., 480.]
+    } else {
+        size
+    };
     let native = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
@@ -139,7 +144,7 @@ fn main() -> eframe::Result {
                 "Captures — wgpu fixture workbench"
             })
             .with_inner_size(size)
-            .with_min_inner_size(size)
+            .with_min_inner_size(minimum_size)
             .with_visible(!idle)
             // eframe's wgpu painter takes its alpha capability from the root,
             // including for the transparent countdown child viewport.

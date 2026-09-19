@@ -85,6 +85,11 @@ impl Selector {
         *self = Self::default();
     }
 
+    pub fn clear_selection(&mut self) {
+        self.rect = None;
+        self.drag = None;
+    }
+
     pub fn cancel_drag(&mut self) {
         if let Some(drag) = self.drag.take() {
             self.rect = selection::capturable(Some(drag.initial)).then_some(drag.initial);
@@ -188,7 +193,14 @@ impl Selector {
         let capturable = drag_stopped && self.end();
         let auto_confirm = drag_stopped && created && capturable && auto_start;
 
-        paint_surface(ui, coordinates, tokens, frozen, self.rect);
+        paint_surface(
+            ui,
+            coordinates,
+            tokens,
+            frozen,
+            self.rect,
+            self.drag.is_some(),
+        );
         auto_confirm.then_some(Action::Confirm)
     }
 
@@ -384,6 +396,7 @@ fn paint_surface(
     tokens: &Tokens,
     frozen: Option<&TextureHandle>,
     selection: Option<Rect>,
+    dragging: bool,
 ) {
     let surface = coordinates.surface;
     let painter = ui.painter();
@@ -456,7 +469,7 @@ fn paint_surface(
             tokens.color("glass-strong"),
         );
         painter.galley(label_center - galley.size() / 2., galley, Color32::WHITE);
-    } else {
+    } else if !dragging {
         painter.rect_filled(surface, 0., veil);
         painter.text(
             surface.center() - egui::vec2(0., 28.),
@@ -472,6 +485,8 @@ fn paint_surface(
             FontId::proportional(tokens.number("text-sm")),
             tokens.color("glass-text-muted"),
         );
+    } else {
+        painter.rect_filled(surface, 0., veil);
     }
 }
 
@@ -598,6 +613,25 @@ mod tests {
         assert_eq!(selector.rect(), None);
         assert!(selector.drag.is_none());
         assert_eq!(selector.aspect, Aspect::Free);
+    }
+
+    #[test]
+    fn display_change_clears_selection_but_preserves_aspect() {
+        let mut selector = Selector {
+            rect: Some(Rect {
+                x: 10.,
+                y: 20.,
+                width: 100.,
+                height: 80.,
+            }),
+            aspect: Aspect::SixteenNine,
+            drag: None,
+        };
+        selector.begin(Point { x: 30., y: 40. });
+        selector.clear_selection();
+        assert_eq!(selector.rect, None);
+        assert!(selector.drag.is_none());
+        assert_eq!(selector.aspect, Aspect::SixteenNine);
     }
 
     #[test]
