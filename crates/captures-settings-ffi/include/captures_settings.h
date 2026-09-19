@@ -192,6 +192,24 @@ char *captures_window_capture_v1(const CapturesWindowSession *session,
  * Separately finish the event-loop capture-flow guard on every exit path. */
 void captures_window_free_v1(CapturesWindowSession *session);
 
+/* Owned mutable recording lifecycle. Prepare and every request may block: run
+ * them on one serialized worker, never AppKit's event thread. Prepare JSON is
+ * {recovery_root,options,display}; success returns {snapshot}. Lifecycle request
+ * operations are snapshot, start, pause, stop, finish and discard. Start accepts
+ * generation/exclude_captures_app and requires an is_current callback, invoked
+ * before and after engine opening; it must only read a thread-safe host
+ * cancellation gate. Finish accepts history_root/ffmpeg/ffprobe file paths and
+ * returns FinalizedRecording metadata/path, never media JSON/base64. Stop/discard
+ * an active handle before free. All responses use the standard owned envelope. */
+typedef struct CapturesRecordingSession CapturesRecordingSession;
+typedef bool (*CapturesRecordingIsCurrent)(void *context, uint64_t generation);
+char *captures_recording_info_v1(const char *request_json);
+CapturesRecordingSession *captures_recording_prepare_v1(const char *request_json,
+    char **output);
+char *captures_recording_request_v1(CapturesRecordingSession *handle,
+    const char *request_json, CapturesRecordingIsCurrent is_current, void *context);
+void captures_recording_free_v1(CapturesRecordingSession *handle);
+
 /* Versioned JSON ABI. Operations are load, save, default_path, and theme.
  * Theme accepts {"operation":"theme","accent":"#rgb","signal":"#rrggbb",
  * "light":true} and returns {"ok":true,"colors":{...}}.

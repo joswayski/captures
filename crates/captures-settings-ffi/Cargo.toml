@@ -10,6 +10,10 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 captures-app = { path = "../captures-app" }
+captures-capture = { path = "../captures-capture" }
+captures-media = { path = "../captures-media" }
+captures-recording = { path = "../captures-recording" }
+captures-recording-platform = { path = "../captures-recording-platform" }
 captures-settings = { path = "../captures-settings" }
 serde.workspace = true
 serde_json.workspace = true
