@@ -21,13 +21,107 @@ final class ClosureColorWell: NSColorWell {
     @objc func selectedColor() { change?(color) }
 }
 
+final class ShortcutRecorderButton: NSButton {
+    var tokens: Tokens!
+    var beginRecording: (() -> Void)?
+    var recordEvent: ((NSEvent) -> Void)?
+    var cancelRecording: (() -> Void)?
+    private(set) var recording = false
+    private(set) var keys: [String] = []
+    private(set) var error = ""
+
+    override var acceptsFirstResponder: Bool { true }
+
+    init(frame: NSRect, tokens: Tokens, label: String, keys: [String]) {
+        super.init(frame: frame)
+        self.tokens = tokens; self.keys = keys
+        title = ""; isBordered = false; setButtonType(.momentaryPushIn)
+        target = self; action = #selector(activateRecorder)
+        setAccessibilityRole(.button); setAccessibilityLabel(label)
+        updateAccessibility()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    @objc private func activateRecorder() { beginRecording?() }
+
+    func startRecording() {
+        recording = true; keys = []; error = ""; updateAccessibility(); needsDisplay = true
+    }
+    func update(keys: [String], error: String = "") {
+        self.keys = keys; self.error = error; updateAccessibility(); needsDisplay = true
+    }
+    func stopRecording(keys: [String]) {
+        recording = false; self.keys = keys; error = ""; updateAccessibility(); needsDisplay = true
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let accepted = super.resignFirstResponder()
+        if recording { cancelRecording?() }
+        needsDisplay = true
+        return accepted
+    }
+    override func keyDown(with event: NSEvent) {
+        if recording {
+            recordEvent?(event)
+        } else if event.keyCode == 36 || event.keyCode == 49 {
+            beginRecording?()
+        } else {
+            super.keyDown(with: event)
+        }
+    }
+    override func flagsChanged(with event: NSEvent) {
+        if recording { recordEvent?(event) } else { super.flagsChanged(with: event) }
+    }
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard recording else { return super.performKeyEquivalent(with: event) }
+        recordEvent?(event)
+        return true
+    }
+
+    private func updateAccessibility() {
+        state = recording ? .on : .off
+        setAccessibilityValue(keys.isEmpty ? (recording ? "Press shortcut" : "None") : keys.joined(separator: " + "))
+        setAccessibilitySelected(recording)
+        setAccessibilityHelp(error.isEmpty ? nil : error)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
+            xRadius: tokens.number("r-md"), yRadius: tokens.number("r-md"))
+        tokens.color(recording ? "surface-selected" : "surface-field").setFill(); outline.fill()
+        tokens.color(recording || window?.firstResponder === self ? "theme-accent" : "control-border").setStroke()
+        outline.lineWidth = recording ? 2 : 1; outline.stroke()
+
+        let values = keys.isEmpty ? [recording ? "Press shortcut…" : "None"] : keys
+        var x: CGFloat = 10
+        for value in values {
+            let font = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: font,
+                .foregroundColor: tokens.color(keys.isEmpty ? "text-muted" : "text"),
+            ]
+            let textSize = (value as NSString).size(withAttributes: attributes)
+            let chip = NSBezierPath(roundedRect: NSRect(x: x, y: 7, width: textSize.width + 14, height: 24),
+                xRadius: tokens.number("r-sm"), yRadius: tokens.number("r-sm"))
+            tokens.color("control").setFill(); chip.fill()
+            (value as NSString).draw(at: NSPoint(x: x + 7, y: 11), withAttributes: attributes)
+            x += textSize.width + 20
+        }
+    }
+}
+
 final class PreferencesController: NSObject, NSTextFieldDelegate {
+    typealias ShortcutPolicy = (String, Bool, Bool, Bool, Bool) throws -> [String: Any]
+    typealias ShortcutDisplay = (String) throws -> [String]
+
     private let root: Surface
     private let store: SettingsStore
     private let tokensProvider: () -> Tokens
     private let appearanceChanged: (String, String, [String: Any]) -> Void
     private let settingsChanged: ([String: Any]) -> Void
     private let settingsPersisted: ([String: Any]) -> Void
+    private let shortcutPolicy: ShortcutPolicy
+    private let shortcutDisplay: ShortcutDisplay
     private let showHistory: () -> Void
     private let liveCaptureAvailable: Bool
     private var settings: [String: Any] = [:]
@@ -43,6 +137,11 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private var latestRevision = 0
     private var saveFailed = false
     private var rebuilding = false
+    private var shortcutRecorders: [String: ShortcutRecorderButton] = [:]
+    private var shortcutErrors: [String: NSTextField] = [:]
+    private weak var recordingShortcut: ShortcutRecorderButton?
+    private var shortcutEventMonitor: Any?
+    private var shortcutFocusObserver: NSObjectProtocol?
     private let sections = [("appearance", "Appearance"), ("capture", "Capture"),
                             ("shortcuts", "Shortcuts"),
                             ("recording", "Recording"), ("gif", "GIF export"),
@@ -54,12 +153,18 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
          appearanceChanged: @escaping (String, String, [String: Any]) -> Void,
          settingsChanged: @escaping ([String: Any]) -> Void = { _ in },
          settingsPersisted: @escaping ([String: Any]) -> Void = { _ in },
+         shortcutPolicy: @escaping ShortcutPolicy = { code, control, shift, alt, meta in
+             try NativeCaptureShortcuts.record(code: code, control: control, shift: shift,
+                 alt: alt, meta: meta)
+         },
+         shortcutDisplay: @escaping ShortcutDisplay = { try NativeCaptureShortcuts.display($0) },
          showHistory: @escaping () -> Void, liveCaptureAvailable: Bool = false,
          initialAppearance: String? = nil, initialTheme: String? = nil) {
         self.root = root; self.store = store; tokensProvider = tokens
         self.appearanceChanged = appearanceChanged; self.showHistory = showHistory
         self.settingsChanged = settingsChanged
         self.settingsPersisted = settingsPersisted
+        self.shortcutPolicy = shortcutPolicy; self.shortcutDisplay = shortcutDisplay
         self.liveCaptureAvailable = liveCaptureAvailable
         super.init()
         buildShell()
@@ -133,6 +238,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
 
     private func card(_ id: String, title: String, description: String, y: CGFloat, height: CGFloat) -> Surface {
         let card = Surface(frame: NSRect(x: 28, y: y, width: min(720, scroll.contentSize.width - 56), height: height))
+        card.identifier = NSUserInterfaceItemIdentifier("preferences-card.\(id)")
         card.wantsLayer = true; card.layer?.cornerRadius = tokens.number("r-xl")
         card.layer?.backgroundColor = tokens.color("surface-raised").cgColor
         card.layer?.borderWidth = 1; card.layer?.borderColor = tokens.color("border").cgColor
@@ -202,13 +308,205 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
 
     private func shortcutsCard(_ y: CGFloat) -> CGFloat {
         let description = liveCaptureAvailable
-            ? "Saved bindings for native region, window and display captures."
-            : "Global capture shortcuts are not connected in this native development build."
-        let card = card("shortcuts", title: "Shortcuts", description: description, y: y, height: 164)
-        disabledRow(liveCaptureAvailable ? "Capture shortcuts" : "Global capture shortcuts",
-            detail: liveCaptureAvailable ? "Shortcut editing is not available in the native workspace yet."
-                : "Use the installed Preview for capture shortcuts.", y: 88, parent: card)
+            ? "Edit saved shortcuts. Region, window and display screenshots are active in this native build."
+            : "Edit disposable fixture settings. Fixture scenes never register global keys."
+        let card = card("shortcuts", title: "Shortcuts", description: description, y: y, height: 574)
+        shortcutRecorders.removeAll(); shortcutErrors.removeAll()
+        let rows = [
+            ("new_capture_shortcut", "New Capture", false, false),
+            ("region_shortcut", "Screenshot region", true, false),
+            ("window_shortcut", "Screenshot window", true, false),
+            ("display_shortcut", "Screenshot display", true, false),
+            ("video_shortcut", "Record region", false, true),
+            ("window_shortcut", "Record window", false, true),
+            ("display_shortcut", "Record display", false, true),
+        ]
+        for (index, row) in rows.enumerated() {
+            shortcutRow(key: row.0, title: row.1,
+                detail: liveCaptureAvailable && row.2 ? "Active in the native workspace" : "Not connected in the native workspace",
+                recordingSetting: row.3, y: 84 + CGFloat(index) * 68, parent: card)
+        }
         return y + card.frame.height + 22
+    }
+
+    private func shortcutRow(key: String, title: String, detail: String,
+                             recordingSetting: Bool, y: CGFloat, parent: NSView) {
+        let identifier = recordingSetting ? "recording.\(key)" : key
+        let shortcut = recordingSetting
+            ? (settings["recording"] as? [String: Any] ?? [:]).string(key)
+            : settings.string(key)
+        let titleLabel = addLabel(title, frame: NSRect(x: 22, y: y, width: 280, height: 20),
+            size: 13, weight: .medium, parent: parent)
+        let detailLabel = addLabel(detail, frame: NSRect(x: 22, y: y + 20, width: 310, height: 20),
+            size: 11, muted: true, parent: parent)
+        searchable += [(titleLabel, title), (detailLabel, detail)]
+        let keys = (try? shortcutDisplay(shortcut)) ?? [shortcut]
+        let recorder = ShortcutRecorderButton(frame: NSRect(x: 350, y: y, width: 328, height: 38),
+            tokens: tokens, label: title, keys: keys.filter { !$0.isEmpty })
+        recorder.identifier = NSUserInterfaceItemIdentifier("shortcut.\(identifier)")
+        recorder.beginRecording = { [weak self, weak recorder] in
+            guard let self, let recorder else { return }
+            self.beginShortcutRecording(recorder)
+        }
+        recorder.recordEvent = { [weak self] event in self?.recordShortcut(event) }
+        recorder.cancelRecording = { [weak self, weak recorder] in
+            guard let self, let recorder, self.recordingShortcut === recorder else { return }
+            self.stopShortcutRecording(recorder, identifier: identifier)
+        }
+        parent.addSubview(recorder); shortcutRecorders[identifier] = recorder
+        let error = addLabel("", frame: NSRect(x: 350, y: y + 40, width: 328, height: 18),
+            size: 11, parent: parent, color: "danger-text")
+        error.identifier = NSUserInterfaceItemIdentifier("shortcut-error.\(identifier)")
+        error.setAccessibilityRole(.staticText); error.setAccessibilityLabel("\(title) shortcut error")
+        shortcutErrors[identifier] = error
+    }
+
+    private func beginShortcutRecording(_ recorder: ShortcutRecorderButton) {
+        if let current = recordingShortcut, current !== recorder {
+            stopShortcutRecording(current, identifier: shortcutIdentifier(current))
+        }
+        recordingShortcut = recorder
+        recorder.startRecording()
+        shortcutErrors[shortcutIdentifier(recorder)]?.stringValue = ""
+        root.window?.makeFirstResponder(recorder)
+        if shortcutEventMonitor == nil {
+            shortcutEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) {
+                [weak self] event in
+                guard let self, self.recordingShortcut != nil else { return event }
+                self.recordShortcut(event)
+                return nil
+            }
+        }
+        if shortcutFocusObserver == nil, let window = root.window {
+            shortcutFocusObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didResignKeyNotification, object: window, queue: .main
+            ) { [weak self, weak recorder] _ in
+                guard let self, let recorder, self.recordingShortcut === recorder else { return }
+                self.stopShortcutRecording(recorder, identifier: self.shortcutIdentifier(recorder))
+            }
+        }
+    }
+
+    private func recordShortcut(_ event: NSEvent) {
+        handleShortcutInput(code: Self.domCode(for: event),
+            control: event.modifierFlags.contains(.control),
+            shift: event.modifierFlags.contains(.shift),
+            alt: event.modifierFlags.contains(.option),
+            meta: event.modifierFlags.contains(.command))
+    }
+
+    func handleShortcutInput(code: String, control: Bool, shift: Bool, alt: Bool, meta: Bool) {
+        guard let recorder = recordingShortcut else { return }
+        let identifier = shortcutIdentifier(recorder)
+        do {
+            let result = try shortcutPolicy(code, control, shift, alt, meta)
+            guard let kind = result["kind"] as? String,
+                  let keys = result["keys"] as? [String] else { throw AppBridgeError.invalidResponse }
+            switch kind {
+            case "cancel":
+                stopShortcutRecording(recorder, identifier: identifier)
+            case "waiting":
+                recorder.update(keys: keys)
+                shortcutErrors[identifier]?.stringValue = ""
+            case "invalid":
+                let message = result["message"] as? String ?? "That shortcut is not supported."
+                recorder.update(keys: keys, error: message)
+                shortcutErrors[identifier]?.stringValue = message
+            case "complete":
+                guard let shortcut = result["shortcut"] as? String else {
+                    throw AppBridgeError.invalidResponse
+                }
+                setShortcut(shortcut, identifier: identifier)
+                finishShortcutRecording(recorder, keys: keys)
+            default: throw AppBridgeError.invalidResponse
+            }
+        } catch {
+            let message = error.localizedDescription
+            recorder.update(keys: recorder.keys, error: message)
+            shortcutErrors[identifier]?.stringValue = message
+        }
+    }
+
+    private func stopShortcutRecording(_ recorder: ShortcutRecorderButton, identifier: String) {
+        let shortcut = shortcutValue(identifier: identifier)
+        finishShortcutRecording(recorder,
+            keys: (try? shortcutDisplay(shortcut)) ?? [shortcut].filter { !$0.isEmpty })
+    }
+
+    private func finishShortcutRecording(_ recorder: ShortcutRecorderButton, keys: [String]) {
+        recorder.stopRecording(keys: keys)
+        shortcutErrors[shortcutIdentifier(recorder)]?.stringValue = ""
+        if recordingShortcut === recorder { recordingShortcut = nil }
+        if let monitor = shortcutEventMonitor {
+            NSEvent.removeMonitor(monitor); shortcutEventMonitor = nil
+        }
+        if let observer = shortcutFocusObserver {
+            NotificationCenter.default.removeObserver(observer); shortcutFocusObserver = nil
+        }
+    }
+
+    private func setShortcut(_ shortcut: String, identifier: String) {
+        if identifier.hasPrefix("recording.") {
+            let key = String(identifier.dropFirst("recording.".count))
+            var recording = settings["recording"] as? [String: Any] ?? [:]
+            recording[key] = shortcut; settings["recording"] = recording
+        } else {
+            settings[identifier] = shortcut
+        }
+        changed(rerender: false)
+    }
+
+    private func shortcutValue(identifier: String) -> String {
+        if identifier.hasPrefix("recording.") {
+            return (settings["recording"] as? [String: Any] ?? [:])
+                .string(String(identifier.dropFirst("recording.".count)))
+        }
+        return settings.string(identifier)
+    }
+
+    private func shortcutIdentifier(_ recorder: ShortcutRecorderButton) -> String {
+        guard let value = recorder.identifier?.rawValue else { return "" }
+        return String(value.dropFirst("shortcut.".count))
+    }
+
+    func shortcutRecorder(identifier: String) -> ShortcutRecorderButton? {
+        shortcutRecorders[identifier]
+    }
+
+    func shortcutCard() -> NSView? { sectionViews["shortcuts"] }
+
+    deinit {
+        if let monitor = shortcutEventMonitor { NSEvent.removeMonitor(monitor) }
+        if let observer = shortcutFocusObserver { NotificationCenter.default.removeObserver(observer) }
+    }
+
+    static func domCode(for event: NSEvent) -> String {
+        let codes: [UInt16: String] = [
+            0: "KeyA", 1: "KeyS", 2: "KeyD", 3: "KeyF", 4: "KeyH", 5: "KeyG",
+            6: "KeyZ", 7: "KeyX", 8: "KeyC", 9: "KeyV", 11: "KeyB", 12: "KeyQ",
+            13: "KeyW", 14: "KeyE", 15: "KeyR", 16: "KeyY", 17: "KeyT",
+            18: "Digit1", 19: "Digit2", 20: "Digit3", 21: "Digit4", 22: "Digit6",
+            23: "Digit5", 24: "Equal", 25: "Digit9", 26: "Digit7", 27: "Minus",
+            28: "Digit8", 29: "Digit0", 30: "BracketRight", 31: "KeyO", 32: "KeyU",
+            33: "BracketLeft", 34: "KeyI", 35: "KeyP", 36: "Enter", 37: "KeyL",
+            38: "KeyJ", 39: "Quote", 40: "KeyK", 41: "Semicolon", 42: "Backslash",
+            43: "Comma", 44: "Slash", 45: "KeyN", 46: "KeyM", 47: "Period",
+            48: "Tab", 49: "Space", 50: "Backquote", 51: "Backspace", 53: "Escape",
+            54: "MetaRight", 55: "MetaLeft", 56: "ShiftLeft", 57: "CapsLock",
+            58: "AltLeft", 59: "ControlLeft", 60: "ShiftRight", 61: "AltRight",
+            62: "ControlRight", 65: "NumpadDecimal", 67: "NumpadMultiply",
+            69: "NumpadAdd", 71: "NumLock", 75: "NumpadDivide", 76: "NumpadEnter",
+            78: "NumpadSubtract", 81: "NumpadEqual", 82: "Numpad0", 83: "Numpad1",
+            84: "Numpad2", 85: "Numpad3", 86: "Numpad4", 87: "Numpad5",
+            88: "Numpad6", 89: "Numpad7", 91: "Numpad8", 92: "Numpad9",
+            96: "F5", 97: "F6", 98: "F7", 99: "F3", 100: "F8", 101: "F9",
+            103: "F11", 105: "F13", 106: "F16", 107: "F14", 109: "F10",
+            111: "F12", 113: "F15", 114: "Insert", 115: "Home", 116: "PageUp",
+            117: "Delete", 118: "F4", 119: "End", 120: "F2", 121: "PageDown",
+            122: "F1", 123: "ArrowLeft", 124: "ArrowRight", 125: "ArrowDown",
+            126: "ArrowUp",
+        ]
+        return codes[event.keyCode] ?? "Unidentified"
     }
 
     private func recordingCard(_ y: CGFloat) -> CGFloat {
