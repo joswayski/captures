@@ -1558,6 +1558,7 @@ impl Live {
         tokens: &Tokens,
         settings: Result<AppSettings, String>,
     ) {
+        self.capture_viewports(ctx, tokens);
         if self.flow.is_none()
             && let Ok(settings) = &settings
         {
@@ -1841,13 +1842,7 @@ impl Live {
         );
     }
 
-    pub fn ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        t: &Tokens,
-        frame: &eframe::Frame,
-        settings: impl Fn() -> Result<AppSettings, String>,
-    ) {
+    fn capture_viewports(&mut self, ctx: &egui::Context, t: &Tokens) {
         if self.capture_phase == Some(CapturePhase::RegionSelecting) {
             let t = t.clone();
             let generation = self
@@ -1870,7 +1865,7 @@ impl Live {
                 width: overlay_width,
                 height: overlay_height,
             };
-            ui.ctx().show_viewport_deferred(
+            ctx.show_viewport_deferred(
                 egui::ViewportId::from_hash_of("region-selector"),
                 capture_viewport(
                     "Captures Region Selection",
@@ -1928,7 +1923,7 @@ impl Live {
                     .as_ref()
                     .expect("selection owns window session"),
             );
-            ui.ctx().show_viewport_deferred(
+            ctx.show_viewport_deferred(
                 egui::ViewportId::from_hash_of("window-selector"),
                 capture_viewport(
                     "Captures Window Selection",
@@ -1986,7 +1981,7 @@ impl Live {
                 let t = t.clone();
                 let generation = flow.generation();
                 let target = self.countdown_target.expect("countdown target validated");
-                ui.ctx().show_viewport_deferred(
+                ctx.show_viewport_deferred(
                     egui::ViewportId::from_hash_of("screenshot-countdown"),
                     capture_viewport(
                         "Captures Screenshot Countdown",
@@ -2008,9 +2003,18 @@ impl Live {
             } else {
                 // Stop declaring the child before hiding the root. Hidden-root
                 // logic then verifies visibility and waits for compositor settling.
-                self.hide_for_capture(ui.ctx());
+                self.hide_for_capture(ctx);
             }
         }
+    }
+
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        t: &Tokens,
+        frame: &eframe::Frame,
+        settings: impl Fn() -> Result<AppSettings, String>,
+    ) {
         if self.flow.is_some() || self.capture_in_flight {
             ui.disable();
         }
@@ -2542,6 +2546,34 @@ mod tests {
             live.error.as_deref(),
             Some("Another capture or history action is still in progress.")
         );
+        live.flush();
+    }
+
+    #[test]
+    fn capture_viewports_do_not_depend_on_workspace_or_preview_rendering() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        live.flow = Some(CaptureFlow::begin(5).unwrap());
+        live.capture_phase = Some(CapturePhase::DisplayCountdown);
+        live.countdown_target = Some(CaptureTarget {
+            monitor: 0,
+            position: egui::pos2(0., 0.),
+            size: egui::vec2(800., 600.),
+            preview_bounds: None,
+        });
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+
+        ctx.begin_pass(Default::default());
+        live.viewports(&ctx, &tokens, Ok(AppSettings::default()));
+        let mut output = ctx.end_pass();
+
+        let declared = output
+            .viewport_output
+            .contains_key(&egui::ViewportId::from_hash_of("screenshot-countdown"));
+        output.textures_delta.clear();
+        assert!(declared);
         live.flush();
     }
 
