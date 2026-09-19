@@ -863,6 +863,10 @@ name = "captures-settings-ffi"
 version = "0.1.0"
 dependencies = [
  "captures-app",
+ "captures-capture",
+ "captures-media",
+ "captures-recording",
+ "captures-recording-platform",
  "captures-settings",
  "serde",
  "serde_json",
