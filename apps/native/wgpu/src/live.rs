@@ -288,16 +288,12 @@ impl MiniPreviews {
             return Err("Mini-preview capture state was lost before persistence.".into());
         };
         self.omission_frame = None;
-        if !self.show {
-            self.visibility.restore_capture(capture_generation);
-            self.capture_target = None;
-            return Ok(None);
-        }
-        let Some(target) = self.capture_target.take() else {
+        let target = self.capture_target.take();
+        if self.show && target.is_none() {
             self.visibility.restore_capture(capture_generation);
             return Err("Mini-preview monitor state was lost before persistence.".into());
-        };
-        if target.preview_bounds.is_none() {
+        }
+        if self.show && target.is_some_and(|target| target.preview_bounds.is_none()) {
             self.visibility.restore_capture(capture_generation);
             return Err("Mini-preview positioning is unavailable for this display.".into());
         }
@@ -327,7 +323,9 @@ impl MiniPreviews {
                 message: None,
             },
         );
-        self.stack_target = Some(target);
+        if target.is_some() {
+            self.stack_target = target;
+        }
         self.waiting_artifact = Some(artifact_id.clone());
         Ok(Some((
             PreviewGuard {
@@ -1458,6 +1456,9 @@ impl Live {
         let Some(target) = self.previews.stack_target else {
             return;
         };
+        let Some(preview_bounds) = target.preview_bounds else {
+            return;
+        };
         let count = self.previews.stack.ids().len();
         let collapsed = self.previews.stack.is_collapsed();
         let placement = self.previews.placement;
@@ -1487,9 +1488,7 @@ impl Live {
         }
         let tokens = tokens.clone();
         let geometry = captures_app::preview::thumbnail_geometry(
-            target
-                .preview_bounds
-                .expect("visible preview has validated monitor bounds"),
+            preview_bounds,
             count,
             collapsed,
             None,
@@ -1615,9 +1614,14 @@ impl Live {
                 if collapsed {
                     for card in &cards {
                         let rect = egui::Rect::from_min_size(
-                            egui::pos2(0., card.layout.y as f32),
+                            egui::pos2(
+                                captures_app::preview::THUMBNAIL_PADDING as f32,
+                                card.layout.y as f32,
+                            ),
                             egui::vec2(
-                                captures_app::preview::THUMBNAIL_WIDTH as f32,
+                                (captures_app::preview::THUMBNAIL_WIDTH
+                                    - captures_app::preview::THUMBNAIL_PADDING * 2.)
+                                    as f32,
                                 captures_app::preview::THUMBNAIL_CARD_HEIGHT as f32,
                             ),
                         );
@@ -1658,9 +1662,15 @@ impl Live {
                                     let y =
                                         card.layout.y as f32 - if top_anchor { gutter } else { 0. };
                                     let rect = egui::Rect::from_min_size(
-                                        content.min + egui::vec2(0., y),
+                                        content.min
+                                            + egui::vec2(
+                                                captures_app::preview::THUMBNAIL_PADDING as f32,
+                                                y,
+                                            ),
                                         egui::vec2(
-                                            captures_app::preview::THUMBNAIL_WIDTH as f32,
+                                            (captures_app::preview::THUMBNAIL_WIDTH
+                                                - captures_app::preview::THUMBNAIL_PADDING * 2.)
+                                                as f32,
                                             captures_app::preview::THUMBNAIL_CARD_HEIGHT as f32,
                                         ),
                                     );
@@ -1671,31 +1681,39 @@ impl Live {
                             });
                     });
                 }
-                let gutter = captures_app::preview::THUMBNAIL_CONTROL_GUTTER as f32;
-                let controls = egui::Rect::from_min_size(
-                    egui::pos2(
-                        0.,
-                        if top_anchor {
-                            0.
-                        } else {
-                            geometry.height as f32 - gutter
-                        },
-                    ),
-                    egui::vec2(captures_app::preview::THUMBNAIL_WIDTH as f32, gutter),
-                );
-                ui.scope_builder(egui::UiBuilder::new().max_rect(controls), |ui| {
-                    match crate::mini_preview::show_stack_controls(ui, &tokens, count, collapsed) {
-                        Some(crate::mini_preview::StackAction::ToggleCollapsed) => {
-                            message = Some(PreviewMessage::ToggleCollapsed);
+                if crate::mini_preview::stack_controls_visible(count, collapsed) {
+                    let gutter = captures_app::preview::THUMBNAIL_CONTROL_GUTTER as f32;
+                    let padding = captures_app::preview::THUMBNAIL_PADDING as f32;
+                    let controls = egui::Rect::from_min_size(
+                        egui::pos2(
+                            padding,
+                            if top_anchor {
+                                0.
+                            } else {
+                                geometry.height as f32 - gutter
+                            },
+                        ),
+                        egui::vec2(
+                            captures_app::preview::THUMBNAIL_WIDTH as f32 - padding * 2.,
+                            gutter,
+                        ),
+                    );
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(controls), |ui| {
+                        match crate::mini_preview::show_stack_controls(
+                            ui, &tokens, count, collapsed,
+                        ) {
+                            Some(crate::mini_preview::StackAction::ToggleCollapsed) => {
+                                message = Some(PreviewMessage::ToggleCollapsed);
+                            }
+                            Some(crate::mini_preview::StackAction::ClearAll) => {
+                                message = Some(PreviewMessage::ClearAll {
+                                    artifact_ids: clear_ids.clone(),
+                                });
+                            }
+                            None => {}
                         }
-                        Some(crate::mini_preview::StackAction::ClearAll) => {
-                            message = Some(PreviewMessage::ClearAll {
-                                artifact_ids: clear_ids.clone(),
-                            });
-                        }
-                        None => {}
-                    }
-                });
+                    });
+                }
                 if let Some(message) = message {
                     let _ = sender.send(message);
                     ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
@@ -2599,7 +2617,7 @@ mod tests {
     }
 
     #[test]
-    fn disabled_mini_previews_skip_card_without_losing_capture() {
+    fn disabled_mini_previews_retain_card_for_reenable_without_showing_it() {
         let root = tempfile::tempdir().unwrap();
         let artifact = preview_artifact(root.path(), [40, 50, 60, 255]);
         let settings = AppSettings {
@@ -2607,11 +2625,29 @@ mod tests {
             ..AppSettings::default()
         };
         let mut previews = MiniPreviews::default();
-        previews.begin_capture(&settings, None, 1).unwrap();
+        previews
+            .begin_capture(&settings, Some(preview_target()), 1)
+            .unwrap();
 
-        assert!(previews.start_artifact(&artifact).unwrap().is_none());
-        assert!(previews.cards.is_empty());
+        let (guard, _) = previews.start_artifact(&artifact).unwrap().unwrap();
+        assert_eq!(
+            previews.stack.ids(),
+            std::slice::from_ref(&artifact.entry.id)
+        );
+        assert!(previews.accepts(&guard.artifact_id, guard.generation));
+        assert!(!previews.is_visible());
+        previews.mark_ready(&guard.artifact_id);
         assert!(!previews.visibility.is_suppressed());
+        previews.show = true;
+        assert!(!previews.is_visible(), "decode still gates presentation");
+        let context = egui::Context::default();
+        let texture = context.load_texture(
+            "disabled-preview-test",
+            egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]),
+            egui::TextureOptions::LINEAR,
+        );
+        previews.cards.get_mut(&guard.artifact_id).unwrap().texture = Some(texture);
+        assert!(previews.is_visible());
         assert_eq!(captures_app::list(root.path()).unwrap().len(), 1);
     }
 
