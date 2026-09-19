@@ -235,7 +235,7 @@ final class CaptureControlsTests: XCTestCase {
     private func descendant(in view: NSView, accessibilityLabel: String) -> NSView? {
         if view.accessibilityLabel() == accessibilityLabel { return view }
         return view.subviews.lazy.compactMap {
-            descendant(in: $0, accessibilityLabel: accessibilityLabel)
+            self.descendant(in: $0, accessibilityLabel: accessibilityLabel)
         }.first
     }
 
