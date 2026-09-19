@@ -109,8 +109,9 @@ final class MiniPreviewTests: XCTestCase {
         let second = try XCTUnwrap(controller.beginCapture(settings: visible))
         controller.present(new, on: screenID(), settings: visible, generation: second)
         try waitUntil { controller.presentedArtifactID == "new" && controller.isPanelVisible }
+        XCTAssertEqual(controller.decodedArtifactIDs, ["new"])
         oldDecode.signal()
-        try waitUntil { controller.presentedArtifactIDs == ["old", "new"] }
+        try waitUntil { controller.decodedArtifactIDs == ["old", "new"] }
         XCTAssertEqual(controller.presentedArtifactID, "new",
             "decode completion order must not change chronological membership")
 
@@ -175,7 +176,7 @@ final class MiniPreviewTests: XCTestCase {
         let second = try XCTUnwrap(controller.beginCapture(settings: settings))
         controller.present(artifact(id: "second", previewPath: "/second-preview.png"),
                            on: screenID(), settings: settings, generation: second)
-        try waitUntil { controller.presentedArtifactIDs == ["first", "second"] }
+        try waitUntil { controller.decodedArtifactIDs == ["first", "second"] }
         XCTAssertTrue(controller.isCollapsed)
 
         controller.updateSettings(MiniPreviewSettings(enabled: false, placement: "top_left",
@@ -189,24 +190,97 @@ final class MiniPreviewTests: XCTestCase {
             "hiding previews must retain membership for re-enable")
     }
 
-    func testRealThumbnailRendersRepresentativePanel() throws {
+    func testDeletingBlockedLatestDecodeRestoresVisibleOlderCard() throws {
         _ = NSApplication.shared
-        let image = NSImage(cgImage: PreviewView.fixtureImage(scale: 2),
-                            size: NSSize(width: 284, height: 160))
-        let panel = fixturePanel(ids: ["fixture"], images: ["fixture": image])
+        let releaseLatest = DispatchSemaphore(value: 0)
+        let image = solidImage(.systemBlue)
+        let controller = MiniPreviewController(tokens: tokens, imageLoader: { path in
+            if path == "/latest-preview.png" { releaseLatest.wait() }
+            return image
+        })
+        let settings = MiniPreviewSettings(enabled: true, placement: "bottom_right",
+                                           includeInCaptures: false)
+        let first = try XCTUnwrap(controller.beginCapture(settings: settings))
+        controller.present(artifact(id: "older", previewPath: "/older-preview.png"),
+                           on: screenID(), settings: settings, generation: first)
+        try waitUntil { controller.decodedArtifactIDs == ["older"] && controller.isPanelVisible }
+
+        let second = try XCTUnwrap(controller.beginCapture(settings: settings))
+        controller.present(artifact(id: "latest", previewPath: "/latest-preview.png"),
+                           on: screenID(), settings: settings, generation: second)
+        XCTAssertFalse(controller.isPanelVisible)
+        controller.reconcileHistory(ids: ["older"])
+        XCTAssertEqual(controller.presentedArtifactIDs, ["older"])
+        XCTAssertTrue(controller.isPanelVisible,
+            "deleting the pending latest capture must restore decoded survivors")
+        releaseLatest.signal()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(controller.decodedArtifactIDs, ["older"])
+    }
+
+    func testRealThumbnailRendersExpandedAndCollapsedStacks() throws {
+        _ = NSApplication.shared
+        let ids = ["oldest", "middle", "newest"]
+        let images = ["oldest": solidImage(.systemRed), "middle": solidImage(.systemGreen),
+                      "newest": solidImage(.systemBlue)]
+        let expanded = fixturePanel(ids: ids, images: images, topAnchor: true)
+        let collapsed = fixturePanel(ids: ids, images: images, collapsed: true, topAnchor: true)
+        defer { expanded.close(); collapsed.close() }
+
+        for (panel, name) in [(expanded, "expanded"), (collapsed, "collapsed")] {
+            panel.display(); panel.previewView.layoutSubtreeIfNeeded()
+            XCTAssertEqual(panel.previewView.cardPaintOrder, ids,
+                "chronological subview order paints newest on top")
+            let view = panel.previewView
+            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 10, y: 10)).alphaComponent, 0,
+                           accuracy: 0.01, "stack padding remains transparent")
+            let frontPixel = try XCTUnwrap(bitmap.colorAt(x: 170, y: 90))
+            XCTAssertGreaterThan(frontPixel.alphaComponent, 0.9)
+            XCTAssertGreaterThan(frontPixel.blueComponent, frontPixel.redComponent,
+                "the newest blue capture must paint over older cards")
+            guard let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] else { continue }
+            let url = URL(fileURLWithPath: directory)
+                .appendingPathComponent("mini-preview-stack-\(name).png")
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: url)
+        }
+    }
+
+    func testCollapsedPileHidesActionsAndFrontHitTargetExpands() {
+        _ = NSApplication.shared
+        let ids = ["older", "newer"]
+        let image = solidImage(.systemBlue)
+        var expanded = false
+        let panel = fixturePanel(ids: ids,
+            images: Dictionary(uniqueKeysWithValues: ids.map { ($0, image) }), collapsed: true,
+            setCollapsed: { expanded = !$0 })
         defer { panel.close() }
-        panel.display(); panel.previewView.layoutSubtreeIfNeeded()
-        guard let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] else { return }
-        let view = panel.previewView
-        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
-        view.cacheDisplay(in: view.bounds, to: bitmap)
-        XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 10, y: 10)).alphaComponent,
-                       tokens.color("glass-strong").alphaComponent,
-                       accuracy: 0.01)
-        let url = URL(fileURLWithPath: directory).appendingPathComponent("mini-preview-dark-latest.png")
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                withIntermediateDirectories: true)
-        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: url)
+        XCTAssertEqual(panel.previewView.visibleCardActionTitles, [])
+        XCTAssertEqual(panel.previewView.pileExpandAccessibilityLabel, "Expand 2 previews")
+        panel.previewView.activatePileExpand()
+        XCTAssertTrue(expanded)
+    }
+
+    func testOverflowUsesSharedLayoutsAndReservesBottomControlGutter() throws {
+        _ = NSApplication.shared
+        let ids = (0..<8).map { "capture-\($0)" }
+        let image = solidImage(.systemPurple)
+        let panel = fixturePanel(ids: ids,
+            images: Dictionary(uniqueKeysWithValues: ids.map { ($0, image) }))
+        defer { panel.close() }
+        XCTAssertEqual(panel.previewView.documentHeight, 1_528)
+        XCTAssertGreaterThan(panel.previewView.documentHeight, panel.previewView.bounds.height)
+        XCTAssertEqual(panel.previewView.scrollOffsetY,
+            panel.previewView.documentHeight - panel.previewView.bounds.height, accuracy: 0.5)
+
+        let collapsed = fixturePanel(ids: ids,
+            images: Dictionary(uniqueKeysWithValues: ids.map { ($0, image) }), collapsed: true)
+        defer { collapsed.close() }
+        XCTAssertEqual(collapsed.previewView.documentHeight, collapsed.previewView.bounds.height,
+            "collapsed piles never create a hidden scroll range")
     }
 
     func testClosingRootWindowClosesOpenPanelAndRequestsTermination() {
@@ -236,31 +310,40 @@ final class MiniPreviewTests: XCTestCase {
             "image_path": imagePath ?? "/\(id).png", "preview_path": previewPath])!
     }
 
-    private func fixtureGeometry() -> CapturesPreviewGeometry {
-        CapturesPreviewGeometry(x: 0, y: 0, width: 340, height: 240,
-            card_height: 160, padding: 28, control_gutter: 52, anchor: 0)
-    }
-
     private func fixturePanel(ids: [String], images: [String: NSImage],
                               collapsed: Bool = false, topAnchor: Bool = false,
                               copy: @escaping (String) -> Void = { _ in },
                               save: @escaping (String) -> Void = { _ in },
                               open: @escaping (String) -> Void = { _ in },
-                              dismiss: @escaping (String) -> Void = { _ in }) -> MiniPreviewPanel {
-        let geometry = fixtureGeometry()
+                              dismiss: @escaping (String) -> Void = { _ in },
+                              setCollapsed: @escaping (Bool) -> Void = { _ in }) -> MiniPreviewPanel {
+        let stack = NativePreviewStack()
+        ids.forEach { XCTAssertTrue(stack.insert($0)) }
+        if collapsed { stack.setCollapsed(true) }
+        let placement = topAnchor ? "top_left" : "bottom_left"
+        let monitor = CapturesPreviewMonitor(work_x: 0, work_y: 0,
+            work_width: 800, work_height: 700, full_x: 0, full_y: 0,
+            full_width: 800, full_height: 700, scale_factor: 1)
+        let geometry = NativePreviewLayout.geometry(monitor: monitor, count: ids.count,
+            collapsed: collapsed, placement: placement)!
         let resources = Dictionary(uniqueKeysWithValues: ids.compactMap { id in
             images[id].map { (id, MiniPreviewResource(artifact: artifact(id: id,
                 previewPath: "/\(id)-preview.png"), image: $0)) }
         })
-        let layouts = Dictionary(uniqueKeysWithValues: ids.enumerated().map { index, id in
-            (id, CapturesPreviewCardLayout(y: 28 + Double(index) * 184,
-                depth: ids.count - index - 1, interactive: true))
+        let layouts = Dictionary(uniqueKeysWithValues: ids.enumerated().compactMap { index, id in
+            stack.cardLayout(index: index, topAnchor: topAnchor).map { (id, $0) }
         })
         return MiniPreviewPanel(frame: NSRect(x: 0, y: 0,
             width: geometry.width, height: geometry.height), geometry: geometry,
             resources: resources, ids: ids, layouts: layouts, collapsed: collapsed,
             topAnchor: topAnchor, tokens: tokens, copy: copy, save: save, open: open,
-            dismiss: dismiss, setCollapsed: { _ in }, clearAll: {})
+            dismiss: dismiss, setCollapsed: setCollapsed, clearAll: {})
+    }
+
+    private func solidImage(_ color: NSColor) -> NSImage {
+        NSImage(size: NSSize(width: 284, height: 160), flipped: true) { rect in
+            color.setFill(); rect.fill(); return true
+        }
     }
 
     private func preferences() throws -> CapturePreferences {
