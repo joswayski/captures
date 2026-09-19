@@ -81,7 +81,7 @@ final class CaptureControlsTests: XCTestCase {
         var confirmed: [WindowSelectionChoice] = []
         let automaticDisplay = makeView(autoStart: true, confirm: { confirmed.append($0) })
         automaticDisplay.restoreControls(
-            UnifiedCaptureControlsState(target: .display, aspectIndex: 4))
+            UnifiedCaptureControlsState(mode: .screenshot, target: .display, aspectIndex: 4))
         XCTAssertEqual(automaticDisplay.target, .display)
         XCTAssertEqual(confirmed, [.display],
             "display auto-capture is scheduled against the replacement session")
@@ -202,6 +202,79 @@ final class CaptureControlsTests: XCTestCase {
         XCTAssertFalse(gate.accepts(replacement), "cancel must prevent a late preparation from reopening controls")
     }
 
+    func testRecordModeUsesExplicitConfirmationAndPreservesLogicalRegionCoordinates() throws {
+        _ = NSApplication.shared
+        var confirmed: [WindowSelectionChoice] = []
+        let view = makeView(autoStart: true, confirm: { confirmed.append($0) })
+        view.setMode(.record)
+        view.beginRegion(NSPoint(x: 100.4, y: 49.6))
+        view.dragRegion(NSPoint(x: 900.2, y: 499.7)); view.endRegion()
+        XCTAssertTrue(confirmed.isEmpty,
+            "screenshot auto-start must not implicitly start a recording")
+        let start = try XCTUnwrap(buttons(in: view.controls).first {
+            $0.accessibilityLabel() == "Start recording"
+        })
+        XCTAssertFalse(start.isHidden,
+            "recording always retains explicit confirmation even when screenshot auto-start is enabled")
+        XCTAssertEqual(start.title, "Start recording")
+        view.confirmSelection()
+        XCTAssertEqual(confirmed.count, 1)
+
+        let target = try nativeRecordingTarget(try XCTUnwrap(view.choice), displayID: "-1440")
+        let rect = try XCTUnwrap(target["rect"] as? [String: Any])
+        XCTAssertEqual(target["display_id"] as? String, "-1440")
+        XCTAssertEqual(rect["x"] as? Int, 100)
+        XCTAssertEqual(rect["y"] as? Int, 50)
+        XCTAssertEqual(rect["width"] as? Int, 800)
+        XCTAssertEqual(rect["height"] as? Int, 450,
+            "2x and negative-origin displays still cross the bridge in display-local logical units")
+    }
+
+    func testRecordingControlsRespectCapabilitiesAndRenderNarrowly() throws {
+        _ = NSApplication.shared
+        let narrowFrame = NSRect(x: 0, y: 0, width: 768, height: 600)
+        let window = NSWindow(contentRect: narrowFrame, styleMask: [.borderless],
+            backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; defer { window.close() }
+        let view = UnifiedCaptureSelectionView(frame: narrowFrame, image: nil, targets: targets,
+            tokens: Tokens.variants["dark-mustard"]!, autoStart: true,
+            hitTest: { _ in 0 }, displayTitles: ["Main display · 768 × 600"],
+            selectedDisplay: 0, confirm: { _ in }, cancel: {}, changeDisplay: { _ in },
+            recordingState: RecordingControlState(framesPerSecond: 60, maxResolution: "original",
+                showCursor: true, highlightClicks: true, systemAudio: true,
+                microphoneDeviceID: "stored-mic"),
+            recordingAvailability: RecordingControlAvailability(cursor: true, clicks: false,
+                systemAudio: true, microphone: true),
+            microphoneDevices: [
+                NativeMicrophoneDevice(["id": "built-in", "name": "MacBook Microphone",
+                    "is_default": true])!,
+            ])
+        window.contentView = view; view.setMode(.record)
+        let buttons = buttons(in: view.controls)
+        XCTAssertTrue(buttons.first { $0.accessibilityLabel() == "Cursor" }?.isEnabled == true)
+        XCTAssertTrue(buttons.first { $0.accessibilityLabel() == "Clicks" }?.isEnabled == false)
+        XCTAssertTrue(buttons.first { $0.accessibilityLabel() == "Desktop audio" }?.isEnabled == true)
+        let microphone = try XCTUnwrap(descendant(in: view.controls,
+            accessibilityLabel: "Microphone") as? NSPopUpButton)
+        XCTAssertTrue(microphone.isEnabled)
+        XCTAssertEqual(microphone.titleOfSelectedItem, "Selected microphone",
+            "a stored device remains selected while temporarily absent from discovery")
+        var changes: [RecordingControlState] = []
+        view.controls.recordingControlsChanged = { changes.append($0) }
+        view.controls.selectMicrophone(0, notify: true)
+        XCTAssertNil(changes.last?.microphoneDeviceID)
+        view.controls.selectMicrophone(2, notify: true)
+        XCTAssertEqual(changes.last?.microphoneDeviceID, "built-in")
+        XCTAssertEqual(view.controlsState.mode, .record)
+        XCTAssertEqual(view.controls.frame.width, 736)
+        XCTAssertEqual(view.controls.frame.height, 154)
+        XCTAssertTrue(view.controls.subviews.allSatisfy {
+            $0.frame.minX >= 0 && $0.frame.maxX <= view.controls.bounds.width
+                && $0.frame.minY >= 0 && $0.frame.maxY <= view.controls.bounds.height
+        }, "recording settings must not clip on a 768-point display")
+        try render(view, window: window, name: "capture-controls-dark-narrow-recording")
+    }
+
     func testBlankControlsSpaceDragsAndClampsWithoutStartingARegion() throws {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: frame, styleMask: [.borderless],
@@ -316,10 +389,16 @@ final class CaptureControlsTests: XCTestCase {
             XCTAssertTrue(controls.allSatisfy(\.glass))
             XCTAssertTrue(controls.allSatisfy { $0.accessibilityLabel() != nil })
             XCTAssertTrue(controls.first { $0.title == "Capture" }?.isHidden == true)
-            XCTAssertTrue(controls.first { $0.title == "Record" }?.isEnabled == false)
+            XCTAssertTrue(controls.first { $0.title == "Record" }?.isEnabled == true)
             XCTAssertEqual(automatic.controls.frame.width, 854)
             XCTAssertEqual(automatic.controls.frame.height, 86)
             XCTAssertEqual(automatic.controls.frame.minY, frame.height - 112)
+
+            automatic.setMode(.record)
+            XCTAssertEqual(automatic.controls.frame.width, 902)
+            XCTAssertEqual(automatic.controls.frame.height, 154)
+            try render(automatic, window: window,
+                name: "capture-controls-\(appearance)-recording")
         }
     }
 

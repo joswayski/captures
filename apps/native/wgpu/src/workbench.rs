@@ -1,7 +1,9 @@
 use std::{
+    cell::RefCell,
     collections::BTreeMap,
     fs,
     path::Path,
+    rc::Rc,
     sync::{
         Arc,
         mpsc::{self, Receiver, Sender},
@@ -20,13 +22,26 @@ use crate::{
     live::{CaptureRequest, Live},
     options::{Options, Scene},
     preferences::Preferences,
-    shortcut_input,
+    recording_hud, shortcut_input,
     tokens::{self, Tokens},
     tray::{self, Action as TrayAction, Tray},
 };
 
 // All state below is disposable fixture/UI state, not a second implementation
 // of capture, settings persistence, history retention, or editor documents.
+#[derive(Clone, Default)]
+pub(crate) struct ShortcutOwner(Rc<RefCell<Option<CaptureShortcuts>>>);
+
+impl ShortcutOwner {
+    pub(crate) fn resume_after_root_blur(&self) {
+        if let Some(shortcuts) = self.0.borrow_mut().as_mut() {
+            // The next UI pass retries and reports a failed restore. Doing this
+            // on the native focus event closes the gap before that repaint.
+            let _ = shortcuts.set_suspended(false);
+        }
+    }
+}
+
 pub struct Workbench {
     options: Options,
     variants: BTreeMap<String, Tokens>,
@@ -41,7 +56,6 @@ pub struct Workbench {
     history_end: bool,
     selected_row: Option<usize>,
     paused: bool,
-    muted: bool,
     texture: Option<egui::TextureHandle>,
     animation: Option<Instant>,
     deleted: bool,
@@ -67,7 +81,7 @@ pub struct Workbench {
     root_hidden: bool,
     tray: Option<Tray>,
     tray_error: Option<String>,
-    shortcuts: Option<CaptureShortcuts>,
+    shortcuts: ShortcutOwner,
     shortcuts_generation: u64,
     shortcut_error: Option<String>,
     shortcut_suspension_error: Option<String>,
@@ -82,6 +96,7 @@ impl Workbench {
         cc: &eframe::CreationContext<'_>,
         options: Options,
         shortcut_input: shortcut_input::Bridge,
+        shortcuts: ShortcutOwner,
     ) -> Self {
         if options.scene == Scene::Idle && cc.winit_window().and_then(|w| w.is_visible()).is_none()
         {
@@ -161,6 +176,11 @@ impl Workbench {
             is_primary: false,
             ..window_display.clone()
         });
+        let capture_controls = if options.capture_controls_recording {
+            crate::capture_controls::CaptureControls::recording_fixture()
+        } else {
+            crate::capture_controls::CaptureControls::fixture()
+        };
         let this = Self {
             options,
             variants: tokens::load(),
@@ -175,7 +195,6 @@ impl Workbench {
             history_end: false,
             selected_row: None,
             paused: false,
-            muted: false,
             texture: None,
             animation: None,
             deleted: false,
@@ -188,7 +207,7 @@ impl Workbench {
             screenshot_tx,
             screenshot_rx,
             preferences_state,
-            capture_controls: crate::capture_controls::CaptureControls::fixture(),
+            capture_controls,
             region_selector: crate::selector::Selector::default(),
             window_selector: crate::window_selector::WindowSelector::fixture(),
             window_display,
@@ -201,7 +220,7 @@ impl Workbench {
             root_hidden: false,
             tray,
             tray_error,
-            shortcuts: None,
+            shortcuts,
             shortcuts_generation: 0,
             shortcut_error: None,
             shortcut_suspension_error: None,
@@ -305,7 +324,7 @@ impl Workbench {
         if let Some(live) = &mut self.live {
             live.flush();
         }
-        self.shortcuts.take();
+        self.shortcuts.0.borrow_mut().take();
         self.tray.take();
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
@@ -323,12 +342,13 @@ impl Workbench {
                 return;
             }
         };
-        let result = if let Some(shortcuts) = &mut self.shortcuts {
+        let mut owner = self.shortcuts.0.borrow_mut();
+        let result = if let Some(shortcuts) = owner.as_mut() {
             shortcuts.update(&settings)
         } else {
             let wake = ctx.clone();
             CaptureShortcuts::new(&settings, move || wake.request_repaint()).map(|shortcuts| {
-                self.shortcuts = Some(shortcuts);
+                *owner = Some(shortcuts);
             })
         };
         match result {
@@ -341,7 +361,8 @@ impl Workbench {
     }
 
     fn sync_shortcut_suspension(&mut self, suspended: bool) {
-        let Some(shortcuts) = &mut self.shortcuts else {
+        let mut owner = self.shortcuts.0.borrow_mut();
+        let Some(shortcuts) = owner.as_mut() else {
             return;
         };
         self.shortcut_suspension_error = shortcuts.set_suspended(suspended).err().map(|error| {
@@ -356,7 +377,7 @@ impl Workbench {
         let (enabled, selector_generation) = self.live.as_ref().map_or((false, None), |live| {
             shortcut_routing_state(live.can_launch_capture(), live.selector_generation())
         });
-        if let Some(shortcuts) = &self.shortcuts {
+        if let Some(shortcuts) = self.shortcuts.0.borrow().as_ref() {
             shortcuts.set_selector_generation(selector_generation);
             shortcuts.set_enabled(enabled);
         }
@@ -530,30 +551,21 @@ impl Workbench {
     }
 
     fn hud(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        glass(t).show(ui, |ui| {
-            ui.set_width(520.);
-            t.glass_controls(ui);
-            ui.horizontal(|ui| {
-                ui.colored_label(t.color("theme-signal"), if self.paused { "Ⅱ" } else { "●" });
-                ui.heading(if self.paused {
-                    "Paused · 00:24"
-                } else {
-                    "Recording · 00:24"
-                });
-                if ui
-                    .button(if self.paused { "Resume" } else { "Pause" })
-                    .clicked()
-                {
-                    self.paused = !self.paused;
-                }
-                ui.checkbox(&mut self.muted, "Muted");
-            });
-            ui.label(
-                RichText::new("Static timer fixture — no recording engine")
-                    .small()
-                    .color(t.color("glass-text-muted")),
-            );
-        });
+        if matches!(
+            recording_hud::show(
+                ui,
+                t,
+                recording_hud::View {
+                    paused: self.paused,
+                    elapsed_ms: 24_000,
+                    notice: "These controls won’t show in recordings",
+                    warning: false,
+                },
+            ),
+            Some(recording_hud::Action::Pause | recording_hud::Action::Resume)
+        ) {
+            self.paused = !self.paused;
+        }
     }
 
     fn dissolve(&mut self, ctx: &egui::Context, cold: bool) {
@@ -799,6 +811,8 @@ impl eframe::App for Workbench {
         self.sync_shortcut_routing();
         let shortcut_action = self
             .shortcuts
+            .0
+            .borrow()
             .as_ref()
             .and_then(CaptureShortcuts::next_action);
         if let (Some(action), Some(live)) = (shortcut_action, &mut self.live)
@@ -1030,10 +1044,12 @@ impl eframe::App for Workbench {
                 t.color("surface-canvas")
             })
             .inner_margin(
-                if matches!(
-                    self.options.scene,
-                    Scene::CaptureControls | Scene::Region | Scene::Window
-                ) {
+                if self.options.floating
+                    || matches!(
+                        self.options.scene,
+                        Scene::CaptureControls | Scene::Region | Scene::Window
+                    )
+                {
                     0
                 } else {
                     t.number("s-8") as i8
@@ -1055,7 +1071,7 @@ impl eframe::App for Workbench {
                     .color(t.color("text-muted")),
                 );
                 ui.add_space(t.number("s-6"));
-            } else if self.options.floating {
+            } else if self.options.floating && self.options.scene != Scene::Hud {
                 glass(&t).show(ui, |ui| {
                     t.glass_controls(ui);
                     ui.horizontal(|ui| {
@@ -1093,6 +1109,8 @@ impl eframe::App for Workbench {
                             displays: &self.capture_control_displays,
                             windows,
                             auto_start: false,
+                            recording_available: true,
+                            recording_unavailable_reason: None,
                         },
                         |point| fixture_window_hit_test(windows, shell, display, point),
                     ) {
@@ -1173,7 +1191,7 @@ impl eframe::App for Workbench {
         if let Some(live) = &mut self.live {
             live.flush();
         }
-        self.shortcuts.take();
+        self.shortcuts.0.borrow_mut().take();
         self.tray.take();
         emit(
             "exit",

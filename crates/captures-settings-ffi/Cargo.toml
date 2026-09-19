@@ -10,9 +10,18 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 captures-app = { path = "../captures-app" }
+captures-capture = { path = "../captures-capture" }
+captures-history = { path = "../captures-history" }
+captures-media = { path = "../captures-media" }
+captures-recording = { path = "../captures-recording" }
+captures-recording-platform = { path = "../captures-recording-platform" }
 captures-settings = { path = "../captures-settings" }
+chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints.clippy]
 all = { level = "deny", priority = -1 }

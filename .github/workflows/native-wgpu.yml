@@ -10,6 +10,8 @@ on:
       - 'crates/captures-image/**'
       - 'crates/captures-capture/**'
       - 'crates/captures-session/**'
+      - 'crates/captures-recording*/**'
+      - 'crates/captures-media/**'
       - 'Cargo.lock'
       - 'shared/**'
       - 'scripts/native-tokens.test.mjs'
@@ -43,7 +45,7 @@ jobs:
           cache-workspaces: apps/native/wgpu
       - name: Install Linux windowing and software-rendering test dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxi-dev libxrandr-dev libdbus-1-dev libxcb1-dev libpipewire-0.3-dev libegl-dev libgbm-dev libclang-dev mesa-vulkan-drivers libgl1-mesa-dri xvfb dbus python3-dbus python3-gi openbox picom hsetroot xclip xdotool x11-utils x11-apps imagemagick xfce4-panel xdg-utils
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxi-dev libxrandr-dev libdbus-1-dev libxcb1-dev libpipewire-0.3-dev libasound2-dev libegl-dev libgbm-dev libclang-dev mesa-vulkan-drivers libgl1-mesa-dri xvfb dbus python3-dbus python3-gi python3-xlib openbox picom hsetroot xclip xdotool x11-utils x11-apps imagemagick xfce4-panel xdg-utils ffmpeg
       - run: node apps/native/prepare.mjs --output apps/native/wgpu/resources
       - run: node --test scripts/native-tokens.test.mjs
       - run: python -m unittest discover -s apps/native -p 'test_*.py'
@@ -64,6 +66,9 @@ jobs:
       - name: Exercise registered target keys inside New Capture on private X11
         if: runner.os == 'Linux'
         run: /usr/bin/python3 apps/native/x11_capture_smoke.py --controls --target-shortcuts --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-target-shortcuts
+      - name: Record and decode real MP4 with native controls on private X11
+        if: runner.os == 'Linux'
+        run: /usr/bin/python3 apps/native/x11_recording_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recording
       - name: Exercise native history deletion on private X11
         if: runner.os == 'Linux'
         run: python apps/native/x11_history_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-history
@@ -85,6 +90,7 @@ jobs:
             native-x11-capture
             native-x11-controls
             native-x11-target-shortcuts
+            native-x11-recording
             native-x11-history
             native-x11-preview
             native-x11-lifecycle
