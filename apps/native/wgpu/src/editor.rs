@@ -10,7 +10,7 @@ use std::{
 };
 
 use captures_app::{
-    editor::Rect,
+    editor::{Document, Element, LayerEdit, LayerPlacement, Rect},
     editor_session::{EditorSession, OpenRequest, Request},
 };
 use eframe::egui::{self, RichText};
@@ -25,6 +25,7 @@ enum Job {
 }
 
 struct Presented {
+    document: Arc<Document>,
     pixels: Arc<RgbaImage>,
     can_undo: bool,
     can_redo: bool,
@@ -36,6 +37,7 @@ impl Presented {
     fn from_session(session: &EditorSession) -> Self {
         let snapshot = session.snapshot();
         Self {
+            document: Arc::new(snapshot.document.clone()),
             pixels: session.pixels(),
             can_undo: snapshot.can_undo,
             can_redo: snapshot.can_redo,
@@ -50,6 +52,11 @@ struct View {
     texture: Option<egui::TextureHandle>,
     crop: [f64; 4],
     canvas: [f64; 2],
+    show_layers: bool,
+    selected_layer: Option<String>,
+    layer_name: String,
+    layer_opacity: f64,
+    layer_position: [f64; 2],
     pending: bool,
     closed: bool,
     close_requested: bool,
@@ -65,6 +72,11 @@ impl Default for View {
             texture: None,
             crop: [0., 0., 1., 1.],
             canvas: [1., 1.],
+            show_layers: false,
+            selected_layer: None,
+            layer_name: String::new(),
+            layer_opacity: 100.,
+            layer_position: [0., 0.],
             pending: true,
             closed: false,
             close_requested: false,
@@ -113,12 +125,16 @@ impl View {
                     self.crop = [0., 0., self.canvas[0], self.canvas[1]];
                 }
                 self.presented = Some(presented);
+                self.select_layer(self.selected_layer.clone());
                 self.error = None;
                 if self.close_after_save || (self.close_requested && !self.unsaved()) {
                     self.closed = true;
                 }
             }
-            Err(error) => self.error = Some(error),
+            Err(error) => {
+                self.error = Some(error);
+                self.select_layer(self.selected_layer.clone());
+            }
         }
         if self.close_requested && !self.unsaved() {
             self.closed = true;
@@ -136,6 +152,31 @@ impl View {
                 self.error =
                     Some("The editor worker stopped. Your last saved draft is preserved.".into())
             }
+        }
+    }
+
+    fn select_layer(&mut self, id: Option<String>) {
+        let elements = self
+            .presented
+            .as_ref()
+            .map(|value| &value.document.elements);
+        let layer = elements.and_then(|elements| {
+            elements
+                .iter()
+                .find(|element| Some(&element.base().id) == id.as_ref())
+                .or_else(|| elements.last())
+        });
+        self.selected_layer = layer.map(|element| element.base().id.clone());
+        if let Some(layer) = layer {
+            self.layer_name = layer_label(layer).into();
+            self.layer_opacity = layer.base().opacity;
+            self.layer_position = [layer.base().x, layer.base().y];
+        }
+    }
+
+    fn submit_layer(&mut self, tx: &Sender<Job>, edit: LayerEdit) {
+        if let Some(id) = self.selected_layer.clone() {
+            self.submit(tx, Request::Layer { id, edit });
         }
     }
 }
@@ -321,6 +362,9 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                     view.submit(tx, Request::SaveDraft { updated_at_ms: chrono::Utc::now().timestamp_millis().max(0) as u64 });
                 }
                 if ui.add_enabled(view.presented.is_some(), egui::Button::new("Discard edits…")).clicked() { view.confirm_discard = true; }
+                ui.separator();
+                ui.selectable_value(&mut view.show_layers, false, "Geometry");
+                ui.selectable_value(&mut view.show_layers, true, "Layers");
             });
         });
         if let Some(error) = &view.error { ui.colored_label(tokens.color("theme-signal"), error); }
@@ -349,8 +393,12 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         }
     });
     egui::Panel::left("editor-geometry").resizable(false).exact_size(230.).show(ui, |ui| {
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt(view.show_layers).auto_shrink([false, false]).show(ui, |ui| {
         ui.add_enabled_ui(!view.pending && view.presented.is_some(), |ui| {
+            if view.show_layers {
+                show_layers(ui, view, tx);
+                return;
+            }
             ui.heading("Crop");
             ui.label("Coordinates in image pixels");
             egui::Grid::new("crop-fields").show(ui, |ui| {
@@ -377,7 +425,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         });
         ui.add_space(tokens.number("s-6"));
         ui.label(RichText::new("Native editor preview").color(tokens.color("text-muted")));
-        ui.small("Crop, canvas sizing and drafts are connected. Annotation tools and edited-image export are still in development.");
+        ui.small("Geometry, layers and drafts are connected. Drawing tools and edited-image export are still in development.");
         });
     });
     egui::CentralPanel::default().show(ui, |ui| {
@@ -399,6 +447,169 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     });
 }
 
+fn layer_label(element: &Element) -> &str {
+    match element {
+        Element::Image(image) => &image.name,
+        Element::Text(_) => "Text",
+        Element::Shape(shape) => &shape.shape,
+        Element::Path(_) => "Freehand",
+    }
+}
+
+fn show_layers(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
+    let Some(presented) = &view.presented else {
+        return;
+    };
+    let document = presented.document.clone();
+    let elements = &document.elements;
+    ui.heading("Layers");
+    ui.small("Front to back");
+    egui::ScrollArea::vertical()
+        .id_salt("layer-list")
+        .max_height(112.)
+        .min_scrolled_height(112.)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for element in elements.iter().rev() {
+                let base = element.base();
+                let label = format!(
+                    "{}{}{}",
+                    layer_label(element),
+                    if base.locked { " · locked" } else { "" },
+                    if base.visible { "" } else { " · hidden" }
+                );
+                let selected = view.selected_layer.as_deref() == Some(&base.id);
+                if ui
+                    .add_sized(
+                        [ui.available_width(), 30.],
+                        egui::Button::selectable(selected, &label).truncate(),
+                    )
+                    .on_hover_text(&label)
+                    .clicked()
+                {
+                    view.select_layer(Some(base.id.clone()));
+                }
+            }
+        });
+    let Some(index) = elements
+        .iter()
+        .position(|element| Some(&element.base().id) == view.selected_layer.as_ref())
+    else {
+        ui.label("No layers. Undo to restore a deleted layer.");
+        return;
+    };
+    let element = &elements[index];
+    let base = element.base();
+    ui.separator();
+    ui.horizontal(|ui| {
+        let mut visible = base.visible;
+        let mut locked = base.locked;
+        if ui.checkbox(&mut visible, "Visible").changed() {
+            view.submit_layer(tx, LayerEdit::Visibility { visible });
+        }
+        if ui.checkbox(&mut locked, "Locked").changed() {
+            view.submit_layer(tx, LayerEdit::Lock { locked });
+        }
+    });
+    if matches!(element, Element::Image(_)) {
+        ui.label("Name");
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut view.layer_name).desired_width(132.));
+            if ui.button("Rename").clicked() {
+                view.submit_layer(
+                    tx,
+                    LayerEdit::Rename {
+                        name: view.layer_name.clone(),
+                    },
+                );
+            }
+        });
+    }
+    ui.horizontal(|ui| {
+        ui.label("Opacity");
+        ui.add(
+            egui::DragValue::new(&mut view.layer_opacity)
+                .range(0. ..=100.)
+                .suffix("%"),
+        );
+        if ui.button("Apply").clicked() {
+            view.submit_layer(
+                tx,
+                LayerEdit::Opacity {
+                    opacity: view.layer_opacity,
+                },
+            );
+        }
+    });
+    ui.add_enabled_ui(!base.locked, |ui| {
+        egui::Grid::new("layer-position").show(ui, |ui| {
+            for (label, value) in ["X", "Y"].into_iter().zip(&mut view.layer_position) {
+                ui.label(label);
+                ui.add(
+                    egui::DragValue::new(value)
+                        .range(-32768. ..=32768.)
+                        .speed(1.),
+                );
+                ui.end_row();
+            }
+        });
+        ui.horizontal(|ui| {
+            if ui.button("Move").clicked() {
+                view.submit_layer(
+                    tx,
+                    LayerEdit::Translate {
+                        delta_x: view.layer_position[0] - base.x,
+                        delta_y: view.layer_position[1] - base.y,
+                    },
+                );
+            }
+            for (label, target, placement) in [
+                ("Up", elements.get(index + 1), LayerPlacement::Before),
+                (
+                    "Down",
+                    index.checked_sub(1).and_then(|index| elements.get(index)),
+                    LayerPlacement::After,
+                ),
+            ] {
+                if ui
+                    .add_enabled(
+                        target.is_some_and(|element| !element.base().locked),
+                        egui::Button::new(label),
+                    )
+                    .clicked()
+                {
+                    view.submit_layer(
+                        tx,
+                        LayerEdit::Reorder {
+                            target_id: target.unwrap().base().id.clone(),
+                            placement,
+                        },
+                    );
+                }
+            }
+        });
+    });
+    ui.horizontal(|ui| {
+        if ui.button("Duplicate").clicked() {
+            let new_id = uuid::Uuid::new_v4().to_string();
+            view.submit_layer(
+                tx,
+                LayerEdit::Duplicate {
+                    new_id: new_id.clone(),
+                },
+            );
+            view.selected_layer = Some(new_id);
+        }
+        if ui
+            .add_enabled(!base.locked, egui::Button::new("Delete"))
+            .clicked()
+        {
+            view.submit_layer(tx, LayerEdit::Delete);
+        }
+    });
+    ui.small("Locked layers stay in place. Hidden layers can still be edited.");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,12 +617,50 @@ mod tests {
 
     fn presented(unsaved: bool) -> Presented {
         Presented {
+            document: Arc::new(Document::new_capture("fixture", 7., 3., None)),
             pixels: Arc::new(RgbaImage::new(7, 3)),
             can_undo: unsaved,
             can_redo: false,
             unsaved,
             has_draft: !unsaved,
         }
+    }
+
+    #[test]
+    fn layer_selection_follows_ids_and_failed_commands_restore_published_fields() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let mut value = presented(true);
+        Arc::make_mut(&mut value.document)
+            .edit_layer(
+                "capture-background",
+                LayerEdit::Duplicate {
+                    new_id: "copy".into(),
+                },
+            )
+            .unwrap();
+        view.receive(&ctx, Ok(value));
+        assert_eq!(view.selected_layer.as_deref(), Some("copy"));
+        assert_eq!(view.layer_position, [24., 24.]);
+        let (tx, rx) = mpsc::channel();
+        view.submit_layer(&tx, LayerEdit::Visibility { visible: false });
+        assert!(
+            matches!(rx.recv().unwrap(), Job::Apply(Request::Layer { id, edit: LayerEdit::Visibility { visible: false } }) if id == "copy")
+        );
+        assert!(view.pending);
+        view.selected_layer = Some("rejected-duplicate".into());
+        view.layer_position = [999., 999.];
+        view.receive(&ctx, Err("unsupported layer".into()));
+        assert_eq!(view.selected_layer.as_deref(), Some("copy"));
+        assert_eq!(view.layer_position, [24., 24.]);
+        assert!(!view.pending);
+        view.receive(&ctx, Ok(presented(false))); // Undo removed the selected copy.
+        assert_eq!(view.selected_layer.as_deref(), Some("capture-background"));
+        assert_eq!(view.layer_position, [0., 0.]);
+        let mut empty = presented(true);
+        Arc::make_mut(&mut empty.document).elements.clear();
+        view.receive(&ctx, Ok(empty));
+        assert!(view.selected_layer.is_none());
     }
 
     #[test]
