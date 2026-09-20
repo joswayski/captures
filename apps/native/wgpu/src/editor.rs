@@ -25,6 +25,7 @@ use crate::tokens::Tokens;
 enum Job {
     Apply(Request),
     Preview(ExportOptions),
+    Copy,
     SaveNew {
         destination: PathBuf,
         options: ExportOptions,
@@ -38,6 +39,7 @@ struct Presented {
     pixels: Arc<RgbaImage>,
     output: Option<(RgbaImage, usize)>,
     saved: Option<SavedExport>,
+    copied: bool,
     can_undo: bool,
     can_redo: bool,
     unsaved: bool,
@@ -52,6 +54,7 @@ impl Presented {
             pixels: session.pixels(),
             output: None,
             saved: None,
+            copied: false,
             can_undo: snapshot.can_undo,
             can_redo: snapshot.can_redo,
             unsaved: snapshot.unsaved_changes,
@@ -77,7 +80,7 @@ struct View {
     output: Option<(egui::TextureHandle, usize)>,
     show_output: bool,
     destination: String,
-    saved_notice: Option<String>,
+    output_notice: Option<String>,
     history_changed: bool,
     selected_layer: Option<String>,
     layer_name: String,
@@ -109,7 +112,7 @@ impl Default for View {
             output: None,
             show_output: false,
             destination: String::new(),
-            saved_notice: None,
+            output_notice: None,
             history_changed: false,
             selected_layer: None,
             layer_name: String::new(),
@@ -159,6 +162,7 @@ impl View {
                     .is_none_or(|old| !Arc::ptr_eq(&old.pixels, &presented.pixels));
                 if changed {
                     self.invalidate_output();
+                    self.output_notice = None;
                     let image = &presented.pixels;
                     self.texture = Some(ctx.load_texture(
                         "edited-screenshot",
@@ -186,7 +190,7 @@ impl View {
                     self.show_output = true;
                 }
                 if let Some(saved) = presented.saved.take() {
-                    self.saved_notice = Some(match saved {
+                    self.output_notice = Some(match saved {
                         SavedExport::Saved { path, .. } => {
                             self.history_changed = true;
                             format!("Saved copy to {}", path.display())
@@ -198,6 +202,9 @@ impl View {
                             )
                         }
                     });
+                }
+                if presented.copied {
+                    self.output_notice = Some("Copied edited pixels to the clipboard.".into());
                 }
                 self.presented = Some(presented);
                 self.select_layer(self.selected_layer.clone());
@@ -232,7 +239,7 @@ impl View {
     }
 
     fn save_new(&mut self, tx: &Sender<Job>) {
-        self.saved_notice = None;
+        self.output_notice = None;
         self.submit_job(
             tx,
             Job::SaveNew {
@@ -240,6 +247,11 @@ impl View {
                 options: self.export_options,
             },
         );
+    }
+
+    fn copy(&mut self, tx: &Sender<Job>) {
+        self.output_notice = None;
+        self.submit_job(tx, Job::Copy);
     }
 
     fn submit_job(&mut self, tx: &Sender<Job>, job: Job) {
@@ -314,6 +326,7 @@ impl Editor {
         artifact_id: String,
         output_directory: PathBuf,
         mode: CaptureMode,
+        copy: impl Fn(Arc<RgbaImage>) -> Result<(), String> + Send + 'static,
     ) -> Self {
         let viewport = egui::ViewportId::from_hash_of(("screenshot-editor", &artifact_id));
         let destination = output_directory
@@ -363,6 +376,15 @@ impl Editor {
                                 .into_rgba8();
                             let mut presented = Presented::from_session(session);
                             presented.output = Some((image, bytes.len()));
+                            Ok(presented)
+                        }),
+                    Job::Copy => session
+                        .as_ref()
+                        .ok_or_else(|| "Editor is unavailable.".to_owned())
+                        .and_then(|session| {
+                            copy(session.pixels())?;
+                            let mut presented = Presented::from_session(session);
+                            presented.copied = true;
                             Ok(presented)
                         }),
                     Job::SaveNew {
@@ -586,7 +608,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         });
         ui.add_space(tokens.number("s-6"));
         ui.label(RichText::new("Native editor preview").color(tokens.color("text-muted")));
-        ui.small("Geometry, layers, drafts and new-copy export are connected. Drawing tools, replacing files and clipboard output are still in development.");
+        ui.small("Geometry, layers, drafts, new-copy export and clipboard output are connected. Drawing tools and replacing files are still in development.");
         });
     });
     egui::CentralPanel::default().show(ui, |ui| {
@@ -698,13 +720,19 @@ fn show_output(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<
     ui.label("New copy destination");
     ui.add(egui::TextEdit::singleline(&mut view.destination).desired_width(ui.available_width()))
         .on_hover_text(&view.destination);
-    if ui.button("Save new copy").clicked() {
-        view.save_new(tx);
-    }
+    ui.horizontal(|ui| {
+        if ui.button("Save new copy").clicked() {
+            view.save_new(tx);
+        }
+        if ui.button("Copy pixels").clicked() {
+            view.copy(tx);
+        }
+    });
     ui.small(
         "Existing files are never replaced. Saving a copy does not save or discard your draft.",
     );
-    if let Some(notice) = &view.saved_notice {
+    ui.small("Copy uses the lossless edited canvas, regardless of export quality.");
+    if let Some(notice) = &view.output_notice {
         ui.label(notice);
     }
 }
@@ -883,6 +911,7 @@ mod tests {
             pixels: Arc::new(RgbaImage::new(7, 3)),
             output: None,
             saved: None,
+            copied: false,
             can_undo: unsaved,
             can_redo: false,
             unsaved,
@@ -995,6 +1024,7 @@ mod tests {
             id,
             data.path().join("exports"),
             CaptureMode::Region,
+            |_| unreachable!("copy was not requested"),
         );
         receive(&editor, &ctx);
         editor.view.lock().unwrap().submit(&editor.tx, crop());
@@ -1073,6 +1103,7 @@ mod tests {
             id.clone(),
             data.path().join("exports"),
             CaptureMode::Region,
+            |_| unreachable!("copy was not requested"),
         );
         receive(&editor, &ctx);
         fs::write(data.path().join("editor-drafts"), b"blocked").unwrap();
@@ -1103,6 +1134,7 @@ mod tests {
             id.clone(),
             data.path().join("exports"),
             CaptureMode::Region,
+            |_| unreachable!("copy was not requested"),
         );
         receive(&editor, &ctx);
         editor.view.lock().unwrap().submit(&editor.tx, crop());
@@ -1147,6 +1179,7 @@ mod tests {
             id,
             data.path().join("exports"),
             CaptureMode::Region,
+            |_| unreachable!("copy was not requested"),
         );
         receive(&editor, &ctx);
         editor.view.lock().unwrap().submit(&editor.tx, crop());
@@ -1171,7 +1204,7 @@ mod tests {
             let mut view = editor.view.lock().unwrap();
             assert!(view.unsaved() && view.presented.as_ref().unwrap().can_undo);
             assert!(
-                view.saved_notice
+                view.output_notice
                     .as_ref()
                     .unwrap()
                     .contains("Saved copy to")
@@ -1182,7 +1215,7 @@ mod tests {
         {
             let view = editor.view.lock().unwrap();
             assert!(view.error.is_some() && view.unsaved() && !view.pending && !view.closed);
-            assert!(view.saved_notice.is_none());
+            assert!(view.output_notice.is_none());
         }
         assert!(!editor.take_history_changed());
         assert_eq!(fs::read(&destination).unwrap(), bytes);
@@ -1203,7 +1236,7 @@ mod tests {
         {
             let view = editor.view.lock().unwrap();
             assert!(view.error.is_none() && view.unsaved() && !view.closed && view.close_requested);
-            let notice = view.saved_notice.as_ref().unwrap();
+            let notice = view.output_notice.as_ref().unwrap();
             assert!(notice.contains("recovered.png") && notice.contains("History was not updated"));
         }
         assert_eq!(fs::read(recovered).unwrap(), bytes);
@@ -1212,15 +1245,133 @@ mod tests {
     }
 
     #[test]
-    fn quit_drains_accepted_copy_before_saving_the_dirty_draft() {
+    fn copy_uses_edited_rgba_ignores_export_limits_and_retries_without_persisting() {
+        use std::sync::atomic::{AtomicBool, Ordering};
         let (data, id) = fixture();
         let ctx = egui::Context::default();
+        let (copied, rx) = mpsc::channel();
+        let fail_once = AtomicBool::new(true);
+        let editor = Editor::open(
+            &ctx,
+            data.path().join("history"),
+            id,
+            data.path().join("exports"),
+            CaptureMode::Region,
+            move |pixels| {
+                copied.send(pixels).unwrap();
+                if fail_once.swap(false, Ordering::Relaxed) {
+                    Err("Clipboard unavailable".into())
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        receive(&editor, &ctx);
+        editor.view.lock().unwrap().submit(&editor.tx, crop());
+        receive(&editor, &ctx);
+        editor.view.lock().unwrap().submit(
+            &editor.tx,
+            Request::ResizeCanvas {
+                width: 8.,
+                height: 5.,
+            },
+        );
+        receive(&editor, &ctx);
+        let mut document = editor
+            .view
+            .lock()
+            .unwrap()
+            .presented
+            .as_ref()
+            .unwrap()
+            .document
+            .as_ref()
+            .clone();
+        document.background = None; // Exercise alpha, not the default off-white canvas.
+        editor
+            .view
+            .lock()
+            .unwrap()
+            .submit(&editor.tx, Request::Commit { document });
+        receive(&editor, &ctx);
+        let before = editor
+            .view
+            .lock()
+            .unwrap()
+            .presented
+            .as_ref()
+            .unwrap()
+            .document
+            .clone();
+        {
+            let mut view = editor.view.lock().unwrap();
+            view.export_options.format = ExportFormat::Jpeg;
+            view.export_options.max_size_bytes = Some(0); // Would reject any export, never a copy.
+            view.copy(&editor.tx);
+            assert!(view.pending);
+        }
+        receive(&editor, &ctx);
+        {
+            let mut view = editor.view.lock().unwrap();
+            assert_eq!(view.error.as_deref(), Some("Clipboard unavailable"));
+            assert!(
+                view.output_notice.is_none() && view.unsaved() && !view.pending && !view.closed
+            );
+            assert_eq!(view.presented.as_ref().unwrap().document, before);
+            view.copy(&editor.tx);
+            view.request_close();
+        }
+        receive(&editor, &ctx);
+        for _ in 0..2 {
+            let pixels = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            assert_eq!(pixels.dimensions(), (8, 5));
+            assert_eq!(pixels.get_pixel(0, 0).0, [62, 71, 9, 255]);
+            assert_eq!(pixels.get_pixel(3, 1).0, [155, 142, 9, 255]);
+            assert_eq!(pixels.get_pixel(7, 4).0, [0, 0, 0, 0]);
+        }
+        assert!(!editor.take_history_changed());
+        let view = editor.view.lock().unwrap();
+        assert!(view.error.is_none() && view.unsaved() && view.close_requested && !view.closed);
+        assert_eq!(
+            view.output_notice.as_deref(),
+            Some("Copied edited pixels to the clipboard.")
+        );
+        assert_eq!(view.presented.as_ref().unwrap().document, before);
+        assert!(view.presented.as_ref().unwrap().can_undo);
+        assert!(!data.path().join("editor-drafts").exists());
+        assert!(!data.path().join("exports").exists());
+        assert_eq!(
+            fs::read_dir(data.path().join("history")).unwrap().count(),
+            1
+        );
+        drop(view);
+        {
+            let mut view = editor.view.lock().unwrap();
+            view.close_requested = false;
+            view.submit(&editor.tx, Request::Undo);
+        }
+        receive(&editor, &ctx);
+        assert!(
+            editor.view.lock().unwrap().output_notice.is_none(),
+            "an edit invalidates the copied confirmation"
+        );
+    }
+
+    #[test]
+    fn quit_drains_accepted_output_before_saving_the_dirty_draft() {
+        let (data, id) = fixture();
+        let ctx = egui::Context::default();
+        let (copied, rx) = mpsc::channel();
         let editor = Editor::open(
             &ctx,
             data.path().join("history"),
             id.clone(),
             data.path().join("exports"),
             CaptureMode::Region,
+            move |pixels| {
+                copied.send(pixels).unwrap();
+                Ok(())
+            },
         );
         receive(&editor, &ctx);
         editor.view.lock().unwrap().submit(&editor.tx, crop());
@@ -1232,7 +1383,11 @@ mod tests {
                 options: View::default().export_options,
             })
             .unwrap();
+        editor.tx.send(Job::Copy).unwrap();
         editor.flush(&ctx).unwrap();
+        let pixels = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(pixels.dimensions(), (4, 2));
+        assert_eq!(pixels.get_pixel(0, 0).0, [62, 71, 9, 255]);
         assert_eq!(
             image::open(destination)
                 .unwrap()

@@ -369,10 +369,26 @@ def main():
         (output / "previous-history").rename(history)
         assert draft.read_bytes() == saved_draft
         assert (artifact / "capture.png").read_bytes() == original
+
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "4")
+        click(editor, 170, 641)  # Copy the edited canvas, not the History source.
+        wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+             "edited clipboard copy completes")
+        copied = run("xclip", "-selection", "clipboard", "-t", "image/png", "-o")
+        clipboard_png = output / "clipboard-edited.png"
+        clipboard_png.write_bytes(copied)
+        assert run("identify", "-format", "%wx%h", str(clipboard_png)) == b"480x300"
+        for x, y, expected in ((70, 80, (229, 179, 68)), (450, 250, (46, 158, 113))):
+            assert run("convert", str(clipboard_png), "-crop", f"1x1+{x}+{y}", "-depth", "8", "rgb:-") == bytes(expected)
+        assert draft.read_bytes() == saved_draft and len(list(history.glob("*/metadata.json"))) == 2
+        assert len(list((output / "exports").iterdir())) == 2
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "5")
+        shot(editor, "clipboard-copied")
         click(editor, 398, 62)  # Geometry restores its own scroll position.
 
         close(editor)
         wait(lambda: not windows("Screenshot editor"), "saved editor closes")
+        assert run("xclip", "-selection", "clipboard", "-t", "image/png", "-o") == copied, "workspace retains clipboard after editor closes"
         editor = reopen()
         shot(editor, "editor-reopened")
         pixel("editor-reopened", 900, 400, (46, 158, 113))
@@ -421,7 +437,8 @@ def main():
                        "layer-empty-undo", "output-png-jpeg-webp", "output-comparison",
                        "output-budget-error-retry", "output-no-draft-or-file-write",
                        "output-png-palette-minimum-scroll", "export-new-copy-history",
-                       "export-collision-original-protection", "export-history-warning-recovery"],
+                       "export-collision-original-protection", "export-history-warning-recovery",
+                       "clipboard-edited-pixels-no-persistence", "clipboard-survives-editor-close"],
             "originalSha256": hashlib.sha256(original).hexdigest(),
         }, indent=2) + "\n")
         print("PASS native editor: layers, crop, canvas, undo/redo, draft reopen, close/discard, save/quit recovery, original unchanged")

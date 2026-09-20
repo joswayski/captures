@@ -460,8 +460,16 @@ starts in the configured output directory and accepts an editable full path.
 It never replaces existing files; successful exports add a distinct History entry
 without modifying the original or draft. A post-publication History failure shows
 the saved path and warning. Accepted writes drain before application quit.
-Native save dialogs, overwrite-original and clipboard remain separate work, as
-do AppKit export controls and physical-platform acceptance.
+**Copy pixels** sends the current lossless RGBA canvas to the existing workspace
+clipboard worker, independent of export format/quality/budget. It retains undo and
+draft state, reports recoverable clipboard errors, and does not create History or
+file output. The workspace retains clipboard ownership after an editor closes;
+normal quit drains accepted copies. X11 checks read the actual PNG selection and
+verify edited pixels before and after editor close. Linux currently uses arboard's
+X11/XWayland backend; native Wayland clipboard support is not enabled. Windows uses
+the existing platform backend but remains physically unverified. Native save
+dialogs, overwrite-original, AppKit output controls and physical acceptance remain
+separate work.
 
 The AppKit editor host now enables **Edit screenshot** only for screenshot History
 entries. Its dedicated serialized worker owns the shared Rust session and publishes

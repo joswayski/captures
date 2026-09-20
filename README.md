@@ -271,13 +271,17 @@ bytes, and switches between the edited canvas and encoded output without saving.
 **Save new copy** exports to an editable destination path without replacing an
 existing file, adds a distinct History entry, and preserves the current draft.
 If History cannot be updated, the saved file's path remains available for recovery.
+**Copy pixels** copies the lossless edited canvas independently of export quality,
+without saving a file or draft. Linux clipboard support currently requires X11
+or XWayland; copied pixels remain available after closing the editor while the
+application stays open.
 Closing can save or keep the previous draft; explicit Discard edits restores the
 original. Failed draft saves keep edits open and cancel normal quit. Private-X11 checks
 cover both appearances, persisted drafts, real preview pixels and error recovery.
 AppKit now connects the same crop, canvas-resize and draft operations in its own
 window. Windows, Wayland and physical AppKit presentation remain unverified.
 Native image-transform controls, text, annotation shadows, annotation tools, save
-dialogs/overwrite-original, edited-image clipboard output, AppKit edited-file export,
+dialogs/overwrite-original, AppKit edited-image clipboard/file output,
 and recording editing remain unconnected. The shared image-transform command and
 rendering/export support are prerequisites, not native editor acceptance. OS shortcut
 takeover, login items, single-instance relaunch and updates
