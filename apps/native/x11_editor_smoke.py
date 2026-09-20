@@ -176,7 +176,7 @@ def main():
             "auto_copy_to_clipboard": False, "show_mini_previews": False,
         }))
         app = spawn("app", [str(binary), "--live", "--history-root", str(history),
-                    "--settings-file", str(settings), "--quit-after", "360"])
+                    "--settings-file", str(settings), "--quit-after", "480"])
         root = wait(lambda: windows("Captures"), "History workspace")[0]
         run("xdotool", "windowmove", "--sync", root, "0", "0")
         time.sleep(1)
@@ -234,6 +234,65 @@ def main():
 
         click(editor, 463, 62)  # Layers, preserving the Geometry panel's scroll position.
         shot(editor, "layers-original-locked")
+        click(editor, 88, 632)
+        shot(editor, "layers-transform-menu")
+        run("xdotool", "key", "Escape")
+
+        def transform(index, orientation, width, height):
+            click(editor, 88, 632)
+            click(editor, 58, 464 + 44 * index)
+            save_layers(lambda values: values[0].get("orientation") == orientation,
+                        f"transform {orientation}")
+            assert saved(width, height, 0, 0), "fresh photo rotates its canvas"
+            assert layers()[0]["locked"], "transform must not unlock the original"
+
+        def assert_transformed_pixels(name, gold_left, gold_above):
+            shot(editor, name)
+            pixels = run("convert", str(output / f"{name}.png"), "-crop", "754x610+238+89",
+                         "-depth", "8", "rgb:-")
+
+            def center(color):
+                points = [(i // 3 % 754, i // 3 // 754)
+                          for i in range(0, len(pixels), 3) if pixels[i:i + 3] == bytes(color)]
+                assert len(points) > 100, (name, color, "missing painted region")
+                xs, ys = zip(*points)
+                return (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+
+            gold, green = center((229, 179, 68)), center((46, 158, 113))
+            assert (gold[0] < green[0]) == gold_left, (name, gold, green)
+            assert (gold[1] < green[1]) == gold_above, (name, gold, green)
+
+        # The unequal, offset regions distinguish every menu action's direction.
+        transform(1, "rotate-90", 360, 640)
+        assert_transformed_pixels("layers-rotate-right", False, True)
+        close(editor)
+        editor = reopen()
+        click(editor, 463, 62)
+        assert_transformed_pixels("layers-transform-reopened", False, True)
+        transform(2, "transpose", 360, 640)
+        assert_transformed_pixels("layers-flip-horizontal", True, True)
+        click(editor, 36, 62)
+        save_layers(lambda values: values[0].get("orientation") == "rotate-90", "undo flip")
+        # Reopening starts a new undo history, so rotate left explicitly restores the photo.
+        transform(0, None, 640, 360)
+        transform(0, "rotate-270", 360, 640)
+        assert_transformed_pixels("layers-rotate-left", True, False)
+        transform(3, "transpose", 360, 640)
+        assert_transformed_pixels("layers-flip-vertical", True, True)
+        click(editor, 36, 62)
+        save_layers(lambda values: values[0].get("orientation") == "rotate-270", "undo vertical flip")
+        click(editor, 36, 62)
+        save_layers(lambda values: values[0].get("orientation") is None, "undo left rotation")
+        assert saved(640, 360, 0, 0)
+        click(editor, 17, 299)  # A hidden, locked image remains transformable.
+        save_layers(lambda values: not values[0]["visible"], "hide original before transform")
+        transform(2, "flip-horizontal", 640, 360)
+        assert not layers()[0]["visible"]
+        click(editor, 36, 62)
+        save_layers(lambda values: values[0].get("orientation") is None, "undo hidden transform")
+        click(editor, 36, 62)
+        save_layers(lambda values: values[0]["visible"], "restore original visibility")
+        assert_transformed_pixels("layers-transform-restored", True, True)
         click(editor, 47, 591)  # Duplicate the locked original, not delete or move it.
         first = save_layers(lambda values: len(values) == 2, "duplicate original")
         copy_id = first[1]["id"]
@@ -502,7 +561,9 @@ def main():
                        "explicit-discard", "save-error", "quit-error-retry", "original-unchanged",
                        "layer-duplicate-rename-move", "layer-opacity-visibility-pixels",
                        "layer-lock-order-delete", "layer-draft-reopen", "layer-undo-redo",
-                       "layer-empty-undo", "output-png-jpeg-webp", "output-comparison",
+                       "layer-empty-undo", "image-transform-four-actions-pixels",
+                       "image-transform-locked-hidden", "image-transform-canvas-draft-undo",
+                       "output-png-jpeg-webp", "output-comparison",
                        "output-budget-error-retry", "output-no-draft-or-file-write",
                        "output-png-palette-minimum-scroll", "export-new-copy-history",
                        "export-collision-original-protection", "export-history-warning-recovery",

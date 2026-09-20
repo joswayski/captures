@@ -10,7 +10,7 @@ use std::{
 };
 
 use captures_app::{
-    editor::{Document, Element, LayerEdit, LayerPlacement, Rect},
+    editor::{Document, Element, ImageTransform, LayerEdit, LayerPlacement, Rect},
     editor_output::{SavedExport, save_new_export},
     editor_session::{
         EditorSession, ExportFormat, ExportOptions, ExportQuality, OpenRequest, PngOptions, Request,
@@ -974,7 +974,22 @@ fn show_layers(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
             view.submit_layer(tx, LayerEdit::Delete);
         }
     });
-    ui.small("Locked layers stay in place. Hidden layers can still be edited.");
+    if matches!(element, Element::Image(_)) {
+        ui.menu_button("Transform image", |ui| {
+            for (label, transform) in [
+                ("Rotate left", ImageTransform::RotateCounterclockwise),
+                ("Rotate right", ImageTransform::RotateClockwise),
+                ("Flip horizontal", ImageTransform::FlipHorizontal),
+                ("Flip vertical", ImageTransform::FlipVertical),
+            ] {
+                if ui.button(label).clicked() {
+                    view.submit_layer(tx, LayerEdit::ImageTransform { transform });
+                    ui.close();
+                }
+            }
+        });
+    }
+    ui.small("Hidden and locked images can transform.");
 }
 
 #[cfg(test)]
