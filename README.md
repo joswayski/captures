@@ -265,7 +265,7 @@ resize/lossless image transforms/undo, single decoded-RGBA image import, and ret
 pixel frames for native hosts. Typed rectangle/ellipse creation is also available.
 Shared annotation-style patches can update existing
 shape/path colors, closed-shape fill/stroke controls, widths and shadow settings
-without replacing documents; native property controls remain unconnected.
+without replacing documents.
 Full-canvas photos rotate their canvas; layered overhang stays clipped and fully
 off-canvas transformed images expand the canvas so they are not lost. Shared
 interactive crop geometry also matches shipping bounds, aspect presets and Shift
@@ -277,6 +277,9 @@ the selection; Cancel or Escape leaves the document unchanged. Its layer panel s
 visibility, locking, opacity, renaming, position, duplication, deletion and ordering.
 **Draw** adds filled rectangles and ellipses in the default annotation color, one
 undoable layer per drag. Escape cancels an unfinished drag; drafts retain the shapes.
+**Layers → Annotation style** edits fill, stroke and shadow color, width, opacity,
+blur and offsets. Apply style creates one undo step; Reset fields cancels unapplied
+changes. Hidden and locked annotations remain editable.
 Image layers also expose lossless left/right rotations and horizontal/vertical
 flips, including when hidden or locked; each action supports undo and draft restore.
 **Import image** adds one PNG, JPEG, WebP or TIFF below the selected visible image,
@@ -301,8 +304,8 @@ original. Failed draft saves keep edits open and cancel normal quit. Private-X11
 cover both appearances, persisted drafts, real preview pixels and error recovery.
 AppKit now connects the same crop, canvas-resize and draft operations in its own
 window. Windows, Wayland and physical AppKit presentation remain unverified.
-AppKit image-transform/import controls, batch/drag-and-drop import, text, annotation
-fill/stroke/shadow controls, other annotation tools, overwrite-original, AppKit edited-image clipboard/file output,
+AppKit image-transform/import/style controls, batch/drag-and-drop import, text,
+other annotation tools, overwrite-original, AppKit edited-image clipboard/file output,
 and recording editing remain unconnected. These connected controls and shared
 rendering/export support do not complete native editor acceptance. OS shortcut
 takeover, login items, single-instance relaunch and updates

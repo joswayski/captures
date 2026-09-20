@@ -136,6 +136,15 @@ def main():
             "mousemove_relative", "--sync", "1", "0", "sleep", ".15", "mousedown", "1",
             "sleep", ".15", "mouseup", "1", "sleep", ".2")
 
+    def drag(start, end, shift=False):
+        run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start), "sleep", ".2")
+        if shift:
+            run("xdotool", "keydown", "Shift_L", "sleep", ".1")
+        run("xdotool", "mousedown", "1", "sleep", ".2", "mousemove", "--sync",
+            "--window", editor, *map(str, end), "sleep", ".3", "mouseup", "1", "sleep", ".2")
+        if shift:
+            run("xdotool", "keyup", "Shift_L")
+
     try:
         env["DISPLAY"] = ":" + spawn("xvfb", ["Xvfb", "-displayfd", "1", "-screen", "0",
             "1280x900x24", "-dpi", "96", "-nolisten", "tcp"], True)
@@ -189,10 +198,10 @@ def main():
         pixel("editor-original", 10, 690,
               (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
 
-        def field(y, value):
-            click(editor, 78, y)
+        def field(y, value, x=78):
+            click(editor, x, y)
             run("xdotool", "key", "ctrl+a")
-            run("xdotool", "type", "--clearmodifiers", "--delay", "60", str(value))
+            run("xdotool", "type", "--clearmodifiers", "--delay", "60", "--", str(value))
             run("xdotool", "key", "Return", "sleep", ".2")
 
         draft = output / "editor-drafts" / artifact_id / "manifest.json"
@@ -235,6 +244,92 @@ def main():
         def save_layers(predicate, description):
             save_until(lambda: predicate(layers()), description)
             return layers()
+
+        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        click(editor, 736, 62)
+        drag((320, 250), (480, 370))
+        annotation = save_layers(lambda values: len(values) == 2, "annotation fixture")[-1]
+        click(editor, 463, 62)
+        click(editor, 79, 300)
+        save_layers(lambda values: values[-1]["locked"], "locked annotation remains style editable")
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "5")
+        shot(editor, "annotation-fields")
+        unchanged = draft.read_bytes()
+        click(editor, 50, 503)  # Unchanged Apply is disabled.
+        field(415, "#23b5a9")
+        assert draft.read_bytes() == unchanged
+        shot(editor, "annotation-unapplied")
+        pixel("annotation-unapplied", 400, 310, (255, 59, 92))
+        click(editor, 150, 503)  # Reset does not mutate the document.
+        assert draft.read_bytes() == unchanged
+        click(editor, 50, 503)  # A broken Reset would apply the staged cyan here.
+        save_layers(lambda values: values[-1]["style"]["fill"] == "#ff3b5c", "reset cleared staged fill")
+        field(415, "#23b5a9")
+        click(editor, 50, 503)
+        save_layers(lambda values: values[-1]["style"]["fill"] == "#23b5a9", "annotation fill")
+        shot(editor, "annotation-fill")
+        pixel("annotation-fill", 400, 310, (35, 181, 169))
+        click(editor, 35, 62)
+        save_layers(lambda values: values[-1]["style"]["fill"] == "#ff3b5c", "one-step style undo")
+        click(editor, 98, 62)
+        save_layers(lambda values: values[-1]["style"]["fill"] == "#23b5a9", "style redo")
+        click(editor, 15, 300)  # Enable stroke, then keep the final controls in view.
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "5")
+        field(256, "#3269d6")
+        field(300, 12, 130)
+        click(editor, 15, 344)  # Clear fill.
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "5")
+        click(editor, 50, 503)
+        save_layers(lambda values: values[-1]["style"]["fill"] is None and values[-1]["style"]["strokeWidth"] == 12, "annotation outline")
+        shot(editor, "annotation-outline")
+        pixel("annotation-outline", 400, 310, (40, 110, 166))
+        pixel("annotation-outline", 323, 310, (50, 105, 214))
+        click(editor, 15, 415)  # Restore fill; enter a different color from the stroke.
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "5")
+        field(415, "#23b5a9")
+        click(editor, 15, 459)  # Enable custom shadow controls.
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "25", "5")
+        shot(editor, "annotation-shadow-fields")
+        field(283, "#ff8800")
+        field(327, 80, 125)
+        field(371, 0)
+        field(415, 25, 90)
+        field(459, -12, 90)
+        click(editor, 50, 503)
+        styled = save_layers(lambda values: values[-1]["style"].get("dropShadowStyle", {}).get("offsetX") == 25, "custom annotation shadow")[-1]
+        assert styled["id"] == annotation["id"] and styled["locked"]
+        assert styled["style"]["dropShadowStyle"] == {"color": "#ff8800", "opacity": 80, "blur": 0, "offsetX": 25, "offsetY": -12}
+        shot(editor, "annotation-shadow")
+        pixel("annotation-shadow", 509, 310, (212, 131, 33), tolerance=1)
+        click(editor, 28, 283)
+        shot(editor, "annotation-color-picker")
+        run("xdotool", "key", "Escape", "sleep", ".2")
+        click(editor, 15, 212)  # Disable shadow without losing custom knobs.
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "5")
+        click(editor, 50, 503)
+        disabled = save_layers(lambda values: values[-1]["style"]["dropShadow"] is False, "shadow off")[-1]
+        assert disabled["style"]["dropShadowStyle"] == styled["style"]["dropShadowStyle"]
+        shot(editor, "annotation-shadow-off")
+        pixel("annotation-shadow-off", 509, 310, (40, 110, 166))
+        click(editor, 15, 459)
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "25", "5")
+        click(editor, 50, 503)
+        save_layers(lambda values: values[-1]["style"] == styled["style"], "shadow settings restored")
+        run("xdotool", "windowsize", "--sync", editor, "760", "540")
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "25", "5")
+        shot(editor, "annotation-minimum")
+        close(editor)
+        wait(lambda: not windows("Screenshot editor"), "styled editor closes")
+        editor = reopen()
+        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        shot(editor, "annotation-reopened")
+        pixel("annotation-reopened", 509, 310, (212, 131, 33), tolerance=1)
+        assert layers()[-1]["style"] == styled["style"]
+        assert (artifact / "capture.png").read_bytes() == original
+        click(editor, 275, 62)
+        click(editor, 55, 128)
+        wait(lambda: not draft.exists(), "discard annotation edits")
+        run("xdotool", "windowsize", "--sync", editor, "1000", "700")
 
         # These synthetic hex colors are sRGB. Keep the fixture untagged rather
         # than ImageMagick's gamma/chromaticity-only PNG; profiles have unit coverage.
@@ -279,6 +374,7 @@ def main():
         pixel("imported-canvas", 568, 537, (60, 179, 113))
         pixel("imported-canvas", 674, 584, (45, 100, 189))
         click(editor, 463, 62)
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "25", "4")
         shot(editor, "imported-selected-layer")
         click(editor, 78, 371)
         run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
@@ -461,15 +557,6 @@ def main():
 
         # At this size the preview is 1:1: image origin (238,89), size 640x360.
         run("xdotool", "windowsize", "--sync", editor, "886", "700")
-
-        def drag(start, end, shift=False):
-            run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start), "sleep", ".2")
-            if shift:
-                run("xdotool", "keydown", "Shift_L", "sleep", ".1")
-            run("xdotool", "mousedown", "1", "sleep", ".2", "mousemove", "--sync",
-                "--window", editor, *map(str, end), "sleep", ".3", "mouseup", "1", "sleep", ".2")
-            if shift:
-                run("xdotool", "keyup", "Shift_L")
 
         click(editor, 736, 62)  # Draw keeps the chosen shape active after each release.
         drag((658, 289), (538, 169))
@@ -765,6 +852,9 @@ def main():
                        "crop-cancel-restores-fields", "crop-popup-escape",
                        "shape-reverse-rectangle-ellipse-pixels", "shape-single-undo-redo-stable-id",
                        "shape-transient-escape-degenerate", "shape-draft-reopen-outside-expansion",
+                       "annotation-unapplied-reset-noop", "annotation-locked-fill-stroke-pixels",
+                       "annotation-style-undo-redo", "annotation-shadow-toggle-retains-custom",
+                       "annotation-color-picker-minimum-reopen-pixels",
                        "canvas", "undo-redo", "draft-reopen", "close-preserves-draft",
                        "image-picker-pending-cancel-retry", "image-import-exact-pixels",
                        "image-import-owned-draft-reopen", "image-picker-stale-close-result",

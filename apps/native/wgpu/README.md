@@ -99,8 +99,16 @@ and rounded rectangle corners. Drag previews are transient; release creates one
 selected layer and undo step. Escape, focus loss, close or switching panels cancels
 the unfinished drag. Reverse and off-canvas drags use document coordinates; partial
 overhang stays clipped and fully outside shapes expand the canvas. Zero-width or
-zero-height drags add nothing. The chosen tool remains active. Fill/stroke/shadow
-styling, resize grips and other drawing tools remain unconnected.
+zero-height drags add nothing. The chosen tool remains active. Resize grips and
+other drawing tools remain unconnected.
+Layers → Annotation style now edits closed-shape fill/stroke toggles, stroke/fill
+colors, stroke width and drop-shadow color, opacity, blur and offsets. Color pickers
+and hex fields edit local values; Apply style sends only changed fields as one
+undoable patch. Reset fields or changing the selected layer drops unapplied values.
+Shared Rust supplies shadow defaults/clamps; toggling shadow off preserves its
+stored custom settings. Hidden and locked annotations remain editable. Open shapes
+and paths omit fill/stroke toggles, while images and text have no annotation controls.
+Applying styles invalidates encoded previews without writing files or drafts.
 Import image opens a single-file PNG/JPEG/WebP/TIFF picker without blocking draft
 saves or close. The worker bounds and decodes the file, honors EXIF orientation,
 then imports below the selected visible image using shared placement/expansion.

@@ -463,7 +463,7 @@ customization uses the renderer's bounded defaults while preserving stored custo
 and unknown fields when toggled off. Unsupported image/text targets and exact
 no-ops retain history, redo and frame identity; failed rendering rolls back the
 whole patch. This is a common prerequisite for AppKit, Windows, X11 and Wayland.
-No host property controls or physical-platform acceptance are included.
+Host property controls are tracked below; physical-platform acceptance remains open.
 
 The first wgpu editor window now opens isolated History screenshots on its own
 serialized worker, with fit preview, numeric crop/canvas fields, undo/redo,
@@ -507,10 +507,19 @@ remain host-local until release sends one shared creation command to the worker.
 The new stable layer ID is selected and stale encoded output is cleared. Reverse
 and off-canvas drags, zero-area no-ops, cancellation, undo/redo, persisted pixels
 and draft reopening have automated coverage. Shipping default fill and rounded
-rectangle geometry are used; custom fill/stroke/shadow controls, resize grips and
-other drawing tools are still separate work. Windows/X11/Wayland share this host
+rectangle geometry are used; resize grips and other drawing tools are still
+separate work. Windows/X11/Wayland share this host
 code; private X11 is the exercised UI, not physical input/accessibility acceptance.
 AppKit creation controls remain unconnected.
+
+The wgpu Layers panel connects annotation-style fields with one explicit Apply
+style transaction. Local fields and color pickers emit only changed patch values;
+displaying resolved defaults does not materialize legacy fields or overwrite unknown
+data. A disabled shadow does not submit hidden custom controls. Reset and selection
+changes discard unapplied fields; worker errors restore published values. Styled
+pixels, undo/redo, draft restore and light/dark/minimum layouts are exercised on
+private X11. Windows/Wayland presentation and AppKit style controls remain unverified
+or unconnected, respectively; physical input/accessibility acceptance stays open.
 
 The wgpu Import image action now picks one PNG/JPEG/WebP/TIFF file independently
 of the session worker. The worker bounds encoded input and decoded dimensions,

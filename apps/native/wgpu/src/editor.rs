@@ -13,8 +13,9 @@ use std::{
 
 use captures_app::{
     editor::{
-        ClosedShapeCreate, ClosedShapeKind, CropDrag, Document, Element, ElementStyle,
-        ImageTransform, LayerEdit, LayerPlacement, Point, Rect,
+        AnnotationStylePatch, ClosedShapeCreate, ClosedShapeKind, CropDrag, Document,
+        DropShadowStyle, DropShadowStylePatch, Element, ElementStyle, ImageTransform, LayerEdit,
+        LayerPlacement, OptionalNullable, Point, Rect,
     },
     editor_output::{SavedExport, save_new_export},
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
@@ -92,6 +93,55 @@ const CROP_ASPECTS: [(&str, Option<f64>); 5] = [
     ("16:9", Some(16. / 9.)),
 ];
 
+struct AnnotationFields {
+    style: ElementStyle,
+    shadow: DropShadowStyle,
+}
+
+impl AnnotationFields {
+    fn new(style: &ElementStyle) -> Self {
+        Self {
+            style: style.clone(),
+            shadow: style.resolved_drop_shadow_style(),
+        }
+    }
+
+    fn patch(&self, original: &ElementStyle) -> AnnotationStylePatch {
+        let previous_shadow = original.resolved_drop_shadow_style();
+        let shadow = DropShadowStylePatch {
+            color: (self.shadow.color != previous_shadow.color).then(|| self.shadow.color.clone()),
+            opacity: (self.shadow.opacity != previous_shadow.opacity)
+                .then_some(self.shadow.opacity),
+            blur: (self.shadow.blur != previous_shadow.blur).then_some(self.shadow.blur),
+            offset_x: (self.shadow.offset_x != previous_shadow.offset_x)
+                .then_some(self.shadow.offset_x),
+            offset_y: (self.shadow.offset_y != previous_shadow.offset_y)
+                .then_some(self.shadow.offset_y),
+        };
+        AnnotationStylePatch {
+            color: (self.style.color != original.color).then(|| self.style.color.clone()),
+            fill: if self.style.fill == original.fill {
+                OptionalNullable::Missing
+            } else {
+                self.style
+                    .fill
+                    .clone()
+                    .map_or(OptionalNullable::Null, OptionalNullable::Value)
+            },
+            stroke_width: (self.style.stroke_width != original.stroke_width)
+                .then_some(self.style.stroke_width),
+            stroke_enabled: (self.style.has_stroke() != original.has_stroke())
+                .then_some(self.style.has_stroke()),
+            drop_shadow: (self.style.has_drop_shadow() != original.has_drop_shadow())
+                .then_some(self.style.has_drop_shadow()),
+            // Hidden controls must not accidentally re-enable a disabled shadow.
+            drop_shadow_style: (self.style.has_drop_shadow()
+                && shadow != DropShadowStylePatch::default())
+            .then_some(shadow),
+        }
+    }
+}
+
 struct View {
     presented: Option<Presented>,
     texture: Option<egui::TextureHandle>,
@@ -115,6 +165,7 @@ struct View {
     layer_name: String,
     layer_opacity: f64,
     layer_position: [f64; 2],
+    annotation: Option<AnnotationFields>,
     pending: bool,
     closed: bool,
     close_requested: bool,
@@ -154,6 +205,7 @@ impl Default for View {
             layer_name: String::new(),
             layer_opacity: 100.,
             layer_position: [0., 0.],
+            annotation: None,
             pending: true,
             closed: false,
             close_requested: false,
@@ -434,6 +486,11 @@ impl View {
                 .or_else(|| elements.last())
         });
         self.selected_layer = layer.map(|element| element.base().id.clone());
+        self.annotation = layer.and_then(|element| match element {
+            Element::Shape(shape) => Some(AnnotationFields::new(&shape.style)),
+            Element::Path(path) => Some(AnnotationFields::new(&path.style)),
+            _ => None,
+        });
         if let Some(layer) = layer {
             self.layer_name = layer_label(layer).into();
             self.layer_opacity = layer.base().opacity;
@@ -904,7 +961,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                     ui.selectable_value(&mut view.draw_shape, ClosedShapeKind::Ellipse, "Ellipse");
                 });
                 ui.label("Drag to draw. Release to add one layer. Escape cancels the current drag.");
-                ui.small("Filled shapes use the default annotation color. Change opacity, position and ordering in Layers. Fill/stroke styling is not connected yet.");
+                ui.small("New shapes use the default annotation color. Change fill, stroke, shadow, opacity, position and ordering in Layers.");
                 return;
             }
             ui.heading("Crop");
@@ -1505,7 +1562,144 @@ fn show_layers(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
             }
         });
     }
-    ui.small("Hidden and locked images can transform.");
+    match element {
+        Element::Shape(shape) => show_annotation(
+            ui,
+            view,
+            tx,
+            &shape.style,
+            matches!(
+                shape.shape.as_str(),
+                "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
+            ),
+        ),
+        Element::Path(path) => show_annotation(ui, view, tx, &path.style, false),
+        _ => {
+            ui.small("Hidden and locked images can transform.");
+        }
+    }
+}
+
+fn annotation_color(ui: &mut egui::Ui, label: &str, value: &mut String) {
+    ui.push_id(label, |ui| {
+        let label = ui.label(label);
+        ui.horizontal(|ui| {
+            let [red, green, blue, _] = egui::Color32::from_hex(value)
+                .unwrap_or(egui::Color32::BLACK)
+                .to_srgba_unmultiplied();
+            let mut rgb = [red, green, blue];
+            if ui
+                .color_edit_button_srgb(&mut rgb)
+                .labelled_by(label.id)
+                .changed()
+            {
+                *value = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
+            }
+            ui.add(egui::TextEdit::singleline(value).desired_width(132.))
+                .labelled_by(label.id);
+        });
+    });
+}
+
+fn show_annotation(
+    ui: &mut egui::Ui,
+    view: &mut View,
+    tx: &Sender<Job>,
+    original: &ElementStyle,
+    closed: bool,
+) {
+    let Some(fields) = &mut view.annotation else {
+        return;
+    };
+    ui.separator();
+    ui.heading("Annotation style");
+    let style = &mut fields.style;
+    if closed {
+        let mut stroke = style.has_stroke();
+        if ui.checkbox(&mut stroke, "Stroke").changed() {
+            style.stroke_enabled = Some(stroke);
+        }
+    }
+    if !closed || style.has_stroke() {
+        annotation_color(ui, "Stroke color", &mut style.color);
+        ui.horizontal(|ui| {
+            ui.label("Stroke width");
+            ui.add(
+                egui::DragValue::new(&mut style.stroke_width)
+                    .range(2. ..=40.)
+                    .clamp_existing_to_range(false)
+                    .speed(1.),
+            );
+        });
+    }
+    if closed {
+        let mut filled = style.fill.is_some();
+        if ui.checkbox(&mut filled, "Filled shape").changed() {
+            style.fill = filled.then(|| style.color.clone());
+        }
+        if let Some(fill) = &mut style.fill {
+            annotation_color(ui, "Fill color", fill);
+        }
+    }
+    let mut shadow = style.has_drop_shadow();
+    if ui.checkbox(&mut shadow, "Drop shadow").changed() {
+        style.drop_shadow = Some(shadow);
+    }
+    if shadow {
+        annotation_color(ui, "Shadow color", &mut fields.shadow.color);
+        for (label, value, range) in [
+            ("Shadow opacity", &mut fields.shadow.opacity, 0. ..=100.),
+            ("Blur", &mut fields.shadow.blur, 0. ..=100.),
+            ("X offset", &mut fields.shadow.offset_x, -500. ..=500.),
+            ("Y offset", &mut fields.shadow.offset_y, -500. ..=500.),
+        ] {
+            ui.horizontal(|ui| {
+                ui.label(label);
+                ui.add(
+                    egui::DragValue::new(value)
+                        .range(range)
+                        .clamp_existing_to_range(false)
+                        .speed(1.),
+                );
+            });
+        }
+    }
+    let patch = fields.patch(original);
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(
+                patch != AnnotationStylePatch::default(),
+                egui::Button::new("Apply style"),
+            )
+            .clicked()
+        {
+            let invalid = [
+                patch.color.as_deref(),
+                match &patch.fill {
+                    OptionalNullable::Value(fill) => Some(fill.as_str()),
+                    _ => None,
+                },
+                patch
+                    .drop_shadow_style
+                    .as_ref()
+                    .and_then(|shadow| shadow.color.as_deref()),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|color| egui::Color32::from_hex(color).is_err());
+            if invalid {
+                view.error =
+                    Some("Use a hex color such as #ff3b5c. Style changes were not applied.".into());
+            } else {
+                view.submit_layer(tx, LayerEdit::AnnotationStyle { patch });
+            }
+        }
+        if ui.button("Reset fields").clicked() {
+            view.annotation = Some(AnnotationFields::new(original));
+            view.error = None;
+        }
+    });
+    ui.small("Apply changes one undo step. Hidden and locked annotations remain editable.");
 }
 
 #[cfg(test)]
@@ -1526,6 +1720,125 @@ mod tests {
             unsaved,
             has_draft: !unsaved,
         }
+    }
+
+    #[test]
+    fn displaying_annotation_controls_does_not_clamp_legacy_values_into_a_patch() {
+        let ctx = egui::Context::default();
+        let original = ElementStyle {
+            stroke_width: 200.,
+            stroke_enabled: None,
+            drop_shadow: Some(true),
+            ..ElementStyle::default()
+        };
+        let mut view = View {
+            annotation: Some(AnnotationFields::new(&original)),
+            ..View::default()
+        };
+        let (tx, rx) = mpsc::channel();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600., 1400.));
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        });
+        let mut ui = egui::Ui::new(
+            ctx.clone(),
+            egui::Id::unique("annotation-test"),
+            egui::UiBuilder::new().max_rect(screen),
+        );
+        show_annotation(&mut ui, &mut view, &tx, &original, true);
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+        let fields = view.annotation.as_ref().unwrap();
+        assert_eq!(fields.style.stroke_width, 200.);
+        assert_eq!(fields.shadow.blur, 170.);
+        assert_eq!(fields.patch(&original), AnnotationStylePatch::default());
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn annotation_fields_patch_only_changed_values_and_preserve_legacy_defaults() {
+        use serde_json::json;
+        let original = ElementStyle {
+            stroke_enabled: None,
+            drop_shadow: Some(true),
+            drop_shadow_style: Some(DropShadowStyle {
+                color: "#123456".into(),
+                opacity: 80.,
+                blur: 3.,
+                offset_x: 900.,
+                offset_y: -2.,
+                extra: serde_json::from_value(json!({"futureShadow": "keep"})).unwrap(),
+            }),
+            extra: serde_json::from_value(json!({"futureStyle": [7, 2]})).unwrap(),
+            ..ElementStyle::default()
+        };
+        let mut fields = AnnotationFields::new(&original);
+        assert_eq!(fields.shadow.offset_x, 500.); // Display resolves, but does not rewrite raw data.
+        assert_eq!(fields.patch(&original), AnnotationStylePatch::default());
+        fields.style.fill = None;
+        fields.shadow.offset_x = -7.;
+        assert_eq!(
+            serde_json::to_value(fields.patch(&original)).unwrap(),
+            json!({"fill": null, "dropShadowStyle": {"offsetX": -7.0}})
+        );
+        fields.style.drop_shadow = Some(false);
+        assert_eq!(
+            serde_json::to_value(fields.patch(&original)).unwrap(),
+            json!({"fill": null, "dropShadow": false})
+        ); // Never materialize hidden shadow fields.
+        assert_eq!(original.drop_shadow_style.as_ref().unwrap().offset_x, 900.);
+        assert_eq!(fields.style.extra["futureStyle"], json!([7, 2]));
+        assert_eq!(fields.shadow.extra["futureShadow"], "keep");
+
+        let original = ElementStyle::default();
+        let mut fields = AnnotationFields::new(&original);
+        fields.style.stroke_width = 20.;
+        fields.style.drop_shadow = Some(true);
+        assert_eq!(
+            serde_json::to_value(fields.patch(&original)).unwrap(),
+            json!({"strokeWidth": 20.0, "dropShadow": true})
+        );
+    }
+
+    #[test]
+    fn annotation_selection_and_error_restore_the_published_layer_fields() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let mut value = presented(true);
+        let document = Arc::make_mut(&mut value.document);
+        let id = document
+            .create_closed_shape(ClosedShapeCreate {
+                shape: ClosedShapeKind::Ellipse,
+                start: Point { x: 1., y: 1. },
+                end: Point { x: 5., y: 2. },
+                style: ElementStyle::default(),
+                opacity: 100.,
+            })
+            .unwrap();
+        document
+            .edit_layer(&id, LayerEdit::Lock { locked: true })
+            .unwrap();
+        document
+            .edit_layer(&id, LayerEdit::Visibility { visible: false })
+            .unwrap();
+        view.receive(&ctx, Ok(value));
+        assert_eq!(view.selected_layer.as_deref(), Some(id.as_str()));
+        let pixels = view.presented.as_ref().unwrap().pixels.clone();
+        view.annotation.as_mut().unwrap().style.fill = Some("bad color".into());
+        view.receive(&ctx, Err("Style failed".into()));
+        assert_eq!(
+            view.annotation.as_ref().unwrap().style.fill.as_deref(),
+            Some("#ff3b5c")
+        );
+        assert!(Arc::ptr_eq(
+            &pixels,
+            &view.presented.as_ref().unwrap().pixels
+        ));
+        view.select_layer(Some("capture-background".into()));
+        assert!(view.annotation.is_none());
+        view.select_layer(Some(id));
+        assert!(view.annotation.is_some());
     }
 
     #[test]
