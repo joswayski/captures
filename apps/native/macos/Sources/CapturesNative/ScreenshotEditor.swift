@@ -163,7 +163,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate {
 
         label("Crop", frame: NSRect(x: 688, y: 24, width: 280, height: 24),
               size: 16, weight: .semibold)
-        label("Uses canvas coordinates and shared Rust geometry.",
+        label("Shared Rust owns canvas geometry.",
               frame: NSRect(x: 688, y: 54, width: 280, height: 22), muted: true)
         fieldLabel("X", x: 688, y: 92); fieldLabel("Y", x: 832, y: 92)
         configure(cropX, frame: NSRect(x: 688, y: 116, width: 128, height: 30), label: "Crop X")
@@ -177,7 +177,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate {
 
         label("Canvas", frame: NSRect(x: 688, y: 278, width: 280, height: 24),
               size: 16, weight: .semibold)
-        label("Resize the canvas without scaling the image layer.",
+        label("Resize canvas without scaling the image.",
               frame: NSRect(x: 688, y: 308, width: 280, height: 22), muted: true)
         fieldLabel("Width", x: 688, y: 346); fieldLabel("Height", x: 832, y: 346)
         configure(canvasWidth, frame: NSRect(x: 688, y: 370, width: 128, height: 30), label: "Canvas width")
@@ -198,7 +198,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate {
             [weak self] in self?.saveDraft()
         }
         saveButton.primary = true
-        discardButton = button("Discard edits…", frame: NSRect(x: 832, y: 524, width: 128, height: 34)) {
+        discardButton = button("Discard edits…", frame: NSRect(x: 824, y: 524, width: 136, height: 34)) {
             [weak self] in self?.confirmDiscard()
         }
         status.frame = NSRect(x: 688, y: 580, width: 272, height: 72)
