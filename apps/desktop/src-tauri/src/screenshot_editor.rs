@@ -7,7 +7,7 @@ use std::{
 };
 
 use chrono::{Local, Utc};
-use image::{ImageFormat, RgbImage, RgbaImage};
+use image::{ImageFormat, RgbaImage};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
@@ -17,7 +17,6 @@ use captures_history::editor_draft;
 pub use captures_history::editor_draft::{
     LoadedDraft as LoadedScreenshotEditorDraft, SaveRequest as SaveScreenshotEditorDraftRequest,
 };
-use captures_image::composite_onto_white;
 
 use crate::{
     AppError, CommandResult,
@@ -45,12 +44,6 @@ pub enum ScreenshotExportQualityMode {
     Preserve,
     Compress,
     Maximum,
-}
-
-impl ScreenshotExportQualityMode {
-    const fn uses_compact_encode(self) -> bool {
-        !matches!(self, Self::Preserve)
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -553,46 +546,16 @@ fn encode_export(
     jpeg_quality: u8,
     png_max_colors: Option<u16>,
 ) -> Result<Vec<u8>, AppError> {
-    match format {
-        ScreenshotEditFormat::Png => {
-            let max_colors = match quality_mode {
-                ScreenshotExportQualityMode::Preserve => None,
-                ScreenshotExportQualityMode::Compress => png_max_colors
-                    .filter(|count| *count > 0)
-                    .or_else(|| storage::png_palette_colors_for_quality(jpeg_quality)),
-                // Maximum without a byte budget still quantizes aggressively.
-                ScreenshotExportQualityMode::Maximum => {
-                    Some(png_max_colors.filter(|count| *count > 0).unwrap_or(64))
-                }
-            };
-            storage::encode_png_export(image, quality_mode.uses_compact_encode(), max_colors)
-        }
-        ScreenshotEditFormat::Jpeg => {
-            let quality = if matches!(quality_mode, ScreenshotExportQualityMode::Preserve) {
-                100
-            } else {
-                jpeg_quality
-            };
-            let rgb = composite_onto_white(image);
-            encode_jpeg(&rgb, quality)
-        }
-        ScreenshotEditFormat::Webp => {
-            // Preserve = lossless WebP. Compress/maximum = lossy quality (libwebp).
-            let quality = match quality_mode {
-                ScreenshotExportQualityMode::Preserve => None,
-                ScreenshotExportQualityMode::Compress => Some(jpeg_quality.clamp(1, 100)),
-                ScreenshotExportQualityMode::Maximum => Some(jpeg_quality.clamp(1, 100).min(80)),
-            };
-            encode_webp(image, quality)
-        }
-    }
+    encode_export_with_limit(
+        image,
+        format,
+        quality_mode,
+        jpeg_quality,
+        None,
+        png_max_colors,
+    )
 }
 
-fn encoded_len(bytes: &[u8]) -> u64 {
-    u64::try_from(bytes.len()).unwrap_or(u64::MAX)
-}
-
-/// Select export bytes when saving also needs a lossless history PNG.
 fn encode_save_export<'a>(
     image: &RgbaImage,
     history_png: &'a [u8],
@@ -606,8 +569,8 @@ fn encode_save_export<'a>(
         && matches!(quality_mode, ScreenshotExportQualityMode::Preserve)
         && max_size_bytes.is_none()
     {
-        // The history PNG uses the same encoder as Preserve export. Borrow
-        // those canonical bytes, avoiding both a second encode and its buffer.
+        // Preserve export and history use the same canonical encoder. Borrow
+        // the history bytes to avoid a second encode and output allocation.
         return Ok(Cow::Borrowed(history_png));
     }
     encode_export_with_limit(
@@ -629,129 +592,29 @@ fn encode_export_with_limit(
     max_size_bytes: Option<u64>,
     png_max_colors: Option<u16>,
 ) -> Result<Vec<u8>, AppError> {
-    let Some(maximum) = max_size_bytes else {
-        return encode_export(image, format, quality_mode, jpeg_quality, png_max_colors);
+    let format = match format {
+        ScreenshotEditFormat::Png => captures_image::ExportFormat::Png,
+        ScreenshotEditFormat::Jpeg => captures_image::ExportFormat::Jpeg,
+        ScreenshotEditFormat::Webp => captures_image::ExportFormat::Webp,
     };
-
-    // Highest quality that still fits: start from an uncompressed/preserve
-    // encode. A large cap (500 MB on a 4 MB original) must not keep a previous
-    // 64-color PNG or q80 WebP just because that already fit.
-    let preserve = encode_export(
+    let quality = match quality_mode {
+        ScreenshotExportQualityMode::Preserve => captures_image::ExportQuality::Preserve,
+        ScreenshotExportQualityMode::Compress => captures_image::ExportQuality::Compress,
+        ScreenshotExportQualityMode::Maximum => captures_image::ExportQuality::Maximum,
+    };
+    captures_image::encode_export(
         image,
-        format,
-        ScreenshotExportQualityMode::Preserve,
-        100,
-        None,
-    )?;
-    if encoded_len(&preserve) <= maximum {
-        return Ok(preserve);
-    }
-
-    let quality_ceiling = match quality_mode {
-        ScreenshotExportQualityMode::Compress => jpeg_quality,
-        ScreenshotExportQualityMode::Preserve | ScreenshotExportQualityMode::Maximum => 100,
-    };
-
-    match format {
-        ScreenshotEditFormat::Jpeg => {
-            let rgb = composite_onto_white(image);
-            let maximum_quality = quality_ceiling.clamp(40, 100);
-            let minimum = encode_jpeg(&rgb, 40)?;
-            if encoded_len(&minimum) > maximum {
-                return Err(AppError::Image(
-                    "JPEG cannot meet the requested maximum at the supported quality range; reduce the output size or raise the limit"
-                        .to_owned(),
-                ));
-            }
-
-            let mut best = minimum;
-            let mut low = 41_u8;
-            let mut high = maximum_quality;
-            while low <= high {
-                let quality = low + (high - low) / 2;
-                let candidate = encode_jpeg(&rgb, quality)?;
-                if encoded_len(&candidate) <= maximum {
-                    best = candidate;
-                    low = quality.saturating_add(1);
-                } else {
-                    if quality == 0 {
-                        break;
-                    }
-                    high = quality - 1;
-                }
-            }
-            Ok(best)
-        }
-        ScreenshotEditFormat::Png => {
-            // Walk down the color budget until the file fits (same idea as quality notches).
-            let mut best: Option<Vec<u8>> = None;
-            'palettes: for colors in storage::PNG_MAXIMUM_COLOR_STEPS {
-                // Dither first (matches Compress). If Floyd–Steinberg noise makes
-                // every indexed file larger than lossless, try the undithered
-                // palette so a size cap can still be met with posterization.
-                for dither in [true, false] {
-                    let candidate =
-                        storage::encode_png_export_dithered(image, true, Some(colors), dither)?;
-                    let fits = encoded_len(&candidate) <= maximum;
-                    if fits {
-                        best = Some(candidate);
-                        break 'palettes;
-                    }
-                    best = Some(candidate);
-                }
-            }
-            let best = best.ok_or_else(|| {
-                AppError::Image(
-                    "PNG cannot meet the requested maximum; reduce the output size or raise the limit"
-                        .to_owned(),
-                )
-            })?;
-            if encoded_len(&best) <= maximum {
-                Ok(best)
-            } else {
-                Err(AppError::Image(
-                    "the PNG is larger than the requested maximum even after reducing colors; reduce the output size, raise the limit, or switch to JPEG for more aggressive size control"
-                        .to_owned(),
-                ))
-            }
-        }
-        ScreenshotEditFormat::Webp => {
-            let minimum = encode_webp(image, Some(1))?;
-            if encoded_len(&minimum) > maximum {
-                return Err(AppError::Image(
-                    "WebP cannot meet the requested maximum at the supported quality range; reduce the output size or raise the limit"
-                        .to_owned(),
-                ));
-            }
-            let mut best = minimum;
-            let mut low = 2_u8;
-            let mut high = quality_ceiling.clamp(1, 100);
-            while low <= high {
-                let quality = low + (high - low) / 2;
-                let candidate = encode_webp(image, Some(quality))?;
-                if encoded_len(&candidate) <= maximum {
-                    best = candidate;
-                    low = quality.saturating_add(1);
-                } else {
-                    if quality == 0 {
-                        break;
-                    }
-                    high = quality - 1;
-                }
-            }
-            Ok(best)
-        }
-    }
-}
-
-fn encode_jpeg(image: &RgbImage, quality: u8) -> Result<Vec<u8>, AppError> {
-    captures_image::encode_jpeg(image, quality).map_err(AppError::Image)
-}
-
-/// Encode WebP. `None` quality is lossless; `Some(q)` is lossy at quality 1–100.
-/// Keeps alpha (unlike JPEG). Uses libwebp because the `image` crate only encodes lossless WebP.
-fn encode_webp(image: &RgbaImage, quality: Option<u8>) -> Result<Vec<u8>, AppError> {
-    captures_image::encode_webp(image, quality).map_err(AppError::Image)
+        captures_image::ExportOptions {
+            format,
+            quality,
+            quality_value: jpeg_quality,
+            max_size_bytes,
+            png: captures_image::PngOptions {
+                max_colors: png_max_colors,
+            },
+        },
+    )
+    .map_err(AppError::Image)
 }
 
 fn validated_destination(
@@ -817,14 +680,15 @@ fn write_export_atomically(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
 
 #[cfg(test)]
 mod tests {
+    use captures_image::{composite_onto_white, encode_png_export_dithered};
     use image::{ImageFormat, Rgba, RgbaImage};
     use tempfile::tempdir;
 
     use super::{
-        ScreenshotEditFormat, ScreenshotExportQualityMode, composite_onto_white,
-        decode_still_image_file, encode_export, encode_export_with_limit, encode_save_export,
-        encoded_len, ensure_editor_image_limits, resolve_editor_draft_asset, unique_export_path,
-        validated_destination, write_export_atomically,
+        ScreenshotEditFormat, ScreenshotExportQualityMode, decode_still_image_file, encode_export,
+        encode_export_with_limit, encode_save_export, ensure_editor_image_limits,
+        resolve_editor_draft_asset, unique_export_path, validated_destination,
+        write_export_atomically,
     };
 
     fn sample() -> RgbaImage {
@@ -847,6 +711,10 @@ mod tests {
                 255,
             ])
         })
+    }
+
+    fn encoded_len(bytes: &[u8]) -> u64 {
+        u64::try_from(bytes.len()).unwrap_or(u64::MAX)
     }
 
     #[test]
@@ -1496,10 +1364,10 @@ mod tests {
             None,
         )
         .unwrap();
-        let dithered = crate::storage::encode_png_export_dithered(&image, true, Some(8), true)
-            .expect("dithered 8-color");
-        let undithered = crate::storage::encode_png_export_dithered(&image, true, Some(8), false)
-            .expect("undithered 8-color");
+        let dithered =
+            encode_png_export_dithered(&image, true, Some(8), true).expect("dithered 8-color");
+        let undithered =
+            encode_png_export_dithered(&image, true, Some(8), false).expect("undithered 8-color");
         assert!(
             undithered.len() < dithered.len().min(lossless.len()),
             "undithered 8-color should undercut dither/lossless (undithered={}, dithered={}, lossless={})",
