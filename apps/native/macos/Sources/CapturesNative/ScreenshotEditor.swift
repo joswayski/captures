@@ -62,6 +62,111 @@ private final class EditorLayerCell: NSTableCellView {
     }
 }
 
+final class EditorDrawOverlay: NSView {
+    enum Shape: String {
+        case rectangle, ellipse
+    }
+
+    var shape: Shape = .rectangle
+    var canvasSize = NSSize.zero { didSet { needsDisplay = true } }
+    var drawingEnabled = false {
+        didSet {
+            isHidden = !drawingEnabled
+            if !drawingEnabled { cancelGesture() }
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+    var onComplete: ((Shape, NSPoint, NSPoint) -> Void)?
+    var fillColor = NSColor.controlAccentColor.withAlphaComponent(0.22)
+    var strokeColor = NSColor.controlAccentColor
+    private(set) var startPoint: NSPoint?
+    private(set) var currentPoint: NSPoint?
+
+    override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { true }
+
+    var presentedImageRect: NSRect {
+        guard canvasSize.width > 0, canvasSize.height > 0,
+              bounds.width > 0, bounds.height > 0 else { return .zero }
+        let scale = min(bounds.width / canvasSize.width, bounds.height / canvasSize.height)
+        let size = NSSize(width: canvasSize.width * scale, height: canvasSize.height * scale)
+        return NSRect(x: (bounds.width - size.width) / 2,
+                      y: (bounds.height - size.height) / 2,
+                      width: size.width, height: size.height)
+    }
+
+    func canvasPoint(for point: NSPoint) -> NSPoint {
+        let image = presentedImageRect
+        guard image.width > 0, image.height > 0 else { return .zero }
+        return NSPoint(x: (point.x - image.minX) * canvasSize.width / image.width,
+                       y: (point.y - image.minY) * canvasSize.height / image.height)
+    }
+
+    func begin(at point: NSPoint) {
+        guard drawingEnabled else { return }
+        startPoint = point; currentPoint = point; needsDisplay = true
+    }
+
+    func drag(to point: NSPoint) {
+        guard startPoint != nil else { return }
+        currentPoint = point; needsDisplay = true
+    }
+
+    func end(at point: NSPoint) {
+        guard let startPoint else { return }
+        currentPoint = point
+        let start = canvasPoint(for: startPoint)
+        let end = canvasPoint(for: point)
+        cancelGesture()
+        guard start.x != end.x, start.y != end.y else { return }
+        onComplete?(shape, start, end)
+    }
+
+    func cancelGesture() {
+        startPoint = nil; currentPoint = nil; needsDisplay = true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        begin(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        drag(to: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        end(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { cancelGesture() }
+        else { super.keyDown(with: event) }
+    }
+
+    override func resignFirstResponder() -> Bool {
+        cancelGesture()
+        return super.resignFirstResponder()
+    }
+
+    override func resetCursorRects() {
+        if drawingEnabled { addCursorRect(bounds, cursor: .crosshair) }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let startPoint, let currentPoint else { return }
+        let rect = NSRect(x: min(startPoint.x, currentPoint.x),
+                          y: min(startPoint.y, currentPoint.y),
+                          width: abs(currentPoint.x - startPoint.x),
+                          height: abs(currentPoint.y - startPoint.y))
+        let path = shape == .rectangle ? NSBezierPath(rect: rect)
+            : NSBezierPath(ovalIn: rect)
+        fillColor.setFill(); path.fill()
+        strokeColor.setStroke(); path.lineWidth = 2; path.stroke()
+    }
+}
+
 final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewDataSource,
                                         NSTableViewDelegate, NSTextFieldDelegate {
     let window: NSWindow
@@ -84,8 +189,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let geometryPanel = Surface()
     private let layersPanel = Surface()
     private let layerContent = Surface()
+    private let drawPanel = Surface()
     private let outputPanel = Surface()
     private let outputContent = Surface()
+    let drawOverlay = EditorDrawOverlay()
     private let layerName = NSTextField()
     private let layerOpacity = NSTextField()
     private let layerX = NSTextField()
@@ -100,6 +207,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var outputPngPaletteLabel: NSTextField!
     private var outputByteBudgetLabel: NSTextField!
     private var sectionControl: NSSegmentedControl!
+    private var drawTool: NSSegmentedControl!
     private var outputFormat: NSPopUpButton!
     private var outputQuality: NSPopUpButton!
     private var outputPreviewMode: NSSegmentedControl!
@@ -147,6 +255,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var importToken = 0
     private var importLoading = false
     private var pendingImport: (image: EditorDecodedImage, generation: Int, artifactID: String)?
+
+    private enum Section {
+        static let geometry = 0
+        static let layers = 1
+        static let draw = 2
+        static let output = 3
+    }
 
     init(tokens: Tokens, worker: EditorWorking = EditorWorker(), numberLocale: Locale = .current,
          reportError: @escaping (String) -> Void = { _ in },
@@ -234,6 +349,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     func prepareForTermination() -> Bool {
+        cancelDrawing()
         cancelPendingImport()
         let result = worker.prepareForTermination()
         switch result {
@@ -248,6 +364,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        cancelDrawing()
         guard !state.busy else {
             status.stringValue = "Wait for the current editor action to finish."
             return false
@@ -272,6 +389,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         return false
     }
 
+    func windowDidResignKey(_ notification: Notification) {
+        cancelDrawing()
+    }
+
     private func build() {
         label("Screenshot editor", frame: NSRect(x: 24, y: 20, width: 400, height: 30),
               size: 21, weight: .semibold)
@@ -287,10 +408,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         preview.imageScaling = .scaleProportionallyUpOrDown
         preview.setAccessibilityLabel("Edited screenshot preview")
         previewPanel.addSubview(preview)
+        drawOverlay.frame = preview.frame
+        drawOverlay.autoresizingMask = [.width, .height]
+        drawOverlay.setAccessibilityLabel("Screenshot drawing canvas")
+        drawOverlay.onComplete = { [weak self] shape, start, end in
+            self?.createClosedShape(shape: shape, start: start, end: end)
+        }
+        previewPanel.addSubview(drawOverlay)
         dimensions.frame = NSRect(x: 24, y: 654, width: 640, height: 20)
         dimensions.setAccessibilityLabel("Edited canvas dimensions"); root.addSubview(dimensions)
 
-        sectionControl = NSSegmentedControl(labels: ["Geometry", "Layers", "Output"], trackingMode: .selectOne,
+        sectionControl = NSSegmentedControl(labels: ["Geometry", "Layers", "Draw", "Output"], trackingMode: .selectOne,
                                             target: self, action: #selector(changeSection))
         sectionControl.frame = NSRect(x: 688, y: 24, width: 272, height: 28)
         sectionControl.selectedSegment = 0
@@ -299,11 +427,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
         geometryPanel.frame = NSRect(x: 688, y: 66, width: 272, height: 390)
         layersPanel.frame = geometryPanel.frame; layersPanel.isHidden = true
+        drawPanel.frame = geometryPanel.frame; drawPanel.isHidden = true
         outputPanel.frame = geometryPanel.frame; outputPanel.isHidden = true
         geometryPanel.setAccessibilityLabel("Geometry controls")
         layersPanel.setAccessibilityLabel("Layer controls")
+        drawPanel.setAccessibilityLabel("Drawing controls")
         outputPanel.setAccessibilityLabel("Output controls")
-        root.addSubview(geometryPanel); root.addSubview(layersPanel); root.addSubview(outputPanel)
+        root.addSubview(geometryPanel); root.addSubview(layersPanel)
+        root.addSubview(drawPanel); root.addSubview(outputPanel)
 
         panelLabel("Crop", frame: NSRect(x: 0, y: 0, width: 272, height: 24),
                    size: 16, weight: .semibold, parent: geometryPanel)
@@ -342,6 +473,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
 
         buildLayersPanel()
+        buildDrawPanel()
         buildOutputPanel()
 
         undoButton = button("Undo", frame: NSRect(x: 688, y: 470, width: 128, height: 34)) {
@@ -363,6 +495,24 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         status.maximumNumberOfLines = 5; status.setAccessibilityLabel("Screenshot editor status")
         root.addSubview(status)
         fields = [cropX, cropY, cropWidth, cropHeight, canvasWidth, canvasHeight]
+    }
+
+    private func buildDrawPanel() {
+        panelLabel("Draw", frame: NSRect(x: 0, y: 0, width: 272, height: 24),
+                   size: 16, weight: .semibold, parent: drawPanel)
+        panelLabel("Drag directly on the edited image preview.",
+                   frame: NSRect(x: 0, y: 28, width: 272, height: 38), muted: true,
+                   parent: drawPanel)
+        panelFieldLabel("Shape", x: 0, y: 78, parent: drawPanel)
+        drawTool = NSSegmentedControl(labels: ["Rectangle", "Ellipse"], trackingMode: .selectOne,
+                                      target: self, action: #selector(changeDrawTool))
+        drawTool.frame = NSRect(x: 0, y: 100, width: 272, height: 30)
+        drawTool.selectedSegment = 0
+        drawTool.setAccessibilityLabel("Drawing shape")
+        drawPanel.addSubview(drawTool)
+        panelLabel("Release creates one layer using the shared default style. Escape, changing sections, or leaving the window cancels the current drag.",
+                   frame: NSRect(x: 0, y: 148, width: 272, height: 94), muted: true,
+                   parent: drawPanel)
     }
 
     private func buildOutputPanel() {
@@ -534,9 +684,22 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     @objc private func changeSection() {
-        geometryPanel.isHidden = sectionControl.selectedSegment != 0
-        layersPanel.isHidden = sectionControl.selectedSegment != 1
-        outputPanel.isHidden = sectionControl.selectedSegment != 2
+        cancelDrawing()
+        geometryPanel.isHidden = sectionControl.selectedSegment != Section.geometry
+        layersPanel.isHidden = sectionControl.selectedSegment != Section.layers
+        drawPanel.isHidden = sectionControl.selectedSegment != Section.draw
+        outputPanel.isHidden = sectionControl.selectedSegment != Section.output
+        if sectionControl.selectedSegment == Section.output {
+            changeOutputPreview()
+        } else {
+            preview.image = editedImage
+        }
+        updateDrawing()
+    }
+
+    @objc private func changeDrawTool() {
+        cancelDrawing()
+        drawOverlay.shape = drawTool.selectedSegment == 1 ? .ellipse : .rectangle
     }
 
     @objc private func outputOptionsChanged() {
@@ -785,6 +948,28 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 preferredSelection: preferredSelection)
     }
 
+    private func createClosedShape(shape: EditorDrawOverlay.Shape, start: NSPoint, end: NSPoint) {
+        guard let layers = state.snapshot?.layers, start.x != end.x, start.y != end.y else { return }
+        command([
+            "operation": "create_closed_shape",
+            "shape": shape.rawValue,
+            "start": ["x": start.x, "y": start.y],
+            "end": ["x": end.x, "y": end.y],
+        ], message: shape == .rectangle ? "Drawing rectangle…" : "Drawing ellipse…",
+           createdLayerExistingIDs: Set(layers.map(\.id)))
+    }
+
+    private func cancelDrawing() {
+        drawOverlay.cancelGesture()
+    }
+
+    private func updateDrawing() {
+        let active = sectionControl?.selectedSegment == Section.draw
+            && state.snapshot != nil && !state.busy
+        drawTool?.isEnabled = state.snapshot != nil && !state.busy
+        drawOverlay.drawingEnabled = active
+    }
+
     private func toggleVisibility() {
         guard let layer = selectedLayer else { return }
         layerCommand(layer, edit: ["action": "visibility", "visible": !layer.visible],
@@ -991,7 +1176,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func command(_ object: [String: Any], message: String, resetCrop: Bool = false,
-                         preferredSelection: String? = nil) {
+                         preferredSelection: String? = nil,
+                         createdLayerExistingIDs: Set<String>? = nil) {
         guard let generation = state.beginCommand() else { return }
         invalidateOutput()
         preferredLayerID = preferredSelection
@@ -1001,6 +1187,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             switch result {
             case .success(let presentation):
                 guard self.state.complete(presentation.snapshot, generation: generation) else { return }
+                if let createdLayerExistingIDs {
+                    self.preferredLayerID = presentation.snapshot.layers
+                        .first { !createdLayerExistingIDs.contains($0.id) }?.id
+                }
                 self.publish(presentation, resetCrop: resetCrop)
                 self.status.textColor = self.tokens.color("text-muted")
                 self.status.stringValue = presentation.snapshot.unsavedChanges
@@ -1024,6 +1214,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             size: NSSize(width: CGFloat(presentation.image.width),
                          height: CGFloat(presentation.image.height)))
         preview.image = editedImage
+        drawOverlay.canvasSize = NSSize(width: snapshot.width, height: snapshot.height)
         dimensions.stringValue = "\(format(snapshot.width)) × \(format(snapshot.height)) pixels"
         canvasWidth.stringValue = format(snapshot.width); canvasHeight.stringValue = format(snapshot.height)
         if resetCrop || cropWidth.stringValue.isEmpty {
@@ -1035,6 +1226,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func closeNow() {
+        cancelDrawing()
         cancelPendingImport()
         closeAfterCommand = false; selectedLayerID = nil; preferredLayerID = nil
         state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
@@ -1057,6 +1249,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         saveNewCopyButton?.isEnabled = ready && !outputDirectory.isEmpty
         outputPreviewMode?.isEnabled = ready && encodedOutput != nil
         updateOutputOptionControls()
+        updateDrawing()
         layerTable?.isEnabled = ready
         importImageButton?.isEnabled = ready && !importLoading
         let layer = ready ? selectedLayer : nil
@@ -1156,6 +1349,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         status.textColor = tokens.color("text-muted"); dimensions.textColor = tokens.color("text-muted")
         outputSize.textColor = tokens.color("text-muted")
+        drawOverlay.fillColor = tokens.color("theme-accent").withAlphaComponent(0.22)
+        drawOverlay.strokeColor = tokens.color("theme-accent")
+        drawOverlay.needsDisplay = true
         preview.superview?.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
         preview.superview?.layer?.borderColor = tokens.color("border").cgColor
     }

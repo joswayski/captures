@@ -554,6 +554,88 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(controller.state.snapshot?.unsavedChanges == true)
     }
 
+    func testShapeDragMapsPreviewCoordinatesSelectsFreshLayerAndCancelsWithoutEdits() throws {
+        _ = NSApplication.shared
+        let original = layer(id: "original", name: "Original", x: 0, y: 0,
+                             visible: true, locked: true, opacity: 100)
+        let created = shapeLayer(id: "fresh-shape", x: 127.152, y: -55.099)
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", width: 1280, height: 640,
+                                                          unsaved: true, layers: [original]))
+        worker.response = { request in
+            guard request["operation"] as? String == "create_closed_shape" else { return nil }
+            return self.snapshot(id: "shot", width: 1280, height: 640,
+                                 unsaved: true, draft: true, layers: [original, created])
+        }
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                     worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showOutput(in: controller.root)
+        try button("Preview output", in: controller.root).performClick(nil)
+        let outputMode = try segmented("Output preview image", in: controller.root)
+        XCTAssertEqual(outputMode.selectedSegment, 1)
+        try showDraw(in: controller.root)
+
+        let tool = try segmented("Drawing shape", in: controller.root)
+        tool.selectedSegment = 1; _ = tool.sendAction(tool.action, to: tool.target)
+        let overlay = controller.drawOverlay
+        XCTAssertEqual(overlay.presentedImageRect,
+                       NSRect(x: 0, y: 106, width: 604, height: 302))
+        overlay.begin(at: NSPoint(x: 500, y: 350))
+        overlay.drag(to: NSPoint(x: 60, y: 80))
+        XCTAssertTrue(worker.requests.isEmpty, "transient drawing never mutates the document")
+        overlay.end(at: NSPoint(x: 60, y: 80))
+
+        let request = try XCTUnwrap(worker.requests.last)
+        XCTAssertEqual(request["operation"] as? String, "create_closed_shape")
+        XCTAssertEqual(request["shape"] as? String, "ellipse")
+        let start = try XCTUnwrap(request["start"] as? [String: CGFloat])
+        let end = try XCTUnwrap(request["end"] as? [String: CGFloat])
+        XCTAssertEqual(try XCTUnwrap(start["x"]), 1_059.603, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(start["y"]), 517.086, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(end["x"]), 127.152, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(end["y"]), -55.099, accuracy: 0.001,
+                       "preview whitespace maps to off-canvas document coordinates")
+        XCTAssertNil(request["style"]); XCTAssertNil(request["opacity"])
+        XCTAssertEqual(outputMode.selectedSegment, 0)
+        XCTAssertFalse(outputMode.isEnabled, "accepted creation invalidates encoded output")
+        try showLayers(in: controller.root)
+        XCTAssertEqual((try field("Layer name", in: controller.root)).stringValue, "Shape")
+        XCTAssertEqual(try table("Screenshot layers", in: controller.root).selectedRow, 0,
+                       "the returned fresh stable layer is selected")
+
+        let acceptedCount = worker.requests.count
+        try showDraw(in: controller.root)
+        overlay.begin(at: NSPoint(x: 200, y: 200)); overlay.drag(to: NSPoint(x: 260, y: 260))
+        overlay.keyDown(with: try keyEvent(window: controller.window, keyCode: 53,
+                                           characters: "\u{1b}"))
+        overlay.end(at: NSPoint(x: 260, y: 260))
+        XCTAssertEqual(worker.requests.count, acceptedCount, "Escape cancels without an edit")
+
+        overlay.begin(at: NSPoint(x: 210, y: 210)); overlay.drag(to: NSPoint(x: 270, y: 270))
+        try showLayers(in: controller.root)
+        overlay.end(at: NSPoint(x: 270, y: 270))
+        XCTAssertEqual(worker.requests.count, acceptedCount, "leaving Draw cancels")
+
+        try showDraw(in: controller.root)
+        overlay.begin(at: NSPoint(x: 220, y: 220)); overlay.drag(to: NSPoint(x: 280, y: 280))
+        controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification,
+                                                   object: controller.window))
+        overlay.end(at: NSPoint(x: 280, y: 280))
+        XCTAssertEqual(worker.requests.count, acceptedCount, "focus loss cancels")
+
+        overlay.begin(at: NSPoint(x: 300, y: 200)); overlay.end(at: NSPoint(x: 300, y: 350))
+        XCTAssertEqual(worker.requests.count, acceptedCount, "zero-width shapes are host no-ops")
+
+        overlay.begin(at: NSPoint(x: 230, y: 230)); overlay.drag(to: NSPoint(x: 290, y: 290))
+        XCTAssertFalse(controller.windowShouldClose(controller.window))
+        overlay.end(at: NSPoint(x: 290, y: 290))
+        XCTAssertEqual(worker.requests.count, acceptedCount, "closing cancels the transient drag")
+        if let sheet = controller.window.attachedSheet {
+            controller.window.endSheet(sheet, returnCode: .alertThirdButtonReturn)
+        }
+    }
+
     func testRejectedDuplicateAndDeletionKeepRecoverableStableSelection() throws {
         _ = NSApplication.shared
         let back = layer(id: "back", name: "Back", x: 0, y: 0, visible: true,
@@ -866,6 +948,33 @@ final class ScreenshotEditorTests: XCTestCase {
             try button("Rotate right", in: controller.root).performClick(nil)
             try render(controller.root,
                        name: "screenshot-editor-transform-error-minimum-\(appearance)")
+        }
+    }
+
+    func testClosedShapeRenderedStates() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", width: 960, height: 540,
+                                                              unsaved: true, draft: true,
+                                                              layers: [shapeLayer(id: "existing-shape",
+                                                                                  x: 48, y: 32)]))
+            let controller = ScreenshotEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showDraw(in: controller.root)
+            let tool = try segmented("Drawing shape", in: controller.root)
+            tool.selectedSegment = appearance == "light" ? 0 : 1
+            _ = tool.sendAction(tool.action, to: tool.target)
+            controller.drawOverlay.begin(at: NSPoint(x: 500, y: 390))
+            controller.drawOverlay.drag(to: NSPoint(x: 90, y: 125))
+            try render(controller.root, name: "screenshot-editor-draw-preview-\(appearance)")
+
+            worker.failOperation = "create_closed_shape"
+            worker.failureMessage = "The closed shape could not be created. The previous draft, layer selection, pixels, and undo history remain open and recoverable."
+            controller.drawOverlay.end(at: NSPoint(x: 90, y: 125))
+            try render(controller.root,
+                       name: "screenshot-editor-draw-error-minimum-\(appearance)")
         }
     }
 
@@ -1199,6 +1308,98 @@ final class ScreenshotEditorTests: XCTestCase {
         reopened.close(); EditorWorker.flush()
     }
 
+    func testRealBridgeClosedShapePixelsClippingExpansionHistoryAndDraftReopen() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let worker = EditorWorker()
+        let opened = expectation(description: "open for shape creation")
+        var original: EditorPresentation?
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                    artifactID: fixture.id) { result in
+            original = try? result.get(); opened.fulfill()
+        }
+        wait(for: [opened], timeout: 5)
+        let originalID = try XCTUnwrap(original?.snapshot.layers.first?.id)
+
+        let rectangle = expectation(description: "reverse partially clipped rectangle")
+        var rectangleID: String?
+        worker.request([
+            "operation": "create_closed_shape", "shape": "rectangle",
+            "start": ["x": 6.0, "y": 3.0], "end": ["x": 2.0, "y": -1.0],
+        ]) { result in
+            let value = try? result.get()
+            rectangleID = value?.snapshot.layers.first?.id
+            XCTAssertNotEqual(rectangleID, originalID)
+            XCTAssertEqual(value?.snapshot.width, 7); XCTAssertEqual(value?.snapshot.height, 3,
+                           "a partially clipped shape does not expand the canvas")
+            if let image = value?.image {
+                XCTAssertEqual(self.rgba(image, x: 3, y: 2), [255, 59, 92, 255])
+            }
+            rectangle.fulfill()
+        }
+        wait(for: [rectangle], timeout: 5)
+
+        let undone = expectation(description: "undo shape")
+        worker.request(["operation": "undo"]) { result in
+            let value = try? result.get()
+            XCTAssertEqual(value?.snapshot.layers.map(\.id), [originalID])
+            if let image = value?.image {
+                XCTAssertEqual(self.rgba(image, x: 3, y: 2), [93, 142, 19, 255])
+            }
+            undone.fulfill()
+        }
+        wait(for: [undone], timeout: 5)
+        let redone = expectation(description: "redo shape")
+        worker.request(["operation": "redo"]) { result in
+            XCTAssertEqual((try? result.get())?.snapshot.layers.first?.id, rectangleID)
+            redone.fulfill()
+        }
+        wait(for: [redone], timeout: 5)
+
+        let ellipse = expectation(description: "fully outside ellipse expands")
+        var expanded: EditorPresentation?
+        worker.request([
+            "operation": "create_closed_shape", "shape": "ellipse",
+            "start": ["x": -20.0, "y": -15.0], "end": ["x": -16.0, "y": -11.0],
+        ]) { result in
+            expanded = try? result.get(); ellipse.fulfill()
+        }
+        wait(for: [ellipse], timeout: 5)
+        let expandedValue = try XCTUnwrap(expanded)
+        XCTAssertEqual(expandedValue.snapshot.width, 32)
+        XCTAssertEqual(expandedValue.snapshot.height, 23)
+        XCTAssertEqual(expandedValue.snapshot.layers.count, 3)
+        XCTAssertNotEqual(expandedValue.snapshot.layers[0].id, rectangleID)
+        XCTAssertEqual(rgba(expandedValue.image, x: 7, y: 7), [255, 59, 92, 255])
+        XCTAssertEqual(rgba(expandedValue.image, x: 25, y: 20), [0, 0, 19, 255])
+
+        let saved = expectation(description: "save shape draft")
+        worker.request(["operation": "save_draft", "updated_at_ms": 987]) { result in
+            XCTAssertFalse((try? result.get().snapshot.unsavedChanges) ?? true)
+            saved.fulfill()
+        }
+        wait(for: [saved], timeout: 5)
+        worker.close(); EditorWorker.flush()
+
+        let reopened = EditorWorker()
+        let restored = expectation(description: "reopen shape draft")
+        reopened.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                      artifactID: fixture.id) { result in
+            let value = try? result.get()
+            XCTAssertTrue(value?.snapshot.hasDraft == true)
+            XCTAssertEqual(value?.snapshot.width, 32); XCTAssertEqual(value?.snapshot.height, 23)
+            XCTAssertEqual(value?.snapshot.layers.count, 3)
+            if let image = value?.image {
+                XCTAssertEqual(self.rgba(image, x: 7, y: 7), [255, 59, 92, 255])
+                XCTAssertEqual(self.rgba(image, x: 25, y: 20), [0, 0, 19, 255])
+            }
+            restored.fulfill()
+        }
+        wait(for: [restored], timeout: 5)
+        reopened.close(); EditorWorker.flush()
+    }
+
     private func snapshot(id: String, width: Double = 640, height: Double = 360,
                           unsaved: Bool = false, draft: Bool = false,
                           layers: [[String: Any]] = []) -> NativeEditorSnapshot {
@@ -1214,6 +1415,11 @@ final class ScreenshotEditorTests: XCTestCase {
                        locked: Bool, opacity: Double) -> [String: Any] {
         ["kind": "image", "id": id, "name": name, "x": x, "y": y,
          "visible": visible, "locked": locked, "opacity": opacity]
+    }
+
+    private func shapeLayer(id: String, x: Double, y: Double) -> [String: Any] {
+        ["kind": "shape", "id": id, "x": x, "y": y,
+         "visible": true, "locked": false, "opacity": 100.0]
     }
 
     private func artifact(id: String, mode: String = "region") -> CaptureArtifact {
@@ -1240,6 +1446,12 @@ final class ScreenshotEditorTests: XCTestCase {
     }
 
     private func showOutput(in view: NSView) throws {
+        let sections = try segmented("Editor section", in: view)
+        sections.selectedSegment = 3
+        _ = sections.sendAction(sections.action, to: sections.target)
+    }
+
+    private func showDraw(in view: NSView) throws {
         let sections = try segmented("Editor section", in: view)
         sections.selectedSegment = 2
         _ = sections.sendAction(sections.action, to: sections.target)
@@ -1279,6 +1491,18 @@ final class ScreenshotEditorTests: XCTestCase {
     private func segmented(_ label: String, in view: NSView) throws -> NSSegmentedControl {
         try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSSegmentedControl }
             .first { $0.accessibilityLabel() == label })
+    }
+
+    private func table(_ label: String, in view: NSView) throws -> NSTableView {
+        try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSTableView }
+            .first { $0.accessibilityLabel() == label })
+    }
+
+    private func keyEvent(window: NSWindow, keyCode: UInt16, characters: String) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: window.windowNumber, context: nil,
+            characters: characters, charactersIgnoringModifiers: characters,
+            isARepeat: false, keyCode: keyCode))
     }
 
     private func labels(in view: NSView) -> [String] {

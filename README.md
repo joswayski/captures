@@ -295,9 +295,12 @@ also imports one still image at a time as a new image layer using its color-mana
 system decoder. It normalizes imported pixels to straight-alpha sRGB RGBA8 and retains
 them in the draft without depending on the source file. ImageIO-supported sources use
 their first image; files without a usable color description are rejected rather than
-silently relabeled.
+silently relabeled. Its **Draw** view maps rectangle and ellipse drags from the fitted
+edited preview into shared document coordinates, including reverse and off-canvas
+gestures. Release creates one undoable layer; Escape, focus loss, close, or leaving Draw
+cancels transient geometry without editing the document.
 Windows, Wayland and physical AppKit presentation remain unverified.
-AppKit annotation styles and drawing tools, text, overwrite-original, edited-image
+AppKit annotation styles and other drawing tools, text, overwrite-original, edited-image
 clipboard output, and recording editing remain unconnected. Shared editor support
 is prerequisite work, not native editor acceptance. OS shortcut takeover, login items,
 single-instance relaunch and updates

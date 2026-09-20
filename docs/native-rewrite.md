@@ -513,16 +513,24 @@ description are rejected instead of silently relabeled.
 Image layers expose shared rotate-left, rotate-right, flip-horizontal and flip-vertical
 commands, including hidden or locked layers; shared Rust owns orientation, canvas fit,
 clipping and expansion policy while AppKit retains the stable selected layer.
+The AppKit **Draw** view connects rectangle and ellipse gestures directly to the fitted
+edited preview. Transient geometry stays host-local; release submits one shared
+creation command, selects the returned fresh layer ID and invalidates stale encoded
+output. Preview mapping preserves reverse and off-canvas coordinates without reading
+unapplied numeric fields. Escape, focus loss, close, or changing sections cancels a
+drag without editing the document. Shared Rust remains the authority for default
+style, clipping, fully-outside expansion, rendering and undo/draft transactionality.
 Closing an unsaved session offers save-and-close,
 close without saving the current session (retaining any older persisted draft), or
 cancel. Quit drains accepted work and cancels termination if its draft save fails.
 AppKit CI covers bridge/export/import lifetime, pending-edit ownership, locale-aware
-geometry, failure/close/output/import behavior and rendered light/dark fixtures.
+geometry, drawing gesture cancellation and mapping, failure/close/output/import
+behavior, real shape pixels/history/draft reopen, and rendered light/dark fixtures.
 Physical AppKit input, accessibility and IME acceptance remain unverified.
 
 Across both hosts, physical input/accessibility/IME acceptance remains open.
-AppKit annotation styles and drawing tools, edited-image clipboard output and recording
-editing are not connected; the screenshot-editor parity gate stays open.
+AppKit annotation styles and other drawing tools, edited-image clipboard output and
+recording editing are not connected; the screenshot-editor parity gate stays open.
 
 New Capture connects its persisted shortcut, tray action and workspace entry to
 fixed-glass screenshot controls on both hosts. Region, Window and Full screen
