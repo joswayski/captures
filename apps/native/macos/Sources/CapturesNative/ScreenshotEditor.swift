@@ -75,6 +75,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var selectedLayerID: String?
     private var selectedLayerIndex = 0
     private var preferredLayerID: String?
+    private var reconcilingLayerSelection = false
 
     init(tokens: Tokens, worker: EditorWorking = EditorWorker(), numberLocale: Locale = .current,
          reportError: @escaping (String) -> Void = { _ in }) {
@@ -524,6 +525,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             selectedLayerIndex = min(selectedLayerIndex, layers.count - 1)
             selectedLayerID = layers[selectedLayerIndex].id
         }
+        reconcilingLayerSelection = true
+        defer { reconcilingLayerSelection = false }
         layerTable?.reloadData()
         if let selectedLayerID,
            let index = layers.firstIndex(where: { $0.id == selectedLayerID }) {
@@ -550,6 +553,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     func numberOfRows(in tableView: NSTableView) -> Int { state.snapshot?.layers.count ?? 0 }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
+        guard !reconcilingLayerSelection else { return }
         guard let layers = state.snapshot?.layers, layers.indices.contains(layerTable.selectedRow) else {
             selectedLayerID = nil; publishSelectedLayerFields(); return
         }
