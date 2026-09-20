@@ -359,6 +359,13 @@ Unknown document fields survive native operations, remaining compatible with the
 opaque version-1 draft manifest. This prerequisite alone does not close a native
 editor acceptance gate; the first connected host slice is recorded below.
 
+Shared transient crop-drag geometry now clamps and normalizes document-space
+pointers, applies directional preset constraints, and snapshots the shipping
+Shift-lock ratio after an 8×8 live selection (falling back to 1:1 while tiny).
+Preset selection and Shift release clear the transient latch. Hosts still own
+pointer routing, preview state, Escape and the existing crop command on Apply;
+this shared helper does not establish macOS, Windows, X11 or Wayland acceptance.
+
 The first shared editor-rendering unit converts visible image layers into the
 existing `captures-image` compositor using caller-supplied in-memory assets. It
 retains canvas background/alpha, clipping, order, opacity, six blend modes,
