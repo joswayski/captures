@@ -3088,7 +3088,7 @@ impl Live {
         let notice = notice.clone();
         let tokens = tokens.clone();
         let builder = egui::ViewportBuilder::default()
-            .with_title("Recording ready")
+            .with_title(notice.title())
             .with_position(position)
             .with_inner_size(crate::recording_saved_notice::SIZE)
             .with_min_inner_size(crate::recording_saved_notice::SIZE)
@@ -3104,34 +3104,32 @@ impl Live {
         let builder = builder
             .with_window_type(egui::X11WindowType::Notification)
             .with_override_redirect(true);
-        ctx.show_viewport_deferred(
-            egui::ViewportId::from_hash_of(("recording-saved-notice", notice.guard.generation)),
-            builder,
-            move |ui, _| {
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::OuterPosition(position));
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::ContentProtected(true));
-                if notice.expired(Instant::now())
-                    || ui.input(|input| input.viewport().close_requested())
-                {
-                    let _ = sender.send(crate::recording_saved_notice::Action::Dismiss(
-                        notice.guard.clone(),
-                    ));
-                    request_hidden_root_paint(ui.ctx());
-                    ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
-                } else if let Some(action) =
-                    crate::recording_saved_notice::show(ui, &tokens, &notice)
-                {
-                    let _ = sender.send(action);
-                    request_hidden_root_paint(ui.ctx());
-                    ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
-                }
-                if let Some(remaining) = notice.remaining(Instant::now()) {
-                    ui.ctx().request_repaint_after(remaining);
-                }
-            },
-        );
+        let viewport =
+            egui::ViewportId::from_hash_of(("recording-saved-notice", notice.guard.generation));
+        ctx.show_viewport_deferred(viewport, builder, move |ui, _| {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::ContentProtected(true));
+            if notice.expired(Instant::now())
+                || ui.input(|input| input.viewport().close_requested())
+            {
+                let _ = sender.send(crate::recording_saved_notice::Action::Dismiss(
+                    notice.guard.clone(),
+                ));
+                request_hidden_root_paint(ui.ctx());
+                ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+            } else if let Some(action) = crate::recording_saved_notice::show(ui, &tokens, &notice) {
+                let _ = sender.send(action);
+                request_hidden_root_paint(ui.ctx());
+                ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+            }
+            if let Some(remaining) = notice.remaining(Instant::now()) {
+                ui.ctx().request_repaint_after(remaining);
+            }
+        });
+        // Worker replies update this deferred callback on the root. Paint the
+        // child too: it must not require pointer motion to leave "Saving…".
+        // This does not schedule another root frame or an idle repaint loop.
+        ctx.request_repaint_of(viewport);
     }
 
     fn capture_viewports(&mut self, ctx: &egui::Context, t: &Tokens) {

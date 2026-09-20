@@ -305,7 +305,9 @@ def main():
         if args.ready_notice_only:
             def notice_click(window, x, y):
                 # Notifications do not activate the root or accept WM activation.
-                run("xdotool", "mousemove", "--sync", "--window", window, str(x), str(y),
+                # Like click(), deliver a position event even for repeated clicks.
+                run("xdotool", "mousemove", "--sync", "--window", window, str(x - 1), str(y),
+                    "mousemove_relative", "--sync", "1", "0",
                     "sleep", ".15", "mousedown", "1", "sleep", ".15", "mouseup", "1")
                 time.sleep(.3)
 
@@ -341,23 +343,26 @@ def main():
             exports = output / "exports"
             exports.write_text("blocked output directory")
             notice_click(notice, 300, 89)
+            wait(lambda: windows("Could not save recording"), "save failure presented")
             shot(notice, "notice-save-error")
             assert json.loads(metadata.read_text())["saved_path"] is None
-            assert media.read_bytes() == original and windows("Recording ready")
+            assert media.read_bytes() == original and windows("Could not save recording")
             exports.unlink()
             notice_click(notice, 300, 89)
+            wait(lambda: windows("Recording saved"), "saved state presented")
             saved = Path(wait(lambda: json.loads(metadata.read_text()).get("saved_path"), "notice export"))
             assert saved.parent == exports and saved.read_bytes() == original
             assert len(list(exports.iterdir())) == 1
             shot(notice, "notice-saved")
             saved.unlink()
             notice_click(notice, 300, 89)
-            assert windows("Recording ready"), "missing export must not falsely reveal/dismiss"
+            wait(lambda: windows("Could not show recording"), "missing export error presented")
             assert not (output / "revealed-path.txt").exists()
             shot(notice, "notice-reveal-error")
             saved.write_bytes(original)
             notice_click(notice, 300, 89)
-            wait(lambda: not windows("Recording ready"), "successful reveal dismissal")
+            wait(lambda: not windows("Could not show recording"), "successful reveal dismissal")
+            wait(lambda: (output / "revealed-path.txt").exists(), "OS reveal launcher")
             assert (output / "revealed-path.txt").read_text().strip() == str(exports)
             assert len(history()) == 1 and saved.read_bytes() == original
 

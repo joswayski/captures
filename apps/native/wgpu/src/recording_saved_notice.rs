@@ -55,6 +55,22 @@ impl Notice {
         Some(self.guard.clone())
     }
 
+    pub fn title(&self) -> &'static str {
+        if self.error.is_some() {
+            if self.saved_path.is_some() {
+                "Could not show recording"
+            } else {
+                "Could not save recording"
+            }
+        } else if self.pending {
+            "Saving recording"
+        } else if self.saved_path.is_some() {
+            "Recording saved"
+        } else {
+            "Recording ready"
+        }
+    }
+
     pub fn save_result(
         &mut self,
         guard: &Guard,
@@ -137,17 +153,14 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, notice: &Notice) -> Option<Actio
         )),
         |ui| {
             ui.label(
-                RichText::new(if notice.saved_path.is_some() {
-                    "Recording saved"
-                } else {
-                    "Recording ready"
-                })
-                .strong()
-                .color(tokens.color("glass-text")),
+                RichText::new(notice.title())
+                    .strong()
+                    .color(tokens.color("glass-text")),
             );
             egui::ScrollArea::vertical()
                 .id_salt("recording-notice-detail")
                 .max_height(32.)
+                .min_scrolled_height(0.)
                 .show(ui, |ui| {
                     ui.label(
                         RichText::new(notice.error.as_deref().unwrap_or(
