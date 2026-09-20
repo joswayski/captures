@@ -23,6 +23,9 @@ enum Request {
     Enabled {
         enabled: bool,
     },
+    RestoreOnly {
+        restore_only: bool,
+    },
     Suspended {
         suspended: bool,
     },
@@ -58,6 +61,12 @@ fn response(request: Request, wake: Option<extern "C" fn()>) -> Result<Value, St
                 slot.as_ref()
                     .ok_or("Capture shortcuts are not configured")?
                     .set_enabled(enabled);
+                Ok(json!({}))
+            }
+            Request::RestoreOnly { restore_only } => {
+                slot.as_ref()
+                    .ok_or("Capture shortcuts are not configured")?
+                    .set_restore_only(restore_only);
                 Ok(json!({}))
             }
             Request::Suspended { suspended } => {

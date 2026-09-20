@@ -208,7 +208,8 @@ Screenshot and Record controls for Region, Window and Full screen, retaining sel
 switching targets with the toolbar. While these controls are open, the configured
 region/window/display shortcuts switch mode and target in the same session; keyboard
 Full screen does not auto-start capture. Focused Preferences and capture
-preparation/countdown and active recording suppress those shortcuts. Native Preferences can edit all seven capture
+preparation/countdown and active recording suppress those shortcuts. While recording controls are hidden, only the
+configured New Capture shortcut remains active so it can restore the same take. Native Preferences can edit all seven capture
 and recording shortcuts. Recording keys open the selector without starting a take. Linux requires
 a StatusNotifier tray host; without one,
 closing the window quits instead of leaving an unreachable background process.
@@ -217,11 +218,14 @@ audio options. Its compact controls support pause/resume, confirmed restart with
 the stored countdown, microphone mute/unmute, stop/save to development History,
 and discard. Running mute changes durably complete the current segment before
 continuing with the same target and options; paused changes do not resume. Restart
-replaces only the current take and resets its elapsed time. FFmpeg and FFprobe must
+replaces only the current take and resets its elapsed time. Hide removes only the controls, shows a temporary
+noninteractive notice, and preserves the session, timer, pause and microphone state. The menu bar/tray,
+app reactivation, and configured New Capture shortcut restore the controls; Linux disables Hide without a
+usable tray and restores the controls and workspace if its tray host disappears. FFmpeg and FFprobe must
 be installed separately for these development builds; native media-tool bundling
 is not connected. Started recordings are saved on session loss instead of being
 discarded; failed finalization retains recovery data. Linux cannot exclude the
-controls from captured pixels, and native Hide controls is not connected yet.
+controls from captured pixels, so Hide is the native workaround on X11.
 Screenshots during recording, recording playback/editing/export and GIF
 conversion remain unconnected; History displays recording posters and metadata only.
 Real macOS and Windows recording, audio devices, multi-display and hardware acceptance remain open;

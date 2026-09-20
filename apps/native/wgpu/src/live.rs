@@ -228,6 +228,9 @@ enum SelectorMessage {
     DiscardRecording {
         generation: u64,
     },
+    HideRecordingControls {
+        generation: u64,
+    },
     SwitchControlsDisplay {
         generation: u64,
         display_id: String,
@@ -579,6 +582,9 @@ pub struct Live {
     recording_last_snapshot_poll: Instant,
     recording_has_started: bool,
     recording_restart_confirmation: bool,
+    recording_controls_hidden: Option<u64>,
+    recording_hidden_notice_until: Option<Instant>,
+    recording_restore_available: bool,
     history_refresh_status: Option<String>,
     can_hide: Option<bool>,
     confirm_delete: Option<String>,
@@ -756,6 +762,9 @@ impl Live {
             recording_last_snapshot_poll: Instant::now(),
             recording_has_started: false,
             recording_restart_confirmation: false,
+            recording_controls_hidden: None,
+            recording_hidden_notice_until: None,
+            recording_restore_available: false,
             history_refresh_status: None,
             can_hide: None,
             confirm_delete: None,
@@ -774,6 +783,33 @@ impl Live {
 
     pub fn can_launch_capture(&self) -> bool {
         self.pending == 0 && !self.is_capturing() && self.requested_capture.is_none()
+    }
+
+    pub fn recording_controls_hidden(&self) -> bool {
+        recording_controls_hidden(
+            self.recording_controls_hidden,
+            self.flow.as_ref().map(CaptureFlow::generation),
+        )
+    }
+
+    pub fn set_recording_restore_available(&mut self, available: bool, ctx: &egui::Context) {
+        self.recording_restore_available = available;
+        if !available {
+            self.show_recording_controls(ctx);
+        }
+    }
+
+    pub fn show_recording_controls(&mut self, ctx: &egui::Context) -> bool {
+        if !self.recording_controls_hidden() {
+            self.recording_controls_hidden = None;
+            self.recording_hidden_notice_until = None;
+            return false;
+        }
+        self.recording_controls_hidden = None;
+        self.recording_hidden_notice_until = None;
+        ctx.request_repaint_of(egui::ViewportId::from_hash_of("recording-controls"));
+        request_hidden_root_paint(ctx);
+        true
     }
 
     pub fn selector_generation(&self) -> Option<u64> {
@@ -813,6 +849,12 @@ impl Live {
     }
 
     pub fn request_capture(&mut self, request: CaptureRequest) {
+        if request == CaptureRequest::NewCapture && self.recording_controls_hidden() {
+            // The shipping New Capture action restores a hidden active HUD; it
+            // never starts a second capture or replaces the accepted take.
+            self.requested_capture = None;
+            return;
+        }
         if self.pending > 0 || self.is_capturing() || self.requested_capture.is_some() {
             self.error = Some("Another capture or history action is still in progress.".into());
         } else {
@@ -1319,6 +1361,8 @@ impl Live {
                     };
                     match flow.restart_countdown(seconds) {
                         Ok(()) => {
+                            self.recording_controls_hidden = None;
+                            self.recording_hidden_notice_until = None;
                             self.capture_phase = Some(CapturePhase::RecordingRestarting);
                             self.status = "Restarting recording…".into();
                             self.recording_worker
@@ -1356,6 +1400,21 @@ impl Live {
                     self.status = "Discarding recording…".into();
                     self.recording_worker
                         .send(recording::Command::Discard { generation });
+                }
+                SelectorMessage::HideRecordingControls { generation }
+                    if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
+                        && self.recording_restore_available
+                        && matches!(
+                            self.capture_phase,
+                            Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
+                        ) =>
+                {
+                    self.recording_controls_hidden = Some(generation);
+                    self.recording_hidden_notice_until =
+                        Some(Instant::now() + Duration::from_millis(6_200));
+                    self.recording_restart_confirmation = false;
+                    request_hidden_root_paint(ctx);
+                    ctx.request_repaint_after(Duration::from_millis(6_200));
                 }
                 SelectorMessage::SwitchControlsDisplay {
                     generation,
@@ -1407,6 +1466,7 @@ impl Live {
                 | SelectorMessage::CancelRestartRecording { .. }
                 | SelectorMessage::StopRecording { .. }
                 | SelectorMessage::DiscardRecording { .. }
+                | SelectorMessage::HideRecordingControls { .. }
                 | SelectorMessage::SwitchControlsDisplay { .. }
                 | SelectorMessage::Cancel { .. } => {}
             }
@@ -2365,6 +2425,8 @@ impl Live {
         self.recording_snapshot_poll_pending = false;
         self.recording_has_started = false;
         self.recording_restart_confirmation = false;
+        self.recording_controls_hidden = None;
+        self.recording_hidden_notice_until = None;
         self.root_hide_deferred = false;
         if !preserve_auto_copy {
             self.previews.restore_capture();
@@ -2801,6 +2863,8 @@ impl Live {
                 _ => false,
             };
             let restart_confirmation = self.recording_restart_confirmation;
+            let controls_hidden = self.recording_controls_hidden == Some(generation);
+            let hide_available = self.recording_restore_available;
             let busy = restart_confirmation
                 || matches!(
                     self.capture_phase,
@@ -2831,7 +2895,9 @@ impl Live {
                     .with_decorations(false)
                     .with_always_on_top(),
                 move |ui, _| {
-                    if ui.input(|input| input.viewport().close_requested()) {
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::Visible(!controls_hidden));
+                    if !controls_hidden && ui.input(|input| input.viewport().close_requested()) {
                         let _ = sender.send(SelectorMessage::StopRecording { generation });
                         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
                         return;
@@ -2860,6 +2926,7 @@ impl Live {
                             elapsed_ms,
                             notice,
                             warning: warning.is_some(),
+                            hide_available,
                         },
                     ) {
                         let message = match action {
@@ -2881,6 +2948,9 @@ impl Live {
                             recording_hud::Action::Discard => {
                                 SelectorMessage::DiscardRecording { generation }
                             }
+                            recording_hud::Action::Hide => {
+                                SelectorMessage::HideRecordingControls { generation }
+                            }
                         };
                         let _ = sender.send(message);
                         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
@@ -2890,6 +2960,44 @@ impl Live {
                     }
                 },
             );
+            if controls_hidden
+                && self
+                    .recording_hidden_notice_until
+                    .is_some_and(|deadline| deadline > Instant::now())
+            {
+                let notice_tokens = t.clone();
+                ctx.show_viewport_deferred(
+                    egui::ViewportId::from_hash_of("recording-controls-hidden"),
+                    egui::ViewportBuilder::default()
+                        .with_title("Recording controls hidden")
+                        .with_inner_size([360., 96.])
+                        .with_position(position + egui::vec2(35., 3.))
+                        .with_transparent(true)
+                        .with_decorations(false)
+                        .with_always_on_top()
+                        .with_mouse_passthrough(true),
+                    move |ui, _| {
+                        notice_tokens.glass_controls(ui);
+                        egui::Frame::new()
+                            .fill(notice_tokens.color("glass-strong"))
+                            .stroke(egui::Stroke::new(
+                                1.,
+                                notice_tokens.color("glass-border"),
+                            ))
+                            .corner_radius(notice_tokens.number("r-xl") as u8)
+                            .inner_margin(egui::Margin::symmetric(20, 14))
+                            .show(ui, |ui| {
+                                ui.set_width(320.);
+                                ui.vertical_centered(|ui| {
+                                    ui.strong("Recording controls hidden");
+                                    ui.label(
+                                        "Open Captures from the tray, reactivate the app, or press New Capture to bring them back.",
+                                    );
+                                });
+                            });
+                    },
+                );
+            }
             if restart_confirmation {
                 let tokens = t.clone();
                 ctx.show_viewport_deferred(
@@ -3474,6 +3582,13 @@ impl Live {
             });
         }
     }
+}
+
+fn recording_controls_hidden(
+    hidden_generation: Option<u64>,
+    active_generation: Option<u64>,
+) -> bool {
+    hidden_generation.is_some() && hidden_generation == active_generation
 }
 
 fn capture_target(
@@ -4602,5 +4717,13 @@ mod tests {
             2.,
             1.5,
         ));
+    }
+
+    #[test]
+    fn stale_hidden_generation_cannot_resurrect_ended_or_replaced_controls() {
+        assert!(recording_controls_hidden(Some(41), Some(41)));
+        assert!(!recording_controls_hidden(Some(41), Some(42)));
+        assert!(!recording_controls_hidden(Some(41), None));
+        assert!(!recording_controls_hidden(None, Some(41)));
     }
 }

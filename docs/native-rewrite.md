@@ -249,8 +249,16 @@ and after replacement-engine opening. Countdown cancellation discards the replac
 session. Private X11 exercises running/paused restart and replacement-only decoded
 pixels; AppKit and Windows remain implemented but require native CI/hardware, and
 Wayland remains gated by the existing native recording limitation. This does not
-close the Recording HUD gate: mute, hide, in-recording screenshots, region
+close the Recording HUD gate: in-recording screenshots, region
 indicator and physical accessibility/compositor acceptance remain open.
+
+The recording Hide slice keeps the accepted AppKit/wgpu session and capture-flow
+generation alive while removing only its HUD. A 6.2-second click-through fixed-glass
+notice replaces no controls. Menu bar/tray actions, app reactivation and a restore-only
+New Capture shortcut bring the HUD back without enabling any other busy shortcut.
+Stop, Discard, Restart/countdown, session loss and teardown clear hidden state; generation
+checks reject stale restoration. Linux requires a live SNI host and restores the HUD plus
+workspace on host loss. Windows/AppKit physical acceptance remains open and Wayland stays gated.
 
 New Capture connects its persisted shortcut, tray action and workspace entry to
 fixed-glass screenshot controls on both hosts. Region, Window and Full screen

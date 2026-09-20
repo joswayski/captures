@@ -8,6 +8,7 @@ final class StatusItemTests: XCTestCase {
         var captures: [StillCaptureKind] = []
         var actions: [String] = []
         let target = LiveStatusActions(newCapture: { actions.append("new") },
+            showRecordingControls: { actions.append("show-controls") },
             capture: { captures.append($0) },
             history: { actions.append("history") },
             preferences: { actions.append("preferences") },
@@ -15,17 +16,18 @@ final class StatusItemTests: XCTestCase {
             quit: { actions.append("quit") })
 
         let menu = target.makeMenu()
-        XCTAssertEqual(menu.items.map(\.title), ["New Capture…", "Screenshot Region",
-            "Screenshot Window", "Screenshot Display", "", "Capture History…",
+        XCTAssertEqual(menu.items.map(\.title), ["New Capture…", "Show Recording Controls",
+            "Screenshot Region", "Screenshot Window", "Screenshot Display", "", "Capture History…",
             "Open Save Location", "Preferences…", "", "Quit Captures"])
-        XCTAssertFalse(menu.items.contains { $0.title.localizedCaseInsensitiveContains("record") })
+        XCTAssertFalse(menu.items.contains { $0.title == "Start Recording" })
         XCTAssertFalse(menu.items.contains { $0.title.localizedCaseInsensitiveContains("update") })
 
-        for index in [0, 1, 2, 3, 5, 6, 7, 9] {
+        for index in [0, 1, 2, 3, 4, 6, 7, 8, 10] {
             menu.performActionForItem(at: index)
         }
         XCTAssertEqual(captures, [.region, .window, .display])
-        XCTAssertEqual(actions, ["new", "history", "folder", "preferences", "quit"])
+        XCTAssertEqual(actions,
+            ["new", "show-controls", "history", "folder", "preferences", "quit"])
     }
 
     func testLiveRootCloseHidesWithoutClosingPreviewsOrTerminating() {
@@ -129,6 +131,9 @@ final class StatusItemTests: XCTestCase {
         XCTAssertTrue(captureShortcutsEnabled(captureBusy: false, selectorGeneration: nil))
         XCTAssertFalse(captureShortcutsEnabled(captureBusy: true, selectorGeneration: nil),
             "capture-busy suppression remains independent of registration suspension")
+        XCTAssertTrue(captureShortcutsEnabled(captureBusy: true, selectorGeneration: nil,
+            recordingControlsHidden: true),
+            "only New Capture is routed while hidden controls need restoration")
         XCTAssertTrue(captureShortcutsEnabled(captureBusy: true, selectorGeneration: 42),
             "the exact active selector scope keeps target shortcuts enabled")
         XCTAssertFalse(captureShortcutsSuspended(preferencesFocused: false),

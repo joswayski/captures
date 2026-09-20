@@ -26,7 +26,7 @@ final class RecordingHUDTests: XCTestCase {
             XCTAssertEqual(hud.frame.size, NSSize(width: 430, height: 102))
             XCTAssertTrue(hud.subviews.allSatisfy { $0.frame.maxX <= 430 && $0.frame.maxY <= 102 },
                 "compact controls must not clip")
-            XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 4,
+            XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 5,
                 "mic-less sessions keep mute unavailable")
             let microphone = try XCTUnwrap(hud.subviews.compactMap { $0 as? CaptureButton }
                 .first { $0.accessibilityLabel()?.contains("Microphone unavailable") == true })
@@ -44,11 +44,11 @@ final class RecordingHUDTests: XCTestCase {
                 try render(hud, window: window, name: "recording-hud-dark-busy")
             }
             hud.setLifecycleActionsEnabled(true)
-            XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 4)
+            XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 5)
             hud.setMicrophone(muted: false, available: true)
             XCTAssertTrue(microphone.isEnabled)
             XCTAssertEqual(microphone.accessibilityLabel(), "Mute microphone")
-            XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 5)
+            XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 6)
             try render(hud, window: window, name: "recording-hud-\(appearance)-unmuted")
             let bitmap = try XCTUnwrap(microphone.bitmapImageRepForCachingDisplay(in: microphone.bounds))
             microphone.cacheDisplay(in: microphone.bounds, to: bitmap)
@@ -92,6 +92,23 @@ final class RecordingHUDTests: XCTestCase {
             tokens: tokens, excludedFromCapture: false)
         XCTAssertTrue(included.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
             .contains("These controls will appear in recordings"))
+    }
+
+    func testHiddenNoticeIsFixedGlassNoninteractiveAndExplainsRestoration() throws {
+        _ = NSApplication.shared
+        let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
+        let notice = RecordingControlsHiddenNoticeView(
+            frame: NSRect(x: 0, y: 0, width: 360, height: 96), tokens: tokens)
+        let labels = notice.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
+        XCTAssertTrue(labels.contains("Recording controls hidden"))
+        XCTAssertTrue(labels.contains { $0.contains("menu bar") && $0.contains("New Capture") })
+        XCTAssertEqual(notice.layer?.backgroundColor,
+            tokens.color(RecordingHUDColorToken.glassStrong.rawValue).cgColor)
+        let window = NSWindow(contentRect: notice.bounds, styleMask: [.borderless],
+            backing: .buffered, defer: false)
+        window.contentView = notice
+        defer { window.close() }
+        try render(notice, window: window, name: "recording-controls-hidden-notice")
     }
 
     private func render(_ view: NSView, window: NSWindow, name: String) throws {

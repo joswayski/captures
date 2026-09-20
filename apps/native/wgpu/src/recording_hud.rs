@@ -10,6 +10,7 @@ pub enum Action {
     Stop,
     SetMicrophoneMuted(bool),
     Discard,
+    Hide,
 }
 
 #[derive(Clone, Copy)]
@@ -33,6 +34,7 @@ pub struct View<'a> {
     pub elapsed_ms: u64,
     pub notice: &'a str,
     pub warning: bool,
+    pub hide_available: bool,
 }
 
 pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action> {
@@ -182,12 +184,23 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                         {
                             action = Some(Action::Discard);
                         }
-                        unavailable(
+                        if control(
                             ui,
                             Icon::Hide,
-                            "Hide recording controls",
-                            "Hiding controls is not available in this build",
-                        );
+                            if view.hide_available {
+                                "Hide recording controls"
+                            } else {
+                                "Hide unavailable because no tray restore path is available"
+                            },
+                            false,
+                            !view.busy && view.hide_available,
+                            false,
+                            tokens,
+                        )
+                        .clicked()
+                        {
+                            action = Some(Action::Hide);
+                        }
                     });
                 });
             });

@@ -62,7 +62,9 @@ host can open the replacement engine.
 Both hosts connect Video-only Record controls and region/window/display recording
 shortcuts. From idle the keys open Record on that target; in an open selector,
 screenshot and recording keys switch mode/target in place. Busy recording phases
-and focused Preferences suppress capture shortcuts. Native recording editing,
+and focused Preferences suppress capture shortcuts. Hidden recording controls are the exception:
+only New Capture is routed, and it restores the same generation without launching another capture.
+Native recording editing,
 GIF export and media-tool bundling remain unconnected.
 
 Linux CI records an asymmetric 310×170 region on a private Xvfb display, pauses,
@@ -79,6 +81,15 @@ env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 CAPTURES_TEST_PRIVATE_X11=1 \
 
 This needs `xvfb`, `xauth`, `hsetroot`, FFmpeg and FFprobe. It is not physical
 Windows/macOS, audio-device, multi-display or Wayland acceptance.
+
+The native recording Hide slice removes the AppKit or wgpu HUD without changing
+the accepted session, timer, pause/microphone state, capture generation or media.
+A 6.2-second click-through fixed-glass notice explains restoration; no collapsed
+replacement strip remains. Menu bar/tray actions, app reactivation and the configured
+New Capture shortcut restore controls under the persisted capture-exclusion policy.
+Linux enables Hide only while a real SNI host supplies a restoration path, and tray-host
+loss restores the HUD and workspace. AppKit and Windows still require physical-host
+compositor and accessibility acceptance; Wayland remains gated.
 
 ## Resident lifecycle and screenshot shortcuts
 

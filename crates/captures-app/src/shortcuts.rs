@@ -84,6 +84,7 @@ struct Routes {
     armed: BTreeSet<u32>,
     pending: Option<CaptureShortcut>,
     enabled: bool,
+    restore_only: bool,
     suspended: bool,
     restoring: bool,
     selector_generation: Option<u64>,
@@ -114,6 +115,10 @@ impl Routes {
         let Some(binding) = self.bindings.get(&id) else {
             return false;
         };
+        if self.restore_only && binding.action != CaptureShortcut::NewCapture {
+            self.armed.remove(&id);
+            return false;
+        }
         if self.selector_generation.is_some() && binding.action == CaptureShortcut::NewCapture {
             return false;
         }
@@ -392,6 +397,17 @@ impl CaptureShortcuts {
         }
     }
 
+    /// While recording controls are hidden, retain only the configured New
+    /// Capture chord as a restoration route. Other capture bindings remain
+    /// suppressed exactly as they are for every other busy recording phase.
+    pub fn set_restore_only(&self, restore_only: bool) {
+        let mut routes = self.dispatcher.routes.lock().unwrap();
+        if routes.restore_only != restore_only {
+            routes.clear();
+            routes.restore_only = restore_only;
+        }
+    }
+
     /// Route target shortcuts to an already-open New Capture selector, never
     /// to a new capture. Set only during selection, and clear before countdown,
     /// display preparation or cancellation. Scope changes discard held/queued
@@ -410,6 +426,7 @@ impl CaptureShortcuts {
         let pending = routes.pending.take();
         (routes.enabled
             && !routes.suspended
+            && (!routes.restore_only || pending == Some(CaptureShortcut::NewCapture))
             && crate::capture_flow::shortcuts_allowed(routes.selector_generation))
         .then_some(pending)
         .flatten()
@@ -514,6 +531,33 @@ mod tests {
         assert!(bindings(&conflicting).unwrap_err().contains("different"));
         conflicting.recording.window_shortcut = "Escape".into();
         assert!(bindings(&conflicting).unwrap_err().contains("reserved"));
+    }
+
+    #[test]
+    fn restore_only_routes_new_capture_and_suppresses_every_other_busy_binding() {
+        let settings = settings();
+        let mut routes = Routes {
+            bindings: bindings(&settings).unwrap(),
+            enabled: true,
+            restore_only: true,
+            ..Routes::default()
+        };
+        for (text, expected) in [
+            (
+                &settings.new_capture_shortcut,
+                Some(CaptureShortcut::NewCapture),
+            ),
+            (&settings.region_shortcut, None),
+            (&settings.recording.video_shortcut, None),
+        ] {
+            let id = text.parse::<HotKey>().unwrap().id();
+            assert!(!routes.event(id, HotKeyState::Pressed, false));
+            assert_eq!(
+                routes.event(id, HotKeyState::Released, false),
+                expected.is_some()
+            );
+            assert_eq!(routes.pending.take(), expected);
+        }
     }
 
     #[test]

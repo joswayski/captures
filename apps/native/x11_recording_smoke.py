@@ -31,6 +31,8 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--restart-only", action="store_true",
                         help="stop after running/paused Restart and replacement-media checks")
+    parser.add_argument("--hide-controls-only", action="store_true",
+                        help="exercise real-SNI Hide/restore, tray loss and finalized media")
     parser.add_argument("--virtual-microphone", action="store_true",
                         help="use a disposable PulseAudio null-sink monitor to verify mute segments")
     args = parser.parse_args()
@@ -47,6 +49,7 @@ def main():
         env[variable] = str(path)
     children, logs = [], []
     loop = None
+    panel = None
 
     def spawn(name, command, announce=False):
         stdout = subprocess.PIPE if announce else (output / f"{name}.jsonl").open("w")
@@ -91,6 +94,32 @@ def main():
             "mousemove", "--sync", "--window", window, str(x - 1), str(y),
             "mousemove_relative", "--sync", "1", "0", "sleep", ".15", "mousedown", "1",
             "sleep", ".15", "mouseup", "1")
+
+    def window_geometry(window):
+        values = {}
+        for line in run("xdotool", "getwindowgeometry", "--shell", window).decode().splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                values[key] = value
+        return values
+
+    def menu_action(label):
+        labels = ["New Capture", "Show recording controls", "Capture display",
+                  "Capture region", "Capture window", "History", "Preferences",
+                  "Open output folder", "Quit Captures"]
+        panel_ids = run("xdotool", "search", "--onlyvisible", "--class", "xfce4-panel").decode().split()
+        tray = next(window for window in panel_ids if int(window_geometry(window)["WIDTH"]) >= 24)
+        geometry = window_geometry(tray)
+        run("xdotool", "mousemove", "--window", tray, str(int(geometry["WIDTH"]) // 2),
+            str(int(geometry["HEIGHT"]) // 2), "click", "3", "sleep", ".4")
+        popup_ids = run("xdotool", "search", "--onlyvisible", "--class", ".*").decode().split()
+        popup = next(window for window in popup_ids
+                     if b"_MENU" in run("xprop", "-id", window, "_NET_WM_WINDOW_TYPE"))
+        popup_geometry = window_geometry(popup)
+        run("xdotool", "mousemove", "--window", popup,
+            str(int(popup_geometry["WIDTH"]) // 2),
+            str(int((labels.index(label) + .5) * int(popup_geometry["HEIGHT"]) / len(labels))),
+            "click", "1")
 
     def manifest():
         files = list((output / "recording-recovery").glob("*/manifest.json"))
@@ -173,6 +202,32 @@ def main():
         threading.Thread(target=loop.run, daemon=True).start()
         spawn("openbox", ["openbox", "--sm-disable"])
         spawn("picom", ["picom", "--config", "/dev/null", "--backend", "xrender"])
+        if args.hide_controls_only:
+            config = output / "config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml"
+            config.parent.mkdir(parents=True)
+            config.write_text('''<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-panel" version="1.0">
+ <property name="configver" type="int" value="2"/>
+ <property name="panels" type="array"><value type="int" value="1"/>
+  <property name="panel-1" type="empty">
+   <property name="position" type="string" value="p=0;x=1200;y=24"/>
+   <property name="position-locked" type="bool" value="true"/>
+   <property name="disable-struts" type="bool" value="true"/>
+   <property name="length" type="uint" value="1"/>
+   <property name="length-adjust" type="bool" value="true"/>
+   <property name="size" type="uint" value="32"/>
+   <property name="plugin-ids" type="array"><value type="int" value="1"/></property>
+  </property>
+ </property>
+ <property name="plugins" type="empty">
+  <property name="plugin-1" type="string" value="systray">
+   <property name="hide-new-items" type="bool" value="false"/>
+   <property name="icon-size" type="uint" value="24"/>
+  </property>
+ </property>
+</channel>''')
+            panel = spawn("sni-panel", ["xfce4-panel", "--disable-wm-check", "--sm-client-disable"])
+            wait(lambda: bus.name_has_owner("org.kde.StatusNotifierWatcher"), "real SNI watcher")
         if args.virtual_microphone:
             spawn("pulseaudio", ["pulseaudio", "--daemonize=no", "--exit-idle-time=-1"])
             wait(lambda: subprocess.run(["pactl", "info"], env=env, capture_output=True).returncode == 0,
@@ -213,6 +268,71 @@ def main():
         run("xdotool", "key", "ctrl+alt+d")
         hud = running_hud()
         shot(hud, "hud-running")
+        if args.hide_controls_only:
+            watcher = dbus.Interface(
+                bus.get_object("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher"),
+                "org.freedesktop.DBus.Properties")
+            wait(lambda: watcher.Get("org.kde.StatusNotifierWatcher",
+                                     "RegisteredStatusNotifierItems"),
+                 "Captures registered in real SNI tray")
+            bundle = next((output / "recording-recovery").glob("*/manifest.json")).parent
+            click(hud, 398, 54)
+            wait(lambda: not windows("Captures Recording Controls"), "running HUD hidden")
+            notice = wait(lambda: windows("Recording controls hidden"), "temporary hidden notice")[0]
+            shot(notice, "recording-controls-hidden-running")
+            before = manifest()
+            assert before["state"] == "recording" and before["segments"] == []
+            run("xdotool", "key", "ctrl+shift+F9", "ctrl+alt+r", "sleep", ".3")
+            assert (not windows("Captures Capture Controls")
+                    and manifest()["session_id"] == before["session_id"])
+            run("xdotool", "key", "ctrl+shift+F10")
+            hud = wait(lambda: windows("Captures Recording Controls"),
+                       "New Capture shortcut restores HUD")[0]
+            assert manifest()["session_id"] == before["session_id"] and not history()
+
+            click(hud, 178, 54)
+            wait(lambda: (value := manifest()) and value["state"] == "paused", "pause completed")
+            hud = wait(lambda: windows("Captures Recording Controls"), "paused HUD")[0]
+            click(hud, 398, 54)
+            wait(lambda: not windows("Captures Recording Controls"), "paused HUD hidden")
+            menu_action("Show recording controls")
+            hud = wait(lambda: windows("Captures Recording Controls"),
+                       "real tray action restores paused HUD")[0]
+            assert (manifest()["state"] == "paused"
+                    and manifest()["session_id"] == before["session_id"])
+            shot(hud, "recording-controls-restored-paused")
+
+            click(hud, 398, 54)
+            wait(lambda: not windows("Captures Recording Controls"), "HUD hidden before tray loss")
+            run("xfce4-panel", "--quit")
+            panel.wait(timeout=10)
+            hud = wait(lambda: windows("Captures Recording Controls"),
+                       "tray-host loss restores controls")[0]
+            root = wait(lambda: windows("Captures"), "tray-host loss restores workspace")[0]
+            shot("root", "recording-controls-tray-loss-restored")
+            assert (manifest()["state"] == "paused"
+                    and manifest()["session_id"] == before["session_id"])
+
+            click(hud, 142, 54)
+            metadata = wait(lambda: list((output / "history").glob("*/metadata.json")),
+                            "hidden/restored recording publication")
+            assert len(metadata) == 1
+            media = metadata[0].parent / "media.mp4"
+            run("ffmpeg", "-v", "error", "-i", str(media), "-f", "null", "-")
+            finished(1)
+            assert manifest() is None and not bundle.exists()
+            acceptance = {
+                "running_hide": True, "paused_hide": True,
+                "new_capture_shortcut_restore": True, "real_sni_restore": True,
+                "tray_host_loss_restore": True, "same_session": True,
+                "busy_shortcuts_suppressed": True, "history_publication": True,
+                "decoded_output": True, "source_cleanup": True,
+            }
+            (output / "acceptance-hide-controls.json").write_text(
+                json.dumps(acceptance, indent=2))
+            print("PASS native recording Hide: running/paused preservation, New Capture and real "
+                  "SNI restore, tray-host-loss recovery, finalized decode and cleanup")
+            return
         run("xdotool", "key", "ctrl+alt+r", "ctrl+shift+F9")
         assert not windows("Captures Capture Controls")
         # Escape only cancels before engine handoff, not an accepted recording.

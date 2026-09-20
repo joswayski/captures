@@ -207,21 +207,25 @@ final class RootWindowCloseHandler: NSObject, NSWindowDelegate {
 
 final class LiveStatusActions: NSObject {
     private let newCaptureAction: () -> Void
+    private let showRecordingControlsAction: () -> Void
     private let captureAction: (StillCaptureKind) -> Void
     private let historyAction: () -> Void
     private let preferencesAction: () -> Void
     private let outputFolderAction: () -> Void
     private let quitAction: () -> Void
 
-    init(newCapture: @escaping () -> Void, capture: @escaping (StillCaptureKind) -> Void,
+    init(newCapture: @escaping () -> Void, showRecordingControls: @escaping () -> Void = {},
+         capture: @escaping (StillCaptureKind) -> Void,
          history: @escaping () -> Void, preferences: @escaping () -> Void,
          outputFolder: @escaping () -> Void, quit: @escaping () -> Void) {
-        newCaptureAction = newCapture; captureAction = capture; historyAction = history
+        newCaptureAction = newCapture; showRecordingControlsAction = showRecordingControls
+        captureAction = capture; historyAction = history
         preferencesAction = preferences; outputFolderAction = outputFolder
         quitAction = quit
     }
 
     @objc func newCapture() { newCaptureAction() }
+    @objc func showRecordingControls() { showRecordingControlsAction() }
     @objc func captureRegion() { captureAction(.region) }
     @objc func captureWindow() { captureAction(.window) }
     @objc func captureDisplay() { captureAction(.display) }
@@ -233,6 +237,7 @@ final class LiveStatusActions: NSObject {
     func makeMenu() -> NSMenu {
         let menu = NSMenu()
         add("New Capture…", action: #selector(newCapture), to: menu)
+        add("Show Recording Controls", action: #selector(showRecordingControls), to: menu)
         add("Screenshot Region", action: #selector(captureRegion), to: menu)
         add("Screenshot Window", action: #selector(captureWindow), to: menu)
         add("Screenshot Display", action: #selector(captureDisplay), to: menu)
@@ -268,8 +273,9 @@ func captureShortcutSignature(_ settings: [String: Any]) -> [String] {
         recording.string("window_shortcut"), recording.string("display_shortcut")]
 }
 
-func captureShortcutsEnabled(captureBusy: Bool, selectorGeneration: UInt64? = nil) -> Bool {
-    !captureBusy || selectorGeneration != nil
+func captureShortcutsEnabled(captureBusy: Bool, selectorGeneration: UInt64? = nil,
+                             recordingControlsHidden: Bool = false) -> Bool {
+    !captureBusy || selectorGeneration != nil || recordingControlsHidden
 }
 
 func captureShortcutsSuspended(preferencesFocused: Bool) -> Bool { preferencesFocused }
@@ -452,6 +458,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard options.live else { return true }
+        if liveController?.showRecordingControls() == true { return true }
         switch liveReopenAction(hasVisibleWindows: flag) {
         case .focusExisting:
             window.makeKeyAndOrderFront(nil)
@@ -580,6 +587,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 }, selectorGenerationChanged: { [weak self] generation in
                     self?.shortcutSelectorGeneration = generation
                     self?.updateShortcutState()
+                }, recordingControlsVisibilityChanged: { [weak self] _ in
+                    self?.updateShortcutState()
                 }, reportError: { [weak self] message in
                     self?.presentHostError(title: "Capture Failed", message: message)
                 }) { [weak self] in
@@ -637,6 +646,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         let actions = LiveStatusActions(newCapture: { [weak self] in
             self?.preferencesController?.flush()
             self?.launchNewCapture()
+        }, showRecordingControls: { [weak self] in
+            _ = self?.liveController?.showRecordingControls()
         }, capture: { [weak self] kind in
             self?.preferencesController?.flush()
             self?.launchCapture(kind)
@@ -713,8 +724,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             reportShortcutError(error)
             return
         }
+        let controlsHidden = liveController?.recordingControlsHidden == true
+        captureShortcuts.setRestoreOnly(controlsHidden)
         let enabled = captureShortcutsEnabled(captureBusy: captureBusy,
-            selectorGeneration: shortcutSelectorGeneration)
+            selectorGeneration: shortcutSelectorGeneration,
+            recordingControlsHidden: controlsHidden)
         if enabled != shortcutEnabled {
             captureShortcuts.setEnabled(enabled)
             shortcutEnabled = enabled
@@ -724,11 +738,14 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private func drainCaptureShortcuts() {
         guard !terminating, !preferencesFocused,
               captureShortcutsEnabled(captureBusy: captureBusy,
-                  selectorGeneration: shortcutSelectorGeneration),
+                  selectorGeneration: shortcutSelectorGeneration,
+                  recordingControlsHidden: liveController?.recordingControlsHidden == true),
               let captureShortcuts else { return }
         do {
             while let action = try captureShortcuts.nextAction() {
-                if shortcutSelectorGeneration != nil {
+                if liveController?.recordingControlsHidden == true {
+                    if action == .newCapture { _ = liveController?.showRecordingControls() }
+                } else if shortcutSelectorGeneration != nil {
                     _ = liveController?.selectUnifiedTargetFromShortcut(action)
                 } else if action.mode == .record, let target = action.target {
                     launchNewCapture(recordingTarget: target)
@@ -774,6 +791,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func launchNewCapture(recordingTarget: UnifiedCaptureTarget? = nil) {
+        if liveController?.showRecordingControls() == true { return }
         guard liveController?.newCapture(recordingTarget: recordingTarget) == true else {
             presentHostError(title: "Capture Unavailable",
                 message: "The capture workspace is still loading or another capture is already active.")
