@@ -82,6 +82,11 @@ struct EditorOutputPresentation {
     var length: Int { data.count }
 }
 
+enum EditorSavePresentation: Equatable {
+    case saved(path: String)
+    case savedWithoutHistory(path: String, warning: String)
+}
+
 /// Independently retained immutable Rust pixels. The CGImage provider retains
 /// this frame, so draws may safely finish after a later edit or session close.
 final class NativeEditorFrame {
@@ -197,6 +202,32 @@ private final class NativeEditorSession {
         }
         return EditorOutputPresentation(data: encoded, image: image)
     }
+
+    func saveNew(_ request: [String: Any]) throws -> EditorSavePresentation {
+        let data = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
+        let response = String(decoding: data, as: UTF8.self).withCString {
+            captures_editor_save_new_v1(handle, $0)
+        }
+        guard let response else { throw AppBridgeError.invalidResponse }
+        defer { captures_settings_free_v1(response) }
+        let result = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+        guard let status = result["status"] as? String,
+              let path = result["path"] as? String, !path.isEmpty else {
+            throw AppBridgeError.invalidResponse
+        }
+        switch status {
+        case "saved":
+            guard result["artifact"] is [String: Any] else { throw AppBridgeError.invalidResponse }
+            return .saved(path: path)
+        case "saved_without_history":
+            guard let warning = result["warning"] as? String, !warning.isEmpty else {
+                throw AppBridgeError.invalidResponse
+            }
+            return .savedWithoutHistory(path: path, warning: warning)
+        default:
+            throw AppBridgeError.invalidResponse
+        }
+    }
 }
 
 protocol EditorWorking: AnyObject {
@@ -206,6 +237,8 @@ protocol EditorWorking: AnyObject {
                  completion: @escaping (Result<EditorPresentation, Error>) -> Void)
     func encode(_ options: [String: Any],
                 completion: @escaping (Result<EditorOutputPresentation, Error>) -> Void)
+    func saveNew(_ request: [String: Any],
+                 completion: @escaping (Result<EditorSavePresentation, Error>) -> Void)
     func close()
     func prepareForTermination() -> Result<Void, Error>
 }
@@ -266,6 +299,20 @@ final class EditorWorker: EditorWorking {
                     throw AppBridgeError.backend("The screenshot editor is closed.")
                 }
                 return try session.encode(options)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func saveNew(_ request: [String: Any],
+                 completion: @escaping (Result<EditorSavePresentation, Error>) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            let result = Result { () throws -> EditorSavePresentation in
+                guard let session = storage.session else {
+                    throw AppBridgeError.backend("The screenshot editor is closed.")
+                }
+                return try session.saveNew(request)
             }
             DispatchQueue.main.async { completion(result) }
         }

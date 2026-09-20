@@ -278,11 +278,12 @@ original. Failed draft saves keep edits open and cancel normal quit. Private-X11
 cover both appearances, persisted drafts, real preview pixels and error recovery.
 AppKit now connects the same crop, canvas-resize and draft operations in its own
 window, along with native image-layer controls and PNG/JPEG/WebP output previews
-that report exact encoded size without saving. Windows, Wayland and physical AppKit
-presentation remain unverified.
+that report exact encoded size without saving. Its **Save new copy** controls choose
+a folder and filename, publish without replacing files, and preserve the draft.
+Windows, Wayland and physical AppKit presentation remain unverified.
 Native image-transform controls, text, annotation shadows, annotation tools, save
-dialogs/overwrite-original, edited-image clipboard output, AppKit edited-file export,
-and recording editing remain unconnected. The shared image-transform command and
+overwrite-original, edited-image clipboard output, and recording editing remain
+unconnected. The shared image-transform command and
 rendering/export support are prerequisites, not native editor acceptance. OS shortcut
 takeover, login items, single-instance relaunch and updates
 are not connected to the native hosts yet. Windows/Linux renderer selection and full

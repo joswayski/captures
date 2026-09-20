@@ -36,9 +36,9 @@ with those flows; its tests retain both screenshot-child and saved-notice covera
 Superseded parent PRs may be closed rather than separately merged because the
 repository uses squash merges. Their functionality must not be counted as missing.
 
-Next implementation boundary: connect shared image transforms to both editor hosts
-and edited-image export controls to AppKit. Shared commands and encoding remain
-prerequisites, not native editor/output acceptance.
+Next implementation boundary: connect shared image transforms and remaining output
+actions to both editor hosts. Shared commands and encoding remain prerequisites,
+not native editor/output acceptance.
 Native live capture on Wayland remains explicitly
 gated; no stub or X11 result closes that platform gate. Merging development slices
 does not authorize a native release, renderer cutover or removal of Tauri.
@@ -474,7 +474,10 @@ ordering. Stable IDs preserve selection across replies, and shared Rust remains 
 authority for locked barriers and duplicate behavior. An Output view runs shared
 PNG/JPEG/WebP encoding on that worker, reports exact bytes and switches the fit preview
 between the edited canvas and decoded output. Option or document changes invalidate
-stale output; previewing has no draft, undo, clipboard or file side effects. Drafts use
+stale output; previewing has no draft, undo, clipboard or file side effects. **Save new
+copy** chooses a directory independently of the worker, then serializes publication on
+that worker. It never replaces a file or mutates the draft; successful publication adds
+a distinct History entry, and partial History failure preserves the saved path. Drafts use
 the same isolated sibling root and reopen with the screenshot. Closing an unsaved session offers save-and-close,
 close without saving the current session (retaining any older persisted draft), or
 cancel. Quit drains accepted work and cancels termination if its draft save fails.
