@@ -576,8 +576,8 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(outputMode.selectedSegment, 1)
         try showDraw(in: controller.root)
 
-        let tool = try segmented("Drawing shape", in: controller.root)
-        tool.selectedSegment = 1; _ = tool.sendAction(tool.action, to: tool.target)
+        let tool = try popup("Drawing tool", in: controller.root)
+        tool.selectItem(at: 1); _ = tool.sendAction(tool.action, to: tool.target)
         let overlay = controller.drawOverlay
         XCTAssertEqual(overlay.presentedImageRect,
                        NSRect(x: 0, y: 106, width: 604, height: 302))
@@ -963,8 +963,8 @@ final class ScreenshotEditorTests: XCTestCase {
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
             try showDraw(in: controller.root)
-            let tool = try segmented("Drawing shape", in: controller.root)
-            tool.selectedSegment = appearance == "light" ? 0 : 1
+            let tool = try popup("Drawing tool", in: controller.root)
+            tool.selectItem(at: appearance == "light" ? 0 : 1)
             _ = tool.sendAction(tool.action, to: tool.target)
             controller.drawOverlay.begin(at: NSPoint(x: 500, y: 390))
             controller.drawOverlay.drag(to: NSPoint(x: 90, y: 125))
@@ -1585,6 +1585,187 @@ final class ScreenshotEditorTests: XCTestCase {
             reopened.fulfill()
         }
         wait(for: [reopened], timeout: 5)
+    }
+
+    func testOpenDrawingThresholdsAndPenSamplingRestoreMouseCoalescing() throws {
+        _ = NSApplication.shared
+        let coalescing = NSEvent.isMouseCoalescingEnabled
+        defer { NSEvent.isMouseCoalescingEnabled = coalescing }
+        let overlay = EditorDrawOverlay(frame: NSRect(x: 0, y: 0, width: 200, height: 120))
+        overlay.canvasSize = NSSize(width: 400, height: 200); overlay.drawingEnabled = true
+        var completed: [(EditorDrawOverlay.Shape, NSPoint, NSPoint, [NSPoint])] = []
+        overlay.onComplete = { completed.append(($0, $1, $2, $3)) }
+        overlay.shape = .line
+        for end in [NSPoint(x: 80, y: 30), NSPoint(x: 20, y: 80), NSPoint(x: 20, y: 30)] {
+            overlay.begin(at: NSPoint(x: 20, y: 30)); overlay.end(at: end)
+        }
+        XCTAssertEqual(completed.count, 3, "axis-aligned and zero-length lines survive")
+        XCTAssertEqual(completed[0].1, NSPoint(x: 40, y: 40))
+        XCTAssertEqual(completed[0].2, NSPoint(x: 160, y: 40))
+        overlay.shape = .arrow
+        for (size, below, accepted) in [(NSSize(width: 400, height: 200), 2.99, 3.0),
+                                         (NSSize(width: 50, height: 25), 5.99, 6.0)] {
+            overlay.canvasSize = size
+            let count = completed.count
+            overlay.begin(at: NSPoint(x: 20, y: 30)); overlay.end(at: NSPoint(x: 20 + below, y: 30))
+            XCTAssertEqual(completed.count, count)
+            overlay.begin(at: NSPoint(x: 20, y: 30)); overlay.end(at: NSPoint(x: 20 + accepted, y: 30))
+            XCTAssertEqual(completed.count, count + 1, "both screen and shared document minima apply")
+        }
+        overlay.canvasSize = NSSize(width: 400, height: 200); overlay.shape = .pen
+        NSEvent.isMouseCoalescingEnabled = true
+        overlay.begin(at: NSPoint(x: 20, y: 30))
+        XCTAssertFalse(NSEvent.isMouseCoalescingEnabled)
+        overlay.drag(to: NSPoint(x: 21.49, y: 30))
+        overlay.drag(to: NSPoint(x: 21.5, y: 30))
+        overlay.drag(to: NSPoint(x: -5, y: 50))
+        overlay.end(at: NSPoint(x: 99, y: 99))
+        XCTAssertEqual(completed.last?.3, [NSPoint(x: 40, y: 40), NSPoint(x: 43, y: 40), NSPoint(x: -10, y: 80)])
+        XCTAssertTrue(NSEvent.isMouseCoalescingEnabled)
+        overlay.begin(at: NSPoint(x: 30, y: 35)); overlay.end(at: NSPoint(x: 90, y: 90))
+        XCTAssertEqual(completed.last?.3, [NSPoint(x: 60, y: 50)], "click-only Pen remains a dot")
+        let count = completed.count
+        for originallyCoalesced in [false, true] {
+            NSEvent.isMouseCoalescingEnabled = originallyCoalesced
+            overlay.begin(at: NSPoint(x: 20, y: 30)); overlay.shape = .arrow
+            XCTAssertEqual(NSEvent.isMouseCoalescingEnabled, originallyCoalesced)
+            overlay.end(at: NSPoint(x: 90, y: 90)); overlay.shape = .pen
+            overlay.begin(at: NSPoint(x: 20, y: 30)); _ = overlay.resignFirstResponder()
+            XCTAssertEqual(NSEvent.isMouseCoalescingEnabled, originallyCoalesced)
+            overlay.end(at: NSPoint(x: 90, y: 90))
+        }
+        XCTAssertEqual(completed.count, count, "cancellation never commits partial samples")
+        let geometry = try XCTUnwrap(NativeEditorDrawGeometry(arrow: false,
+            samples: [CGPoint(x: 2, y: 3), CGPoint(x: 10, y: 19), CGPoint(x: 26, y: 7)]))
+        XCTAssertEqual(geometry.points.count, 26)
+        XCTAssertEqual(geometry.points[12], CGPoint(x: 10, y: 13.5))
+        XCTAssertEqual(geometry.strokeWidth, 8)
+    }
+
+    func testOpenDrawingCommandsSelectFreshLayersInvalidateOutputAndCancelPen() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { worker.response = nil; controller.drawOverlay.cancelGesture(); controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        worker.response = { request in
+            var layer = self.shapeLayer(id: "new-\(worker.requests.count)", x: 11, y: 17)
+            if request["operation"] as? String == "create_freehand_path" { layer["kind"] = "path" }
+            return self.snapshot(id: "shot", unsaved: true, layers: [layer])
+        }
+        let tool = try popup("Drawing tool", in: controller.root)
+        let overlay = controller.drawOverlay
+        for (index, operation) in [(2, "create_open_shape"), (3, "create_open_shape"), (4, "create_freehand_path")] {
+            try showOutput(in: controller.root)
+            try button("Preview output", in: controller.root).performClick(nil)
+            try showDraw(in: controller.root)
+            tool.selectItem(at: index); _ = tool.sendAction(tool.action, to: tool.target)
+            overlay.begin(at: NSPoint(x: 350, y: 300)); overlay.drag(to: NSPoint(x: 80, y: 130))
+            let count = worker.requests.count
+            overlay.end(at: NSPoint(x: 40, y: 110))
+            XCTAssertEqual(worker.requests.count, count + 1)
+            XCTAssertEqual(worker.requests.last?["operation"] as? String, operation)
+            XCTAssertEqual(controller.state.snapshot?.layers.first?.id, "new-\(count + 1)")
+            XCTAssertFalse(try segmented("Output preview image", in: controller.root).isEnabled)
+            if index == 4 {
+                XCTAssertEqual((worker.requests.last?["points"] as? [[String: CGFloat]])?.count, 2)
+            } else { XCTAssertEqual(worker.requests.last?["shape"] as? String, index == 2 ? "line" : "arrow") }
+        }
+        let count = worker.requests.count
+        let coalescing = NSEvent.isMouseCoalescingEnabled
+        overlay.begin(at: NSPoint(x: 40, y: 110))
+        overlay.keyDown(with: try keyEvent(window: controller.window, keyCode: 53, characters: "\u{1b}"))
+        overlay.end(at: NSPoint(x: 120, y: 150))
+        XCTAssertEqual(worker.requests.count, count); XCTAssertEqual(NSEvent.isMouseCoalescingEnabled, coalescing)
+        overlay.begin(at: NSPoint(x: 40, y: 110)); try showLayers(in: controller.root)
+        overlay.end(at: NSPoint(x: 120, y: 150))
+        XCTAssertEqual(worker.requests.count, count); XCTAssertEqual(NSEvent.isMouseCoalescingEnabled, coalescing)
+        try showDraw(in: controller.root)
+        worker.failOperation = "create_freehand_path"
+        let published = controller.state.snapshot
+        overlay.begin(at: NSPoint(x: 40, y: 110)); overlay.end(at: NSPoint(x: 40, y: 110))
+        XCTAssertEqual(controller.state.snapshot, published)
+        XCTAssertFalse(controller.state.busy); XCTAssertNil(overlay.startPoint)
+        XCTAssertEqual(NSEvent.isMouseCoalescingEnabled, coalescing)
+    }
+
+    func testOpenDrawingRenderedStates() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true))
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.drawOverlay.cancelGesture(); controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showDraw(in: controller.root)
+            let tool = try popup("Drawing tool", in: controller.root)
+            XCTAssertEqual(tool.itemTitles, ["Rectangle", "Ellipse", "Line", "Arrow", "Pen"])
+            for (index, name) in [(2, "line"), (3, "arrow"), (4, "pen")] {
+                tool.selectItem(at: index); _ = tool.sendAction(tool.action, to: tool.target)
+                controller.drawOverlay.begin(at: NSPoint(x: 100, y: 220))
+                controller.drawOverlay.drag(to: NSPoint(x: 250, y: 90))
+                controller.drawOverlay.drag(to: NSPoint(x: 420, y: 320))
+                try render(controller.root, name: "screenshot-editor-\(name)-preview-\(appearance)")
+                controller.drawOverlay.cancelGesture()
+            }
+            controller.drawOverlay.begin(at: NSPoint(x: 240, y: 210))
+            try render(controller.root, name: "screenshot-editor-pen-dot-\(appearance)")
+            worker.failOperation = "create_freehand_path"
+            worker.failureMessage = "The Pen stroke could not be created. The previous draft, selection, pixels and undo history remain recoverable."
+            controller.drawOverlay.end(at: NSPoint(x: 240, y: 210))
+            try render(controller.root, name: "screenshot-editor-pen-error-minimum-\(appearance)")
+        }
+    }
+
+    func testRealBridgeOpenDrawingPixelsUndoAndDraftReopen() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let worker = EditorWorker()
+        defer { worker.close(); EditorWorker.flush() }
+        let opened = expectation(description: "open drawing fixture")
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path, artifactID: fixture.id) {
+            result in XCTAssertNotNil(try? result.get()); opened.fulfill()
+        }
+        wait(for: [opened], timeout: 5)
+        func request(_ object: [String: Any]) throws -> EditorPresentation {
+            let done = expectation(description: "drawing request")
+            var response: Result<EditorPresentation, Error>?
+            worker.request(object) { result in response = result; done.fulfill() }
+            wait(for: [done], timeout: 5)
+            return try XCTUnwrap(response).get()
+        }
+        _ = try request(["operation": "resize_canvas", "width": 640, "height": 360])
+        let line = try request(["operation": "create_open_shape", "shape": "line",
+                                "start": ["x": 450, "y": 120], "end": ["x": 50, "y": 120]])
+        XCTAssertEqual(rgba(line.image, x: 300, y: 120), [255, 59, 92, 255])
+        let arrow = try request(["operation": "create_open_shape", "shape": "arrow",
+                                 "start": ["x": 70, "y": 300], "end": ["x": 550, "y": 300]])
+        XCTAssertEqual(rgba(arrow.image, x: 400, y: 300), [255, 59, 92, 255])
+        let pen = try request(["operation": "create_freehand_path", "points": [
+            ["x": 80, "y": 80], ["x": 200, "y": 240], ["x": 400, "y": 80],
+        ]])
+        XCTAssertEqual(pen.snapshot.layers.first?.kind, .path)
+        XCTAssertEqual(rgba(pen.image, x: 195, y: 180), [255, 59, 92, 255])
+        let undone = try request(["operation": "undo"])
+        XCTAssertEqual(rgba(undone.image, x: 195, y: 180), [247, 247, 245, 255])
+        let redone = try request(["operation": "redo"])
+        XCTAssertEqual(redone.snapshot.layers.first?.id, pen.snapshot.layers.first?.id)
+        XCTAssertEqual(rgba(redone.image, x: 195, y: 180), [255, 59, 92, 255])
+        _ = try request(["operation": "save_draft", "updated_at_ms": 2468])
+        worker.close(); EditorWorker.flush()
+        for appearance in ["light", "dark"] {
+            let reopened = EditorWorker()
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: reopened)
+            controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+            waitUntil { controller.state.snapshot?.hasDraft == true && !controller.state.busy }
+            XCTAssertEqual(controller.state.snapshot?.layers.first?.id, pen.snapshot.layers.first?.id)
+            XCTAssertEqual(controller.state.snapshot?.layers.count, 4)
+            try showDraw(in: controller.root)
+            let tool = try popup("Drawing tool", in: controller.root)
+            tool.selectItem(at: 4); _ = tool.sendAction(tool.action, to: tool.target)
+            try render(controller.root, name: "screenshot-editor-drawing-committed-\(appearance)")
+            controller.window.orderOut(nil); reopened.close(); EditorWorker.flush()
+        }
     }
 
     private func annotationStyle() -> [String: Any] {

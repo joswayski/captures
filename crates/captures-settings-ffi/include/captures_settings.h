@@ -170,6 +170,8 @@ void captures_region_free_v1(CapturesRegionSession *session);
  * NULL output refuses open; otherwise output receives owned {ok,result}/{ok,error}
  * JSON, freed with captures_settings_free_v1. Failed open returns NULL.
  * Requests: snapshot, crop {rect:{x,y,width,height}}, resize_canvas {width,height},
+ * create_closed_shape/create_open_shape {shape,start:{x,y},end:{x,y}},
+ * create_freehand_path {points:[{x,y},...]}, layer {id,edit},
  * commit {document}, undo, redo, save_draft {updated_at_ms}, discard_draft.
  * Snapshots contain artifact_id, document, can_undo, can_redo, unsaved_changes,
  * has_draft. Only owned image sources may be committed; unsupported visible
@@ -180,6 +182,25 @@ typedef struct CapturesEditorSession CapturesEditorSession;
 typedef struct CapturesEditorFrame CapturesEditorFrame;
 CapturesEditorSession *captures_editor_open_v1(const char *request_json, char **output);
 char *captures_editor_request_v1(CapturesEditorSession *session, const char *request_json);
+/* Stateless shared preview geometry; no session access or per-event JSON.
+ * kind 0: arrow outline, exactly two signed document-space endpoints.
+ * kind 1: smoothed Pen centerline, one or more accepted samples; one is a dot,
+ * two also represent a straight Line. Hosts paint round caps/joins.
+ * Input is aligned/readable for length initialized points during the call.
+ * Non-null output points to writable aligned descriptor storage. Success owns
+ * an independent immutable buffer and returns the default shared stroke width.
+ * Too-short arrows succeed with zero points. Invalid inputs/panic return NULL
+ * and leave output unchanged. Borrow output.data only while the handle lives;
+ * release exactly once after all borrows. NULL free is allowed. */
+typedef struct CapturesEditorDrawGeometry CapturesEditorDrawGeometry;
+typedef struct {
+    const CapturesSelectionPoint *data;
+    size_t length;
+    double stroke_width;
+} CapturesEditorDrawPoints;
+CapturesEditorDrawGeometry *captures_editor_draw_geometry_v1(uint32_t kind,
+    const CapturesSelectionPoint *input, size_t length, CapturesEditorDrawPoints *output);
+void captures_editor_draw_geometry_free_v1(CapturesEditorDrawGeometry *handle);
 /* Import one host-decoded image on the serialized session worker. request_json is
  * {name,selected_id?,point?:{x,y}} and never contains pixels or asset URLs.
  * pixels describes borrowed top-down straight-alpha sRGB RGBA8; padded rows are

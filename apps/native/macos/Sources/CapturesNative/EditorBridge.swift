@@ -3,6 +3,26 @@ import CoreGraphics
 import ImageIO
 import CCapturesSettings
 
+/// Copies shared preview geometry out of its short-lived C owner. No session
+/// worker or JSON is involved in drawing pointer feedback.
+struct NativeEditorDrawGeometry {
+    let points: [CGPoint]
+    let strokeWidth: Double
+
+    init?(arrow: Bool, samples: [CGPoint]) {
+        let input = samples.map { CapturesSelectionPoint(x: $0.x, y: $0.y) }
+        var output = CapturesEditorDrawPoints()
+        let handle = input.withUnsafeBufferPointer {
+            captures_editor_draw_geometry_v1(arrow ? 0 : 1, $0.baseAddress, $0.count, &output)
+        }
+        guard let handle else { return nil }
+        defer { captures_editor_draw_geometry_free_v1(handle) }
+        points = UnsafeBufferPointer(start: output.data, count: output.length)
+            .map { CGPoint(x: $0.x, y: $0.y) }
+        strokeWidth = output.stroke_width
+    }
+}
+
 /// Display values resolved by Rust, never a replacement for authored document data.
 struct NativeAnnotationStyle: Equatable {
     let closed: Bool

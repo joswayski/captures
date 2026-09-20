@@ -2,9 +2,12 @@
 
 use super::region::{RegionPixels, response, text};
 use captures_app::{
-    editor::Point,
+    editor::{
+        ElementBase, ElementStyle, Point, ShapeElement, arrow_fill_polygon, smooth_path_centerline,
+    },
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
     editor_session::{EditorSession, ExportOptions, ImportImage, OpenRequest, Request},
+    selection::Point as AbiPoint,
 };
 use image::RgbaImage;
 use serde::Deserialize;
@@ -16,6 +19,117 @@ use std::{
     ptr,
     sync::Arc,
 };
+
+pub struct DrawGeometry(Vec<AbiPoint>);
+
+#[repr(C)]
+pub struct DrawPoints {
+    pub data: *const AbiPoint,
+    pub length: usize,
+    pub stroke_width: f64,
+}
+
+/// Shared transient geometry, independent of editor sessions. Kind 0 returns
+/// an arrow outline from exactly two endpoints; kind 1 smooths accepted Pen
+/// samples (one point is a dot, two points are also a straight Line preview).
+/// A too-short arrow succeeds with an empty outline. No JSON or pixel rendering.
+///
+/// # Safety
+/// Non-null input is aligned and readable for `length` initialized points for
+/// this call. Non-null output is writable aligned descriptor storage. Returned
+/// points are immutable and live until the returned handle is freed. Nulls,
+/// invalid kinds/counts/coordinates or panic return null and leave output intact.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_draw_geometry_v1(
+    kind: u32,
+    input: *const AbiPoint,
+    length: usize,
+    output: *mut DrawPoints,
+) -> *mut DrawGeometry {
+    if input.is_null()
+        || output.is_null()
+        || length == 0
+        || length > isize::MAX as usize / (24 * size_of::<AbiPoint>())
+        || kind > 1
+        || (kind == 0 && length != 2)
+    {
+        return ptr::null_mut();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains readable initialized points; length is bounded above.
+        let input = unsafe { std::slice::from_raw_parts(input, length) };
+        if !input
+            .iter()
+            .all(|point| (point.x as f32).is_finite() && (point.y as f32).is_finite())
+        {
+            return None;
+        }
+        let style = ElementStyle::default();
+        let width = style.stroke_width;
+        let points = if kind == 0 {
+            arrow_fill_polygon(&ShapeElement {
+                base: ElementBase {
+                    id: String::new(),
+                    x: input[0].x,
+                    y: input[0].y,
+                    rotation: None,
+                    locked: false,
+                    visible: true,
+                    opacity: 100.,
+                    blend_mode: "source-over".into(),
+                },
+                shape: "arrow".into(),
+                end_x: input[1].x,
+                end_y: input[1].y,
+                controls: Vec::new(),
+                style,
+                extra: Default::default(),
+            })
+        } else {
+            smooth_path_centerline(
+                &input
+                    .iter()
+                    .map(|point| Point {
+                        x: point.x,
+                        y: point.y,
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let geometry = Box::new(DrawGeometry(
+            points
+                .into_iter()
+                .map(|point| AbiPoint {
+                    x: point.x,
+                    y: point.y,
+                })
+                .collect(),
+        ));
+        Some((geometry, width))
+    }));
+    let Ok(Some((geometry, width))) = result else {
+        return ptr::null_mut();
+    };
+    // SAFETY: caller retains writable descriptor storage; handle owns point storage.
+    unsafe {
+        output.write(DrawPoints {
+            data: geometry.0.as_ptr(),
+            length: geometry.0.len(),
+            stroke_width: width,
+        })
+    };
+    Box::into_raw(geometry)
+}
+
+/// # Safety
+/// Free a live geometry handle exactly once, after all point borrows end. Null is allowed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_draw_geometry_free_v1(handle: *mut DrawGeometry) {
+    if !handle.is_null() {
+        // SAFETY: caller transfers the uniquely owned live handle.
+        drop(unsafe { Box::from_raw(handle) });
+    }
+}
 
 /// Open from isolated native History/draft roots on a host worker.
 ///
@@ -364,6 +478,110 @@ mod tests {
         ffi::{CStr, CString},
         mem::MaybeUninit,
     };
+
+    #[test]
+    fn drawing_geometry_is_owned_and_uses_shared_quadratics_and_arrow_outline() {
+        let mut input = [
+            AbiPoint { x: 2., y: 3. },
+            AbiPoint { x: 10., y: 19. },
+            AbiPoint { x: 26., y: 7. },
+        ];
+        let mut output = MaybeUninit::uninit();
+        // SAFETY: all buffers are initialized/live; borrows end before their owner is freed.
+        unsafe {
+            let pen = captures_editor_draw_geometry_v1(
+                1,
+                input.as_ptr(),
+                input.len(),
+                output.as_mut_ptr(),
+            );
+            assert!(!pen.is_null());
+            let output = output.assume_init();
+            input[0].x = 99.;
+            let points = std::slice::from_raw_parts(output.data, output.length);
+            assert_eq!(output.stroke_width, 8.);
+            assert_eq!(points.len(), 26);
+            assert_ne!(points[0].x, input[0].x, "geometry owns a copy of its input");
+            assert_eq!((points[0].x, points[0].y), (2., 3.));
+            // Quadratic at t=.5, control (10,19), midpoint endpoint (18,13).
+            assert_eq!((points[12].x, points[12].y), (10., 13.5));
+            assert_eq!((points[25].x, points[25].y), (26., 7.));
+            captures_editor_draw_geometry_free_v1(pen);
+
+            let endpoints = [AbiPoint { x: 5., y: 9. }, AbiPoint { x: 85., y: 9. }];
+            let mut output = MaybeUninit::uninit();
+            let arrow =
+                captures_editor_draw_geometry_v1(0, endpoints.as_ptr(), 2, output.as_mut_ptr());
+            assert!(!arrow.is_null());
+            let output = output.assume_init();
+            let points = std::slice::from_raw_parts(output.data, output.length);
+            assert!(
+                points.len() > 6,
+                "tapered outline includes the rounded tail, not a triangle"
+            );
+            assert!(points.iter().any(|point| point.x == 85. && point.y == 9.));
+            assert!(points.iter().any(|point| point.y > 9.));
+            assert!(points.iter().any(|point| point.y < 9.));
+            captures_editor_draw_geometry_free_v1(arrow);
+        }
+    }
+
+    #[test]
+    fn drawing_geometry_rejects_invalid_inputs_and_retains_dots_and_minimum_arrows() {
+        let input = [AbiPoint { x: 7., y: 11. }, AbiPoint { x: 8.49, y: 11. }];
+        let mut output = DrawPoints {
+            data: ptr::null(),
+            length: 123,
+            stroke_width: -1.,
+        };
+        // SAFETY: invalid metadata is rejected before dereference; all other buffers are live.
+        unsafe {
+            for (kind, points, count) in [
+                (2, input.as_ptr(), 2),
+                (0, input.as_ptr(), 1),
+                (1, ptr::null(), 1),
+                (1, input.as_ptr(), 0),
+                (1, input.as_ptr(), usize::MAX),
+            ] {
+                assert!(
+                    captures_editor_draw_geometry_v1(kind, points, count, &mut output).is_null()
+                );
+                assert_eq!(output.length, 123);
+                assert_eq!(output.stroke_width, -1.);
+                assert!(output.data.is_null());
+            }
+            assert!(
+                captures_editor_draw_geometry_v1(1, input.as_ptr(), 1, ptr::null_mut()).is_null()
+            );
+            let invalid = [AbiPoint {
+                x: f64::INFINITY,
+                y: 0.,
+            }];
+            assert!(
+                captures_editor_draw_geometry_v1(1, invalid.as_ptr(), 1, &mut output).is_null()
+            );
+            assert_eq!(output.length, 123);
+            let dot = captures_editor_draw_geometry_v1(1, input.as_ptr(), 1, &mut output);
+            assert!(!dot.is_null());
+            assert_eq!(output.length, 1);
+            assert_eq!(((*output.data).x, (*output.data).y), (7., 11.));
+            captures_editor_draw_geometry_free_v1(dot);
+            for (length, empty) in [(1.49, true), (1.5, false)] {
+                let endpoints = [
+                    input[0],
+                    AbiPoint {
+                        x: 7. + length,
+                        y: 11.,
+                    },
+                ];
+                let arrow = captures_editor_draw_geometry_v1(0, endpoints.as_ptr(), 2, &mut output);
+                assert!(!arrow.is_null());
+                assert_eq!(output.length == 0, empty);
+                captures_editor_draw_geometry_free_v1(arrow);
+            }
+            captures_editor_draw_geometry_free_v1(ptr::null_mut());
+        }
+    }
 
     unsafe fn take_json(value: *mut c_char) -> serde_json::Value {
         // SAFETY: tests pass only live Rust-owned response strings.

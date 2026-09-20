@@ -63,12 +63,14 @@ private final class EditorLayerCell: NSTableCellView {
 }
 
 final class EditorDrawOverlay: NSView {
-    enum Shape: String {
-        case rectangle, ellipse
+    enum Shape: String, CaseIterable {
+        case rectangle, ellipse, line, arrow, pen
     }
 
-    var shape: Shape = .rectangle
-    var canvasSize = NSSize.zero { didSet { needsDisplay = true } }
+    var shape: Shape = .rectangle { didSet { if shape != oldValue { cancelGesture() } } }
+    var canvasSize = NSSize.zero {
+        didSet { if canvasSize != oldValue { cancelGesture() }; needsDisplay = true }
+    }
     var drawingEnabled = false {
         didSet {
             isHidden = !drawingEnabled
@@ -76,11 +78,17 @@ final class EditorDrawOverlay: NSView {
             window?.invalidateCursorRects(for: self)
         }
     }
-    var onComplete: ((Shape, NSPoint, NSPoint) -> Void)?
+    var onComplete: ((Shape, NSPoint, NSPoint, [NSPoint]) -> Void)?
     var fillColor = NSColor.controlAccentColor.withAlphaComponent(0.22)
     var strokeColor = NSColor.controlAccentColor
     private(set) var startPoint: NSPoint?
     private(set) var currentPoint: NSPoint?
+    private(set) var penPoints: [NSPoint] = []
+    private var previousMouseCoalescing: Bool?
+
+    deinit {
+        if let previousMouseCoalescing { NSEvent.isMouseCoalescingEnabled = previousMouseCoalescing }
+    }
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -103,13 +111,24 @@ final class EditorDrawOverlay: NSView {
     }
 
     func begin(at point: NSPoint) {
-        guard drawingEnabled else { return }
+        guard drawingEnabled, presentedImageRect.width > 0 else { return }
+        cancelGesture()
         startPoint = point; currentPoint = point; needsDisplay = true
+        if shape == .pen {
+            penPoints = [canvasPoint(for: point)]
+            previousMouseCoalescing = NSEvent.isMouseCoalescingEnabled
+            NSEvent.isMouseCoalescingEnabled = false
+        }
     }
 
     func drag(to point: NSPoint) {
         guard startPoint != nil else { return }
         currentPoint = point; needsDisplay = true
+        if shape == .pen, let last = penPoints.last {
+            let next = canvasPoint(for: point)
+            let minimum = 1.5 * canvasSize.width / presentedImageRect.width
+            if hypot(next.x - last.x, next.y - last.y) >= minimum { penPoints.append(next) }
+        }
     }
 
     func end(at point: NSPoint) {
@@ -117,13 +136,29 @@ final class EditorDrawOverlay: NSView {
         currentPoint = point
         let start = canvasPoint(for: startPoint)
         let end = canvasPoint(for: point)
+        let points = penPoints
+        let arrowLength = hypot(point.x - startPoint.x, point.y - startPoint.y)
         cancelGesture()
-        guard start.x != end.x, start.y != end.y else { return }
-        onComplete?(shape, start, end)
+        switch shape {
+        case .rectangle, .ellipse:
+            guard start.x != end.x, start.y != end.y else { return }
+        case .arrow:
+            guard arrowLength >= 3,
+                  let geometry = NativeEditorDrawGeometry(arrow: true, samples: [start, end]),
+                  !geometry.points.isEmpty else { return }
+        case .line, .pen: break
+        }
+        // Like shipping, Pen accepts movement samples, not the release location.
+        onComplete?(shape, start, end, points)
     }
 
     func cancelGesture() {
         startPoint = nil; currentPoint = nil; needsDisplay = true
+        penPoints.removeAll(keepingCapacity: true)
+        if let previousMouseCoalescing {
+            NSEvent.isMouseCoalescingEnabled = previousMouseCoalescing
+            self.previousMouseCoalescing = nil
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -156,6 +191,33 @@ final class EditorDrawOverlay: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard let startPoint, let currentPoint else { return }
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSBezierPath(rect: bounds).addClip()
+        if shape == .line || shape == .arrow || shape == .pen {
+            let samples = shape == .pen ? penPoints : [canvasPoint(for: startPoint), canvasPoint(for: currentPoint)]
+            guard let geometry = NativeEditorDrawGeometry(arrow: shape == .arrow, samples: samples),
+                  let first = geometry.points.first else { return }
+            let image = presentedImageRect
+            let scale = image.width / canvasSize.width
+            let position: (NSPoint) -> NSPoint = {
+                NSPoint(x: image.minX + $0.x * scale, y: image.minY + $0.y * scale)
+            }
+            let path = NSBezierPath(); path.move(to: position(first))
+            geometry.points.dropFirst().forEach { path.line(to: position($0)) }
+            strokeColor.setFill(); strokeColor.setStroke()
+            if shape == .arrow { path.close(); path.fill() }
+            else if geometry.points.allSatisfy({ $0 == first }) {
+                let radius = geometry.strokeWidth * scale / 2
+                let center = position(first)
+                NSBezierPath(ovalIn: NSRect(x: center.x - radius, y: center.y - radius,
+                                           width: radius * 2, height: radius * 2)).fill()
+            } else {
+                path.lineWidth = geometry.strokeWidth * scale
+                path.lineCapStyle = .round; path.lineJoinStyle = .round; path.stroke()
+            }
+            return
+        }
         let rect = NSRect(x: min(startPoint.x, currentPoint.x),
                           y: min(startPoint.y, currentPoint.y),
                           width: abs(currentPoint.x - startPoint.x),
@@ -208,7 +270,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var outputPngPaletteLabel: NSTextField!
     private var outputByteBudgetLabel: NSTextField!
     private var sectionControl: NSSegmentedControl!
-    private var drawTool: NSSegmentedControl!
+    private var drawTool: NSPopUpButton!
     private var outputFormat: NSPopUpButton!
     private var outputQuality: NSPopUpButton!
     private var outputPreviewMode: NSSegmentedControl!
@@ -412,8 +474,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.frame = preview.frame
         drawOverlay.autoresizingMask = [.width, .height]
         drawOverlay.setAccessibilityLabel("Screenshot drawing canvas")
-        drawOverlay.onComplete = { [weak self] shape, start, end in
-            self?.createClosedShape(shape: shape, start: start, end: end)
+        drawOverlay.onComplete = { [weak self] shape, start, end, points in
+            self?.createDrawing(shape: shape, start: start, end: end, points: points)
         }
         previewPanel.addSubview(drawOverlay)
         dimensions.frame = NSRect(x: 24, y: 654, width: 640, height: 20)
@@ -504,12 +566,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         panelLabel("Drag directly on the edited image preview.",
                    frame: NSRect(x: 0, y: 28, width: 272, height: 38), muted: true,
                    parent: drawPanel)
-        panelFieldLabel("Shape", x: 0, y: 78, parent: drawPanel)
-        drawTool = NSSegmentedControl(labels: ["Rectangle", "Ellipse"], trackingMode: .selectOne,
-                                      target: self, action: #selector(changeDrawTool))
+        panelFieldLabel("Tool", x: 0, y: 78, parent: drawPanel)
+        drawTool = NSPopUpButton()
+        drawTool.addItems(withTitles: ["Rectangle", "Ellipse", "Line", "Arrow", "Pen"])
+        drawTool.target = self; drawTool.action = #selector(changeDrawTool)
         drawTool.frame = NSRect(x: 0, y: 100, width: 272, height: 30)
-        drawTool.selectedSegment = 0
-        drawTool.setAccessibilityLabel("Drawing shape")
+        drawTool.selectItem(at: 0)
+        drawTool.setAccessibilityLabel("Drawing tool")
         drawPanel.addSubview(drawTool)
         panelLabel("Release creates one layer using the shared default style. Escape, changing sections, or leaving the window cancels the current drag.",
                    frame: NSRect(x: 0, y: 148, width: 272, height: 94), muted: true,
@@ -711,7 +774,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     @objc private func changeDrawTool() {
         cancelDrawing()
-        drawOverlay.shape = drawTool.selectedSegment == 1 ? .ellipse : .rectangle
+        drawOverlay.shape = EditorDrawOverlay.Shape.allCases[drawTool.indexOfSelectedItem]
     }
 
     @objc private func outputOptionsChanged() {
@@ -960,15 +1023,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 preferredSelection: preferredSelection)
     }
 
-    private func createClosedShape(shape: EditorDrawOverlay.Shape, start: NSPoint, end: NSPoint) {
-        guard let layers = state.snapshot?.layers, start.x != end.x, start.y != end.y else { return }
-        command([
-            "operation": "create_closed_shape",
-            "shape": shape.rawValue,
-            "start": ["x": start.x, "y": start.y],
-            "end": ["x": end.x, "y": end.y],
-        ], message: shape == .rectangle ? "Drawing rectangle…" : "Drawing ellipse…",
-           createdLayerExistingIDs: Set(layers.map(\.id)))
+    private func createDrawing(shape: EditorDrawOverlay.Shape, start: NSPoint, end: NSPoint, points: [NSPoint]) {
+        guard let layers = state.snapshot?.layers else { return }
+        let request: [String: Any]
+        if shape == .pen {
+            request = ["operation": "create_freehand_path", "points": points.map { ["x": $0.x, "y": $0.y] }]
+        } else {
+            request = ["operation": shape == .line || shape == .arrow ? "create_open_shape" : "create_closed_shape",
+                       "shape": shape.rawValue,
+                       "start": ["x": start.x, "y": start.y], "end": ["x": end.x, "y": end.y]]
+        }
+        command(request, message: "Drawing \(shape.rawValue)…", createdLayerExistingIDs: Set(layers.map(\.id)))
     }
 
     private func cancelDrawing() {

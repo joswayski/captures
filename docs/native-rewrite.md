@@ -546,7 +546,7 @@ pixels, off-canvas expansion and draft reopening have automated coverage.
 Resize/curve grips and other tools remain separate work.
 Windows/X11/Wayland share this host code; private X11 is the exercised UI, not
 physical input/accessibility acceptance.
-AppKit connects rectangles/ellipses below; Line/Arrow and Pen remain unconnected.
+AppKit connects the same five drawing tools below.
 
 The wgpu Layers panel connects annotation-style fields with one explicit Apply
 style transaction. Local fields and color pickers emit only changed patch values;
@@ -617,13 +617,22 @@ description are rejected instead of silently relabeled.
 Image layers expose shared rotate-left, rotate-right, flip-horizontal and flip-vertical
 commands, including hidden or locked layers; shared Rust owns orientation, canvas fit,
 clipping and expansion policy while AppKit retains the stable selected layer.
-The AppKit **Draw** view connects rectangle and ellipse gestures directly to the fitted
-edited preview. Transient geometry stays host-local; release submits one shared
+The AppKit **Draw** view connects Rectangle, Ellipse, Line, Arrow and Pen gestures to the fitted
+edited preview. Pointer state stays host-local; release submits one shared
 creation command, selects the returned fresh layer ID and invalidates stale encoded
 output. Preview mapping preserves reverse and off-canvas coordinates without reading
 unapplied numeric fields. Escape, focus loss, close, or changing sections cancels a
 drag without editing the document. Shared Rust remains the authority for default
 style, clipping, fully-outside expansion, rendering and undo/draft transactionality.
+The C ABI supplies the shared arrow polygon and smoothed Pen centerline without
+per-event JSON or session-worker access. AppKit paints round caps/joins and click
+dots. Axis-aligned/zero-length lines remain valid; arrows enforce both the three-view-
+point threshold and the shared minimum document length. Pen accepts each delivered
+movement at least 1.5/displayScale document pixels from its last accepted sample,
+including off-canvas samples, without appending the release location. Mouse event
+coalescing is disabled only during a Pen stroke; every completion/cancellation restores
+the previous setting. Physical mouse/tablet sample delivery and mixed-DPI remain
+unverified. Windows/X11/Wayland retain their existing drawing implementation.
 The AppKit **Layers** view connects fill/stroke toggles for closed shapes, annotation
 color/width, and shadow color/opacity/blur/offset controls. Apply style submits one
 minimal shared patch through the existing serialized worker and invalidates encoded
@@ -644,7 +653,10 @@ behavior, real shape pixels/history/draft reopen, and rendered light/dark fixtur
 Physical AppKit input, accessibility and IME acceptance remain unverified.
 
 Across both hosts, physical input/accessibility/IME acceptance remains open.
-AppKit's other drawing tools and edited-image clipboard output
+The current native screenshot editor is a functional workbench, not a visual match
+for the shipping Tauri editor. Functional controls and inspected fixtures do not
+complete the editor layout/interaction/design parity gate.
+Direct canvas manipulation, other drawing tools and edited-image clipboard output
 are not connected. Recording editing remains open on both hosts; the
 screenshot-editor parity gate stays open.
 
