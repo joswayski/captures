@@ -456,6 +456,26 @@ this implementation but remain presentation-unverified; AppKit layer controls
 are in progress. Merge/flatten, image import, image transforms and drawing tools
 are not connected by this panel slice.
 
+The wgpu Import image action now picks one PNG/JPEG/WebP/TIFF file independently
+of the session worker. The worker bounds encoded input and decoded dimensions,
+normalizes EXIF orientation and supplies owned RGBA to the shared import command.
+RGB/grayscale ICC profiles convert to sRGB before publication, preserving straight
+alpha; untagged files assume sRGB. Unsupported or malformed ICC profiles, CMYK
+profiles, and PNG gamma/chromaticity-only or CICP descriptions fail recoverably
+instead of silently relabeling samples. Those color formats and HDR/wide-gamut
+editing remain open; imports normalize to RGBA8. Analytic linear-to-sRGB fixtures
+exercise profile transport through PNG, JPEG, WebP and TIFF plus grayscale alpha.
+The returned stable ID selects the new layer. Cancellation, decode failures and
+late results after close preserve the editor; a completed selection waits for
+already accepted edits before importing. Imports do not write a draft or History
+until explicitly saved, and saved assets survive deleting the external source.
+Private-X11 checks exercise the actual rfd D-Bus transport with a disposable file
+chooser fixture, asymmetric rendered pixels, cancellation/retry, undo/redo,
+reopen and stale-close handling in both appearances. That fixture does not verify
+physical file dialogs, input, accessibility or IME. Windows and Wayland share the
+implementation but remain presentation-unverified; AppKit, batch import and
+drag-and-drop remain separate slices. Shipping Tauri import is unchanged.
+
 The wgpu Output panel now previews shared PNG/JPEG/WebP encoding with the shipping
 quality modes, palette controls and hard byte budget. Encoding and decoding run
 on the editor worker; the UI reports actual encoded bytes and switches between

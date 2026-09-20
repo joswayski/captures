@@ -1,7 +1,9 @@
 //! First connected screenshot editor: one serialized worker per open artifact.
 //! Only snapshots and retained pixels cross to the UI; disk/render work does not.
 use std::{
-    path::PathBuf,
+    fs::File,
+    io::{Cursor, Read},
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         mpsc::{self, Receiver, Sender},
@@ -12,18 +14,24 @@ use std::{
 use captures_app::{
     editor::{Document, Element, LayerEdit, LayerPlacement, Rect},
     editor_output::{SavedExport, save_new_export},
+    editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
     editor_session::{
-        EditorSession, ExportFormat, ExportOptions, ExportQuality, OpenRequest, PngOptions, Request,
+        EditorSession, ExportFormat, ExportOptions, ExportQuality, ImportImage, OpenRequest,
+        PngOptions, Request,
     },
 };
 use captures_capture::CaptureMode;
 use eframe::egui::{self, RichText};
-use image::RgbaImage;
+use image::{ImageDecoder, ImageFormat, ImageReader, RgbaImage};
 
 use crate::tokens::Tokens;
 
 enum Job {
     Apply(Request),
+    Import {
+        path: PathBuf,
+        selected_id: Option<String>,
+    },
     Preview(ExportOptions),
     SaveNew {
         destination: PathBuf,
@@ -38,6 +46,7 @@ struct Presented {
     pixels: Arc<RgbaImage>,
     output: Option<(RgbaImage, usize)>,
     saved: Option<SavedExport>,
+    imported_layer: Option<String>,
     can_undo: bool,
     can_redo: bool,
     unsaved: bool,
@@ -52,6 +61,7 @@ impl Presented {
             pixels: session.pixels(),
             output: None,
             saved: None,
+            imported_layer: None,
             can_undo: snapshot.can_undo,
             can_redo: snapshot.can_redo,
             unsaved: snapshot.unsaved_changes,
@@ -77,6 +87,7 @@ struct View {
     output: Option<(egui::TextureHandle, usize)>,
     show_output: bool,
     destination: String,
+    import_picker: Option<Receiver<Option<PathBuf>>>,
     saved_notice: Option<String>,
     history_changed: bool,
     selected_layer: Option<String>,
@@ -109,6 +120,7 @@ impl Default for View {
             output: None,
             show_output: false,
             destination: String::new(),
+            import_picker: None,
             saved_notice: None,
             history_changed: false,
             selected_layer: None,
@@ -199,8 +211,12 @@ impl View {
                         }
                     });
                 }
+                let selected = presented
+                    .imported_layer
+                    .take()
+                    .or(self.selected_layer.clone());
                 self.presented = Some(presented);
-                self.select_layer(self.selected_layer.clone());
+                self.select_layer(selected);
                 self.error = None;
                 if self.close_after_save || (self.close_requested && !self.unsaved()) {
                     self.closed = true;
@@ -240,6 +256,60 @@ impl View {
                 options: self.export_options,
             },
         );
+    }
+
+    fn choose_image(&mut self, ctx: &egui::Context) {
+        if self.import_picker.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.import_picker = Some(rx);
+        let ctx = ctx.clone();
+        let viewport = ctx.viewport_id();
+        // Picking is independent of the session worker: quit and draft saves
+        // never wait for a dialog. Decode and import happen on the worker later.
+        thread::spawn(move || {
+            let selected = rfd::FileDialog::new()
+                .set_title("Import image")
+                .add_filter(
+                    "Images (PNG, JPEG, WebP, TIFF)",
+                    &["png", "jpg", "jpeg", "webp", "tif", "tiff"],
+                )
+                .pick_file();
+            let _ = tx.send(selected);
+            wake(&ctx, viewport);
+        });
+    }
+
+    fn receive_import(&mut self, tx: &Sender<Job>) -> bool {
+        if self.closed || self.close_requested {
+            self.import_picker = None;
+            return false;
+        }
+        // Preserve the one-in-flight edit contract. A selected file waits until
+        // an accepted edit or a discard confirmation has finished.
+        if self.pending || self.confirm_discard {
+            return false;
+        }
+        let Some(result) = self.import_picker.as_ref().map(Receiver::try_recv) else {
+            return false;
+        };
+        if matches!(result, Err(mpsc::TryRecvError::Empty)) {
+            return false;
+        }
+        self.import_picker = None;
+        match result {
+            Ok(Some(path)) => self.submit_job(
+                tx,
+                Job::Import {
+                    path,
+                    selected_id: self.selected_layer.clone(),
+                },
+            ),
+            Ok(None) => {}
+            Err(_) => self.error = Some("Image selection failed. Try again.".into()),
+        }
+        true
     }
 
     fn submit_job(&mut self, tx: &Sender<Job>, job: Job) {
@@ -298,6 +368,108 @@ fn save_dirty(session: &mut EditorSession) -> Result<(), String> {
     Ok(())
 }
 
+fn decode_import(path: &Path) -> Result<RgbaImage, String> {
+    let maximum = captures_history::editor_draft::MAX_IMAGE_BYTES as u64;
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    if file.metadata().map_err(|error| error.to_string())?.len() > maximum {
+        return Err("This image is too large to open in Captures.".into());
+    }
+    let mut bytes = Vec::new();
+    file.take(maximum + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() as u64 > maximum {
+        return Err("This image is too large to open in Captures.".into());
+    }
+    let format = image::guess_format(&bytes).map_err(|error| error.to_string())?;
+    if !matches!(
+        format,
+        ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::WebP | ImageFormat::Tiff
+    ) {
+        return Err("Choose a PNG, JPEG, WebP or TIFF image.".into());
+    }
+    let mut decoder = ImageReader::with_format(Cursor::new(&bytes), format)
+        .into_decoder()
+        .map_err(|error| error.to_string())?;
+    let (width, height) = decoder.dimensions();
+    if width == 0
+        || height == 0
+        || width > MAX_RENDER_DIMENSION
+        || height > MAX_RENDER_DIMENSION
+        || u64::from(width) * u64::from(height) > MAX_RENDER_PIXELS
+    {
+        return Err(format!(
+            "Images are limited to {MAX_RENDER_DIMENSION} pixels per side and {MAX_RENDER_PIXELS} total pixels."
+        ));
+    }
+    // Browser-decoded imports in Tauri respect EXIF orientation. Normalize it
+    // before choosing natural dimensions or owning the pixels in a draft asset.
+    let orientation = decoder.orientation().map_err(|error| error.to_string())?;
+    let color_error = |error| format!("Cannot convert this image's color profile to sRGB: {error}");
+    let profile = if format == ImageFormat::Tiff {
+        // image's TIFF adapter suppresses tag errors. Distinguish an absent ICC
+        // profile from a malformed one rather than silently importing wrong colors.
+        tiff::decoder::Decoder::new(Cursor::new(&bytes))
+            .and_then(|mut decoder| decoder.image_ifd().find_tag(tiff::tags::Tag::IccProfile))
+            .and_then(|tag| tag.map(|value| value.into_u8_vec()).transpose())
+            .map_err(|error| color_error(error.to_string()))?
+    } else {
+        decoder
+            .icc_profile()
+            .map_err(|error| color_error(error.to_string()))?
+    };
+    if format == ImageFormat::Png {
+        let metadata = png::Decoder::new(Cursor::new(&bytes))
+            .read_info()
+            .map_err(|error| color_error(error.to_string()))?;
+        let info = metadata.info();
+        // CICP takes precedence over ICC. Gamma/chromaticity-only PNGs require
+        // a separate source-profile construction path, not an sRGB relabel.
+        if info.coding_independent_code_points.is_some()
+            || (profile.is_none()
+                && info.srgb.is_none()
+                && (info.gama_chunk.is_some() || info.chrm_chunk.is_some()))
+        {
+            return Err("This PNG's color metadata is not supported yet. Convert it to sRGB before importing.".into());
+        }
+    }
+    let mut image =
+        image::DynamicImage::from_decoder(decoder).map_err(|error| error.to_string())?;
+    image.apply_orientation(orientation);
+    let Some(profile) = profile else {
+        return Ok(image.into_rgba8()); // Untagged files use the sRGB assumption.
+    };
+    let profile = moxcms::ColorProfile::new_from_slice(&profile)
+        .map_err(|error| color_error(error.to_string()))?;
+    // image decodes CMYK JPEG to RGB, losing the original CMYK samples. Such
+    // profiles cannot safely be applied to the resulting pixels.
+    let (width, height) = (image.width(), image.height());
+    let (layout, samples) = match profile.color_space {
+        moxcms::DataColorSpace::Rgb => (moxcms::Layout::Rgba, image.into_rgba8().into_raw()),
+        moxcms::DataColorSpace::Gray if !image.color().has_color() => (
+            moxcms::Layout::GrayAlpha,
+            image.into_luma_alpha8().into_raw(),
+        ),
+        _ => return Err(
+            "This image's color space is not supported yet. Convert it to sRGB before importing."
+                .into(),
+        ),
+    };
+    let transform = profile
+        .create_transform_8bit(
+            layout,
+            &moxcms::ColorProfile::new_srgb(),
+            moxcms::Layout::Rgba,
+            moxcms::TransformOptions::default(),
+        )
+        .map_err(|error| color_error(error.to_string()))?;
+    let mut pixels = RgbaImage::new(width, height);
+    transform
+        .transform(&samples, pixels.as_mut())
+        .map_err(|error| color_error(error.to_string()))?;
+    Ok(pixels)
+}
+
 fn wake(ctx: &egui::Context, viewport: egui::ViewportId) {
     ctx.send_viewport_cmd_to(
         egui::ViewportId::ROOT,
@@ -352,6 +524,24 @@ impl Editor {
                         .and_then(|session| {
                             session.execute(request)?;
                             Ok(Presented::from_session(session))
+                        }),
+                    Job::Import { path, selected_id } => session
+                        .as_mut()
+                        .ok_or_else(|| "Editor is unavailable.".to_owned())
+                        .and_then(|session| {
+                            let id = session.import_image(ImportImage {
+                                pixels: decode_import(&path)?,
+                                name: path
+                                    .file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .into_owned(),
+                                selected_id,
+                                point: None,
+                            })?;
+                            let mut presented = Presented::from_session(session);
+                            presented.imported_layer = Some(id);
+                            Ok(presented)
                         }),
                     Job::Preview(options) => session
                         .as_ref()
@@ -431,6 +621,9 @@ impl Editor {
             self.view.lock().unwrap().receive(ctx, result);
             ctx.request_repaint_of(self.viewport);
         }
+        if self.view.lock().unwrap().receive_import(&self.tx) {
+            ctx.request_repaint_of(self.viewport);
+        }
     }
 
     /// Application quit drains accepted edits and saves their final draft on the
@@ -439,6 +632,9 @@ impl Editor {
         if self.closed() {
             return Ok(());
         }
+        // A ready picker result is not an accepted edit yet. Do not let receive
+        // enqueue a new import after the worker has finished its final save.
+        self.view.lock().unwrap().import_picker = None;
         let (tx, rx) = mpsc::channel();
         self.tx
             .send(Job::Flush(tx))
@@ -511,7 +707,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 .color(tokens.color("text-muted")));
         });
         ui.add_enabled_ui(!view.pending, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if ui.add_enabled(view.presented.as_ref().is_some_and(|p| p.can_undo), egui::Button::new("Undo")).clicked() { view.submit(tx, Request::Undo); }
                 if ui.add_enabled(view.presented.as_ref().is_some_and(|p| p.can_redo), egui::Button::new("Redo")).clicked() { view.submit(tx, Request::Redo); }
                 if ui.add_enabled(view.presented.is_some(), egui::Button::new("Save draft")).clicked() {
@@ -522,6 +718,9 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 ui.selectable_value(&mut view.section, Section::Geometry, "Geometry");
                 ui.selectable_value(&mut view.section, Section::Layers, "Layers");
                 ui.selectable_value(&mut view.section, Section::Output, "Output");
+                if ui.add_enabled(view.import_picker.is_none() && !view.close_requested && !view.confirm_discard, egui::Button::new("Import image…")).clicked() {
+                    view.choose_image(ui.ctx());
+                }
             });
         });
         if let Some(error) = &view.error { ui.colored_label(tokens.color("theme-signal"), error); }
@@ -883,11 +1082,384 @@ mod tests {
             pixels: Arc::new(RgbaImage::new(7, 3)),
             output: None,
             saved: None,
+            imported_layer: None,
             can_undo: unsaved,
             can_redo: false,
             unsaved,
             has_draft: !unsaved,
         }
+    }
+
+    #[test]
+    fn import_picker_defers_while_busy_and_ignores_cancelled_or_closing_results() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented(false)));
+        let pixels = view.presented.as_ref().unwrap().pixels.clone();
+        let (jobs, queued) = mpsc::channel();
+        let (selection, picked) = mpsc::channel();
+        view.import_picker = Some(picked);
+        selection.send(Some(PathBuf::from("photo.png"))).unwrap();
+        view.pending = true;
+        assert!(!view.receive_import(&jobs));
+        assert!(queued.try_recv().is_err() && view.import_picker.is_some());
+        view.pending = false;
+        assert!(view.receive_import(&jobs));
+        assert!(
+            matches!(queued.recv().unwrap(), Job::Import { path, selected_id }
+            if path == Path::new("photo.png") && selected_id.as_deref() == Some("capture-background"))
+        );
+        assert!(view.pending && view.import_picker.is_none());
+        assert!(Arc::ptr_eq(
+            &pixels,
+            &view.presented.as_ref().unwrap().pixels
+        ));
+        view.pending = false;
+        let (selection, picked) = mpsc::channel();
+        view.import_picker = Some(picked);
+        selection.send(None).unwrap();
+        assert!(view.receive_import(&jobs));
+        assert!(!view.pending && !view.unsaved() && queued.try_recv().is_err());
+        for closed in [false, true] {
+            let (selection, picked) = mpsc::channel();
+            view.import_picker = Some(picked);
+            selection.send(Some(PathBuf::from("stale.png"))).unwrap();
+            view.closed = closed;
+            view.close_requested = !closed;
+            assert!(!view.receive_import(&jobs));
+            assert!(view.import_picker.is_none() && queued.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn import_converts_rgb_and_gray_profiles_without_changing_straight_alpha() {
+        use image::ImageEncoder;
+        use moxcms::{ColorProfile, ToneReprCurve};
+        let data = tempfile::tempdir().unwrap();
+        let path = data.path().join("profile.data");
+        let mut linear = ColorProfile::new_srgb();
+        linear.cicp = None;
+        linear.red_trc = Some(ToneReprCurve::Parametric(vec![1.]));
+        linear.green_trc = linear.red_trc.clone();
+        linear.blue_trc = linear.red_trc.clone();
+        let profile = linear.encode().unwrap();
+        let samples = [64, 128, 192, 73, 192, 32, 8, 0];
+        fn write(mut encoder: impl ImageEncoder, profile: Vec<u8>, samples: &[u8]) {
+            encoder.set_icc_profile(profile).unwrap();
+            encoder
+                .write_image(samples, 2, 1, image::ExtendedColorType::Rgba8)
+                .unwrap();
+        }
+        for format in [ImageFormat::Png, ImageFormat::WebP, ImageFormat::Tiff] {
+            let mut encoded = Cursor::new(Vec::new());
+            match format {
+                ImageFormat::Png => write(
+                    image::codecs::png::PngEncoder::new(&mut encoded),
+                    profile.clone(),
+                    &samples,
+                ),
+                ImageFormat::WebP => write(
+                    image::codecs::webp::WebPEncoder::new_lossless(&mut encoded),
+                    profile.clone(),
+                    &samples,
+                ),
+                ImageFormat::Tiff => write(
+                    image::codecs::tiff::TiffEncoder::new(&mut encoded),
+                    profile.clone(),
+                    &samples,
+                ),
+                _ => unreachable!(),
+            }
+            fs::write(&path, encoded.into_inner()).unwrap();
+            let decoded = decode_import(&path).unwrap();
+            // Independently calculated sRGB OETF: round(255*(1.055*(v/255)^(1/2.4)-.055)).
+            for (actual, expected) in decoded
+                .as_raw()
+                .iter()
+                .zip([137u8, 188, 225, 73, 225, 99, 50, 0])
+            {
+                assert!(
+                    actual.abs_diff(expected) <= 1,
+                    "{format:?}: {actual} != {expected}"
+                );
+            }
+            assert_eq!(decoded.get_pixel(0, 0)[3], 73);
+            assert_eq!(decoded.get_pixel(1, 0)[3], 0);
+        }
+        let mut encoded = Vec::new();
+        let mut jpeg = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, 100);
+        jpeg.set_icc_profile(profile).unwrap();
+        jpeg.write_image(&[128, 128, 128], 1, 1, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        fs::write(&path, encoded).unwrap();
+        assert_eq!(
+            decode_import(&path).unwrap().get_pixel(0, 0).0,
+            [188, 188, 188, 255]
+        );
+
+        let mut encoded = Vec::new();
+        let mut png = image::codecs::png::PngEncoder::new(&mut encoded);
+        png.set_icc_profile(ColorProfile::new_gray_with_gamma(1.).encode().unwrap())
+            .unwrap();
+        png.write_image(&[128, 73, 32, 0], 2, 1, image::ExtendedColorType::La8)
+            .unwrap();
+        fs::write(&path, encoded).unwrap();
+        let decoded = decode_import(&path).unwrap();
+        assert_eq!(decoded.as_raw(), &[188, 188, 188, 73, 99, 99, 99, 0]);
+    }
+
+    #[test]
+    fn import_rejects_unusable_color_metadata_instead_of_relabeling_pixels() {
+        use image::ImageEncoder;
+        let data = tempfile::tempdir().unwrap();
+        let path = data.path().join("profile.png");
+        for profile in [vec![1, 2, 3], {
+            let mut profile = moxcms::ColorProfile::new_srgb().encode().unwrap();
+            profile[16..20].copy_from_slice(b"CMYK");
+            profile
+        }] {
+            let mut encoded = Vec::new();
+            let mut png = image::codecs::png::PngEncoder::new(&mut encoded);
+            png.set_icc_profile(profile).unwrap();
+            png.write_image(&[64, 128, 192, 73], 1, 1, image::ExtendedColorType::Rgba8)
+                .unwrap();
+            fs::write(&path, encoded).unwrap();
+            assert!(decode_import(&path).unwrap_err().contains("color"));
+        }
+        let mut encoded = Vec::new();
+        let mut png = png::Encoder::new(&mut encoded, 1, 1);
+        png.set_color(png::ColorType::Rgba);
+        png.set_source_gamma(png::ScaledFloat::new(1.));
+        png.write_header()
+            .unwrap()
+            .write_image_data(&[64, 128, 192, 73])
+            .unwrap();
+        fs::write(&path, encoded).unwrap();
+        assert!(
+            decode_import(&path)
+                .unwrap_err()
+                .contains("color metadata is not supported")
+        );
+    }
+
+    #[test]
+    fn import_decoder_preserves_lossless_formats_applies_exif_and_rejects_limits() {
+        let data = tempfile::tempdir().unwrap();
+        let path = data.path().join("image.data"); // Sniff bytes, not the filename.
+        let pixels = RgbaImage::from_fn(7, 3, |x, y| {
+            image::Rgba([x as u8 * 31, y as u8 * 71, 9, 128])
+        });
+        for format in [ImageFormat::Png, ImageFormat::WebP, ImageFormat::Tiff] {
+            pixels.save_with_format(&path, format).unwrap();
+            assert_eq!(decode_import(&path).unwrap(), pixels, "{format:?}");
+        }
+        let rgb = image::DynamicImage::ImageRgba8(pixels).into_rgb8();
+        rgb.save_with_format(&path, ImageFormat::Jpeg).unwrap();
+        let decoded = decode_import(&path).unwrap();
+        assert_eq!(decoded.dimensions(), (7, 3));
+        let jpeg = fs::read(&path).unwrap();
+        // APP1 Exif, little-endian TIFF IFD with orientation tag 6 (90° clockwise).
+        let exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0\x06\0\0\0\0\0\0\0";
+        let mut oriented = vec![0xff, 0xd8, 0xff, 0xe1];
+        oriented.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
+        oriented.extend_from_slice(exif);
+        oriented.extend_from_slice(&jpeg[2..]);
+        fs::write(&path, oriented).unwrap();
+        let rotated = decode_import(&path).unwrap();
+        assert_eq!(rotated.dimensions(), (3, 7));
+        for y in 0..7 {
+            for x in 0..3 {
+                assert_eq!(rotated.get_pixel(x, y), decoded.get_pixel(y, 2 - x));
+            }
+        }
+        fs::write(&path, b"GIF89a").unwrap();
+        assert_eq!(
+            decode_import(&path).unwrap_err(),
+            "Choose a PNG, JPEG, WebP or TIFF image."
+        );
+        fs::write(&path, b"not an image").unwrap();
+        assert!(decode_import(&path).is_err());
+        RgbaImage::new(MAX_RENDER_DIMENSION + 1, 1)
+            .save_with_format(&path, ImageFormat::Png)
+            .unwrap();
+        assert!(
+            decode_import(&path)
+                .unwrap_err()
+                .contains("pixels per side")
+        );
+        File::create(&path)
+            .unwrap()
+            .set_len(captures_history::editor_draft::MAX_IMAGE_BYTES as u64 + 1)
+            .unwrap();
+        assert_eq!(
+            decode_import(&path).unwrap_err(),
+            "This image is too large to open in Captures."
+        );
+    }
+
+    #[test]
+    fn quit_drops_unaccepted_picker_results_but_saves_already_queued_imports() {
+        let (data, id) = fixture();
+        let path = data.path().join("new.png");
+        RgbaImage::new(3, 2).save(&path).unwrap();
+        let ctx = egui::Context::default();
+        let editor = Editor::open(
+            &ctx,
+            data.path().join("history"),
+            id.clone(),
+            data.path().join("exports"),
+            CaptureMode::Region,
+        );
+        receive(&editor, &ctx);
+        let (selection, picked) = mpsc::channel();
+        editor.view.lock().unwrap().import_picker = Some(picked);
+        selection.send(Some(path.clone())).unwrap();
+        editor.flush(&ctx).unwrap();
+        {
+            let view = editor.view.lock().unwrap();
+            assert!(!view.pending && !view.unsaved() && view.import_picker.is_none());
+            assert_eq!(view.presented.as_ref().unwrap().document.elements.len(), 1);
+        }
+        assert!(!data.path().join("editor-drafts").exists());
+        editor.view.lock().unwrap().submit_job(
+            &editor.tx,
+            Job::Import {
+                path,
+                selected_id: None,
+            },
+        );
+        editor.flush(&ctx).unwrap();
+        let view = editor.view.lock().unwrap();
+        // Flush acknowledges durable saving before its final UI snapshot may
+        // arrive. Verify persisted contents below, not that asynchronous label.
+        assert!(!view.pending);
+        assert_eq!(view.presented.as_ref().unwrap().document.elements.len(), 2);
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &fs::read(
+                data.path()
+                    .join("editor-drafts")
+                    .join(id)
+                    .join("manifest.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            manifest["document"]["elements"].as_array().unwrap().len(),
+            2
+        );
+    }
+
+    #[test]
+    fn imported_file_is_owned_undoable_and_reopens_after_source_deletion() {
+        let (data, id) = fixture();
+        let original = fs::read(data.path().join("history").join(&id).join("capture.png")).unwrap();
+        let path = data.path().join("Imported é.png");
+        let imported = RgbaImage::from_fn(3, 2, |x, y| {
+            image::Rgba([x as u8 * 80, y as u8 * 90, 255, 255])
+        });
+        imported.save(&path).unwrap();
+        let ctx = egui::Context::default();
+        let open = || {
+            Editor::open(
+                &ctx,
+                data.path().join("history"),
+                id.clone(),
+                data.path().join("exports"),
+                CaptureMode::Region,
+            )
+        };
+        let editor = open();
+        receive(&editor, &ctx);
+        editor.view.lock().unwrap().submit_job(
+            &editor.tx,
+            Job::Import {
+                path: path.clone(),
+                selected_id: Some("capture-background".into()),
+            },
+        );
+        receive(&editor, &ctx);
+        let (layer_id, edited) = {
+            let view = editor.view.lock().unwrap();
+            let frame = view.presented.as_ref().unwrap();
+            let layer = frame.document.elements.last().unwrap();
+            assert_eq!(layer_label(layer), "Imported é.png");
+            assert_eq!(
+                view.selected_layer.as_deref(),
+                Some(layer.base().id.as_str())
+            );
+            assert_eq!((layer.base().x, layer.base().y), (2., 3.));
+            assert_eq!(frame.pixels.dimensions(), (7, 5));
+            for y in 0..2 {
+                for x in 0..3 {
+                    assert_eq!(
+                        frame.pixels.get_pixel(x + 2, y + 3),
+                        imported.get_pixel(x, y)
+                    );
+                }
+            }
+            assert!(view.unsaved());
+            (layer.base().id.clone(), frame.pixels.clone())
+        };
+        assert!(!data.path().join("editor-drafts").exists());
+        fs::remove_file(&path).unwrap();
+        editor
+            .view
+            .lock()
+            .unwrap()
+            .submit(&editor.tx, Request::Undo);
+        receive(&editor, &ctx);
+        let before = editor
+            .view
+            .lock()
+            .unwrap()
+            .presented
+            .as_ref()
+            .unwrap()
+            .pixels
+            .clone();
+        editor.view.lock().unwrap().submit_job(
+            &editor.tx,
+            Job::Import {
+                path,
+                selected_id: None,
+            },
+        );
+        receive(&editor, &ctx);
+        {
+            let view = editor.view.lock().unwrap();
+            assert!(view.error.is_some() && !view.pending);
+            assert!(view.presented.as_ref().unwrap().can_redo);
+            assert!(Arc::ptr_eq(
+                &before,
+                &view.presented.as_ref().unwrap().pixels
+            ));
+        }
+        editor
+            .view
+            .lock()
+            .unwrap()
+            .submit(&editor.tx, Request::Redo);
+        receive(&editor, &ctx);
+        editor
+            .view
+            .lock()
+            .unwrap()
+            .submit(&editor.tx, Request::SaveDraft { updated_at_ms: 123 });
+        receive(&editor, &ctx);
+        drop(editor);
+        let reopened = open();
+        receive(&reopened, &ctx);
+        let view = reopened.view.lock().unwrap();
+        let frame = view.presented.as_ref().unwrap();
+        assert_eq!(frame.document.elements.last().unwrap().base().id, layer_id);
+        assert_eq!(frame.pixels.as_ref(), edited.as_ref());
+        assert!(!view.unsaved() && frame.has_draft);
+        assert_eq!(
+            fs::read(data.path().join("history").join(id).join("capture.png")).unwrap(),
+            original
+        );
+        assert!(!data.path().join("exports").exists());
     }
 
     #[test]
