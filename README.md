@@ -258,7 +258,8 @@ Shared Rust now defines the screenshot editor's layered document, crop/translati
 orientation geometry, canvas sizing and bounded snapshot history, checked against
 the shipping TypeScript behavior. A shared renderer now flattens real image layers
 and editor shapes, including closed annotations, curved lines, tapered arrows and
-freehand paths with crop geometry, rotation, opacity and blending, without host I/O.
+freehand paths with crop geometry, rotation, opacity, blending and enabled shape/path
+drop shadows, without host I/O.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
 resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
 pixel frames for native hosts.
@@ -295,7 +296,7 @@ cover both appearances, persisted drafts, real preview pixels and error recovery
 AppKit now connects the same crop, canvas-resize and draft operations in its own
 window. Windows, Wayland and physical AppKit presentation remain unverified.
 AppKit image-transform/import controls, batch/drag-and-drop import, text, annotation
-shadows, annotation tools,
+shadow controls, annotation tools,
 overwrite-original, AppKit edited-image clipboard/file output,
 and recording editing remain unconnected. These connected controls and shared
 rendering/export support do not complete native editor acceptance. OS shortcut

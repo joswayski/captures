@@ -2,8 +2,8 @@ use std::{collections::BTreeMap, f64::consts::FRAC_PI_4, sync::Arc};
 
 use captures_app::{
     editor::{
-        Document, Element, ElementBase, ElementStyle, ImageElement, ImageOrientation,
-        OptionalNullable, PathElement, Point, Rect, ShapeElement,
+        Document, DropShadowStyle, Element, ElementBase, ElementStyle, ImageElement,
+        ImageOrientation, OptionalNullable, PathElement, Point, Rect, ShapeElement,
     },
     editor_render::render,
 };
@@ -597,7 +597,7 @@ fn unsupported_visible_content_and_values_fail_instead_of_disappearing() {
 }
 
 #[test]
-fn unsupported_shape_kinds_effects_and_invalid_style_values_are_explicit() {
+fn unsupported_shape_kinds_and_invalid_style_values_are_explicit() {
     let error = render(
         &document(
             20.,
@@ -613,17 +613,6 @@ fn unsupported_shape_kinds_effects_and_invalid_style_values_are_explicit() {
     )
     .unwrap_err();
     assert!(error.contains("unsupported shape kind"), "{error}");
-
-    let mut shadow = shape("shadow", "rectangle", (1., 1.), (10., 10.));
-    shadow.style.drop_shadow = Some(true);
-    assert!(
-        render(
-            &document(20., 20., vec![Element::Shape(shadow)]),
-            &BTreeMap::new()
-        )
-        .unwrap_err()
-        .contains("unsupported drop shadow")
-    );
 
     for mutate in [
         |shape: &mut ShapeElement| shape.end_x = f64::NAN,
@@ -655,17 +644,6 @@ fn unsupported_shape_kinds_effects_and_invalid_style_values_are_explicit() {
         .is_ok()
     );
 
-    let mut path_shadow = path("path-shadow", &[(1., 1.), (10., 10.)]);
-    path_shadow.style.drop_shadow = Some(true);
-    assert!(
-        render(
-            &document(20., 20., vec![Element::Path(path_shadow)]),
-            &BTreeMap::new()
-        )
-        .unwrap_err()
-        .contains("unsupported drop shadow")
-    );
-
     for mutate in [
         |path: &mut PathElement| path.points[0].x = f64::NAN,
         |path: &mut PathElement| path.style.stroke_width = 0.,
@@ -684,6 +662,45 @@ fn unsupported_shape_kinds_effects_and_invalid_style_values_are_explicit() {
             .is_err()
         );
     }
+}
+
+#[test]
+fn enabled_shape_and_path_shadows_use_custom_and_shipping_default_metrics() {
+    let mut shadow = shape("shadow", "rectangle", (5., 7.), (15., 17.));
+    shadow.base.opacity = 50.;
+    shadow.style.stroke_enabled = Some(false);
+    shadow.style.drop_shadow = Some(true);
+    shadow.style.drop_shadow_style = Some(DropShadowStyle {
+        color: "#20c060".into(),
+        opacity: 80.,
+        blur: 0.,
+        offset_x: 12.,
+        offset_y: -3.,
+        extra: Map::new(),
+    });
+    let rendered = render(
+        &document(36., 24., vec![Element::Shape(shadow)]),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let shadow_only = rendered.get_pixel(21, 9).0;
+    for (actual, expected) in shadow_only[..3].iter().zip([32_u8, 192, 96]) {
+        assert!(actual.abs_diff(expected) <= 1, "{shadow_only:?}");
+    }
+    assert!((100..=103).contains(&shadow_only[3]), "{shadow_only:?}");
+    assert_eq!(&rendered.get_pixel(10, 11).0[..3], &[230, 60, 40]);
+
+    let mut path_shadow = path("path-shadow", &[(4., 12.), (13., 12.)]);
+    path_shadow.style.color = "#e04090".into();
+    path_shadow.style.stroke_width = 8.;
+    path_shadow.style.drop_shadow = Some(true);
+    let rendered = render(
+        &document(28., 28., vec![Element::Path(path_shadow)]),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(&rendered.get_pixel(8, 12).0[..3], &[224, 64, 144]);
+    assert!(rendered.get_pixel(8, 21).0[3] > 0);
 }
 
 #[test]
