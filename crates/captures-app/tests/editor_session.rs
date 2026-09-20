@@ -195,6 +195,313 @@ fn layer_json_commands_render_transactionally_and_restore_shared_assets() {
 }
 
 #[test]
+fn annotation_style_json_patches_locked_hidden_layers_and_preserves_history_and_drafts() {
+    let (data, id, _) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    let mut baseline = editor.snapshot().document.clone();
+    baseline.width = 32.;
+    baseline.height = 24.;
+    baseline.background = None;
+    baseline
+        .extra
+        .insert("futureDocument".into(), json!({"keep": "annotation-style"}));
+    let Element::Image(background) = &mut baseline.elements[0] else {
+        panic!()
+    };
+    background.base.visible = false;
+    background
+        .extra
+        .insert("futureImage".into(), json!({"keep": true}));
+    baseline.elements.extend([
+        serde_json::from_value(json!({
+            "kind": "shape",
+            "id": "locked-shape",
+            "x": 5,
+            "y": 7,
+            "endX": 15,
+            "endY": 17,
+            "controls": [],
+            "shape": "rectangle",
+            "locked": true,
+            "visible": true,
+            "opacity": 100,
+            "blendMode": "source-over",
+            "style": {
+                "color": "#111111",
+                "fill": "#cc2233",
+                "strokeWidth": 4,
+                "strokeEnabled": true,
+                "dropShadow": false,
+                "dropShadowStyle": {
+                    "color": "#334455",
+                    "opacity": 70,
+                    "blur": 2,
+                    "offsetX": 1,
+                    "offsetY": -3,
+                    "futureShadow": {"keep": [3, 1]}
+                },
+                "futureStyle": {"keep": 9}
+            },
+            "futureShape": ["preserve"]
+        }))
+        .unwrap(),
+        serde_json::from_value(json!({
+            "kind": "path",
+            "id": "hidden-path",
+            "x": 3,
+            "y": 20,
+            "points": [{"x": 3, "y": 20}, {"x": 23, "y": 20}],
+            "locked": true,
+            "visible": false,
+            "opacity": 100,
+            "blendMode": "source-over",
+            "style": {
+                "color": "#0000ff",
+                "fill": "#abcdef",
+                "strokeWidth": 3,
+                "strokeEnabled": false,
+                "dropShadow": false,
+                "futurePathStyle": "keep"
+            },
+            "futurePath": {"keep": true}
+        }))
+        .unwrap(),
+        serde_json::from_value(json!({
+            "kind": "text",
+            "id": "hidden-text",
+            "x": 1,
+            "y": 1,
+            "locked": true,
+            "visible": false,
+            "opacity": 100,
+            "blendMode": "source-over",
+            "text": "unsupported target",
+            "fontSize": 14,
+            "width": 80,
+            "fontFamily": "Inter",
+            "bold": false,
+            "italic": false,
+            "align": "left",
+            "color": "#ffffff",
+            "background": null,
+            "outlined": false,
+            "roundedBackground": false,
+            "futureText": "keep"
+        }))
+        .unwrap(),
+    ]);
+    editor
+        .execute(Request::Commit { document: baseline })
+        .unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 1 })
+        .unwrap();
+    drop(editor);
+
+    let mut editor = open(data.path(), &id).unwrap();
+    let layer = |id: &str, edit| {
+        serde_json::from_value::<Request>(json!({
+            "operation": "layer", "id": id, "edit": edit,
+        }))
+        .unwrap()
+    };
+    editor
+        .execute(layer(
+            "locked-shape",
+            json!({
+                "action": "annotation_style",
+                "patch": {
+                    "color": "#123456",
+                    "fill": "#e04090",
+                    "strokeWidth": 8,
+                    "strokeEnabled": false,
+                    "dropShadowStyle": {
+                        "color": "#20c060",
+                        "opacity": 80,
+                        "blur": 0,
+                        "offsetX": 6
+                    }
+                }
+            }),
+        ))
+        .unwrap();
+    let enabled = editor.snapshot().document.clone();
+    let Element::Shape(shape) = &enabled.elements[1] else {
+        panic!()
+    };
+    assert!(shape.base.locked);
+    assert_eq!(shape.style.color, "#123456");
+    assert_eq!(shape.style.fill.as_deref(), Some("#e04090"));
+    assert_eq!(shape.style.stroke_width, 8.);
+    assert_eq!(shape.style.stroke_enabled, Some(false));
+    assert_eq!(shape.style.drop_shadow, Some(true));
+    assert_eq!(shape.style.extra["futureStyle"], json!({"keep": 9}));
+    let shadow = shape.style.drop_shadow_style.as_ref().unwrap();
+    assert_eq!(shadow.color, "#20c060");
+    assert_eq!((shadow.opacity, shadow.blur), (80., 0.));
+    assert_eq!((shadow.offset_x, shadow.offset_y), (6., -3.));
+    assert_eq!(shadow.extra["futureShadow"], json!({"keep": [3, 1]}));
+    assert_eq!(shape.extra["futureShape"], json!(["preserve"]));
+    assert_eq!(editor.pixels().get_pixel(10, 12).0, [224, 64, 144, 255]);
+    let shadow_pixel = editor.pixels().get_pixel(18, 9).0;
+    for (actual, expected) in shadow_pixel[..3].iter().zip([32_u8, 192, 96]) {
+        assert!(actual.abs_diff(expected) <= 1, "{shadow_pixel:?}");
+    }
+    assert_eq!(shadow_pixel[3], 204);
+
+    editor
+        .execute(layer(
+            "locked-shape",
+            json!({
+                "action": "annotation_style",
+                "patch": {"dropShadow": false}
+            }),
+        ))
+        .unwrap();
+    let Element::Shape(disabled) = &editor.snapshot().document.elements[1] else {
+        panic!()
+    };
+    assert_eq!(disabled.style.drop_shadow, Some(false));
+    assert_eq!(disabled.style.drop_shadow_style.as_ref(), Some(shadow));
+    assert_eq!(editor.pixels().get_pixel(18, 9).0, [0, 0, 0, 0]);
+
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.snapshot().document, &enabled);
+    assert!(editor.snapshot().can_redo);
+    let retained_frame = editor.pixels();
+    let retained_snapshot = serde_json::to_value(editor.snapshot()).unwrap();
+    for request in [
+        layer(
+            "capture-background",
+            json!({
+                "action": "annotation_style",
+                "patch": {"color": "#ffffff"}
+            }),
+        ),
+        layer(
+            "hidden-text",
+            json!({
+                "action": "annotation_style",
+                "patch": {"strokeWidth": 12}
+            }),
+        ),
+        layer(
+            "locked-shape",
+            json!({"action": "annotation_style", "patch": {}}),
+        ),
+    ] {
+        editor.execute(request).unwrap();
+        assert_eq!(
+            serde_json::to_value(editor.snapshot()).unwrap(),
+            retained_snapshot
+        );
+        assert!(Arc::ptr_eq(&retained_frame, &editor.pixels()));
+        assert!(editor.snapshot().can_redo);
+    }
+    assert!(
+        editor
+            .execute(layer(
+                "missing",
+                json!({
+                    "action": "annotation_style",
+                    "patch": {"color": "#ffffff"}
+                }),
+            ))
+            .is_err()
+    );
+    assert!(
+        editor
+            .execute(layer(
+                "locked-shape",
+                json!({
+                    "action": "annotation_style",
+                    "patch": {"fill": "invalid-color"}
+                }),
+            ))
+            .is_err()
+    );
+    assert_eq!(
+        serde_json::to_value(editor.snapshot()).unwrap(),
+        retained_snapshot
+    );
+    assert!(Arc::ptr_eq(&retained_frame, &editor.pixels()));
+    assert!(editor.snapshot().can_redo);
+
+    editor.execute(Request::Redo).unwrap();
+    editor
+        .execute(layer(
+            "locked-shape",
+            json!({
+                "action": "annotation_style",
+                "patch": {"dropShadowStyle": {"offsetX": 7}}
+            }),
+        ))
+        .unwrap();
+    let Element::Shape(shape) = &editor.snapshot().document.elements[1] else {
+        panic!()
+    };
+    let shadow = shape.style.drop_shadow_style.as_ref().unwrap();
+    assert_eq!(shape.style.drop_shadow, Some(true));
+    assert_eq!((shadow.offset_x, shadow.offset_y), (7., -3.));
+    assert_eq!(shadow.color, "#20c060");
+    assert_eq!(shadow.extra["futureShadow"], json!({"keep": [3, 1]}));
+
+    editor
+        .execute(layer(
+            "hidden-path",
+            json!({
+                "action": "annotation_style",
+                "patch": {
+                    "color": "#ffaa00",
+                    "fill": null,
+                    "strokeWidth": 5,
+                    "strokeEnabled": true,
+                    "dropShadowStyle": {"offsetY": 4}
+                }
+            }),
+        ))
+        .unwrap();
+    let Element::Path(path) = &editor.snapshot().document.elements[2] else {
+        panic!()
+    };
+    assert!(path.base.locked && !path.base.visible);
+    assert_eq!(path.style.color, "#ffaa00");
+    assert_eq!(path.style.stroke_width, 5.);
+    assert_eq!(path.style.fill.as_deref(), Some("#abcdef"));
+    assert_eq!(path.style.stroke_enabled, Some(false));
+    assert_eq!(path.style.drop_shadow, Some(true));
+    let path_shadow = path.style.drop_shadow_style.as_ref().unwrap();
+    assert_eq!(path_shadow.color, "#000000");
+    assert_eq!((path_shadow.opacity, path_shadow.blur), (45., 6.));
+    assert_eq!((path_shadow.offset_x, path_shadow.offset_y), (0., 4.));
+    assert_eq!(path.style.extra["futurePathStyle"], "keep");
+    assert_eq!(path.extra["futurePath"], json!({"keep": true}));
+
+    editor
+        .execute(layer(
+            "hidden-path",
+            json!({"action": "visibility", "visible": true}),
+        ))
+        .unwrap();
+    let path_pixel = editor.pixels().get_pixel(12, 20).0;
+    assert!(path_pixel[0] >= 250 && path_pixel[1] >= 165 && path_pixel[2] <= 5);
+    let final_document = editor.snapshot().document.clone();
+    let final_pixels = editor.pixels();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 2 })
+        .unwrap();
+    drop(editor);
+
+    let restored = open(data.path(), &id).unwrap();
+    assert_eq!(restored.snapshot().document, &final_document);
+    assert_eq!(restored.pixels(), final_pixels);
+    assert_eq!(
+        restored.snapshot().document.extra["futureDocument"],
+        json!({"keep": "annotation-style"})
+    );
+}
+
+#[test]
 fn image_transform_json_preserves_center_pixels_history_and_draft_data() {
     let (data, id, original) = setup();
     let mut editor = open(data.path(), &id).unwrap();
