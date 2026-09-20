@@ -481,7 +481,7 @@ are in progress. Image layers expose a **Transform image** menu for lossless
 left/right rotation and horizontal/vertical flips through the shared worker commands.
 Hidden and locked images can transform, matching shipping policy; full-canvas
 photos rotate their canvas, and undo/draft restore retain the orientation.
-Merge/flatten, image import and drawing tools are not connected by this panel slice.
+Merge/flatten and drawing tools remain unconnected.
 
 The wgpu Import image action now picks one PNG/JPEG/WebP/TIFF file independently
 of the session worker. The worker bounds encoded input and decoded dimensions,
@@ -527,8 +527,10 @@ clipboard worker, independent of export format/quality/budget. It retains undo a
 draft state, reports recoverable clipboard errors, and does not create History or
 file output. The workspace retains clipboard ownership after an editor closes;
 normal quit drains accepted copies. X11 checks read the actual PNG selection and
-verify edited pixels before and after editor close. Linux currently uses arboard's
-X11/XWayland backend; native Wayland clipboard support is not enabled. Windows uses
+verify edited pixels before and after editor close. Linux uses arboard's native
+Wayland data-control backend with X11/XWayland fallback; disposable wlroots tests
+verify the native transport independently. Unsupported compositors return an error.
+Windows uses
 the existing platform backend but remains physically unverified. Overwrite-original,
 AppKit output controls and physical acceptance remain
 separate work.

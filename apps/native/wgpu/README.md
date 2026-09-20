@@ -109,15 +109,15 @@ PNG palette sizes and an optional hard byte limit. Preview output runs the real
 shared encoder and decoder on the worker, reports the exact byte count, and
 switches between edited and encoded pixels. Changing options or editing clears
 stale output; encoding errors retain the draft and allow retry. Preview does not
-write files or change undo/redo. Save new copy is connected; edited-image Copy
-integration remains open. As a transport prerequisite, Linux now enables arboard's
+write files or change undo/redo. Save new copy and lossless edited-image Copy pixels
+are connected. Linux enables arboard's
 native Wayland data-control backend before its X11 fallback. Compositors without
 `ext-data-control-v1` or `wlr-data-control` return a recoverable clipboard error.
 This does not enable Wayland capture or close editor/input parity.
 Normal quit drains edits and saves dirty sessions; a save failure cancels quit and
 keeps the editor recoverable. Drafts live in `editor-drafts` beside the selected
-History root, never the installed Tauri data. Annotation tools and edited-image
-Copy are not connected yet. The same Windows/X11/Wayland host code is present;
+History root, never the installed Tauri data. Annotation tools remain unconnected.
+The same Windows/X11/Wayland host code is present;
 only private-X11/software-GL presentation has been exercised.
 
 Run `python apps/native/x11_editor_smoke.py --binary

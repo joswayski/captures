@@ -266,7 +266,7 @@ pixel frames for native hosts.
 Full-canvas photos rotate their canvas; layered overhang stays clipped and fully
 off-canvas transformed images expand the canvas so they are not lost. Shared
 interactive crop geometry also matches shipping bounds, aspect presets and Shift
-locking, but host gesture controls and physical acceptance remain separate work.
+locking; AppKit gesture controls and physical acceptance remain separate work.
 The Windows/Linux candidate opens screenshots from History in a native crop,
 canvas-size and draft editor with undo/redo. **Draw crop** selects directly on the
 preview with free or preset aspect ratios and Shift ratio locking. Apply commits
@@ -287,17 +287,17 @@ existing file, adds a distinct History entry, and preserves the current draft.
 leaves the destination unchanged; choosing a folder does not save a file or draft.
 If History cannot be updated, the saved file's path remains available for recovery.
 **Copy pixels** copies the lossless edited canvas independently of export quality,
-without saving a file or draft. Linux clipboard support currently requires X11
-or XWayland; copied pixels remain available after closing the editor while the
-application stays open.
+without saving a file or draft. Linux supports X11/XWayland and native Wayland
+compositors with data-control support; copied pixels remain available after closing
+the editor while the application stays open. Unsupported compositors return a
+recoverable error.
 Closing can save or keep the previous draft; explicit Discard edits restores the
 original. Failed draft saves keep edits open and cancel normal quit. Private-X11 checks
 cover both appearances, persisted drafts, real preview pixels and error recovery.
 AppKit now connects the same crop, canvas-resize and draft operations in its own
 window. Windows, Wayland and physical AppKit presentation remain unverified.
 AppKit image-transform/import controls, batch/drag-and-drop import, text, annotation
-shadow controls, annotation tools,
-overwrite-original, AppKit edited-image clipboard/file output,
+shadow controls, annotation tools, overwrite-original, AppKit edited-image clipboard/file output,
 and recording editing remain unconnected. These connected controls and shared
 rendering/export support do not complete native editor acceptance. OS shortcut
 takeover, login items, single-instance relaunch and updates
