@@ -15,6 +15,7 @@ fn layer(shape: Shape) -> Layer {
         stroke_width: 2.0,
         fill: None,
         rotation_degrees: 0.0,
+        rotation_origin: None,
         blend_mode: BlendMode::Normal,
     }
 }
@@ -157,6 +158,39 @@ fn unfilled_shapes_do_not_select_or_paint_their_interiors() {
             [0, 120, 30, 255]
         );
     }
+}
+
+#[test]
+fn rounded_rectangles_and_explicit_rotation_origins_preserve_authored_geometry() {
+    let mut rounded = layer(Shape::RoundedRectangle {
+        origin: point(10.0, 10.0),
+        width: 30.0,
+        height: 20.0,
+        radius: 8.0,
+    });
+    rounded.stroke_width = 0.0;
+    rounded.fill = Some([20, 100, 220, 255]);
+    let rounded_render = render(&document(vec![rounded.clone()])).unwrap();
+    assert_eq!(rounded_render.get_pixel(10, 10)[3], 0);
+    assert_eq!(rounded_render.get_pixel(25, 20).0, [20, 100, 220, 255]);
+    assert!(!rounded.hit_test(point(10.0, 10.0), 0.0));
+    assert!(rounded.hit_test(point(25.0, 20.0), 0.0));
+
+    let mut polygon = layer(Shape::Polygon(vec![
+        point(10.0, 10.0),
+        point(20.0, 10.0),
+        point(10.0, 20.0),
+    ]));
+    polygon.stroke_width = 0.0;
+    polygon.fill = Some([230, 40, 70, 255]);
+    polygon.rotation_degrees = 180.0;
+    polygon.rotation_origin = Some(point(20.0, 20.0));
+    let explicit = render(&document(vec![polygon.clone()])).unwrap();
+    assert_eq!(explicit.get_pixel(28, 28).0, [230, 40, 70, 255]);
+
+    polygon.rotation_origin = None;
+    let implicit = render(&document(vec![polygon])).unwrap();
+    assert_eq!(implicit.get_pixel(28, 28)[3], 0);
 }
 
 #[test]
