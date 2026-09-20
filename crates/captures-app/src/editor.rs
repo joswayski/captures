@@ -264,7 +264,8 @@ impl ElementStyle {
         self.drop_shadow.unwrap_or(false)
     }
 
-    fn resolved_drop_shadow_style(&self) -> DropShadowStyle {
+    #[must_use]
+    pub fn resolved_drop_shadow_style(&self) -> DropShadowStyle {
         let width = self.stroke_width.max(1.);
         let fallback = DropShadowStyle {
             color: "#000000".into(),
@@ -812,7 +813,7 @@ impl Document {
                     Element::Path(element) => (&mut element.style, false),
                     Element::Image(_) | Element::Text(_) => return Ok(()),
                 };
-                patch.apply(style, closed);
+                patch.apply(style, closed)?;
             }
             LayerEdit::Translate { delta_x, delta_y } => {
                 if !delta_x.is_finite() || !delta_y.is_finite() {
@@ -964,7 +965,13 @@ fn annotation_drop_shadow_pad(style: &ElementStyle) -> f64 {
 }
 
 impl AnnotationStylePatch {
-    fn apply(self, style: &mut ElementStyle, closed: bool) {
+    fn apply(self, style: &mut ElementStyle, closed: bool) -> Result<(), String> {
+        if self
+            .stroke_width
+            .is_some_and(|stroke_width| !stroke_width.is_finite())
+        {
+            return Err("Annotation stroke width must be finite.".into());
+        }
         if let Some(color) = self.color {
             style.color = color;
         }
@@ -984,7 +991,7 @@ impl AnnotationStylePatch {
         if let Some(drop_shadow) = self.drop_shadow {
             style.drop_shadow = Some(drop_shadow);
         }
-        if let Some(patch) = self.drop_shadow_style {
+        if let Some(patch) = self.drop_shadow_style.filter(|patch| !patch.is_empty()) {
             let mut shadow = style.resolved_drop_shadow_style();
             if let Some(color) = patch.color {
                 shadow.color = color;
@@ -1005,6 +1012,17 @@ impl AnnotationStylePatch {
             style.drop_shadow_style = Some(shadow);
             style.drop_shadow_style = Some(style.resolved_drop_shadow_style());
         }
+        Ok(())
+    }
+}
+
+impl DropShadowStylePatch {
+    fn is_empty(&self) -> bool {
+        self.color.is_none()
+            && self.opacity.is_none()
+            && self.blur.is_none()
+            && self.offset_x.is_none()
+            && self.offset_y.is_none()
     }
 }
 
