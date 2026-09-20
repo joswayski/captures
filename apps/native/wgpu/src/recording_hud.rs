@@ -38,13 +38,28 @@ pub struct View<'a> {
 pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action> {
     let mut action = None;
     tokens.glass_controls(ui);
+    let widgets = &mut ui.visuals_mut().widgets;
+    for widget in [&mut widgets.inactive, &mut widgets.noninteractive] {
+        widget.bg_fill = egui::Color32::TRANSPARENT;
+        widget.weak_bg_fill = egui::Color32::TRANSPARENT;
+    }
+    for widget in [
+        &mut widgets.inactive,
+        &mut widgets.noninteractive,
+        &mut widgets.hovered,
+        &mut widgets.active,
+        &mut widgets.open,
+    ] {
+        widget.bg_stroke = Stroke::NONE;
+        widget.corner_radius = (tokens.number("r-sm") as u8).into();
+    }
     ui.add_space(6.);
     ui.horizontal(|ui| {
         ui.add_space(6.);
         egui::Frame::new()
             .fill(tokens.color("glass-strong"))
             .stroke(Stroke::new(1., tokens.color("glass-border")))
-            .corner_radius(tokens.number("r-2xl") as u8)
+            .corner_radius(tokens.number("r-xl") as u8)
             .inner_margin(egui::Margin::symmetric(12, 8))
             .show(ui, |ui| {
                 ui.set_width(394.);
@@ -204,29 +219,60 @@ fn control(
     selected: bool,
     tokens: &Tokens,
 ) -> egui::Response {
-    let mut button = egui::Button::new("").min_size(Vec2::splat(32.));
-    if signal {
-        button = button.fill(tokens.color("theme-signal"));
-    } else if selected {
-        button = button
-            .fill(tokens.color("glass-active"))
-            .stroke(Stroke::new(1., tokens.color("theme-accent")));
-    }
-    let response = ui.add_enabled(enabled, button).on_hover_text(description);
-    response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, description));
-    paint_icon(
-        ui,
-        response.rect,
-        icon,
-        ui.visuals().widgets.active.fg_stroke.color,
-    );
-    response
+    ui.scope(|ui| {
+        let mut button = egui::Button::new("").min_size(Vec2::splat(32.));
+        if signal {
+            let widgets = &mut ui.visuals_mut().widgets;
+            widgets.inactive.weak_bg_fill = tokens.color("theme-signal-surface");
+            widgets.inactive.bg_stroke =
+                Stroke::new(1., tokens.color("theme-signal").gamma_multiply(0.4));
+            widgets.hovered.weak_bg_fill = tokens.color("theme-signal");
+            widgets.active.weak_bg_fill = tokens.color("theme-signal");
+        } else if selected && enabled {
+            button = button
+                .fill(tokens.color("glass-active"))
+                .stroke(Stroke::new(
+                    1.,
+                    tokens.color("theme-accent").gamma_multiply(0.3),
+                ));
+        }
+        let response = ui.add_enabled(enabled, button).on_hover_text(description);
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, description)
+        });
+        if response.has_focus() {
+            ui.painter().rect_stroke(
+                response.rect,
+                tokens.number("r-sm") as u8,
+                Stroke::new(2., tokens.color("theme-accent")),
+                StrokeKind::Inside,
+            );
+        }
+        let color = tokens.color(if !enabled {
+            "glass-text-subtle"
+        } else if signal && !response.hovered() && !response.is_pointer_button_down_on() {
+            "theme-signal"
+        } else if selected {
+            "theme-accent"
+        } else if response.hovered() || response.is_pointer_button_down_on() {
+            "glass-text"
+        } else {
+            "glass-text-muted"
+        });
+        paint_icon(ui, response.rect, icon, color);
+        response
+    })
+    .inner
 }
 
 fn unavailable(ui: &mut egui::Ui, icon: Icon, label: &str, description: &str) {
     let response = ui
-        .add_enabled(false, egui::Button::new("").min_size(Vec2::splat(32.)))
+        .add_enabled(
+            false,
+            egui::Button::new("")
+                .frame(false)
+                .min_size(Vec2::splat(32.)),
+        )
         .on_disabled_hover_text(description);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, false, label));
     paint_icon(

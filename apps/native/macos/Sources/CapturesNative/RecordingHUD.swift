@@ -45,7 +45,7 @@ final class RecordingHUDView: NSView {
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassStrong.rawValue).cgColor
-        layer?.cornerRadius = tokens.number("r-2xl")
+        layer?.cornerRadius = tokens.number("r-xl")
         layer?.borderWidth = 1
         layer?.borderColor = tokens.color(RecordingHUDColorToken.glassBorder.rawValue).cgColor
         layer?.shadowColor = NSColor.black.cgColor; layer?.shadowOpacity = 0.44
@@ -73,7 +73,7 @@ final class RecordingHUDView: NSView {
 
         let stop = hudButton("■", x: 104, help: "Stop and save recording") { [weak self] in self?.stop() }
         stop.signal = true; stop.setAccessibilityLabel("Stop recording")
-        pauseButton.frame = NSRect(x: 144, y: 35, width: 38, height: 42)
+        pauseButton.frame = NSRect(x: 144, y: 39, width: 38, height: 34)
         pauseButton.actionBlock = { [weak self] in self?.pauseOrResume() }
         pauseButton.setAccessibilityLabel("Pause recording"); addSubview(pauseButton)
         let restart = hudButton("↻", x: 184, help: "Restart recording") {
@@ -82,13 +82,14 @@ final class RecordingHUDView: NSView {
         restart.setAccessibilityLabel("Restart recording")
         unavailable("⌗", x: 224, label: "Screenshot during recording is unavailable in this version")
         unavailable("—", x: 264, label: "Audio meter is unavailable in this version")
-        microphoneButton.frame = NSRect(x: 304, y: 35, width: 38, height: 42)
+        microphoneButton.frame = NSRect(x: 304, y: 39, width: 38, height: 34)
         microphoneButton.actionBlock = { [weak self] in self?.toggleMicrophone() }
         addSubview(microphoneButton)
         let trash = hudButton("⌫", x: 344, help: "Discard recording") { [weak self] in self?.discard() }
         trash.setAccessibilityLabel("Discard recording")
         lifecycleButtons = [stop, pauseButton, restart, microphoneButton, trash]
         unavailable("◉̸", x: 384, label: "Hide controls is unavailable in this version")
+        for case let button as CaptureButton in subviews { button.hudControl = true }
         setPaused(false, elapsedMilliseconds: 0)
         setMicrophone(muted: false, available: false)
     }
@@ -96,7 +97,7 @@ final class RecordingHUDView: NSView {
 
     private func hudButton(_ title: String, x: CGFloat, help: String,
                            action: @escaping () -> Void) -> CaptureButton {
-        let button = CaptureButton(title, frame: NSRect(x: x, y: 35, width: 38, height: 42),
+        let button = CaptureButton(title, frame: NSRect(x: x, y: 39, width: 38, height: 34),
             tokens: tokens, glass: true, action: action)
         button.toolTip = help; addSubview(button); return button
     }
