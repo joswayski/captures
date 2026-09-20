@@ -21,6 +21,12 @@ struct ScreenshotEditorState: Equatable {
         snapshot = value; busy = false; return true
     }
 
+    mutating func completeOutput(generation: Int, artifactID: String) -> Bool {
+        guard self.generation == generation, self.artifactID == artifactID,
+              snapshot != nil else { return false }
+        busy = false; return true
+    }
+
     mutating func fail(generation: Int) -> Bool {
         guard self.generation == generation else { return false }
         busy = false; return true
@@ -30,13 +36,14 @@ struct ScreenshotEditorState: Equatable {
 }
 
 final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewDataSource,
-                                        NSTableViewDelegate {
+                                        NSTableViewDelegate, NSTextFieldDelegate {
     let window: NSWindow
     let root: Surface
     private(set) var state = ScreenshotEditorState()
     private let worker: EditorWorking
     private let reportError: (String) -> Void
     private let editorNumberFormatter: NumberFormatter
+    private let outputIntegerFormatter: NumberFormatter
     private var tokens: Tokens
     private let preview = NSImageView()
     private let cropX = NSTextField()
@@ -49,11 +56,22 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let dimensions = NSTextField(labelWithString: "")
     private let geometryPanel = Surface()
     private let layersPanel = Surface()
+    private let outputPanel = Surface()
     private let layerName = NSTextField()
     private let layerOpacity = NSTextField()
     private let layerX = NSTextField()
     private let layerY = NSTextField()
+    private let outputQualityValue = NSTextField()
+    private let outputPngPalette = NSTextField()
+    private let outputByteBudget = NSTextField()
+    private let outputSize = NSTextField(wrappingLabelWithString: "No encoded preview yet.")
+    private var outputQualityValueLabel: NSTextField!
+    private var outputPngPaletteLabel: NSTextField!
+    private var outputByteBudgetLabel: NSTextField!
     private var sectionControl: NSSegmentedControl!
+    private var outputFormat: NSPopUpButton!
+    private var outputQuality: NSPopUpButton!
+    private var outputPreviewMode: NSSegmentedControl!
     private var layerTable: NSTableView!
     private var visibilityButton: CaptureButton!
     private var lockButton: CaptureButton!
@@ -70,23 +88,32 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var discardButton: CaptureButton!
     private var applyCropButton: CaptureButton!
     private var resizeButton: CaptureButton!
+    private var previewOutputButton: CaptureButton!
     private var fields: [NSTextField] = []
     private var closeAfterCommand = false
     private var selectedLayerID: String?
     private var selectedLayerIndex = 0
     private var preferredLayerID: String?
     private var reconcilingLayerSelection = false
+    private var editedImage: NSImage?
+    private var encodedOutput: EditorOutputPresentation?
 
     init(tokens: Tokens, worker: EditorWorking = EditorWorker(), numberLocale: Locale = .current,
          reportError: @escaping (String) -> Void = { _ in }) {
         self.tokens = tokens; self.worker = worker; self.reportError = reportError
         editorNumberFormatter = NumberFormatter()
+        outputIntegerFormatter = NumberFormatter()
         editorNumberFormatter.locale = numberLocale
         editorNumberFormatter.numberStyle = .decimal
         editorNumberFormatter.usesGroupingSeparator = false
         editorNumberFormatter.maximumFractionDigits = 3
         editorNumberFormatter.minimum = -1_000_000
         editorNumberFormatter.maximum = 1_000_000
+        outputIntegerFormatter.locale = numberLocale
+        outputIntegerFormatter.numberStyle = .decimal
+        outputIntegerFormatter.usesGroupingSeparator = false
+        outputIntegerFormatter.maximumFractionDigits = 0
+        outputIntegerFormatter.minimum = 0
         let bounds = NSRect(x: 0, y: 0, width: 1000, height: 700)
         root = Surface(frame: bounds)
         window = NSWindow(contentRect: bounds, styleMask: [.titled, .closable, .miniaturizable],
@@ -119,7 +146,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         let generation = state.beginOpen(artifactID: artifact.id)
         selectedLayerID = nil; selectedLayerIndex = 0; preferredLayerID = nil
-        preview.image = nil; window.title = "Edit screenshot"
+        editedImage = nil; invalidateOutput(); preview.image = nil; window.title = "Edit screenshot"
         status.stringValue = "Opening screenshot…"; updateControls()
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         let draftsRoot = URL(fileURLWithPath: historyRoot).deletingLastPathComponent()
@@ -146,7 +173,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let result = worker.prepareForTermination()
         switch result {
         case .success:
-            state.close(); preview.image = nil; window.orderOut(nil); return true
+            state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
+            window.orderOut(nil); return true
         case .failure(let error):
             showError("Couldn’t save screenshot draft before quitting: \(error.localizedDescription)")
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
@@ -197,7 +225,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         dimensions.frame = NSRect(x: 24, y: 654, width: 640, height: 20)
         dimensions.setAccessibilityLabel("Edited canvas dimensions"); root.addSubview(dimensions)
 
-        sectionControl = NSSegmentedControl(labels: ["Geometry", "Layers"], trackingMode: .selectOne,
+        sectionControl = NSSegmentedControl(labels: ["Geometry", "Layers", "Output"], trackingMode: .selectOne,
                                             target: self, action: #selector(changeSection))
         sectionControl.frame = NSRect(x: 688, y: 24, width: 272, height: 28)
         sectionControl.selectedSegment = 0
@@ -206,9 +234,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
         geometryPanel.frame = NSRect(x: 688, y: 66, width: 272, height: 390)
         layersPanel.frame = geometryPanel.frame; layersPanel.isHidden = true
+        outputPanel.frame = geometryPanel.frame; outputPanel.isHidden = true
         geometryPanel.setAccessibilityLabel("Geometry controls")
         layersPanel.setAccessibilityLabel("Layer controls")
-        root.addSubview(geometryPanel); root.addSubview(layersPanel)
+        outputPanel.setAccessibilityLabel("Output controls")
+        root.addSubview(geometryPanel); root.addSubview(layersPanel); root.addSubview(outputPanel)
 
         panelLabel("Crop", frame: NSRect(x: 0, y: 0, width: 272, height: 24),
                    size: 16, weight: .semibold, parent: geometryPanel)
@@ -247,6 +277,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
 
         buildLayersPanel()
+        buildOutputPanel()
 
         undoButton = button("Undo", frame: NSRect(x: 688, y: 470, width: 128, height: 34)) {
             [weak self] in self?.command(["operation": "undo"], message: "Undoing…")
@@ -267,6 +298,65 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         status.maximumNumberOfLines = 5; status.setAccessibilityLabel("Screenshot editor status")
         root.addSubview(status)
         fields = [cropX, cropY, cropWidth, cropHeight, canvasWidth, canvasHeight]
+    }
+
+    private func buildOutputPanel() {
+        panelLabel("Output preview", frame: NSRect(x: 0, y: 0, width: 272, height: 24),
+                   size: 16, weight: .semibold, parent: outputPanel)
+        panelLabel("Encode without saving or changing the draft.",
+                   frame: NSRect(x: 0, y: 28, width: 272, height: 22), muted: true,
+                   parent: outputPanel)
+
+        panelFieldLabel("Format", x: 0, y: 58, parent: outputPanel)
+        outputFormat = NSPopUpButton(frame: NSRect(x: 0, y: 78, width: 120, height: 30))
+        outputFormat.addItems(withTitles: ["PNG", "JPEG", "WebP"])
+        outputFormat.setAccessibilityLabel("Output format")
+        outputFormat.target = self; outputFormat.action = #selector(outputOptionsChanged)
+        outputPanel.addSubview(outputFormat)
+
+        panelFieldLabel("Quality mode", x: 128, y: 58, parent: outputPanel)
+        outputQuality = NSPopUpButton(frame: NSRect(x: 128, y: 78, width: 144, height: 30))
+        outputQuality.addItems(withTitles: ["Preserve", "Compress", "Maximum file size"])
+        outputQuality.setAccessibilityLabel("Output quality mode")
+        outputQuality.target = self; outputQuality.action = #selector(outputOptionsChanged)
+        outputPanel.addSubview(outputQuality)
+
+        outputQualityValueLabel = panelFieldLabel("Quality value", x: 0, y: 118,
+                                                  parent: outputPanel)
+        outputPngPaletteLabel = panelFieldLabel("PNG palette", x: 144, y: 118,
+                                                parent: outputPanel)
+        configure(outputQualityValue, frame: NSRect(x: 0, y: 138, width: 128, height: 30),
+                  label: "Output quality value", parent: outputPanel)
+        configure(outputPngPalette, frame: NSRect(x: 144, y: 138, width: 128, height: 30),
+                  label: "PNG maximum colors", parent: outputPanel)
+        outputQualityValue.stringValue = "98"
+        outputPngPalette.placeholderString = "Optional"
+
+        outputByteBudgetLabel = panelFieldLabel("Byte budget (minimum 10,000)", x: 0, y: 178,
+                                               parent: outputPanel)
+        configure(outputByteBudget, frame: NSRect(x: 0, y: 198, width: 272, height: 30),
+                  label: "Output byte budget", parent: outputPanel)
+        outputByteBudget.placeholderString = "Required for Maximum"
+        outputByteBudget.stringValue = "10000000"
+        [outputQualityValue, outputPngPalette, outputByteBudget].forEach {
+            $0.formatter = outputIntegerFormatter; $0.delegate = self
+        }
+
+        previewOutputButton = button("Preview output", frame: NSRect(x: 0, y: 240, width: 272, height: 34),
+                                     parent: outputPanel) { [weak self] in self?.previewOutput() }
+        previewOutputButton.primary = true
+        outputPreviewMode = NSSegmentedControl(labels: ["Edited canvas", "Encoded output"],
+                                               trackingMode: .selectOne, target: self,
+                                               action: #selector(changeOutputPreview))
+        outputPreviewMode.frame = NSRect(x: 0, y: 286, width: 272, height: 28)
+        outputPreviewMode.selectedSegment = 0
+        outputPreviewMode.setAccessibilityLabel("Output preview image")
+        outputPanel.addSubview(outputPreviewMode)
+        outputSize.frame = NSRect(x: 0, y: 326, width: 272, height: 58)
+        outputSize.maximumNumberOfLines = 3
+        outputSize.setAccessibilityLabel("Encoded output size")
+        outputPanel.addSubview(outputSize)
+        updateOutputOptionControls()
     }
 
     private func buildLayersPanel() {
@@ -317,8 +407,131 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     @objc private func changeSection() {
-        let showLayers = sectionControl.selectedSegment == 1
-        geometryPanel.isHidden = showLayers; layersPanel.isHidden = !showLayers
+        geometryPanel.isHidden = sectionControl.selectedSegment != 0
+        layersPanel.isHidden = sectionControl.selectedSegment != 1
+        outputPanel.isHidden = sectionControl.selectedSegment != 2
+    }
+
+    @objc private func outputOptionsChanged() {
+        normalizeOutputQuality()
+        invalidateOutput(optionsChanged: true)
+        updateOutputOptionControls()
+        updateControls()
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard let field = notification.object as? NSTextField,
+              [outputQualityValue, outputPngPalette, outputByteBudget].contains(where: { $0 === field })
+        else { return }
+        invalidateOutput(optionsChanged: true)
+        updateControls()
+    }
+
+    @objc private func changeOutputPreview() {
+        if outputPreviewMode.selectedSegment == 1, let encodedOutput {
+            preview.image = NSImage(cgImage: encodedOutput.image,
+                                    size: NSSize(width: encodedOutput.image.width,
+                                                 height: encodedOutput.image.height))
+        } else {
+            outputPreviewMode.selectedSegment = 0
+            preview.image = editedImage
+        }
+    }
+
+    private func previewOutput() {
+        guard let artifactID = state.artifactID,
+              let options = outputOptions(),
+              let generation = state.beginCommand() else { return }
+        invalidateOutput()
+        status.stringValue = "Encoding output preview…"; updateControls()
+        worker.encode(options) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let output):
+                guard self.state.completeOutput(generation: generation, artifactID: artifactID) else { return }
+                self.encodedOutput = output
+                self.outputSize.stringValue = "Exact encoded size: \(self.formatInteger(output.length)) bytes"
+                self.outputPreviewMode.selectedSegment = 1
+                self.changeOutputPreview()
+                self.status.textColor = self.tokens.color("text-muted")
+                self.status.stringValue = "Output preview encoded. No file was saved."
+            case .failure(let error):
+                guard self.state.fail(generation: generation) else { return }
+                self.invalidateOutput()
+                self.showError("Output preview failed: \(error.localizedDescription)")
+            }
+            self.updateControls()
+        }
+    }
+
+    private func outputOptions() -> [String: Any]? {
+        let formats = ["png", "jpeg", "webp"]
+        let qualities = ["preserve", "compress", "maximum"]
+        guard formats.indices.contains(outputFormat.indexOfSelectedItem),
+              qualities.indices.contains(outputQuality.indexOfSelectedItem) else { return nil }
+        let format = formats[outputFormat.indexOfSelectedItem]
+        let quality = qualities[outputQuality.indexOfSelectedItem]
+        let qualityValue: UInt64
+        if quality == "compress" {
+            let minimum: UInt64 = format == "jpeg" ? 40 : 1
+            guard let value = outputInteger(outputQualityValue), (minimum...100).contains(value) else {
+                showError("Output quality must be a whole number from \(minimum) through 100 for \(format.uppercased()).")
+                return nil
+            }
+            qualityValue = value
+        } else {
+            qualityValue = 100
+        }
+        var png: [String: Any] = [:]
+        if format == "png", quality == "compress", !outputPngPalette.stringValue.isEmpty {
+            guard let colors = outputInteger(outputPngPalette), (1...256).contains(colors) else {
+                showError("PNG palette size must be a whole number from 1 through 256."); return nil
+            }
+            png["max_colors"] = colors
+        }
+        var options: [String: Any] = [
+            "format": format, "quality": quality, "quality_value": qualityValue, "png": png,
+        ]
+        if quality == "maximum" {
+            guard let budget = outputInteger(outputByteBudget), budget >= 10_000 else {
+                showError("Enter an output byte budget of at least 10,000."); return nil
+            }
+            options["max_size_bytes"] = budget
+        }
+        return options
+    }
+
+    private func invalidateOutput(optionsChanged: Bool = false) {
+        let hadOutput = encodedOutput != nil
+        encodedOutput = nil
+        outputPreviewMode?.selectedSegment = 0
+        preview.image = editedImage
+        if optionsChanged && hadOutput {
+            outputSize.stringValue = "Options changed. Preview output again."
+        } else if !optionsChanged {
+            outputSize?.stringValue = "No encoded preview yet."
+        }
+    }
+
+    private func updateOutputOptionControls() {
+        guard outputFormat != nil, outputQuality != nil else { return }
+        let ready = state.snapshot != nil && !state.busy
+        let compress = outputQuality.indexOfSelectedItem == 1
+        let maximum = outputQuality.indexOfSelectedItem == 2
+        let pngPalette = compress && outputFormat.indexOfSelectedItem == 0
+        outputQualityValueLabel.isHidden = !compress; outputQualityValue.isHidden = !compress
+        outputPngPaletteLabel.isHidden = !pngPalette; outputPngPalette.isHidden = !pngPalette
+        outputByteBudgetLabel.isHidden = !maximum; outputByteBudget.isHidden = !maximum
+        outputQualityValue.isEnabled = ready && compress
+        outputPngPalette.isEnabled = ready && pngPalette
+        outputByteBudget.isEnabled = ready && maximum
+    }
+
+    private func normalizeOutputQuality() {
+        guard outputQuality.indexOfSelectedItem == 1,
+              let current = outputInteger(outputQualityValue) else { return }
+        let minimum: UInt64 = outputFormat.indexOfSelectedItem == 1 ? 40 : 1
+        outputQualityValue.stringValue = String(min(100, max(minimum, current)))
     }
 
     private var selectedLayer: NativeEditorLayer? {
@@ -437,6 +650,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func command(_ object: [String: Any], message: String, resetCrop: Bool = false,
                          preferredSelection: String? = nil) {
         guard let generation = state.beginCommand() else { return }
+        invalidateOutput()
         preferredLayerID = preferredSelection
         status.stringValue = message; updateControls()
         worker.request(object) { [weak self] result in
@@ -462,9 +676,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func publish(_ presentation: EditorPresentation, resetCrop: Bool) {
         let snapshot = presentation.snapshot
-        preview.image = NSImage(cgImage: presentation.image,
+        editedImage = NSImage(cgImage: presentation.image,
             size: NSSize(width: CGFloat(presentation.image.width),
                          height: CGFloat(presentation.image.height)))
+        preview.image = editedImage
         dimensions.stringValue = "\(format(snapshot.width)) × \(format(snapshot.height)) pixels"
         canvasWidth.stringValue = format(snapshot.width); canvasHeight.stringValue = format(snapshot.height)
         if resetCrop || cropWidth.stringValue.isEmpty {
@@ -477,7 +692,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func closeNow() {
         closeAfterCommand = false; selectedLayerID = nil; preferredLayerID = nil
-        state.close(); preview.image = nil
+        state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
         worker.close(); window.orderOut(nil); updateControls()
     }
 
@@ -490,6 +705,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         saveButton?.isEnabled = ready && state.snapshot?.unsavedChanges == true
         discardButton?.isEnabled = ready && (state.snapshot?.hasDraft == true || state.snapshot?.unsavedChanges == true)
         sectionControl?.isEnabled = ready
+        outputFormat?.isEnabled = ready; outputQuality?.isEnabled = ready
+        previewOutputButton?.isEnabled = ready
+        outputPreviewMode?.isEnabled = ready && encodedOutput != nil
+        updateOutputOptionControls()
         layerTable?.isEnabled = ready
         let layer = ready ? selectedLayer : nil
         let image = layer?.kind == .image
@@ -589,6 +808,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 ? "text-muted" : "text")
         }
         status.textColor = tokens.color("text-muted"); dimensions.textColor = tokens.color("text-muted")
+        outputSize.textColor = tokens.color("text-muted")
         preview.superview?.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
         preview.superview?.layer?.borderColor = tokens.color("border").cgColor
     }
@@ -611,6 +831,15 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func format(_ value: Double) -> String {
         editorNumberFormatter.string(from: NSNumber(value: value)) ?? String(value)
     }
+    private func outputInteger(_ field: NSTextField) -> UInt64? {
+        guard let value = outputIntegerFormatter.number(from: field.stringValue)?.doubleValue,
+              value.isFinite, value >= 0, value.rounded() == value,
+              value < Double(UInt64.max) else { return nil }
+        return UInt64(value)
+    }
+    private func formatInteger(_ value: Int) -> String {
+        outputIntegerFormatter.string(from: NSNumber(value: value)) ?? String(value)
+    }
 
     private func showError(_ message: String) {
         status.stringValue = message; status.textColor = tokens.color("danger-text")
@@ -627,7 +856,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         root.addSubview(label); return label
     }
 
-    private func panelFieldLabel(_ text: String, x: CGFloat, y: CGFloat, parent: NSView) {
+    @discardableResult private func panelFieldLabel(_ text: String, x: CGFloat, y: CGFloat,
+                                                     parent: NSView) -> NSTextField {
         panelLabel(text, frame: NSRect(x: x, y: y, width: 128, height: 20),
                    muted: true, parent: parent)
     }

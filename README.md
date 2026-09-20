@@ -270,8 +270,9 @@ Closing can save or keep the previous draft; explicit Discard edits restores the
 original. Failed saves keep edits open and cancel normal quit. Private-X11 checks
 cover both appearances, persisted drafts, real preview pixels and error recovery.
 AppKit now connects the same crop, canvas-resize and draft operations in its own
-window, along with native image-layer controls. Windows, Wayland and physical
-AppKit presentation remain unverified.
+window, along with native image-layer controls and PNG/JPEG/WebP output previews
+that report exact encoded size without saving. Windows, Wayland and physical AppKit
+presentation remain unverified.
 Text, annotation shadows, annotation tools, edited-image export, and recording editing
 remain unconnected. This shared rendering support does not complete native editor
 acceptance. OS shortcut takeover, login items, single-instance relaunch and updates

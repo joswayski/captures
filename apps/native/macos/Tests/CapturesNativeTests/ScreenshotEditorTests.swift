@@ -140,6 +140,106 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(rect, ["x": 1.5, "y": 2.25, "width": 300.75, "height": 150.5])
     }
 
+    func testOutputPreviewUsesShippingOptionsAndInvalidatesAfterEditsAndOptions() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                     worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showOutput(in: controller.root)
+        let format = try popup("Output format", in: controller.root)
+        let quality = try popup("Output quality mode", in: controller.root)
+        let qualityValue = try field("Output quality value", in: controller.root)
+        let palette = try field("PNG maximum colors", in: controller.root)
+        let budget = try field("Output byte budget", in: controller.root)
+        XCTAssertTrue(qualityValue.isHidden); XCTAssertTrue(palette.isHidden)
+        XCTAssertTrue(budget.isHidden)
+
+        quality.selectItem(withTitle: "Compress"); _ = quality.sendAction(quality.action, to: quality.target)
+        format.selectItem(withTitle: "WebP"); _ = format.sendAction(format.action, to: format.target)
+        qualityValue.stringValue = "1"
+        format.selectItem(withTitle: "JPEG"); _ = format.sendAction(format.action, to: format.target)
+        XCTAssertEqual(qualityValue.stringValue, "40", "JPEG UI clamps to the encoder's minimum")
+        qualityValue.stringValue = "73"
+        try button("Preview output", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.encodes.count, 1)
+        XCTAssertEqual(worker.encodes[0]["format"] as? String, "jpeg")
+        XCTAssertEqual(worker.encodes[0]["quality"] as? String, "compress")
+        XCTAssertEqual(worker.encodes[0]["quality_value"] as? UInt64, 73)
+        XCTAssertNil(worker.encodes[0]["max_size_bytes"])
+        XCTAssertTrue((worker.encodes[0]["png"] as? [String: Any])?.isEmpty == true)
+        XCTAssertTrue(controller.state.snapshot?.unsavedChanges == true,
+                      "encoding does not mutate draft state")
+        let previewMode = try segmented("Output preview image", in: controller.root)
+        XCTAssertEqual(previewMode.selectedSegment, 1)
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Exact encoded size") })
+
+        (try field("Crop X", in: controller.root)).stringValue = "3"
+        (try field("Crop Y", in: controller.root)).stringValue = "5"
+        (try field("Crop width", in: controller.root)).stringValue = "300"
+        (try field("Crop height", in: controller.root)).stringValue = "200"
+        try button("Apply crop", in: controller.root).performClick(nil)
+        XCTAssertEqual(previewMode.selectedSegment, 0)
+        XCTAssertFalse(previewMode.isEnabled, "an accepted document edit invalidates encoded output")
+
+        try button("Preview output", in: controller.root).performClick(nil)
+        XCTAssertEqual(previewMode.selectedSegment, 1)
+        format.selectItem(withTitle: "WebP"); _ = format.sendAction(format.action, to: format.target)
+        XCTAssertEqual(previewMode.selectedSegment, 0)
+        XCTAssertFalse(previewMode.isEnabled, "changed options cannot leave stale output current")
+    }
+
+    func testMaximumOutputRequiresLocaleParsedDefaultCapAndFailuresRemainRecoverable() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!,
+            worker: worker, numberLocale: Locale(identifier: "fr_FR"))
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showOutput(in: controller.root)
+        let quality = try popup("Output quality mode", in: controller.root)
+        quality.selectItem(withTitle: "Maximum file size")
+        _ = quality.sendAction(quality.action, to: quality.target)
+        let budget = try field("Output byte budget", in: controller.root)
+        XCTAssertFalse(budget.isHidden); XCTAssertEqual(budget.stringValue, "10000000")
+        XCTAssertTrue((try field("Output quality value", in: controller.root)).isHidden)
+        try button("Preview output", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.encodes.last?["max_size_bytes"] as? UInt64, 10_000_000)
+        XCTAssertEqual(worker.encodes.last?["quality"] as? String, "maximum")
+
+        budget.stringValue = "9 999"
+        try button("Preview output", in: controller.root).performClick(nil)
+        XCTAssertFalse(controller.state.busy)
+        XCTAssertEqual(worker.encodes.count, 1)
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("at least 10,000") })
+
+        budget.stringValue = "10000"
+        worker.failEncode = true
+        try button("Preview output", in: controller.root).performClick(nil)
+        XCTAssertFalse(controller.state.busy)
+        XCTAssertNotNil(controller.state.snapshot)
+        XCTAssertTrue(controller.window.isVisible)
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("fixture encode failed") })
+    }
+
+    func testStaleOutputCompletionCannotReopenClosedEditor() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        worker.deferEncodes = true
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                     worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showOutput(in: controller.root)
+        try button("Preview output", in: controller.root).performClick(nil)
+        XCTAssertTrue(controller.state.busy)
+        XCTAssertTrue(controller.prepareForTermination())
+        worker.completePendingEncode()
+        XCTAssertNil(controller.state.artifactID)
+        XCTAssertFalse(controller.window.isVisible)
+    }
+
     func testLayerSnapshotOrderAndCommandsUseStableIDs() throws {
         _ = NSApplication.shared
         let background = layer(id: "background", name: "Original screenshot", x: 0, y: 0,
@@ -377,6 +477,37 @@ final class ScreenshotEditorTests: XCTestCase {
         }
     }
 
+    func testOutputPanelRenderedStates() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true))
+            let controller = ScreenshotEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showOutput(in: controller.root)
+            try render(controller.root, name: "screenshot-editor-output-normal-\(appearance)")
+
+            let quality = try popup("Output quality mode", in: controller.root)
+            quality.selectItem(withTitle: "Compress")
+            _ = quality.sendAction(quality.action, to: quality.target)
+            try button("Preview output", in: controller.root).performClick(nil)
+            try render(controller.root, name: "screenshot-editor-output-preview-\(appearance)")
+
+            quality.selectItem(withTitle: "Maximum file size")
+            _ = quality.sendAction(quality.action, to: quality.target)
+            (try field("Output byte budget", in: controller.root)).stringValue = "99"
+            try button("Preview output", in: controller.root).performClick(nil)
+            try render(controller.root, name: "screenshot-editor-output-error-\(appearance)")
+
+            (try field("Output byte budget", in: controller.root)).stringValue = "10000"
+            worker.failEncode = true
+            worker.failureMessage = "The encoded screenshot cannot meet this byte budget without exceeding the supported quality limits. The current draft and undo history remain unchanged and recoverable."
+            try button("Preview output", in: controller.root).performClick(nil)
+            try render(controller.root, name: "screenshot-editor-output-error-minimum-\(appearance)")
+        }
+    }
+
     func testRealBridgeCropSaveReopenDiscardAndRetainedFrame() throws {
         _ = NSApplication.shared
         let fixture = try makeHistoryFixture()
@@ -429,6 +560,41 @@ final class ScreenshotEditorTests: XCTestCase {
         reopenedWorker.close(); EditorWorker.flush()
     }
 
+    func testRealBridgeEncodesPngJpegAndWebpWithIndependentBytesAndAlphaPolicy() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture(transparentOrigin: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let worker = EditorWorker()
+        let opened = expectation(description: "open for export")
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                    artifactID: fixture.id) { result in
+            XCTAssertNoThrow(try result.get()); opened.fulfill()
+        }
+        wait(for: [opened], timeout: 5)
+
+        var outputs: [String: EditorOutputPresentation] = [:]
+        for format in ["png", "jpeg", "webp"] {
+            let encoded = expectation(description: "encode \(format)")
+            worker.encode(["format": format, "quality": "compress", "quality_value": 85,
+                           "png": format == "png" ? ["max_colors": 128] : [:]]) { result in
+                outputs[format] = try? result.get(); encoded.fulfill()
+            }
+            wait(for: [encoded], timeout: 5)
+        }
+        XCTAssertEqual(Array(outputs["png"]?.data.prefix(4) ?? Data()), [137, 80, 78, 71])
+        XCTAssertEqual(Array(outputs["jpeg"]?.data.prefix(2) ?? Data()), [255, 216])
+        XCTAssertEqual(String(data: outputs["webp"]?.data.subdata(in: 8..<12) ?? Data(),
+                              encoding: .ascii), "WEBP")
+        XCTAssertEqual(outputs["png"]?.image.width, 7); XCTAssertEqual(outputs["webp"]?.image.height, 3)
+        XCTAssertEqual(rgba(try XCTUnwrap(outputs["png"]?.image), x: 0, y: 0)[3], 0,
+                       "PNG preview preserves alpha")
+        XCTAssertEqual(rgba(try XCTUnwrap(outputs["jpeg"]?.image), x: 0, y: 0)[3], 255,
+                       "JPEG preview reflects shared white compositing")
+        worker.close(); EditorWorker.flush()
+        XCTAssertFalse(outputs["webp"]?.data.isEmpty ?? true,
+                       "copied export bytes remain valid after session close")
+    }
+
     private func snapshot(id: String, width: Double = 640, height: Double = 360,
                           unsaved: Bool = false, draft: Bool = false,
                           layers: [[String: Any]] = []) -> NativeEditorSnapshot {
@@ -464,10 +630,25 @@ final class ScreenshotEditorTests: XCTestCase {
     }
 
     private func showLayers(in view: NSView) throws {
-        let sections = try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSSegmentedControl }
-            .first { $0.accessibilityLabel() == "Editor section" })
+        let sections = try segmented("Editor section", in: view)
         sections.selectedSegment = 1
         _ = sections.sendAction(sections.action, to: sections.target)
+    }
+
+    private func showOutput(in view: NSView) throws {
+        let sections = try segmented("Editor section", in: view)
+        sections.selectedSegment = 2
+        _ = sections.sendAction(sections.action, to: sections.target)
+    }
+
+    private func popup(_ label: String, in view: NSView) throws -> NSPopUpButton {
+        try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSPopUpButton }
+            .first { $0.accessibilityLabel() == label })
+    }
+
+    private func segmented(_ label: String, in view: NSView) throws -> NSSegmentedControl {
+        try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSSegmentedControl }
+            .first { $0.accessibilityLabel() == label })
     }
 
     private func labels(in view: NSView) -> [String] {
@@ -503,14 +684,15 @@ final class ScreenshotEditorTests: XCTestCase {
         try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: url)
     }
 
-    private func makeHistoryFixture() throws -> (root: URL, history: URL, drafts: URL, id: String) {
+    private func makeHistoryFixture(transparentOrigin: Bool = false) throws
+        -> (root: URL, history: URL, drafts: URL, id: String) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let history = root.appendingPathComponent("History")
         let drafts = root.appendingPathComponent("editor-drafts")
         let id = UUID().uuidString.lowercased()
         let entry = history.appendingPathComponent(id)
         try FileManager.default.createDirectory(at: entry, withIntermediateDirectories: true)
-        let image = CGImage.fixture(width: 7, height: 3)
+        let image = CGImage.fixture(width: 7, height: 3, transparentOrigin: transparentOrigin)
         let png = try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
         try png.write(to: entry.appendingPathComponent("capture.png"))
         try png.write(to: entry.appendingPathComponent("preview.png"))
@@ -536,6 +718,7 @@ final class ScreenshotEditorTests: XCTestCase {
 private final class FakeEditorWorker: EditorWorking {
     var snapshot: NativeEditorSnapshot
     var requests: [[String: Any]] = []
+    var encodes: [[String: Any]] = []
     var openArtifactIDs: [String] = []
     var closeCount = 0
     var draftsRoot: String?
@@ -543,9 +726,12 @@ private final class FakeEditorWorker: EditorWorking {
     var failLayerAction: String?
     var failureMessage = "fixture save failed"
     var deferRequests = false
+    var deferEncodes = false
+    var failEncode = false
     var response: (([String: Any]) -> NativeEditorSnapshot?)?
     var terminationResult: Result<Void, Error> = .success(())
     private var pendingCompletion: ((Result<EditorPresentation, Error>) -> Void)?
+    private var pendingEncodeCompletion: ((Result<EditorOutputPresentation, Error>) -> Void)?
 
     init(snapshot: NativeEditorSnapshot) { self.snapshot = snapshot }
 
@@ -584,15 +770,39 @@ private final class FakeEditorWorker: EditorWorking {
             image: CGImage.fixture(width: Int(snapshot.width), height: Int(snapshot.height)))))
     }
 
+    func encode(_ options: [String: Any],
+                completion: @escaping (Result<EditorOutputPresentation, Error>) -> Void) {
+        encodes.append(options)
+        if failEncode {
+            completion(.failure(AppBridgeError.backend(failureMessage))); return
+        }
+        if deferEncodes {
+            pendingEncodeCompletion = completion; return
+        }
+        completion(.success(output()))
+    }
+
+    func completePendingEncode() {
+        let completion = pendingEncodeCompletion
+        pendingEncodeCompletion = nil
+        completion?(.success(output()))
+    }
+
+    private func output() -> EditorOutputPresentation {
+        EditorOutputPresentation(data: Data(repeating: 0x5a, count: 12_345),
+            image: CGImage.fixture(width: Int(snapshot.width), height: Int(snapshot.height)))
+    }
+
     func close() { closeCount += 1 }
     func prepareForTermination() -> Result<Void, Error> { terminationResult }
 }
 
 private extension CGImage {
-    static func fixture(width: Int, height: Int) -> CGImage {
+    static func fixture(width: Int, height: Int, transparentOrigin: Bool = false) -> CGImage {
         let bytes = (0..<width * height).flatMap { index -> [UInt8] in
             let x = index % width, y = index / width
-            return [UInt8(truncatingIfNeeded: x * 31), UInt8(truncatingIfNeeded: y * 71), 19, 255]
+            return [UInt8(truncatingIfNeeded: x * 31), UInt8(truncatingIfNeeded: y * 71), 19,
+                    transparentOrigin && index == 0 ? 0 : 255]
         }
         let provider = CGDataProvider(data: Data(bytes) as CFData)!
         return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,

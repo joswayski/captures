@@ -446,12 +446,15 @@ remains the only geometry/render authority. Geometry and Layers views retain the
 preview; the front-to-back layer panel exposes visibility, lock, opacity, absolute
 X/Y movement through shared deltas, image rename, duplicate, delete and adjacent
 ordering. Stable IDs preserve selection across replies, and shared Rust remains the
-authority for locked barriers and duplicate behavior. Drafts use the same isolated sibling root
-and reopen with the screenshot. Closing an unsaved session offers save-and-close,
+authority for locked barriers and duplicate behavior. An Output view runs shared
+PNG/JPEG/WebP encoding on that worker, reports exact bytes and switches the fit preview
+between the edited canvas and decoded output. Option or document changes invalidate
+stale output; previewing has no draft, undo, clipboard or file side effects. Drafts use
+the same isolated sibling root and reopen with the screenshot. Closing an unsaved session offers save-and-close,
 close without saving the current session (retaining any older persisted draft), or
 cancel. Quit drains accepted work and cancels termination if its draft save fails.
-AppKit CI covers bridge lifetime, pending-edit ownership, locale-aware geometry,
-failure/close behavior and rendered light/dark fixtures. Physical AppKit input,
+AppKit CI covers bridge/export lifetime, pending-edit ownership, locale-aware geometry,
+failure/close/output behavior and rendered light/dark fixtures. Physical AppKit input,
 accessibility and IME acceptance remain unverified.
 
 Across both hosts, physical input/accessibility/IME acceptance remains open.

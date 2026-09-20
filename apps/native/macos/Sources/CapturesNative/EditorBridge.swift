@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import ImageIO
 import CCapturesSettings
 
 struct NativeEditorLayer: Equatable {
@@ -72,6 +73,13 @@ struct NativeEditorSnapshot: Equatable {
 struct EditorPresentation {
     let snapshot: NativeEditorSnapshot
     let image: CGImage
+}
+
+struct EditorOutputPresentation {
+    let data: Data
+    let image: CGImage
+
+    var length: Int { data.count }
 }
 
 /// Independently retained immutable Rust pixels. The CGImage provider retains
@@ -154,6 +162,41 @@ private final class NativeEditorSession {
         let frame = NativeEditorFrame(handle: handle)
         return EditorPresentation(snapshot: snapshot, image: try frame.image())
     }
+
+    func encode(_ options: [String: Any]) throws -> EditorOutputPresentation {
+        let data = try JSONSerialization.data(withJSONObject: options, options: [.sortedKeys])
+        var response: UnsafeMutablePointer<CChar>?
+        let exported = String(decoding: data, as: UTF8.self).withCString {
+            captures_editor_encode_v1(handle, $0, &response)
+        }
+        defer { captures_settings_free_v1(response) }
+        guard let response else {
+            captures_editor_export_free_v1(exported)
+            throw AppBridgeError.invalidResponse
+        }
+        let result: [String: Any]
+        do { result = try AppBridge.decode(Data(bytes: response, count: strlen(response))) }
+        catch {
+            captures_editor_export_free_v1(exported)
+            throw error
+        }
+        guard let exported, let expectedLength = (result["length"] as? NSNumber)?.intValue else {
+            captures_editor_export_free_v1(exported)
+            throw AppBridgeError.invalidResponse
+        }
+        defer { captures_editor_export_free_v1(exported) }
+        var bytes = CapturesEditorBytes()
+        guard captures_editor_export_bytes_v1(exported, &bytes),
+              let pointer = bytes.data, bytes.length == expectedLength else {
+            throw AppBridgeError.invalidResponse
+        }
+        let encoded = Data(bytes: pointer, count: bytes.length)
+        guard let source = CGImageSourceCreateWithData(encoded as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            throw AppBridgeError.invalidResponse
+        }
+        return EditorOutputPresentation(data: encoded, image: image)
+    }
 }
 
 protocol EditorWorking: AnyObject {
@@ -161,6 +204,8 @@ protocol EditorWorking: AnyObject {
               completion: @escaping (Result<EditorPresentation, Error>) -> Void)
     func request(_ object: [String: Any],
                  completion: @escaping (Result<EditorPresentation, Error>) -> Void)
+    func encode(_ options: [String: Any],
+                completion: @escaping (Result<EditorOutputPresentation, Error>) -> Void)
     func close()
     func prepareForTermination() -> Result<Void, Error>
 }
@@ -207,6 +252,20 @@ final class EditorWorker: EditorWorking {
                 let snapshot = try session.request(object)
                 storage.snapshot = snapshot
                 return try session.presentation(snapshot)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func encode(_ options: [String: Any],
+                completion: @escaping (Result<EditorOutputPresentation, Error>) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            let result = Result { () throws -> EditorOutputPresentation in
+                guard let session = storage.session else {
+                    throw AppBridgeError.backend("The screenshot editor is closed.")
+                }
+                return try session.encode(options)
             }
             DispatchQueue.main.async { completion(result) }
         }
