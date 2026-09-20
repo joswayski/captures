@@ -182,7 +182,8 @@ Captures design. Development workbenches include Swift/AppKit on macOS and an
 experimental Rust/wgpu renderer candidate for Windows/Linux. They are not
 replacement downloads. An opt-in native capture workspace connects full-display
 PNG capture, local screenshot history, copy, export, and deletion to
-shared Rust engines. Clear history requires confirmation and keeps exported files.
+shared Rust engines. Clear history requires confirmation, removes all capture
+types regardless of the selected filter, and keeps exported files and recovery drafts.
 It uses separate development data; Wayland capture is gated
 until the candidate can hide its window reliably. Native Preferences saves
 appearance, custom colors, and capture/media defaults through shared Rust logic
@@ -234,10 +235,22 @@ the accepted take. Escape cancels only that selector or its screenshot countdown
 successful screenshots use the normal native History, preview and auto-copy paths.
 AppKit and Windows can exclude native capture UI. X11 temporarily hides the HUD and
 guide from the screenshot, but cannot keep the selector out of the ongoing recording.
-Recording playback/editing/export and GIF conversion remain unconnected; History
-displays recording posters and metadata only.
-Real macOS and Windows recording, audio devices, multi-display and hardware acceptance remain open;
+Recording playback/editing, transcoded export and GIF
+conversion remain unconnected. History displays recording posters and metadata; **Save file**
+copies the original media to the output folder without re-encoding, and
+**Show in Folder** reveals that saved copy. Both native
+hosts offer counted All, Screenshots, Video and GIF history filters; filtering
+does not delete captures or exports. After finalization, a temporary **Recording ready**
+notice offers Save file, then Show in Folder after saving a permanent copy. Dismissing
+or letting it expire preserves History and exports; failed saves can be retried.
+The native editor is not connected, so this notice appears immediately rather than
+after closing an editor. Real macOS and
+Windows recording, audio devices, multi-display and hardware acceptance remain open;
 Wayland recording is gated with the rest of native capture.
+Native Preferences also includes an optional feedback form. Sending shares only
+the message, optional contact, category, and displayed app/system details with
+captur.es; it never attaches captures, files, or diagnostics. Fixture mode cannot
+send feedback, and failed requests preserve the draft for retry.
 Editing, OS shortcut takeover, login items,
 single-instance relaunch and updates are not connected to the native hosts yet. Windows/Linux
 renderer selection and full feature/design parity remain open. The

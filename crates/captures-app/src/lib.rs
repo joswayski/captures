@@ -70,6 +70,11 @@ pub enum Request {
         directory: PathBuf,
         format: ScreenshotFormat,
     },
+    SaveRecording {
+        root: PathBuf,
+        id: String,
+        directory: PathBuf,
+    },
     Delete {
         root: PathBuf,
         id: String,
@@ -163,15 +168,21 @@ pub fn execute(request: Request) -> Result<Response, Error> {
             directory,
             format,
         } => save_screenshot(&root, &id, &directory, format),
+        Request::SaveRecording {
+            root,
+            id,
+            directory,
+        } => save_recording(&root, &id, &directory),
         Request::Delete { root, id } => {
             captures_history::delete(&root, &id)?;
             Ok(Response::Deleted { id })
         }
         Request::ClearHistory { root } => {
-            // Clear only the screenshots exposed by this workspace, never exports
-            // or another data root. Hosts refresh even on error: deletion can be partial.
-            for item in list(&root)? {
-                captures_history::delete(&root, &item.entry.id)?;
+            // Both hosts confirm clearing every capture kind, independent of the
+            // selected filter. Never follow export paths or remove another root.
+            // Hosts refresh even on error: deletion can be partial.
+            for entry in captures_history::load(&root, Utc::now())? {
+                captures_history::delete(&root, &entry.id)?;
             }
             Ok(Response::History {
                 artifacts: list(&root)?,
@@ -182,9 +193,14 @@ pub fn execute(request: Request) -> Result<Response, Error> {
 
 fn artifact(root: &Path, entry: HistoryEntry) -> Result<Artifact, Error> {
     let directory = captures_history::entry_directory(root, &entry.id)?;
+    let image_path = directory.join(if entry.kind.is_recording() {
+        captures_history::HISTORY_PREVIEW_FILE
+    } else {
+        captures_history::HISTORY_IMAGE_FILE
+    });
     Ok(Artifact {
         entry,
-        image_path: directory.join(captures_history::HISTORY_IMAGE_FILE),
+        image_path,
         preview_path: directory.join(captures_history::HISTORY_PREVIEW_FILE),
     })
 }
@@ -233,7 +249,7 @@ fn save_screenshot(
     directory: &Path,
     format: ScreenshotFormat,
 ) -> Result<Response, Error> {
-    let mut item = list(root)?
+    let item = list(root)?
         .into_iter()
         .find(|item| item.entry.id == id)
         .ok_or(Error::Missing)?;
@@ -252,7 +268,6 @@ fn save_screenshot(
         });
     }
     fs::create_dir_all(directory)?;
-    let stem = format!("Captures_{}", Local::now().format("%Y-%m-%d_%H-%M-%S_%3f"));
     let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
     if format == ScreenshotFormat::Png {
         std::io::copy(&mut fs::File::open(&item.image_path)?, &mut temporary)?;
@@ -270,8 +285,57 @@ fn save_screenshot(
         .map_err(Error::Image)?;
         temporary.write_all(&bytes)?;
     }
+    publish_export(root, item, temporary, directory, format.extension())
+}
+
+fn save_recording(root: &Path, id: &str, directory: &Path) -> Result<Response, Error> {
+    let entry = captures_history::load(root, Utc::now())?
+        .into_iter()
+        .find(|entry| entry.id == id && entry.kind.is_recording())
+        .ok_or(Error::Missing)?;
+    let item = artifact(root, entry)?;
+    if let Some(path) = item
+        .entry
+        .saved_path
+        .as_ref()
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+    {
+        return Ok(Response::Saved {
+            artifact: item,
+            path,
+        });
+    }
+    let source = item
+        .entry
+        .recording_media_path(root)
+        .filter(|path| path.is_file())
+        .ok_or(Error::Missing)?;
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or(if item.entry.kind == ArtifactKind::Gif {
+            "gif"
+        } else {
+            "mp4"
+        });
+    fs::create_dir_all(directory)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
+    std::io::copy(&mut fs::File::open(&source)?, &mut temporary)?;
+    publish_export(root, item, temporary, directory, extension)
+}
+
+/// Atomically publish prepared bytes without overwriting another file, then
+/// record the export separately from the retained private History artifact.
+fn publish_export(
+    root: &Path,
+    mut item: Artifact,
+    temporary: tempfile::NamedTempFile,
+    directory: &Path,
+    extension: &str,
+) -> Result<Response, Error> {
     temporary.as_file().sync_all()?;
-    let extension = format.extension();
+    let stem = format!("Captures_{}", Local::now().format("%Y-%m-%d_%H-%M-%S_%3f"));
     let path = (0_u32..)
         .find_map(|suffix| {
             let name = if suffix == 0 {
@@ -317,6 +381,103 @@ mod tests {
             Err(Error::Cancelled)
         ));
         assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn recording_save_copies_original_media_and_preserves_private_history() {
+        for (kind, extension, mime) in [
+            (ArtifactKind::Video, "mp4", "video/mp4"),
+            (ArtifactKind::Video, "webm", "video/webm"),
+            (ArtifactKind::Gif, "gif", "image/gif"),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let output = tempfile::tempdir().unwrap();
+            let screenshot =
+                persist_screenshot(root.path(), &RgbaImage::new(7, 3), CaptureMode::Window)
+                    .unwrap();
+            let poster = fs::read(&screenshot.preview_path).unwrap();
+            let mut entry = screenshot.entry.clone();
+            entry.id = uuid::Uuid::new_v4().to_string();
+            entry.kind = kind;
+            entry.mime_type = Some(mime.into());
+            entry.duration_ms = Some(1234);
+            entry.target = Some(
+                serde_json::from_value(
+                    serde_json::json!({"type":"display", "display_id":"fixture"}),
+                )
+                .unwrap(),
+            );
+            let source = root.path().join(format!("source.{extension}"));
+            let media = b"original media bytes, not the PNG poster\x00\x18\xff";
+            fs::write(&source, media).unwrap();
+            let private =
+                captures_history::save_recording(root.path(), &entry, &poster, &source).unwrap();
+
+            // Wrong-kind requests and blocked destinations must not publish or
+            // mark a recording saved. They must leave the private media intact.
+            let unused = output.path().join("unused");
+            assert!(save_recording(root.path(), &screenshot.entry.id, &unused).is_err());
+            assert!(!unused.exists());
+            let blocked = output.path().join("blocked");
+            fs::write(&blocked, b"keep").unwrap();
+            assert!(save_recording(root.path(), &entry.id, &blocked).is_err());
+            assert!(
+                captures_history::load(root.path(), Utc::now())
+                    .unwrap()
+                    .iter()
+                    .find(|item| item.id == entry.id)
+                    .unwrap()
+                    .saved_path
+                    .is_none()
+            );
+
+            let request = serde_json::from_value(serde_json::json!({
+                "operation":"save_recording", "root":root.path(), "id":entry.id, "directory":output.path(),
+            })).unwrap();
+            let Response::Saved { artifact, path } = execute(request).unwrap() else {
+                panic!("saved response")
+            };
+            assert_eq!(path.extension().unwrap(), extension);
+            assert_eq!(fs::read(&path).unwrap(), media);
+            assert_eq!(fs::read(&private).unwrap(), media);
+            assert_eq!(
+                artifact.image_path, artifact.preview_path,
+                "recordings must keep rendering their poster"
+            );
+            assert_eq!(fs::read(&artifact.image_path).unwrap(), poster);
+            assert_eq!(artifact.entry.duration_ms, Some(1234));
+            assert_eq!(artifact.entry.saved_path.as_deref(), path.to_str());
+            let Response::Saved { path: reused, .. } =
+                save_recording(root.path(), &entry.id, &unused).unwrap()
+            else {
+                panic!("saved response")
+            };
+            assert_eq!(reused, path);
+            assert!(
+                !unused.exists(),
+                "repeat Save does not create another export directory"
+            );
+
+            fs::remove_file(&path).unwrap();
+            let Response::Saved {
+                path: recreated, ..
+            } = save_recording(root.path(), &entry.id, output.path()).unwrap()
+            else {
+                panic!("saved response")
+            };
+            assert_eq!(fs::read(&recreated).unwrap(), media);
+            assert_eq!(fs::read(blocked).unwrap(), b"keep");
+            execute(Request::ClearHistory {
+                root: root.path().into(),
+            })
+            .unwrap();
+            assert!(!private.exists());
+            assert_eq!(
+                fs::read(recreated).unwrap(),
+                media,
+                "export survives deleting history"
+            );
+        }
     }
 
     #[test]
@@ -438,7 +599,7 @@ mod tests {
     }
 
     #[test]
-    fn clear_history_removes_all_local_screenshots_but_keeps_exports_and_other_roots() {
+    fn clear_history_removes_all_kinds_but_keeps_exports_recovery_and_other_roots() {
         let data = tempfile::tempdir().unwrap();
         let exports = tempfile::tempdir().unwrap();
         let other = tempfile::tempdir().unwrap();
@@ -457,8 +618,8 @@ mod tests {
         .unwrap() else {
             panic!("saved response")
         };
-        // The native workspace exposes screenshots only. Hidden recording entries
-        // must not be swept up by a screenshot-history confirmation.
+        // Both referenced exports and history-owned recording copies are visible.
+        // Clearing history removes only the copies inside this history root.
         let media = exports.path().join("keep.mp4");
         fs::write(&media, b"recording fixture").unwrap();
         let mut recording = first.entry.clone();
@@ -474,14 +635,26 @@ mod tests {
             .unwrap(),
         );
         captures_history::save_recording_reference(data.path(), &recording, b"preview").unwrap();
+        let gif_source = exports.path().join("keep.gif");
+        fs::write(&gif_source, b"GIF fixture").unwrap();
+        let mut gif = recording.clone();
+        gif.id = uuid::Uuid::new_v4().to_string();
+        gif.kind = ArtifactKind::Gif;
+        gif.mime_type = Some("image/gif".into());
+        gif.saved_path = Some(gif_source.to_string_lossy().into());
+        let gif_copy =
+            captures_history::save_recording(data.path(), &gif, b"poster", &gif_source).unwrap();
         assert_eq!(
             captures_history::load(data.path(), Utc::now())
                 .unwrap()
                 .len(),
-            3
+            4
         );
         // A non-history file in the root is not permission to recursively remove it.
         fs::write(data.path().join("keep.txt"), b"keep").unwrap();
+        let recovery = data.path().join(".recovery");
+        fs::create_dir(&recovery).unwrap();
+        fs::write(recovery.join("segment.mp4"), b"unfinished take").unwrap();
         let request = serde_json::from_value(serde_json::json!({
             "operation": "clear_history", "root": data.path(),
         }))
@@ -495,9 +668,15 @@ mod tests {
         assert_eq!(image::open(&path).unwrap().into_rgba8(), pixels);
         assert!(untouched.image_path.is_file());
         let remaining = captures_history::load(data.path(), Utc::now()).unwrap();
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].id, recording.id);
+        assert!(remaining.is_empty());
+        assert!(!data.path().join(&recording.id).exists());
+        assert!(!gif_copy.exists());
         assert_eq!(fs::read(media).unwrap(), b"recording fixture");
+        assert_eq!(fs::read(gif_source).unwrap(), b"GIF fixture");
+        assert_eq!(
+            fs::read(recovery.join("segment.mp4")).unwrap(),
+            b"unfinished take"
+        );
         assert_eq!(fs::read(data.path().join("keep.txt")).unwrap(), b"keep");
         assert!(
             execute(Request::ClearHistory {

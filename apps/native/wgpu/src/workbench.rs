@@ -19,7 +19,7 @@ use captures_app::shortcuts::{CaptureShortcut, CaptureShortcuts};
 
 use crate::{
     emit,
-    live::{CaptureRequest, Live},
+    live::{CaptureRequest, HistoryFilter, Live},
     options::{HudState, Options, Scene},
     preferences::Preferences,
     recording_hud, shortcut_input,
@@ -52,7 +52,7 @@ pub struct Workbench {
     settled_frames: u64,
     ui_ms: f64,
     max_ui_ms: f64,
-    history_filter: usize,
+    history_filter: HistoryFilter,
     history_end: bool,
     selected_row: Option<usize>,
     paused: bool,
@@ -192,7 +192,7 @@ impl Workbench {
             settled_frames: 0,
             ui_ms: 0.,
             max_ui_ms: 0.,
-            history_filter: 0,
+            history_filter: HistoryFilter::All,
             history_end: false,
             selected_row: None,
             paused: false,
@@ -495,7 +495,7 @@ impl Workbench {
     }
 
     fn preferences(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        if self.preferences_state.ui(ui, t) {
+        if self.preferences_state.ui(ui, t, false) {
             self.change_scene(Scene::History);
         }
     }
@@ -517,11 +517,14 @@ impl Workbench {
                 }
             }
         });
-        ui.horizontal(|ui| {
-            for (index, title) in ["All", "Screenshots", "Video", "GIF"].iter().enumerate() {
-                ui.selectable_value(&mut self.history_filter, index, *title);
-            }
-        });
+        if self.history_filter.ui(
+            ui,
+            (0..self.options.history_count).map(history_artifact_kind),
+        ) {
+            self.selected_row = self
+                .selected_row
+                .filter(|row| self.history_filter.matches(history_artifact_kind(*row)));
+        }
         let rows = history_rows(self.options.history_count, self.history_filter);
         if rows.is_empty() {
             self.texture = None;
@@ -1018,7 +1021,7 @@ impl eframe::App for Workbench {
                         self.preferences_state.sidebar(ui, &t);
                     });
                 egui::CentralPanel::default().show(ui, |ui| {
-                    if self.preferences_state.ui(ui, &t) {
+                    if self.preferences_state.ui(ui, &t, true) {
                         self.live_preferences = false;
                     }
                 });
@@ -1286,14 +1289,17 @@ fn history_kind(row: usize) -> &'static str {
         _ => "GIF",
     }
 }
-fn history_rows(count: usize, filter: usize) -> Vec<usize> {
+fn history_artifact_kind(row: usize) -> captures_history::ArtifactKind {
+    match row % 3 {
+        0 => captures_history::ArtifactKind::Video,
+        1 => captures_history::ArtifactKind::Screenshot,
+        _ => captures_history::ArtifactKind::Gif,
+    }
+}
+
+fn history_rows(count: usize, filter: HistoryFilter) -> Vec<usize> {
     (0..count)
-        .filter(|row| match filter {
-            1 => row % 3 == 1,
-            2 => row % 3 == 0,
-            3 => row % 3 == 2,
-            _ => true,
-        })
+        .filter(|row| filter.matches(history_artifact_kind(*row)))
         .collect()
 }
 
@@ -1469,12 +1475,12 @@ mod tests {
     use super::*;
     #[test]
     fn filtered_history_preserves_original_ids_and_boundaries() {
-        assert_eq!(history_rows(8, 1), vec![1, 4, 7]);
-        assert_eq!(history_rows(8, 2), vec![0, 3, 6]);
-        assert_eq!(history_rows(8, 3), vec![2, 5]);
-        assert!(history_rows(0, 0).is_empty());
-        assert_eq!(history_rows(1, 2), vec![0]);
-        assert!(history_rows(1, 1).is_empty());
+        assert_eq!(history_rows(8, HistoryFilter::Screenshots), vec![1, 4, 7]);
+        assert_eq!(history_rows(8, HistoryFilter::Video), vec![0, 3, 6]);
+        assert_eq!(history_rows(8, HistoryFilter::Gif), vec![2, 5]);
+        assert!(history_rows(0, HistoryFilter::All).is_empty());
+        assert_eq!(history_rows(1, HistoryFilter::Video), vec![0]);
+        assert!(history_rows(1, HistoryFilter::Screenshots).is_empty());
     }
 
     #[test]

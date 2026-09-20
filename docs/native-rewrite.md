@@ -136,6 +136,14 @@ visible and cannot justify a renderer selection or performance claim.
 
 ## Windows and Linux evaluation plan
 
+Native AppKit and wgpu Preferences now connect explicit, optional feedback through
+`captures-feedback`. The form displays its app/system context before Send, permits
+an optional contact, blocks duplicate submissions, and retains drafts after errors
+or closing/reopening. Submission runs separately from capture/settings workers;
+fixtures cannot send. No captures, files, or crash diagnostics are attached and
+no startup network request is introduced. This advances the manual feedback slice,
+not automatic crash reporting or full accessibility/physical-platform acceptance.
+
 No renderer is selected for these platforms yet. The same fixture scenes, token
 resources, resource budgets, visual checkpoints and input scripts are mandatory.
 
@@ -249,8 +257,19 @@ and after replacement-engine opening. Countdown cancellation discards the replac
 session. Private X11 exercises running/paused restart and replacement-only decoded
 pixels; AppKit and Windows remain implemented but require native CI/hardware, and
 Wayland remains gated by the existing native recording limitation. This does not
-close the Recording HUD gate: in-recording screenshots, saved notices and physical
+close the Recording HUD gate: in-recording screenshots and physical
 accessibility/compositor acceptance remain open.
+
+The recording-ready notice slice connects successful finalization to a fixed-glass,
+nonactivating top-right notice in both native hosts. Save file reuses the shared
+original-recording export operation; saved state offers Show in Folder. Pending
+saves pause the 15.2-second expiry; failure keeps retry available. Dismiss, expiry
+and new capture only remove presentation, and stale callbacks cannot revive it.
+Native has no recording editor yet, so the trigger is finalization, not the
+shipping editor-close event. Private-X11 input tests exercise export byte equality,
+failure/retry, missing exports, intercepted OS-reveal arguments, hidden-root expiry,
+dismissal and capture cleanup; AppKit provides state and render fixtures. Physical
+macOS/Windows, Wayland, accessibility and motion parity remain open.
 
 Native region recordings now retain a passive display-local guide from countdown
 until finalization/discard/cancellation. AppKit and wgpu paint the fixed glass veil

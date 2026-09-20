@@ -361,6 +361,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var preview: PreviewView?
     private var table: NSTableView?
     private var preferencesController: PreferencesController?
+    private var feedbackController: FeedbackController?
     private var liveController: LiveCaptureController?
     private var miniPreviews: MiniPreviewController?
     private var miniPreviewActions: MiniPreviewActions?
@@ -516,6 +517,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         guard appearance == "system" else { return }
         resolvedTokens = makeTokens()
         preferencesController?.restyle()
+        feedbackController?.restyle(tokens)
         liveStyleRevision += 1
         rebuildRenderedLiveWorkspaceIfNeeded()
     }
@@ -570,6 +572,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     self?.updateCaptureShortcuts(settings: settings)
                 }, showHistory: { [weak self] in self?.showHistory() },
                    liveCaptureAvailable: options.live,
+                   showFeedback: { [weak self] in self?.showFeedback() },
                    initialAppearance: options.appearanceOverride ? options.appearance : nil,
                    initialTheme: options.themeOverride ? options.theme : nil)
             } catch {
@@ -858,6 +861,14 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         updateShortcutState()
+    }
+
+    private func showFeedback() {
+        if feedbackController == nil {
+            feedbackController = FeedbackController(tokens: tokens, live: options.live)
+        }
+        feedbackController?.restyle(tokens)
+        feedbackController?.present(on: window)
     }
 
     private func openOutputFolder() {

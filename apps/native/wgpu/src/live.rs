@@ -37,6 +37,69 @@ use crate::{
 };
 use crate::{recording, recording_hud, tokens::Tokens};
 
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub(super) enum HistoryFilter {
+    #[default]
+    All,
+    Screenshots,
+    Video,
+    Gif,
+}
+
+impl HistoryFilter {
+    const ALL: [Self; 4] = [Self::All, Self::Screenshots, Self::Video, Self::Gif];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Screenshots => "Screenshots",
+            Self::Video => "Video",
+            Self::Gif => "GIF",
+        }
+    }
+
+    pub(super) fn matches(self, kind: captures_history::ArtifactKind) -> bool {
+        use captures_history::ArtifactKind;
+        matches!(
+            (self, kind),
+            (Self::All, _)
+                | (Self::Screenshots, ArtifactKind::Screenshot)
+                | (Self::Video, ArtifactKind::Video)
+                | (Self::Gif, ArtifactKind::Gif)
+        )
+    }
+
+    // The live workspace and disposable fixture use the same filter controls.
+    pub(super) fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        kinds: impl Iterator<Item = captures_history::ArtifactKind>,
+    ) -> bool {
+        let mut counts = [0usize; 4];
+        for kind in kinds {
+            for (index, filter) in Self::ALL.iter().enumerate() {
+                counts[index] += usize::from(filter.matches(kind));
+            }
+        }
+        let before = *self;
+        ui.horizontal_wrapped(|ui| {
+            for (filter, count) in Self::ALL.into_iter().zip(counts) {
+                let label = format!("{} {count}", filter.label());
+                if ui
+                    .add_enabled(
+                        filter == Self::All || count > 0,
+                        egui::Button::new(label).selected(*self == filter),
+                    )
+                    .clicked()
+                {
+                    *self = filter;
+                }
+            }
+        });
+        *self != before
+    }
+}
+
 enum Job {
     LoadHistory {
         root: PathBuf,
@@ -44,6 +107,7 @@ enum Job {
     Execute {
         request: Request,
         preview: Option<PreviewGuard>,
+        notice: Option<crate::recording_saved_notice::Guard>,
     },
     PrepareRegion {
         display_id: String,
@@ -91,6 +155,7 @@ enum Reply {
     HistoryLoaded(Result<Vec<Artifact>, String>),
     Executed {
         preview: Option<PreviewGuard>,
+        notice: Option<crate::recording_saved_notice::Guard>,
         result: Result<Box<Response>, String>,
     },
     HistoryCleared(Result<Box<Response>, String>),
@@ -547,6 +612,7 @@ pub struct Live {
     displays: Vec<DisplayDescriptor>,
     display_id: Option<String>,
     artifacts: Vec<Artifact>,
+    history_filter: HistoryFilter,
     selection: Selection,
     texture: Option<egui::TextureHandle>,
     preview_loading: bool,
@@ -570,6 +636,11 @@ pub struct Live {
     selector_rx: Receiver<SelectorMessage>,
     preview_tx: Sender<PreviewMessage>,
     preview_rx: Receiver<PreviewMessage>,
+    notice_tx: Sender<crate::recording_saved_notice::Action>,
+    notice_rx: Receiver<crate::recording_saved_notice::Action>,
+    recording_notice: Option<crate::recording_saved_notice::Notice>,
+    recording_notice_generation: u64,
+    recording_notice_target: Option<CaptureTarget>,
     previews: MiniPreviews,
     root_hide_deferred: bool,
     open_history_requested: bool,
@@ -621,6 +692,7 @@ impl Live {
         let (out, rx) = mpsc::channel();
         let (selector_tx, selector_rx) = mpsc::channel();
         let (preview_tx, preview_rx) = mpsc::channel();
+        let (notice_tx, notice_rx) = mpsc::channel();
         let capture_ctx = ctx.clone();
         let worker = thread::spawn(move || {
             // Retain ownership on X11. Disk decode and clipboard encoding never
@@ -630,7 +702,11 @@ impl Live {
                 let reply = match job {
                     Job::Shutdown => break,
                     Job::LoadHistory { root } => Reply::HistoryLoaded(load_history(&root)),
-                    Job::Execute { request, preview } => {
+                    Job::Execute {
+                        request,
+                        preview,
+                        notice,
+                    } => {
                         let clearing = matches!(request, Request::ClearHistory { .. });
                         let result = captures_app::execute(request)
                             .map(Box::new)
@@ -638,7 +714,11 @@ impl Live {
                         if clearing {
                             Reply::HistoryCleared(result)
                         } else {
-                            Reply::Executed { preview, result }
+                            Reply::Executed {
+                                preview,
+                                notice,
+                                result,
+                            }
                         }
                     }
                     Job::PrepareRegion {
@@ -733,6 +813,7 @@ impl Live {
             displays: vec![],
             display_id: None,
             artifacts: vec![],
+            history_filter: HistoryFilter::All,
             selection: Selection::default(),
             texture: None,
             preview_loading: false,
@@ -756,6 +837,11 @@ impl Live {
             selector_rx,
             preview_tx,
             preview_rx,
+            notice_tx,
+            notice_rx,
+            recording_notice: None,
+            recording_notice_generation: 0,
+            recording_notice_target: None,
             previews: MiniPreviews::default(),
             root_hide_deferred: false,
             open_history_requested: false,
@@ -876,6 +962,8 @@ impl Live {
     }
 
     pub fn request_capture(&mut self, request: CaptureRequest) {
+        self.recording_notice = None;
+        self.recording_notice_target = None;
         if request == CaptureRequest::NewCapture && self.recording_controls_hidden() {
             // The shipping New Capture action restores a hidden active HUD; it
             // never starts a second capture or replaces the accepted take.
@@ -1030,6 +1118,8 @@ impl Live {
     }
 
     pub fn flush(&mut self) {
+        self.recording_notice = None;
+        self.recording_notice_target = None;
         // Cancel preparation/countdown before draining work. CaptureFlow::cancel
         // leaves a capture that already crossed its persistence commit point alone.
         self.selector_scope_generation.store(0, Ordering::Release);
@@ -1098,6 +1188,7 @@ impl Live {
         let _ = self.tx.send(Job::Execute {
             request,
             preview: None,
+            notice: None,
         });
     }
 
@@ -1113,6 +1204,7 @@ impl Live {
         let _ = self.tx.send(Job::Execute {
             request,
             preview: Some(preview),
+            notice: None,
         });
     }
 
@@ -1159,6 +1251,11 @@ impl Live {
     }
 
     fn select(&mut self, id: String) {
+        if let Some(item) = self.artifacts.iter().find(|item| item.entry.id == id)
+            && !self.history_filter.matches(item.entry.kind)
+        {
+            self.history_filter = HistoryFilter::All;
+        }
         self.selection.begin(id);
         self.texture = None;
         self.decoded_path = None;
@@ -1166,7 +1263,34 @@ impl Live {
         self.load_selected();
     }
 
+    fn refresh_history_selection(&mut self) {
+        let visible = |item: &&Artifact| self.history_filter.matches(item.entry.kind);
+        let id = self
+            .artifacts
+            .iter()
+            .filter(visible)
+            .find(|item| self.selection.id.as_deref() == Some(item.entry.id.as_str()))
+            .or_else(|| self.artifacts.iter().find(visible))
+            .map(|item| item.entry.id.clone());
+        self.selection.clear();
+        self.texture = None;
+        self.decoded_path = None;
+        self.preview_loading = false;
+        self.confirm_delete = None;
+        if let Some(id) = id {
+            self.select(id);
+        }
+    }
+
     pub fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if self
+            .recording_notice
+            .as_ref()
+            .is_some_and(|notice| notice.expired(Instant::now()))
+        {
+            self.recording_notice = None;
+            self.recording_notice_target = None;
+        }
         self.can_hide = frame
             .winit_window()
             .map(|window| window.is_visible().is_some());
@@ -1881,6 +2005,15 @@ impl Live {
                 {
                     match result {
                         Ok(finalized) => {
+                            self.recording_notice_generation =
+                                self.recording_notice_generation.wrapping_add(1);
+                            self.recording_notice =
+                                Some(crate::recording_saved_notice::Notice::new(
+                                    finalized.entry.id.clone(),
+                                    self.recording_notice_generation,
+                                    Instant::now(),
+                                ));
+                            self.recording_notice_target = self.countdown_target;
                             self.status = finalized.warning.map_or_else(
                                 || format!("Recording saved to {}", finalized.path.display()),
                                 |warning| {
@@ -1893,6 +2026,7 @@ impl Live {
                             self.history_refresh_status = Some(self.status.clone());
                             self.finish_capture(ctx, false);
                             self.load_history();
+                            request_hidden_root_paint(ctx);
                         }
                         Err(error) => {
                             self.error = Some(error);
@@ -2290,7 +2424,11 @@ impl Live {
                         }
                     }
                 }
-                Reply::Executed { preview, result } => {
+                Reply::Executed {
+                    preview,
+                    notice,
+                    result,
+                } => {
                     self.pending = self.pending.saturating_sub(1);
                     if self.capture_phase == Some(CapturePhase::DisplayCapturing) {
                         self.capture_in_flight = false;
@@ -2299,6 +2437,14 @@ impl Live {
                     }
                     match result {
                         Err(error) => {
+                            if let Some(guard) = notice {
+                                if self.recording_notice.as_mut().is_some_and(|current| {
+                                    current.save_result(&guard, Err(error.clone()), Instant::now())
+                                }) {
+                                    request_hidden_root_paint(ctx);
+                                }
+                                continue;
+                            }
                             if let Some(preview) = preview {
                                 if let Some(card) = self
                                     .previews
@@ -2314,6 +2460,25 @@ impl Live {
                             }
                         }
                         Ok(response) => {
+                            if let Some(guard) = notice {
+                                let path = match response.as_ref() {
+                                    Response::Saved { artifact, path }
+                                        if artifact.entry.id == guard.artifact_id =>
+                                    {
+                                        Some(path.clone())
+                                    }
+                                    _ => None,
+                                };
+                                self.apply(*response, false);
+                                if let Some(path) = path
+                                    && self.recording_notice.as_mut().is_some_and(|current| {
+                                        current.save_result(&guard, Ok(path), Instant::now())
+                                    })
+                                {
+                                    request_hidden_root_paint(ctx);
+                                }
+                                continue;
+                            }
                             let announce = preview.as_ref().is_none_or(|preview| {
                                 self.previews
                                     .accepts(&preview.artifact_id, preview.generation)
@@ -2787,14 +2952,8 @@ impl Live {
                 self.previews.clear(&removed);
                 self.confirm_clear_history = false;
                 self.confirm_delete = None;
-                self.selection.clear();
-                self.texture = None;
-                self.decoded_path = None;
-                self.preview_loading = false;
                 self.artifacts = artifacts;
-                if let Some(id) = self.artifacts.first().map(|item| item.entry.id.clone()) {
-                    self.select(id);
-                }
+                self.refresh_history_selection();
                 self.status = self
                     .history_refresh_status
                     .take()
@@ -2804,6 +2963,9 @@ impl Live {
                 self.accept_artifact(artifact, "Full display captured as PNG");
             }
             Response::Saved { artifact, path } => {
+                if announce && let Some(notice) = &mut self.recording_notice {
+                    notice.mark_saved(&artifact.entry.id, path.clone(), Instant::now());
+                }
                 if let Some(item) = self
                     .artifacts
                     .iter_mut()
@@ -2819,13 +2981,7 @@ impl Live {
                 self.previews.remove(&id);
                 self.artifacts.retain(|item| item.entry.id != id);
                 self.confirm_delete = None;
-                self.selection.clear();
-                self.texture = None;
-                self.decoded_path = None;
-                self.preview_loading = false;
-                if let Some(id) = self.artifacts.first().map(|item| item.entry.id.clone()) {
-                    self.select(id);
-                }
+                self.refresh_history_selection();
                 self.status = "Removed from capture history; exported files were kept".into();
             }
             Response::PermissionGranted => {
@@ -2843,6 +2999,76 @@ impl Live {
         settings: Result<AppSettings, String>,
     ) {
         self.capture_viewports(ctx, tokens);
+        while let Ok(action) = self.notice_rx.try_recv() {
+            use crate::recording_saved_notice::Action;
+            match action {
+                Action::Dismiss(guard)
+                    if self
+                        .recording_notice
+                        .as_ref()
+                        .is_some_and(|n| n.guard == guard) =>
+                {
+                    self.recording_notice = None;
+                    self.recording_notice_target = None;
+                }
+                Action::Reveal(guard, path)
+                    if self
+                        .recording_notice
+                        .as_ref()
+                        .is_some_and(|n| n.guard == guard) =>
+                {
+                    if let Err(error) = reveal(&path) {
+                        if let Some(notice) = &mut self.recording_notice {
+                            notice.fail(
+                                format!("Could not show the recording in its folder: {error}"),
+                                Instant::now(),
+                            );
+                        }
+                    } else {
+                        self.recording_notice = None;
+                        self.recording_notice_target = None;
+                    }
+                }
+                Action::Save(guard)
+                    if self
+                        .recording_notice
+                        .as_ref()
+                        .is_some_and(|n| n.guard == guard) =>
+                {
+                    let directory = settings
+                        .as_ref()
+                        .map(|s| PathBuf::from(&s.output_directory));
+                    match directory {
+                        Ok(directory) => {
+                            let accepted =
+                                self.recording_notice.as_mut().and_then(|n| n.begin_save());
+                            if let Some(guard) = accepted {
+                                self.pending += 1;
+                                let _ = self.tx.send(Job::Execute {
+                                    request: Request::SaveRecording {
+                                        root: self.root.clone(),
+                                        id: guard.artifact_id.clone(),
+                                        directory,
+                                    },
+                                    preview: None,
+                                    notice: Some(guard),
+                                });
+                            }
+                        }
+                        Err(error) => {
+                            if let Some(notice) = &mut self.recording_notice {
+                                notice.fail(
+                                    format!("Could not save the recording: {error}"),
+                                    Instant::now(),
+                                );
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.recording_notice_viewport(ctx, tokens);
         if self.flow.is_none()
             && let Ok(settings) = &settings
         {
@@ -3124,6 +3350,69 @@ impl Live {
                 }
             },
         );
+    }
+
+    fn recording_notice_viewport(&self, ctx: &egui::Context, tokens: &Tokens) {
+        let (Some(notice), Some(target)) = (&self.recording_notice, self.recording_notice_target)
+        else {
+            return;
+        };
+        let Some(bounds) = target.preview_bounds else {
+            return;
+        };
+        let scale = bounds.scale_factor.max(1.0) as f32;
+        let work_right = (bounds.work_x + bounds.work_width as i32) as f32 / scale;
+        let work_top = bounds.work_y as f32 / scale;
+        let position = egui::pos2(
+            work_right - crate::recording_saved_notice::SIZE.x - 16.,
+            work_top + 16.,
+        );
+        let sender = self.notice_tx.clone();
+        let notice = notice.clone();
+        let tokens = tokens.clone();
+        let builder = egui::ViewportBuilder::default()
+            .with_title(notice.title())
+            .with_position(position)
+            .with_inner_size(crate::recording_saved_notice::SIZE)
+            .with_min_inner_size(crate::recording_saved_notice::SIZE)
+            .with_max_inner_size(crate::recording_saved_notice::SIZE)
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_transparent(true)
+            .with_has_shadow(false)
+            .with_always_on_top()
+            .with_taskbar(false)
+            .with_active(false);
+        #[cfg(target_os = "linux")]
+        let builder = builder
+            .with_window_type(egui::X11WindowType::Notification)
+            .with_override_redirect(true);
+        let viewport =
+            egui::ViewportId::from_hash_of(("recording-saved-notice", notice.guard.generation));
+        ctx.show_viewport_deferred(viewport, builder, move |ui, _| {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::ContentProtected(true));
+            if notice.expired(Instant::now())
+                || ui.input(|input| input.viewport().close_requested())
+            {
+                let _ = sender.send(crate::recording_saved_notice::Action::Dismiss(
+                    notice.guard.clone(),
+                ));
+                request_hidden_root_paint(ui.ctx());
+                ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+            } else if let Some(action) = crate::recording_saved_notice::show(ui, &tokens, &notice) {
+                let _ = sender.send(action);
+                request_hidden_root_paint(ui.ctx());
+                ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+            }
+            if let Some(remaining) = notice.remaining(Instant::now()) {
+                ui.ctx().request_repaint_after(remaining);
+            }
+        });
+        // Worker replies update this deferred callback on the root. Paint the
+        // child too: it must not require pointer motion to leave "Saving…".
+        // This does not schedule another root frame or an idle repaint loop.
+        ctx.request_repaint_of(viewport);
     }
 
     fn capture_viewports(&mut self, ctx: &egui::Context, t: &Tokens) {
@@ -3697,10 +3986,10 @@ impl Live {
             ui.horizontal(|ui| {
                 ui.heading("Captures");
                 ui.label(
-                    RichText::new("Native screenshot capture").color(t.color("text-muted")),
+                    RichText::new("Native capture workspace").color(t.color("text-muted")),
                 );
             });
-            ui.label("Display, region and window capture with countdown, cursor inclusion, automatic copy, save format/folder preferences, and one latest mini preview. Recording and editing are not connected yet.");
+            ui.label("Capture screenshots or record video from a display, region or window. Browse capture history below; native editing is not connected yet.");
             ui.horizontal(|ui| {
                 egui::ComboBox::from_label("Display")
                     .selected_text(self.displays.iter().find(|d| Some(&d.id) == self.display_id.as_ref()).map_or("No display", |d| d.name.as_str()))
@@ -3745,6 +4034,13 @@ impl Live {
                         .small()
                         .color(t.color("text-muted")),
                 );
+                if self
+                    .history_filter
+                    .ui(ui, self.artifacts.iter().map(|item| item.entry.kind))
+                {
+                    self.confirm_clear_history = false;
+                    self.refresh_history_selection();
+                }
                 if ui
                     .add_enabled(
                         self.pending == 0 && !self.artifacts.is_empty(),
@@ -3758,7 +4054,7 @@ impl Live {
                 if self.confirm_clear_history {
                     ui.group(|ui| {
                         ui.label(
-                            "Delete all screenshots from history? Exported files stay on disk.",
+                            "Delete all screenshots, videos and GIFs from history, including captures outside this filter? Exported files and recovery drafts stay on disk.",
                         );
                         ui.horizontal(|ui| {
                             if ui.button("Cancel").clicked()
@@ -3785,49 +4081,54 @@ impl Live {
                         });
                     });
                 }
-                if self.artifacts.is_empty() {
-                    ui.label("No captures yet");
+                let visible: Vec<usize> = self
+                    .artifacts
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, item)| self.history_filter.matches(item.entry.kind))
+                    .map(|(index, _)| index)
+                    .collect();
+                if visible.is_empty() {
+                    ui.label(if self.artifacts.is_empty() {
+                        "No captures yet"
+                    } else {
+                        "No captures match this filter"
+                    });
                 }
-                egui::ScrollArea::vertical().show_rows(
-                    ui,
-                    40.,
-                    self.artifacts.len(),
-                    |ui, rows| {
-                        for row in rows {
-                            let item = &self.artifacts[row].entry;
-                            let id = item.id.clone();
-                            let date = chrono::DateTime::parse_from_rfc3339(&item.created_at)
-                                .map(|date| {
-                                    date.with_timezone(&chrono::Local)
-                                        .format("%b %d, %H:%M")
-                                        .to_string()
-                                })
-                                .unwrap_or_else(|_| item.created_at.clone());
-                            if ui
-                                .add_sized(
-                                    [ui.available_width(), 40.],
-                                    egui::Button::new(format!(
-                                        "{} · {}×{}\n{}",
-                                        match item.kind {
-                                            captures_history::ArtifactKind::Screenshot =>
-                                                "Screenshot",
-                                            captures_history::ArtifactKind::Video => "Video",
-                                            captures_history::ArtifactKind::Gif => "GIF",
-                                        },
-                                        item.width,
-                                        item.height,
-                                        date
-                                    ))
-                                    .wrap_mode(egui::TextWrapMode::Extend)
-                                    .selected(self.selection.id.as_deref() == Some(&id)),
-                                )
-                                .clicked()
-                            {
-                                self.select(id);
-                            }
+                egui::ScrollArea::vertical().show_rows(ui, 40., visible.len(), |ui, rows| {
+                    for row in rows {
+                        let item = &self.artifacts[visible[row]].entry;
+                        let id = item.id.clone();
+                        let date = chrono::DateTime::parse_from_rfc3339(&item.created_at)
+                            .map(|date| {
+                                date.with_timezone(&chrono::Local)
+                                    .format("%b %d, %H:%M")
+                                    .to_string()
+                            })
+                            .unwrap_or_else(|_| item.created_at.clone());
+                        if ui
+                            .add_sized(
+                                [ui.available_width(), 40.],
+                                egui::Button::new(format!(
+                                    "{} · {}×{}\n{}",
+                                    match item.kind {
+                                        captures_history::ArtifactKind::Screenshot => "Screenshot",
+                                        captures_history::ArtifactKind::Video => "Video",
+                                        captures_history::ArtifactKind::Gif => "GIF",
+                                    },
+                                    item.width,
+                                    item.height,
+                                    date
+                                ))
+                                .wrap_mode(egui::TextWrapMode::Extend)
+                                .selected(self.selection.id.as_deref() == Some(&id)),
+                            )
+                            .clicked()
+                        {
+                            self.select(id);
                         }
-                    },
-                );
+                    }
+                });
             });
 
         egui::CentralPanel::default().show(ui, |ui| {
@@ -3855,18 +4156,24 @@ impl Live {
                 }
                 if ui
                     .add_enabled(
-                        selected_is_screenshot && self.pending == 0,
-                        egui::Button::new("Save image"),
+                        selected.is_some() && self.pending == 0,
+                        egui::Button::new(if selected.is_some() && !selected_is_screenshot { "Save file" } else { "Save image" }),
                     )
                     .clicked()
                     && let Some(id) = selected.clone()
                 {
                     match settings() {
-                        Ok(settings) => self.send(Request::SaveScreenshot {
-                            root: self.root.clone(),
-                            id,
-                            directory: settings.output_directory.into(),
-                            format: settings.screenshot_format,
+                        Ok(settings) => self.send(if selected_is_screenshot {
+                            Request::SaveScreenshot {
+                                root: self.root.clone(), id,
+                                directory: settings.output_directory.into(),
+                                format: settings.screenshot_format,
+                            }
+                        } else {
+                            Request::SaveRecording {
+                                root: self.root.clone(), id,
+                                directory: settings.output_directory.into(),
+                            }
                         }),
                         Err(error) => self.error = Some(error),
                     }
@@ -3887,7 +4194,7 @@ impl Live {
                     .find(|a| Some(&a.entry.id) == selected.as_ref())
                     .and_then(|a| a.entry.saved_path.as_deref());
                 if ui
-                    .add_enabled(saved.is_some(), egui::Button::new("Reveal export"))
+                    .add_enabled(saved.is_some(), egui::Button::new("Show in Folder"))
                     .clicked()
                     && let Some(path) = saved
                     && let Err(error) = reveal(Path::new(path))
@@ -4307,6 +4614,12 @@ fn copy_image(path: &Path, clipboard: &mut Option<arboard::Clipboard>) -> Result
 }
 
 fn reveal(path: &Path) -> std::io::Result<()> {
+    if !path.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("saved file no longer exists: {}", path.display()),
+        ));
+    }
     #[cfg(target_os = "windows")]
     let result = Command::new("explorer")
         .arg(format!("/select,{}", path.display()))
@@ -4321,6 +4634,88 @@ fn reveal(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_filters_preserve_ids_and_invalidate_hidden_preview_work() {
+        use captures_history::ArtifactKind;
+        let root = tempfile::tempdir().unwrap();
+        let original = preview_artifact(root.path(), [47, 83, 129, 255]);
+        let artifacts = || {
+            [
+                ("v1", ArtifactKind::Video),
+                ("s1", ArtifactKind::Screenshot),
+                ("g1", ArtifactKind::Gif),
+                ("s2", ArtifactKind::Screenshot),
+                ("v2", ArtifactKind::Video),
+            ]
+            .into_iter()
+            .map(|(id, kind)| {
+                let mut item = Artifact {
+                    entry: original.entry.clone(),
+                    image_path: original.image_path.clone(),
+                    preview_path: original.preview_path.clone(),
+                };
+                item.entry.id = id.into();
+                item.entry.kind = kind;
+                item
+            })
+            .collect::<Vec<_>>()
+        };
+        let mut live = Live::new(egui::Context::default(), Some(root.path().into()));
+        live.apply(
+            Response::History {
+                artifacts: artifacts(),
+            },
+            false,
+        );
+        let original_decode = live.selection.generation;
+        live.decoded_path = Some(original.image_path.clone());
+        live.confirm_delete = Some("v1".into());
+        live.history_filter = HistoryFilter::Screenshots;
+        live.refresh_history_selection();
+        assert_eq!(live.selection.id.as_deref(), Some("s1"));
+        assert!(!live.selection.accepts(original_decode));
+        assert!(live.decoded_path.is_none());
+        assert!(live.confirm_delete.is_none());
+
+        live.select("s2".into());
+        live.apply(
+            Response::History {
+                artifacts: artifacts(),
+            },
+            false,
+        );
+        assert_eq!(live.history_filter, HistoryFilter::Screenshots);
+        assert_eq!(live.selection.id.as_deref(), Some("s2"));
+        live.apply(Response::Deleted { id: "s2".into() }, false);
+        assert_eq!(live.selection.id.as_deref(), Some("s1"));
+        live.apply(Response::Deleted { id: "s1".into() }, false);
+        assert_eq!(live.history_filter, HistoryFilter::Screenshots);
+        assert!(live.selection.id.is_none());
+        assert!(!live.preview_loading);
+        assert_eq!(
+            live.artifacts.len(),
+            3,
+            "filtering must not remove other kinds"
+        );
+
+        live.history_filter = HistoryFilter::Gif;
+        live.refresh_history_selection();
+        assert_eq!(live.selection.id.as_deref(), Some("g1"));
+        live.apply(
+            Response::History {
+                artifacts: artifacts().into_iter().take(1).collect(),
+            },
+            false,
+        );
+        assert_eq!(live.history_filter, HistoryFilter::Gif);
+        assert!(live.selection.id.is_none());
+        // An explicit capture/preview reveal must never select a hidden row.
+        live.select("v1".into());
+        assert_eq!(live.history_filter, HistoryFilter::All);
+        assert_eq!(live.selection.id.as_deref(), Some("v1"));
+        live.flush();
+    }
 
     fn preview_target() -> CaptureTarget {
         CaptureTarget {
@@ -4881,13 +5276,27 @@ mod tests {
             captures_capture::CaptureMode::Window,
         )
         .unwrap();
+        let source = root.path().join("export.mp4");
+        std::fs::write(&source, b"exported recording").unwrap();
+        let mut recording = artifact.entry.clone();
+        recording.id = "67e55044-10b1-426f-9247-bb680e5fe0c8".into();
+        recording.kind = captures_history::ArtifactKind::Video;
+        recording.mime_type = Some("video/mp4".into());
+        recording.duration_ms = Some(1_200);
+        recording.target = Some(RecordingTarget::Display {
+            display_id: "fixture".into(),
+        });
+        let poster = std::fs::read(&artifact.preview_path).unwrap();
+        captures_history::save_recording(root.path(), &recording, &poster, &source).unwrap();
         let mut live = Live::new(egui::Context::default(), Some(root.path().into()));
+        live.history_filter = HistoryFilter::Screenshots;
         live.apply(
             Response::History {
-                artifacts: captures_app::list(root.path()).unwrap(),
+                artifacts: load_history(root.path()).unwrap(),
             },
             true,
         );
+        assert_eq!(live.artifacts.len(), 2);
         let decoding = live.selection.generation;
         live.decoded_path = Some(artifact.image_path);
         live.confirm_delete = Some(artifact.entry.id);
@@ -4906,7 +5315,9 @@ mod tests {
             .expect("dedicated clear response");
         live.apply(*response, true);
         assert!(live.artifacts.is_empty());
-        assert!(captures_app::list(root.path()).unwrap().is_empty());
+        assert!(load_history(root.path()).unwrap().is_empty());
+        assert_eq!(std::fs::read(source).unwrap(), b"exported recording");
+        assert_eq!(live.history_filter, HistoryFilter::Screenshots);
         assert!(!live.selection.accepts(decoding));
         assert!(live.selection.id.is_none());
         assert!(live.decoded_path.is_none());

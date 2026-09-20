@@ -6,6 +6,7 @@ on:
       - 'apps/native/**'
       - 'crates/captures-settings*/**'
       - 'crates/captures-app/**'
+      - 'crates/captures-feedback/**'
       - 'crates/captures-history/**'
       - 'crates/captures-image/**'
       - 'crates/captures-capture/**'

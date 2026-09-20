@@ -4,6 +4,7 @@
 //! Construct and call the blocking client on a worker, not a native UI thread.
 
 pub mod crash_diagnostics;
+pub mod native;
 
 use std::{
     io::Read,
@@ -18,7 +19,7 @@ pub const DEFAULT_FEEDBACK_URL: &str = "https://captur.es/api/feedback";
 const COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_RESPONSE_BYTES: u64 = 8_192;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FeedbackDraft {
     pub message: String,
     pub contact: Option<String>,

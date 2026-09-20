@@ -36,6 +36,9 @@ def main():
                         help="exercise real-SNI Hide/restore, tray loss and finalized media")
     parser.add_argument("--screenshot-only", action="store_true",
                         help="exercise running/paused region screenshots without replacing the take")
+    parser.add_argument("--ready-notice-only", action="store_true",
+                        help="exercise recording-ready save/retry/reveal, expiry and dismissal")
+    parser.add_argument("--appearance", choices=("dark", "light"), default="dark")
     parser.add_argument("--virtual-microphone", action="store_true",
                         help="use a disposable PulseAudio null-sink monitor to verify mute segments")
     args = parser.parse_args()
@@ -207,7 +210,7 @@ def main():
         threading.Thread(target=loop.run, daemon=True).start()
         spawn("openbox", ["openbox", "--sm-disable"])
         spawn("picom", ["picom", "--config", "/dev/null", "--backend", "xrender"])
-        if args.hide_controls_only:
+        if args.hide_controls_only or args.ready_notice_only:
             config = output / "config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml"
             config.parent.mkdir(parents=True)
             config.write_text('''<?xml version="1.0" encoding="UTF-8"?>
@@ -255,7 +258,7 @@ def main():
             run("hsetroot", "-solid", "#c02040")
         settings = output / "settings.json"
         settings.write_text(json.dumps({
-            "settings_schema_version": 5, "appearance": "dark", "theme": "mustard",
+            "settings_schema_version": 5, "appearance": args.appearance, "theme": "mustard",
             "output_directory": str(output / "exports"),
             "new_capture_shortcut": "Ctrl+Shift+F10", "region_shortcut": "Ctrl+Shift+F7",
             "window_shortcut": "Ctrl+Shift+F8", "display_shortcut": "Ctrl+Shift+F9",
@@ -270,6 +273,16 @@ def main():
                           "microphone_device_id": "default" if args.virtual_microphone else None,
                           "open_editor_after_recording": False},
         }))
+        if args.ready_notice_only:
+            # Observe the exact OS-launch argument without opening a file manager.
+            # Export itself still uses the real Rust worker and filesystem.
+            tools = output / "tools"
+            tools.mkdir()
+            opener = tools / "xdg-open"
+            opener.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" > "$CAPTURES_TEST_REVEAL"\n')
+            opener.chmod(0o755)
+            env["PATH"] = str(tools) + os.pathsep + env["PATH"]
+            env["CAPTURES_TEST_REVEAL"] = str(output / "revealed-path.txt")
         app = spawn("app", [str(binary), "--live", "--history-root", str(output / "history"),
                             "--settings-file", str(settings), "--quit-after", "120"])
         root = wait(lambda: windows("Captures"), "capture workspace")[0]
@@ -412,6 +425,106 @@ def main():
                 json.dumps(acceptance, indent=2))
             print("PASS native recording Screenshot: running publish/preview, selection and paused "
                   "countdown Escape, asymmetric pixels, same take, decode and cleanup")
+            return
+        if args.ready_notice_only:
+            def notice_click(window, x, y):
+                # Notifications do not activate the root or accept WM activation.
+                # Like click(), deliver a position event even for repeated clicks.
+                run("xdotool", "mousemove", "--sync", "--window", window, str(x - 1), str(y),
+                    "mousemove_relative", "--sync", "1", "0",
+                    "sleep", ".15", "mousedown", "1", "sleep", ".15", "mouseup", "1")
+                time.sleep(.3)
+
+            def stop_with_notice(hud, count):
+                click(hud, 142, 54)
+                wait(lambda: len(history()) == count, "recording publication")
+                notice = wait(lambda: windows("Recording ready"), "recording-ready notice")[0]
+                wait(lambda: manifest() is None, "finalization cleanup")
+                assert not windows("Captures Recording Controls")
+                assert not windows("Captures Recording Region")
+                assert run("xdotool", "getwindowfocus").decode().strip() != notice
+                time.sleep(.4)
+                return notice
+
+            notice = stop_with_notice(hud, 1)
+            shot(notice, "notice-ready")
+            metadata = next(iter(history()))
+            media = metadata.parent / "media.mp4"
+            run("ffmpeg", "-v", "error", "-i", str(media), "-f", "null", "-")
+            original = media.read_bytes()
+            # Close the root normally into its real SNI tray: the notice must
+            # continue accepting actions and expiring with no visible root.
+            connection = display.Display(env["DISPLAY"])
+            try:
+                window = connection.create_resource_object("window", int(root))
+                window.send_event(protocol.event.ClientMessage(
+                    window=window, client_type=connection.intern_atom("WM_PROTOCOLS"),
+                    data=(32, [connection.intern_atom("WM_DELETE_WINDOW"), X.CurrentTime, 0, 0, 0])))
+                connection.sync()
+            finally:
+                connection.close()
+            wait(lambda: not windows("Captures"), "root hidden in tray")
+            exports = output / "exports"
+            exports.write_text("blocked output directory")
+            notice_click(notice, 300, 89)
+            wait(lambda: windows("Could not save recording"), "save failure presented")
+            shot(notice, "notice-save-error")
+            assert json.loads(metadata.read_text())["saved_path"] is None
+            assert media.read_bytes() == original and windows("Could not save recording")
+            exports.unlink()
+            notice_click(notice, 300, 89)
+            wait(lambda: windows("Recording saved"), "saved state presented")
+            saved = Path(wait(lambda: json.loads(metadata.read_text()).get("saved_path"), "notice export"))
+            assert saved.parent == exports and saved.read_bytes() == original
+            assert len(list(exports.iterdir())) == 1
+            shot(notice, "notice-saved")
+            saved.unlink()
+            notice_click(notice, 300, 89)
+            wait(lambda: windows("Could not show recording"), "missing export error presented")
+            assert not (output / "revealed-path.txt").exists()
+            shot(notice, "notice-reveal-error")
+            saved.write_bytes(original)
+            notice_click(notice, 300, 89)
+            wait(lambda: not windows("Could not show recording"), "successful reveal dismissal")
+            wait(lambda: (output / "revealed-path.txt").exists(), "OS reveal launcher")
+            assert (output / "revealed-path.txt").read_text().strip() == str(exports)
+            assert len(history()) == 1 and saved.read_bytes() == original
+
+            for count, action in [(2, "expiry"), (3, "dismiss"), (4, "new-capture")]:
+                run("xdotool", "key", "ctrl+shift+F10")
+                select_recording(f"notice-{action}-selector")
+                hud = running_hud()
+                time.sleep(.4)
+                notice = stop_with_notice(hud, count)
+                assert not windows("Captures"), "background completion must not show root"
+                if action == "expiry":
+                    time.sleep(13)
+                    assert windows("Recording ready"), "notice expired too early"
+                    wait(lambda: not windows("Recording ready"), "15.2-second expiry with hidden root")
+                elif action == "dismiss":
+                    notice_click(notice, 423, 18)
+                    wait(lambda: not windows("Recording ready"), "explicit notice dismissal")
+                else:
+                    run("xdotool", "key", "ctrl+shift+F10")
+                    wait(lambda: windows("Captures Capture Controls"), "capture after notice")
+                    assert not windows("Recording ready"), "notice leaked into next capture"
+                    run("xdotool", "key", "Escape")
+                    wait(lambda: not windows("Captures Capture Controls"), "capture cancellation")
+                assert len(history()) == count and saved.read_bytes() == original
+                assert manifest() is None
+            menu_action("Quit Captures")
+            assert app.wait(timeout=10) == 0
+            (output / "acceptance-ready-notice.json").write_text(json.dumps({
+                "appearance": args.appearance, "real_recording_decode": True,
+                "nonactivating": True, "hidden_root_actions_and_expiry": True,
+                "save_error_retry": True, "byte_identical_export": True,
+                "missing_export_reveal_error": True, "reveal_path": str(exports),
+                "expiry_preserves_history": True, "dismiss_preserves_history": True,
+                "new_capture_clears_notice": True, "clean_exit": True,
+                "scope": "Private X11/software GL; OS reveal launcher intercepted; no hardware/AT acceptance",
+            }, indent=2))
+            print("PASS recording notice: actual finalization, save failure/retry, byte-identical export, "
+                  "reveal path/error, hidden-root expiry, dismiss, next capture and clean exit")
             return
         if args.hide_controls_only:
             watcher = dbus.Interface(

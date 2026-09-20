@@ -92,14 +92,46 @@ def main():
         shot("root", "timeout-desktop")
         raise AssertionError(f"Timed out: {description}")
 
-    def click(window, x, y, activate=True):
+    def click(window, x, y, activate=True, button=1):
         # Cross a real intermediate point to avoid winit's stale-position filter
         # after an X11 remap. Preview clicks deliberately do not activate windows.
         if activate:
             run("xdotool", "windowactivate", "--sync", window, "windowfocus", "--sync", window)
         run("xdotool", "mousemove", "--sync", "--window", window, str(x - 1), str(y),
-            "mousemove_relative", "--sync", "1", "0", "sleep", ".15", "mousedown", "1",
-            "sleep", ".15", "mouseup", "1")
+            "mousemove_relative", "--sync", "1", "0", "sleep", ".15", "mousedown", str(button),
+            "sleep", ".15", "mouseup", str(button), "sleep", ".15")
+        # XSync acknowledges X11 input, not egui's next frame. Let release open
+        # the clicked recorder/navigation target before sending its next key.
+
+    def select_region(selector, rect):
+        wait(lambda: int(run("import", "-window", selector, "-crop", "1280x96+0+804",
+            "-format", "%k", "info:")) > 16, "painted region controls before drag")
+
+        def controls_pixels():
+            return run("import", "-window", selector, "-crop", "1280x96+0+804",
+                       "-depth", "8", "rgb:-")
+
+        x, y, width, height = rect
+        run("xdotool", "windowfocus", "--sync", selector, "sleep", ".15",
+            "mousemove", "--sync", "--window", selector, str(x - 1), str(y),
+            "mousemove_relative", "--sync", "1", "0", "sleep", ".15")
+        wait(lambda: run("xdotool", "getwindowfocus", "-f").decode().strip() == selector,
+             "region selector has X input focus")
+        before = controls_pixels()
+        # --sync observes the server pointer, not consumption by winit/egui.
+        # Hover the enabled Aspect dropdown and observe it repaint, then leave
+        # and observe the normal toolbar again before pressing. This also gives
+        # remapped selectors a distinct, acknowledged pointer position.
+        run("xdotool", "mousemove", "--sync", "--window", selector, "631", "849")
+        wait(lambda: controls_pixels() != before, "selector consumes toolbar hover")
+        run("xdotool", "mousemove", "--sync", "--window", selector, str(x), str(y))
+        wait(lambda: controls_pixels() == before, "selector consumes pointer return before drag")
+        run("xdotool", "mousedown", "1", "sleep", ".15", "mousemove", "--sync", "--window", selector,
+            str(x + width), str(y + height), "sleep", ".15", "mouseup", "1", "sleep", ".15")
+        # Do not confirm an unselected region if X11 dropped the drag. Pointer
+        # motion stays above this strip; its change is the painted selection UI.
+        wait(lambda: controls_pixels() != before, "painted region selection after drag")
+        run("xdotool", "key", "Return")
 
     def rgb(path):
         return run("convert", str(path), "-depth", "8", "rgb:-")
@@ -212,11 +244,7 @@ def main():
             def capture(rect):
                 previous = entries()
                 selector = begin()
-                x, y, width, height = rect
-                run("xdotool", "windowfocus", "--sync", selector, "mousemove", "--window", selector,
-                    str(x), str(y), "sleep", ".1", "mousedown", "1", "sleep", ".15", "mousemove",
-                    "--window", selector, str(x + width), str(y + height), "sleep", ".15", "mouseup", "1",
-                    "key", "Return")
+                select_region(selector, rect)
                 entry = wait(lambda: entries() - previous, "new persisted capture").pop()
                 wait(lambda: windows("Captures") and not windows(SELECTOR), "restored root")
                 # Openbox may reposition an off-screen workspace when remapping.
@@ -412,18 +440,25 @@ def main():
                     tray = next(window for window in panel_ids
                                 if int(window_geometry(window)["WIDTH"]) >= 24)
                     geometry = window_geometry(tray)
-                    run("xdotool", "mousemove", "--window", tray, str(int(geometry["WIDTH"]) // 2),
-                        str(int(geometry["HEIGHT"]) // 2), "click", "3", "sleep", ".4")
-                    if screenshot:
-                        shot("root", "lifecycle-open-tray-menu")
+                    click(tray, int(geometry["WIDTH"]) // 2, int(geometry["HEIGHT"]) // 2,
+                          activate=False, button=3)
                     # Resolve the actual GTK popup, not a fixed desktop point.
                     # These native menu entries have equal-height, non-separator rows.
-                    popup_ids = run("xdotool", "search", "--onlyvisible", "--class", ".*").decode().split()
-                    popup = next(window for window in popup_ids
-                                 if b"_MENU" in run("xprop", "-id", window, "_NET_WM_WINDOW_TYPE"))
+                    def visible_popup():
+                        popup_ids = run("xdotool", "search", "--onlyvisible", "--class", ".*").decode().split()
+                        return next((window for window in popup_ids
+                                     if b"_MENU" in run("xprop", "-id", window, "_NET_WM_WINDOW_TYPE")), None)
+
+                    popup = wait(visible_popup, f"tray popup for {label}")
                     popup_geometry = window_geometry(popup)
+                    print(f"Tray action {label}: tray={tray} popup={popup} geometry={popup_geometry}", flush=True)
+                    shot(popup, "lifecycle-menu-" + label.lower().replace(" ", "-"))
+                    if screenshot:
+                        shot("root", "lifecycle-open-tray-menu")
                     click(popup, int(popup_geometry["WIDTH"]) // 2,
                           int((index + .5) * int(popup_geometry["HEIGHT"]) / len(labels)), activate=False)
+                    # The click destroys GTK's popup. Do not race its teardown
+                    # with another whole-tree query; callers verify the action.
 
                 run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
                 wait(lambda: not windows("Captures"), "close hides resident workspace")
@@ -437,9 +472,7 @@ def main():
                 assert not windows(SELECTOR), "capture started before shortcut release"
                 run("xdotool", "keyup", "ctrl+shift+F7")
                 selector = wait(lambda: windows(SELECTOR), "hidden-root region shortcut")[0]
-                run("xdotool", "windowfocus", "--sync", selector, "mousemove", "--window", selector,
-                    "140", "180", "mousedown", "1", "sleep", ".15", "mousemove", "--window", selector,
-                    "450", "350", "sleep", ".15", "mouseup", "1", "key", "Return")
+                select_region(selector, (140, 180, 310, 170))
                 entry = wait(lambda: entries() - previous, "background region artifact").pop()
                 assert rgb(entry.parent / "capture.png") == wallpaper_crop(140, 180, 310, 170)
                 wait(lambda: not windows(SELECTOR) and windows(PREVIEW), "background preview restored")
@@ -480,9 +513,7 @@ def main():
                 run("xdotool", "windowactivate", "--sync", other, "key", "ctrl+shift+F7")
                 selector = wait(lambda: windows(SELECTOR), "hidden Preferences does not block background shortcut")[0]
                 previous = entries()
-                run("xdotool", "windowfocus", "--sync", selector, "mousemove", "--window", selector,
-                    "140", "180", "mousedown", "1", "sleep", ".15", "mousemove", "--window", selector,
-                    "450", "350", "sleep", ".15", "mouseup", "1", "key", "Return")
+                select_region(selector, (140, 180, 310, 170))
                 countdown = wait(lambda: windows("Captures Screenshot Countdown"),
                                  "countdown from hidden Preferences")[0]
                 shot(countdown, "lifecycle-hidden-preferences-countdown")
@@ -492,9 +523,10 @@ def main():
                 assert not windows("Captures") and entries() == previous
                 for label, title in [("Capture region", SELECTOR), ("Capture window", "Captures Window Selection")]:
                     menu_action(label)
-                    wait(lambda: windows(title), "tray selector launches from hidden Preferences")
+                    selector = wait(lambda: windows(title), f"tray {label} launches from hidden Preferences")[0]
+                    shot(selector, "lifecycle-selector-" + label.lower().replace(" ", "-"))
                     run("xdotool", "key", "Escape")
-                    wait(lambda: not windows(title), "cancel tray capture")
+                    wait(lambda: not windows(title), f"cancel tray {label}")
                     assert not windows("Captures")
                 menu_action("New Capture")
                 controls = wait(lambda: windows(CONTROLS), "tray New Capture opens unified controls")[0]
@@ -674,9 +706,7 @@ def main():
                 previous = entries()
                 run("xdotool", "key", "ctrl+alt+r")
                 selector = wait(lambda: windows(SELECTOR), "hidden root creates first selector")[0]
-                run("xdotool", "windowfocus", "--sync", selector, "mousemove", "--window", selector,
-                    "140", "180", "mousedown", "1", "sleep", ".15", "mousemove", "--window", selector,
-                    "450", "350", "sleep", ".15", "mouseup", "1", "key", "Return")
+                select_region(selector, (140, 180, 310, 170))
                 entry = wait(lambda: entries() - previous, "first background capture after restart").pop()
                 preview = wait(lambda: windows(PREVIEW), "hidden root creates first mini preview")[0]
                 assert not windows("Captures"), "first preview reopened hidden Preferences"

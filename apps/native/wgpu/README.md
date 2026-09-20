@@ -52,6 +52,12 @@ tray-host loss restores the HUD and workspace. Microphone mute/unmute rotates th
 changing the selected device or global preference, while paused changes remain
 paused; mic-less sessions explain why the control is unavailable. Successful output is listed in native History with its
 poster and metadata. The native recording editor is not connected yet.
+After finalization, a fixed-glass Recording ready notice offers Save file using
+the current output folder, followed by Show in Folder for the saved copy. It does
+not activate the root; hidden-root actions and expiry work through one-shot
+wakeups. The 15.2-second expiry pauses during a save and resets after its result;
+errors allow retry. Dismiss/expiry never delete media, and a new capture clears
+the notice. This is a finalization trigger until the native editor is connected.
 A passive region guide remains visible through countdown, pause, restart and
 hidden controls. Its veil and accent border are painted strictly outside the
 recorded rectangle, with outward pixel rounding at fractional scale. It accepts
@@ -63,7 +69,20 @@ Windows/X11 use the shipping
 synthetic cursor arrow, not the actual system cursor image. Other capture defaults remain unconnected;
 other scenes remain fixtures. The selector fixture handles window-focused Escape
 only, while live capture uses the shared process-wide Escape cancellation handler.
-Login, feedback and updating remain visibly unavailable.
+Preferences → About → Send feedback uses the shared Rust client on a separate
+worker. Only explicit Send in `--live` can contact captur.es; fixture mode keeps
+submission disabled. The form previews the included app/system context, retains
+drafts on errors and navigation, and prevents duplicate sends while pending.
+Captures, files, and diagnostics are never attached. Login and updating remain
+visibly unavailable.
+
+Feedback input/retry verification uses a rejecting loopback proxy, never the
+production service: `python apps/native/x11_feedback_smoke.py --binary
+apps/native/wgpu/target/release/captures-wgpu-workbench --output feedback-smoke`.
+It runs on private X11/software GL and checks empty/pending submission gates,
+retained text through navigation and failure, offline retry, and clean exit in
+both appearances. Shared client tests cover HTTP success, cooldown and payload
+privacy against disposable loopback servers. Physical input/AT acceptance remains open.
 
 The candidate tests whether shared custom components are viable. It is not a
 retained widget renderer: egui rebuilds the visible UI on an event-driven repaint,

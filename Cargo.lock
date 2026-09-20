@@ -864,6 +864,7 @@ version = "0.1.0"
 dependencies = [
  "captures-app",
  "captures-capture",
+ "captures-feedback",
  "captures-history",
  "captures-media",
  "captures-recording",

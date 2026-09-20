@@ -212,6 +212,7 @@ pub struct Preferences {
     shortcut_recorder: Option<ShortcutRecorder>,
     shortcut_input: shortcut_input::Bridge,
     suppress_shortcut_commands: bool,
+    feedback: crate::feedback::Feedback,
 }
 
 impl Preferences {
@@ -267,6 +268,7 @@ impl Preferences {
             shortcut_recorder: None,
             shortcut_input,
             suppress_shortcut_commands: false,
+            feedback: crate::feedback::Feedback::default(),
         }
     }
 
@@ -404,6 +406,7 @@ impl Preferences {
                     .selected(self.active_section == index),
             );
             if response.clicked() {
+                self.feedback.open = false;
                 self.section_jump = Some(index);
                 self.active_section = index;
             }
@@ -411,7 +414,11 @@ impl Preferences {
     }
 
     /// Returns true when the user requests the history window.
-    pub fn ui(&mut self, ui: &mut egui::Ui, t: &Tokens) -> bool {
+    pub fn ui(&mut self, ui: &mut egui::Ui, t: &Tokens, live: bool) -> bool {
+        if self.feedback.open {
+            self.feedback.ui(ui, t, live);
+            return false;
+        }
         self.receive_shortcut_input();
         self.keyboard(ui);
         let mut history = false;
@@ -1092,7 +1099,9 @@ impl Preferences {
     }
     fn about(&mut self, ui: &mut egui::Ui, t: &Tokens) {
         self.card(ui,t,6,"About","Captures is in active development. Telling us what breaks is the fastest way to fix it.",|this,ui| {
-            this.row(ui,"Send feedback","Feedback submission is not connected yet.",|_,ui| { ui.add_enabled(false,egui::Button::new("Open")); });
+            this.row(ui,"Send feedback","No captures or diagnostics are attached.",|this,ui| {
+                if ui.button("Open").clicked() { this.feedback.open(ui.ctx()); }
+            });
             ui.separator();
             this.toggle(ui,&["launch_at_login"],"Launch Captures when I sign in","Login-item integration is not connected yet.",false);
         });
