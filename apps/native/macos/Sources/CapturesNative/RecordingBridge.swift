@@ -40,6 +40,7 @@ struct NativeRecordingSnapshot: Equatable {
     let elapsedMilliseconds: UInt64
     let hasMicrophone: Bool
     let microphoneMuted: Bool
+    let region: CGRect?
     let warning: String?
 
     init?(_ value: [String: Any]) {
@@ -52,6 +53,14 @@ struct NativeRecordingSnapshot: Equatable {
         self.id = id; self.state = state; elapsedMilliseconds = elapsed.uint64Value
         hasMicrophone = audio["microphone_device_id"] as? String != nil
         self.microphoneMuted = microphoneMuted
+        if let target = options["target"] as? [String: Any], target["type"] as? String == "region",
+           let rect = target["rect"] as? [String: Int],
+           let x = rect["x"], let y = rect["y"],
+           let width = rect["width"], let height = rect["height"] {
+            region = CGRect(x: CGFloat(x), y: CGFloat(y), width: CGFloat(width), height: CGFloat(height))
+        } else {
+            region = nil
+        }
         warning = value["warning"] as? String
     }
 }

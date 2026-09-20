@@ -6,6 +6,7 @@ mod options;
 mod preferences;
 mod recording;
 mod recording_hud;
+mod recording_region;
 mod selector;
 mod shortcut_input;
 mod tokens;

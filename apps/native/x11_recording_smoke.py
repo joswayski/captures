@@ -21,6 +21,7 @@ import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 from Xlib import X, display, protocol
+from Xlib.ext import shape
 
 from x11_capture_smoke import ScreenSaver
 
@@ -152,18 +153,18 @@ def main():
                 run("xdotool", "key", chord, "sleep", ".2")
                 assert windows("Captures Capture Controls") == [selector]
                 assert manifest() is None and not history()
-            # Reassert the asymmetric region after global-key delivery so this
-            # recording acceptance does not depend on Xvfb pointer batching.
-            run("xdotool", "mousemove", "--sync", "--window", selector, "140", "180",
-                "sleep", ".1", "mousedown", "1", "sleep", ".2",
-                "mousemove", "--sync", "--window", selector, "450", "350",
-                "sleep", ".2", "mouseup", "1")
+            # Do not drag this corner again: the retained selection correctly
+            # treats that as a NW resize and collapses it toward the SE corner.
+            # Validate the preserved target after confirmation instead.
         for _ in range(20):
             run("xdotool", "windowactivate", "--sync", selector, "key", "Return")
             time.sleep(.25)
             if manifest() is not None:
                 break
         assert manifest() is not None, "recording confirmation never reached preparation"
+        assert manifest()["options"]["target"]["rect"] == {
+            "x": 140, "y": 180, "width": 310, "height": 170,
+        }, "recording must retain the selected region across target shortcuts"
 
     def running_hud():
         wait(lambda: (value := manifest()) and value["state"] == "recording", "durable Recording")
@@ -183,6 +184,7 @@ def main():
     def finished(expected_count):
         wait(lambda: len(history()) == expected_count, "History publication count")
         wait(lambda: not windows("Captures Recording Controls"), "HUD removal")
+        wait(lambda: not windows("Captures Recording Region"), "region guide removal")
         wait(lambda: manifest() is None, "recovery source cleanup")
         # Disk cleanup precedes the worker reply. Only the event-thread finish
         # restores the previously visible root and releases the capture flow.
@@ -264,10 +266,29 @@ def main():
         run("xdotool", "key", "ctrl+alt+w")
         select_recording("recording-selector", shortcuts=True)
         countdown = wait(lambda: windows("Captures Recording Countdown"), "recording countdown")[0]
+        guide = wait(lambda: windows("Captures Recording Region"), "countdown region guide")[0]
         shot(countdown, "recording-countdown")
         run("xdotool", "key", "ctrl+alt+d")
         hud = running_hud()
         shot(hud, "hud-running")
+        assert windows("Captures Recording Region") == [guide]
+        shot("root", "recording-region-running")
+        # The guide must really be click-through, not just omit UI handlers.
+        connection = display.Display(env["DISPLAY"])
+        try:
+            window = connection.create_resource_object("window", int(guide))
+            assert not window.shape_get_rectangles(shape.SK.Input).rectangles
+        finally:
+            connection.close()
+        # Probe every inner edge, where an inward/antialiased border would leak.
+        for x, y in [(140, 180), (449, 180), (140, 349), (449, 349), (295, 265)]:
+            pixel = run("import", "-window", "root", "-crop", f"1x1+{x}+{y}",
+                        "-depth", "8", "rgb:-")
+            assert tuple(pixel[:3]) == (192, 32, 64), (x, y, pixel)
+        border = run("import", "-window", "root", "-crop", "1x1+139+220", "-depth", "8", "rgb:-")
+        assert tuple(border[:3]) == (255, 202, 40), border
+        veil = run("import", "-window", "root", "-crop", "1x1+100+220", "-depth", "8", "rgb:-")
+        assert 0 < veil[0] < 192, veil
         if args.hide_controls_only:
             watcher = dbus.Interface(
                 bus.get_object("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher"),
@@ -278,6 +299,8 @@ def main():
             bundle = next((output / "recording-recovery").glob("*/manifest.json")).parent
             click(hud, 398, 54)
             wait(lambda: not windows("Captures Recording Controls"), "running HUD hidden")
+            assert windows("Captures Recording Region") == [guide]
+            shot("root", "recording-region-hidden-hud")
             notice = wait(lambda: windows("Recording controls hidden"), "temporary hidden notice")[0]
             shot(notice, "recording-controls-hidden-running")
             before = manifest()
@@ -301,6 +324,7 @@ def main():
                        "real tray action restores paused HUD")[0]
             assert (manifest()["state"] == "paused"
                     and manifest()["session_id"] == before["session_id"])
+            assert windows("Captures Recording Region") == [guide]
             shot(hud, "recording-controls-restored-paused")
 
             click(hud, 398, 54)
@@ -320,6 +344,18 @@ def main():
             assert len(metadata) == 1
             media = metadata[0].parent / "media.mp4"
             run("ffmpeg", "-v", "error", "-i", str(media), "-f", "null", "-")
+            pixels = run("ffmpeg", "-v", "error", "-i", str(media), "-frames:v", "1",
+                         "-f", "rawvideo", "-pix_fmt", "rgb24", "-")
+            # OpenH264 quantizes edge blocks: a separate encode of a uniform
+            # RGB(192,32,64) buffer has up to 18 levels of corner error and
+            # matches this recording byte-for-byte after decoding. The raw
+            # composited edge probes above stay exact; this codec tolerance
+            # still rejects either the dim veil or accent border in the MP4.
+            for x, y in [(0, 0), (309, 0), (0, 169), (309, 169), (155, 85)]:
+                offset = (y * 310 + x) * 3
+                actual = pixels[offset:offset + 3]
+                assert len(actual) == 3 and all(abs(a - e) <= 20 for a, e in
+                    zip(actual, (192, 32, 64))), (x, y, actual)
             finished(1)
             assert manifest() is None and not bundle.exists()
             acceptance = {
@@ -328,6 +364,8 @@ def main():
                 "tray_host_loss_restore": True, "same_session": True,
                 "busy_shortcuts_suppressed": True, "history_publication": True,
                 "decoded_output": True, "source_cleanup": True,
+                "region_guide_preserved": True, "region_guide_click_through": True,
+                "region_guide_clean_inner_edges": True, "region_guide_cleanup": True,
             }
             (output / "acceptance-hide-controls.json").write_text(
                 json.dumps(acceptance, indent=2))

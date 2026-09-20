@@ -117,6 +117,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private let recordingGate = RecordingGenerationGate()
     private var recordingSession: NativeRecordingSession?
     private var recordingHUD: RecordingHUDPanel?
+    private var recordingRegionPanel: RecordingRegionPanel?
     private var recordingHiddenNotice: RecordingControlsHiddenNoticePanel?
     private var recordingHiddenNoticeTimer: Timer?
     private(set) var recordingControlsHidden = false
@@ -544,7 +545,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     return
                 }
                 do {
-                    let (session, _) = try result.get()
+                    let (session, snapshot) = try result.get()
                     self.recordingSession = session
                     self.recordingDisplay = display
                     self.recordingPreferences = preferences
@@ -553,6 +554,11 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     self.activeRecordingGeneration = generation
                     _ = try AppBridge.flow(["operation": "start_countdown",
                         "generation": generation, "seconds": preferences.recording.countdown])
+                    if let region = snapshot.region {
+                        let guide = RecordingRegionPanel(screen: screen, region: region, tokens: self.tokens)
+                        self.recordingRegionPanel = guide
+                        guide.orderFrontRegardless()
+                    }
                     if preferences.recording.countdown > 0 {
                         let countdown = ScreenshotCountdownPanel(screen: screen, tokens: self.tokens,
                             remaining: preferences.recording.countdown)
@@ -1138,6 +1144,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     func finishCapture(restoreWindow: Bool = true, restorePreview: Bool = true) {
+        recordingRegionPanel?.close(); recordingRegionPanel = nil
         clearRecordingControlsHiddenState()
         if let session = recordingSession {
             recordingPollTimer?.invalidate(); recordingPollTimer = nil

@@ -52,6 +52,13 @@ tray-host loss restores the HUD and workspace. Microphone mute/unmute rotates th
 changing the selected device or global preference, while paused changes remain
 paused; mic-less sessions explain why the control is unavailable. Successful output is listed in native History with its
 poster and metadata. The native recording editor is not connected yet.
+A passive region guide remains visible through countdown, pause, restart and
+hidden controls. Its veil and accent border are painted strictly outside the
+recorded rectangle, with outward pixel rounding at fractional scale. It accepts
+no input and closes with the recording; display/window recordings have no guide.
+The private-X11 recording smoke checks input passthrough, clean inner-edge pixels,
+decoded output, Hide/restore preservation and end/cancellation cleanup. Windows
+and physical macOS/compositor/mixed-DPI acceptance remain open; Wayland stays gated.
 Windows/X11 use the shipping
 synthetic cursor arrow, not the actual system cursor image. Other capture defaults remain unconnected;
 other scenes remain fixtures. The selector fixture handles window-focused Escape

@@ -249,8 +249,18 @@ and after replacement-engine opening. Countdown cancellation discards the replac
 session. Private X11 exercises running/paused restart and replacement-only decoded
 pixels; AppKit and Windows remain implemented but require native CI/hardware, and
 Wayland remains gated by the existing native recording limitation. This does not
-close the Recording HUD gate: in-recording screenshots, region
-indicator and physical accessibility/compositor acceptance remain open.
+close the Recording HUD gate: in-recording screenshots, saved notices and physical
+accessibility/compositor acceptance remain open.
+
+Native region recordings now retain a passive display-local guide from countdown
+until finalization/discard/cancellation. AppKit and wgpu paint the fixed glass veil
+and accent border strictly outside an outward-pixel-rounded transparent hole;
+no centered stroke or antialias fringe enters recorded pixels. The guide does not
+take focus or pointer input, survives pause/restart/hidden controls, and is absent
+for window/display targets. Private-X11 checks cover the input shape, composited
+inner-edge pixels, decoded MP4 corners, Hide/restore, and cleanup. AppKit has
+alpha-channel render tests; physical macOS/Windows, fractional-DPI compositor and
+multi-display acceptance remain open. Wayland remains gated.
 
 The recording Hide slice keeps the accepted AppKit/wgpu session and capture-flow
 generation alive while removing only its HUD. A 6.2-second click-through fixed-glass

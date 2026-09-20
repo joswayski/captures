@@ -2844,6 +2844,32 @@ impl Live {
     }
 
     fn capture_viewports(&mut self, ctx: &egui::Context, t: &Tokens) {
+        // The guide belongs to the recording, not the HUD. Keep it during
+        // countdown, pause, restart and Hide; dropping the snapshot closes it.
+        if let (Some(snapshot), Some(target)) = (&self.recording_snapshot, self.countdown_target)
+            && let RecordingTarget::Region { rect, .. } = snapshot.options.target
+            && self.flow.as_ref().is_some_and(CaptureFlow::is_current)
+        {
+            let tokens = t.clone();
+            ctx.show_viewport_deferred(
+                egui::ViewportId::from_hash_of("recording-region-indicator"),
+                egui::ViewportBuilder::default()
+                    .with_title("Captures Recording Region")
+                    .with_position(target.position)
+                    .with_inner_size(target.size)
+                    .with_transparent(true)
+                    .with_decorations(false)
+                    .with_always_on_top()
+                    .with_taskbar(false)
+                    .with_active(false)
+                    .with_mouse_passthrough(true),
+                move |ui, _| {
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::ContentProtected(true));
+                    crate::recording_region::show(ui, &tokens, rect);
+                },
+            );
+        }
         if matches!(
             self.capture_phase,
             Some(
