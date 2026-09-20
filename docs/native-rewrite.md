@@ -1,12 +1,46 @@
 # Browser-free desktop migration
 
-Status: **cross-platform foundations in progress; renderer selection still open**.
+Status: **native capture/recording workflows implemented; editor work beginning;
+cross-platform acceptance and renderer selection still open**.
 This rewrite covers macOS, Windows, and Linux, feature by feature rather than one
-complete OS at a time. AppKit and an experimental shared Rust/wgpu fixture
-frontend exist; no production native capture workflow or replacement is released.
+complete OS at a time. AppKit and the experimental Rust/wgpu host both connect
+real capture engines in opt-in development builds; neither replaces the released app.
 The shipping Tauri application remains available. No WebView, JavaScript runtime,
 localhost server, or Tauri dependency belongs in the replacement. The website is
 unaffected.
+
+## Progress dashboard
+
+We are delivering stage 4 workflow slices and starting stage 5 editor slices.
+**Implemented is not accepted:** native CI and private-X11/software-rendered tests
+do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
+The detailed checklist below remains the release gate; unchecked does not mean
+unimplemented. Later slice notes supersede earlier notes about missing behavior.
+
+| Area | Implemented in this tree | Work still open |
+| --- | --- | --- |
+| Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage | Editor document/actions/undo and host bindings; installed-data migration/rollback |
+| Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
+| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices | Audio meter/device-change parity, physical recording/audio acceptance, recording editor and transcoded exports |
+| Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
+| Editors | Shared v1 screenshot draft storage preserves shipping documents/assets without migration ([#594](https://github.com/joswayski/captures/pull/594)) | Native screenshot editing/rendering/input/export comparison, then recording playback/timeline/editing/export |
+| Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
+
+The former History and recording/HUD/feedback stacks are integrated through
+[#583](https://github.com/joswayski/captures/pull/583),
+[#585](https://github.com/joswayski/captures/pull/585),
+[#586](https://github.com/joswayski/captures/pull/586) and
+[#593](https://github.com/joswayski/captures/pull/593).
+[#592](https://github.com/joswayski/captures/pull/592) combines in-recording screenshots
+with those flows; its tests retain both screenshot-child and saved-notice coverage.
+Superseded parent PRs may be closed rather than separately merged because the
+repository uses squash merges. Their functionality must not be counted as missing.
+
+Next implementation boundary: share screenshot document geometry and undo/redo
+with differential shipping-TypeScript fixtures, then connect one real editing
+slice in both AppKit and wgpu. Native live capture on Wayland remains explicitly
+gated; no stub or X11 result closes that platform gate. Merging development slices
+does not authorize a native release, renderer cutover or removal of Tauri.
 
 ## Inventory and acceptance checklist
 
@@ -86,7 +120,7 @@ identical component implementations or a common UI framework.
    Shared tokens and fixture preferences/history/HUD/preview screens exist. The
    workbench runs on the maintainer's Mac and native CI passes; full visual and
    resource acceptance remains open. Mock screens are not feature parity.
-2. **Cross-platform foundations (next).** Bring Windows and Linux renderer
+2. **Cross-platform foundations (implemented; acceptance open).** Bring Windows and Linux renderer
    prototypes alongside AppKit using the same fixture scenarios below. Compare
    candidates before selecting production renderers. Make resources and scenario
    expectations platform-independent; keep backend measurement adapters separate.
@@ -269,8 +303,8 @@ and after replacement-engine opening. Countdown cancellation discards the replac
 session. Private X11 exercises running/paused restart and replacement-only decoded
 pixels; AppKit and Windows remain implemented but require native CI/hardware, and
 Wayland remains gated by the existing native recording limitation. This does not
-close the Recording HUD gate: in-recording screenshots and physical
-accessibility/compositor acceptance remain open.
+close the Recording HUD gate: physical accessibility/compositor acceptance remains
+open; the later Screenshot and saved-notice slices below supply those controls.
 
 The recording-ready notice slice connects successful finalization to a fixed-glass,
 nonactivating top-right notice in both native hosts. Save file reuses the shared
