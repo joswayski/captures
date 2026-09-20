@@ -72,8 +72,9 @@ struct ImportImageRequest {
 ///
 /// # Safety
 /// Non-null session is live and exclusively owned for the call. Non-null pixels
-/// points to a readable descriptor whose data covers every required top-down
-/// straight-alpha sRGB RGBA8 row through the call. Input JSON is readable,
+/// points to a readable descriptor whose actual top-down straight-alpha sRGB
+/// RGBA8 bytes in each row are initialized and readable through the call. Row
+/// padding need not be initialized and is never read. Input JSON is readable,
 /// NUL-terminated UTF-8. Free the owned response with captures_settings_free_v1.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn captures_editor_import_image_v1(
@@ -141,13 +142,16 @@ unsafe fn copy_import_pixels(pixels: &RegionPixels) -> Result<RgbaImage, String>
         .ok()
         .and_then(|pixels| pixels.checked_mul(4))
         .ok_or("editor import dimensions overflow")?;
-    // SAFETY: caller guarantees readable storage; required was checked against
-    // length, pointer arithmetic bounds and every row's tight RGBA byte range.
-    let source = unsafe { std::slice::from_raw_parts(pixels.data, required) };
     let mut owned = Vec::with_capacity(owned_length);
     for row in 0..height as usize {
-        let start = row * pixels.bytes_per_row;
-        owned.extend_from_slice(&source[start..start + tight_row]);
+        let start = row
+            .checked_mul(pixels.bytes_per_row)
+            .ok_or("editor import layout overflows")?;
+        // SAFETY: required was checked against the declared length and pointer
+        // arithmetic bounds. The caller initializes each tight RGBA row; this
+        // slice deliberately excludes possibly uninitialized row padding.
+        let source = unsafe { std::slice::from_raw_parts(pixels.data.add(start), tight_row) };
+        owned.extend_from_slice(source);
     }
     RgbaImage::from_raw(width, height, owned).ok_or_else(|| "invalid editor image layout".into())
 }
@@ -356,7 +360,10 @@ pub unsafe extern "C" fn captures_editor_free_v1(handle: *mut EditorSession) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::{CStr, CString};
+    use std::{
+        ffi::{CStr, CString},
+        mem::MaybeUninit,
+    };
 
     unsafe fn take_json(value: *mut c_char) -> serde_json::Value {
         // SAFETY: tests pass only live Rust-owned response strings.
@@ -418,11 +425,15 @@ mod tests {
             ],
         )
         .unwrap();
-        let mut caller = [0xEE; 32];
-        caller[..12].copy_from_slice(&imported.as_raw()[..12]);
-        caller[16..28].copy_from_slice(&imported.as_raw()[12..]);
+        let mut caller = [MaybeUninit::<u8>::uninit(); 32];
+        for (output, input) in caller[..12].iter_mut().zip(&imported.as_raw()[..12]) {
+            output.write(*input);
+        }
+        for (output, input) in caller[16..28].iter_mut().zip(&imported.as_raw()[12..]) {
+            output.write(*input);
+        }
         let pixels = RegionPixels {
-            data: caller.as_ptr(),
+            data: caller.as_ptr().cast(),
             length: caller.len(),
             width: 3,
             height: 2,
@@ -458,7 +469,7 @@ mod tests {
                 }
             }
 
-            caller.fill(0);
+            caller.fill(MaybeUninit::new(0));
             assert_eq!((&*session).pixels(), imported_frame);
             let undo = take_json(captures_editor_request_v1(
                 session,
