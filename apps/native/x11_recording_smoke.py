@@ -142,16 +142,23 @@ def main():
                              "-format", "%k", "info:")) > 16, "painted controls")
         if shortcuts:
             shot(selector, "record-window-shortcut")
-            run("xdotool", "key", "ctrl+alt+r", "sleep", ".6")
-        else:
-            click(selector, 488, 761)
-            time.sleep(.5)
+        # A fresh New Capture starts in Screenshot mode, whose toolbar is
+        # shorter than Record's. Select mode and target explicitly through the
+        # registered shortcut instead of clicking a previous layout's row.
+        run("xdotool", "key", "ctrl+alt+r", "sleep", ".6")
         shot(selector, name)
+        # Observe the actual selected area: the unified controls toolbar does
+        # not necessarily change its pixels when a region becomes valid.
+        before = run("import", "-window", selector, "-crop", "310x170+140+180",
+                     "-depth", "8", "rgb:-")
         # egui must observe a held pointer, not press/release in one input batch.
         run("xdotool", "mousemove", "--sync", "--window", selector, "140", "180",
             "sleep", ".1", "mousedown", "1", "sleep", ".2",
             "mousemove", "--sync", "--window", selector, "450", "350",
             "sleep", ".2", "mouseup", "1")
+        wait(lambda: run("import", "-window", selector, "-crop", "310x170+140+180",
+                         "-depth", "8", "rgb:-") != before,
+             "painted recording selection before confirmation")
         if shortcuts:
             # Switching across every target must retain this asymmetric region,
             # not replace the child or accidentally start a Display recording.
@@ -162,12 +169,11 @@ def main():
             # Do not drag this corner again: the retained selection correctly
             # treats that as a NW resize and collapses it toward the SE corner.
             # Validate the preserved target after confirmation instead.
-        for _ in range(20):
-            run("xdotool", "windowactivate", "--sync", selector, "key", "Return")
-            time.sleep(.25)
-            if manifest() is not None:
-                break
-        assert manifest() is not None, "recording confirmation never reached preparation"
+        # Confirmation destroys the selector before asynchronous preparation
+        # necessarily writes its manifest. Never reactivate that retired XID or
+        # repeat Return while waiting for the accepted recording to start.
+        run("xdotool", "windowactivate", "--sync", selector, "key", "Return")
+        wait(manifest, "recording confirmation reaches preparation")
         assert manifest()["options"]["target"]["rect"] == {
             "x": 140, "y": 180, "width": 310, "height": 170,
         }, "recording must retain the selected region across target shortcuts"
