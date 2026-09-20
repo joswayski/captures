@@ -438,6 +438,16 @@ visually inspected. Unit tests cover queued edits and stale replies during close
 Status: X11 verified on private software GL; Windows and Wayland use the same
 implemented host but remain presentation-unverified.
 
+The wgpu Geometry panel also connects shared `CropDrag` to the fitted image preview.
+Draw crop exposes Free, 1:1, 4:3, 3:2 and 16:9 presets, Shift ratio locking,
+reverse/outside-image drags, a dimmed exterior and dimension badge. Selection is
+transient: Apply issues the existing crop command; Cancel, Escape and changing
+panels restore the prior fields without touching the document or draft. Pointer
+coordinates use the published image, not uncommitted canvas-size fields. New pixel
+frames clear stale gestures. This host path is shared by Windows, X11 and Wayland;
+private-X11 input/render checks do not complete physical host, accessibility or
+IME acceptance. AppKit interactive crop remains a separate host slice.
+
 The wgpu editor's Layers panel now exposes those shared commands with stable-ID
 selection, safe long-name truncation and independent geometry/layer scrolling.
 Undo, deletion and rejected commands restore valid selection and field state.

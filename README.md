@@ -264,7 +264,9 @@ resize/lossless image transforms/undo, and retained pixel frames for native host
 Full-canvas photos rotate their canvas; layered overhang stays clipped and fully
 off-canvas transformed images expand the canvas so they are not lost.
 The Windows/Linux candidate opens screenshots from History in a native crop,
-canvas-size and draft editor with undo/redo. Its layer panel supports selection,
+canvas-size and draft editor with undo/redo. **Draw crop** selects directly on the
+preview with free or preset aspect ratios and Shift ratio locking. Apply commits
+the selection; Cancel or Escape leaves the document unchanged. Its layer panel supports selection,
 visibility, locking, opacity, renaming, position, duplication, deletion and ordering.
 Its Output panel previews PNG/JPEG/WebP quality and size limits, reports encoded
 bytes, and switches between the edited canvas and encoded output without saving.

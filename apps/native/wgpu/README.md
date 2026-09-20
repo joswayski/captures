@@ -87,6 +87,10 @@ privacy against disposable loopback servers. Physical input/AT acceptance remain
 History → Edit screenshot opens a worker-owned crop/canvas/draft editor. Undo/redo,
 Save draft, confirmed Discard edits, and unsaved-close choices preserve the original
 capture and exports. Closing without saving preserves any older saved draft.
+Geometry → Draw crop selects on the preview, including reverse and outside-image
+drags. Free, 1:1, 4:3, 3:2 and 16:9 presets use shared Rust geometry; hold Shift
+to lock the current ratio. Apply crop commits; Cancel, Escape or switching panels
+abandons the selection without editing or saving. Numeric crop fields remain usable.
 The Layers panel selects front-to-back layers and connects visibility, locking,
 image rename, opacity, X/Y movement, duplicate, delete and adjacent ordering.
 Shared Rust preserves locked boundaries and makes every accepted edit undoable.

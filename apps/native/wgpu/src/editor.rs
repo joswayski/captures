@@ -10,7 +10,7 @@ use std::{
 };
 
 use captures_app::{
-    editor::{Document, Element, LayerEdit, LayerPlacement, Rect},
+    editor::{CropDrag, Document, Element, LayerEdit, LayerPlacement, Point, Rect},
     editor_output::{SavedExport, save_new_export},
     editor_session::{
         EditorSession, ExportFormat, ExportOptions, ExportQuality, OpenRequest, PngOptions, Request,
@@ -67,10 +67,21 @@ enum Section {
     Output,
 }
 
+const CROP_ASPECTS: [(&str, Option<f64>); 5] = [
+    ("Free", None),
+    ("1:1", Some(1.)),
+    ("4:3", Some(4. / 3.)),
+    ("3:2", Some(3. / 2.)),
+    ("16:9", Some(16. / 9.)),
+];
+
 struct View {
     presented: Option<Presented>,
     texture: Option<egui::TextureHandle>,
     crop: [f64; 4],
+    crop_previous: Option<[f64; 4]>,
+    crop_drag: Option<CropDrag>,
+    crop_aspect: usize,
     canvas: [f64; 2],
     section: Section,
     export_options: ExportOptions,
@@ -97,6 +108,9 @@ impl Default for View {
             presented: None,
             texture: None,
             crop: [0., 0., 1., 1.],
+            crop_previous: None,
+            crop_drag: None,
+            crop_aspect: 0,
             canvas: [1., 1.],
             section: Section::Geometry,
             export_options: ExportOptions {
@@ -126,6 +140,13 @@ impl Default for View {
 }
 
 impl View {
+    fn cancel_crop(&mut self) {
+        if let Some(previous) = self.crop_previous.take() {
+            self.crop = previous;
+        }
+        self.crop_drag = None;
+    }
+
     fn title(&self) -> &'static str {
         if self.pending {
             "Screenshot editor — Captures — Working…"
@@ -159,6 +180,7 @@ impl View {
                     .is_none_or(|old| !Arc::ptr_eq(&old.pixels, &presented.pixels));
                 if changed {
                     self.invalidate_output();
+                    self.cancel_crop();
                     let image = &presented.pixels;
                     self.texture = Some(ctx.load_texture(
                         "edited-screenshot",
@@ -503,6 +525,12 @@ impl Drop for Editor {
 }
 
 fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
+    if !ui.ctx().egui_wants_keyboard_input()
+        && !egui::Popup::is_any_open(ui.ctx())
+        && ui.input(|input| input.key_pressed(egui::Key::Escape))
+    {
+        view.cancel_crop();
+    }
     egui::Panel::top("editor-actions").show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.heading("Screenshot editor");
@@ -549,6 +577,9 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             });
         }
     });
+    if view.section != Section::Geometry {
+        view.cancel_crop();
+    }
     egui::Panel::left("editor-geometry").resizable(false).exact_size(230.).show(ui, |ui| {
         egui::ScrollArea::vertical().id_salt(view.section).auto_shrink([false, false]).show(ui, |ui| {
         ui.add_enabled_ui(!view.pending && view.presented.is_some(), |ui| {
@@ -568,9 +599,33 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                     ui.add(egui::DragValue::new(value).range(0. ..=32768.).speed(1.)); ui.end_row();
                 }
             });
-            if ui.button("Apply crop").clicked() {
-                let [x, y, width, height] = view.crop;
-                view.submit(tx, Request::Crop { rect: Rect { x, y, width, height } });
+            ui.horizontal(|ui| {
+                if ui.button("Apply crop").clicked() {
+                    let [x, y, width, height] = view.crop;
+                    view.crop_previous = None;
+                    view.crop_drag = None;
+                    view.submit(tx, Request::Crop { rect: Rect { x, y, width, height } });
+                }
+                if ui.button(if view.crop_previous.is_some() { "Cancel" } else { "Draw crop" }).clicked() {
+                    if view.crop_previous.is_some() {
+                        view.cancel_crop();
+                    } else {
+                        view.crop_previous = Some(view.crop);
+                    }
+                }
+            });
+            if view.crop_previous.is_some() {
+                ui.horizontal(|ui| {
+                    ui.label("Aspect");
+                    egui::ComboBox::from_id_salt("crop-aspect")
+                        .selected_text(CROP_ASPECTS[view.crop_aspect].0)
+                        .show_ui(ui, |ui| {
+                            for (index, (label, _)) in CROP_ASPECTS.iter().enumerate() {
+                                ui.selectable_value(&mut view.crop_aspect, index, *label);
+                            }
+                        });
+                });
+                ui.small("Drag on the canvas. Hold Shift to lock the ratio. Escape cancels; Apply crop commits.");
             }
             ui.add_space(tokens.number("s-6"));
             ui.heading("Canvas");
@@ -596,11 +651,15 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             view.texture.as_ref()
         };
         if let Some(texture) = texture {
-            ui.add(
+            let available = ui.available_rect_before_wrap();
+            let image = ui.add(
                 egui::Image::new(texture)
                     .fit_to_exact_size(ui.available_size())
                     .maintain_aspect_ratio(true),
             );
+            if view.crop_previous.is_some() && !view.pending {
+                show_crop(ui, tokens, view, available, image.rect);
+            }
         } else if view.pending {
             ui.centered_and_justified(|ui| {
                 ui.spinner();
@@ -611,6 +670,130 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             });
         }
     });
+}
+
+fn image_point(position: egui::Pos2, preview: egui::Rect, bounds: Rect) -> Point {
+    Point {
+        x: f64::from(position.x - preview.left()) / f64::from(preview.width()) * bounds.width,
+        y: f64::from(position.y - preview.top()) / f64::from(preview.height()) * bounds.height,
+    }
+}
+
+fn show_crop(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    view: &mut View,
+    available: egui::Rect,
+    preview: egui::Rect,
+) {
+    let Some(presented) = &view.presented else {
+        return;
+    };
+    let bounds = Rect {
+        x: 0.,
+        y: 0.,
+        width: f64::from(presented.pixels.width()),
+        height: f64::from(presented.pixels.height()),
+    };
+    let response = ui.interact(
+        available,
+        ui.scope_id().with("crop-canvas"),
+        egui::Sense::drag(),
+    );
+    let aspect = CROP_ASPECTS[view.crop_aspect].1;
+    let shift = ui.input(|input| input.modifiers.shift);
+    if response.drag_started_by(egui::PointerButton::Primary)
+        && let Some(origin) = ui.input(|input| input.pointer.press_origin())
+    {
+        view.crop_drag = Some(CropDrag::new(
+            image_point(origin, preview, bounds),
+            bounds,
+            aspect,
+            shift,
+        ));
+    }
+    if (response.dragged_by(egui::PointerButton::Primary)
+        || response.drag_stopped_by(egui::PointerButton::Primary))
+        && let Some(position) = response.interact_pointer_pos()
+        && let Some(drag) = &mut view.crop_drag
+    {
+        let rect = drag.update(image_point(position, preview, bounds), aspect, shift);
+        view.crop = [rect.x, rect.y, rect.width, rect.height];
+    }
+    if response.drag_stopped() {
+        view.crop_drag = None;
+    }
+    if response.hovered() || response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    }
+    let [x, y, width, height] = view.crop;
+    let selection = egui::Rect::from_min_max(
+        egui::pos2(
+            preview.left() + (x / bounds.width) as f32 * preview.width(),
+            preview.top() + (y / bounds.height) as f32 * preview.height(),
+        )
+        .clamp(preview.min, preview.max),
+        egui::pos2(
+            preview.left() + ((x + width) / bounds.width) as f32 * preview.width(),
+            preview.top() + ((y + height) / bounds.height) as f32 * preview.height(),
+        )
+        .clamp(preview.min, preview.max),
+    );
+    let painter = ui
+        .painter()
+        .with_clip_rect(preview.intersect(ui.clip_rect()));
+    for (min, max) in [
+        (preview.min, egui::pos2(preview.right(), selection.top())),
+        (egui::pos2(preview.left(), selection.bottom()), preview.max),
+        (
+            egui::pos2(preview.left(), selection.top()),
+            selection.left_bottom(),
+        ),
+        (
+            selection.right_top(),
+            egui::pos2(preview.right(), selection.bottom()),
+        ),
+    ] {
+        painter.rect_filled(
+            egui::Rect::from_min_max(min, max),
+            0.,
+            tokens.color("glass-veil-heavy"),
+        );
+    }
+    let stroke = egui::Stroke::new(tokens.number("s-1"), tokens.color("glass-text"));
+    let corners = [
+        selection.left_top(),
+        selection.right_top(),
+        selection.right_bottom(),
+        selection.left_bottom(),
+        selection.left_top(),
+    ];
+    painter.extend(egui::Shape::dashed_line(
+        &corners,
+        stroke,
+        tokens.number("s-3"),
+        tokens.number("s-2"),
+    ));
+    let label = painter.layout_no_wrap(
+        format!("{width} × {height}"),
+        egui::FontId::proportional(tokens.number("text-sm")),
+        tokens.color("glass-text"),
+    );
+    let padding = tokens.number("s-2");
+    let origin = egui::pos2(
+        (selection.center().x - label.size().x / 2.).clamp(
+            preview.left() + padding,
+            (preview.right() - label.size().x - padding).max(preview.left() + padding),
+        ),
+        (selection.top() + padding)
+            .min((preview.bottom() - label.size().y - padding).max(preview.top() + padding)),
+    );
+    painter.rect_filled(
+        egui::Rect::from_min_size(origin, label.size()).expand(padding),
+        tokens.number("r-sm"),
+        tokens.color("glass-strong"),
+    );
+    painter.galley(origin, label, tokens.color("glass-text"));
 }
 
 fn show_output(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
@@ -888,6 +1071,128 @@ mod tests {
             unsaved,
             has_draft: !unsaved,
         }
+    }
+
+    #[test]
+    fn crop_pointer_uses_presented_pixels_and_stays_transient_until_apply() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let mut value = presented(false);
+        value.pixels = Arc::new(RgbaImage::new(1280, 640));
+        value.document = Arc::new(Document::new_capture("fixture", 1280., 640., None));
+        view.receive(&ctx, Ok(value));
+        let pixels = view.presented.as_ref().unwrap().pixels.clone();
+        let document = view.presented.as_ref().unwrap().document.clone();
+        view.canvas = [999., 777.]; // Unapplied canvas fields are not preview dimensions.
+        view.crop_previous = Some(view.crop);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000., 800.));
+        let preview = egui::Rect::from_min_size(egui::pos2(100., 100.), egui::vec2(640., 320.));
+        let frame = |view: &mut View, mut events: Vec<egui::Event>, shift| {
+            events.insert(
+                0,
+                egui::Event::ModifiersChanged(egui::Modifiers {
+                    shift,
+                    ..Default::default()
+                }),
+            );
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            });
+            let mut ui = egui::Ui::new(
+                ctx.clone(),
+                egui::Id::unique("crop-test"),
+                egui::UiBuilder::new().max_rect(screen),
+            );
+            show_crop(
+                &mut ui,
+                &crate::tokens::load()["dark-mustard"],
+                view,
+                screen,
+                preview,
+            );
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+        };
+        let button = |position, pressed, shift| egui::Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers {
+                shift,
+                ..Default::default()
+            },
+        };
+        let start = egui::pos2(500., 300.);
+        let end = egui::pos2(200., 150.);
+        frame(&mut view, vec![], false);
+        frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(start), button(start, true, false)],
+            false,
+        );
+        frame(&mut view, vec![egui::Event::PointerMoved(end)], false);
+        assert_eq!(view.crop, [200., 100., 600., 300.]);
+        frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(egui::pos2(150., 200.))],
+            true,
+        );
+        assert_eq!(view.crop, [100., 50., 700., 350.]); // Lock the live 2:1 ratio, not 1:1.
+        frame(&mut view, vec![egui::Event::PointerMoved(end)], false);
+        frame(&mut view, vec![button(end, false, false)], false);
+        assert_eq!(view.crop, [200., 100., 600., 300.]);
+        assert!(view.crop_drag.is_none());
+        assert!(Arc::ptr_eq(
+            &pixels,
+            &view.presented.as_ref().unwrap().pixels
+        ));
+        assert!(Arc::ptr_eq(
+            &document,
+            &view.presented.as_ref().unwrap().document
+        ));
+        assert!(!view.unsaved() && !view.pending);
+        view.cancel_crop();
+        assert_eq!(view.crop, [0., 0., 1280., 640.]);
+
+        // Pressing Shift before the first movement must initialize a square.
+        view.crop_previous = Some(view.crop);
+        frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(end), button(end, true, true)],
+            true,
+        );
+        let destination = egui::pos2(350., 250.);
+        frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(destination)],
+            true,
+        );
+        assert_eq!(view.crop, [200., 100., 300., 300.]);
+        view.crop_aspect = 2; // An explicit 4:3 preset wins over Shift.
+        frame(&mut view, vec![], true);
+        assert_eq!(view.crop, [200., 100., 300., 225.]);
+        frame(&mut view, vec![button(destination, false, true)], true);
+        view.cancel_crop();
+
+        view.crop_previous = Some(view.crop);
+        view.crop_aspect = 0;
+        let outside = egui::pos2(300., 500.);
+        frame(
+            &mut view,
+            vec![
+                egui::Event::PointerMoved(outside),
+                button(outside, true, false),
+            ],
+            false,
+        );
+        frame(&mut view, vec![egui::Event::PointerMoved(end)], false);
+        assert_eq!(view.crop, [200., 100., 200., 540.]);
+        // A new published frame clears the gesture and all stale crop coordinates.
+        view.receive(&ctx, Ok(presented(true)));
+        assert!(view.crop_previous.is_none() && view.crop_drag.is_none());
+        assert_eq!(view.crop, [0., 0., 7., 3.]);
     }
 
     #[test]

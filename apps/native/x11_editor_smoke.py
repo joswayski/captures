@@ -162,9 +162,16 @@ def main():
             layer = document["elements"][0]
             return (document["width"], document["height"], layer["x"], layer["y"]) == (width, height, x, y)
 
+        def save_until(predicate, description):
+            def attempt():
+                # Save is idempotent. The previous idle title can still be visible
+                # while an edit is queued, so an early Save click may be disabled.
+                click(editor, 170, 62)
+                return predicate()
+            wait(attempt, description)
+
         def save(width, height, x, y):
-            click(editor, 170, 62)
-            wait(lambda: saved(width, height, x, y), f"saved {width}x{height} at {x},{y}")
+            save_until(lambda: saved(width, height, x, y), f"saved {width}x{height} at {x},{y}")
 
         def close(window):
             run("xdotool", "windowactivate", "--sync", window, "key", "alt+F4", "sleep", ".4")
@@ -180,8 +187,7 @@ def main():
             return json.loads(draft.read_text())["document"]["elements"] if draft.exists() else []
 
         def save_layers(predicate, description):
-            click(editor, 170, 62)
-            wait(lambda: predicate(layers()), description)
+            save_until(lambda: predicate(layers()), description)
             return layers()
 
         click(editor, 463, 62)  # Layers, preserving the Geometry panel's scroll position.
@@ -263,9 +269,68 @@ def main():
         wait(lambda: not draft.exists(), "discard layer edits")
         click(editor, 398, 62)  # Geometry has an independent scroll position.
 
-        for y, value in ((159, 40), (203, 30), (247, 360), (291, 240)):
-            field(y, value)
+        # At this size the preview is 1:1: image origin (238,89), size 640x360.
+        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+
+        def drag(start, end, shift=False):
+            run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start), "sleep", ".2")
+            if shift:
+                run("xdotool", "keydown", "Shift_L", "sleep", ".1")
+            run("xdotool", "mousedown", "1", "sleep", ".2", "mousemove", "--sync",
+                "--window", editor, *map(str, end), "sleep", ".3", "mouseup", "1", "sleep", ".2")
+            if shift:
+                run("xdotool", "keyup", "Shift_L")
+
+        click(editor, 159, 335)
+        drag((638, 359), (278, 119))  # Reverse drag: 40,30 with size 360x240.
+        shot(editor, "crop-selection")
+        run("xdotool", "windowsize", "--sync", editor, "760", "540")
+        shot(editor, "crop-selection-minimum")
+        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        assert not draft.exists(), "selection must not write a draft"
+        assert (artifact / "capture.png").read_bytes() == original
+        run("xdotool", "key", "Escape", "sleep", ".2")
+        shot(editor, "crop-cancelled")
+        save(640, 360, 0, 0)  # Escape must not crop or mutate the document.
+        before_selection = draft.read_bytes()
+        click(editor, 159, 335)
+        drag((278, 119), (438, 219), shift=True)
+        shot(editor, "crop-shift-square")
+        assert draft.read_bytes() == before_selection
         click(editor, 50, 335)
+        save(160, 160, -40, -30)
+        click(editor, 35, 62)
+        save(640, 360, 0, 0)
+        click(editor, 159, 335)
+        drag((638, 500), (278, 119))  # Starts below the image; clamps to y=360.
+        shot(editor, "crop-outside-start")
+        click(editor, 50, 335)
+        save(360, 330, -40, -30)
+        click(editor, 35, 62)
+        save(640, 360, 0, 0)
+        click(editor, 159, 335)
+        click(editor, 125, 379)
+        shot(editor, "crop-aspect-menu")
+        run("xdotool", "key", "Escape", "sleep", ".2")
+        click(editor, 125, 379)
+        click(editor, 106, 507)  # 4:3 preset takes precedence over Shift's square.
+        drag((278, 119), (438, 219), shift=True)
+        shot(editor, "crop-preset-four-three")
+        click(editor, 50, 335)
+        save(160, 120, -40, -30)
+        click(editor, 35, 62)
+        save(640, 360, 0, 0)
+        click(editor, 159, 335)
+        click(editor, 125, 379)
+        click(editor, 106, 419)  # Free for the following asymmetric crop.
+        drag((638, 359), (278, 119))
+        click(editor, 159, 335)  # Cancel restores numeric fields as well as pixels.
+        click(editor, 50, 335)
+        save(640, 360, 0, 0)
+        click(editor, 159, 335)
+        drag((638, 359), (278, 119))
+        click(editor, 50, 335)
+        run("xdotool", "windowsize", "--sync", editor, "1000", "700")
         save(360, 240, -40, -30)
         shot(editor, "editor-cropped")
         pixel("editor-cropped", 900, 400, (40, 110, 166))
@@ -414,7 +479,10 @@ def main():
         assert (artifact / "capture.png").read_bytes() == original
         (output / "result.json").write_text(json.dumps({
             "passed": True, "appearance": args.appearance,
-            "checks": ["crop", "canvas", "undo-redo", "draft-reopen", "close-preserves-draft",
+            "checks": ["crop", "crop-pointer-reverse", "crop-escape-no-mutation", "crop-transient-no-write",
+                       "crop-shift-square", "crop-outside-start-clamping", "crop-preset-precedes-shift",
+                       "crop-cancel-restores-fields", "crop-popup-escape",
+                       "canvas", "undo-redo", "draft-reopen", "close-preserves-draft",
                        "explicit-discard", "save-error", "quit-error-retry", "original-unchanged",
                        "layer-duplicate-rename-move", "layer-opacity-visibility-pixels",
                        "layer-lock-order-delete", "layer-draft-reopen", "layer-undo-redo",
