@@ -471,6 +471,59 @@ def main():
             if shift:
                 run("xdotool", "keyup", "Shift_L")
 
+        click(editor, 736, 62)  # Draw keeps the chosen shape active after each release.
+        drag((658, 289), (538, 169))
+        rectangle = save_layers(lambda values: len(values) == 2, "reverse rectangle")[-1]
+        assert rectangle["kind"] == "shape" and rectangle["shape"] == "rectangle"
+        assert (rectangle["x"], rectangle["y"], rectangle["endX"], rectangle["endY"]) == (420, 200, 300, 80)
+        assert rectangle["style"]["fill"] == "#ff3b5c" and not rectangle["style"]["strokeEnabled"]
+        shot(editor, "shape-rectangle")
+        pixel("shape-rectangle", 600, 230, (255, 59, 92))
+        click(editor, 35, 62)
+        save_layers(lambda values: len(values) == 1, "single-step shape undo")
+        shot(editor, "shape-undone")
+        pixel("shape-undone", 600, 230, (40, 110, 166))
+        click(editor, 98, 62)
+        save_layers(lambda values: len(values) == 2 and values[-1]["id"] == rectangle["id"], "shape redo keeps id")
+        click(editor, 138, 138)  # Ellipse.
+        drag((608, 349), (778, 399))
+        ellipse = save_layers(lambda values: len(values) == 3, "ellipse layer")[-1]
+        assert ellipse["shape"] == "ellipse" and ellipse["id"] != rectangle["id"]
+        assert (ellipse["x"], ellipse["y"], ellipse["endX"], ellipse["endY"]) == (370, 260, 540, 310)
+        shot(editor, "shape-ellipse")
+        pixel("shape-ellipse", 693, 374, (255, 59, 92))
+        pixel("shape-ellipse", 610, 350, (40, 110, 166))
+        before_draw = draft.read_bytes()
+        run("xdotool", "mousemove", "--sync", "--window", editor, "320", "300", "mousedown", "1",
+            "sleep", ".2", "mousemove", "--sync", "--window", editor, "420", "380", "sleep", ".3")
+        shot(editor, "shape-transient")
+        assert draft.read_bytes() == before_draw
+        run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
+        save_layers(lambda values: len(values) == 3, "escape cancels shape")
+        drag((320, 300), (320, 380))  # Degenerate zero-width gesture.
+        save_layers(lambda values: len(values) == 3, "degenerate shape has no layer")
+        run("xdotool", "windowsize", "--sync", editor, "760", "540")
+        shot(editor, "shape-minimum")
+        close(editor)
+        wait(lambda: not windows("Screenshot editor"), "saved shapes close")
+        editor = reopen()
+        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        shot(editor, "shape-reopened")
+        pixel("shape-reopened", 600, 230, (255, 59, 92))
+        pixel("shape-reopened", 693, 374, (255, 59, 92))
+        assert layers()[-1]["id"] == ellipse["id"]
+        click(editor, 736, 62)
+        drag((298, 500), (358, 570))  # Fully outside the image grows the canvas.
+        outside = save_layers(lambda values: len(values) == 4, "outside shape retained")[-1]
+        assert outside["shape"] == "rectangle"
+        assert saved(640, 486, 0, 0)
+        shot(editor, "shape-outside-expanded")
+        assert (artifact / "capture.png").read_bytes() == original
+        click(editor, 275, 62)
+        click(editor, 55, 128)
+        wait(lambda: not draft.exists(), "discard shape edits")
+        click(editor, 398, 62)
+
         click(editor, 159, 335)
         drag((638, 359), (278, 119))  # Reverse drag: 40,30 with size 360x240.
         shot(editor, "crop-selection")
@@ -710,6 +763,8 @@ def main():
             "checks": ["crop", "crop-pointer-reverse", "crop-escape-no-mutation", "crop-transient-no-write",
                        "crop-shift-square", "crop-outside-start-clamping", "crop-preset-precedes-shift",
                        "crop-cancel-restores-fields", "crop-popup-escape",
+                       "shape-reverse-rectangle-ellipse-pixels", "shape-single-undo-redo-stable-id",
+                       "shape-transient-escape-degenerate", "shape-draft-reopen-outside-expansion",
                        "canvas", "undo-redo", "draft-reopen", "close-preserves-draft",
                        "image-picker-pending-cancel-retry", "image-import-exact-pixels",
                        "image-import-owned-draft-reopen", "image-picker-stale-close-result",

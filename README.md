@@ -262,8 +262,7 @@ freehand paths with crop geometry, rotation, opacity, blending and enabled shape
 drop shadows, without host I/O.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
 resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
-pixel frames for native hosts. Typed rectangle/ellipse creation is also available;
-drawing-tool presentation is not connected yet.
+pixel frames for native hosts. Typed rectangle/ellipse creation is also available.
 Full-canvas photos rotate their canvas; layered overhang stays clipped and fully
 off-canvas transformed images expand the canvas so they are not lost. Shared
 interactive crop geometry also matches shipping bounds, aspect presets and Shift
@@ -273,6 +272,8 @@ canvas-size and draft editor with undo/redo. **Draw crop** selects directly on t
 preview with free or preset aspect ratios and Shift ratio locking. Apply commits
 the selection; Cancel or Escape leaves the document unchanged. Its layer panel supports selection,
 visibility, locking, opacity, renaming, position, duplication, deletion and ordering.
+**Draw** adds filled rectangles and ellipses in the default annotation color, one
+undoable layer per drag. Escape cancels an unfinished drag; drafts retain the shapes.
 Image layers also expose lossless left/right rotations and horizontal/vertical
 flips, including when hidden or locked; each action supports undo and draft restore.
 **Import image** adds one PNG, JPEG, WebP or TIFF below the selected visible image,
@@ -298,7 +299,7 @@ cover both appearances, persisted drafts, real preview pixels and error recovery
 AppKit now connects the same crop, canvas-resize and draft operations in its own
 window. Windows, Wayland and physical AppKit presentation remain unverified.
 AppKit image-transform/import controls, batch/drag-and-drop import, text, annotation
-shadow controls, annotation tools, overwrite-original, AppKit edited-image clipboard/file output,
+fill/stroke/shadow controls, other annotation tools, overwrite-original, AppKit edited-image clipboard/file output,
 and recording editing remain unconnected. These connected controls and shared
 rendering/export support do not complete native editor acceptance. OS shortcut
 takeover, login items, single-instance relaunch and updates

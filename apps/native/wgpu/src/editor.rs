@@ -12,7 +12,10 @@ use std::{
 };
 
 use captures_app::{
-    editor::{CropDrag, Document, Element, ImageTransform, LayerEdit, LayerPlacement, Point, Rect},
+    editor::{
+        ClosedShapeCreate, ClosedShapeKind, CropDrag, Document, Element, ElementStyle,
+        ImageTransform, LayerEdit, LayerPlacement, Point, Rect,
+    },
     editor_output::{SavedExport, save_new_export},
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
     editor_session::{
@@ -48,7 +51,7 @@ struct Presented {
     output: Option<(RgbaImage, usize)>,
     saved: Option<SavedExport>,
     copied: bool,
-    imported_layer: Option<String>,
+    created_layer: Option<String>,
     can_undo: bool,
     can_redo: bool,
     unsaved: bool,
@@ -64,7 +67,7 @@ impl Presented {
             output: None,
             saved: None,
             copied: false,
-            imported_layer: None,
+            created_layer: None,
             can_undo: snapshot.can_undo,
             can_redo: snapshot.can_redo,
             unsaved: snapshot.unsaved_changes,
@@ -78,6 +81,7 @@ enum Section {
     Geometry,
     Layers,
     Output,
+    Draw,
 }
 
 const CROP_ASPECTS: [(&str, Option<f64>); 5] = [
@@ -95,6 +99,8 @@ struct View {
     crop_previous: Option<[f64; 4]>,
     crop_drag: Option<CropDrag>,
     crop_aspect: usize,
+    draw_shape: ClosedShapeKind,
+    shape_drag: Option<(Point, Point)>,
     canvas: [f64; 2],
     section: Section,
     export_options: ExportOptions,
@@ -126,6 +132,8 @@ impl Default for View {
             crop_previous: None,
             crop_drag: None,
             crop_aspect: 0,
+            draw_shape: ClosedShapeKind::Rectangle,
+            shape_drag: None,
             canvas: [1., 1.],
             section: Section::Geometry,
             export_options: ExportOptions {
@@ -177,6 +185,7 @@ impl View {
     }
 
     fn request_close(&mut self) {
+        self.shape_drag = None;
         if self.pending || self.unsaved() {
             self.close_requested = true;
         } else {
@@ -199,6 +208,7 @@ impl View {
                     self.invalidate_output();
                     self.output_notice = None;
                     self.cancel_crop();
+                    self.shape_drag = None;
                     let image = &presented.pixels;
                     self.texture = Some(ctx.load_texture(
                         "edited-screenshot",
@@ -243,7 +253,7 @@ impl View {
                     self.output_notice = Some("Copied edited pixels to the clipboard.".into());
                 }
                 let selected = presented
-                    .imported_layer
+                    .created_layer
                     .take()
                     .or(self.selected_layer.clone());
                 self.presented = Some(presented);
@@ -610,8 +620,18 @@ impl Editor {
                         .as_mut()
                         .ok_or_else(|| "Editor is unavailable.".to_owned())
                         .and_then(|session| {
+                            let creates_layer =
+                                matches!(request, Request::CreateClosedShape { .. });
                             session.execute(request)?;
-                            Ok(Presented::from_session(session))
+                            let mut presented = Presented::from_session(session);
+                            if creates_layer {
+                                presented.created_layer = presented
+                                    .document
+                                    .elements
+                                    .last()
+                                    .map(|element| element.base().id.clone());
+                            }
+                            Ok(presented)
                         }),
                     Job::Import { path, selected_id } => session
                         .as_mut()
@@ -628,7 +648,7 @@ impl Editor {
                                 point: None,
                             })?;
                             let mut presented = Presented::from_session(session);
-                            presented.imported_layer = Some(id);
+                            presented.created_layer = Some(id);
                             Ok(presented)
                         }),
                     Job::Preview(options) => session
@@ -804,6 +824,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         && ui.input(|input| input.key_pressed(egui::Key::Escape))
     {
         view.cancel_crop();
+        view.shape_drag = None;
     }
     egui::Panel::top("editor-actions").show(ui, |ui| {
         ui.horizontal(|ui| {
@@ -827,6 +848,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 if ui.add_enabled(view.import_picker.is_none() && !view.close_requested && !view.confirm_discard, egui::Button::new("Import image…")).clicked() {
                     view.choose_image(ui.ctx());
                 }
+                ui.selectable_value(&mut view.section, Section::Draw, "Draw");
             });
         });
         if let Some(error) = &view.error { ui.colored_label(tokens.color("theme-signal"), error); }
@@ -857,6 +879,13 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     if view.section != Section::Geometry {
         view.cancel_crop();
     }
+    if view.section != Section::Draw
+        || view.close_requested
+        || view.confirm_discard
+        || !ui.input(|input| input.focused)
+    {
+        view.shape_drag = None;
+    }
     egui::Panel::left("editor-geometry").resizable(false).exact_size(230.).show(ui, |ui| {
         egui::ScrollArea::vertical().id_salt(view.section).auto_shrink([false, false]).show(ui, |ui| {
         ui.add_enabled_ui(!view.pending && view.presented.is_some(), |ui| {
@@ -866,6 +895,16 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             }
             if view.section == Section::Layers {
                 show_layers(ui, view, tx);
+                return;
+            }
+            if view.section == Section::Draw {
+                ui.heading("Draw shapes");
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut view.draw_shape, ClosedShapeKind::Rectangle, "Rectangle");
+                    ui.selectable_value(&mut view.draw_shape, ClosedShapeKind::Ellipse, "Ellipse");
+                });
+                ui.label("Drag to draw. Release to add one layer. Escape cancels the current drag.");
+                ui.small("Filled shapes use the default annotation color. Change opacity, position and ordering in Layers. Fill/stroke styling is not connected yet.");
                 return;
             }
             ui.heading("Crop");
@@ -918,7 +957,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         });
         ui.add_space(tokens.number("s-6"));
         ui.label(RichText::new("Native editor preview").color(tokens.color("text-muted")));
-        ui.small("Geometry, layers, drafts, new-copy export and clipboard output are connected. Drawing tools and replacing files are still in development.");
+        ui.small("Geometry, layers, filled shapes, drafts, new-copy export and clipboard output are connected. Other drawing tools and replacing files are still in development.");
         });
     });
     egui::CentralPanel::default().show(ui, |ui| {
@@ -937,6 +976,13 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             if view.crop_previous.is_some() && !view.pending {
                 show_crop(ui, tokens, view, available, image.rect);
             }
+            if view.section == Section::Draw
+                && !view.pending
+                && !view.close_requested
+                && !view.confirm_discard
+            {
+                show_shape(ui, view, tx, available, image.rect);
+            }
         } else if view.pending {
             ui.centered_and_justified(|ui| {
                 ui.spinner();
@@ -953,6 +999,94 @@ fn image_point(position: egui::Pos2, preview: egui::Rect, bounds: Rect) -> Point
     Point {
         x: f64::from(position.x - preview.left()) / f64::from(preview.width()) * bounds.width,
         y: f64::from(position.y - preview.top()) / f64::from(preview.height()) * bounds.height,
+    }
+}
+
+fn show_shape(
+    ui: &mut egui::Ui,
+    view: &mut View,
+    tx: &Sender<Job>,
+    available: egui::Rect,
+    preview: egui::Rect,
+) {
+    let Some(presented) = &view.presented else {
+        return;
+    };
+    let bounds = Rect {
+        x: 0.,
+        y: 0.,
+        width: f64::from(presented.pixels.width()),
+        height: f64::from(presented.pixels.height()),
+    };
+    let response = ui.interact(
+        available,
+        ui.scope_id().with("shape-canvas"),
+        egui::Sense::drag(),
+    );
+    if response.drag_started_by(egui::PointerButton::Primary)
+        && let Some(origin) = ui.input(|input| input.pointer.press_origin())
+    {
+        let start = image_point(origin, preview, bounds);
+        view.shape_drag = Some((start, start));
+    }
+    if (response.dragged_by(egui::PointerButton::Primary)
+        || response.drag_stopped_by(egui::PointerButton::Primary))
+        && let Some(position) = response.interact_pointer_pos()
+        && let Some((_, end)) = &mut view.shape_drag
+    {
+        *end = image_point(position, preview, bounds);
+    }
+    if response.hovered() || response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    }
+    let style = ElementStyle::default();
+    if let Some((start, end)) = view.shape_drag {
+        let position = |point: Point| {
+            egui::pos2(
+                preview.left() + (point.x / bounds.width) as f32 * preview.width(),
+                preview.top() + (point.y / bounds.height) as f32 * preview.height(),
+            )
+        };
+        let rect = egui::Rect::from_two_pos(position(start), position(end));
+        let painter = ui
+            .painter()
+            .with_clip_rect(available.intersect(ui.clip_rect()));
+        let fill =
+            egui::Color32::from_hex(style.fill.as_deref().expect("default closed-shape fill"))
+                .expect("default annotation color is hex");
+        match view.draw_shape {
+            ClosedShapeKind::Rectangle => {
+                let radius = (12. * preview.width() / bounds.width as f32)
+                    .min(rect.width() / 6.)
+                    .min(rect.height() / 6.);
+                painter.rect_filled(rect, radius, fill);
+            }
+            ClosedShapeKind::Ellipse => {
+                painter.add(egui::Shape::ellipse_filled(
+                    rect.center(),
+                    rect.size() / 2.,
+                    fill,
+                ));
+            }
+        }
+    }
+    if response.drag_stopped_by(egui::PointerButton::Primary)
+        && let Some((start, end)) = view.shape_drag.take()
+        && start.x != end.x
+        && start.y != end.y
+    {
+        view.submit(
+            tx,
+            Request::CreateClosedShape {
+                create: ClosedShapeCreate {
+                    shape: view.draw_shape,
+                    start,
+                    end,
+                    style,
+                    opacity: 100.,
+                },
+            },
+        );
     }
 }
 
@@ -1386,12 +1520,188 @@ mod tests {
             output: None,
             saved: None,
             copied: false,
-            imported_layer: None,
+            created_layer: None,
             can_undo: unsaved,
             can_redo: false,
             unsaved,
             has_draft: !unsaved,
         }
+    }
+
+    #[test]
+    fn shape_drag_maps_reverse_and_outside_points_without_committing_until_release() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let mut value = presented(false);
+        value.pixels = Arc::new(RgbaImage::new(1280, 640));
+        view.receive(&ctx, Ok(value));
+        let pixels = view.presented.as_ref().unwrap().pixels.clone();
+        let document = view.presented.as_ref().unwrap().document.clone();
+        view.canvas = [999., 777.]; // Never use unapplied canvas fields for mapping.
+        let (tx, rx) = mpsc::channel();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000., 800.));
+        let preview = egui::Rect::from_min_size(egui::pos2(100., 100.), egui::vec2(640., 320.));
+        let frame = |view: &mut View, events| {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            });
+            let mut ui = egui::Ui::new(
+                ctx.clone(),
+                egui::Id::unique("shape-test"),
+                egui::UiBuilder::new().max_rect(screen),
+            );
+            show_shape(&mut ui, view, &tx, screen, preview);
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+        };
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        frame(&mut view, vec![]);
+        for kind in [ClosedShapeKind::Rectangle, ClosedShapeKind::Ellipse] {
+            view.draw_shape = kind;
+            let start = egui::pos2(500., 300.);
+            let end = egui::pos2(60., 150.); // Outside preview, not clamped like crop.
+            frame(
+                &mut view,
+                vec![egui::Event::PointerMoved(start), button(start, true)],
+            );
+            frame(&mut view, vec![egui::Event::PointerMoved(end)]);
+            assert_eq!(
+                view.shape_drag,
+                Some((Point { x: 800., y: 400. }, Point { x: -80., y: 100. }))
+            );
+            assert!(rx.try_recv().is_err() && !view.unsaved() && !view.pending);
+            assert!(Arc::ptr_eq(
+                &pixels,
+                &view.presented.as_ref().unwrap().pixels
+            ));
+            assert!(Arc::ptr_eq(
+                &document,
+                &view.presented.as_ref().unwrap().document
+            ));
+            frame(&mut view, vec![button(end, false)]);
+            let Job::Apply(Request::CreateClosedShape { create }) = rx.try_recv().unwrap() else {
+                panic!()
+            };
+            assert_eq!(create.shape, kind);
+            assert_eq!(create.start, Point { x: 800., y: 400. });
+            assert_eq!(create.end, Point { x: -80., y: 100. });
+            assert_eq!(create.style, ElementStyle::default());
+            assert_eq!(create.opacity, 100.);
+            assert!(rx.try_recv().is_err() && view.shape_drag.is_none() && view.pending);
+            assert_eq!(view.draw_shape, kind); // Creation does not switch back to another tool.
+            view.pending = false;
+        }
+        let start = egui::pos2(300., 200.);
+        let end = egui::pos2(300., 350.);
+        frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(start), button(start, true)],
+        );
+        frame(&mut view, vec![egui::Event::PointerMoved(end)]);
+        frame(&mut view, vec![button(end, false)]);
+        assert!(rx.try_recv().is_err() && !view.pending); // Zero width must not create pixels.
+        frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(start), button(start, true)],
+        );
+        frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(egui::pos2(400., 350.))],
+        );
+        view.request_close();
+        assert!(view.shape_drag.is_none());
+        frame(&mut view, vec![button(end, false)]);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn shape_worker_selects_new_id_invalidates_output_and_preserves_draft_pixels() {
+        let (data, id) = fixture();
+        let ctx = egui::Context::default();
+        let editor = Editor::open(
+            &ctx,
+            data.path().join("history"),
+            id.clone(),
+            data.path().join("exports"),
+            CaptureMode::Region,
+            |_| unreachable!("copy was not requested"),
+        );
+        receive(&editor, &ctx);
+        editor.view.lock().unwrap().preview(&editor.tx);
+        receive(&editor, &ctx);
+        assert!(editor.view.lock().unwrap().show_output);
+        editor.view.lock().unwrap().submit(
+            &editor.tx,
+            Request::CreateClosedShape {
+                create: ClosedShapeCreate {
+                    shape: ClosedShapeKind::Rectangle,
+                    start: Point { x: 6., y: 3. },
+                    end: Point { x: 2., y: 1. },
+                    style: ElementStyle {
+                        drop_shadow: Some(true),
+                        ..ElementStyle::default()
+                    },
+                    opacity: 100.,
+                },
+            },
+        );
+        receive(&editor, &ctx);
+        let (layer, pixels) = {
+            let view = editor.view.lock().unwrap();
+            assert!(view.error.is_none() && view.unsaved());
+            assert!(!view.show_output && view.output.is_none());
+            let frame = view.presented.as_ref().unwrap();
+            assert_eq!(frame.document.elements.len(), 2);
+            let layer = frame.document.elements.last().unwrap().base().id.clone();
+            assert_eq!(view.selected_layer.as_deref(), Some(layer.as_str()));
+            assert_eq!(frame.pixels.get_pixel(3, 2).0, [255, 59, 92, 255]);
+            (layer, frame.pixels.clone())
+        };
+        assert!(!data.path().join("editor-drafts").exists());
+        editor
+            .view
+            .lock()
+            .unwrap()
+            .submit(&editor.tx, Request::Undo);
+        receive(&editor, &ctx);
+        assert_eq!(
+            editor.view.lock().unwrap().selected_layer.as_deref(),
+            Some("capture-background")
+        );
+        editor
+            .view
+            .lock()
+            .unwrap()
+            .submit(&editor.tx, Request::Redo);
+        receive(&editor, &ctx);
+        editor.flush(&ctx).unwrap();
+        drop(editor);
+        let reopened = EditorSession::open(OpenRequest {
+            history_root: data.path().join("history"),
+            drafts_root: data.path().join("editor-drafts"),
+            artifact_id: id,
+        })
+        .unwrap();
+        assert_eq!(
+            reopened
+                .snapshot()
+                .document
+                .elements
+                .last()
+                .unwrap()
+                .base()
+                .id,
+            layer
+        );
+        assert_eq!(reopened.pixels(), pixels);
+        assert!(!data.path().join("exports").exists());
     }
 
     #[test]

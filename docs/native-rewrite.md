@@ -453,9 +453,8 @@ partial clipping, and expands/translates the document only when the annotation i
 fully outside, including painted bounds from enabled default or custom shadows.
 Degenerate closed-shape geometry is rejected transactionally instead of becoming a
 synthetic filled pixel. TypeScript-derived reverse/fractional vectors and rendered
-session tests cover rollback, undo/redo and draft reopen. This is a drawing-tool
-prerequisite shared by macOS, Windows, X11 and Wayland; no host creation gesture or
-physical-platform acceptance is included.
+session tests cover rollback, undo/redo and draft reopen. This prerequisite is
+shared by macOS, Windows, X11 and Wayland; host status is tracked separately below.
 
 The first wgpu editor window now opens isolated History screenshots on its own
 serialized worker, with fit preview, numeric crop/canvas fields, undo/redo,
@@ -492,7 +491,17 @@ are in progress. Image layers expose a **Transform image** menu for lossless
 left/right rotation and horizontal/vertical flips through the shared worker commands.
 Hidden and locked images can transform, matching shipping policy; full-canvas
 photos rotate their canvas, and undo/draft restore retain the orientation.
-Merge/flatten and drawing tools remain unconnected.
+Merge/flatten remains unconnected.
+
+The wgpu Draw panel connects filled rectangle and ellipse gestures. Preview points
+remain host-local until release sends one shared creation command to the worker.
+The new stable layer ID is selected and stale encoded output is cleared. Reverse
+and off-canvas drags, zero-area no-ops, cancellation, undo/redo, persisted pixels
+and draft reopening have automated coverage. Shipping default fill and rounded
+rectangle geometry are used; custom fill/stroke/shadow controls, resize grips and
+other drawing tools are still separate work. Windows/X11/Wayland share this host
+code; private X11 is the exercised UI, not physical input/accessibility acceptance.
+AppKit creation controls remain unconnected.
 
 The wgpu Import image action now picks one PNG/JPEG/WebP/TIFF file independently
 of the session worker. The worker bounds encoded input and decoded dimensions,
@@ -559,7 +568,7 @@ failure/close behavior and rendered light/dark fixtures. Physical AppKit input,
 accessibility and IME acceptance remain unverified.
 
 Across both hosts, physical input/accessibility/IME acceptance remains open.
-AppKit image-transform/import controls, annotation tools, AppKit edited-image export and
+AppKit image-transform/import/drawing controls, other annotation tools, AppKit edited-image export and
 recording editing are not connected; the screenshot-editor parity gate stays open.
 
 New Capture connects its persisted shortcut, tray action and workspace entry to

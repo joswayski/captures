@@ -94,6 +94,13 @@ abandons the selection without editing or saving. Numeric crop fields remain usa
 The Layers panel selects front-to-back layers and connects visibility, locking,
 image rename, opacity, X/Y movement, duplicate, delete and adjacent ordering.
 Shared Rust preserves locked boundaries and makes every accepted edit undoable.
+Draw adds filled rectangles and ellipses with the shipping default annotation color
+and rounded rectangle corners. Drag previews are transient; release creates one
+selected layer and undo step. Escape, focus loss, close or switching panels cancels
+the unfinished drag. Reverse and off-canvas drags use document coordinates; partial
+overhang stays clipped and fully outside shapes expand the canvas. Zero-width or
+zero-height drags add nothing. The chosen tool remains active. Fill/stroke/shadow
+styling, resize grips and other drawing tools remain unconnected.
 Import image opens a single-file PNG/JPEG/WebP/TIFF picker without blocking draft
 saves or close. The worker bounds and decodes the file, honors EXIF orientation,
 then imports below the selected visible image using shared placement/expansion.
@@ -116,7 +123,7 @@ native Wayland data-control backend before its X11 fallback. Compositors without
 This does not enable Wayland capture or close editor/input parity.
 Normal quit drains edits and saves dirty sessions; a save failure cancels quit and
 keeps the editor recoverable. Drafts live in `editor-drafts` beside the selected
-History root, never the installed Tauri data. Annotation tools remain unconnected.
+History root, never the installed Tauri data. Other annotation tools remain unconnected.
 The same Windows/X11/Wayland host code is present;
 only private-X11/software-GL presentation has been exercised.
 
