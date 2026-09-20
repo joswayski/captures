@@ -509,7 +509,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if optionsChanged && hadOutput {
             outputSize.stringValue = "Options changed. Preview output again."
         } else if !optionsChanged {
-            outputSize?.stringValue = "No encoded preview yet."
+            outputSize.stringValue = "No encoded preview yet."
         }
     }
 
