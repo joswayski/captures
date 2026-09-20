@@ -91,8 +91,10 @@ sharing, disabled until the operator explicitly enables and configures the servi
 When enabled, `/account` accepts screenshots, GIFs, videos, and other files and
 preserves their original bytes. Uploads stay private until you create an
 anyone-with-the-link URL, optionally with a password or expiry; share pages request
-no indexing. Stopping sharing denies subsequent requests, including from previously
-unlocked browsers, but already downloaded files cannot be recalled. Website account
+no indexing. Uploads go directly to private R2; a Cloudflare Worker delivers downloads
+after an uncached API authorization check, without sending file bytes through the API.
+Stopping sharing denies subsequent requests, including from previously
+unlocked browsers, but downloads already authorized or completed cannot be recalled. Website account
 and sharing flows are implemented. Desktop sign-in, native uploads, and a native
 Share button are not: native integration follows the rewrite.
 

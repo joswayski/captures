@@ -133,7 +133,7 @@ does not update live Cloudflare rules.
 | Rule | Match | Action |
 | --- | --- | --- |
 | Hashed assets | hostname is `captur.es` and URI Path starts with `/assets/` | Eligible for cache, Edge TTL 1 year, respect origin `Cache-Control` |
-| Dynamic | hostname is `captur.es` and (URI Path equals `/`, `/account`, `/api`, or `/s`, or starts with `/account/`, `/api/`, or `/s/`) | Bypass cache |
+| Dynamic | hostname is `captur.es` and (URI Path equals `/`, `/account`, `/api`, `/s`, or `/media`, or starts with `/account/`, `/api/`, `/s/`, or `/media/`) | Bypass cache |
 
 The homepage already sends `Cache-Control: private` and `Vary` on the OS hint
 headers, so a missed Bypass rule still should not share one download button
@@ -162,11 +162,13 @@ See [`../api`](../api/README.md) for auth and storage configuration.
 
 `/account` and `/s/*` send `no-store` and `Referrer-Policy: no-referrer`; every
 share state also sends `noindex`. Noindex is a crawler instruction, not access
-control. Media authorization is
-enforced again by Rust, so stale page HTML cannot bypass revocation. Configure
-the same-origin API routing and dynamic cache bypass before activation. The
-development Vite proxy routes `/api` to the local API; production ingress must
-do this separately.
+control. The Cloudflare media Worker serves `/media/*` from private R2 after
+Rust authorizes each request, so stale page HTML cannot bypass revocation. Configure
+the same-origin Worker route, API routing, and dynamic cache bypass before activation.
+The development Vite proxy routes `/api` to the local API and `/media` to the local
+Worker at port 8787 (`CAPTURES_MEDIA_ORIGIN` overrides this development-only target).
+Production routing must be configured separately; Node never proxies file bytes.
+See the [Worker activation checklist](../media-worker/README.md).
 
 Direct uploads require the R2 bucket CORS policy to allow `PUT` from the exact
 website origin and to expose the `ETag` response header. The browser sends only

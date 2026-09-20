@@ -1,10 +1,5 @@
 //! End-to-end account and sharing contracts against real PostgreSQL.
-use crate::{
-    auth::AuthState,
-    email::Mailer,
-    sharing::SharingState,
-    storage::{ObjectStore, StoredObject},
-};
+use crate::{auth::AuthState, email::Mailer, sharing::SharingState, storage::ObjectStore};
 use async_trait::async_trait;
 use axum::{
     Router,
@@ -51,7 +46,6 @@ struct Objects {
     fail_abort: AtomicBool,
     fail_delete: AtomicBool,
     fail_head_once: AtomicBool,
-    during_get: Mutex<Option<(PgPool, String)>>,
 }
 impl Objects {
     fn stage(&self, asset: &str, bytes: &[u8]) {
@@ -132,34 +126,6 @@ impl ObjectStore for Objects {
             .map(|x| x.len() as i64)
             .ok_or(())
     }
-    async fn get(&self, key: &str, range: Option<&str>) -> Result<StoredObject, ()> {
-        let hook = { self.during_get.lock().unwrap().take() };
-        if let Some((pool, id)) = hook {
-            sqlx::query("UPDATE shares SET active=false WHERE id=$1")
-                .bind(id)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-        let all = self.complete.lock().unwrap().get(key).cloned().ok_or(())?;
-        let (bytes, content_range) = if let Some(range) = range {
-            let bounds = range.strip_prefix("bytes=").ok_or(())?;
-            let (start, end) = bounds.split_once('-').ok_or(())?;
-            let start: usize = start.parse().map_err(|_| ())?;
-            let end: usize = end.parse().map_err(|_| ())?;
-            (
-                all[start..=end].to_vec(),
-                Some(format!("bytes {start}-{end}/{}", all.len())),
-            )
-        } else {
-            (all, None)
-        };
-        Ok(StoredObject {
-            byte_size: bytes.len() as i64,
-            content_range,
-            body: Body::from(bytes),
-        })
-    }
     async fn delete(&self, key: &str) -> Result<(), ()> {
         if self.fail_delete.load(Ordering::SeqCst) {
             return Err(());
@@ -203,18 +169,21 @@ async fn finish(admin: PgPool, pool: PgPool, name: &str) {
         .unwrap();
     admin.close().await;
 }
+const MEDIA_WORKER_SECRET: &str = "stable-account-test-media-worker-secret";
 fn app(pool: &PgPool, mail: Arc<Mail>, store: Arc<Objects>) -> (Router, SharingState) {
     let auth = AuthState::for_test(pool.clone(), mail, "https://captur.es");
-    let sharing = SharingState::new(auth.clone(), Some(store));
+    let mut sharing = SharingState::new(auth.clone(), Some(store));
+    sharing.media_worker_secret = Some(MEDIA_WORKER_SECRET.into());
     (crate::app_router(None, auth, sharing.clone()), sharing)
 }
-async fn call(
+async fn call_with_media_key(
     app: &Router,
     method: &str,
     path: &str,
     token: Option<&str>,
     cookie: Option<&str>,
     body: Option<Value>,
+    media_key: Option<&str>,
 ) -> Response {
     let mut r = Request::builder()
         .method(method)
@@ -226,6 +195,9 @@ async fn call(
     if let Some(x) = cookie {
         r = r.header("cookie", x);
     }
+    if let Some(x) = media_key {
+        r = r.header("x-captures-media-key", x);
+    }
     let body = if let Some(x) = body {
         r = r.header("content-type", "application/json");
         Body::from(x.to_string())
@@ -236,6 +208,19 @@ async fn call(
     r.extensions_mut()
         .insert(ConnectInfo("127.0.0.1:4567".parse::<SocketAddr>().unwrap()));
     app.clone().oneshot(r).await.unwrap()
+}
+async fn call(
+    app: &Router,
+    method: &str,
+    path: &str,
+    token: Option<&str>,
+    cookie: Option<&str>,
+    body: Option<Value>,
+) -> Response {
+    let media_key = path
+        .starts_with("/api/media/")
+        .then_some(MEDIA_WORKER_SECRET);
+    call_with_media_key(app, method, path, token, cookie, body, media_key).await
 }
 async fn body(response: Response) -> Value {
     serde_json::from_slice(
@@ -421,7 +406,7 @@ async fn postgres_otp_concurrency_expiry_and_sessions() {
 
 #[tokio::test]
 #[ignore = "requires disposable local TEST_DATABASE_URL"]
-async fn postgres_asset_multipart_lifecycle_isolation_ranges_and_cleanup() {
+async fn postgres_asset_multipart_lifecycle_media_authorization_and_cleanup() {
     let (admin, pool, name) = database().await;
     let mail = Arc::new(Mail::default());
     let store = Arc::new(Objects::default());
@@ -441,7 +426,7 @@ async fn postgres_asset_multipart_lifecycle_isolation_ranges_and_cleanup() {
     let pending = body(pending).await["id"].as_str().unwrap().to_owned();
     store.stage(&pending, b"GIF89a");
     for path in [
-        format!("/api/assets/{pending}/media"),
+        format!("/api/media/assets/{pending}"),
         format!("/api/assets/{pending}/share"),
     ] {
         let method = if path.ends_with("share") {
@@ -561,10 +546,72 @@ async fn postgres_asset_multipart_lifecycle_isolation_ranges_and_cleanup() {
         call(
             &app,
             "GET",
-            &format!("/api/assets/{gif}/media"),
+            &format!("/api/media/assets/{gif}"),
             Some(&other),
             None,
             None
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    let media = call(
+        &app,
+        "GET",
+        &format!("/api/media/assets/{video}"),
+        Some(&owner),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(media.status(), StatusCode::OK);
+    assert_eq!(
+        body(media).await,
+        json!({
+            "key": format!("assets/{video}"),
+            "contentType": "video/webm",
+            "name": "clip.webm",
+            "byteSize": 11
+        })
+    );
+    for media_key in [None, Some("wrong-worker-secret")] {
+        assert_eq!(
+            call_with_media_key(
+                &app,
+                "GET",
+                &format!("/api/media/assets/{video}"),
+                Some(&owner),
+                None,
+                None,
+                media_key,
+            )
+            .await
+            .status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    assert_eq!(
+        call_with_media_key(
+            &app,
+            "GET",
+            &format!("/api/media/assets/{video}"),
+            None,
+            None,
+            None,
+            Some(MEDIA_WORKER_SECRET),
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &format!("/api/assets/{video}/media"),
+            Some(&owner),
+            None,
+            None,
         )
         .await
         .status(),
@@ -582,21 +629,6 @@ async fn postgres_asset_multipart_lifecycle_isolation_ranges_and_cleanup() {
         .await
         .status(),
         StatusCode::NOT_FOUND
-    );
-    let mut range = Request::get(format!("/api/assets/{video}/media"))
-        .header("authorization", format!("Bearer {owner}"))
-        .header(header::RANGE, "bytes=2-6")
-        .body(Body::empty())
-        .unwrap();
-    range
-        .extensions_mut()
-        .insert(ConnectInfo("127.0.0.1:4567".parse::<SocketAddr>().unwrap()));
-    let range = app.clone().oneshot(range).await.unwrap();
-    assert_eq!(range.status(), StatusCode::PARTIAL_CONTENT);
-    assert_eq!(range.headers()[header::CONTENT_RANGE], "bytes 2-6/11");
-    assert_eq!(
-        &to_bytes(range.into_body(), 100).await.unwrap()[..],
-        b"deo-e"
     );
 
     // Metadata alone may describe large multipart objects without allocating them.
@@ -734,7 +766,7 @@ async fn postgres_share_updates_passwords_expiry_and_revocation() {
     let media = call(
         &app,
         "GET",
-        &format!("/api/shares/{sid}/media"),
+        &format!("/api/media/shares/{sid}"),
         None,
         Some(cookie),
         None,
@@ -742,18 +774,56 @@ async fn postgres_share_updates_passwords_expiry_and_revocation() {
     .await;
     assert_eq!(media.status(), StatusCode::OK);
     assert_eq!(
-        media.headers()[header::CONTENT_TYPE],
-        "application/octet-stream"
+        body(media).await,
+        json!({
+            "key": format!("assets/{asset}"),
+            "contentType": "image/svg+xml",
+            "name": "unsafe.svg",
+            "byteSize": 29
+        })
     );
-    assert!(
-        media.headers()[header::CONTENT_DISPOSITION]
-            .to_str()
-            .unwrap()
-            .starts_with("attachment;")
+    for media_key in [None, Some("wrong-worker-secret")] {
+        assert_eq!(
+            call_with_media_key(
+                &app,
+                "GET",
+                &format!("/api/media/shares/{sid}"),
+                None,
+                Some(cookie),
+                None,
+                media_key,
+            )
+            .await
+            .status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    assert_eq!(
+        call_with_media_key(
+            &app,
+            "GET",
+            &format!("/api/media/shares/{sid}"),
+            None,
+            None,
+            None,
+            Some(MEDIA_WORKER_SECRET),
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
     );
     assert_eq!(
-        media.headers()["content-security-policy"],
-        "default-src 'none'; sandbox"
+        call(
+            &app,
+            "GET",
+            &format!("/api/shares/{sid}/media"),
+            None,
+            Some(cookie),
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
     );
 
     assert_eq!(
@@ -771,7 +841,7 @@ async fn postgres_share_updates_passwords_expiry_and_revocation() {
         call(
             &app,
             "GET",
-            &format!("/api/shares/{sid}/media"),
+            &format!("/api/media/shares/{sid}"),
             None,
             Some(cookie),
             None
@@ -824,7 +894,7 @@ async fn postgres_share_updates_passwords_expiry_and_revocation() {
         call(
             &app,
             "GET",
-            &format!("/api/shares/{sid}/media"),
+            &format!("/api/media/shares/{sid}"),
             None,
             None,
             None
@@ -834,12 +904,16 @@ async fn postgres_share_updates_passwords_expiry_and_revocation() {
         StatusCode::OK
     );
 
-    *store.during_get.lock().unwrap() = Some((pool.clone(), sid.clone()));
+    sqlx::query("UPDATE shares SET active=false WHERE id=$1")
+        .bind(&sid)
+        .execute(&pool)
+        .await
+        .unwrap();
     assert_eq!(
         call(
             &app,
             "GET",
-            &format!("/api/shares/{sid}/media"),
+            &format!("/api/media/shares/{sid}"),
             None,
             Some(&cookie2),
             None
@@ -893,7 +967,7 @@ async fn postgres_share_updates_passwords_expiry_and_revocation() {
         call(
             &app,
             "GET",
-            &format!("/api/shares/{sid2}/media"),
+            &format!("/api/media/shares/{sid2}"),
             None,
             None,
             None

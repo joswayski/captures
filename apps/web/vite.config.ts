@@ -145,6 +145,9 @@ export default defineConfig(async ({ command }) => {
                 "/api/**": {
                   proxy: `${process.env.CAPTURES_API_ORIGIN || "http://127.0.0.1:3001"}/api/**`,
                 },
+                "/media/**": {
+                  proxy: `${process.env.CAPTURES_MEDIA_ORIGIN || "http://127.0.0.1:8787"}/media/**`,
+                },
               }
             : {}),
           "/assets/**": {
@@ -175,6 +178,9 @@ export default defineConfig(async ({ command }) => {
       proxy: {
         "/api": {
           target: process.env.CAPTURES_API_ORIGIN || "http://127.0.0.1:3001",
+        },
+        "/media": {
+          target: process.env.CAPTURES_MEDIA_ORIGIN || "http://127.0.0.1:8787",
         },
       },
       fs: {

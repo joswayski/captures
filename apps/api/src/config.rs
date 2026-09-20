@@ -18,6 +18,7 @@ pub struct Config {
     pub discord_webhook_url: Option<String>,
     pub auth: AuthConfig,
     pub storage: Option<StorageConfig>,
+    pub media_worker_secret: Option<String>,
 }
 
 #[derive(Clone)]
@@ -100,12 +101,22 @@ impl Config {
         } else {
             None
         };
+        let media_worker_secret = if storage.is_some() {
+            let secret = required("MEDIA_WORKER_SECRET")?;
+            if secret.len() < 32 {
+                return Err("MEDIA_WORKER_SECRET must contain at least 32 bytes".into());
+            }
+            Some(secret)
+        } else {
+            None
+        };
         Ok(Self {
             database_url: database_url("DATABASE_URL", false)?,
             bind,
             discord_webhook_url: discord_webhook_url()?,
             auth,
             storage,
+            media_worker_secret,
         })
     }
 }

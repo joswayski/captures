@@ -1,6 +1,6 @@
 use crate::{
     auth::{AuthError, AuthState},
-    storage::{ObjectStore, StoredObject, multipart_shape},
+    storage::{ObjectStore, multipart_shape},
 };
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 use axum::{
@@ -13,6 +13,7 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -24,6 +25,7 @@ use tokio::sync::Semaphore;
 pub struct SharingState {
     pub auth: AuthState,
     pub store: Option<Arc<dyn ObjectStore>>,
+    pub media_worker_secret: Option<String>,
     work: Arc<Semaphore>,
     pub(crate) new_id: fn() -> String,
 }
@@ -32,6 +34,7 @@ impl SharingState {
         Self {
             auth,
             store,
+            media_worker_secret: None,
             work: Arc::new(Semaphore::new(2)),
             new_id: || nanoid::nanoid!(12),
         }
@@ -74,10 +77,10 @@ pub fn router(s: SharingState) -> Router {
         .route("/api/assets/{id}", delete(remove))
         .route("/api/assets/{id}/parts", post(part))
         .route("/api/assets/{id}/complete", post(complete))
-        .route("/api/assets/{id}/media", get(owner_media))
+        .route("/api/media/assets/{id}", get(owner_media))
         .route("/api/assets/{id}/share", put(update_share))
         .route("/api/shares/{id}", get(metadata))
-        .route("/api/shares/{id}/media", get(shared_media))
+        .route("/api/media/shares/{id}", get(shared_media))
         .route("/api/shares/{id}/unlock", post(unlock))
         .with_state(s)
         .layer(middleware::map_response(headers))
@@ -327,109 +330,29 @@ async fn remove(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn safe_type(t: &str) -> (&str, bool) {
-    match t {
-        "image/gif" | "image/jpeg" | "image/png" | "image/webp" | "video/mp4" | "video/webm"
-        | "video/ogg" => (t, true),
-        _ => ("application/octet-stream", false),
-    }
-}
-fn media(mut o: StoredObject, t: &str, name: &str) -> Result<Response, ShareError> {
-    let (ct, inline) = safe_type(t);
-    let mut r = Response::new(o.body);
-    *r.status_mut() = if o.content_range.is_some() {
-        StatusCode::PARTIAL_CONTENT
-    } else {
-        StatusCode::OK
-    };
-    let h = r.headers_mut();
-    h.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_str(ct).map_err(|_| unavailable())?,
-    );
-    h.insert(
-        header::CONTENT_LENGTH,
-        HeaderValue::from_str(&o.byte_size.to_string()).unwrap(),
-    );
-    h.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
-    if let Some(v) = o.content_range.take() {
-        h.insert(
-            header::CONTENT_RANGE,
-            HeaderValue::from_str(&v).map_err(|_| unavailable())?,
-        );
-    }
-    h.insert(
-        header::CONTENT_DISPOSITION,
-        HeaderValue::from_str(&format!(
-            "{}; filename*=UTF-8''{}",
-            if inline { "inline" } else { "attachment" },
-            name.bytes()
-                .map(|b| format!("%{b:02X}"))
-                .collect::<String>()
-        ))
-        .map_err(|_| unavailable())?,
-    );
-    h.insert(
-        "content-security-policy",
-        HeaderValue::from_static("default-src 'none'; sandbox"),
-    );
-    Ok(r)
-}
-fn range(h: &HeaderMap, size: i64) -> Result<Option<String>, ShareError> {
-    let vals = h.get_all(header::RANGE);
-    let mut it = vals.iter();
-    let first = it.next();
-    if it.next().is_some() {
-        return Err(ShareError(
-            StatusCode::RANGE_NOT_SATISFIABLE,
-            "Only one range is supported",
-        ));
-    }
-    let Some(first) = first else {
-        return Ok(None);
-    };
-    let invalid = || ShareError(StatusCode::RANGE_NOT_SATISFIABLE, "Invalid range");
-    let text = first
-        .to_str()
-        .map_err(|_| invalid())?
-        .strip_prefix("bytes=")
-        .ok_or_else(invalid)?;
-    let (start, end) = text.split_once('-').ok_or_else(invalid)?;
-    let number = |s: &str| -> Result<i64, ShareError> {
-        if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
-            return Err(invalid());
-        }
-        s.parse().map_err(|_| invalid())
-    };
-    if size <= 0 {
-        return Err(invalid());
-    }
-    let (start, end) = if start.is_empty() {
-        let suffix = number(end)?;
-        if suffix == 0 {
-            return Err(invalid());
-        }
-        (size.saturating_sub(suffix).max(0), size - 1)
-    } else {
-        (
-            number(start)?,
-            if end.is_empty() {
-                size - 1
-            } else {
-                number(end)?.min(size - 1)
-            },
-        )
-    };
-    if start >= size || end < start {
-        return Err(invalid());
-    }
-    Ok(Some(format!("bytes={start}-{end}")))
+fn require_worker(s: &SharingState, h: &HeaderMap) -> Result<(), ShareError> {
+    s.store()?;
+    let secret = s.media_worker_secret.as_deref().ok_or_else(unavailable)?;
+    let supplied = h
+        .get("x-captures-media-key")
+        .map(|v| v.as_bytes())
+        .unwrap_or_default();
+    // HMAC verification compares fixed-length tags in constant time.
+    let mut expected =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|_| unavailable())?;
+    expected.update(b"captures-media-worker");
+    let mut received = Hmac::<Sha256>::new_from_slice(supplied).map_err(|_| unavailable())?;
+    received.update(b"captures-media-worker");
+    expected
+        .verify_slice(&received.finalize().into_bytes())
+        .map_err(|_| ShareError(StatusCode::UNAUTHORIZED, "Worker authentication required"))
 }
 async fn owner_media(
     State(s): State<SharingState>,
     Path(id): Path<String>,
     h: HeaderMap,
-) -> Result<Response, ShareError> {
+) -> Result<Json<Value>, ShareError> {
+    require_worker(&s, &h)?;
     let u = s.auth.authenticate(&h).await?;
     let row: Option<(String, String, i64)> = sqlx::query_as(
         "SELECT content_type,name,byte_size FROM assets WHERE id=$1 AND user_id=$2 AND state='ready'",
@@ -439,24 +362,9 @@ async fn owner_media(
     .fetch_optional(&s.auth.pool)
     .await?;
     let (t, n, size) = row.ok_or_else(missing)?;
-    let requested_range = range(&h, size)?;
-    let o = s
-        .store()?
-        .get(&key(&id), requested_range.as_deref())
-        .await
-        .map_err(|_| unavailable())?;
-    s.auth.authenticate(&h).await?;
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM assets WHERE id=$1 AND user_id=$2 AND state='ready')",
-    )
-    .bind(&id)
-    .bind(u.id)
-    .fetch_one(&s.auth.pool)
-    .await?;
-    if !exists {
-        return Err(missing());
-    }
-    media(o, &t, &n)
+    Ok(Json(
+        json!({"key":key(&id),"contentType":t,"name":n,"byteSize":size}),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -654,29 +562,22 @@ async fn metadata(
     let a = access(&s, &id).await?;
     let can = permitted(&s, &a, &h).await?;
     Ok(Json(
-        json!({"id":a.id,"name":a.name,"contentType":a.content_type,"byteSize":a.byte_size,"passwordRequired":a.password_hash.is_some(),"expiresAt":a.expires_at,"mediaUrl":can.then(||format!("/api/shares/{id}/media"))}),
+        json!({"id":a.id,"name":a.name,"contentType":a.content_type,"byteSize":a.byte_size,"passwordRequired":a.password_hash.is_some(),"expiresAt":a.expires_at,"mediaUrl":can.then(||format!("/media/shares/{id}"))}),
     ))
 }
 async fn shared_media(
     State(s): State<SharingState>,
     Path(id): Path<String>,
     h: HeaderMap,
-) -> Result<Response, ShareError> {
+) -> Result<Json<Value>, ShareError> {
+    require_worker(&s, &h)?;
     let a = access(&s, &id).await?;
     if !permitted(&s, &a, &h).await? {
         return Err(ShareError(StatusCode::UNAUTHORIZED, "Password required"));
     }
-    let requested_range = range(&h, a.byte_size)?;
-    let o = s
-        .store()?
-        .get(&key(&a.asset_id), requested_range.as_deref())
-        .await
-        .map_err(|_| unavailable())?;
-    let now = access(&s, &id).await?;
-    if !permitted(&s, &now, &h).await? {
-        return Err(missing());
-    }
-    media(o, &a.content_type, &a.name)
+    Ok(Json(
+        json!({"key":key(&a.asset_id),"contentType":a.content_type,"name":a.name,"byteSize":a.byte_size}),
+    ))
 }
 #[derive(Deserialize)]
 struct Unlock {
@@ -768,35 +669,6 @@ async fn unlock(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn ranges_normalize_suffixes_and_reject_invalid_bounds() {
-        for (input, expected) in [
-            ("bytes=2-6", "bytes=2-6"),
-            ("bytes=8-", "bytes=8-10"),
-            ("bytes=-3", "bytes=8-10"),
-            ("bytes=0-99", "bytes=0-10"),
-        ] {
-            let mut headers = HeaderMap::new();
-            headers.insert(header::RANGE, input.parse().unwrap());
-            assert_eq!(range(&headers, 11).unwrap().as_deref(), Some(expected));
-        }
-        for input in [
-            "bytes=-0",
-            "bytes=11-",
-            "bytes=7-2",
-            "bytes=1-3,5-7",
-            "bytes=x-2",
-            "bytes=+2-4",
-            "items=0-2",
-        ] {
-            let mut headers = HeaderMap::new();
-            headers.insert(header::RANGE, input.parse().unwrap());
-            assert_eq!(
-                range(&headers, 11).unwrap_err().0,
-                StatusCode::RANGE_NOT_SATISFIABLE
-            );
-        }
-    }
     #[test]
     fn protocol_parts() {
         assert_eq!(multipart_shape(1).unwrap(), (64 * 1024 * 1024, 1));

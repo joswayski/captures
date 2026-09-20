@@ -97,6 +97,7 @@ fn enabled_accounts_fail_startup_on_missing_or_invalid_settings() {
         "R2_BUCKET",
         "R2_ACCESS_KEY_ID",
         "R2_SECRET_ACCESS_KEY",
+        "MEDIA_WORKER_SECRET",
     ] {
         let mut command = api();
         command
@@ -112,6 +113,7 @@ fn enabled_accounts_fail_startup_on_missing_or_invalid_settings() {
             .env("R2_BUCKET", "test-captures")
             .env("R2_ACCESS_KEY_ID", "test-key")
             .env("R2_SECRET_ACCESS_KEY", "test-key")
+            .env("MEDIA_WORKER_SECRET", "test-fixture-not-a-secret-32-bytes")
             .env_remove(missing);
         failure(command.output().unwrap(), &format!("{missing} is required"));
     }

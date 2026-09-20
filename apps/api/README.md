@@ -18,11 +18,11 @@ organizations are not implemented.
 | `POST /api/assets` | `{name,contentType,byteSize}` → 201 `{id,partSize,partCount}` |
 | `POST /api/assets/<id>/parts` | `{partNumber}` → direct R2 `{url,headers}` |
 | `POST /api/assets/<id>/complete` | `{parts:[{partNumber,etag}]}` → completed asset |
-| `GET /api/assets/<id>/media` | Owner-only streamed original bytes; supports one HTTP Range |
+| `GET /api/media/assets/<id>` | Worker-only owner authorization → `{key,name,contentType,byteSize}`; no file bytes |
 | `DELETE /api/assets/<id>` | Abort pending or deny/delete completed asset with durable retry; 204 |
 | `PUT /api/assets/<id>/share` | `{enabled,password?,expiresAt?}` → `{share}`; owner-only |
 | `GET /api/shares/<id>` | Metadata; protected links return `passwordRequired:true,mediaUrl:null` until authorized |
-| `GET /api/shares/<id>/media` | Authorize each request, stream original bytes; never redirect to storage |
+| `GET /api/media/shares/<id>` | Worker-only share authorization → `{key,name,contentType,byteSize}`; no file bytes |
 | `POST /api/shares/<id>/unlock` | `{password}` → 204 and browser-session per-share viewer cookie |
 
 Account and media responses are `no-store`. Browser writes require the exact
@@ -60,6 +60,7 @@ files itself. Never put secrets in the image or desktop bundle.
 | `R2_ACCOUNT_ID` | Cloudflare account ID; derives the HTTPS R2 endpoint, region `auto` |
 | `R2_BUCKET` | `staging-captures` or `production-captures`; private, no r2.dev/custom public domain |
 | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Environment/bucket-scoped Object Read & Write credentials, separate from SES AWS identity |
+| `MEDIA_WORKER_SECRET` | Required when sharing enabled; independent random secret of at least 32 bytes shared only with the environment's media Worker |
 
 Enabled-but-incomplete configuration fails startup. Health is liveness, not an SES
 delivery test: activation still requires a real delivery/upload/view/revoke smoke
@@ -86,10 +87,16 @@ access. This supersedes the earlier no-CORS storage foundation and requires
 separately reviewed infrastructure configuration before activation.
 
 Original GIF, video, raster, and general-asset bytes are retained. Downloads are
-streamed through the API with bounded memory and single-range support; no signed GET
-is exposed. GIF, JPEG, PNG, WebP, MP4, WebM, and Ogg video are safe inline media;
-all other types are attachment `application/octet-stream`. Authorization is checked
-again immediately after opening storage, so revocation applies to the next request.
+streamed by the [Cloudflare media Worker](../media-worker/README.md) from a private
+R2 binding with single-range support. The API never receives download bytes and no
+signed GET is exposed. Each GET/HEAD/range request calls the API with
+`x-captures-media-key: MEDIA_WORKER_SECRET` and the viewer's credentials. The API
+returns only an authorized object key and metadata; missing/invalid Worker keys
+are rejected even with a valid viewer session. GIF, JPEG, PNG, WebP, MP4, WebM, and
+Ogg video are safe inline media; other types are attachment `application/octet-stream`.
+Neither authorization nor responses are cached. Revocation denies requests whose
+authorization begins after the revocation commits; already authorized streams and
+saved bytes cannot be recalled. API unavailability denies new downloads.
 Every share is an anyone-with-link URL, optionally protected by Argon2id password,
 and always requests no indexing. There is at most one active, editable share per
 asset. In the share update body, omitted `password`/`expiresAt` preserves the current
@@ -105,8 +112,8 @@ days, matching the bucket's incomplete-multipart lifecycle policy.
 Completed ready media has no automatic expiry. Expiring/revoking a share does not
 delete the owner's upload. Auth challenges/sessions receive seven-day expired
 retention cleanup on issuance. Share edits/deletion remove viewer grants;
-the sharing worker removes old unlock attempts. Do not cache `/api/*`, `/account`,
-or `/s/*` in a proxy/CDN.
+the sharing cleanup task removes old unlock attempts. Do not cache `/api/*`, `/account`,
+`/s/*`, or `/media/*` in a proxy/CDN.
 
 ## Shared cluster, dedicated database, separate credentials
 
@@ -300,7 +307,9 @@ overwriting the image. Publication does not deploy or configure secrets.
 
 - `captur.es/api/*` and `api.captur.es/api/*` route to `captures-api`, including
   feedback, Preview updater manifests, accounts, and asset sharing.
-- Other `captur.es` requests route to `captures-web`.
+- Before sharing activation, route `captur.es/media/*` to the media Worker; keep
+  `/api/*` on the API origin so authorization subrequests cannot loop into the Worker.
+  Other `captur.es` requests route to `captures-web`.
 - Keep Rust `/health` internal. No native login or token storage is implemented or
   claimed tested on macOS, Windows, or Linux.
 

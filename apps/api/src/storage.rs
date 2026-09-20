@@ -7,7 +7,6 @@ use aws_sdk_s3::{
     presigning::PresigningConfig,
     types::{CompletedMultipartUpload, CompletedPart},
 };
-use axum::body::Body;
 use std::{collections::HashMap, time::Duration};
 
 pub const MIN_PART_SIZE: i64 = 64 * 1024 * 1024;
@@ -30,12 +29,6 @@ pub fn multipart_shape(bytes: i64) -> Result<(i64, i32), ()> {
     Ok((size, count))
 }
 
-pub struct StoredObject {
-    pub body: Body,
-    pub byte_size: i64,
-    pub content_range: Option<String>,
-}
-
 #[async_trait]
 pub trait ObjectStore: Send + Sync {
     async fn create_multipart(&self, key: &str, content_type: &str) -> Result<String, ()>;
@@ -53,7 +46,6 @@ pub trait ObjectStore: Send + Sync {
     ) -> Result<(), ()>;
     async fn abort_multipart(&self, key: &str, upload_id: &str) -> Result<(), ()>;
     async fn head(&self, key: &str) -> Result<i64, ()>;
-    async fn get(&self, key: &str, range: Option<&str>) -> Result<StoredObject, ()>;
     async fn delete(&self, key: &str) -> Result<(), ()>;
 }
 
@@ -182,24 +174,6 @@ impl ObjectStore for R2Store {
             .map_err(|_| ())?
             .content_length()
             .ok_or(())
-    }
-    async fn get(&self, key: &str, range: Option<&str>) -> Result<StoredObject, ()> {
-        let out = self
-            .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .set_range(range.map(str::to_owned))
-            .send()
-            .await
-            .map_err(|_| ())?;
-        Ok(StoredObject {
-            byte_size: out.content_length().ok_or(())?,
-            content_range: out.content_range().map(str::to_owned),
-            body: Body::from_stream(tokio_util::io::ReaderStream::new(
-                out.body.into_async_read(),
-            )),
-        })
     }
     async fn delete(&self, key: &str) -> Result<(), ()> {
         self.client

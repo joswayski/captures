@@ -76,7 +76,8 @@ async fn main() {
         std::sync::Arc::new(storage::R2Store::new(config))
             as std::sync::Arc<dyn storage::ObjectStore>
     });
-    let sharing_state = sharing::SharingState::new(auth_state.clone(), store);
+    let mut sharing_state = sharing::SharingState::new(auth_state.clone(), store);
+    sharing_state.media_worker_secret = config.media_worker_secret;
     let cleanup = sharing_state.clone();
     let cleanup_task = tokio::spawn(async move {
         if cleanup.store.is_none() {

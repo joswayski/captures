@@ -591,7 +591,7 @@ function UploadCard({
 }
 
 function AssetPreview({ asset }: { asset: Asset }) {
-  const url = `/api/assets/${encodeURIComponent(asset.id)}/media`;
+  const url = `/media/assets/${encodeURIComponent(asset.id)}`;
   const kind = assetMediaKind(asset.contentType);
   if (kind === "image")
     return <img src={url} alt={asset.name} loading="lazy" />;

@@ -164,7 +164,7 @@ function SharedMedia({
   contentType: string;
   onError: () => void;
 }) {
-  const url = `/api/shares/${encodeURIComponent(id)}/media`;
+  const url = `/media/shares/${encodeURIComponent(id)}`;
   const kind = shareMediaKind(contentType);
   if (kind === "image") return <img src={url} alt={name} onError={onError} />;
   if (kind === "video")

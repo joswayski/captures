@@ -1,0 +1,22 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "captures-media-local-only",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-20",
+  "workers_dev": false,
+  "preview_urls": false,
+  "env": {
+    "staging": {
+      "name": "captures-media-staging",
+      "workers_dev": false,
+      "preview_urls": false,
+      "r2_buckets": [{ "binding": "ASSETS", "bucket_name": "staging-captures" }]
+    },
+    "production": {
+      "name": "captures-media-production",
+      "workers_dev": false,
+      "preview_urls": false,
+      "r2_buckets": [{ "binding": "ASSETS", "bucket_name": "production-captures" }]
+    }
+  }
+}
