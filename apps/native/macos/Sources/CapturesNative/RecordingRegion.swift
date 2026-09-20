@@ -48,6 +48,7 @@ final class RecordingRegionPanel: NSPanel {
         title = "Captures Recording Region"
         isReleasedWhenClosed = false; isOpaque = false; backgroundColor = .clear
         hasShadow = false; ignoresMouseEvents = true
+        hidesOnDeactivate = false
         level = .floating; collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         sharingType = .none
         contentView = RecordingRegionView(frame: NSRect(origin: .zero, size: screen.frame.size),

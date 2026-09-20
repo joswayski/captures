@@ -54,18 +54,19 @@ final class RecordingRegionTests: XCTestCase {
         defer { panel.close() }
         XCTAssertEqual(panel.frame, screen.frame)
         XCTAssertTrue(panel.ignoresMouseEvents)
+        XCTAssertFalse(panel.hidesOnDeactivate)
         XCTAssertFalse(panel.canBecomeKey); XCTAssertFalse(panel.canBecomeMain)
         XCTAssertEqual(panel.sharingType, .none)
         XCTAssertFalse(try XCTUnwrap(panel.contentView).isAccessibilityElement())
     }
 
-    func testRegionComesFromCanonicalRecordingTargetNotDisplayOrigin() throws {
+    func testOnlyCanonicalRegionTargetsProduceGuideRect() throws {
         let rect = ["x": 101, "y": 53, "width": 317, "height": 179]
         for type in ["region", "display", "window"] {
             let snapshot = try XCTUnwrap(NativeRecordingSnapshot([
                 "id": "take", "state": "paused", "elapsed_ms": 37000,
                 "options": ["audio": ["microphone_muted": false],
-                    "target": ["type": type, "display_id": "negative-origin-2x", "rect": rect]],
+                    "target": ["type": type, "display_id": "display", "rect": rect]],
             ]))
             XCTAssertEqual(snapshot.region, type == "region"
                 ? NSRect(x: 101, y: 53, width: 317, height: 179) : nil)
