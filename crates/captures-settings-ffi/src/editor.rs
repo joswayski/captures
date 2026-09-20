@@ -3,7 +3,8 @@
 use super::region::{RegionPixels, response, text};
 use captures_app::{
     editor::{
-        ElementBase, ElementStyle, Point, ShapeElement, arrow_fill_polygon, smooth_path_centerline,
+        Document, ElementBase, ElementStyle, Point, ShapeElement, arrow_fill_polygon,
+        smooth_path_centerline,
     },
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
     editor_session::{EditorSession, ExportOptions, ImportImage, OpenRequest, Request},
@@ -21,6 +22,34 @@ use std::{
 };
 
 pub struct DrawGeometry(Vec<AbiPoint>);
+
+/// Pick from an immutable published document, without borrowing a worker-owned
+/// editor session. Call once on pointer press, not per frame/movement. Geometry
+/// only: no asset decode, render, filesystem access, or document mutation.
+///
+/// # Safety
+/// Input is readable NUL-terminated UTF-8 for the call. The owned JSON response
+/// must be freed with captures_settings_free_v1. Null/malformed input is an error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_hit_test_document_v1(
+    document_json: *const c_char,
+    x: f64,
+    y: f64,
+    tolerance: f64,
+) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains readable input during this call.
+        let document: Document = serde_json::from_str(unsafe { text(document_json) }?)
+            .map_err(|error| error.to_string())?;
+        let hit = document.hit_test(Point { x, y }, tolerance)?;
+        Ok::<_, String>(json!({"hit": hit.map(|element| element.base().id.as_str())}))
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    response(match result {
+        Ok(result) => json!({"ok":true,"result":result}),
+        Err(error) => json!({"ok":false,"error":error}),
+    })
+}
 
 #[repr(C)]
 pub struct DrawPoints {
@@ -478,6 +507,88 @@ mod tests {
         ffi::{CStr, CString},
         mem::MaybeUninit,
     };
+
+    #[test]
+    fn published_document_picking_is_independent_and_reports_errors() {
+        let (_data, request, _) = editor_fixture();
+        // SAFETY: all inputs are retained C strings; responses/session freed once.
+        unsafe {
+            let session = open_editor(&request);
+            let before = take_json(captures_editor_request_v1(
+                session,
+                c"{\"operation\":\"snapshot\"}".as_ptr(),
+            ));
+            assert_eq!(
+                before["result"]["selection_outlines"]["capture-background"],
+                json!([
+                    {"x":0.,"y":0.},{"x":7.,"y":0.},{"x":7.,"y":3.},{"x":0.,"y":3.}
+                ])
+            );
+            let mut document = before["result"]["document"].clone();
+            let locked = CString::new(document.to_string()).unwrap();
+            assert_eq!(
+                take_json(captures_editor_hit_test_document_v1(
+                    locked.as_ptr(),
+                    2.,
+                    1.,
+                    0.
+                ))["result"]["hit"],
+                json!(null)
+            );
+            document["elements"][0]["locked"] = json!(false);
+            let input = CString::new(document.to_string()).unwrap();
+            assert_eq!(
+                take_json(captures_editor_request_v1(
+                    session,
+                    c"{\"operation\":\"snapshot\"}".as_ptr()
+                )),
+                before
+            );
+            captures_editor_free_v1(session);
+            assert_eq!(
+                take_json(captures_editor_hit_test_document_v1(
+                    input.as_ptr(),
+                    2.,
+                    1.,
+                    0.
+                )),
+                json!({"ok":true,"result":{"hit":"capture-background"}})
+            );
+            assert_eq!(
+                take_json(captures_editor_hit_test_document_v1(
+                    input.as_ptr(),
+                    -1.,
+                    1.,
+                    0.
+                )),
+                json!({"ok":true,"result":{"hit":null}})
+            );
+            for (input, x, tolerance) in [
+                (ptr::null(), 1., 0.),
+                (c"{}".as_ptr(), 1., 0.),
+                (input.as_ptr(), f64::NAN, 0.),
+                (input.as_ptr(), 1., -1.),
+            ] {
+                assert_eq!(
+                    take_json(captures_editor_hit_test_document_v1(
+                        input, x, 1., tolerance
+                    ))["ok"],
+                    false
+                );
+            }
+            document["elements"][0] = json!({"kind":"shape","id":"unsupported","x":0.,"y":0.,"endX":1.,"endY":1.,"controls":[],"shape":"future-shape","locked":false,"visible":true,"opacity":100.,"blendMode":"source-over","style":{"color":"#ffffff","fill":null,"strokeWidth":1.}});
+            let unsupported = CString::new(document.to_string()).unwrap();
+            assert_eq!(
+                take_json(captures_editor_hit_test_document_v1(
+                    unsupported.as_ptr(),
+                    0.,
+                    0.,
+                    0.
+                ))["ok"],
+                false
+            );
+        }
+    }
 
     #[test]
     fn drawing_geometry_is_owned_and_uses_shared_quadratics_and_arrow_outline() {

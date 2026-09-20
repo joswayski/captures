@@ -182,6 +182,16 @@ typedef struct CapturesEditorSession CapturesEditorSession;
 typedef struct CapturesEditorFrame CapturesEditorFrame;
 CapturesEditorSession *captures_editor_open_v1(const char *request_json, char **output);
 char *captures_editor_request_v1(CapturesEditorSession *session, const char *request_json);
+/* Stateless picking from a published document JSON copy, not a session handle.
+ * Call once on pointer press, never per movement/frame. No render/decode/I/O.
+ * Coordinates and nonnegative tolerance are finite document pixels.
+ * Returns owned {ok:true,result:{hit:string|null}} or {ok:false,error:string};
+ * free with captures_settings_free_v1. Null/malformed input is an error.
+ * Visible/unlocked unsupported geometry is an error, not silent fall-through.
+ * Snapshots also provide selection_outlines: {layerId:[{x,y},...]} with four
+ * document-space corners; unsupported layers omit their outline. */
+char *captures_editor_hit_test_document_v1(const char *document_json,
+    double x, double y, double tolerance);
 /* Stateless shared preview geometry; no session access or per-event JSON.
  * kind 0: arrow outline, exactly two signed document-space endpoints.
  * kind 1: smoothed Pen centerline, one or more accepted samples; one is a dot,

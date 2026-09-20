@@ -31,6 +31,7 @@ struct HitTestCase {
     name: String,
     input: Document,
     bounds: Option<Rect>,
+    outline: Option<[Point; 4]>,
     queries: Vec<HitTestQuery>,
 }
 
@@ -222,6 +223,20 @@ fn assert_json_equivalent(actual: Value, expected: Value) {
 #[test]
 fn canvas_selection_bounds_and_hits_match_typescript() {
     for case in fixture().hit_tests {
+        if let Some(expected) = case.outline {
+            for (actual, expected) in case.input.elements[0]
+                .selection_outline()
+                .unwrap()
+                .into_iter()
+                .zip(expected)
+            {
+                assert!(
+                    (actual.x - expected.x).abs() < 1e-9 && (actual.y - expected.y).abs() < 1e-9,
+                    "{}: {actual:?} != {expected:?}",
+                    case.name
+                );
+            }
+        }
         if let Some(expected) = case.bounds {
             let actual = case.input.elements[0].selection_bounds().unwrap();
             for (actual, expected) in [

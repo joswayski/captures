@@ -612,6 +612,47 @@ impl Element {
         }
     }
 
+    /// Document-space corners for native selection/move feedback. Hosts only
+    /// translate/project these points; picking and rotation remain shared.
+    pub fn selection_outline(&self) -> Result<[Point; 4], String> {
+        let bounds = self.selection_bounds()?;
+        let mut points = [
+            Point {
+                x: bounds.x,
+                y: bounds.y,
+            },
+            Point {
+                x: bounds.x + bounds.width,
+                y: bounds.y,
+            },
+            Point {
+                x: bounds.x + bounds.width,
+                y: bounds.y + bounds.height,
+            },
+            Point {
+                x: bounds.x,
+                y: bounds.y + bounds.height,
+            },
+        ];
+        let rotation = self.base().rotation();
+        if rotation != 0. {
+            let center = Point {
+                x: bounds.x + bounds.width / 2.,
+                y: bounds.y + bounds.height / 2.,
+            };
+            let (sin, cos) = rotation.sin_cos();
+            for point in &mut points {
+                let dx = point.x - center.x;
+                let dy = point.y - center.y;
+                *point = Point {
+                    x: center.x + dx * cos - dy * sin,
+                    y: center.y + dx * sin + dy * cos,
+                };
+            }
+        }
+        Ok(points)
+    }
+
     fn base_mut(&mut self) -> &mut ElementBase {
         match self {
             Self::Image(element) => &mut element.base,

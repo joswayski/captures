@@ -90,9 +90,11 @@ struct NativeEditorLayer: Equatable {
     let opacity: Double
     let x: Double
     let y: Double
+    let selectionOutline: [CGPoint]?
     let annotation: NativeAnnotationStyle?
 
-    init?(_ value: [String: Any], annotation: [String: Any]? = nil) {
+    init?(_ value: [String: Any], annotation: [String: Any]? = nil,
+          selectionOutline: [[String: Any]]? = nil) {
         guard let id = value["id"] as? String, !id.isEmpty,
               let rawKind = value["kind"] as? String,
               let kind = Kind(rawValue: rawKind),
@@ -106,6 +108,14 @@ struct NativeEditorLayer: Equatable {
         self.opacity = opacity.doubleValue; self.x = x.doubleValue; self.y = y.doubleValue
         self.annotation = annotation.flatMap(NativeAnnotationStyle.init)
         if annotation != nil && self.annotation == nil { return nil }
+        if let selectionOutline {
+            let points = selectionOutline.compactMap { point -> CGPoint? in
+                guard let x = point["x"] as? NSNumber, let y = point["y"] as? NSNumber else { return nil }
+                return CGPoint(x: x.doubleValue, y: y.doubleValue)
+            }
+            guard points.count == 4 else { return nil }
+            self.selectionOutline = points
+        } else { self.selectionOutline = nil }
         switch kind {
         case .image: name = (value["name"] as? String) ?? "Image"
         case .text: name = "Text"
@@ -125,6 +135,8 @@ struct NativeEditorSnapshot: Equatable {
     let hasDraft: Bool
     /// Shared documents store back-to-front. Native layer panels display front-to-back.
     let layers: [NativeEditorLayer]
+    /// Stable, sorted JSON used by pointer-down hit testing without touching the session.
+    let documentJSON: String
 
     init?(_ value: [String: Any]) {
         guard let artifactID = value["artifact_id"] as? String,
@@ -138,15 +150,36 @@ struct NativeEditorSnapshot: Equatable {
               width.doubleValue > 0, height.doubleValue > 0 else { return nil }
         let elements = document["elements"] as? [[String: Any]] ?? []
         let annotations = value["annotation_controls"] as? [String: [String: Any]] ?? [:]
+        let outlines = value["selection_outlines"] as? [String: [[String: Any]]] ?? [:]
         let layers = elements.compactMap { element in
-            NativeEditorLayer(element, annotation: (element["id"] as? String).flatMap { annotations[$0] })
+            let id = element["id"] as? String
+            return NativeEditorLayer(element, annotation: id.flatMap { annotations[$0] },
+                                     selectionOutline: id.flatMap { outlines[$0] })
         }
         guard layers.count == elements.count else { return nil }
+        guard let documentData = try? JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]) else {
+            return nil
+        }
         self.artifactID = artifactID
         self.width = width.doubleValue; self.height = height.doubleValue
         self.canUndo = canUndo; self.canRedo = canRedo
         self.unsavedChanges = unsavedChanges; self.hasDraft = hasDraft
         self.layers = Array(layers.reversed())
+        self.documentJSON = String(decoding: documentData, as: UTF8.self)
+    }
+}
+
+enum NativeEditorHitTesting {
+    static func hit(documentJSON: String, point: CGPoint, tolerance: Double) throws -> String? {
+        let response = documentJSON.withCString {
+            captures_editor_hit_test_document_v1($0, point.x, point.y, tolerance)
+        }
+        guard let response else { throw AppBridgeError.invalidResponse }
+        defer { captures_settings_free_v1(response) }
+        let result = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+        if result["hit"] is NSNull { return nil }
+        guard let hit = result["hit"] as? String else { throw AppBridgeError.invalidResponse }
+        return hit
     }
 }
 

@@ -107,6 +107,7 @@ pub struct Snapshot<'a> {
     pub artifact_id: &'a str,
     pub document: &'a Document,
     pub annotation_controls: BTreeMap<&'a str, AnnotationControls<'a>>,
+    pub selection_outlines: BTreeMap<&'a str, [Point; 4]>,
     pub can_undo: bool,
     pub can_redo: bool,
     /// Changes since the last successful draft save (or open), not since capture.
@@ -185,6 +186,18 @@ impl EditorSession {
         Snapshot {
             artifact_id: &self.artifact_id,
             document: self.history.current(),
+            selection_outlines: self
+                .history
+                .current()
+                .elements
+                .iter()
+                .filter_map(|element| {
+                    element
+                        .selection_outline()
+                        .ok()
+                        .map(|outline| (element.base().id.as_str(), outline))
+                })
+                .collect(),
             annotation_controls: self
                 .history
                 .current()

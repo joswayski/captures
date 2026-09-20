@@ -372,6 +372,12 @@ function hitTestCases() {
   ];
   const scenario = (name, elements, queries, bounds = null) => ({
     name, input: { ...document, elements }, bounds,
+    outline: bounds ? [
+      { x: bounds.x, y: bounds.y },
+      { x: bounds.x + bounds.width, y: bounds.y },
+      { x: bounds.x + bounds.width, y: bounds.y + bounds.height },
+      { x: bounds.x, y: bounds.y + bounds.height },
+    ].map(point => elementWorldPoint(elements[0], point)) : null,
     queries: queries.map(({ point, tolerance }) => ({
       point, tolerance, expected: hitTestElement(elements, point, tolerance)?.id ?? null,
     })),

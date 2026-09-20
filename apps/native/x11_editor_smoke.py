@@ -607,6 +607,25 @@ def main():
         save_layers(lambda values: (values[-1]["x"], values[-1]["y"]) == (190, 70), "moved duplicate")
         shot(editor, "layers-moved")
         pixel("layers-moved", 591, 277, (229, 179, 68))
+        # Canvas picking is based on the rendered document, not the layer-list selection.
+        # Escape cancels the translated outline without touching the saved draft.
+        canvas_before = draft.read_bytes()
+        run("xdotool", "mousemove", "--window", editor, "591", "277", "mousedown", "1",
+            "sleep", ".2", "mousemove", "--sync", "--window", editor, "631", "307", "sleep", ".2")
+        shot(editor, "layers-canvas-active-outline")
+        run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
+        assert draft.read_bytes() == canvas_before
+        click(editor, 260, 200)  # Empty point before the unlocked copy clears selection.
+        assert draft.read_bytes() == canvas_before
+        drag((591, 277), (631, 307))
+        moved_canvas = save_layers(
+            lambda values: values[-1]["x"] > 220 and values[-1]["y"] > 90,
+            "canvas drag moved duplicate")[-1]
+        assert moved_canvas["id"] == copy_id
+        shot(editor, "layers-canvas-moved-selection")
+        click(editor, 35, 62)
+        save_layers(lambda values: (values[-1]["x"], values[-1]["y"]) == (190, 70),
+                    "undo canvas move")
         field(415, 50)
         click(editor, 154, 415)
         save_layers(lambda values: values[-1]["opacity"] == 50, "half opacity")
@@ -976,7 +995,8 @@ def main():
                        "image-picker-pending-cancel-retry", "image-import-exact-pixels",
                        "image-import-owned-draft-reopen", "image-picker-stale-close-result",
                        "explicit-discard", "save-error", "quit-error-retry", "original-unchanged",
-                       "layer-duplicate-rename-move", "layer-opacity-visibility-pixels",
+                       "layer-duplicate-rename-move", "layer-canvas-click-drag-escape",
+                       "layer-opacity-visibility-pixels",
                        "layer-lock-order-delete", "layer-draft-reopen", "layer-undo-redo",
                        "layer-empty-undo", "image-transform-four-actions-pixels",
                        "image-transform-locked-hidden", "image-transform-canvas-draft-undo",

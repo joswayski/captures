@@ -229,6 +229,90 @@ final class EditorDrawOverlay: NSView {
     }
 }
 
+final class EditorSelectionOverlay: NSView {
+    var canvasSize = NSSize.zero { didSet { cancelGesture(); needsDisplay = true } }
+    var selectionEnabled = false { didSet { if !selectionEnabled { cancelGesture() }; isHidden = !selectionEnabled } }
+    var selectedOutline: [CGPoint]? { didSet { needsDisplay = true } }
+    var strokeColor = NSColor.controlAccentColor { didSet { needsDisplay = true } }
+    var hitTestLayer: ((CGPoint, Double) throws -> String?)?
+    var outlineForLayer: ((String) -> [CGPoint]?)?
+    var onSelect: ((String?) -> Void)?
+    var onMove: ((String, CGFloat, CGFloat) -> Void)?
+    var onError: ((Error) -> Void)?
+    private(set) var startPoint: CGPoint?
+    private(set) var currentPoint: CGPoint?
+    private var hitLayerID: String?
+    private var transientOutline: [CGPoint]?
+
+    override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { true }
+    override func setFrameSize(_ newSize: NSSize) {
+        if newSize != frame.size { cancelGesture() }
+        super.setFrameSize(newSize)
+    }
+    var presentedImageRect: NSRect {
+        guard canvasSize.width > 0, canvasSize.height > 0, bounds.width > 0, bounds.height > 0 else { return .zero }
+        let scale = min(bounds.width / canvasSize.width, bounds.height / canvasSize.height)
+        let size = NSSize(width: canvasSize.width * scale, height: canvasSize.height * scale)
+        return NSRect(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2,
+                      width: size.width, height: size.height)
+    }
+    func canvasPoint(for point: CGPoint) -> CGPoint {
+        let image = presentedImageRect
+        return CGPoint(x: (point.x - image.minX) * canvasSize.width / image.width,
+                       y: (point.y - image.minY) * canvasSize.height / image.height)
+    }
+    func begin(at point: CGPoint) {
+        cancelGesture()
+        guard selectionEnabled, presentedImageRect.contains(point) else { return }
+        do {
+            let scale = presentedImageRect.width / canvasSize.width
+            hitLayerID = try hitTestLayer?(canvasPoint(for: point), 8 / scale)
+            transientOutline = hitLayerID.flatMap { outlineForLayer?($0) }
+            startPoint = point; currentPoint = point; needsDisplay = true
+        } catch { cancelGesture(); onError?(error) }
+    }
+    func drag(to point: CGPoint) { guard startPoint != nil else { return }; currentPoint = point; needsDisplay = true }
+    func end(at point: CGPoint) {
+        guard let start = startPoint else { return }
+        let hit = hitLayerID
+        let distance = hypot(point.x - start.x, point.y - start.y)
+        let scale = presentedImageRect.width / canvasSize.width
+        cancelGesture()
+        if distance >= 3, let hit { onMove?(hit, (point.x - start.x) / scale, (point.y - start.y) / scale) }
+        else { onSelect?(hit) }
+    }
+    func cancelGesture() {
+        startPoint = nil; currentPoint = nil; hitLayerID = nil; transientOutline = nil; needsDisplay = true
+    }
+    override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(self); begin(at: convert(event.locationInWindow, from: nil)) }
+    override func mouseDragged(with event: NSEvent) { drag(to: convert(event.locationInWindow, from: nil)) }
+    override func mouseUp(with event: NSEvent) { end(at: convert(event.locationInWindow, from: nil)) }
+    override func keyDown(with event: NSEvent) { event.keyCode == 53 ? cancelGesture() : super.keyDown(with: event) }
+    override func resignFirstResponder() -> Bool { cancelGesture(); return super.resignFirstResponder() }
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard canvasSize.width > 0, canvasSize.height > 0,
+              let outline = startPoint == nil ? selectedOutline : transientOutline,
+              outline.count == 4 else { return }
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSBezierPath(rect: bounds).addClip()
+        let image = presentedImageRect, scale = image.width / canvasSize.width
+        let delta: CGPoint
+        if let startPoint, let currentPoint, hypot(currentPoint.x-startPoint.x, currentPoint.y-startPoint.y) >= 3 {
+            delta = CGPoint(x: currentPoint.x-startPoint.x, y: currentPoint.y-startPoint.y)
+        } else { delta = .zero }
+        let path = NSBezierPath()
+        for (index, point) in outline.enumerated() {
+            let mapped = CGPoint(x: image.minX + point.x * scale + delta.x,
+                                 y: image.minY + point.y * scale + delta.y)
+            index == 0 ? path.move(to: mapped) : path.line(to: mapped)
+        }
+        path.close(); strokeColor.setStroke(); path.lineWidth = 2; path.stroke()
+    }
+}
+
 final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewDataSource,
                                         NSTableViewDelegate, NSTextFieldDelegate {
     let window: NSWindow
@@ -256,6 +340,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let outputPanel = Surface()
     private let outputContent = Surface()
     let drawOverlay = EditorDrawOverlay()
+    let selectionOverlay = EditorSelectionOverlay()
     private let layerName = NSTextField()
     private let layerOpacity = NSTextField()
     private let layerX = NSTextField()
@@ -478,6 +563,21 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             self?.createDrawing(shape: shape, start: start, end: end, points: points)
         }
         previewPanel.addSubview(drawOverlay)
+        selectionOverlay.frame = preview.frame
+        selectionOverlay.autoresizingMask = [.width, .height]
+        selectionOverlay.setAccessibilityLabel("Screenshot layer selection canvas")
+        selectionOverlay.toolTip = "Click to select. Drag the outline and release to move. Escape cancels."
+        selectionOverlay.hitTestLayer = { [weak self] point, tolerance in
+            guard let json = self?.state.snapshot?.documentJSON else { return nil }
+            return try NativeEditorHitTesting.hit(documentJSON: json, point: point, tolerance: tolerance)
+        }
+        selectionOverlay.outlineForLayer = { [weak self] id in
+            self?.state.snapshot?.layers.first(where: { $0.id == id })?.selectionOutline
+        }
+        selectionOverlay.onSelect = { [weak self] id in self?.selectCanvasLayer(id) }
+        selectionOverlay.onMove = { [weak self] id, dx, dy in self?.moveCanvasLayer(id, dx: dx, dy: dy) }
+        selectionOverlay.onError = { [weak self] error in self?.showError("Layer hit testing failed: \(error.localizedDescription)") }
+        previewPanel.addSubview(selectionOverlay)
         dimensions.frame = NSRect(x: 24, y: 654, width: 640, height: 20)
         dimensions.setAccessibilityLabel("Edited canvas dimensions"); root.addSubview(dimensions)
 
@@ -1038,6 +1138,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func cancelDrawing() {
         drawOverlay.cancelGesture()
+        selectionOverlay.cancelGesture()
     }
 
     private func updateDrawing() {
@@ -1045,6 +1146,23 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             && state.snapshot != nil && !state.busy
         drawTool?.isEnabled = state.snapshot != nil && !state.busy
         drawOverlay.drawingEnabled = active
+        selectionOverlay.selectionEnabled = sectionControl?.selectedSegment == Section.layers
+            && state.snapshot != nil && !state.busy && !importLoading
+    }
+
+    private func selectCanvasLayer(_ id: String?) {
+        guard !state.busy else { return }
+        selectedLayerID = id
+        if let id, let index = state.snapshot?.layers.firstIndex(where: { $0.id == id }) { selectedLayerIndex = index }
+        reconcileLayerSelection(state.snapshot?.layers ?? [], allowFallback: false)
+    }
+
+    private func moveCanvasLayer(_ id: String, dx: CGFloat, dy: CGFloat) {
+        guard !state.busy, let layer = state.snapshot?.layers.first(where: { $0.id == id }),
+              !layer.locked else { return }
+        command(["operation": "layer", "id": id,
+                 "edit": ["action": "translate", "delta_x": Double(dx), "delta_y": Double(dy)]],
+                message: "Moving layer…", preferredSelection: id)
     }
 
     private func toggleVisibility() {
@@ -1056,6 +1174,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func chooseImage() {
         guard let artifactID = state.artifactID, state.snapshot != nil, !state.busy,
               !importLoading else { return }
+        selectionOverlay.cancelGesture()
         importToken += 1
         let token = importToken
         let generation = state.generation
@@ -1292,6 +1411,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                          height: CGFloat(presentation.image.height)))
         preview.image = editedImage
         drawOverlay.canvasSize = NSSize(width: snapshot.width, height: snapshot.height)
+        selectionOverlay.canvasSize = drawOverlay.canvasSize
         dimensions.stringValue = "\(format(snapshot.width)) × \(format(snapshot.height)) pixels"
         canvasWidth.stringValue = format(snapshot.width); canvasHeight.stringValue = format(snapshot.height)
         if resetCrop || cropWidth.stringValue.isEmpty {
@@ -1353,7 +1473,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         lockButton?.title = layer?.locked == true ? "Unlock" : "Lock"
     }
 
-    private func reconcileLayerSelection(_ layers: [NativeEditorLayer]) {
+    private func reconcileLayerSelection(_ layers: [NativeEditorLayer], allowFallback: Bool = true) {
         let preferred = preferredLayerID
         preferredLayerID = nil
         if let preferred, layers.contains(where: { $0.id == preferred }) {
@@ -1362,7 +1482,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             self.selectedLayerID = selectedLayerID
         } else if layers.isEmpty {
             selectedLayerID = nil; selectedLayerIndex = 0
-        } else {
+        } else if allowFallback {
             selectedLayerIndex = min(selectedLayerIndex, layers.count - 1)
             selectedLayerID = layers[selectedLayerIndex].id
         }
@@ -1382,6 +1502,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func publishSelectedLayerFields() {
         annotationControls?.setStyle(selectedLayer?.annotation)
+        selectionOverlay.selectedOutline = selectedLayer?.selectionOutline
         guard let layer = selectedLayer else {
             [layerName, layerOpacity, layerX, layerY].forEach { $0.stringValue = "" }
             updateControls(); return
@@ -1430,6 +1551,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         outputSize.textColor = tokens.color("text-muted")
         drawOverlay.fillColor = tokens.color("theme-accent").withAlphaComponent(0.22)
         drawOverlay.strokeColor = tokens.color("theme-accent")
+        selectionOverlay.strokeColor = tokens.color("theme-accent")
         drawOverlay.needsDisplay = true
         preview.superview?.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
         preview.superview?.layer?.borderColor = tokens.color("border").cgColor

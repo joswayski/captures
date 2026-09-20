@@ -216,6 +216,8 @@ struct View {
     import_picker: Option<Receiver<Option<PathBuf>>>,
     history_changed: bool,
     selected_layer: Option<String>,
+    layer_gesture: Option<LayerGesture>,
+    pending_layer_selection: Option<String>,
     layer_name: String,
     layer_opacity: f64,
     layer_position: [f64; 2],
@@ -257,6 +259,8 @@ impl Default for View {
             import_picker: None,
             history_changed: false,
             selected_layer: None,
+            layer_gesture: None,
+            pending_layer_selection: None,
             layer_name: String::new(),
             layer_opacity: 100.,
             layer_position: [0., 0.],
@@ -284,6 +288,10 @@ impl View {
         self.freehand_points.clear();
     }
 
+    fn cancel_layer_gesture(&mut self) {
+        self.layer_gesture = None;
+    }
+
     fn title(&self) -> &'static str {
         if self.pending {
             "Screenshot editor — Captures — Working…"
@@ -298,6 +306,8 @@ impl View {
 
     fn request_close(&mut self) {
         self.cancel_drawing();
+        self.cancel_layer_gesture();
+        self.pending_layer_selection = None;
         if self.pending || self.unsaved() {
             self.close_requested = true;
         } else {
@@ -364,10 +374,12 @@ impl View {
                 if presented.copied {
                     self.output_notice = Some("Copied edited pixels to the clipboard.".into());
                 }
-                let selected = presented
-                    .created_layer
-                    .take()
-                    .or(self.selected_layer.clone());
+                let selected = self.pending_layer_selection.take().or_else(|| {
+                    presented
+                        .created_layer
+                        .take()
+                        .or(self.selected_layer.clone())
+                });
                 self.presented = Some(presented);
                 self.select_layer(selected);
                 self.error = None;
@@ -376,8 +388,9 @@ impl View {
                 }
             }
             Err(error) => {
+                self.pending_layer_selection = None;
                 self.error = Some(error);
-                self.select_layer(self.selected_layer.clone());
+                self.select_layer_exact(self.selected_layer.clone());
             }
         }
         if self.close_requested && !self.unsaved() {
@@ -522,12 +535,14 @@ impl View {
     }
 
     fn submit_job(&mut self, tx: &Sender<Job>, job: Job) {
+        self.cancel_layer_gesture();
         match tx.send(job) {
             Ok(()) => {
                 self.pending = true;
                 self.error = None;
             }
             Err(_) => {
+                self.pending_layer_selection = None;
                 self.error =
                     Some("The editor worker stopped. Your last saved draft is preserved.".into())
             }
@@ -558,11 +573,32 @@ impl View {
         }
     }
 
+    fn select_layer_exact(&mut self, id: Option<String>) {
+        if id.is_none() {
+            self.selected_layer = None;
+            self.annotation = None;
+            self.layer_name.clear();
+            self.layer_opacity = 100.;
+            self.layer_position = [0., 0.];
+        } else {
+            self.select_layer(id);
+        }
+    }
+
     fn submit_layer(&mut self, tx: &Sender<Job>, edit: LayerEdit) {
         if let Some(id) = self.selected_layer.clone() {
             self.submit(tx, Request::Layer { id, edit });
         }
     }
+}
+
+#[derive(Clone)]
+struct LayerGesture {
+    id: Option<String>,
+    outline: Option<[Point; 4]>,
+    start: Point,
+    current: Point,
+    preview: egui::Rect,
 }
 
 pub struct Editor {
@@ -946,6 +982,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     {
         view.cancel_crop();
         view.cancel_drawing();
+        view.cancel_layer_gesture();
     }
     egui::Panel::top("editor-actions").show(ui, |ui| {
         ui.horizontal(|ui| {
@@ -1006,6 +1043,14 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         || !ui.input(|input| input.focused)
     {
         view.cancel_drawing();
+    }
+    if view.section != Section::Layers
+        || view.pending
+        || view.close_requested
+        || view.confirm_discard
+        || !ui.input(|input| input.focused)
+    {
+        view.cancel_layer_gesture();
     }
     egui::Panel::left("editor-geometry").resizable(false).exact_size(230.).show(ui, |ui| {
         egui::ScrollArea::vertical().id_salt(view.section).auto_shrink([false, false]).show(ui, |ui| {
@@ -1109,6 +1154,13 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             {
                 show_shape(ui, view, tx, available, image.rect);
             }
+            if view.section == Section::Layers
+                && !view.pending
+                && !view.close_requested
+                && !view.confirm_discard
+            {
+                show_layer_canvas(ui, tokens, view, tx, available, image.rect);
+            }
         } else if view.pending {
             ui.centered_and_justified(|ui| {
                 ui.spinner();
@@ -1125,6 +1177,159 @@ fn image_point(position: egui::Pos2, preview: egui::Rect, bounds: Rect) -> Point
     Point {
         x: f64::from(position.x - preview.left()) / f64::from(preview.width()) * bounds.width,
         y: f64::from(position.y - preview.top()) / f64::from(preview.height()) * bounds.height,
+    }
+}
+
+fn show_layer_canvas(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    view: &mut View,
+    tx: &Sender<Job>,
+    available: egui::Rect,
+    preview: egui::Rect,
+) {
+    let Some(presented) = &view.presented else {
+        return;
+    };
+    let document = presented.document.clone();
+    let bounds = Rect {
+        x: 0.,
+        y: 0.,
+        width: f64::from(presented.pixels.width()),
+        height: f64::from(presented.pixels.height()),
+    };
+    if view
+        .layer_gesture
+        .as_ref()
+        .is_some_and(|gesture| gesture.preview != preview)
+    {
+        view.cancel_layer_gesture();
+    }
+    let response = ui
+        .interact(
+            available,
+            ui.scope_id().with("layer-canvas"),
+            egui::Sense::click_and_drag(),
+        )
+        .on_hover_text("Click to select. Drag the outline and release to move. Escape cancels.");
+    let first_pass = ui.ctx().current_pass_index() == 0;
+    let input_enabled = ui.input(|input| input.focused) && !egui::Popup::is_any_open(ui.ctx());
+    if !input_enabled {
+        view.cancel_layer_gesture();
+    }
+    if first_pass && input_enabled {
+        // Process in order: hover after release must not change the committed
+        // delta, and a press/release in one frame must still be a plain click.
+        for event in ui.input(|input| input.events.clone()) {
+            match event {
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    ..
+                } if !view.pending => {
+                    view.cancel_layer_gesture();
+                    if !preview.contains(pos) {
+                        continue;
+                    }
+                    let point = image_point(pos, preview, bounds);
+                    match document.hit_test(point, 8. * bounds.width / f64::from(preview.width())) {
+                        Ok(hit) => {
+                            view.layer_gesture = Some(LayerGesture {
+                                id: hit.map(|element| element.base().id.clone()),
+                                outline: hit.and_then(|element| element.selection_outline().ok()),
+                                start: point,
+                                current: point,
+                                preview,
+                            });
+                            view.error = None;
+                        }
+                        Err(error) => view.error = Some(error),
+                    }
+                }
+                egui::Event::PointerMoved(pos) => {
+                    if let Some(gesture) = &mut view.layer_gesture {
+                        gesture.current = image_point(pos, preview, bounds);
+                    }
+                }
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    ..
+                } => {
+                    let Some(gesture) = view.layer_gesture.take() else {
+                        continue;
+                    };
+                    let end = image_point(pos, preview, bounds);
+                    let delta_x = end.x - gesture.start.x;
+                    let delta_y = end.y - gesture.start.y;
+                    let distance = (delta_x * f64::from(preview.width()) / bounds.width)
+                        .hypot(delta_y * f64::from(preview.height()) / bounds.height);
+                    if distance >= 3.
+                        && let Some(id) = gesture.id
+                    {
+                        view.pending_layer_selection = Some(id.clone());
+                        view.invalidate_output();
+                        view.submit(
+                            tx,
+                            Request::Layer {
+                                id,
+                                edit: LayerEdit::Translate { delta_x, delta_y },
+                            },
+                        );
+                    } else {
+                        view.select_layer_exact(gesture.id);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if response.hovered() || view.layer_gesture.is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
+    let (outline, delta) = if let Some(gesture) = &view.layer_gesture {
+        let dx = gesture.current.x - gesture.start.x;
+        let dy = gesture.current.y - gesture.start.y;
+        let moving = (dx * f64::from(preview.width()) / bounds.width)
+            .hypot(dy * f64::from(preview.height()) / bounds.height)
+            >= 3.;
+        (
+            gesture.outline,
+            Point {
+                x: if moving { dx } else { 0. },
+                y: if moving { dy } else { 0. },
+            },
+        )
+    } else {
+        let outline = view
+            .selected_layer
+            .as_ref()
+            .and_then(|id| {
+                document
+                    .elements
+                    .iter()
+                    .find(|element| &element.base().id == id)
+            })
+            .and_then(|element| element.selection_outline().ok());
+        (outline, Point { x: 0., y: 0. })
+    };
+    if let Some(outline) = outline {
+        let project = |point: Point| {
+            egui::pos2(
+                preview.left() + ((point.x + delta.x) / bounds.width) as f32 * preview.width(),
+                preview.top() + ((point.y + delta.y) / bounds.height) as f32 * preview.height(),
+            )
+        };
+        let mut points: Vec<_> = outline.into_iter().map(project).collect();
+        points.push(points[0]);
+        ui.painter()
+            .with_clip_rect(available.intersect(ui.clip_rect()))
+            .add(egui::Shape::line(
+                points,
+                egui::Stroke::new(2., tokens.color("theme-accent")),
+            ));
     }
 }
 
@@ -2012,6 +2217,106 @@ mod tests {
         assert!(view.annotation.is_none());
         view.select_layer(Some(id));
         assert!(view.annotation.is_some());
+    }
+
+    #[test]
+    fn layer_canvas_click_and_drag_pick_once_and_commit_only_on_release() {
+        let ctx = egui::Context::default();
+        let mut value = presented(false);
+        value.pixels = Arc::new(RgbaImage::new(200, 100));
+        let document = Arc::make_mut(&mut value.document);
+        document.width = 200.;
+        document.height = 100.;
+        let id = document
+            .create_closed_shape(ClosedShapeCreate {
+                shape: ClosedShapeKind::Rectangle,
+                start: Point { x: 20., y: 20. },
+                end: Point { x: 80., y: 60. },
+                style: ElementStyle::default(),
+                opacity: 100.,
+            })
+            .unwrap();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(value));
+        view.pending = false;
+        view.section = Section::Layers;
+        view.select_layer(Some("capture-background".into()));
+        view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
+        let (tx, rx) = mpsc::channel();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400., 300.));
+        let preview = egui::Rect::from_min_size(egui::pos2(100., 100.), egui::vec2(100., 50.));
+        let frame = |view: &mut View, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    focused: true,
+                    ..Default::default()
+                },
+                |_| {
+                    let mut ui = egui::Ui::new(
+                        ctx.clone(),
+                        egui::Id::unique("layer-canvas-test"),
+                        egui::UiBuilder::new().max_rect(screen),
+                    );
+                    let tokens = crate::tokens::load().into_values().next().unwrap();
+                    show_layer_canvas(&mut ui, &tokens, view, &tx, screen, preview);
+                    if ctx.current_pass_index() == 0 {
+                        ctx.request_discard("multipass");
+                    }
+                },
+            );
+            output.textures_delta.clear();
+        };
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let inside = egui::pos2(125., 120.);
+        frame(&mut view, vec![button(inside, true)]);
+        assert_eq!(view.selected_layer.as_deref(), Some("capture-background"));
+        assert!(rx.try_recv().is_err());
+        frame(
+            &mut view,
+            vec![
+                button(inside, false),
+                egui::Event::PointerMoved(egui::pos2(190., 145.)),
+            ],
+        );
+        assert_eq!(view.selected_layer.as_deref(), Some(id.as_str()));
+        assert!(rx.try_recv().is_err() && view.output.is_some());
+
+        let empty = egui::pos2(190., 145.);
+        frame(&mut view, vec![button(empty, true), button(empty, false)]);
+        assert!(view.selected_layer.is_none() && view.annotation.is_none());
+        assert!(rx.try_recv().is_err() && view.output.is_some());
+        frame(&mut view, vec![button(inside, true)]);
+        view.cancel_layer_gesture();
+        frame(&mut view, vec![button(egui::pos2(120., 110.), false)]);
+        assert!(rx.try_recv().is_err() && view.selected_layer.is_none());
+
+        frame(&mut view, vec![button(inside, true)]);
+        frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(egui::pos2(122., 116.))],
+        );
+        assert!(rx.try_recv().is_err() && !view.pending);
+        frame(
+            &mut view,
+            vec![
+                button(egui::pos2(90., 95.), false),
+                egui::Event::PointerMoved(inside),
+            ],
+        );
+        assert!(view.pending && view.output.is_none() && view.selected_layer.is_none());
+        assert!(
+            matches!(rx.recv().unwrap(), Job::Apply(Request::Layer { id: target, edit: LayerEdit::Translate { delta_x, delta_y } }) if target == id && delta_x == -70. && delta_y == -50.)
+        );
+        assert!(rx.try_recv().is_err(), "multipass must not submit twice");
+        view.receive(&ctx, Err("move failed".into()));
+        assert!(view.selected_layer.is_none() && view.pending_layer_selection.is_none());
     }
 
     #[test]
