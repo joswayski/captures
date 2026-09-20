@@ -404,7 +404,8 @@ def main():
                 shot("root", "lifecycle-tray-visible")
 
                 def menu_action(label, screenshot=False):
-                    labels = ["New Capture", "Capture display", "Capture region", "Capture window",
+                    labels = ["New Capture", "Show recording controls",
+                              "Capture display", "Capture region", "Capture window",
                               "History", "Preferences", "Open output folder", "Quit Captures"]
                     index = labels.index(label)
                     panel_ids = run("xdotool", "search", "--onlyvisible", "--class", "xfce4-panel").decode().split()
