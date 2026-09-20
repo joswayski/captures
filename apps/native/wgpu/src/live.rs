@@ -1293,10 +1293,15 @@ impl Live {
     }
 
     pub fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let mut editor_history_changed = false;
         for editor in self.editors.values() {
             editor.receive(ctx);
+            editor_history_changed |= editor.take_history_changed();
         }
         self.editors.retain(|_, editor| !editor.closed());
+        if editor_history_changed {
+            self.load_history();
+        }
         if self
             .recording_notice
             .as_ref()
@@ -4222,10 +4227,16 @@ impl Live {
                     egui::Button::new("Edit screenshot")).clicked()
                     && let Some(id) = selected.clone()
                 {
-                    let editor = self.editors.entry(id.clone()).or_insert_with(|| {
-                        crate::editor::Editor::open(ui.ctx(), self.root.clone(), id)
-                    });
-                    editor.focus(ui.ctx());
+                    match settings() {
+                        Ok(settings) => {
+                            let mode = selected_entry.as_ref().and_then(|entry| entry.mode).unwrap_or(captures_capture::CaptureMode::Region);
+                            let editor = self.editors.entry(id.clone()).or_insert_with(|| {
+                                crate::editor::Editor::open(ui.ctx(), self.root.clone(), id, settings.output_directory.into(), mode)
+                            });
+                            editor.focus(ui.ctx());
+                        }
+                        Err(error) => self.error = Some(error),
+                    }
                 }
             });
             if let Some(entry) = selected_entry.filter(|entry| entry.kind.is_recording()) {

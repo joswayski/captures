@@ -23,7 +23,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices | Audio meter/device-change parity, physical recording/audio acceptance, recording editor and transcoded exports |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared v1 draft storage ([#594](https://github.com/joswayski/captures/pull/594)); document geometry/undo with shipping-TypeScript fixtures ([#595](https://github.com/joswayski/captures/pull/595)); real image-layer renderer and worker-owned draft/edit sessions with retained C-ABI pixel frames; shipping screenshot export encoding policy shared in Rust | Native screenshot host UI/input, annotations/export UI and comparison acceptance, then recording playback/timeline/editing/export |
+| Editors | Shared v1 draft storage ([#594](https://github.com/joswayski/captures/pull/594)); document geometry/undo with shipping-TypeScript fixtures ([#595](https://github.com/joswayski/captures/pull/595)); real image/annotation rendering and worker-owned draft/edit sessions with retained C-ABI pixel frames; lossless image-transform command; shipping screenshot export encoding policy shared in Rust | Remaining native screenshot host controls/input, annotations/export UI and comparison acceptance, then recording playback/timeline/editing/export |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -36,9 +36,9 @@ with those flows; its tests retain both screenshot-child and saved-notice covera
 Superseded parent PRs may be closed rather than separately merged because the
 repository uses squash merges. Their functionality must not be counted as missing.
 
-Next implementation boundary: connect the shared screenshot session, crop/image
-transforms, undo/redo and export policy to History and editor controls in both
-AppKit and wgpu. Shared encoding is a prerequisite, not native export acceptance.
+Next implementation boundary: connect shared image transforms to both editor hosts
+and edited-image export controls to AppKit. Shared commands and encoding remain
+prerequisites, not native editor/output acceptance.
 Native live capture on Wayland remains explicitly
 gated; no stub or X11 result closes that platform gate. Merging development slices
 does not authorize a native release, renderer cutover or removal of Tauri.
@@ -395,12 +395,32 @@ drafts cannot load arbitrary filesystem/network image sources. Visible unsupport
 annotations remain errors rather than silently missing output. This is the same
 host-independent implementation for macOS, Windows, X11 and Wayland.
 
+Editor sessions can encode the current edited frame through the shared PNG/JPEG/
+WebP quality and hard-byte-budget policy. The C ABI returns independently owned
+encoded bytes, borrowed through an explicit pointer/length view and released
+separately from the session. Options and result metadata use JSON; image bytes
+never do. Encoding success or failure leaves document, undo/redo, draft dirty
+state and original History files unchanged. Shared Rust can also publish a new
+edited-file copy without clobbering an existing destination, then add a distinct
+lossless History artifact; a post-publication History failure retains the saved
+path for recovery. `captures_editor_save_new_v1` exposes this on the serialized
+session worker with tagged result JSON and no pixel transport; null/invalid
+inputs, collisions and partial success are covered without changing draft state.
+Hosts still own save dialogs, overwrite-original confirmation
+and clipboard behavior. These shared prerequisites are unit-verified in the Linux
+orb; they do not connect native export controls or complete macOS, Windows, X11
+or Wayland output/physical acceptance.
+
 Shared layer commands now cover visibility, locking, opacity, movement, deletion,
-duplication, image renaming and ordering through the same transactional session
-and C ABI. Shipping TypeScript fixtures check all four duplicate element kinds
-and reorder placements across locked boundaries. Hidden layers remain editable;
-locked layers block movement/deletion/reordering but permit the other panel
-actions. Duplicates share owned image assets and remain draft-compatible.
+duplication, image renaming, ordering and the four lossless image transforms through
+the same transactional session and C ABI. Shipping TypeScript fixtures check all
+four duplicate element kinds, reorder placements across locked boundaries and D4
+orientation composition. Hidden and locked images remain transformable; transform
+requests for non-image layers are no-ops, matching the shipping editor. Locked
+layers otherwise block movement/deletion/reordering but permit the other panel
+actions. A sole visible full-canvas image rotates its canvas, ordinary layered
+overhang remains clipped and a fully off-canvas result expands the document.
+Duplicates share owned image assets and remain draft-compatible.
 These commands are shared across all four platforms; host integration and
 physical acceptance are tracked separately below.
 
@@ -428,6 +448,21 @@ this implementation but remain presentation-unverified; AppKit layer controls
 are described below. Merge/flatten, image import, image transforms and drawing tools
 are not connected by this panel slice.
 
+The wgpu Output panel now previews shared PNG/JPEG/WebP encoding with the shipping
+quality modes, palette controls and hard byte budget. Encoding and decoding run
+on the editor worker; the UI reports actual encoded bytes and switches between
+the edited canvas and decoded output. Edits and option changes invalidate the
+previous comparison; encoding failures retain recoverable edits and allow retry.
+Preview never writes files or saves a draft. The same Windows/X11/Wayland host
+code is implemented; private-X11 and unit checks do not establish physical-host
+acceptance. Its **Save new copy** action runs shared publication on the same worker,
+starts in the configured output directory and accepts an editable full path.
+It never replaces existing files; successful exports add a distinct History entry
+without modifying the original or draft. A post-publication History failure shows
+the saved path and warning. Accepted writes drain before application quit.
+Native save dialogs, overwrite-original and clipboard remain separate work, as
+do AppKit export controls and physical-platform acceptance.
+
 The AppKit editor host now enables **Edit screenshot** only for screenshot History
 entries. Its dedicated serialized worker owns the shared Rust session and publishes
 independently retained RGBA frames to a fit preview. The window exposes crop geometry,
@@ -445,8 +480,8 @@ failure/close behavior and rendered light/dark fixtures. Physical AppKit input,
 accessibility and IME acceptance remain unverified.
 
 Across both hosts, physical input/accessibility/IME acceptance remains open.
-Annotation tools, edited-image export and recording editing are not connected;
-the screenshot-editor parity gate stays open.
+Image-transform controls, annotation tools, AppKit edited-image export and recording
+editing are not connected; the screenshot-editor parity gate stays open.
 
 New Capture connects its persisted shortcut, tray action and workspace entry to
 fixed-glass screenshot controls on both hosts. Region, Window and Full screen

@@ -1,7 +1,7 @@
 use std::{fs, path::Path, sync::Arc};
 
 use captures_app::{
-    editor::{Element, OptionalNullable, Rect},
+    editor::{Element, ImageOrientation, OptionalNullable, Rect},
     editor_session::{EditorSession, OpenRequest, Request},
 };
 use captures_capture::CaptureMode;
@@ -34,6 +34,90 @@ fn crop() -> Request {
             height: 2.,
         },
     }
+}
+
+fn image_transform(id: &str, transform: &str) -> Request {
+    serde_json::from_value(json!({
+        "operation": "layer",
+        "id": id,
+        "edit": {
+            "action": "image_transform",
+            "transform": transform,
+        },
+    }))
+    .unwrap()
+}
+
+#[test]
+fn exports_encode_current_pixels_without_mutating_session_or_original_files() {
+    use captures_app::editor_session::ExportOptions;
+
+    let (data, id, _) = setup();
+    let directory = data.path().join("history").join(&id);
+    let original = fs::read(directory.join("capture.png")).unwrap();
+    let metadata = fs::read(directory.join("metadata.json")).unwrap();
+    let mut editor = open(data.path(), &id).unwrap();
+    let mut document = editor.snapshot().document.clone();
+    document.background = None;
+    editor.execute(Request::Commit { document }).unwrap();
+    editor.execute(crop()).unwrap();
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 6.,
+            height: 3.,
+        })
+        .unwrap();
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 9.,
+            height: 5.,
+        })
+        .unwrap();
+    editor.execute(Request::Undo).unwrap();
+    assert!(editor.snapshot().can_undo && editor.snapshot().can_redo);
+    assert!(editor.snapshot().unsaved_changes);
+    let before = serde_json::to_value(editor.snapshot()).unwrap();
+    let pixels = editor.pixels();
+    let expected = RgbaImage::from_fn(6, 3, |x, y| {
+        // Crop translates layers without destroying off-canvas source pixels.
+        if x < 5 && y < 2 {
+            Rgba([(x + 2) as u8 * 31, (y + 1) as u8 * 71, 19, 255])
+        } else {
+            Rgba([0, 0, 0, 0])
+        }
+    });
+    for format in ["png", "jpeg", "webp"] {
+        let options: ExportOptions = serde_json::from_value(json!({
+            "format":format, "quality":"preserve", "quality_value":100, "png":{},
+        }))
+        .unwrap();
+        let bytes = editor.encode_export(options).unwrap();
+        let decoded = image::load_from_memory(&bytes).unwrap().into_rgba8();
+        assert_eq!(decoded.dimensions(), (6, 3));
+        if format == "jpeg" {
+            assert!(decoded.pixels().all(|pixel| pixel[3] == 255));
+            assert!(
+                decoded.get_pixel(5, 2).0[..3]
+                    .iter()
+                    .all(|channel| *channel >= 250)
+            );
+            assert!(decoded.get_pixel(0, 0)[0] < 100);
+        } else {
+            assert_eq!(decoded, expected);
+        }
+        let limited = ExportOptions {
+            max_size_bytes: Some(0),
+            ..options
+        };
+        assert!(editor.encode_export(limited).is_err());
+        assert_eq!(serde_json::to_value(editor.snapshot()).unwrap(), before);
+        assert!(Arc::ptr_eq(&pixels, &editor.pixels()));
+    }
+    assert!(!data.path().join("drafts").exists());
+    assert_eq!(fs::read(directory.join("capture.png")).unwrap(), original);
+    assert_eq!(fs::read(directory.join("metadata.json")).unwrap(), metadata);
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.pixels().dimensions(), (9, 5));
 }
 
 #[test]
@@ -108,6 +192,180 @@ fn layer_json_commands_render_transactionally_and_restore_shared_assets() {
         .unwrap()
         .into_rgba8();
     assert_eq!(disk, original);
+}
+
+#[test]
+fn image_transform_json_preserves_center_pixels_history_and_draft_data() {
+    let (data, id, original) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    editor
+        .execute(image_transform("capture-background", "rotate-clockwise"))
+        .unwrap();
+    assert_eq!(editor.pixels().dimensions(), (3, 7));
+    assert_eq!(
+        (
+            editor.snapshot().document.width,
+            editor.snapshot().document.height
+        ),
+        (3., 7.)
+    );
+    for y in 0..7 {
+        for x in 0..3 {
+            assert_eq!(
+                editor.pixels().get_pixel(x, y),
+                original.get_pixel(y, 2 - x),
+                "fresh-photo pixel ({x}, {y})"
+            );
+        }
+    }
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.pixels().as_ref(), &original);
+
+    let mut document = editor.snapshot().document.clone();
+    document.width = 11.;
+    document.height = 11.;
+    document.background = None;
+    document
+        .extra
+        .insert("futureDocument".into(), json!({"keep": [3, 1]}));
+    let Element::Image(image) = &mut document.elements[0] else {
+        panic!()
+    };
+    image.base.x = 2.;
+    image.base.y = 4.;
+    image
+        .extra
+        .insert("futureImage".into(), json!({"keep": true}));
+    document.elements.push(
+        serde_json::from_value(json!({
+            "kind": "text",
+            "id": "locked-note",
+            "x": -3.5,
+            "y": 8.25,
+            "locked": true,
+            "visible": false,
+            "opacity": 100,
+            "blendMode": "source-over",
+            "text": "future note",
+            "fontSize": 17,
+            "width": 91,
+            "fontFamily": "Inter",
+            "bold": false,
+            "italic": false,
+            "align": "left",
+            "color": "#123456",
+            "background": null,
+            "outlined": false,
+            "roundedBackground": false,
+            "futureText": {"keep": "too"}
+        }))
+        .unwrap(),
+    );
+    editor.execute(Request::Commit { document }).unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 1 })
+        .unwrap();
+    drop(editor);
+
+    // Reopening makes the prepared asymmetric document the persisted baseline,
+    // so history assertions below measure only layer-transform commands.
+    let mut editor = open(data.path(), &id).unwrap();
+    let baseline = editor.snapshot().document.clone();
+    assert!(!editor.snapshot().can_undo);
+
+    // Shipping permits transforms on the locked capture background.
+    editor
+        .execute(image_transform("capture-background", "rotate-clockwise"))
+        .unwrap();
+    let rotated = editor.snapshot().document.clone();
+    let Element::Image(image) = &rotated.elements[0] else {
+        panic!()
+    };
+    assert!(image.base.locked);
+    assert_eq!(image.orientation, Some(ImageOrientation::Rotate90));
+    assert_eq!((image.base.x, image.base.y), (4., 2.));
+    assert_eq!((image.width, image.height), (3., 7.));
+    assert_eq!(
+        (
+            image.base.x + image.width / 2.,
+            image.base.y + image.height / 2.
+        ),
+        (5.5, 5.5)
+    );
+    assert_eq!(image.extra["futureImage"], json!({"keep": true}));
+    assert_eq!(rotated.extra["futureDocument"], json!({"keep": [3, 1]}));
+    assert_eq!(rotated.elements[1], baseline.elements[1]);
+    let pixels = editor.pixels();
+    assert_eq!(pixels.get_pixel(3, 2).0, [0, 0, 0, 0]);
+    for y in 0..7 {
+        for x in 0..3 {
+            assert_eq!(
+                pixels.get_pixel(x + 4, y + 2),
+                original.get_pixel(y, 2 - x),
+                "rotated pixel ({x}, {y})"
+            );
+        }
+    }
+
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.snapshot().document, &baseline);
+    assert!(editor.snapshot().can_redo);
+    let baseline_frame = editor.pixels();
+    // Shipping ignores image-transform actions for non-image layers. The exact
+    // no-op and a rejected missing-layer command must retain redo and its frame.
+    editor
+        .execute(image_transform("locked-note", "flip-horizontal"))
+        .unwrap();
+    assert!(editor.snapshot().can_redo);
+    assert!(Arc::ptr_eq(&baseline_frame, &editor.pixels()));
+    assert!(
+        editor
+            .execute(image_transform("missing-layer", "flip-horizontal"))
+            .is_err()
+    );
+    assert!(editor.snapshot().can_redo);
+    assert!(Arc::ptr_eq(&baseline_frame, &editor.pixels()));
+
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.snapshot().document, &rotated);
+    assert_eq!(editor.pixels(), pixels);
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 2 })
+        .unwrap();
+    drop(editor);
+
+    let mut restored = open(data.path(), &id).unwrap();
+    assert_eq!(restored.snapshot().document, &rotated);
+    assert_eq!(restored.pixels(), pixels);
+    assert_eq!(
+        restored.snapshot().document.extra["futureDocument"],
+        json!({"keep": [3, 1]})
+    );
+    // Hidden image layers remain transformable, but continue contributing no
+    // pixels. Left-composition turns flip-horizontal × rotate-90 into transpose.
+    restored
+        .execute(
+            serde_json::from_value(json!({
+                "operation": "layer",
+                "id": "capture-background",
+                "edit": {"action": "visibility", "visible": false},
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    restored
+        .execute(image_transform("capture-background", "flip-horizontal"))
+        .unwrap();
+    let Element::Image(hidden) = &restored.snapshot().document.elements[0] else {
+        panic!()
+    };
+    assert_eq!(hidden.orientation, Some(ImageOrientation::Transpose));
+    assert!(
+        restored
+            .pixels()
+            .pixels()
+            .all(|pixel| pixel.0 == [0, 0, 0, 0])
+    );
 }
 
 #[test]
