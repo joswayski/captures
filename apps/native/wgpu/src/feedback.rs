@@ -100,7 +100,9 @@ impl Feedback {
                         ui.colored_label(t.color("positive-text"), "Thanks — feedback sent.");
                     }
                     Err(error) => {
-                        ui.colored_label(t.color("danger-text"), error);
+                        ui.label(
+                            RichText::new(format!("Not sent — {error}")).color(t.color("text")),
+                        );
                     }
                 }
             }
@@ -120,6 +122,7 @@ impl Feedback {
         });
         egui::ScrollArea::vertical().id_salt("feedback-form").show(ui, |ui| {
             ui.set_max_width(664.);
+            ui.spacing_mut().item_spacing.y = t.number("s-3");
             if ui.button("Back to Preferences").clicked() { self.open = false; }
             ui.add_space(t.number("s-6"));
             ui.heading("Send feedback");

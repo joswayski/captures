@@ -70,6 +70,14 @@ drafts on errors and navigation, and prevents duplicate sends while pending.
 Captures, files, and diagnostics are never attached. Login and updating remain
 visibly unavailable.
 
+Feedback input/retry verification uses a rejecting loopback proxy, never the
+production service: `python apps/native/x11_feedback_smoke.py --binary
+apps/native/wgpu/target/release/captures-wgpu-workbench --output feedback-smoke`.
+It runs on private X11/software GL and checks empty/pending submission gates,
+retained text through navigation and failure, offline retry, and clean exit in
+both appearances. Shared client tests cover HTTP success, cooldown and payload
+privacy against disposable loopback servers. Physical input/AT acceptance remains open.
+
 The candidate tests whether shared custom components are viable. It is not a
 retained widget renderer: egui rebuilds the visible UI on an event-driven repaint,
 while image textures remain resident until a scene closes. Static scenes request

@@ -11,8 +11,8 @@
  * No capture, log, or diagnostic attachments. Success/error envelopes and owned
  * UTF-8 pointer rules match captures_app_request_v1; free with
  * captures_settings_free_v1. A process-wide client enforces submission cooldown.
- * Requests block for at most the client's 20-second HTTP timeout; never call on
- * the UI thread or serialize behind capture/recording work. */
+ * HTTP has a 20-second timeout; callers may also wait for serialized submissions.
+ * Never call on the UI thread or serialize behind capture/recording work. */
 char *captures_feedback_request_v1(const char *request_json);
 
 /* Event-loop-thread-only native capture-launch shortcuts. One owner per process.
