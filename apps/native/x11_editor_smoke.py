@@ -279,6 +279,52 @@ def main():
         shot(editor, "editor-resized")
         pixel("editor-resized", 900, 400, (46, 158, 113))
 
+        saved_draft = draft.read_bytes()
+        click(editor, 535, 62)  # Output: encode the edited frame, not History PNG.
+        click(editor, 65, 366)
+        shot(editor, "output-png")
+        pixel("output-png", 500, 200, (229, 179, 68))
+        pixel("output-png", 900, 400, (46, 158, 113))
+        click(editor, 20, 274)  # PNG Compress with an explicit palette.
+        click(editor, 20, 406)
+        field(450, 4)
+        click(editor, 65, 498)
+        shot(editor, "output-png-palette")
+        pixel("output-png-palette", 900, 400, (46, 158, 113))
+        run("xdotool", "windowsize", "--sync", editor, "760", "540")
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "8", "5")
+        shot(editor, "output-palette-minimum-scrolled")
+        run("xdotool", "windowsize", "--sync", editor, "1000", "700")
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "12", "4")
+        click(editor, 85, 159)  # JPEG invalidates the PNG comparison.
+        click(editor, 20, 274)  # Compress.
+        click(editor, 65, 410)
+        shot(editor, "output-jpeg")
+        pixel("output-jpeg", 900, 400, (46, 158, 113), tolerance=4)
+        click(editor, 65, 482)  # Edited canvas comparison.
+        shot(editor, "output-edited-canvas")
+        pixel("output-edited-canvas", 900, 400, (46, 158, 113))
+        click(editor, 65, 525)  # Encoded output comparison.
+        click(editor, 150, 159)  # WebP, still Compress.
+        click(editor, 65, 410)
+        shot(editor, "output-webp")
+        pixel("output-webp", 900, 400, (46, 158, 113), tolerance=4)
+        click(editor, 20, 318)  # Maximum file size enables the hard cap.
+        field(362, 0)
+        click(editor, 65, 410)
+        shot(editor, "output-budget-error")
+        assert app.poll() is None and windows("Screenshot editor")
+        run("xdotool", "windowsize", "--sync", editor, "760", "540")
+        shot(editor, "output-budget-error-minimum")
+        run("xdotool", "windowsize", "--sync", editor, "1000", "700")
+        click(editor, 20, 257)  # Preserve clears the failed budget (error adds 27px).
+        click(editor, 65, 393)  # Retry clears error without persisting a draft.
+        shot(editor, "output-retry")
+        pixel("output-retry", 900, 400, (46, 158, 113))
+        assert draft.read_bytes() == saved_draft, "preview must not write a draft"
+        assert not (output / "exports").exists(), "preview must not publish files"
+        click(editor, 398, 62)  # Geometry restores its own scroll position.
+
         close(editor)
         wait(lambda: not windows("Screenshot editor"), "saved editor closes")
         editor = reopen()
@@ -326,7 +372,9 @@ def main():
                        "explicit-discard", "save-error", "quit-error-retry", "original-unchanged",
                        "layer-duplicate-rename-move", "layer-opacity-visibility-pixels",
                        "layer-lock-order-delete", "layer-draft-reopen", "layer-undo-redo",
-                       "layer-empty-undo"],
+                       "layer-empty-undo", "output-png-jpeg-webp", "output-comparison",
+                       "output-budget-error-retry", "output-no-draft-or-file-write",
+                       "output-png-palette-minimum-scroll"],
             "originalSha256": hashlib.sha256(original).hexdigest(),
         }, indent=2) + "\n")
         print("PASS native editor: layers, crop, canvas, undo/redo, draft reopen, close/discard, save/quit recovery, original unchanged")

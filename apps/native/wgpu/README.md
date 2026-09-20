@@ -90,6 +90,12 @@ capture and exports. Closing without saving preserves any older saved draft.
 The Layers panel selects front-to-back layers and connects visibility, locking,
 image rename, opacity, X/Y movement, duplicate, delete and adjacent ordering.
 Shared Rust preserves locked boundaries and makes every accepted edit undoable.
+The Output panel offers PNG/JPEG/WebP, Preserve/Compress/Maximum quality, custom
+PNG palette sizes and an optional hard byte limit. Preview output runs the real
+shared encoder and decoder on the worker, reports the exact byte count, and
+switches between edited and encoded pixels. Changing options or editing clears
+stale output; encoding errors retain the draft and allow retry. Preview does not
+write files or change undo/redo. Edited-file saving and clipboard are still open.
 Normal quit drains edits and saves dirty sessions; a save failure cancels quit and
 keeps the editor recoverable. Drafts live in `editor-drafts` beside the selected
 History root, never the installed Tauri data. Annotation tools and edited-image
