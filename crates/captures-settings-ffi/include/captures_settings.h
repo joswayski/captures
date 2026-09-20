@@ -214,6 +214,19 @@ CapturesEditorExport *captures_editor_encode_v1(const CapturesEditorSession *ses
 bool captures_editor_export_bytes_v1(const CapturesEditorExport *exported, CapturesEditorBytes *output);
 void captures_editor_export_free_v1(CapturesEditorExport *exported); /* NULL allowed */
 
+/* Save NEW COPY on the serialized session worker. Never replaces an existing file
+ * or changes session/document/undo/redo/draft state. Hosts choose the destination
+ * and pass their isolated History root and capture mode; drain accepted writes
+ * before closing the worker. JSON request: {history_root,destination,options,mode}.
+ * options uses the encode schema above; mode is "region", "window" or "display".
+ * Owned response: {ok:true,result:{status:"saved",path,artifact}} or
+ * {ok:true,result:{status:"saved_without_history",path,warning}} after file success
+ * but History failure. Present that path for recovery, not as a total failure.
+ * {ok:false,error} means no export was published. Free every response with
+ * captures_settings_free_v1. Inputs remain live/readable UTF-8 during the call;
+ * never access/free session concurrently. NULL session/input returns an error. */
+char *captures_editor_save_new_v1(const CapturesEditorSession *session, const char *request_json);
+
 /* Allocation-free macOS window-radius fallback in points. Pass the current OS
  * major version from ProcessInfo. No OS access or session handle is required. */
 double captures_macos_window_corner_radius_v1(int64_t major_version);

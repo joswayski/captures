@@ -3,10 +3,12 @@
 use super::region::{RegionPixels, response, text};
 use captures_app::editor_session::{EditorSession, ExportOptions, OpenRequest, Request};
 use image::RgbaImage;
+use serde::Deserialize;
 use serde_json::json;
 use std::{
     ffi::c_char,
     panic::{AssertUnwindSafe, catch_unwind},
+    path::PathBuf,
     ptr,
     sync::Arc,
 };
@@ -42,6 +44,46 @@ pub unsafe extern "C" fn captures_editor_open_v1(
     // SAFETY: caller supplies aligned writable pointer storage.
     unsafe { output.write(response(value)) };
     handle
+}
+
+#[derive(Deserialize)]
+struct SaveNewRequest {
+    history_root: PathBuf,
+    destination: PathBuf,
+    options: ExportOptions,
+    mode: captures_capture::CaptureMode,
+}
+
+/// Publish the edited frame as a new file and distinct History artifact.
+/// Does not mutate the session or save its draft. Run on the session worker.
+///
+/// # Safety
+/// Non-null session is live and not accessed/freed concurrently. Input is
+/// readable NUL-terminated UTF-8. Free owned JSON with captures_settings_free_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_save_new_v1(
+    session: *const EditorSession,
+    request_json: *const c_char,
+) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains readable input and a live serialized session.
+        let request = serde_json::from_str::<SaveNewRequest>(unsafe { text(request_json) }?)
+            .map_err(|error| error.to_string())?;
+        let session = unsafe { session.as_ref() }.ok_or("editor handle is null")?;
+        captures_app::editor_output::save_new_export(
+            &request.history_root,
+            &session.pixels(),
+            &request.destination,
+            request.options,
+            request.mode,
+        )
+        .map_err(|error| error.to_string())
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    response(match result {
+        Ok(saved) => json!({"ok":true,"result":saved}),
+        Err(error) => json!({"ok":false,"error":error}),
+    })
 }
 
 /// Apply one command and return a snapshot, never image bytes.
@@ -223,6 +265,88 @@ mod tests {
         let json = serde_json::from_slice(unsafe { CStr::from_ptr(value) }.to_bytes()).unwrap();
         unsafe { crate::captures_settings_free_v1(value) };
         json
+    }
+
+    #[test]
+    fn save_new_reports_publication_collision_and_partial_success_without_changing_session() {
+        let data = tempfile::tempdir().unwrap();
+        let root = data.path().join("history");
+        let capture = captures_app::persist_screenshot(
+            &root,
+            &RgbaImage::from_fn(7, 3, |x, y| {
+                image::Rgba([x as u8 * 31, y as u8 * 71, 9, 255])
+            }),
+            captures_capture::CaptureMode::Window,
+        )
+        .unwrap();
+        let mut session = EditorSession::open(OpenRequest {
+            history_root: root.clone(),
+            drafts_root: data.path().join("drafts"),
+            artifact_id: capture.entry.id,
+        })
+        .unwrap();
+        session
+            .execute(Request::Crop {
+                rect: captures_app::editor::Rect {
+                    x: 2.,
+                    y: 1.,
+                    width: 4.,
+                    height: 2.,
+                },
+            })
+            .unwrap();
+        let before = json!(session.snapshot());
+        let pixels = session.pixels();
+        let destination = data.path().join("copy.png");
+        let mut request = json!({"history_root":root,"destination":destination,"mode":"window","options":{"format":"png","quality":"preserve","quality_value":80,"png":{}}});
+        let input = CString::new(request.to_string()).unwrap();
+        // SAFETY: stack session and C strings remain live and serialized; every owned response is freed.
+        unsafe {
+            assert_eq!(
+                take_json(captures_editor_save_new_v1(ptr::null(), input.as_ptr()))["ok"],
+                false
+            );
+            assert_eq!(
+                take_json(captures_editor_save_new_v1(&session, ptr::null()))["ok"],
+                false
+            );
+            assert_eq!(
+                take_json(captures_editor_save_new_v1(&session, c"{}".as_ptr()))["ok"],
+                false
+            );
+            assert!(!destination.exists());
+            let saved = take_json(captures_editor_save_new_v1(&session, input.as_ptr()));
+            assert_eq!(saved["ok"], true);
+            assert_eq!(saved["result"]["status"], "saved");
+            assert_eq!(saved["result"]["path"], json!(destination));
+            assert_eq!(saved["result"]["artifact"]["entry"]["mode"], "window");
+            let bytes = std::fs::read(&destination).unwrap();
+            let decoded = image::load_from_memory(&bytes).unwrap().into_rgba8();
+            assert_eq!(decoded.dimensions(), (4, 2));
+            assert_eq!(decoded.get_pixel(0, 0).0, [62, 71, 9, 255]);
+            assert_eq!(
+                take_json(captures_editor_save_new_v1(&session, input.as_ptr()))["ok"],
+                false
+            );
+            assert_eq!(std::fs::read(&destination).unwrap(), bytes);
+
+            let blocked = data.path().join("blocked-history");
+            std::fs::write(&blocked, b"blocked").unwrap();
+            request["history_root"] = json!(blocked);
+            request["destination"] = json!(data.path().join("recovered.png"));
+            let input = CString::new(request.to_string()).unwrap();
+            let saved = take_json(captures_editor_save_new_v1(&session, input.as_ptr()));
+            assert_eq!(saved["ok"], true);
+            assert_eq!(saved["result"]["status"], "saved_without_history");
+            assert!(!saved["result"]["warning"].as_str().unwrap().is_empty());
+            assert_eq!(
+                std::fs::read(data.path().join("recovered.png")).unwrap(),
+                bytes
+            );
+        }
+        assert_eq!(json!(session.snapshot()), before);
+        assert!(Arc::ptr_eq(&pixels, &session.pixels()));
+        assert!(!data.path().join("drafts").exists());
     }
 
     #[test]
