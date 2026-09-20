@@ -172,6 +172,7 @@ final class ScreenshotEditorTests: XCTestCase {
             try button("Apply crop", in: controller.root).performClick(nil)
             XCTAssertFalse(controller.windowShouldClose(controller.window))
             let closeSheet = try XCTUnwrap(controller.window.attachedSheet)
+            settle(closeSheet)
             try render(try XCTUnwrap(closeSheet.contentView),
                        name: "screenshot-editor-unsaved-close-\(appearance)")
             controller.window.endSheet(closeSheet, returnCode: .alertThirdButtonReturn)
@@ -183,6 +184,7 @@ final class ScreenshotEditorTests: XCTestCase {
 
             try button("Discard edits…", in: controller.root).performClick(nil)
             let discardSheet = try XCTUnwrap(controller.window.attachedSheet)
+            settle(discardSheet)
             try render(try XCTUnwrap(discardSheet.contentView),
                        name: "screenshot-editor-discard-\(appearance)")
             controller.window.endSheet(discardSheet, returnCode: .alertSecondButtonReturn)
@@ -281,6 +283,12 @@ final class ScreenshotEditorTests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.01))
         }
         XCTAssertTrue(predicate())
+    }
+
+    private func settle(_ window: NSWindow) {
+        waitUntil { window.isVisible }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        window.display()
     }
 
     private func render(_ view: NSView, name: String) throws {

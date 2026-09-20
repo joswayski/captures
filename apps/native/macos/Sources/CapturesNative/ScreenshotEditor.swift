@@ -214,8 +214,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate {
         discardButton = button("Discard edits…", frame: NSRect(x: 824, y: 524, width: 136, height: 34)) {
             [weak self] in self?.confirmDiscard()
         }
-        status.frame = NSRect(x: 688, y: 580, width: 272, height: 72)
-        status.maximumNumberOfLines = 3; status.setAccessibilityLabel("Screenshot editor status")
+        status.frame = NSRect(x: 688, y: 568, width: 272, height: 96)
+        status.maximumNumberOfLines = 5; status.setAccessibilityLabel("Screenshot editor status")
         root.addSubview(status)
         fields = [cropX, cropY, cropWidth, cropHeight, canvasWidth, canvasHeight]
     }
