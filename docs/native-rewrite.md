@@ -446,6 +446,15 @@ Duplicates share owned image assets and remain draft-compatible.
 These commands are shared across all four platforms; host integration and
 physical acceptance are tracked separately below.
 
+The shared layer command also accepts typed partial style patches for existing
+shape and freehand-path annotations. Locked and hidden annotations remain editable;
+closed-shape-only fill/stroke toggles do not mutate open shapes or paths, and shadow
+customization uses the renderer's bounded defaults while preserving stored custom
+and unknown fields when toggled off. Unsupported image/text targets and exact
+no-ops retain history, redo and frame identity; failed rendering rolls back the
+whole patch. This is a common prerequisite for AppKit, Windows, X11 and Wayland.
+No host property controls or physical-platform acceptance are included.
+
 The first wgpu editor window now opens isolated History screenshots on its own
 serialized worker, with fit preview, numeric crop/canvas fields, undo/redo,
 save draft and confirmed discard. Closing unsaved edits offers save, keep the last

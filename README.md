@@ -262,7 +262,9 @@ freehand paths with crop geometry, rotation, opacity, blending and enabled shape
 drop shadows, without host I/O.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
 resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
-pixel frames for native hosts.
+pixel frames for native hosts. Shared annotation-style patches can update existing
+shape/path colors, closed-shape fill/stroke controls, widths and shadow settings
+without replacing documents; native property controls remain unconnected.
 Full-canvas photos rotate their canvas; layered overhang stays clipped and fully
 off-canvas transformed images expand the canvas so they are not lost. Shared
 interactive crop geometry also matches shipping bounds, aspect presets and Shift

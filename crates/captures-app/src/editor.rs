@@ -238,6 +238,36 @@ impl ElementStyle {
     pub fn has_drop_shadow(&self) -> bool {
         self.drop_shadow.unwrap_or(false)
     }
+
+    fn resolved_drop_shadow_style(&self) -> DropShadowStyle {
+        let width = self.stroke_width.max(1.);
+        let fallback = DropShadowStyle {
+            color: "#000000".into(),
+            opacity: 45.,
+            blur: (width * 0.85).max(6.),
+            offset_x: 0.,
+            offset_y: (width * 0.32).round().max(2.),
+            extra: Map::new(),
+        };
+        let Some(custom) = self.drop_shadow_style.as_ref() else {
+            return fallback;
+        };
+        let number = |value: f64, minimum: f64, maximum: f64, fallback: f64| {
+            if value.is_finite() {
+                value.clamp(minimum, maximum)
+            } else {
+                fallback
+            }
+        };
+        DropShadowStyle {
+            color: resolved_shadow_color(&custom.color).unwrap_or(fallback.color),
+            opacity: number(custom.opacity, 0., 100., fallback.opacity),
+            blur: number(custom.blur, 0., 100., fallback.blur),
+            offset_x: number(custom.offset_x, -500., 500., fallback.offset_x),
+            offset_y: number(custom.offset_y, -500., 500., fallback.offset_y),
+            extra: custom.extra.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -250,6 +280,43 @@ pub struct DropShadowStyle {
     pub offset_y: f64,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+/// Partial annotation-style update used by native property controls. Fill and
+/// stroke-enabled changes apply only to closed shapes; all other fields apply
+/// to shapes and freehand paths without replacing omitted or unknown data.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnotationStylePatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "OptionalNullable::is_missing")]
+    pub fill: OptionalNullable<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop_shadow: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop_shadow_style: Option<DropShadowStylePatch>,
+}
+
+/// Partial shadow customization. Applying any setting enables the shadow and
+/// resolves omitted values through the shipping renderer defaults.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DropShadowStylePatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blur: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_y: Option<f64>,
 }
 
 /// Distinguishes an omitted legacy field from an explicit JSON `null`.
@@ -488,6 +555,9 @@ pub enum LayerEdit {
     Opacity {
         opacity: f64,
     },
+    AnnotationStyle {
+        patch: AnnotationStylePatch,
+    },
     Translate {
         delta_x: f64,
         delta_y: f64,
@@ -631,6 +701,20 @@ impl Document {
                 }
                 self.elements[index].base_mut().opacity = opacity;
             }
+            LayerEdit::AnnotationStyle { patch } => {
+                let (style, closed) = match &mut self.elements[index] {
+                    Element::Shape(element) => (
+                        &mut element.style,
+                        matches!(
+                            element.shape.as_str(),
+                            "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
+                        ),
+                    ),
+                    Element::Path(element) => (&mut element.style, false),
+                    Element::Image(_) | Element::Text(_) => return Ok(()),
+                };
+                patch.apply(style, closed);
+            }
             LayerEdit::Translate { delta_x, delta_y } => {
                 if !delta_x.is_finite() || !delta_y.is_finite() {
                     return Err("Layer movement must be finite.".into());
@@ -725,6 +809,68 @@ impl Document {
         self.height = (self.height + shift_y).max((fitted_y + bounds.height).ceil());
         self.translate(shift_x, shift_y);
     }
+}
+
+impl AnnotationStylePatch {
+    fn apply(self, style: &mut ElementStyle, closed: bool) {
+        if let Some(color) = self.color {
+            style.color = color;
+        }
+        if closed {
+            match self.fill {
+                OptionalNullable::Missing => {}
+                OptionalNullable::Null => style.fill = None,
+                OptionalNullable::Value(fill) => style.fill = Some(fill),
+            }
+            if let Some(stroke_enabled) = self.stroke_enabled {
+                style.stroke_enabled = Some(stroke_enabled);
+            }
+        }
+        if let Some(stroke_width) = self.stroke_width {
+            style.stroke_width = stroke_width;
+        }
+        if let Some(drop_shadow) = self.drop_shadow {
+            style.drop_shadow = Some(drop_shadow);
+        }
+        if let Some(patch) = self.drop_shadow_style {
+            let mut shadow = style.resolved_drop_shadow_style();
+            if let Some(color) = patch.color {
+                shadow.color = color;
+            }
+            if let Some(opacity) = patch.opacity {
+                shadow.opacity = opacity;
+            }
+            if let Some(blur) = patch.blur {
+                shadow.blur = blur;
+            }
+            if let Some(offset_x) = patch.offset_x {
+                shadow.offset_x = offset_x;
+            }
+            if let Some(offset_y) = patch.offset_y {
+                shadow.offset_y = offset_y;
+            }
+            style.drop_shadow = Some(true);
+            style.drop_shadow_style = Some(shadow);
+            style.drop_shadow_style = Some(style.resolved_drop_shadow_style());
+        }
+    }
+}
+
+fn resolved_shadow_color(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    let raw = trimmed.strip_prefix('#').unwrap_or(trimmed);
+    if !raw.is_ascii() {
+        return None;
+    }
+    let digits = match raw.len() {
+        3 => 3,
+        6.. => 6,
+        _ => return None,
+    };
+    raw.chars()
+        .take(digits)
+        .all(|character| character.is_ascii_hexdigit())
+        .then(|| value.chars().take(7).collect())
 }
 
 pub(crate) fn image_bounds(image: &ImageElement) -> Rect {
