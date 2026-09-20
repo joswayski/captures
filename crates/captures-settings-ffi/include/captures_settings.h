@@ -241,13 +241,16 @@ char *captures_settings_request_v1(const char *request_json);
  * File paths, not image bytes, cross this ABI. The same free function owns both.
  * Permission is prompted only by the explicit request_permission operation. */
 char *captures_app_request_v1(const char *request_json);
-/* Event-loop-thread ONLY: begin {seconds}, poll {generation},
+/* Event-loop-thread ONLY: begin {seconds},
+ * begin_recording_screenshot {parent_generation,seconds}, poll {generation},
  * disarm_escape {generation}, restart_countdown {generation,seconds},
  * finish {generation}.
  * For selection, begin with seconds=0; start_countdown {generation,seconds} after
  * confirmation starts the delay without dropping Escape or changing generation.
- * begin returns {generation}; poll returns {current,remaining}. Escape is global
- * only until disarm_escape hands an accepted recording to its session owner.
+ * begin returns {generation}; poll returns {current,remaining}. A recording
+ * screenshot is a temporary child and never replaces or commits its disarmed
+ * parent. Escape cancels that child only. Otherwise Escape is global only until
+ * disarm_escape hands an accepted recording to its session owner.
  * Always finish, including on cancellation/quit. The guard
  * owns native handles on this thread; never dispatch these calls to a worker.
  * Uses the same {ok,result}/{ok,error} envelope and response ownership as above. */

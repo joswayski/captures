@@ -7,6 +7,7 @@ pub enum Action {
     Pause,
     Resume,
     Restart,
+    Screenshot,
     Stop,
     SetMicrophoneMuted(bool),
     Discard,
@@ -147,12 +148,19 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                         {
                             action = Some(Action::Restart);
                         }
-                        unavailable(
+                        if control(
                             ui,
                             Icon::Screenshot,
-                            "Take screenshot",
-                            "Screenshots are not available while recording",
-                        );
+                            "Take region screenshot",
+                            false,
+                            !view.busy,
+                            false,
+                            tokens,
+                        )
+                        .clicked()
+                        {
+                            action = Some(Action::Screenshot);
+                        }
                         unavailable(
                             ui,
                             Icon::Audio,

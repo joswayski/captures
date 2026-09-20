@@ -19,10 +19,14 @@ const STATE_BITS: u64 = COMMITTED | ESCAPE_DISARMED;
 struct Gate {
     next: AtomicU64,
     current: AtomicU64,
+    child: AtomicU64,
 }
 
 impl Gate {
     fn begin(&self) -> Result<u64, String> {
+        if self.child.load(Ordering::Acquire) != 0 {
+            return Err("A capture is already in progress".into());
+        }
         // Reserve two low bits for persistence commit and Escape ownership.
         let generation = self.next.fetch_add(4, Ordering::AcqRel) + 4;
         self.current
@@ -30,8 +34,32 @@ impl Gate {
             .map(|_| generation)
             .map_err(|_| "A capture is already in progress".into())
     }
+    fn begin_child(&self, parent: u64) -> Result<u64, String> {
+        if parent == 0
+            || parent & STATE_BITS != 0
+            || self.current.load(Ordering::Acquire) != parent | ESCAPE_DISARMED
+        {
+            return Err("The recording is no longer active".into());
+        }
+        let generation = self.next.fetch_add(4, Ordering::AcqRel) + 4;
+        self.child
+            .compare_exchange(0, generation, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| "A recording screenshot is already in progress".to_owned())?;
+        if self.current.load(Ordering::Acquire) != parent | ESCAPE_DISARMED {
+            self.cancel(generation);
+            return Err("The recording is no longer active".into());
+        }
+        Ok(generation)
+    }
     fn is_current(&self, generation: u64) -> bool {
-        generation != 0 && self.current.load(Ordering::Acquire) & !STATE_BITS == generation
+        generation != 0
+            && (self.current.load(Ordering::Acquire) & !STATE_BITS == generation
+                || self.child.load(Ordering::Acquire) & !STATE_BITS == generation)
+    }
+    fn is_pending(&self, generation: u64) -> bool {
+        generation != 0
+            && (self.current.load(Ordering::Acquire) == generation
+                || self.child.load(Ordering::Acquire) == generation)
     }
     fn shortcuts_allowed(&self, selector_generation: Option<u64>) -> bool {
         let current = self.current.load(Ordering::Acquire);
@@ -52,8 +80,18 @@ impl Gate {
             Ordering::AcqRel,
             Ordering::Acquire,
         );
+        let _ = self
+            .child
+            .compare_exchange(generation, 0, Ordering::AcqRel, Ordering::Acquire);
     }
     fn escape(&self) {
+        let child = self.child.load(Ordering::Acquire);
+        if child != 0 && child & STATE_BITS == 0 {
+            let _ = self
+                .child
+                .compare_exchange(child, 0, Ordering::AcqRel, Ordering::Acquire);
+            return;
+        }
         let current = self.current.load(Ordering::Acquire);
         if current != 0 && current & STATE_BITS == 0 {
             // Unlike session cancellation, this must lose to disarm_escape even
@@ -85,8 +123,18 @@ impl Gate {
             .is_ok()
     }
     fn commit(&self, generation: u64) -> bool {
-        generation != 0
-            && self
+        if generation == 0 {
+            return false;
+        }
+        self.child
+            .compare_exchange(
+                generation,
+                generation | COMMITTED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+            || self
                 .current
                 .compare_exchange(
                     generation,
@@ -98,6 +146,12 @@ impl Gate {
     }
     fn finish(&self, generation: u64) {
         self.cancel(generation);
+        let _ = self.child.compare_exchange(
+            generation | COMMITTED,
+            0,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
         let _ = self.current.compare_exchange(
             generation | COMMITTED,
             0,
@@ -110,6 +164,7 @@ impl Gate {
 static GATE: Gate = Gate {
     next: AtomicU64::new(0),
     current: AtomicU64::new(0),
+    child: AtomicU64::new(0),
 };
 
 pub fn is_current(generation: u64) -> bool {
@@ -160,7 +215,7 @@ impl Countdown {
 pub struct CaptureFlow {
     generation: u64,
     countdown: Countdown,
-    manager: GlobalHotKeyManager,
+    manager: Rc<GlobalHotKeyManager>,
     escape_registered: bool,
     _event_loop_thread: PhantomData<Rc<()>>,
 }
@@ -173,7 +228,7 @@ impl CaptureFlow {
         let generation = GATE.begin()?;
         let registration: Result<_, String> = (|| {
             crate::shortcuts::install_dispatcher();
-            let manager = GlobalHotKeyManager::new().map_err(|e| e.to_string())?;
+            let manager = Rc::new(GlobalHotKeyManager::new().map_err(|e| e.to_string())?);
             manager
                 .register(HotKey::new(None, Code::Escape))
                 .map_err(|e| e.to_string())?;
@@ -209,6 +264,45 @@ impl CaptureFlow {
             }
         }
     }
+    /// Temporarily owns Escape and screenshot persistence while this accepted
+    /// recording retains the process-wide parent generation and hotkey manager.
+    pub fn begin_recording_screenshot(&self, seconds: u8) -> Result<Self, String> {
+        if seconds > 10 {
+            return Err("Unsupported screenshot countdown".into());
+        }
+        let generation = GATE.begin_child(self.generation)?;
+        let registration: Result<(), String> = (|| {
+            self.manager
+                .register(HotKey::new(None, Code::Escape))
+                .map_err(|error| error.to_string())?;
+            captures_session::ensure_capture_escape_hook().inspect_err(|_| {
+                let _ = self.manager.unregister(HotKey::new(None, Code::Escape));
+            })?;
+            captures_session::set_capture_escape_handler(Some(escape));
+            captures_session::set_capture_escape_enabled(true);
+            Ok(())
+        })();
+        if let Err(error) = registration {
+            GATE.cancel(generation);
+            return Err(error);
+        }
+        std::thread::spawn(move || {
+            while GATE.is_current(generation) {
+                if !captures_session::capture_session_available() {
+                    GATE.cancel(generation);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+        });
+        Ok(Self {
+            generation,
+            countdown: Countdown::new(Instant::now(), seconds),
+            manager: Rc::clone(&self.manager),
+            escape_registered: true,
+            _event_loop_thread: PhantomData,
+        })
+    }
     pub fn generation(&self) -> u64 {
         self.generation
     }
@@ -221,7 +315,7 @@ impl CaptureFlow {
         if seconds > 10 {
             return Err("Unsupported screenshot countdown".into());
         }
-        if GATE.current.load(Ordering::Acquire) != self.generation {
+        if !GATE.is_pending(self.generation) {
             return Err("Capture is no longer pending".into());
         }
         self.countdown = Countdown::new(Instant::now(), seconds);
@@ -432,5 +526,46 @@ mod tests {
             !gate.rearm_escape(recording),
             "a stale restart cannot reclaim the generation"
         );
+    }
+
+    #[test]
+    fn recording_child_cancel_and_commit_do_not_replace_the_parent() {
+        let gate = Gate::default();
+        let recording = gate.begin().unwrap();
+        assert!(gate.disarm_escape(recording));
+
+        let cancelled = gate.begin_child(recording).unwrap();
+        assert!(gate.begin_child(recording).is_err());
+        gate.escape();
+        assert!(!gate.is_current(cancelled));
+        assert!(gate.is_current(recording));
+
+        let captured = gate.begin_child(recording).unwrap();
+        assert!(gate.commit(captured));
+        gate.escape();
+        assert!(
+            gate.is_current(captured),
+            "Escape loses after screenshot commit"
+        );
+        gate.finish(captured);
+        assert!(gate.is_current(recording));
+        gate.finish(recording);
+    }
+
+    #[test]
+    fn stale_parent_or_child_cleanup_cannot_touch_a_new_generation() {
+        let gate = Gate::default();
+        let recording = gate.begin().unwrap();
+        assert!(gate.disarm_escape(recording));
+        let child = gate.begin_child(recording).unwrap();
+        gate.cancel(recording);
+        assert!(gate.begin_child(recording).is_err());
+        gate.cancel(child);
+
+        let next = gate.begin().unwrap();
+        gate.finish(recording);
+        gate.finish(child);
+        assert!(gate.is_current(next));
+        gate.cancel(next);
     }
 }

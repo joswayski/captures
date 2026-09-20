@@ -34,6 +34,8 @@ def main():
                         help="stop after running/paused Restart and replacement-media checks")
     parser.add_argument("--hide-controls-only", action="store_true",
                         help="exercise real-SNI Hide/restore, tray loss and finalized media")
+    parser.add_argument("--screenshot-only", action="store_true",
+                        help="exercise running/paused region screenshots without replacing the take")
     parser.add_argument("--ready-notice-only", action="store_true",
                         help="exercise recording-ready save/retry/reveal, expiry and dismissal")
     parser.add_argument("--appearance", choices=("dark", "light"), default="dark")
@@ -140,15 +142,23 @@ def main():
                              "-format", "%k", "info:")) > 16, "painted controls")
         if shortcuts:
             shot(selector, "record-window-shortcut")
-            run("xdotool", "key", "ctrl+alt+r", "sleep", ".2")
-        else:
-            click(selector, 405, 811)
+        # A fresh New Capture starts in Screenshot mode, whose toolbar is
+        # shorter than Record's. Select mode and target explicitly through the
+        # registered shortcut instead of clicking a previous layout's row.
+        run("xdotool", "key", "ctrl+alt+r", "sleep", ".6")
         shot(selector, name)
+        # Observe the actual selected area: the unified controls toolbar does
+        # not necessarily change its pixels when a region becomes valid.
+        before = run("import", "-window", selector, "-crop", "310x170+140+180",
+                     "-depth", "8", "rgb:-")
         # egui must observe a held pointer, not press/release in one input batch.
         run("xdotool", "mousemove", "--sync", "--window", selector, "140", "180",
             "sleep", ".1", "mousedown", "1", "sleep", ".2",
             "mousemove", "--sync", "--window", selector, "450", "350",
             "sleep", ".2", "mouseup", "1")
+        wait(lambda: run("import", "-window", selector, "-crop", "310x170+140+180",
+                         "-depth", "8", "rgb:-") != before,
+             "painted recording selection before confirmation")
         if shortcuts:
             # Switching across every target must retain this asymmetric region,
             # not replace the child or accidentally start a Display recording.
@@ -159,12 +169,11 @@ def main():
             # Do not drag this corner again: the retained selection correctly
             # treats that as a NW resize and collapses it toward the SE corner.
             # Validate the preserved target after confirmation instead.
-        for _ in range(20):
-            run("xdotool", "windowactivate", "--sync", selector, "key", "Return")
-            time.sleep(.25)
-            if manifest() is not None:
-                break
-        assert manifest() is not None, "recording confirmation never reached preparation"
+        # Confirmation destroys the selector before asynchronous preparation
+        # necessarily writes its manifest. Never reactivate that retired XID or
+        # repeat Return while waiting for the accepted recording to start.
+        run("xdotool", "windowactivate", "--sync", selector, "key", "Return")
+        wait(manifest, "recording confirmation reaches preparation")
         assert manifest()["options"]["target"]["rect"] == {
             "x": 140, "y": 180, "width": 310, "height": 170,
         }, "recording must retain the selected region across target shortcuts"
@@ -245,7 +254,14 @@ def main():
                 "sine=frequency=730:sample_rate=48000", "-t", "120", str(tone))
             spawn("microphone-tone", ["paplay", "--device=captures", str(tone)])
         time.sleep(1)
-        run("hsetroot", "-solid", "#c02040")
+        if args.screenshot_only:
+            wallpaper = output / "asymmetric-wallpaper.png"
+            run("convert", "-size", "1280x900", "xc:#c02040", "-fill", "#20a050",
+                "-draw", "rectangle 140,180 294,349", "-fill", "#2070c0",
+                "-draw", "rectangle 295,180 449,349", str(wallpaper))
+            run("hsetroot", "-fill", str(wallpaper))
+        else:
+            run("hsetroot", "-solid", "#c02040")
         settings = output / "settings.json"
         settings.write_text(json.dumps({
             "settings_schema_version": 5, "appearance": args.appearance, "theme": "mustard",
@@ -254,7 +270,8 @@ def main():
             "window_shortcut": "Ctrl+Shift+F8", "display_shortcut": "Ctrl+Shift+F9",
             "launch_at_login": False,
             "auto_copy_to_clipboard": False, "auto_start_on_selection": False,
-            "freeze_screen": True, "screenshot_countdown_seconds": 0,
+            "freeze_screen": True,
+            "screenshot_countdown_seconds": 2 if args.screenshot_only else 0,
             "recording": {"video_fps": 15, "countdown_seconds": 3, "show_cursor": False,
                           "video_shortcut": "Ctrl+Alt+R", "window_shortcut": "Ctrl+Alt+W",
                           "display_shortcut": "Ctrl+Alt+D",
@@ -277,7 +294,7 @@ def main():
         root = wait(lambda: windows("Captures"), "capture workspace")[0]
         time.sleep(1)
         run("xdotool", "key", "ctrl+alt+w")
-        select_recording("recording-selector", shortcuts=True)
+        select_recording("recording-selector", shortcuts=not args.screenshot_only)
         countdown = wait(lambda: windows("Captures Recording Countdown"), "recording countdown")[0]
         guide = wait(lambda: windows("Captures Recording Region"), "countdown region guide")[0]
         shot(countdown, "recording-countdown")
@@ -297,11 +314,124 @@ def main():
         for x, y in [(140, 180), (449, 180), (140, 349), (449, 349), (295, 265)]:
             pixel = run("import", "-window", "root", "-crop", f"1x1+{x}+{y}",
                         "-depth", "8", "rgb:-")
-            assert tuple(pixel[:3]) == (192, 32, 64), (x, y, pixel)
+            expected = ((32, 160, 80) if x < 295 else (32, 112, 192)) \
+                if args.screenshot_only else (192, 32, 64)
+            assert tuple(pixel[:3]) == expected, (x, y, pixel)
         border = run("import", "-window", "root", "-crop", "1x1+139+220", "-depth", "8", "rgb:-")
         assert tuple(border[:3]) == (255, 202, 40), border
         veil = run("import", "-window", "root", "-crop", "1x1+100+220", "-depth", "8", "rgb:-")
         assert 0 < veil[0] < 192, veil
+        if args.screenshot_only:
+            session_id = manifest()["session_id"]
+            for chord in ("ctrl+alt+r", "ctrl+alt+w", "ctrl+alt+d", "ctrl+shift+F7"):
+                run("xdotool", "key", chord, "sleep", ".2")
+                assert manifest()["session_id"] == session_id
+
+            seen_selectors = set()
+
+            def start_screenshot():
+                seen_selectors.update(windows("Captures Region Selection"))
+                controls = wait(lambda: windows("Captures Recording Controls"),
+                                "recording controls before screenshot")[0]
+                click(controls, 258, 54)
+                for _ in range(3):
+                    selector = wait(
+                        lambda: [window for window in windows("Captures Region Selection")
+                                 if window not in seen_selectors],
+                        "new recording screenshot selector")[0]
+                    seen_selectors.add(selector)
+                    try:
+                        wait(lambda: int(run("import", "-window", selector, "-format", "%k", "info:")) > 16,
+                             "painted recording screenshot selector")
+                    except subprocess.CalledProcessError:
+                        continue
+                    time.sleep(.3)
+                    if selector in windows("Captures Region Selection"):
+                        return selector
+                raise AssertionError("recording screenshot selector did not stay active")
+
+            def select_screenshot_region(selector, start, end, screenshot=None):
+                for attempt in range(10):
+                    run("xdotool", "mousemove", "--sync", *map(str, start),
+                        "sleep", ".2", "mousedown", "1", "sleep", ".3", "mousemove",
+                        "--sync", *map(str, end), "sleep", ".2", "mouseup", "1")
+                    time.sleep(.2)
+                    if screenshot and attempt == 0:
+                        shot("root", screenshot)
+                    run("xdotool", "key", "Return")
+                    time.sleep(.2)
+                    countdown = windows("Captures Screenshot Countdown")
+                    if countdown:
+                        return countdown[0]
+                raise AssertionError("recording screenshot region was not confirmed")
+
+            # Escape from selection owns only the child; the accepted take and
+            # its passive guide remain alive.
+            selector = start_screenshot()
+            shot(selector, "recording-screenshot-selector-cancel")
+            run("xdotool", "key", "Escape")
+            hud = wait(lambda: windows("Captures Recording Controls"),
+                       "HUD restored after screenshot selection cancellation")[0]
+            assert manifest()["session_id"] == session_id and not history()
+            time.sleep(1)  # Let the X11 hotkey worker release Escape before rearming it.
+
+            # Persist one asymmetric region with fresh pixels and show its real
+            # mini preview while the original recording keeps running.
+            selector = start_screenshot()
+            countdown = select_screenshot_region(
+                selector, (140, 180), (450, 350), "recording-screenshot-selector-running")
+            shot(countdown, "recording-screenshot-countdown-running")
+            screenshot_metadata = wait(
+                lambda: [path for path in history()
+                         if json.loads(path.read_text())["kind"] == "screenshot"],
+                "independent screenshot publication")
+            assert len(screenshot_metadata) == 1
+            screenshot_entry = json.loads(screenshot_metadata[0].read_text())
+            assert (screenshot_entry["mode"], screenshot_entry["width"],
+                    screenshot_entry["height"]) == ("region", 310, 170), screenshot_entry
+            pixels = run("convert", str(screenshot_metadata[0].parent / "capture.png"),
+                         "-depth", "8", "RGBA:-")
+            assert pixels[:4] == bytes((32, 160, 80, 255)), pixels[:4]
+            assert pixels[-4:] == bytes((32, 112, 192, 255)), pixels[-4:]
+            preview = wait(lambda: windows("Captures Mini Preview"), "recording screenshot preview")[0]
+            shot("root", "recording-screenshot-preview")
+            assert manifest()["session_id"] == session_id
+
+            # Pause is unchanged by the child. Escape during its countdown
+            # removes only that child and publishes no second screenshot.
+            hud = wait(lambda: windows("Captures Recording Controls"), "HUD after screenshot")[0]
+            click(hud, 178, 54)
+            wait(lambda: manifest()["state"] == "paused", "pause after screenshot")
+            hud = wait(lambda: windows("Captures Recording Controls"), "paused HUD")[0]
+            selector = start_screenshot()
+            select_screenshot_region(selector, (530, 150), (810, 330))
+            run("xdotool", "key", "Escape")
+            hud = wait(lambda: windows("Captures Recording Controls"),
+                       "paused HUD restored after countdown cancellation")[0]
+            assert manifest()["state"] == "paused" and manifest()["session_id"] == session_id
+            assert len(history()) == 1
+
+            click(hud, 142, 54)
+            finished(2)
+            metadata = [path for path in history()
+                        if json.loads(path.read_text())["kind"] == "video"]
+            assert len(metadata) == 1
+            media = metadata[0].parent / "media.mp4"
+            run("ffmpeg", "-v", "error", "-i", str(media), "-f", "null", "-")
+            assert screenshot_metadata[0].parent.exists() and media.is_file()
+            acceptance = {
+                "running_screenshot": True, "paused_countdown_escape": True,
+                "selection_escape": True, "single_screenshot_publication": True,
+                "mini_preview": True, "same_recording_session": True,
+                "asymmetric_region": [310, 170], "actual_pixels": True,
+                "recording_decoded": True, "recovery_cleanup": True,
+                "x11_selector_visible_in_recording": True,
+            }
+            (output / "acceptance-recording-screenshot.json").write_text(
+                json.dumps(acceptance, indent=2))
+            print("PASS native recording Screenshot: running publish/preview, selection and paused "
+                  "countdown Escape, asymmetric pixels, same take, decode and cleanup")
+            return
         if args.ready_notice_only:
             def notice_click(window, x, y):
                 # Notifications do not activate the root or accept WM activation.

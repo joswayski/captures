@@ -23,12 +23,14 @@ const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 thread_local! {
     // Native key registration and destruction must stay on the event-loop thread.
     static CAPTURE_FLOW: RefCell<Option<captures_app::capture_flow::CaptureFlow>> = const { RefCell::new(None) };
+    static RECORDING_SCREENSHOT_FLOW: RefCell<Option<captures_app::capture_flow::CaptureFlow>> = const { RefCell::new(None) };
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 enum FlowRequest {
     Begin { seconds: u8 },
+    BeginRecordingScreenshot { parent_generation: u64, seconds: u8 },
     StartCountdown { generation: u64, seconds: u8 },
     RestartCountdown { generation: u64, seconds: u8 },
     Poll { generation: u64 },
@@ -39,42 +41,98 @@ enum FlowRequest {
 fn flow_response(request: FlowRequest) -> Result<Value, String> {
     CAPTURE_FLOW.with(|slot| {
         let mut slot = slot.borrow_mut();
-        match request {
-            FlowRequest::Begin { seconds } => {
-                if slot.is_some() { return Err("A capture is already in progress".into()); }
-                let flow = captures_app::capture_flow::CaptureFlow::begin(seconds)?;
-                let generation = flow.generation();
-                *slot = Some(flow);
-                Ok(json!({"generation":generation}))
+        RECORDING_SCREENSHOT_FLOW.with(|child_slot| {
+            let mut child_slot = child_slot.borrow_mut();
+            match request {
+                FlowRequest::Begin { seconds } => {
+                    if slot.is_some() || child_slot.is_some() {
+                        return Err("A capture is already in progress".into());
+                    }
+                    let flow = captures_app::capture_flow::CaptureFlow::begin(seconds)?;
+                    let generation = flow.generation();
+                    *slot = Some(flow);
+                    Ok(json!({"generation":generation}))
+                }
+                FlowRequest::BeginRecordingScreenshot {
+                    parent_generation,
+                    seconds,
+                } => {
+                    if child_slot.is_some() {
+                        return Err("A recording screenshot is already in progress".into());
+                    }
+                    let parent = slot
+                        .as_ref()
+                        .filter(|flow| {
+                            flow.generation() == parent_generation && flow.is_current()
+                        })
+                        .ok_or("The recording is no longer active")?;
+                    let flow = parent.begin_recording_screenshot(seconds)?;
+                    let generation = flow.generation();
+                    *child_slot = Some(flow);
+                    Ok(json!({"generation":generation}))
+                }
+                FlowRequest::StartCountdown {
+                    generation,
+                    seconds,
+                } => {
+                    let flow = child_slot
+                        .as_mut()
+                        .filter(|flow| flow.generation() == generation)
+                        .or_else(|| {
+                            slot.as_mut()
+                                .filter(|flow| flow.generation() == generation)
+                        })
+                        .ok_or("Capture is no longer active")?;
+                    flow.start_countdown(seconds)?;
+                    Ok(json!({}))
+                }
+                FlowRequest::RestartCountdown {
+                    generation,
+                    seconds,
+                } => {
+                    let flow = slot
+                        .as_mut()
+                        .filter(|flow| flow.generation() == generation)
+                        .ok_or("Capture is no longer active")?;
+                    flow.restart_countdown(seconds)?;
+                    Ok(json!({}))
+                }
+                FlowRequest::Poll { generation } => {
+                    let flow = child_slot
+                        .as_ref()
+                        .filter(|flow| flow.generation() == generation)
+                        .or_else(|| {
+                            slot.as_ref()
+                                .filter(|flow| flow.generation() == generation)
+                        })
+                        .ok_or("Capture is no longer active")?;
+                    Ok(json!({"current":flow.is_current(),"remaining":flow.countdown().remaining(Instant::now())}))
+                }
+                FlowRequest::DisarmEscape { generation } => {
+                    let flow = slot
+                        .as_mut()
+                        .filter(|flow| flow.generation() == generation)
+                        .ok_or("Capture is no longer active")?;
+                    flow.disarm_escape()?;
+                    Ok(json!({}))
+                }
+                FlowRequest::Finish { generation } => {
+                    if child_slot
+                        .as_ref()
+                        .is_some_and(|flow| flow.generation() == generation)
+                    {
+                        *child_slot = None;
+                    }
+                    if slot
+                        .as_ref()
+                        .is_some_and(|flow| flow.generation() == generation)
+                    {
+                        *slot = None;
+                    }
+                    Ok(json!({}))
+                }
             }
-            FlowRequest::StartCountdown { generation, seconds } => {
-                let flow = slot.as_mut().filter(|flow| flow.generation() == generation)
-                    .ok_or("Capture is no longer active")?;
-                flow.start_countdown(seconds)?;
-                Ok(json!({}))
-            }
-            FlowRequest::RestartCountdown { generation, seconds } => {
-                let flow = slot.as_mut().filter(|flow| flow.generation() == generation)
-                    .ok_or("Capture is no longer active")?;
-                flow.restart_countdown(seconds)?;
-                Ok(json!({}))
-            }
-            FlowRequest::Poll { generation } => {
-                let flow = slot.as_ref().filter(|flow| flow.generation() == generation)
-                    .ok_or("Capture is no longer active")?;
-                Ok(json!({"current":flow.is_current(),"remaining":flow.countdown().remaining(Instant::now())}))
-            }
-            FlowRequest::DisarmEscape { generation } => {
-                let flow = slot.as_mut().filter(|flow| flow.generation() == generation)
-                    .ok_or("Capture is no longer active")?;
-                flow.disarm_escape()?;
-                Ok(json!({}))
-            }
-            FlowRequest::Finish { generation } => {
-                if slot.as_ref().is_some_and(|flow| flow.generation() == generation) { *slot = None; }
-                Ok(json!({}))
-            }
-        }
+        })
     })
 }
 
@@ -232,6 +290,10 @@ mod tests {
     fn flow_abi_rejects_invalid_or_stale_requests_without_registering_keys() {
         for (request, succeeds) in [
             (r#"{"operation":"begin","seconds":11}"#, false),
+            (
+                r#"{"operation":"begin_recording_screenshot","parent_generation":999,"seconds":0}"#,
+                false,
+            ),
             (r#"{"operation":"poll","generation":999}"#, false),
             (
                 r#"{"operation":"start_countdown","generation":999,"seconds":3}"#,

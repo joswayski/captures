@@ -155,6 +155,14 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var recordingPollTimer: Timer?
     private var recordingPollPending = false
     private var recordingLifecycle = RecordingLifecycleGate()
+    private var recordingScreenshotGeneration: UInt64?
+    private var recordingScreenshotSession: NativeRegionSession?
+    private var recordingScreenshotPanel: RegionSelectionPanel?
+    private var recordingScreenshotRect: CapturesSelectionRect?
+    private var recordingScreenshotTimer: Timer?
+    private var recordingScreenshotCountdownPanel: ScreenshotCountdownPanel?
+    private var recordingScreenshotSnapshotPending = false
+    private var recordingScreenshotPreviewGeneration: UInt64?
     private var preparingRecording = false
     private var recordingPendingStart = false
     private var activeRecordingGeneration: UInt64?
@@ -254,7 +262,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         deleteButton = button("Delete from history", frame: NSRect(x: 758, y: 594, width: 166, height: 34)) { [weak self] in self?.confirmDelete() }
         clearHistoryButton = button("Clear history…", frame: NSRect(x: 28, y: 594, width: 180, height: 34)) { [weak self] in self?.confirmClearHistory() }
         status = title("Loading capture history…", frame: NSRect(x: 28, y: 642, width: 944, height: 24), muted: true)
-        let limits = title("Screenshots and H.264 MP4 recordings are kept in native History. Screenshots while recording remain unavailable in this native slice.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
+        let limits = title("Screenshots and H.264 MP4 recordings are kept in native History. Recording playback and editing remain unavailable in this native slice.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
         limits.maximumNumberOfLines = 2; updateActions()
     }
 
@@ -837,6 +845,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     hud.hud.pauseOrResume = { [weak self] in self?.pauseOrResumeRecording() }
                     hud.hud.toggleMicrophone = { [weak self] in self?.toggleRecordingMicrophone() }
                     hud.hud.restart = { [weak self] in self?.confirmRestartRecording() }
+                    hud.hud.screenshot = { [weak self] in self?.takeRecordingScreenshot() }
                     hud.hud.stop = { [weak self] in self?.stopRecording() }
                     hud.hud.discard = { [weak self] in self?.discardRecording() }
                     hud.hud.hide = { [weak self] in self?.hideRecordingControls() }
@@ -853,6 +862,179 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     self.finishCapture(); self.showError("Recording failed to start", error)
                 }
             }
+        }
+    }
+
+    private func takeRecordingScreenshot() {
+        guard recordingSession != nil, let hud = recordingHUD,
+              let parentGeneration = activeRecordingGeneration,
+              let display = recordingDisplay, let preferences = recordingPreferences,
+              let screen = screen(for: display), recordingScreenshotGeneration == nil,
+              recordingLifecycle.begin() else { return }
+        do {
+            let response = try AppBridge.flow([
+                "operation": "begin_recording_screenshot",
+                "parent_generation": parentGeneration,
+                "seconds": 0,
+            ])
+            guard let generation = response["generation"] as? NSNumber else {
+                throw AppBridgeError.invalidResponse
+            }
+            recordingScreenshotGeneration = generation.uint64Value
+            recordingScreenshotPreviewGeneration = miniPreviews?.beginCapture(
+                settings: preferences.miniPreviewSettings)
+            recordingScreenshotSnapshotPending = false
+            hud.hud.setLifecycleActionsEnabled(false)
+            hud.orderOut(nil)
+            status.stringValue = "Preparing region screenshot… Press Escape to cancel."
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self, self.recordingScreenshotGeneration == generation.uint64Value else {
+                    return
+                }
+                self.run({
+                    let session = try NativeRegionSession.prepare(display: display.id,
+                        generation: generation.uint64Value, preferences: preferences)
+                    return (session, try session.image())
+                }) { [weak self] result in
+                    guard let self,
+                          self.recordingScreenshotGeneration == generation.uint64Value else { return }
+                    do {
+                        let state = try AppBridge.flow([
+                            "operation": "poll", "generation": generation.uint64Value,
+                        ])
+                        guard state["current"] as? Bool == true else {
+                            self.finishRecordingScreenshot()
+                            return
+                        }
+                        let (session, image) = try result.get()
+                        guard session.logicalSize == screen.frame.size else {
+                            throw AppBridgeError.backend(
+                                "The recording display changed. Select the region again.")
+                        }
+                        self.recordingScreenshotSession = session
+                        let panel = RegionSelectionPanel(screen: screen, image: image,
+                            tokens: self.tokens, autoStart: preferences.autoStart,
+                            confirm: { [weak self] rect in
+                                guard let self,
+                                      self.recordingScreenshotGeneration == generation.uint64Value,
+                                      self.recordingScreenshotPanel != nil else { return }
+                                do {
+                                    self.recordingScreenshotRect = rect
+                                    self.recordingScreenshotPanel?.close()
+                                    self.recordingScreenshotPanel = nil
+                                    _ = try AppBridge.flow([
+                                        "operation": "start_countdown",
+                                        "generation": generation.uint64Value,
+                                        "seconds": preferences.countdown,
+                                    ])
+                                    if preferences.countdown > 0 {
+                                        let countdown = ScreenshotCountdownPanel(screen: screen,
+                                            tokens: self.tokens, remaining: preferences.countdown)
+                                        self.recordingScreenshotCountdownPanel = countdown
+                                        countdown.orderFrontRegardless()
+                                    }
+                                    self.tickRecordingScreenshot(display: display,
+                                        preferences: preferences,
+                                        generation: generation.uint64Value)
+                                } catch {
+                                    self.finishRecordingScreenshot()
+                                    self.showError("Screenshot failed", error)
+                                }
+                            }, cancel: { [weak self] in
+                                guard let self,
+                                      self.recordingScreenshotGeneration == generation.uint64Value,
+                                      self.recordingScreenshotPanel != nil else { return }
+                                self.finishRecordingScreenshot()
+                                self.status.stringValue = "Screenshot cancelled; recording continues."
+                            })
+                        self.recordingScreenshotPanel = panel
+                        panel.makeKeyAndOrderFront(nil)
+                        NSApp.activate(ignoringOtherApps: true)
+                        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+                            self?.tickRecordingScreenshot(display: display,
+                                preferences: preferences, generation: generation.uint64Value)
+                        }
+                        self.recordingScreenshotTimer = timer
+                        RunLoop.main.add(timer, forMode: .common)
+                    } catch {
+                        self.finishRecordingScreenshot()
+                        self.showError("Couldn’t prepare recording screenshot", error)
+                    }
+                }
+            }
+        } catch {
+            recordingLifecycle.end()
+            showError("Couldn’t start recording screenshot", error)
+        }
+    }
+
+    private func tickRecordingScreenshot(display: DisplayItem, preferences: CapturePreferences,
+                                         generation: UInt64) {
+        guard recordingScreenshotGeneration == generation else { return }
+        do {
+            let state = try AppBridge.flow(["operation": "poll", "generation": generation])
+            guard state["current"] as? Bool == true else {
+                finishRecordingScreenshot()
+                status.stringValue = "Screenshot cancelled; recording continues."
+                return
+            }
+            guard recordingScreenshotPanel == nil,
+                  let remaining = state["remaining"] as? Int else { return }
+            recordingScreenshotCountdownPanel?.countdownContent.setRemaining(remaining)
+            guard remaining == 0, !recordingScreenshotSnapshotPending,
+                  let session = recordingScreenshotSession,
+                  let rect = recordingScreenshotRect else { return }
+            recordingScreenshotSnapshotPending = true
+            recordingScreenshotCountdownPanel?.close()
+            recordingScreenshotCountdownPanel = nil
+            status.stringValue = "Capturing screenshot while recording…"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self, self.recordingScreenshotGeneration == generation else { return }
+                self.run({
+                    try session.capture(root: self.historyRoot, rect: rect,
+                        afterCountdown: preferences.countdown > 0)
+                }) { [weak self] result in
+                    guard let self, self.recordingScreenshotGeneration == generation else { return }
+                    switch result {
+                    case .success(let artifact):
+                        let previewGeneration = self.recordingScreenshotPreviewGeneration
+                        self.recordingScreenshotPreviewGeneration = nil
+                        self.finishRecordingScreenshot(restorePreview: false)
+                        self.miniPreviews?.present(artifact, on: display.id,
+                            settings: preferences.miniPreviewSettings,
+                            generation: previewGeneration)
+                        self.loadHistory(select: artifact.id)
+                        if preferences.autoCopy { self.copyImage(at: artifact.imagePath) }
+                    case .failure(let error):
+                        self.finishRecordingScreenshot()
+                        self.showError("Screenshot failed", error)
+                    }
+                }
+            }
+        } catch {
+            finishRecordingScreenshot()
+            showError("Screenshot failed", error)
+        }
+    }
+
+    private func finishRecordingScreenshot(restorePreview: Bool = true) {
+        recordingScreenshotTimer?.invalidate(); recordingScreenshotTimer = nil
+        recordingScreenshotCountdownPanel?.close(); recordingScreenshotCountdownPanel = nil
+        recordingScreenshotPanel?.close(); recordingScreenshotPanel = nil
+        recordingScreenshotSession = nil; recordingScreenshotRect = nil
+        recordingScreenshotSnapshotPending = false
+        if let generation = recordingScreenshotGeneration {
+            _ = try? AppBridge.flow(["operation": "finish", "generation": generation])
+            recordingScreenshotGeneration = nil
+        }
+        if restorePreview {
+            miniPreviews?.restoreCapture(generation: recordingScreenshotPreviewGeneration)
+            recordingScreenshotPreviewGeneration = nil
+        }
+        recordingLifecycle.end()
+        if recordingSession != nil, !recordingControlsHidden, let hud = recordingHUD {
+            hud.hud.setLifecycleActionsEnabled(true)
+            hud.orderFrontRegardless()
         }
     }
 
@@ -1219,6 +1401,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     func finishCapture(restoreWindow: Bool = true, restorePreview: Bool = true) {
+        if recordingScreenshotGeneration != nil {
+            finishRecordingScreenshot()
+        }
         recordingSavedNotice.dismiss()
         recordingRegionPanel?.close(); recordingRegionPanel = nil
         clearRecordingControlsHiddenState()

@@ -230,7 +230,12 @@ controls from captured pixels, so Hide is the native workaround on X11.
 Region recordings keep a click-through boundary and dimming outside the recorded
 area during countdown, recording, pause, and hidden controls. The guide leaves
 the recorded pixels transparent and disappears when the take ends or is cancelled.
-Screenshots during recording, recording playback/editing, transcoded export and GIF
+The recording HUD can open a region screenshot selector without pausing or replacing
+the accepted take. Escape cancels only that selector or its screenshot countdown;
+successful screenshots use the normal native History, preview and auto-copy paths.
+AppKit and Windows can exclude native capture UI. X11 temporarily hides the HUD and
+guide from the screenshot, but cannot keep the selector out of the ongoing recording.
+Recording playback/editing, transcoded export and GIF
 conversion remain unconnected. History displays recording posters and metadata; **Save file**
 copies the original media to the output folder without re-encoding, and
 **Show in Folder** reveals that saved copy. Both native

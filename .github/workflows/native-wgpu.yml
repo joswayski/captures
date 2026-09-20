@@ -70,6 +70,9 @@ jobs:
       - name: Record and decode real MP4 with native controls on private X11
         if: runner.os == 'Linux'
         run: /usr/bin/python3 apps/native/x11_recording_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recording
+      - name: Capture regions while a native recording continues on private X11
+        if: runner.os == 'Linux'
+        run: /usr/bin/python3 apps/native/x11_recording_smoke.py --screenshot-only --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recording-screenshot
       - name: Exercise recording-ready save, retry and expiry with a hidden root
         if: runner.os == 'Linux'
         run: |
@@ -98,6 +101,7 @@ jobs:
             native-x11-controls
             native-x11-target-shortcuts
             native-x11-recording
+            native-x11-recording-screenshot
             native-x11-notice-dark
             native-x11-notice-light
             native-x11-history
