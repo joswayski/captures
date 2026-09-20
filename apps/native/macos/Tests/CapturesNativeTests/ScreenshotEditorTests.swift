@@ -92,6 +92,54 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(controller.window.isVisible)
     }
 
+    func testPendingEditCannotBeReplacedAndDirtyCompletionRemainsRecoverable() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "first"))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "first"), historyRoot: "/native/History")
+        worker.deferRequests = true
+
+        (try field("Crop X", in: controller.root)).stringValue = "13"
+        (try field("Crop Y", in: controller.root)).stringValue = "7"
+        (try field("Crop width", in: controller.root)).stringValue = "321"
+        (try field("Crop height", in: controller.root)).stringValue = "199"
+        try button("Apply crop", in: controller.root).performClick(nil)
+        XCTAssertTrue(controller.state.busy)
+
+        controller.present(artifact: artifact(id: "second"), historyRoot: "/native/History")
+        XCTAssertEqual(worker.openArtifactIDs, ["first"], "a pending accepted edit must own the session")
+        XCTAssertEqual(controller.state.artifactID, "first")
+
+        worker.completePending(with: snapshot(id: "first", width: 321, height: 199,
+                                              unsaved: true, draft: false))
+        waitUntil { !controller.state.busy }
+        XCTAssertEqual(controller.state.artifactID, "first")
+        XCTAssertTrue(controller.state.snapshot?.unsavedChanges == true)
+        XCTAssertTrue(controller.window.title.contains("Unsaved"))
+        XCTAssertTrue(try button("Save draft", in: controller.root).isEnabled)
+    }
+
+    func testGeometryParsingAndFormattingUseTheSameCommaDecimalLocale() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", width: 640.5, height: 360.25))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+            worker: worker, numberLocale: Locale(identifier: "fr_FR"))
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        XCTAssertEqual((try field("Canvas width", in: controller.root)).stringValue, "640,5")
+        XCTAssertEqual((try field("Canvas height", in: controller.root)).stringValue, "360,25")
+
+        (try field("Crop X", in: controller.root)).stringValue = "1,5"
+        (try field("Crop Y", in: controller.root)).stringValue = "2,25"
+        (try field("Crop width", in: controller.root)).stringValue = "300,75"
+        (try field("Crop height", in: controller.root)).stringValue = "150,5"
+        try button("Apply crop", in: controller.root).performClick(nil)
+
+        let rect = try XCTUnwrap(worker.requests.last?["rect"] as? [String: Double])
+        XCTAssertEqual(rect, ["x": 1.5, "y": 2.25, "width": 300.75, "height": 150.5])
+    }
+
     func testEditorControlsRenderAndSendSharedGeometryCommands() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
@@ -118,6 +166,26 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertFalse(try button("Undo", in: controller.root).isEnabled)
             XCTAssertFalse(try button("Redo", in: controller.root).isEnabled)
             try render(controller.root, name: "screenshot-editor-\(appearance)")
+
+            worker.snapshot = snapshot(id: "shot", width: 640, height: 360,
+                                       unsaved: true, draft: true)
+            try button("Apply crop", in: controller.root).performClick(nil)
+            XCTAssertFalse(controller.windowShouldClose(controller.window))
+            let closeSheet = try XCTUnwrap(controller.window.attachedSheet)
+            try render(try XCTUnwrap(closeSheet.contentView),
+                       name: "screenshot-editor-unsaved-close-\(appearance)")
+            controller.window.endSheet(closeSheet, returnCode: .alertThirdButtonReturn)
+
+            worker.failOperation = "save_draft"
+            worker.failureMessage = "The draft could not be saved because the isolated editor-drafts location is unavailable. Your unsaved screenshot edits remain open and recoverable."
+            try button("Save draft", in: controller.root).performClick(nil)
+            try render(controller.root, name: "screenshot-editor-save-error-\(appearance)")
+
+            try button("Discard edits…", in: controller.root).performClick(nil)
+            let discardSheet = try XCTUnwrap(controller.window.attachedSheet)
+            try render(try XCTUnwrap(discardSheet.contentView),
+                       name: "screenshot-editor-discard-\(appearance)")
+            controller.window.endSheet(discardSheet, returnCode: .alertSecondButtonReturn)
         }
     }
 
@@ -259,16 +327,21 @@ final class ScreenshotEditorTests: XCTestCase {
 private final class FakeEditorWorker: EditorWorking {
     var snapshot: NativeEditorSnapshot
     var requests: [[String: Any]] = []
+    var openArtifactIDs: [String] = []
     var closeCount = 0
     var draftsRoot: String?
     var failOperation: String?
+    var failureMessage = "fixture save failed"
+    var deferRequests = false
     var terminationResult: Result<Void, Error> = .success(())
+    private var pendingCompletion: ((Result<EditorPresentation, Error>) -> Void)?
 
     init(snapshot: NativeEditorSnapshot) { self.snapshot = snapshot }
 
     func open(historyRoot: String, draftsRoot: String, artifactID: String,
               completion: @escaping (Result<EditorPresentation, Error>) -> Void) {
         self.draftsRoot = draftsRoot
+        openArtifactIDs.append(artifactID)
         completion(.success(EditorPresentation(snapshot: snapshot,
             image: CGImage.fixture(width: Int(snapshot.width), height: Int(snapshot.height)))))
     }
@@ -277,9 +350,21 @@ private final class FakeEditorWorker: EditorWorking {
                  completion: @escaping (Result<EditorPresentation, Error>) -> Void) {
         requests.append(object)
         if object["operation"] as? String == failOperation {
-            completion(.failure(AppBridgeError.backend("fixture save failed"))); return
+            completion(.failure(AppBridgeError.backend(failureMessage))); return
+        }
+        if deferRequests {
+            pendingCompletion = completion
+            return
         }
         completion(.success(EditorPresentation(snapshot: snapshot,
+            image: CGImage.fixture(width: Int(snapshot.width), height: Int(snapshot.height)))))
+    }
+
+    func completePending(with snapshot: NativeEditorSnapshot) {
+        self.snapshot = snapshot
+        let completion = pendingCompletion
+        pendingCompletion = nil
+        completion?(.success(EditorPresentation(snapshot: snapshot,
             image: CGImage.fixture(width: Int(snapshot.width), height: Int(snapshot.height)))))
     }
 

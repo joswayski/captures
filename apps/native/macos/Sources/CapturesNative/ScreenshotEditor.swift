@@ -35,6 +35,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate {
     private(set) var state = ScreenshotEditorState()
     private let worker: EditorWorking
     private let reportError: (String) -> Void
+    private let editorNumberFormatter: NumberFormatter
     private var tokens: Tokens
     private let preview = NSImageView()
     private let cropX = NSTextField()
@@ -54,9 +55,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate {
     private var fields: [NSTextField] = []
     private var closeAfterCommand = false
 
-    init(tokens: Tokens, worker: EditorWorking = EditorWorker(),
+    init(tokens: Tokens, worker: EditorWorking = EditorWorker(), numberLocale: Locale = .current,
          reportError: @escaping (String) -> Void = { _ in }) {
         self.tokens = tokens; self.worker = worker; self.reportError = reportError
+        editorNumberFormatter = NumberFormatter()
+        editorNumberFormatter.locale = numberLocale
+        editorNumberFormatter.numberStyle = .decimal
+        editorNumberFormatter.usesGroupingSeparator = false
+        editorNumberFormatter.maximumFractionDigits = 3
+        editorNumberFormatter.minimum = -1_000_000
+        editorNumberFormatter.maximum = 1_000_000
         let bounds = NSRect(x: 0, y: 0, width: 1000, height: 700)
         root = Surface(frame: bounds)
         window = NSWindow(contentRect: bounds, styleMask: [.titled, .closable, .miniaturizable],
@@ -69,6 +77,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate {
     }
 
     func present(artifact: CaptureArtifact, historyRoot: String) {
+        guard !state.busy else {
+            showError("Wait for the current editor action to finish before opening another screenshot.")
+            window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            return
+        }
         guard !artifact.isRecording else {
             showError("Recording editing is not available in this native editor.")
             return
@@ -315,25 +328,19 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate {
     private func configure(_ field: NSTextField, frame: NSRect, label: String) {
         field.frame = frame; field.setAccessibilityLabel(label)
         field.alignment = .right; field.placeholderString = "0"
-        field.formatter = decimalFormatter(); root.addSubview(field)
-    }
-
-    private func decimalFormatter() -> NumberFormatter {
-        let formatter = NumberFormatter(); formatter.numberStyle = .decimal
-        formatter.usesGroupingSeparator = false; formatter.maximumFractionDigits = 3
-        formatter.minimum = -1_000_000; formatter.maximum = 1_000_000
-        return formatter
+        field.formatter = editorNumberFormatter; root.addSubview(field)
     }
 
     private func number(_ field: NSTextField) -> Double? {
-        guard let value = Double(field.stringValue), value.isFinite else { return nil }
+        guard let value = editorNumberFormatter.number(from: field.stringValue)?.doubleValue,
+              value.isFinite else { return nil }
         return value
     }
     private func positive(_ field: NSTextField) -> Double? {
         guard let value = number(field), value > 0 else { return nil }; return value
     }
     private func format(_ value: Double) -> String {
-        value.rounded() == value ? String(Int(value)) : String(format: "%.3f", value)
+        editorNumberFormatter.string(from: NSNumber(value: value)) ?? String(value)
     }
 
     private func showError(_ message: String) {
