@@ -65,7 +65,11 @@ screenshot and recording keys switch mode/target in place. Busy recording phases
 and focused Preferences suppress capture shortcuts. Hidden recording controls are the exception:
 only New Capture is routed, and it restores the same generation without launching another capture.
 Native recording editing,
-GIF export and media-tool bundling remain unconnected.
+GIF conversion and media-tool bundling remain unconnected. History **Save file**
+copies original video/GIF bytes to the configured output folder without encoding
+or overwriting another file. Repeated Save reuses the export; deleting it allows
+another copy from private History. **Show in Folder** reveals the exported copy,
+which survives deleting or clearing History. The poster remains the native preview.
 
 Linux CI records an asymmetric 310×170 region on a private Xvfb display, pauses,
 resumes and restarts from running/paused, independently decodes replacement pixels
@@ -176,8 +180,9 @@ overwriting an unrelated file. Repeat Save reuses the existing export; a missing
 export can be recreated from history. History always retains the lossless PNG.
 JPEG composites alpha onto white; WebP saves losslessly, using the same encoders
 as the shipping application. Deleting history preserves all exported formats.
-**Clear history…** requires confirmation, deletes the workspace's screenshot
-history copies, and leaves exported files and other history roots untouched.
+**Clear history…** requires confirmation and deletes the workspace's screenshot,
+video and GIF history copies, including entries outside the selected filter.
+It leaves exported files, recording recovery drafts and other history roots untouched.
 Cancel leaves history unchanged. Both hosts reload after a failure, including
 partial deletion, and keep the error visible. This also works with existing
 local history on Wayland; the live capture restriction is separate.

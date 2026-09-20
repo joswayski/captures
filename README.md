@@ -182,7 +182,8 @@ Captures design. Development workbenches include Swift/AppKit on macOS and an
 experimental Rust/wgpu renderer candidate for Windows/Linux. They are not
 replacement downloads. An opt-in native capture workspace connects full-display
 PNG capture, local screenshot history, copy, export, and deletion to
-shared Rust engines. Clear history requires confirmation and keeps exported files.
+shared Rust engines. Clear history requires confirmation, removes all capture
+types regardless of the selected filter, and keeps exported files and recovery drafts.
 It uses separate development data; Wayland capture is gated
 until the candidate can hide its window reliably. Native Preferences saves
 appearance, custom colors, and capture/media defaults through shared Rust logic
@@ -229,9 +230,13 @@ controls from captured pixels, so Hide is the native workaround on X11.
 Region recordings keep a click-through boundary and dimming outside the recorded
 area during countdown, recording, pause, and hidden controls. The guide leaves
 the recorded pixels transparent and disappears when the take ends or is cancelled.
-Screenshots during recording, recording playback/editing/export and GIF
-conversion remain unconnected; History displays recording posters and metadata only.
-Real macOS and Windows recording, audio devices, multi-display and hardware acceptance remain open;
+Screenshots during recording, recording playback/editing, transcoded export and GIF
+conversion remain unconnected. History displays recording posters and metadata; **Save file**
+copies the original media to the output folder without re-encoding, and
+**Show in Folder** reveals that saved copy. Both native
+hosts offer counted All, Screenshots, Video and GIF history filters; filtering
+does not delete captures or exports. Real macOS and
+Windows recording, audio devices, multi-display and hardware acceptance remain open;
 Wayland recording is gated with the rest of native capture.
 Native Preferences also includes an optional feedback form. Sending shares only
 the message, optional contact, category, and displayed app/system details with
