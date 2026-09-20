@@ -502,14 +502,19 @@ Hidden and locked images can transform, matching shipping policy; full-canvas
 photos rotate their canvas, and undo/draft restore retain the orientation.
 Merge/flatten remains unconnected.
 
-The wgpu Draw panel connects filled rectangle and ellipse gestures. Preview points
-remain host-local until release sends one shared creation command to the worker.
+The wgpu Draw panel connects rectangle, ellipse, straight line and tapered arrow
+gestures. Preview points remain host-local until release sends one shared creation
+command to the worker.
 The new stable layer ID is selected and stale encoded output is cleared. Reverse
-and off-canvas drags, zero-area no-ops, cancellation, undo/redo, persisted pixels
-and draft reopening have automated coverage. Shipping default fill and rounded
-rectangle geometry are used; resize grips and other drawing tools are still
-separate work. Windows/X11/Wayland share this host
-code; private X11 is the exercised UI, not physical input/accessibility acceptance.
+and off-canvas drags, zero-area closed-shape no-ops, cancellation, undo/redo,
+persisted pixels and draft reopening have automated coverage. Shipping default fill and rounded
+rectangle geometry are used. Open shapes keep signed endpoints and no fill;
+horizontal, vertical and zero-length lines are retained. Arrow release requires
+max(1.5, 3/displayScale) document pixels. The transient preview triangulates the
+same concave tapered polygon used for shared rendering and painted bounds.
+Resize/curve grips, freehand and other tools remain separate work.
+Windows/X11/Wayland share this host code; private X11 is the exercised UI, not
+physical input/accessibility acceptance.
 AppKit creation controls remain unconnected.
 
 The wgpu Layers panel connects annotation-style fields with one explicit Apply

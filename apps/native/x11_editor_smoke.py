@@ -247,6 +247,62 @@ def main():
 
         run("xdotool", "windowsize", "--sync", editor, "886", "700")
         click(editor, 736, 62)
+        shot(editor, "open-shape-tools")
+        click(editor, 190, 132)  # Line follows Rectangle and Ellipse.
+        drag((320, 310), (500, 310))
+        horizontal = save_layers(lambda values: len(values) == 2, "horizontal line")[-1]
+        assert horizontal["shape"] == "line" and horizontal["style"]["fill"] is None
+        assert (horizontal["x"], horizontal["y"], horizontal["endX"], horizontal["endY"]) == (82, 221, 262, 221)
+        shot(editor, "open-shape-horizontal")
+        pixel("open-shape-horizontal", 400, 310, (255, 59, 92))
+        pixel("open-shape-horizontal", 400, 300, (40, 110, 166))
+        drag((540, 360), (540, 200))
+        vertical = save_layers(lambda values: len(values) == 3, "reverse vertical line")[-1]
+        assert (vertical["x"], vertical["y"], vertical["endX"], vertical["endY"]) == (302, 271, 302, 111)
+        click(editor, 700, 420)
+        point_line = save_layers(lambda values: len(values) == 4, "zero-length line click")[-1]
+        assert (point_line["x"], point_line["y"]) == (point_line["endX"], point_line["endY"])
+        click(editor, 40, 176)  # Arrow wraps onto the next row.
+        before_arrow = draft.read_bytes()
+        run("xdotool", "mousemove", "--window", editor, "750", "320", "mousedown", "1",
+            "sleep", ".2", "mousemove", "--sync", "--window", editor, "580", "190", "sleep", ".3")
+        shot(editor, "open-shape-arrow-transient")
+        pixel("open-shape-arrow-transient", 665, 255, (255, 59, 92))
+        assert draft.read_bytes() == before_arrow
+        run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
+        save_layers(lambda values: len(values) == 4, "arrow Escape cancellation")
+        drag((750, 320), (580, 190))
+        shot(editor, "open-shape-arrow-result")
+        arrow = save_layers(lambda values: len(values) == 5, "reverse diagonal arrow")[-1]
+        assert arrow["shape"] == "arrow" and arrow["controls"] == []
+        assert all(abs(actual - expected) < 1e-12 for actual, expected in zip(
+            (arrow["x"], arrow["y"], arrow["endX"], arrow["endY"]), (512, 231, 342, 101)))
+        shot(editor, "open-shape-arrow")
+        pixel("open-shape-arrow", 665, 255, (255, 59, 92))
+        pixel("open-shape-arrow", 540, 260, (255, 59, 92))
+        drag((500, 400), (502, 400))  # Two screen/document pixels is below the 3px gesture threshold.
+        save_layers(lambda values: len(values) == 5, "short arrow cancellation")
+        click(editor, 35, 62)
+        save_layers(lambda values: len(values) == 4, "arrow single undo")
+        click(editor, 98, 62)
+        assert save_layers(lambda values: len(values) == 5, "arrow redo")[-1]["id"] == arrow["id"]
+        run("xdotool", "windowsize", "--sync", editor, "760", "540")
+        shot(editor, "open-shape-minimum")
+        close(editor)
+        wait(lambda: not windows("Screenshot editor"), "open-shape editor closes")
+        editor = reopen()
+        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        shot(editor, "open-shape-reopened")
+        pixel("open-shape-reopened", 665, 255, (255, 59, 92))
+        assert layers()[-1]["id"] == arrow["id"]
+        assert (artifact / "capture.png").read_bytes() == original
+        click(editor, 275, 62)
+        click(editor, 55, 128)
+        wait(lambda: not draft.exists(), "discard open-shape edits")
+
+        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        click(editor, 736, 62)
+        click(editor, 50, 132)
         drag((320, 250), (480, 370))
         annotation = save_layers(lambda values: len(values) == 2, "annotation fixture")[-1]
         click(editor, 463, 62)
@@ -852,6 +908,8 @@ def main():
                        "crop-cancel-restores-fields", "crop-popup-escape",
                        "shape-reverse-rectangle-ellipse-pixels", "shape-single-undo-redo-stable-id",
                        "shape-transient-escape-degenerate", "shape-draft-reopen-outside-expansion",
+                       "open-shape-horizontal-vertical-zero-lines", "open-shape-reverse-arrow-pixels",
+                       "open-shape-transient-escape-short-cancel", "open-shape-undo-redo-minimum-reopen",
                        "annotation-unapplied-reset-noop", "annotation-locked-fill-stroke-pixels",
                        "annotation-style-undo-redo", "annotation-shadow-toggle-retains-custom",
                        "annotation-color-picker-minimum-reopen-pixels",

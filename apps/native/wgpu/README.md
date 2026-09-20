@@ -94,12 +94,16 @@ abandons the selection without editing or saving. Numeric crop fields remain usa
 The Layers panel selects front-to-back layers and connects visibility, locking,
 image rename, opacity, X/Y movement, duplicate, delete and adjacent ordering.
 Shared Rust preserves locked boundaries and makes every accepted edit undoable.
-Draw adds filled rectangles and ellipses with the shipping default annotation color
-and rounded rectangle corners. Drag previews are transient; release creates one
-selected layer and undo step. Escape, focus loss, close or switching panels cancels
+Draw adds filled rectangles/ellipses, straight lines and tapered arrows with the
+shipping default annotation color and rounded rectangle corners. Drag previews are
+transient; release creates one selected layer and undo step. Escape, focus loss,
+close or switching panels cancels
 the unfinished drag. Reverse and off-canvas drags use document coordinates; partial
 overhang stays clipped and fully outside shapes expand the canvas. Zero-width or
-zero-height drags add nothing. The chosen tool remains active. Resize grips and
+zero-height closed shapes add nothing; lines retain horizontal, vertical and
+zero-length gestures. Arrows require at least 1.5 document pixels and 3 screen pixels.
+Arrow previews triangulate the shared tapered polygon rather than approximating
+its arrowhead. The chosen tool remains active. Resize/curve grips, freehand and
 other drawing tools remain unconnected.
 Layers → Annotation style now edits closed-shape fill/stroke toggles, stroke/fill
 colors, stroke width and drop-shadow color, opacity, blur and offsets. Color pickers

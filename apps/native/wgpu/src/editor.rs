@@ -13,9 +13,10 @@ use std::{
 
 use captures_app::{
     editor::{
-        AnnotationStylePatch, ClosedShapeCreate, ClosedShapeKind, CropDrag, Document,
-        DropShadowStyle, DropShadowStylePatch, Element, ElementStyle, ImageTransform, LayerEdit,
-        LayerPlacement, OptionalNullable, Point, Rect,
+        ARROW_MIN_DRAW_LENGTH, AnnotationStylePatch, ClosedShapeCreate, ClosedShapeKind, CropDrag,
+        Document, DropShadowStyle, DropShadowStylePatch, Element, ElementBase, ElementStyle,
+        ImageTransform, LayerEdit, LayerPlacement, OpenShapeCreate, OpenShapeKind,
+        OptionalNullable, Point, Rect, ShapeElement, arrow_fill_polygon,
     },
     editor_output::{SavedExport, save_new_export},
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
@@ -85,6 +86,56 @@ enum Section {
     Draw,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DrawShape {
+    Rectangle,
+    Ellipse,
+    Line,
+    Arrow,
+}
+
+impl DrawShape {
+    fn request(self, start: Point, end: Point, display_scale: f64) -> Option<Request> {
+        match self {
+            Self::Rectangle | Self::Ellipse if start.x != end.x && start.y != end.y => {
+                Some(Request::CreateClosedShape {
+                    create: ClosedShapeCreate {
+                        shape: if self == Self::Rectangle {
+                            ClosedShapeKind::Rectangle
+                        } else {
+                            ClosedShapeKind::Ellipse
+                        },
+                        start,
+                        end,
+                        style: ElementStyle::default(),
+                        opacity: 100.,
+                    },
+                })
+            }
+            Self::Line | Self::Arrow
+                if self == Self::Line
+                    || (end.x - start.x).hypot(end.y - start.y)
+                        >= ARROW_MIN_DRAW_LENGTH.max(3. / display_scale.max(0.01)) =>
+            {
+                Some(Request::CreateOpenShape {
+                    create: OpenShapeCreate {
+                        shape: if self == Self::Line {
+                            OpenShapeKind::Line
+                        } else {
+                            OpenShapeKind::Arrow
+                        },
+                        start,
+                        end,
+                        style: ElementStyle::default(),
+                        opacity: 100.,
+                    },
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
 const CROP_ASPECTS: [(&str, Option<f64>); 5] = [
     ("Free", None),
     ("1:1", Some(1.)),
@@ -149,7 +200,7 @@ struct View {
     crop_previous: Option<[f64; 4]>,
     crop_drag: Option<CropDrag>,
     crop_aspect: usize,
-    draw_shape: ClosedShapeKind,
+    draw_shape: DrawShape,
     shape_drag: Option<(Point, Point)>,
     canvas: [f64; 2],
     section: Section,
@@ -183,7 +234,7 @@ impl Default for View {
             crop_previous: None,
             crop_drag: None,
             crop_aspect: 0,
-            draw_shape: ClosedShapeKind::Rectangle,
+            draw_shape: DrawShape::Rectangle,
             shape_drag: None,
             canvas: [1., 1.],
             section: Section::Geometry,
@@ -677,8 +728,10 @@ impl Editor {
                         .as_mut()
                         .ok_or_else(|| "Editor is unavailable.".to_owned())
                         .and_then(|session| {
-                            let creates_layer =
-                                matches!(request, Request::CreateClosedShape { .. });
+                            let creates_layer = matches!(
+                                request,
+                                Request::CreateClosedShape { .. } | Request::CreateOpenShape { .. }
+                            );
                             session.execute(request)?;
                             let mut presented = Presented::from_session(session);
                             if creates_layer {
@@ -956,9 +1009,11 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             }
             if view.section == Section::Draw {
                 ui.heading("Draw shapes");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut view.draw_shape, ClosedShapeKind::Rectangle, "Rectangle");
-                    ui.selectable_value(&mut view.draw_shape, ClosedShapeKind::Ellipse, "Ellipse");
+                ui.horizontal_wrapped(|ui| {
+                    ui.selectable_value(&mut view.draw_shape, DrawShape::Rectangle, "Rectangle");
+                    ui.selectable_value(&mut view.draw_shape, DrawShape::Ellipse, "Ellipse");
+                    ui.selectable_value(&mut view.draw_shape, DrawShape::Line, "Line");
+                    ui.selectable_value(&mut view.draw_shape, DrawShape::Arrow, "Arrow");
                 });
                 ui.label("Drag to draw. Release to add one layer. Escape cancels the current drag.");
                 ui.small("New shapes use the default annotation color. Change fill, stroke, shadow, opacity, position and ordering in Layers.");
@@ -1112,39 +1167,81 @@ fn show_shape(
             egui::Color32::from_hex(style.fill.as_deref().expect("default closed-shape fill"))
                 .expect("default annotation color is hex");
         match view.draw_shape {
-            ClosedShapeKind::Rectangle => {
+            DrawShape::Rectangle => {
                 let radius = (12. * preview.width() / bounds.width as f32)
                     .min(rect.width() / 6.)
                     .min(rect.height() / 6.);
                 painter.rect_filled(rect, radius, fill);
             }
-            ClosedShapeKind::Ellipse => {
+            DrawShape::Ellipse => {
                 painter.add(egui::Shape::ellipse_filled(
                     rect.center(),
                     rect.size() / 2.,
                     fill,
                 ));
             }
+            DrawShape::Line => {
+                painter.line_segment(
+                    [position(start), position(end)],
+                    egui::Stroke::new(
+                        (style.stroke_width / bounds.width) as f32 * preview.width(),
+                        fill,
+                    ),
+                );
+            }
+            DrawShape::Arrow => {
+                let arrow = ShapeElement {
+                    base: ElementBase {
+                        id: String::new(),
+                        x: start.x,
+                        y: start.y,
+                        rotation: None,
+                        locked: false,
+                        visible: true,
+                        opacity: 100.,
+                        blend_mode: "source-over".into(),
+                    },
+                    shape: "arrow".into(),
+                    end_x: end.x,
+                    end_y: end.y,
+                    controls: Vec::new(),
+                    style: style.clone(),
+                    extra: Default::default(),
+                };
+                painter.add(egui::Shape::mesh(polygon_mesh(
+                    arrow_fill_polygon(&arrow)
+                        .into_iter()
+                        .map(position)
+                        .collect(),
+                    fill,
+                )));
+            }
         }
     }
     if response.drag_stopped_by(egui::PointerButton::Primary)
         && let Some((start, end)) = view.shape_drag.take()
-        && start.x != end.x
-        && start.y != end.y
+        && let Some(request) =
+            view.draw_shape
+                .request(start, end, f64::from(preview.width()) / bounds.width)
     {
-        view.submit(
-            tx,
-            Request::CreateClosedShape {
-                create: ClosedShapeCreate {
-                    shape: view.draw_shape,
-                    start,
-                    end,
-                    style,
-                    opacity: 100.,
-                },
-            },
-        );
+        view.submit(tx, request);
     }
+}
+
+fn polygon_mesh(points: Vec<egui::Pos2>, color: egui::Color32) -> egui::Mesh {
+    // epaint's filled paths require convex polygons. Tapered arrow necks are concave.
+    let coordinates: Vec<_> = points
+        .iter()
+        .flat_map(|point| [f64::from(point.x), f64::from(point.y)])
+        .collect();
+    let indices = earcutr::earcut(&coordinates, &[], 2)
+        .expect("shared arrow polygon has finite two-dimensional coordinates");
+    let mut mesh = egui::Mesh::default();
+    for point in points {
+        mesh.colored_vertex(point, color);
+    }
+    mesh.indices = indices.into_iter().map(|index| index as u32).collect();
+    mesh
 }
 
 fn show_crop(
@@ -1842,6 +1939,73 @@ mod tests {
     }
 
     #[test]
+    fn open_shape_requests_keep_axis_lines_and_cancel_scale_dependent_arrow_stubs() {
+        let start = Point { x: -7.25, y: 13.5 };
+        for end in [start, Point { x: 4., y: 13.5 }, Point { x: -7.25, y: -2. }] {
+            let Some(Request::CreateOpenShape { create }) =
+                DrawShape::Line.request(start, end, 0.5)
+            else {
+                panic!("lines must not use closed-shape or arrow minimum rules")
+            };
+            assert_eq!(create.shape, OpenShapeKind::Line);
+            assert_eq!((create.start, create.end), (start, end));
+        }
+        for (scale, threshold) in [(0.5, 6.), (1., 3.), (4., 1.5)] {
+            let below = Point {
+                x: start.x - threshold + 0.001,
+                y: start.y,
+            };
+            let at = Point {
+                x: start.x - threshold,
+                y: start.y,
+            };
+            assert!(DrawShape::Arrow.request(start, below, scale).is_none());
+            let Some(Request::CreateOpenShape { create }) =
+                DrawShape::Arrow.request(start, at, scale)
+            else {
+                panic!("an arrow at the inclusive boundary must commit")
+            };
+            assert_eq!(create.shape, OpenShapeKind::Arrow);
+            assert_eq!((create.start, create.end), (start, at));
+        }
+    }
+
+    #[test]
+    fn preview_mesh_triangulates_concave_notches_without_painting_across_them() {
+        // C shape: 6×5 outer rectangle minus a 4×3 notch. A convex fan overfills it.
+        let points = [
+            (0., 0.),
+            (6., 0.),
+            (6., 1.),
+            (2., 1.),
+            (2., 4.),
+            (6., 4.),
+            (6., 5.),
+            (0., 5.),
+        ];
+        let mesh = polygon_mesh(
+            points.map(|(x, y)| egui::pos2(x, y)).to_vec(),
+            egui::Color32::RED,
+        );
+        let mut area = 0.;
+        for indices in mesh.indices.chunks_exact(3) {
+            let [a, b, c] = indices
+                .try_into()
+                .map(|ids: [u32; 3]| ids.map(|id| mesh.vertices[id as usize].pos))
+                .unwrap();
+            area += ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() / 2.;
+            let center = (a.to_vec2() + b.to_vec2() + c.to_vec2()) / 3.;
+            assert!(!(center.x > 2. && center.y > 1. && center.y < 4.));
+        }
+        assert_eq!(area, 18.);
+        assert!(
+            polygon_mesh(Vec::new(), egui::Color32::RED)
+                .indices
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn shape_drag_maps_reverse_and_outside_points_without_committing_until_release() {
         let ctx = egui::Context::default();
         let mut view = View::default();
@@ -1876,7 +2040,12 @@ mod tests {
             modifiers: Default::default(),
         };
         frame(&mut view, vec![]);
-        for kind in [ClosedShapeKind::Rectangle, ClosedShapeKind::Ellipse] {
+        for kind in [
+            DrawShape::Rectangle,
+            DrawShape::Ellipse,
+            DrawShape::Line,
+            DrawShape::Arrow,
+        ] {
             view.draw_shape = kind;
             let start = egui::pos2(500., 300.);
             let end = egui::pos2(60., 150.); // Outside preview, not clamped like crop.
@@ -1899,18 +2068,62 @@ mod tests {
                 &view.presented.as_ref().unwrap().document
             ));
             frame(&mut view, vec![button(end, false)]);
-            let Job::Apply(Request::CreateClosedShape { create }) = rx.try_recv().unwrap() else {
-                panic!()
+            let (start, end, style, opacity) = match rx.try_recv().unwrap() {
+                Job::Apply(Request::CreateClosedShape { create }) => {
+                    assert_eq!(
+                        kind,
+                        if create.shape == ClosedShapeKind::Rectangle {
+                            DrawShape::Rectangle
+                        } else {
+                            DrawShape::Ellipse
+                        }
+                    );
+                    (create.start, create.end, create.style, create.opacity)
+                }
+                Job::Apply(Request::CreateOpenShape { create }) => {
+                    assert_eq!(
+                        kind,
+                        if create.shape == OpenShapeKind::Line {
+                            DrawShape::Line
+                        } else {
+                            DrawShape::Arrow
+                        }
+                    );
+                    (create.start, create.end, create.style, create.opacity)
+                }
+                _ => panic!("expected exactly one creation command"),
             };
-            assert_eq!(create.shape, kind);
-            assert_eq!(create.start, Point { x: 800., y: 400. });
-            assert_eq!(create.end, Point { x: -80., y: 100. });
-            assert_eq!(create.style, ElementStyle::default());
-            assert_eq!(create.opacity, 100.);
+            assert_eq!(start, Point { x: 800., y: 400. });
+            assert_eq!(end, Point { x: -80., y: 100. });
+            assert_eq!(style, ElementStyle::default());
+            assert_eq!(opacity, 100.);
             assert!(rx.try_recv().is_err() && view.shape_drag.is_none() && view.pending);
             assert_eq!(view.draw_shape, kind); // Creation does not switch back to another tool.
             view.pending = false;
         }
+        view.draw_shape = DrawShape::Line;
+        let point = egui::pos2(400., 250.);
+        frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(point), button(point, true)],
+        );
+        frame(&mut view, vec![button(point, false)]);
+        let Job::Apply(Request::CreateOpenShape { create }) = rx.try_recv().unwrap() else {
+            panic!("a line click retains the shipping zero-length layer")
+        };
+        assert_eq!(create.start, create.end);
+        assert_eq!(create.shape, OpenShapeKind::Line);
+        view.pending = false;
+        view.draw_shape = DrawShape::Arrow;
+        let short = egui::pos2(402., 250.); // Four document pixels at 0.5× is below six.
+        frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(point), button(point, true)],
+        );
+        frame(&mut view, vec![egui::Event::PointerMoved(short)]);
+        frame(&mut view, vec![button(short, false)]);
+        assert!(rx.try_recv().is_err() && !view.pending && view.shape_drag.is_none());
+        view.draw_shape = DrawShape::Ellipse;
         let start = egui::pos2(300., 200.);
         let end = egui::pos2(300., 350.);
         frame(
@@ -1947,6 +2160,59 @@ mod tests {
             |_| unreachable!("copy was not requested"),
         );
         receive(&editor, &ctx);
+        for shape in [OpenShapeKind::Line, OpenShapeKind::Arrow] {
+            editor.view.lock().unwrap().preview(&editor.tx);
+            receive(&editor, &ctx);
+            assert!(editor.view.lock().unwrap().show_output);
+            editor.view.lock().unwrap().submit(
+                &editor.tx,
+                Request::CreateOpenShape {
+                    create: OpenShapeCreate {
+                        shape,
+                        start: Point { x: 6., y: 2. },
+                        end: Point { x: 0., y: 2. },
+                        style: ElementStyle::default(),
+                        opacity: 100.,
+                    },
+                },
+            );
+            receive(&editor, &ctx);
+            {
+                let view = editor.view.lock().unwrap();
+                assert!(view.error.is_none() && view.unsaved());
+                assert!(!view.show_output && view.output.is_none());
+                let frame = view.presented.as_ref().unwrap();
+                assert_eq!(frame.document.elements.len(), 2);
+                let created = frame.document.elements.last().unwrap();
+                assert_eq!(
+                    view.selected_layer.as_deref(),
+                    Some(created.base().id.as_str())
+                );
+                assert!(view.annotation.is_some());
+                if shape == OpenShapeKind::Line {
+                    assert_eq!(frame.pixels.get_pixel(3, 2).0, [255, 59, 92, 255]);
+                }
+            }
+            editor
+                .view
+                .lock()
+                .unwrap()
+                .submit(&editor.tx, Request::Undo);
+            receive(&editor, &ctx);
+            assert_eq!(
+                editor
+                    .view
+                    .lock()
+                    .unwrap()
+                    .presented
+                    .as_ref()
+                    .unwrap()
+                    .document
+                    .elements
+                    .len(),
+                1
+            );
+        }
         editor.view.lock().unwrap().preview(&editor.tx);
         receive(&editor, &ctx);
         assert!(editor.view.lock().unwrap().show_output);
