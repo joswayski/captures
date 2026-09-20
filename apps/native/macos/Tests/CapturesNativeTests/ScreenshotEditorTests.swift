@@ -1517,7 +1517,8 @@ final class ScreenshotEditorTests: XCTestCase {
             let document = try XCTUnwrap(scroll.documentView)
             scroll.contentView.scroll(to: NSPoint(x: 0, y: document.bounds.height - scroll.contentView.bounds.height))
             scroll.reflectScrolledClipView(scroll.contentView)
-            XCTAssertEqual(apply.visibleRect, apply.bounds, "style actions remain reachable in the minimum window")
+            XCTAssertTrue(scroll.contentView.bounds.contains(apply.convert(apply.bounds, to: scroll.contentView)),
+                          "style actions remain reachable in the minimum window")
             worker.failLayerAction = "annotation_style"
             worker.failureMessage = "The annotation style could not be applied. The previous draft, layer selection, pixels and undo history remain recoverable."
             try field("Fill color", in: controller.root).stringValue = "#00aa44"
@@ -1567,7 +1568,8 @@ final class ScreenshotEditorTests: XCTestCase {
         let undone = try request(["operation": "undo"])
         XCTAssertEqual(undone.snapshot.layers.first?.annotation, original)
         XCTAssertEqual(rgba(undone.image, x: 10, y: 12), [255, 59, 92, 255])
-        XCTAssertEqual(rgba(undone.image, x: 20, y: 10), [0, 0, 19, 255])
+        // Outside the original 7×3 image, Undo reveals the #f7f7f5 canvas.
+        XCTAssertEqual(rgba(undone.image, x: 20, y: 10), [247, 247, 245, 255])
         _ = try request(["operation": "redo"])
         _ = try request(["operation": "save_draft", "updated_at_ms": 1357])
         worker.close(); EditorWorker.flush()
