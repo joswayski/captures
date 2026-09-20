@@ -1,5 +1,6 @@
 mod capture_controls;
 mod countdown;
+mod editor;
 mod feedback;
 mod live;
 mod mini_preview;
