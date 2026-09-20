@@ -85,6 +85,59 @@ final class RecordingHUDTests: XCTestCase {
         }
     }
 
+    func testHUDChromeAppearsOnlyOnInteractionAndStop() throws {
+        _ = NSApplication.shared
+        let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
+        let hud = RecordingHUDView(frame: NSRect(x: 0, y: 0, width: 430, height: 102),
+            tokens: tokens)
+        let window = NSWindow(contentRect: hud.bounds, styleMask: [.borderless],
+            backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hud; defer { window.close() }
+        hud.setMicrophone(muted: false, available: true)
+        let buttons = hud.subviews.compactMap { $0 as? CaptureButton }
+        XCTAssertTrue(buttons.allSatisfy { $0.hudControl && $0.frame.height == 34 })
+        XCTAssertEqual(hud.layer?.cornerRadius, tokens.number("r-xl"))
+        let microphone = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Mute microphone" })
+
+        func background(_ x: CGFloat, _ y: CGFloat) throws -> NSColor {
+            window.display(); hud.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(hud.bitmapImageRepForCachingDisplay(in: hud.bounds))
+            hud.cacheDisplay(in: hud.bounds, to: bitmap)
+            let scale = CGFloat(bitmap.pixelsWide) / hud.bounds.width
+            return try XCTUnwrap(bitmap.colorAt(x: Int(x * scale), y: Int(y * scale))?
+                .usingColorSpace(.deviceRGB))
+        }
+        let x = microphone.frame.minX + 5
+        let y = microphone.frame.minY + 5
+        let bare = try background(microphone.frame.minX - 1, y)
+        let idle = try background(x, y)
+        XCTAssertEqual(idle.redComponent, bare.redComponent, accuracy: 0.01,
+            "an ordinary idle button must not paint a background")
+        let edge = try background(microphone.frame.minX + 1, microphone.frame.midY)
+        XCTAssertEqual(edge.redComponent, bare.redComponent, accuracy: 0.01,
+            "an ordinary idle button must not paint a border")
+        let event = try XCTUnwrap(NSEvent.enterExitEvent(with: .mouseEntered, location: .zero,
+            modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil,
+            eventNumber: 0, trackingNumber: 0, userData: nil))
+        microphone.mouseEntered(with: event)
+        XCTAssertGreaterThan(try background(x, y).redComponent, bare.redComponent + 0.03)
+        try render(hud, window: window, name: "recording-hud-dark-hover")
+        microphone.mouseExited(with: event)
+        hud.setMicrophone(muted: true, available: true)
+        XCTAssertGreaterThan(try background(x, y).redComponent, bare.redComponent + 0.03)
+        try render(hud, window: window, name: "recording-hud-dark-selected")
+        hud.setLifecycleActionsEnabled(false)
+        microphone.mouseEntered(with: event)
+        XCTAssertEqual(try background(x, y).redComponent, bare.redComponent, accuracy: 0.01,
+            "a disabled button must not paint selected or hover chrome")
+        hud.setLifecycleActionsEnabled(true)
+        let stop = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Stop recording" })
+        let stopColor = try background(stop.frame.minX + 5, stop.frame.minY + 5)
+        XCTAssertGreaterThan(stopColor.redComponent, stopColor.greenComponent,
+            "Stop retains its signal surface without a hover")
+    }
+
     func testPrivacyNoticeReflectsCaptureInclusionSetting() throws {
         _ = NSApplication.shared
         let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])

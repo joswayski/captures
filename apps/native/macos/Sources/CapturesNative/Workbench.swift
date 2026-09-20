@@ -36,6 +36,9 @@ final class CaptureButton: NSButton {
     var glass = false
     var primary = false
     var signal = false
+    var hudControl = false { didSet { updateTrackingAreas(); needsDisplay = true } }
+    private var hoverTracking: NSTrackingArea?
+    private var hovered = false
     var icon: CaptureButtonIcon?
     var actionBlock: (() -> Void)?
     var enterActionBlock: (() -> Void)?
@@ -55,6 +58,21 @@ final class CaptureButton: NSButton {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @objc private func activate() { actionBlock?() }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        hoverTracking = nil
+        if hudControl {
+            let tracking = NSTrackingArea(rect: .zero,
+                options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                owner: self, userInfo: nil)
+            addTrackingArea(tracking); hoverTracking = tracking
+        }
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
@@ -79,26 +97,46 @@ final class CaptureButton: NSButton {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        let radius = tokens.number(hudControl ? "r-sm" : "r-md")
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
-            xRadius: tokens.number("r-md"), yRadius: tokens.number("r-md"))
-        let fill = !isEnabled ? (glass ? "glass" : "surface-sunken")
-            : signal ? "theme-signal-surface"
-            : primary ? "theme-accent"
-            : cell?.isHighlighted == true ? (glass ? "glass-active" : "surface-active")
-            : selected ? (glass ? "glass-active" : "surface-selected") : (glass ? "glass-raised" : "control")
-        tokens.color(fill).setFill()
-        path.fill()
-        tokens.color(signal && isEnabled ? "theme-signal"
-            : primary && isEnabled ? "theme-accent"
-            : selected && isEnabled ? "theme-accent"
-            : (glass ? "glass-border" : "control-border")).setStroke()
-        path.lineWidth = 1
-        path.stroke()
+            xRadius: radius, yRadius: radius)
+        if hudControl {
+            let active = cell?.isHighlighted == true
+            let fill: String? = !isEnabled ? nil
+                : signal ? (hovered || active ? "theme-signal" : "theme-signal-surface")
+                : active || selected ? "glass-active" : hovered ? "glass-hover" : nil
+            if let fill { tokens.color(fill).setFill(); path.fill() }
+            if isEnabled && (signal || selected) {
+                tokens.color(signal ? "theme-signal" : "theme-accent")
+                    .withAlphaComponent(signal ? 0.4 : 0.3).setStroke()
+                path.lineWidth = 1; path.stroke()
+            }
+        } else {
+            let fill = !isEnabled ? (glass ? "glass" : "surface-sunken")
+                : signal ? "theme-signal-surface"
+                : primary ? "theme-accent"
+                : cell?.isHighlighted == true ? (glass ? "glass-active" : "surface-active")
+                : selected ? (glass ? "glass-active" : "surface-selected") : (glass ? "glass-raised" : "control")
+            tokens.color(fill).setFill()
+            path.fill()
+            tokens.color(signal && isEnabled ? "theme-signal"
+                : primary && isEnabled ? "theme-accent"
+                : selected && isEnabled ? "theme-accent"
+                : (glass ? "glass-border" : "control-border")).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
         let font = NSFont.systemFont(ofSize: tokens.number("text-md"), weight: .medium)
-        let foreground = tokens.color(isEnabled
+        var foreground = tokens.color(isEnabled
             ? (signal ? "theme-signal"
                 : primary ? "theme-accent-ink" : glass ? "glass-text" : "text")
             : (glass ? "glass-text-subtle" : "text-faint"))
+        if hudControl {
+            foreground = tokens.color(!isEnabled ? "glass-text-subtle"
+                : signal && !hovered && cell?.isHighlighted != true ? "theme-signal"
+                : selected ? "theme-accent"
+                : hovered || cell?.isHighlighted == true ? "glass-text" : "glass-text-muted")
+        }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font, .foregroundColor: foreground,
         ]
