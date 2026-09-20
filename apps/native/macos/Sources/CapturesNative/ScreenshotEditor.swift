@@ -269,7 +269,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func buildLayersPanel() {
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 272, height: 106))
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 272, height: 88))
         scroll.hasVerticalScroller = true; scroll.drawsBackground = false
         layerTable = NSTableView(frame: scroll.bounds)
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("editor-layer"))
@@ -278,43 +278,41 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         layerTable.allowsEmptySelection = false; layerTable.setAccessibilityLabel("Screenshot layers")
         scroll.documentView = layerTable; layersPanel.addSubview(scroll)
 
-        layerName.frame = NSRect(x: 0, y: 114, width: 190, height: 30)
+        panelFieldLabel("Name", x: 0, y: 94, parent: layersPanel)
+        layerName.frame = NSRect(x: 0, y: 112, width: 190, height: 30)
         layerName.setAccessibilityLabel("Layer name")
         layerName.alignment = .left; layerName.placeholderString = "Layer name"
         layersPanel.addSubview(layerName)
-        renameButton = button("Rename", frame: NSRect(x: 196, y: 114, width: 76, height: 30),
+        renameButton = button("Rename", frame: NSRect(x: 196, y: 112, width: 76, height: 30),
                               parent: layersPanel) { [weak self] in self?.renameLayer() }
-        visibilityButton = button("Hide", frame: NSRect(x: 0, y: 152, width: 128, height: 30),
+        visibilityButton = button("Hide", frame: NSRect(x: 0, y: 150, width: 128, height: 30),
                                   parent: layersPanel) { [weak self] in self?.toggleVisibility() }
-        lockButton = button("Lock", frame: NSRect(x: 144, y: 152, width: 128, height: 30),
+        lockButton = button("Lock", frame: NSRect(x: 144, y: 150, width: 128, height: 30),
                             parent: layersPanel) { [weak self] in self?.toggleLock() }
 
-        panelFieldLabel("Opacity (0–100)", x: 0, y: 190, parent: layersPanel)
-        configure(layerOpacity, frame: NSRect(x: 144, y: 186, width: 72, height: 30),
+        panelFieldLabel("Opacity (0–100)", x: 0, y: 186, parent: layersPanel)
+        configure(layerOpacity, frame: NSRect(x: 0, y: 204, width: 216, height: 30),
                   label: "Layer opacity", parent: layersPanel)
-        opacityButton = button("Set", frame: NSRect(x: 222, y: 186, width: 50, height: 30),
+        opacityButton = button("Set", frame: NSRect(x: 222, y: 204, width: 50, height: 30),
                                parent: layersPanel) { [weak self] in self?.setOpacity() }
 
-        panelFieldLabel("X", x: 0, y: 226, parent: layersPanel)
-        panelFieldLabel("Y", x: 92, y: 226, parent: layersPanel)
-        configure(layerX, frame: NSRect(x: 20, y: 222, width: 66, height: 30),
+        panelFieldLabel("X", x: 0, y: 240, parent: layersPanel)
+        panelFieldLabel("Y", x: 92, y: 240, parent: layersPanel)
+        configure(layerX, frame: NSRect(x: 0, y: 258, width: 86, height: 30),
                   label: "Layer X", parent: layersPanel)
-        configure(layerY, frame: NSRect(x: 112, y: 222, width: 66, height: 30),
+        configure(layerY, frame: NSRect(x: 92, y: 258, width: 86, height: 30),
                   label: "Layer Y", parent: layersPanel)
-        moveButton = button("Move", frame: NSRect(x: 184, y: 222, width: 88, height: 30),
+        moveButton = button("Move", frame: NSRect(x: 184, y: 258, width: 88, height: 30),
                             parent: layersPanel) { [weak self] in self?.moveLayer() }
 
-        duplicateButton = button("Duplicate", frame: NSRect(x: 0, y: 260, width: 128, height: 30),
+        duplicateButton = button("Duplicate", frame: NSRect(x: 0, y: 296, width: 128, height: 30),
                                  parent: layersPanel) { [weak self] in self?.duplicateLayer() }
-        deleteButton = button("Delete", frame: NSRect(x: 144, y: 260, width: 128, height: 30),
+        deleteButton = button("Delete", frame: NSRect(x: 144, y: 296, width: 128, height: 30),
                               parent: layersPanel) { [weak self] in self?.deleteLayer() }
-        moveUpButton = button("Move up", frame: NSRect(x: 0, y: 298, width: 128, height: 30),
+        moveUpButton = button("Move up", frame: NSRect(x: 0, y: 334, width: 128, height: 30),
                               parent: layersPanel) { [weak self] in self?.reorderLayer(up: true) }
-        moveDownButton = button("Move down", frame: NSRect(x: 144, y: 298, width: 128, height: 30),
+        moveDownButton = button("Move down", frame: NSRect(x: 144, y: 334, width: 128, height: 30),
                                 parent: layersPanel) { [weak self] in self?.reorderLayer(up: false) }
-        panelLabel("Locked layers can still be shown, renamed, duplicated, or faded.",
-                   frame: NSRect(x: 0, y: 336, width: 272, height: 44), muted: true,
-                   parent: layersPanel)
     }
 
     @objc private func changeSection() {

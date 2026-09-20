@@ -341,6 +341,11 @@ final class ScreenshotEditorTests: XCTestCase {
                 $0.accessibilityLabel() == "Layer controls"
             })
             XCTAssertTrue(layerPanel.isFlipped)
+            let opacityLabel = try XCTUnwrap(layerPanel.subviews.compactMap { $0 as? NSTextField }
+                .first { $0.stringValue == "Opacity (0–100)" })
+            let opacityField = try field("Layer opacity", in: layerPanel)
+            XCTAssertLessThan(opacityLabel.frame.minY, opacityField.frame.minY,
+                              "top-down layer controls place labels above fields")
             try render(controller.root, name: "screenshot-editor-layers-\(appearance)")
 
             worker.failLayerAction = "duplicate"
