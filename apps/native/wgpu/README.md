@@ -52,6 +52,12 @@ tray-host loss restores the HUD and workspace. Microphone mute/unmute rotates th
 changing the selected device or global preference, while paused changes remain
 paused; mic-less sessions explain why the control is unavailable. Successful output is listed in native History with its
 poster and metadata. The native recording editor is not connected yet.
+After finalization, a fixed-glass Recording ready notice offers Save file using
+the current output folder, followed by Show in Folder for the saved copy. It does
+not activate the root; hidden-root actions and expiry work through one-shot
+wakeups. The 15.2-second expiry pauses during a save and resets after its result;
+errors allow retry. Dismiss/expiry never delete media, and a new capture clears
+the notice. This is a finalization trigger until the native editor is connected.
 A passive region guide remains visible through countdown, pause, restart and
 hidden controls. Its veil and accent border are painted strictly outside the
 recorded rectangle, with outward pixel rounding at fractional scale. It accepts

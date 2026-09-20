@@ -151,6 +151,12 @@ Pass `--hide-controls-only` for focused running/paused Hide checks through a rea
 Xfce SNI tray, configured New Capture shortcut restoration, tray-host-loss recovery,
 finalized media decode and recovery cleanup.
 
+Pass `--ready-notice-only --appearance dark` (and repeat with `light`) to exercise
+real recording finalization followed by notice save failure/retry, byte-identical
+export, missing-file reveal, expiry with a hidden root, dismissal and cleanup
+before another capture. The test intercepts only the `xdg-open` launcher to check
+its path without opening a file manager. It never uses installed capture data.
+
 Add `--virtual-microphone` when PulseAudio, `pactl`, `paplay`, and the ALSA Pulse
 plugin are installed. The test feeds a 730 Hz tone into a disposable null-sink
 monitor, drives running mute/unmute through the real HUD, checks durable segment

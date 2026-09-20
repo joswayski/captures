@@ -40,6 +40,7 @@ packages=(
   postgresql
   python3-dbus
   python3-gi
+  python3-xlib
   wget
   x11-apps
   x11-utils

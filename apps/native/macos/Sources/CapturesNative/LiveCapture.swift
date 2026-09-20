@@ -140,6 +140,17 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var recordingRegionPanel: RecordingRegionPanel?
     private var recordingHiddenNotice: RecordingControlsHiddenNoticePanel?
     private var recordingHiddenNoticeTimer: Timer?
+    private lazy var recordingSavedNotice: RecordingSavedNoticeController = {
+        let controller = RecordingSavedNoticeController(tokens: tokens)
+        controller.save = { [weak self] id, completion in
+            guard let self, let artifact = self.artifacts.first(where: { $0.id == id }) else {
+                completion(.failure(AppBridgeError.backend("The recording is no longer in Capture History.")))
+                return
+            }
+            self.save(artifact, completion: completion)
+        }
+        return controller
+    }()
     private(set) var recordingControlsHidden = false
     private var recordingPollTimer: Timer?
     private var recordingPollPending = false
@@ -349,6 +360,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     @discardableResult func capture(_ kind: StillCaptureKind) -> Bool {
+        recordingSavedNotice.dismiss()
         let index = displayMenu.indexOfSelectedItem
         guard !capturing, displays.indices.contains(index), !historyRoot.isEmpty else { return false }
         windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
@@ -391,6 +403,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     @discardableResult func newCapture(recordingTarget: UnifiedCaptureTarget? = nil) -> Bool {
+        recordingSavedNotice.dismiss()
         let index = displayMenu.indexOfSelectedItem
         guard !capturing, displays.indices.contains(index), !historyRoot.isEmpty else { return false }
         windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
@@ -1137,6 +1150,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private func stopRecording() {
         guard let session = recordingSession, recordingLifecycle.begin() else { return }
+        let noticeScreen = recordingHUD?.screen ?? recordingDisplay.flatMap(screen(for:))
         clearRecordingControlsHiddenState()
         recordingHUD?.hud.setLifecycleActionsEnabled(false)
         recordingPollTimer?.invalidate(); recordingPollTimer = nil
@@ -1157,10 +1171,16 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 self.finishCapture()
                 let finalStatus = finalized.warning
                     ?? "Recording saved to \(finalized.path)"
+                let noticeGeneration = self.recordingSavedNotice.model.generation
                 self.loadHistory(select: finalized.id) { [weak self] in
                     guard let self,
+                          self.recordingSavedNotice.model.generation == noticeGeneration,
+                          !self.capturing,
                           self.artifacts.contains(where: { $0.id == finalized.id }) else { return }
                     self.status.stringValue = finalStatus
+                    if let noticeScreen {
+                        self.recordingSavedNotice.present(artifactID: finalized.id, screen: noticeScreen)
+                    }
                 }
             case .failure(let error):
                 self.preserveFailedRecording(session, warning: error.localizedDescription)
@@ -1199,6 +1219,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     func finishCapture(restoreWindow: Bool = true, restorePreview: Bool = true) {
+        recordingSavedNotice.dismiss()
         recordingRegionPanel?.close(); recordingRegionPanel = nil
         clearRecordingControlsHiddenState()
         if let session = recordingSession {
@@ -1352,7 +1373,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         guard let index = selectedIndex, artifacts.indices.contains(index) else { return }; let artifact = artifacts[index]
         save(artifact)
     }
-    private func save(_ artifact: CaptureArtifact) {
+    private func save(_ artifact: CaptureArtifact,
+                      completion: ((Result<String, Error>) -> Void)? = nil) {
         let noun = artifact.isRecording ? "recording" : "image"
         status.stringValue = "Saving \(noun)…"
         miniPreviews?.setStatus("Saving…", for: artifact.id)
@@ -1360,7 +1382,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             let preferences = try CapturePreferences.load(path: settingsPath)
             let result = try transport.request(["operation": artifact.isRecording ? "save_recording" : "save_screenshot", "root": historyRoot, "id": artifact.id,
                 "directory": preferences.directory, "format": preferences.format])
-            guard let value = result["artifact"] as? [String: Any], let updated = CaptureArtifact(value), let path = result["path"] as? String else { throw AppBridgeError.invalidResponse }
+            guard let value = result["artifact"] as? [String: Any], let updated = CaptureArtifact(value),
+                  let path = result["path"] as? String,
+                  !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { throw AppBridgeError.invalidResponse }
             return (updated, path)
         }) { [weak self] result in
             guard let self else { return }
@@ -1368,9 +1393,14 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 if let current = self.artifacts.firstIndex(where: { $0.id == artifact.id }) { self.artifacts[current] = value.0 }
                 self.status.stringValue = "Saved \(noun) to \(value.1)"
                 self.miniPreviews?.setStatus("Saved", for: artifact.id)
+                completion?(.success(value.1))
+                if completion == nil {
+                    self.recordingSavedNotice.savedFromHistory(artifactID: artifact.id, path: value.1)
+                }
             case .failure(let error):
                 self.showError("Couldn’t save \(noun)", error)
                 self.miniPreviews?.setStatus("Save failed", for: artifact.id)
+                completion?(.failure(error))
             }; self.updateActions()
         }
     }

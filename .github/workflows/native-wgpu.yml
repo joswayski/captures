@@ -70,6 +70,12 @@ jobs:
       - name: Record and decode real MP4 with native controls on private X11
         if: runner.os == 'Linux'
         run: /usr/bin/python3 apps/native/x11_recording_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recording
+      - name: Exercise recording-ready save, retry and expiry with a hidden root
+        if: runner.os == 'Linux'
+        run: |
+          for appearance in dark light; do
+            /usr/bin/python3 apps/native/x11_recording_smoke.py --ready-notice-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-notice-$appearance"
+          done
       - name: Exercise native history deletion on private X11
         if: runner.os == 'Linux'
         run: python apps/native/x11_history_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-history
@@ -92,6 +98,8 @@ jobs:
             native-x11-controls
             native-x11-target-shortcuts
             native-x11-recording
+            native-x11-notice-dark
+            native-x11-notice-light
             native-x11-history
             native-x11-preview
             native-x11-lifecycle

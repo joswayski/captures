@@ -257,8 +257,19 @@ and after replacement-engine opening. Countdown cancellation discards the replac
 session. Private X11 exercises running/paused restart and replacement-only decoded
 pixels; AppKit and Windows remain implemented but require native CI/hardware, and
 Wayland remains gated by the existing native recording limitation. This does not
-close the Recording HUD gate: in-recording screenshots, saved notices and physical
+close the Recording HUD gate: in-recording screenshots and physical
 accessibility/compositor acceptance remain open.
+
+The recording-ready notice slice connects successful finalization to a fixed-glass,
+nonactivating top-right notice in both native hosts. Save file reuses the shared
+original-recording export operation; saved state offers Show in Folder. Pending
+saves pause the 15.2-second expiry; failure keeps retry available. Dismiss, expiry
+and new capture only remove presentation, and stale callbacks cannot revive it.
+Native has no recording editor yet, so the trigger is finalization, not the
+shipping editor-close event. Private-X11 input tests exercise export byte equality,
+failure/retry, missing exports, intercepted OS-reveal arguments, hidden-root expiry,
+dismissal and capture cleanup; AppKit provides state and render fixtures. Physical
+macOS/Windows, Wayland, accessibility and motion parity remain open.
 
 Native region recordings now retain a passive display-local guide from countdown
 until finalization/discard/cancellation. AppKit and wgpu paint the fixed glass veil

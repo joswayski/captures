@@ -107,6 +107,7 @@ enum Job {
     Execute {
         request: Request,
         preview: Option<PreviewGuard>,
+        notice: Option<crate::recording_saved_notice::Guard>,
     },
     PrepareRegion {
         display_id: String,
@@ -154,6 +155,7 @@ enum Reply {
     HistoryLoaded(Result<Vec<Artifact>, String>),
     Executed {
         preview: Option<PreviewGuard>,
+        notice: Option<crate::recording_saved_notice::Guard>,
         result: Result<Box<Response>, String>,
     },
     HistoryCleared(Result<Box<Response>, String>),
@@ -619,6 +621,11 @@ pub struct Live {
     selector_rx: Receiver<SelectorMessage>,
     preview_tx: Sender<PreviewMessage>,
     preview_rx: Receiver<PreviewMessage>,
+    notice_tx: Sender<crate::recording_saved_notice::Action>,
+    notice_rx: Receiver<crate::recording_saved_notice::Action>,
+    recording_notice: Option<crate::recording_saved_notice::Notice>,
+    recording_notice_generation: u64,
+    recording_notice_target: Option<CaptureTarget>,
     previews: MiniPreviews,
     root_hide_deferred: bool,
     open_history_requested: bool,
@@ -664,6 +671,7 @@ impl Live {
         let (out, rx) = mpsc::channel();
         let (selector_tx, selector_rx) = mpsc::channel();
         let (preview_tx, preview_rx) = mpsc::channel();
+        let (notice_tx, notice_rx) = mpsc::channel();
         let capture_ctx = ctx.clone();
         let worker = thread::spawn(move || {
             // Retain ownership on X11. Disk decode and clipboard encoding never
@@ -673,7 +681,11 @@ impl Live {
                 let reply = match job {
                     Job::Shutdown => break,
                     Job::LoadHistory { root } => Reply::HistoryLoaded(load_history(&root)),
-                    Job::Execute { request, preview } => {
+                    Job::Execute {
+                        request,
+                        preview,
+                        notice,
+                    } => {
                         let clearing = matches!(request, Request::ClearHistory { .. });
                         let result = captures_app::execute(request)
                             .map(Box::new)
@@ -681,7 +693,11 @@ impl Live {
                         if clearing {
                             Reply::HistoryCleared(result)
                         } else {
-                            Reply::Executed { preview, result }
+                            Reply::Executed {
+                                preview,
+                                notice,
+                                result,
+                            }
                         }
                     }
                     Job::PrepareRegion {
@@ -800,6 +816,11 @@ impl Live {
             selector_rx,
             preview_tx,
             preview_rx,
+            notice_tx,
+            notice_rx,
+            recording_notice: None,
+            recording_notice_generation: 0,
+            recording_notice_target: None,
             previews: MiniPreviews::default(),
             root_hide_deferred: false,
             open_history_requested: false,
@@ -914,6 +935,8 @@ impl Live {
     }
 
     pub fn request_capture(&mut self, request: CaptureRequest) {
+        self.recording_notice = None;
+        self.recording_notice_target = None;
         if request == CaptureRequest::NewCapture && self.recording_controls_hidden() {
             // The shipping New Capture action restores a hidden active HUD; it
             // never starts a second capture or replaces the accepted take.
@@ -1063,6 +1086,8 @@ impl Live {
     }
 
     pub fn flush(&mut self) {
+        self.recording_notice = None;
+        self.recording_notice_target = None;
         // Cancel preparation/countdown before draining work. CaptureFlow::cancel
         // leaves a capture that already crossed its persistence commit point alone.
         self.selector_scope_generation.store(0, Ordering::Release);
@@ -1126,6 +1151,7 @@ impl Live {
         let _ = self.tx.send(Job::Execute {
             request,
             preview: None,
+            notice: None,
         });
     }
 
@@ -1141,6 +1167,7 @@ impl Live {
         let _ = self.tx.send(Job::Execute {
             request,
             preview: Some(preview),
+            notice: None,
         });
     }
 
@@ -1219,6 +1246,14 @@ impl Live {
     }
 
     pub fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if self
+            .recording_notice
+            .as_ref()
+            .is_some_and(|notice| notice.expired(Instant::now()))
+        {
+            self.recording_notice = None;
+            self.recording_notice_target = None;
+        }
         self.can_hide = frame
             .winit_window()
             .map(|window| window.is_visible().is_some());
@@ -1877,6 +1912,15 @@ impl Live {
                 {
                     match result {
                         Ok(finalized) => {
+                            self.recording_notice_generation =
+                                self.recording_notice_generation.wrapping_add(1);
+                            self.recording_notice =
+                                Some(crate::recording_saved_notice::Notice::new(
+                                    finalized.entry.id.clone(),
+                                    self.recording_notice_generation,
+                                    Instant::now(),
+                                ));
+                            self.recording_notice_target = self.countdown_target;
                             self.status = finalized.warning.map_or_else(
                                 || format!("Recording saved to {}", finalized.path.display()),
                                 |warning| {
@@ -1889,6 +1933,7 @@ impl Live {
                             self.history_refresh_status = Some(self.status.clone());
                             self.finish_capture(ctx, false);
                             self.load_history();
+                            request_hidden_root_paint(ctx);
                         }
                         Err(error) => {
                             self.error = Some(error);
@@ -2224,7 +2269,11 @@ impl Live {
                         }
                     }
                 }
-                Reply::Executed { preview, result } => {
+                Reply::Executed {
+                    preview,
+                    notice,
+                    result,
+                } => {
                     self.pending = self.pending.saturating_sub(1);
                     if self.capture_phase == Some(CapturePhase::DisplayCapturing) {
                         self.capture_in_flight = false;
@@ -2233,6 +2282,14 @@ impl Live {
                     }
                     match result {
                         Err(error) => {
+                            if let Some(guard) = notice {
+                                if self.recording_notice.as_mut().is_some_and(|current| {
+                                    current.save_result(&guard, Err(error.clone()), Instant::now())
+                                }) {
+                                    request_hidden_root_paint(ctx);
+                                }
+                                continue;
+                            }
                             if let Some(preview) = preview {
                                 if let Some(card) = self
                                     .previews
@@ -2248,6 +2305,25 @@ impl Live {
                             }
                         }
                         Ok(response) => {
+                            if let Some(guard) = notice {
+                                let path = match response.as_ref() {
+                                    Response::Saved { artifact, path }
+                                        if artifact.entry.id == guard.artifact_id =>
+                                    {
+                                        Some(path.clone())
+                                    }
+                                    _ => None,
+                                };
+                                self.apply(*response, false);
+                                if let Some(path) = path
+                                    && self.recording_notice.as_mut().is_some_and(|current| {
+                                        current.save_result(&guard, Ok(path), Instant::now())
+                                    })
+                                {
+                                    request_hidden_root_paint(ctx);
+                                }
+                                continue;
+                            }
                             let announce = preview.as_ref().is_none_or(|preview| {
                                 self.previews
                                     .accepts(&preview.artifact_id, preview.generation)
@@ -2604,6 +2680,9 @@ impl Live {
                 self.accept_artifact(artifact, "Full display captured as PNG");
             }
             Response::Saved { artifact, path } => {
+                if announce && let Some(notice) = &mut self.recording_notice {
+                    notice.mark_saved(&artifact.entry.id, path.clone(), Instant::now());
+                }
                 if let Some(item) = self
                     .artifacts
                     .iter_mut()
@@ -2637,6 +2716,76 @@ impl Live {
         settings: Result<AppSettings, String>,
     ) {
         self.capture_viewports(ctx, tokens);
+        while let Ok(action) = self.notice_rx.try_recv() {
+            use crate::recording_saved_notice::Action;
+            match action {
+                Action::Dismiss(guard)
+                    if self
+                        .recording_notice
+                        .as_ref()
+                        .is_some_and(|n| n.guard == guard) =>
+                {
+                    self.recording_notice = None;
+                    self.recording_notice_target = None;
+                }
+                Action::Reveal(guard, path)
+                    if self
+                        .recording_notice
+                        .as_ref()
+                        .is_some_and(|n| n.guard == guard) =>
+                {
+                    if let Err(error) = reveal(&path) {
+                        if let Some(notice) = &mut self.recording_notice {
+                            notice.fail(
+                                format!("Could not show the recording in its folder: {error}"),
+                                Instant::now(),
+                            );
+                        }
+                    } else {
+                        self.recording_notice = None;
+                        self.recording_notice_target = None;
+                    }
+                }
+                Action::Save(guard)
+                    if self
+                        .recording_notice
+                        .as_ref()
+                        .is_some_and(|n| n.guard == guard) =>
+                {
+                    let directory = settings
+                        .as_ref()
+                        .map(|s| PathBuf::from(&s.output_directory));
+                    match directory {
+                        Ok(directory) => {
+                            let accepted =
+                                self.recording_notice.as_mut().and_then(|n| n.begin_save());
+                            if let Some(guard) = accepted {
+                                self.pending += 1;
+                                let _ = self.tx.send(Job::Execute {
+                                    request: Request::SaveRecording {
+                                        root: self.root.clone(),
+                                        id: guard.artifact_id.clone(),
+                                        directory,
+                                    },
+                                    preview: None,
+                                    notice: Some(guard),
+                                });
+                            }
+                        }
+                        Err(error) => {
+                            if let Some(notice) = &mut self.recording_notice {
+                                notice.fail(
+                                    format!("Could not save the recording: {error}"),
+                                    Instant::now(),
+                                );
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.recording_notice_viewport(ctx, tokens);
         if self.flow.is_none()
             && let Ok(settings) = &settings
         {
@@ -2915,6 +3064,71 @@ impl Live {
                 if let Some(message) = message {
                     let _ = sender.send(message);
                     ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                }
+            },
+        );
+    }
+
+    fn recording_notice_viewport(&self, ctx: &egui::Context, tokens: &Tokens) {
+        let (Some(notice), Some(target)) = (&self.recording_notice, self.recording_notice_target)
+        else {
+            return;
+        };
+        let Some(bounds) = target.preview_bounds else {
+            return;
+        };
+        let scale = bounds.scale_factor.max(1.0) as f32;
+        let work_right = (bounds.work_x + bounds.work_width as i32) as f32 / scale;
+        let work_top = bounds.work_y as f32 / scale;
+        let position = egui::pos2(
+            work_right - crate::recording_saved_notice::SIZE.x - 16.,
+            work_top + 16.,
+        );
+        let sender = self.notice_tx.clone();
+        let notice = notice.clone();
+        let tokens = tokens.clone();
+        let builder = egui::ViewportBuilder::default()
+            .with_title("Recording ready")
+            .with_position(position)
+            .with_inner_size(crate::recording_saved_notice::SIZE)
+            .with_min_inner_size(crate::recording_saved_notice::SIZE)
+            .with_max_inner_size(crate::recording_saved_notice::SIZE)
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_transparent(true)
+            .with_has_shadow(false)
+            .with_always_on_top()
+            .with_taskbar(false)
+            .with_active(false);
+        #[cfg(target_os = "linux")]
+        let builder = builder
+            .with_window_type(egui::X11WindowType::Notification)
+            .with_override_redirect(true);
+        ctx.show_viewport_deferred(
+            egui::ViewportId::from_hash_of(("recording-saved-notice", notice.guard.generation)),
+            builder,
+            move |ui, _| {
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::OuterPosition(position));
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::ContentProtected(true));
+                if notice.expired(Instant::now())
+                    || ui.input(|input| input.viewport().close_requested())
+                {
+                    let _ = sender.send(crate::recording_saved_notice::Action::Dismiss(
+                        notice.guard.clone(),
+                    ));
+                    request_hidden_root_paint(ui.ctx());
+                    ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                } else if let Some(action) =
+                    crate::recording_saved_notice::show(ui, &tokens, &notice)
+                {
+                    let _ = sender.send(action);
+                    request_hidden_root_paint(ui.ctx());
+                    ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                }
+                if let Some(remaining) = notice.remaining(Instant::now()) {
+                    ui.ctx().request_repaint_after(remaining);
                 }
             },
         );
@@ -4053,6 +4267,12 @@ fn copy_image(path: &Path, clipboard: &mut Option<arboard::Clipboard>) -> Result
 }
 
 fn reveal(path: &Path) -> std::io::Result<()> {
+    if !path.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("saved file no longer exists: {}", path.display()),
+        ));
+    }
     #[cfg(target_os = "windows")]
     let result = Command::new("explorer")
         .arg(format!("/select,{}", path.display()))

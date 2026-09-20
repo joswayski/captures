@@ -235,7 +235,11 @@ conversion remain unconnected. History displays recording posters and metadata; 
 copies the original media to the output folder without re-encoding, and
 **Show in Folder** reveals that saved copy. Both native
 hosts offer counted All, Screenshots, Video and GIF history filters; filtering
-does not delete captures or exports. Real macOS and
+does not delete captures or exports. After finalization, a temporary **Recording ready**
+notice offers Save file, then Show in Folder after saving a permanent copy. Dismissing
+or letting it expire preserves History and exports; failed saves can be retried.
+The native editor is not connected, so this notice appears immediately rather than
+after closing an editor. Real macOS and
 Windows recording, audio devices, multi-display and hardware acceptance remain open;
 Wayland recording is gated with the rest of native capture.
 Native Preferences also includes an optional feedback form. Sending shares only

@@ -71,6 +71,16 @@ or overwriting another file. Repeated Save reuses the export; deleting it allows
 another copy from private History. **Show in Folder** reveals the exported copy,
 which survives deleting or clearing History. The poster remains the native preview.
 
+Successful finalization also opens a nonactivating fixed-glass **Recording ready**
+notice at the display work area's top right. It reuses History's Save file operation
+and changes to **Recording saved** / Show in Folder after export. Save failure and
+missing-file reveal errors remain retryable; Dismiss and the 15.2-second expiry
+never delete media. Expiry pauses during saving and restarts on completion/error.
+A new capture clears the notice, and stale callbacks cannot reopen a dismissed
+or replaced notice. Because native recording editing is not connected, this appears
+after finalization rather than the shipping editor-close trigger. Physical input,
+compositor, multi-display and accessibility acceptance remain open.
+
 Linux CI records an asymmetric 310×170 region on a private Xvfb display, pauses,
 resumes and restarts from running/paused, independently decodes replacement pixels
 with FFmpeg, publishes video
