@@ -554,8 +554,8 @@ displaying resolved defaults does not materialize legacy fields or overwrite unk
 data. A disabled shadow does not submit hidden custom controls. Reset and selection
 changes discard unapplied fields; worker errors restore published values. Styled
 pixels, undo/redo, draft restore and light/dark/minimum layouts are exercised on
-private X11. Windows/Wayland presentation and AppKit style controls remain unverified
-or unconnected, respectively; physical input/accessibility acceptance stays open.
+private X11. Windows/Wayland presentation remains unverified; AppKit style controls
+are described below. Physical input/accessibility acceptance stays open.
 
 The wgpu Import image action now picks one PNG/JPEG/WebP/TIFF file independently
 of the session worker. The worker bounds encoded input and decoded dimensions,
@@ -624,6 +624,17 @@ output. Preview mapping preserves reverse and off-canvas coordinates without rea
 unapplied numeric fields. Escape, focus loss, close, or changing sections cancels a
 drag without editing the document. Shared Rust remains the authority for default
 style, clipping, fully-outside expansion, rendering and undo/draft transactionality.
+The AppKit **Layers** view connects fill/stroke toggles for closed shapes, annotation
+color/width, and shadow color/opacity/blur/offset controls. Apply style submits one
+minimal shared patch through the existing serialized worker and invalidates encoded
+output; Reset fields, selection changes and worker failures restore published values.
+Rust projects resolved defaults separately from the authored document. Merely opening
+controls does not materialize legacy fields or truncate full-precision numbers to the
+three-decimal display. Disabled shadow fields cannot accidentally re-enable a shadow.
+Styles remain editable on hidden/locked annotations. The scrolling panel has light,
+dark, disabled and minimum-height error fixtures; automated macOS validation is not
+physical input/accessibility/IME acceptance. Windows/X11/Wayland retain the existing
+wgpu controls unchanged; this slice does not close their presentation gates.
 Closing an unsaved session offers save-and-close,
 close without saving the current session (retaining any older persisted draft), or
 cancel. Quit drains accepted work and cancels termination if its draft save fails.
@@ -633,7 +644,7 @@ behavior, real shape pixels/history/draft reopen, and rendered light/dark fixtur
 Physical AppKit input, accessibility and IME acceptance remain unverified.
 
 Across both hosts, physical input/accessibility/IME acceptance remains open.
-AppKit annotation styles, other drawing tools and edited-image clipboard output
+AppKit's other drawing tools and edited-image clipboard output
 are not connected. Recording editing remains open on both hosts; the
 screenshot-editor parity gate stays open.
 

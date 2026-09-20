@@ -197,6 +197,91 @@ fn layer_json_commands_render_transactionally_and_restore_shared_assets() {
 }
 
 #[test]
+fn annotation_control_projection_resolves_defaults_without_authoring_them() {
+    let (data, id, _) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    let mut document = editor.snapshot().document.clone();
+    for (id, shape, width) in [("closed", "rectangle", 10.), ("open", "arrow", 3.)] {
+        document.elements.push(
+            serde_json::from_value(json!({
+                "kind": "shape", "id": id, "shape": shape,
+                "x": 0, "y": 0, "endX": 5, "endY": 2, "controls": [],
+                "visible": false, "locked": true, "opacity": 100, "blendMode": "source-over",
+                "style": {"color": "legacy-color", "strokeWidth": width, "futureStyle": 17}
+            }))
+            .unwrap(),
+        );
+    }
+    document.elements.push(
+        serde_json::from_value(json!({
+            "kind": "path", "id": "path", "x": 0, "y": 0,
+            "points": [{"x": 0, "y": 0}], "visible": false, "locked": true, "opacity": 100,
+            "blendMode": "source-over",
+            "style": {"color": "#abcdef", "strokeWidth": 3, "dropShadow": true,
+                "dropShadowStyle": {"color": "invalid", "opacity": 130, "blur": -4,
+                    "offsetX": -700, "offsetY": 650, "futureShadow": 19}}
+        }))
+        .unwrap(),
+    );
+    editor
+        .execute(Request::Commit {
+            document: document.clone(),
+        })
+        .unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 1 })
+        .unwrap();
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 8.,
+            height: 4.,
+        })
+        .unwrap();
+    editor.execute(Request::Undo).unwrap();
+    let frame = editor.pixels();
+    let manifest = data.path().join("drafts").join(&id).join("manifest.json");
+    let saved = fs::read(&manifest).unwrap();
+    let snapshot = serde_json::to_value(editor.snapshot()).unwrap();
+    let controls = &snapshot["annotation_controls"];
+    assert_eq!(controls.as_object().unwrap().len(), 3);
+    assert!(controls.get("capture-background").is_none());
+    assert_eq!(
+        controls["closed"],
+        json!({
+            "closed": true, "color": "legacy-color", "fill": null, "strokeWidth": 10.,
+            "strokeEnabled": true, "dropShadow": false,
+            "dropShadowStyle": {"color": "#000000", "opacity": 45., "blur": 8.5,
+                "offsetX": 0., "offsetY": 3.}
+        })
+    );
+    assert_eq!(controls["open"]["closed"], false);
+    assert_eq!(controls["open"]["dropShadowStyle"]["blur"], 6.);
+    assert_eq!(controls["open"]["dropShadowStyle"]["offsetY"], 2.);
+    assert_eq!(controls["path"]["closed"], false);
+    assert_eq!(controls["path"]["dropShadow"], true);
+    assert_eq!(
+        controls["path"]["dropShadowStyle"],
+        json!({
+            "color": "#000000", "opacity": 100., "blur": 0.,
+            "offsetX": -500., "offsetY": 500., "futureShadow": 19
+        })
+    );
+    assert_eq!(editor.snapshot().document, &document);
+    assert!(!editor.snapshot().unsaved_changes);
+    assert!(editor.snapshot().can_redo);
+    assert!(Arc::ptr_eq(&frame, &editor.pixels()));
+    assert_eq!(fs::read(manifest).unwrap(), saved);
+    let reopened = open(data.path(), &id).unwrap();
+    assert_eq!(reopened.snapshot().document, &document);
+    assert_eq!(
+        serde_json::to_value(reopened.snapshot()).unwrap()["annotation_controls"],
+        *controls
+    );
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.pixels().dimensions(), (8, 4));
+}
+
+#[test]
 fn annotation_style_json_patches_locked_hidden_layers_and_preserves_history_and_drafts() {
     let (data, id, _) = setup();
     let mut editor = open(data.path(), &id).unwrap();

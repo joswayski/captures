@@ -1400,12 +1400,211 @@ final class ScreenshotEditorTests: XCTestCase {
         reopened.close(); EditorWorker.flush()
     }
 
+    func testAnnotationFieldsPreservePrecisionAndLegacyValuesAndEmitMinimalPatch() throws {
+        _ = NSApplication.shared
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "de_DE"); formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = false; formatter.maximumFractionDigits = 3
+        let controls = EditorAnnotationControls(tokens: Tokens.variants["light-mustard"]!, formatter: formatter)
+        var values = annotationStyle()
+        values["color"] = "legacy-color"; values["strokeWidth"] = 8.123456
+        let original = try XCTUnwrap(NativeAnnotationStyle(values))
+        controls.setStyle(original); controls.setReady(true)
+        var patches: [[String: Any]] = []
+        var errors: [String] = []
+        controls.apply = { patches.append($0) }; controls.reportError = { errors.append($0) }
+        XCTAssertEqual(try field("Stroke width", in: controls).stringValue, "8,123")
+        try button("Apply style", in: controls).performClick(nil)
+        XCTAssertTrue(patches.isEmpty, "displaying resolved values is not an edit")
+        try field("Shadow Y", in: controls).stringValue = "-12,75"
+        try button("Apply style", in: controls).performClick(nil)
+        XCTAssertEqual(patches.count, 1)
+        XCTAssertEqual(patches[0] as NSDictionary, ["dropShadowStyle": ["offsetY": -12.75]] as NSDictionary)
+        XCTAssertTrue(errors.isEmpty, "unchanged legacy colors are not revalidated")
+        try field("Stroke color", in: controls).stringValue = "bad-new-color"
+        try button("Apply style", in: controls).performClick(nil)
+        XCTAssertEqual(patches.count, 1); XCTAssertEqual(errors.count, 1)
+        try button("Reset fields", in: controls).performClick(nil)
+        XCTAssertEqual(try field("Stroke color", in: controls).stringValue, "legacy-color")
+        let picker = try XCTUnwrap(descendants(in: controls).compactMap { $0 as? ClosureColorWell }
+            .first { $0.accessibilityLabel() == "Choose stroke color" })
+        picker.color = NSColor(srgbRed: 0.2, green: 0.4, blue: 0.6, alpha: 1)
+        _ = picker.sendAction(picker.action, to: picker.target)
+        try button("Apply style", in: controls).performClick(nil)
+        XCTAssertEqual(patches.last as NSDictionary?, ["color": "#336699"] as NSDictionary)
+
+        controls.setStyle(original)
+        try field("Shadow blur", in: controls).stringValue = "99"
+        try annotationToggle("Shadow", in: controls).performClick(nil)
+        try annotationToggle("Fill", in: controls).performClick(nil)
+        try button("Apply style", in: controls).performClick(nil)
+        XCTAssertEqual(patches.last as NSDictionary?, ["dropShadow": false, "fill": NSNull()] as NSDictionary)
+        XCTAssertTrue(try field("Shadow blur", in: controls).isHiddenOrHasHiddenAncestor)
+
+        values["closed"] = false
+        controls.setStyle(try XCTUnwrap(NativeAnnotationStyle(values)))
+        XCTAssertTrue(try annotationToggle("Stroke", in: controls).isHiddenOrHasHiddenAncestor)
+        XCTAssertTrue(try annotationToggle("Fill", in: controls).isHiddenOrHasHiddenAncestor)
+        try field("Stroke width", in: controls).stringValue = "3,25"
+        try button("Apply style", in: controls).performClick(nil)
+        XCTAssertEqual(patches.last as NSDictionary?, ["strokeWidth": 3.25] as NSDictionary)
+        controls.setReady(false)
+        XCTAssertFalse(try button("Apply style", in: controls).isEnabled)
+    }
+
+    func testAnnotationSelectionBusyFailureAndOutputInvalidation() throws {
+        _ = NSApplication.shared
+        var hidden = shapeLayer(id: "shape", x: 5, y: 7)
+        hidden["locked"] = true; hidden["visible"] = false
+        let published = snapshot(id: "shot", layers: [
+            layer(id: "image", name: "Original", x: 0, y: 0, visible: true, locked: true, opacity: 100), hidden,
+        ], annotations: ["shape": annotationStyle()])
+        let worker = FakeEditorWorker(snapshot: published)
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showOutput(in: controller.root)
+        try button("Preview output", in: controller.root).performClick(nil)
+        let preview = try segmented("Output preview image", in: controller.root)
+        XCTAssertTrue(preview.isEnabled)
+        try showLayers(in: controller.root)
+        try button("Apply style", in: controller.root).performClick(nil)
+        XCTAssertTrue(worker.requests.isEmpty); XCTAssertTrue(preview.isEnabled)
+        worker.deferRequests = true
+        try field("Fill color", in: controller.root).stringValue = "#2c4"
+        try button("Apply style", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.requests.last?["id"] as? String, "shape")
+        let edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertEqual(edit as NSDictionary, ["action": "annotation_style", "patch": ["fill": "#22CC44"]] as NSDictionary)
+        XCTAssertTrue(controller.state.busy); XCTAssertFalse(preview.isEnabled)
+        XCTAssertFalse(try field("Fill color", in: controller.root).isEnabled)
+        XCTAssertFalse(try table("Screenshot layers", in: controller.root).isEnabled)
+        worker.completePending(with: published)
+        XCTAssertEqual(try field("Fill color", in: controller.root).stringValue, "#E04090")
+        worker.deferRequests = false; worker.failLayerAction = "annotation_style"
+        try field("Fill color", in: controller.root).stringValue = "#123456"
+        try button("Apply style", in: controller.root).performClick(nil)
+        XCTAssertFalse(controller.state.busy)
+        XCTAssertEqual(try field("Fill color", in: controller.root).stringValue, "#E04090")
+        XCTAssertEqual(try table("Screenshot layers", in: controller.root).selectedRow, 0)
+        try field("Fill color", in: controller.root).stringValue = "#abcdef"
+        let table = try table("Screenshot layers", in: controller.root)
+        table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+        XCTAssertTrue(try button("Apply style", in: controller.root).isHiddenOrHasHiddenAncestor)
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        XCTAssertEqual(try field("Fill color", in: controller.root).stringValue, "#E04090")
+    }
+
+    func testAnnotationRenderedStates() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, draft: true,
+                layers: [shapeLayer(id: "shape", x: 5, y: 7)], annotations: ["shape": annotationStyle()]))
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showLayers(in: controller.root)
+            let apply = try button("Apply style", in: controller.root)
+            let scroll = try XCTUnwrap(apply.enclosingScrollView)
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: 550))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            controller.root.layoutSubtreeIfNeeded()
+            for field in descendants(in: controller.root).compactMap({ $0 as? NSTextField })
+                where ["Shadow opacity", "Stroke color", "Shadow color"].contains(field.stringValue) {
+                XCTAssertLessThanOrEqual(field.intrinsicContentSize.width, field.frame.width)
+            }
+            try render(controller.root, name: "screenshot-editor-style-\(appearance)")
+            let document = try XCTUnwrap(scroll.documentView)
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: document.bounds.height - scroll.contentView.bounds.height))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            XCTAssertEqual(apply.visibleRect, apply.bounds, "style actions remain reachable in the minimum window")
+            worker.failLayerAction = "annotation_style"
+            worker.failureMessage = "The annotation style could not be applied. The previous draft, layer selection, pixels and undo history remain recoverable."
+            try field("Fill color", in: controller.root).stringValue = "#00aa44"
+            try button("Apply style", in: controller.root).performClick(nil)
+            try render(controller.root, name: "screenshot-editor-style-error-minimum-\(appearance)")
+            try annotationToggle("Shadow", in: controller.root).performClick(nil)
+            try annotationToggle("Fill", in: controller.root).performClick(nil)
+            try render(controller.root, name: "screenshot-editor-style-disabled-\(appearance)")
+        }
+    }
+
+    func testRealBridgeAnnotationPixelsUndoRedoAndDraftReopen() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let worker = EditorWorker()
+        defer { worker.close(); EditorWorker.flush() }
+        let opened = expectation(description: "open annotation fixture")
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                    artifactID: fixture.id) { result in
+            XCTAssertNotNil(try? result.get()); opened.fulfill()
+        }
+        wait(for: [opened], timeout: 5)
+        func request(_ object: [String: Any]) throws -> EditorPresentation {
+            let done = expectation(description: "annotation request")
+            var response: Result<EditorPresentation, Error>?
+            worker.request(object) { result in response = result; done.fulfill() }
+            wait(for: [done], timeout: 5)
+            return try XCTUnwrap(response).get()
+        }
+        _ = try request(["operation": "resize_canvas", "width": 32, "height": 24])
+        let created = try request(["operation": "create_closed_shape", "shape": "rectangle",
+                                  "start": ["x": 5, "y": 7], "end": ["x": 15, "y": 17]])
+        let shape = try XCTUnwrap(created.snapshot.layers.first)
+        let original = try XCTUnwrap(shape.annotation)
+        XCTAssertFalse(original.strokeEnabled); XCTAssertFalse(original.dropShadow)
+        var edited = original
+        edited.fill = "#E04090"; edited.shadowColor = "#20C060"
+        edited.shadowOpacity = 100; edited.shadowBlur = 0
+        edited.shadowX = 8; edited.shadowY = -3; edited.dropShadow = true
+        let styled = try request(["operation": "layer", "id": shape.id,
+                                 "edit": ["action": "annotation_style", "patch": edited.patch(from: original)]])
+        XCTAssertEqual(styled.snapshot.layers.first?.id, shape.id)
+        XCTAssertEqual(styled.snapshot.layers.first?.annotation, edited)
+        XCTAssertEqual(rgba(styled.image, x: 10, y: 12), [224, 64, 144, 255])
+        XCTAssertEqual(rgba(styled.image, x: 20, y: 10), [32, 192, 96, 255])
+        let undone = try request(["operation": "undo"])
+        XCTAssertEqual(undone.snapshot.layers.first?.annotation, original)
+        XCTAssertEqual(rgba(undone.image, x: 10, y: 12), [255, 59, 92, 255])
+        XCTAssertEqual(rgba(undone.image, x: 20, y: 10), [0, 0, 19, 255])
+        _ = try request(["operation": "redo"])
+        _ = try request(["operation": "save_draft", "updated_at_ms": 1357])
+        worker.close(); EditorWorker.flush()
+        let reopened = expectation(description: "reopen styled draft")
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                    artifactID: fixture.id) { result in
+            let value = try? result.get()
+            XCTAssertEqual(value?.snapshot.layers.first?.annotation, edited)
+            XCTAssertTrue(value?.snapshot.hasDraft == true)
+            if let image = value?.image {
+                XCTAssertEqual(self.rgba(image, x: 20, y: 10), [32, 192, 96, 255])
+            }
+            reopened.fulfill()
+        }
+        wait(for: [reopened], timeout: 5)
+    }
+
+    private func annotationStyle() -> [String: Any] {
+        ["closed": true, "color": "#112233", "fill": "#E04090", "strokeWidth": 4.0,
+         "strokeEnabled": true, "dropShadow": true,
+         "dropShadowStyle": ["color": "#20C060", "opacity": 70.25, "blur": 2.5,
+                             "offsetX": 6.0, "offsetY": -3.0]]
+    }
+
+    private func annotationToggle(_ label: String, in view: NSView) throws -> CaptureButton {
+        try XCTUnwrap(descendants(in: view).compactMap { $0 as? CaptureButton }
+            .first { $0.accessibilityLabel() == label })
+    }
+
     private func snapshot(id: String, width: Double = 640, height: Double = 360,
                           unsaved: Bool = false, draft: Bool = false,
-                          layers: [[String: Any]] = []) -> NativeEditorSnapshot {
+                          layers: [[String: Any]] = [],
+                          annotations: [String: [String: Any]] = [:]) -> NativeEditorSnapshot {
         NativeEditorSnapshot([
             "artifact_id": id, "document": ["width": width, "height": height,
                                                   "elements": layers],
+            "annotation_controls": annotations,
             "can_undo": unsaved, "can_redo": false,
             "unsaved_changes": unsaved, "has_draft": draft,
         ])!

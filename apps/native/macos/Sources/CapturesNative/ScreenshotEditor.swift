@@ -189,6 +189,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let geometryPanel = Surface()
     private let layersPanel = Surface()
     private let layerContent = Surface()
+    private var annotationControls: EditorAnnotationControls!
     private let drawPanel = Surface()
     private let outputPanel = Surface()
     private let outputContent = Surface()
@@ -681,6 +682,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         importImageButton = button("Add image…", frame: NSRect(x: 0, y: 494, width: 272, height: 34),
                                    parent: layerContent) { [weak self] in self?.chooseImage() }
         importImageButton.primary = true
+        annotationControls = EditorAnnotationControls(tokens: tokens, formatter: editorNumberFormatter)
+        annotationControls.apply = { [weak self] patch in
+            guard let self, !self.state.busy, let layer = self.selectedLayer else { return }
+            self.layerCommand(layer, edit: ["action": "annotation_style", "patch": patch],
+                              message: "Applying annotation style…")
+        }
+        annotationControls.reportError = { [weak self] message in self?.showError(message) }
+        annotationControls.resized = { [weak self] height in
+            self?.layerContent.frame.size.height = 550 + height
+        }
+        layerContent.addSubview(annotationControls)
     }
 
     @objc private func changeSection() {
@@ -1252,6 +1264,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         updateDrawing()
         layerTable?.isEnabled = ready
         importImageButton?.isEnabled = ready && !importLoading
+        annotationControls?.setReady(ready)
         let layer = ready ? selectedLayer : nil
         let image = layer?.kind == .image
         layerName.isEnabled = image; renameButton?.isEnabled = image
@@ -1303,6 +1316,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func publishSelectedLayerFields() {
+        annotationControls?.setStyle(selectedLayer?.annotation)
         guard let layer = selectedLayer else {
             [layerName, layerOpacity, layerX, layerY].forEach { $0.stringValue = "" }
             updateControls(); return

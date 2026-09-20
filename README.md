@@ -316,8 +316,11 @@ silently relabeled. Its **Draw** view maps rectangle and ellipse drags from the 
 edited preview into shared document coordinates, including reverse and off-canvas
 gestures. Release creates one undoable layer; Escape, focus loss, close, or leaving Draw
 cancels transient geometry without editing the document.
+Its Layers panel also edits annotation fill, stroke and shadow settings with an explicit
+Apply style action. Unapplied fields can be reset; shared Rust owns style defaults,
+rendering, undo and draft persistence.
 Windows, Wayland and physical AppKit presentation remain unverified.
-AppKit annotation styles and other drawing tools, text, overwrite-original, edited-image
+AppKit's other drawing tools, text, overwrite-original, edited-image
 clipboard output, and recording editing remain unconnected. Shared editor support
 is prerequisite work, not native editor acceptance. OS shortcut takeover, login items,
 single-instance relaunch and updates

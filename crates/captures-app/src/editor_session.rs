@@ -16,8 +16,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     editor::{
-        ClosedShapeCreate, Document, DocumentHistory, Element, ElementBase, FreehandPathCreate,
-        ImageElement, LayerEdit, OpenShapeCreate, OptionalNullable, Point, Rect, image_bounds,
+        ClosedShapeCreate, Document, DocumentHistory, DropShadowStyle, Element, ElementBase,
+        FreehandPathCreate, ImageElement, LayerEdit, OpenShapeCreate, OptionalNullable, Point,
+        Rect, image_bounds,
     },
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS, render},
 };
@@ -87,10 +88,25 @@ pub enum Request {
     DiscardDraft,
 }
 
+/// Resolved UI values, separate from the authored document. Reading legacy
+/// defaults must not materialize fields in drafts or change undo/redo state.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnotationControls<'a> {
+    pub closed: bool,
+    pub color: &'a str,
+    pub fill: Option<&'a str>,
+    pub stroke_width: f64,
+    pub stroke_enabled: bool,
+    pub drop_shadow: bool,
+    pub drop_shadow_style: DropShadowStyle,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Snapshot<'a> {
     pub artifact_id: &'a str,
     pub document: &'a Document,
+    pub annotation_controls: BTreeMap<&'a str, AnnotationControls<'a>>,
     pub can_undo: bool,
     pub can_redo: bool,
     /// Changes since the last successful draft save (or open), not since capture.
@@ -169,6 +185,37 @@ impl EditorSession {
         Snapshot {
             artifact_id: &self.artifact_id,
             document: self.history.current(),
+            annotation_controls: self
+                .history
+                .current()
+                .elements
+                .iter()
+                .filter_map(|element| {
+                    let (style, closed) = match element {
+                        Element::Shape(shape) => (
+                            &shape.style,
+                            matches!(
+                                shape.shape.as_str(),
+                                "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
+                            ),
+                        ),
+                        Element::Path(path) => (&path.style, false),
+                        _ => return None,
+                    };
+                    Some((
+                        element.base().id.as_str(),
+                        AnnotationControls {
+                            closed,
+                            color: &style.color,
+                            fill: style.fill.as_deref(),
+                            stroke_width: style.stroke_width,
+                            stroke_enabled: style.has_stroke(),
+                            drop_shadow: style.has_drop_shadow(),
+                            drop_shadow_style: style.resolved_drop_shadow_style(),
+                        },
+                    ))
+                })
+                .collect(),
             can_undo: self.history.undo_len() > 0,
             can_redo: self.history.redo_len() > 0,
             unsaved_changes: self.history.current() != &self.persisted,

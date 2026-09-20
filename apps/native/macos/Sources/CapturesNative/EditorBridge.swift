@@ -3,6 +3,60 @@ import CoreGraphics
 import ImageIO
 import CCapturesSettings
 
+/// Display values resolved by Rust, never a replacement for authored document data.
+struct NativeAnnotationStyle: Equatable {
+    let closed: Bool
+    var color: String
+    var fill: String?
+    var strokeWidth: Double
+    var strokeEnabled: Bool
+    var dropShadow: Bool
+    var shadowColor: String
+    var shadowOpacity: Double
+    var shadowBlur: Double
+    var shadowX: Double
+    var shadowY: Double
+
+    init?(_ value: [String: Any]) {
+        guard let closed = value["closed"] as? Bool,
+              let color = value["color"] as? String,
+              let width = value["strokeWidth"] as? Double,
+              let stroke = value["strokeEnabled"] as? Bool,
+              let enabled = value["dropShadow"] as? Bool,
+              let shadow = value["dropShadowStyle"] as? [String: Any],
+              let shadowColor = shadow["color"] as? String,
+              let opacity = shadow["opacity"] as? Double,
+              let blur = shadow["blur"] as? Double,
+              let x = shadow["offsetX"] as? Double,
+              let y = shadow["offsetY"] as? Double else { return nil }
+        self.closed = closed; self.color = color; fill = value["fill"] as? String
+        strokeWidth = width; strokeEnabled = stroke; dropShadow = enabled
+        self.shadowColor = shadowColor; shadowOpacity = opacity; shadowBlur = blur
+        shadowX = x; shadowY = y
+    }
+
+    func patch(from original: Self) -> [String: Any] {
+        var patch: [String: Any] = [:]
+        if color != original.color { patch["color"] = color }
+        if strokeWidth != original.strokeWidth { patch["strokeWidth"] = strokeWidth }
+        if closed {
+            if fill != original.fill { patch["fill"] = fill.map { $0 as Any } ?? NSNull() }
+            if strokeEnabled != original.strokeEnabled { patch["strokeEnabled"] = strokeEnabled }
+        }
+        if dropShadow != original.dropShadow { patch["dropShadow"] = dropShadow }
+        if dropShadow {
+            var shadow: [String: Any] = [:]
+            if shadowColor != original.shadowColor { shadow["color"] = shadowColor }
+            if shadowOpacity != original.shadowOpacity { shadow["opacity"] = shadowOpacity }
+            if shadowBlur != original.shadowBlur { shadow["blur"] = shadowBlur }
+            if shadowX != original.shadowX { shadow["offsetX"] = shadowX }
+            if shadowY != original.shadowY { shadow["offsetY"] = shadowY }
+            if !shadow.isEmpty { patch["dropShadowStyle"] = shadow }
+        }
+        return patch
+    }
+}
+
 struct NativeEditorLayer: Equatable {
     enum Kind: String {
         case image, text, shape, path
@@ -16,8 +70,9 @@ struct NativeEditorLayer: Equatable {
     let opacity: Double
     let x: Double
     let y: Double
+    let annotation: NativeAnnotationStyle?
 
-    init?(_ value: [String: Any]) {
+    init?(_ value: [String: Any], annotation: [String: Any]? = nil) {
         guard let id = value["id"] as? String, !id.isEmpty,
               let rawKind = value["kind"] as? String,
               let kind = Kind(rawValue: rawKind),
@@ -29,6 +84,8 @@ struct NativeEditorLayer: Equatable {
         self.id = id; self.kind = kind
         self.visible = visible; self.locked = locked
         self.opacity = opacity.doubleValue; self.x = x.doubleValue; self.y = y.doubleValue
+        self.annotation = annotation.flatMap(NativeAnnotationStyle.init)
+        if annotation != nil && self.annotation == nil { return nil }
         switch kind {
         case .image: name = (value["name"] as? String) ?? "Image"
         case .text: name = "Text"
@@ -60,7 +117,10 @@ struct NativeEditorSnapshot: Equatable {
               let hasDraft = value["has_draft"] as? Bool,
               width.doubleValue > 0, height.doubleValue > 0 else { return nil }
         let elements = document["elements"] as? [[String: Any]] ?? []
-        let layers = elements.compactMap(NativeEditorLayer.init)
+        let annotations = value["annotation_controls"] as? [String: [String: Any]] ?? [:]
+        let layers = elements.compactMap { element in
+            NativeEditorLayer(element, annotation: (element["id"] as? String).flatMap { annotations[$0] })
+        }
         guard layers.count == elements.count else { return nil }
         self.artifactID = artifactID
         self.width = width.doubleValue; self.height = height.doubleValue
