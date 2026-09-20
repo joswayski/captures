@@ -241,6 +241,96 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(controller.window.isVisible)
     }
 
+    func testSaveNewCopySendsExactDestinationOptionsAndModeWithoutChangingDraft() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, draft: true))
+        var refreshCount = 0
+        let controller = ScreenshotEditorController(
+            tokens: Tokens.variants["light-mustard"]!, worker: worker,
+            didSaveCopy: { refreshCount += 1 })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot", mode: "window"),
+                           historyRoot: "/native/History", outputDirectory: "/exports")
+        try showOutput(in: controller.root)
+
+        let format = try popup("Output format", in: controller.root)
+        format.selectItem(withTitle: "JPEG")
+        _ = format.sendAction(format.action, to: format.target)
+        (try field("Output filename", in: controller.root)).stringValue = "asymmetric-edited.jpeg"
+        try button("Save new copy", in: controller.root).performClick(nil)
+
+        let request = try XCTUnwrap(worker.saves.last)
+        XCTAssertEqual(request["history_root"] as? String, "/native/History")
+        XCTAssertEqual(request["destination"] as? String, "/exports/asymmetric-edited.jpg")
+        XCTAssertEqual(request["mode"] as? String, "window")
+        let options = try XCTUnwrap(request["options"] as? [String: Any])
+        XCTAssertEqual(options["format"] as? String, "jpeg")
+        XCTAssertEqual(options["quality"] as? String, "preserve")
+        XCTAssertEqual(refreshCount, 1)
+        XCTAssertTrue(controller.state.snapshot?.unsavedChanges == true)
+        XCTAssertTrue(controller.state.snapshot?.hasDraft == true)
+
+        worker.saveResult = .failure(AppBridgeError.backend("destination already exists"))
+        try button("Save new copy", in: controller.root).performClick(nil)
+        XCTAssertFalse(controller.state.busy)
+        XCTAssertTrue(controller.window.isVisible)
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("destination already exists") })
+
+        worker.saveResult = .success(.savedWithoutHistory(
+            path: "/exports/asymmetric-edited.jpg", warning: "fixture History failure"))
+        try button("Save new copy", in: controller.root).performClick(nil)
+        XCTAssertTrue(labels(in: controller.root).contains {
+            $0.contains("Saved new copy") && $0.contains("fixture History failure")
+        })
+        XCTAssertEqual(refreshCount, 1, "partial publication does not claim a History refresh")
+    }
+
+    func testDirectoryPickerPreservesFilenameAndCancelOrStaleCompletionChangesNothing() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        var pickerCurrent: URL?
+        var pickerCompletion: ((URL?) -> Void)?
+        let controller = ScreenshotEditorController(
+            tokens: Tokens.variants["light-mustard"]!, worker: worker,
+            directoryPicker: { _, current, completion in
+                pickerCurrent = current; pickerCompletion = completion
+            })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History",
+                           outputDirectory: "/first folder")
+        try showOutput(in: controller.root)
+        let filename = try field("Output filename", in: controller.root)
+        filename.stringValue = "keep-this-name.png"
+        try button("Change…", in: controller.root).performClick(nil)
+        XCTAssertEqual(pickerCurrent?.path, "/first folder")
+        pickerCompletion?(nil)
+        XCTAssertEqual(filename.stringValue, "keep-this-name.png")
+        XCTAssertEqual((try field("Output save location", in: controller.root)).stringValue,
+                       "/first folder")
+        XCTAssertFalse(controller.state.busy, "the folder panel does not occupy the editor worker")
+
+        try button("Change…", in: controller.root).performClick(nil)
+        pickerCompletion?(URL(fileURLWithPath: "/selected folder", isDirectory: true))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual((try field("Output save location", in: controller.root)).stringValue,
+                       "/selected folder")
+        XCTAssertEqual(filename.stringValue, "keep-this-name.png")
+
+        try button("Change…", in: controller.root).performClick(nil)
+        XCTAssertFalse(controller.windowShouldClose(controller.window))
+        pickerCompletion?(URL(fileURLWithPath: "/stale folder", isDirectory: true))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual((try field("Output save location", in: controller.root)).stringValue,
+                       "/selected folder", "a retired editor ignores the folder reply")
+
+        let panel = ScreenshotEditorController.outputDirectoryPanel(
+            current: URL(fileURLWithPath: "/first folder", isDirectory: true))
+        XCTAssertEqual(panel.title, "Choose save location")
+        XCTAssertEqual(panel.message, "Choose save location")
+        XCTAssertTrue(panel.canChooseDirectories); XCTAssertFalse(panel.canChooseFiles)
+        XCTAssertTrue(panel.canCreateDirectories); XCTAssertEqual(panel.directoryURL?.path, "/first folder")
+    }
+
     func testLayerSnapshotOrderAndCommandsUseStableIDs() throws {
         _ = NSApplication.shared
         let background = layer(id: "background", name: "Original screenshot", x: 0, y: 0,
@@ -513,6 +603,37 @@ final class ScreenshotEditorTests: XCTestCase {
         }
     }
 
+    func testSaveNewCopyRenderedStates() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, draft: true))
+            let controller = ScreenshotEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History",
+                               outputDirectory: "/Users/test/Pictures/Captures Export")
+            try showOutput(in: controller.root)
+            try scrollOutputSaveControlsVisible(in: controller.root)
+            try render(controller.root, name: "screenshot-editor-save-copy-normal-\(appearance)")
+
+            worker.saveResult = .success(.saved(
+                path: "/Users/test/Pictures/Captures Export/Captures_2026-09-20_edited.png"))
+            try button("Save new copy", in: controller.root).performClick(nil)
+            try render(controller.root, name: "screenshot-editor-save-copy-success-\(appearance)")
+
+            worker.saveResult = .failure(AppBridgeError.backend("A file with this name already exists."))
+            try button("Save new copy", in: controller.root).performClick(nil)
+            try render(controller.root, name: "screenshot-editor-save-copy-error-\(appearance)")
+
+            worker.saveResult = .success(.savedWithoutHistory(
+                path: "/Users/test/Pictures/Captures Export/Captures_2026-09-20_edited.png",
+                warning: "The new file is safe, but the isolated native History location is unavailable. You can reveal the saved file and retry History publication later."))
+            try button("Save new copy", in: controller.root).performClick(nil)
+            try render(controller.root,
+                       name: "screenshot-editor-save-copy-error-minimum-\(appearance)")
+        }
+    }
+
     func testRealBridgeCropSaveReopenDiscardAndRetainedFrame() throws {
         _ = NSApplication.shared
         let fixture = try makeHistoryFixture()
@@ -607,6 +728,63 @@ final class ScreenshotEditorTests: XCTestCase {
                        "copied export bytes remain valid after session close")
     }
 
+    func testRealBridgeSavesNewLossyCopyPublishesHistoryAndNeverOverwrites() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let output = fixture.root.appendingPathComponent("exports")
+            .appendingPathComponent("edited-window.jpg")
+        let worker = EditorWorker()
+        let opened = expectation(description: "open for save")
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                    artifactID: fixture.id) { result in
+            if case .failure(let error) = result { XCTFail("open failed: \(error)") }
+            opened.fulfill()
+        }
+        wait(for: [opened], timeout: 5)
+        let request: [String: Any] = [
+            "history_root": fixture.history.path,
+            "destination": output.path,
+            "options": ["format": "jpeg", "quality": "compress", "quality_value": 73,
+                        "png": [:]],
+            "mode": "display",
+        ]
+        let saved = expectation(description: "save new copy")
+        worker.saveNew(request) { result in
+            XCTAssertEqual(try? result.get(), .saved(path: output.path)); saved.fulfill()
+        }
+        wait(for: [saved], timeout: 5)
+        let bytes = try Data(contentsOf: output)
+        XCTAssertEqual(Array(bytes.prefix(2)), [255, 216])
+        let historyEntries = try FileManager.default.contentsOfDirectory(at: fixture.history,
+            includingPropertiesForKeys: nil).filter { $0.hasDirectoryPath }
+        XCTAssertEqual(historyEntries.count, 2)
+        let published = try XCTUnwrap(historyEntries.first { $0.lastPathComponent != fixture.id })
+        let metadata = try JSONSerialization.jsonObject(with: Data(contentsOf:
+            published.appendingPathComponent("metadata.json"))) as? [String: Any]
+        XCTAssertEqual(metadata?["mode"] as? String, "display")
+        XCTAssertEqual(metadata?["saved_path"] as? String, output.path)
+
+        let collision = expectation(description: "reject overwrite")
+        worker.saveNew(request) { result in
+            if case .success = result { XCTFail("an existing export must not be overwritten") }
+            collision.fulfill()
+        }
+        wait(for: [collision], timeout: 5)
+        XCTAssertEqual(try Data(contentsOf: output), bytes)
+
+        let drainedOutput = output.deletingLastPathComponent().appendingPathComponent("drained.jpg")
+        var drainedRequest = request; drainedRequest["destination"] = drainedOutput.path
+        let drained = expectation(description: "drained save callback")
+        worker.saveNew(drainedRequest) { result in
+            XCTAssertEqual(try? result.get(), .saved(path: drainedOutput.path)); drained.fulfill()
+        }
+        XCTAssertNoThrow(try worker.prepareForTermination().get(),
+                         "quit drains an accepted publication before freeing the session")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: drainedOutput.path))
+        wait(for: [drained], timeout: 5)
+    }
+
     private func snapshot(id: String, width: Double = 640, height: Double = 360,
                           unsaved: Bool = false, draft: Bool = false,
                           layers: [[String: Any]] = []) -> NativeEditorSnapshot {
@@ -624,10 +802,10 @@ final class ScreenshotEditorTests: XCTestCase {
          "visible": visible, "locked": locked, "opacity": opacity]
     }
 
-    private func artifact(id: String) -> CaptureArtifact {
+    private func artifact(id: String, mode: String = "region") -> CaptureArtifact {
         CaptureArtifact(["entry": [
             "id": id, "kind": "screenshot", "width": 640, "height": 360,
-            "created_at": "2026-09-20T00:00:00Z",
+            "created_at": "2026-09-20T00:00:00Z", "mode": mode,
         ], "image_path": "/native/History/\(id)/capture.png",
             "preview_path": "/native/History/\(id)/preview.png"])!
     }
@@ -651,6 +829,14 @@ final class ScreenshotEditorTests: XCTestCase {
         let sections = try segmented("Editor section", in: view)
         sections.selectedSegment = 2
         _ = sections.sendAction(sections.action, to: sections.target)
+    }
+
+    private func scrollOutputSaveControlsVisible(in view: NSView) throws {
+        let filename = try field("Output filename", in: view)
+        let scroll = try XCTUnwrap(filename.enclosingScrollView)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 238))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        view.layoutSubtreeIfNeeded()
     }
 
     private func popup(_ label: String, in view: NSView) throws -> NSPopUpButton {
@@ -753,6 +939,7 @@ private final class FakeEditorWorker: EditorWorking {
     var snapshot: NativeEditorSnapshot
     var requests: [[String: Any]] = []
     var encodes: [[String: Any]] = []
+    var saves: [[String: Any]] = []
     var openArtifactIDs: [String] = []
     var closeCount = 0
     var draftsRoot: String?
@@ -762,6 +949,7 @@ private final class FakeEditorWorker: EditorWorking {
     var deferRequests = false
     var deferEncodes = false
     var failEncode = false
+    var saveResult: Result<EditorSavePresentation, Error> = .success(.saved(path: "/output/edited.png"))
     var response: (([String: Any]) -> NativeEditorSnapshot?)?
     var terminationResult: Result<Void, Error> = .success(())
     private var pendingCompletion: ((Result<EditorPresentation, Error>) -> Void)?
@@ -820,6 +1008,12 @@ private final class FakeEditorWorker: EditorWorking {
         let completion = pendingEncodeCompletion
         pendingEncodeCompletion = nil
         completion?(.success(output()))
+    }
+
+    func saveNew(_ request: [String: Any],
+                 completion: @escaping (Result<EditorSavePresentation, Error>) -> Void) {
+        saves.append(request)
+        completion(saveResult)
     }
 
     private func output() -> EditorOutputPresentation {

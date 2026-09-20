@@ -83,6 +83,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let geometryPanel = Surface()
     private let layersPanel = Surface()
     private let outputPanel = Surface()
+    private let outputContent = Surface()
     private let layerName = NSTextField()
     private let layerOpacity = NSTextField()
     private let layerX = NSTextField()
@@ -90,6 +91,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let outputQualityValue = NSTextField()
     private let outputPngPalette = NSTextField()
     private let outputByteBudget = NSTextField()
+    private let outputFilename = NSTextField()
+    private let outputLocation = NSTextField(labelWithString: "")
     private let outputSize = NSTextField(wrappingLabelWithString: "No encoded preview yet.")
     private var outputQualityValueLabel: NSTextField!
     private var outputPngPaletteLabel: NSTextField!
@@ -115,6 +118,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var applyCropButton: CaptureButton!
     private var resizeButton: CaptureButton!
     private var previewOutputButton: CaptureButton!
+    private var changeOutputDirectoryButton: CaptureButton!
+    private var saveNewCopyButton: CaptureButton!
     private var fields: [NSTextField] = []
     private var closeAfterCommand = false
     private var selectedLayerID: String?
@@ -123,10 +128,18 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var reconcilingLayerSelection = false
     private var editedImage: NSImage?
     private var encodedOutput: EditorOutputPresentation?
+    private var historyRoot = ""
+    private var captureMode = "region"
+    private var outputDirectory = ""
+    private let directoryPicker: ((NSWindow, URL?, @escaping (URL?) -> Void) -> Void)?
+    private let didSaveCopy: () -> Void
 
     init(tokens: Tokens, worker: EditorWorking = EditorWorker(), numberLocale: Locale = .current,
-         reportError: @escaping (String) -> Void = { _ in }) {
+         reportError: @escaping (String) -> Void = { _ in },
+         directoryPicker: ((NSWindow, URL?, @escaping (URL?) -> Void) -> Void)? = nil,
+         didSaveCopy: @escaping () -> Void = {}) {
         self.tokens = tokens; self.worker = worker; self.reportError = reportError
+        self.directoryPicker = directoryPicker; self.didSaveCopy = didSaveCopy
         editorNumberFormatter = NumberFormatter()
         outputIntegerFormatter = NumberFormatter()
         editorNumberFormatter.locale = numberLocale
@@ -151,7 +164,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         build(); restyle(tokens); updateControls()
     }
 
-    func present(artifact: CaptureArtifact, historyRoot: String) {
+    func present(artifact: CaptureArtifact, historyRoot: String, outputDirectory: String? = nil) {
         guard !state.busy else {
             showError("Wait for the current editor action to finish before opening another screenshot.")
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
@@ -171,6 +184,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             return
         }
         let generation = state.beginOpen(artifactID: artifact.id)
+        self.historyRoot = historyRoot
+        captureMode = artifact.mode
+        self.outputDirectory = outputDirectory ?? URL(fileURLWithPath: historyRoot)
+            .deletingLastPathComponent().path
+        outputFilename.stringValue = defaultOutputFilename()
+        publishOutputLocation()
         selectedLayerID = nil; selectedLayerIndex = 0; preferredLayerID = nil
         editedImage = nil; invalidateOutput(); preview.image = nil; window.title = "Edit screenshot"
         status.stringValue = "Opening screenshot…"; updateControls()
@@ -327,61 +346,91 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func buildOutputPanel() {
-        panelLabel("Output preview", frame: NSRect(x: 0, y: 0, width: 272, height: 24),
-                   size: 16, weight: .semibold, parent: outputPanel)
-        panelLabel("Encode without saving or changing the draft.",
-                   frame: NSRect(x: 0, y: 28, width: 272, height: 22), muted: true,
-                   parent: outputPanel)
+        let scroll = NSScrollView(frame: outputPanel.bounds)
+        scroll.autoresizingMask = [.width, .height]
+        scroll.hasVerticalScroller = true; scroll.drawsBackground = false
+        outputContent.frame = NSRect(x: 0, y: 0, width: 252, height: 628)
+        scroll.documentView = outputContent
+        outputPanel.addSubview(scroll)
 
-        panelFieldLabel("Format", x: 0, y: 58, parent: outputPanel)
-        outputFormat = NSPopUpButton(frame: NSRect(x: 0, y: 78, width: 120, height: 30))
+        panelLabel("Output preview", frame: NSRect(x: 0, y: 0, width: 252, height: 24),
+                   size: 16, weight: .semibold, parent: outputContent)
+        panelLabel("Encode without saving or changing the draft.",
+                   frame: NSRect(x: 0, y: 28, width: 252, height: 22), muted: true,
+                   parent: outputContent)
+
+        panelFieldLabel("Format", x: 0, y: 58, parent: outputContent)
+        outputFormat = NSPopUpButton(frame: NSRect(x: 0, y: 78, width: 112, height: 30))
         outputFormat.addItems(withTitles: ["PNG", "JPEG", "WebP"])
         outputFormat.setAccessibilityLabel("Output format")
         outputFormat.target = self; outputFormat.action = #selector(outputOptionsChanged)
-        outputPanel.addSubview(outputFormat)
+        outputContent.addSubview(outputFormat)
 
-        panelFieldLabel("Quality mode", x: 128, y: 58, parent: outputPanel)
-        outputQuality = NSPopUpButton(frame: NSRect(x: 128, y: 78, width: 144, height: 30))
+        panelFieldLabel("Quality mode", x: 120, y: 58, parent: outputContent)
+        outputQuality = NSPopUpButton(frame: NSRect(x: 120, y: 78, width: 132, height: 30))
         outputQuality.addItems(withTitles: ["Preserve", "Compress", "Maximum file size"])
         outputQuality.setAccessibilityLabel("Output quality mode")
         outputQuality.target = self; outputQuality.action = #selector(outputOptionsChanged)
-        outputPanel.addSubview(outputQuality)
+        outputContent.addSubview(outputQuality)
 
         outputQualityValueLabel = panelFieldLabel("Quality value", x: 0, y: 118,
-                                                  parent: outputPanel)
-        outputPngPaletteLabel = panelFieldLabel("PNG palette", x: 144, y: 118,
-                                                parent: outputPanel)
-        configure(outputQualityValue, frame: NSRect(x: 0, y: 138, width: 128, height: 30),
-                  label: "Output quality value", parent: outputPanel)
-        configure(outputPngPalette, frame: NSRect(x: 144, y: 138, width: 128, height: 30),
-                  label: "PNG maximum colors", parent: outputPanel)
+                                                  parent: outputContent)
+        outputPngPaletteLabel = panelFieldLabel("PNG palette", x: 132, y: 118,
+                                                parent: outputContent)
+        configure(outputQualityValue, frame: NSRect(x: 0, y: 138, width: 120, height: 30),
+                  label: "Output quality value", parent: outputContent)
+        configure(outputPngPalette, frame: NSRect(x: 132, y: 138, width: 120, height: 30),
+                  label: "PNG maximum colors", parent: outputContent)
         outputQualityValue.stringValue = "98"
         outputPngPalette.placeholderString = "Optional"
 
         outputByteBudgetLabel = panelFieldLabel("Byte budget (minimum 10,000)", x: 0, y: 178,
-                                               parent: outputPanel)
-        configure(outputByteBudget, frame: NSRect(x: 0, y: 198, width: 272, height: 30),
-                  label: "Output byte budget", parent: outputPanel)
+                                               parent: outputContent)
+        configure(outputByteBudget, frame: NSRect(x: 0, y: 198, width: 252, height: 30),
+                  label: "Output byte budget", parent: outputContent)
         outputByteBudget.placeholderString = "Required for Maximum"
         outputByteBudget.stringValue = "10000000"
         [outputQualityValue, outputPngPalette, outputByteBudget].forEach {
             $0.formatter = outputIntegerFormatter; $0.delegate = self
         }
 
-        previewOutputButton = button("Preview output", frame: NSRect(x: 0, y: 240, width: 272, height: 34),
-                                     parent: outputPanel) { [weak self] in self?.previewOutput() }
+        previewOutputButton = button("Preview output", frame: NSRect(x: 0, y: 240, width: 252, height: 34),
+                                     parent: outputContent) { [weak self] in self?.previewOutput() }
         previewOutputButton.primary = true
         outputPreviewMode = NSSegmentedControl(labels: ["Edited canvas", "Encoded output"],
                                                trackingMode: .selectOne, target: self,
                                                action: #selector(changeOutputPreview))
-        outputPreviewMode.frame = NSRect(x: 0, y: 286, width: 272, height: 28)
+        outputPreviewMode.frame = NSRect(x: 0, y: 286, width: 252, height: 28)
         outputPreviewMode.selectedSegment = 0
         outputPreviewMode.setAccessibilityLabel("Output preview image")
-        outputPanel.addSubview(outputPreviewMode)
-        outputSize.frame = NSRect(x: 0, y: 326, width: 272, height: 58)
+        outputContent.addSubview(outputPreviewMode)
+        outputSize.frame = NSRect(x: 0, y: 326, width: 252, height: 58)
         outputSize.maximumNumberOfLines = 3
         outputSize.setAccessibilityLabel("Encoded output size")
-        outputPanel.addSubview(outputSize)
+        outputContent.addSubview(outputSize)
+
+        panelLabel("Save new copy", frame: NSRect(x: 0, y: 402, width: 252, height: 24),
+                   size: 16, weight: .semibold, parent: outputContent)
+        panelLabel("Publish a new file and History item. Existing files are never replaced.",
+                   frame: NSRect(x: 0, y: 430, width: 252, height: 38), muted: true,
+                   parent: outputContent)
+        panelFieldLabel("Filename", x: 0, y: 474, parent: outputContent)
+        outputFilename.frame = NSRect(x: 0, y: 494, width: 252, height: 30)
+        outputFilename.setAccessibilityLabel("Output filename")
+        outputFilename.placeholderString = "Captures_…_edited.png"
+        outputContent.addSubview(outputFilename)
+        panelFieldLabel("Save location", x: 0, y: 532, parent: outputContent)
+        outputLocation.frame = NSRect(x: 0, y: 552, width: 166, height: 24)
+        outputLocation.lineBreakMode = .byTruncatingMiddle
+        outputLocation.setAccessibilityLabel("Output save location")
+        outputContent.addSubview(outputLocation)
+        changeOutputDirectoryButton = button("Change…", frame: NSRect(x: 174, y: 548, width: 78, height: 30),
+                                             parent: outputContent) {
+            [weak self] in self?.chooseOutputDirectory()
+        }
+        saveNewCopyButton = button("Save new copy", frame: NSRect(x: 0, y: 584, width: 252, height: 34),
+                                   parent: outputContent) { [weak self] in self?.saveNewCopy() }
+        saveNewCopyButton.primary = true
         updateOutputOptionControls()
     }
 
@@ -440,6 +489,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     @objc private func outputOptionsChanged() {
         normalizeOutputQuality()
+        updateOutputFilenameExtension()
         invalidateOutput(optionsChanged: true)
         updateOutputOptionControls()
         updateControls()
@@ -488,6 +538,116 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             }
             self.updateControls()
         }
+    }
+
+    private func chooseOutputDirectory() {
+        guard let artifactID = state.artifactID else { return }
+        let generation = state.generation
+        let current = outputDirectory.isEmpty ? nil
+            : URL(fileURLWithPath: outputDirectory, isDirectory: true)
+        let completion: (URL?) -> Void = { [weak self] selected in
+            DispatchQueue.main.async {
+                guard let self, let selected,
+                      self.state.generation == generation,
+                      self.state.artifactID == artifactID else { return }
+                self.outputDirectory = selected.path
+                self.publishOutputLocation()
+            }
+        }
+        if let directoryPicker {
+            directoryPicker(window, current, completion)
+            return
+        }
+        let panel = Self.outputDirectoryPanel(current: current)
+        panel.beginSheetModal(for: window) { response in
+            completion(response == .OK ? panel.url : nil)
+        }
+    }
+
+    static func outputDirectoryPanel(current: URL?) -> NSOpenPanel {
+        let panel = NSOpenPanel()
+        panel.title = "Choose save location"
+        panel.message = "Choose save location"
+        panel.prompt = "Choose"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = current
+        return panel
+    }
+
+    private func saveNewCopy() {
+        guard let artifactID = state.artifactID,
+              let filename = normalizedOutputFilename(),
+              let options = outputOptions(),
+              let generation = state.beginCommand() else { return }
+        outputFilename.stringValue = filename
+        let destination = URL(fileURLWithPath: outputDirectory, isDirectory: true)
+            .appendingPathComponent(filename, isDirectory: false).path
+        let request: [String: Any] = [
+            "history_root": historyRoot,
+            "destination": destination,
+            "options": options,
+            "mode": captureMode,
+        ]
+        status.textColor = tokens.color("text-muted")
+        status.stringValue = "Saving new copy…"; updateControls()
+        worker.saveNew(request) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let saved):
+                guard self.state.completeOutput(generation: generation, artifactID: artifactID) else { return }
+                switch saved {
+                case .saved(let path):
+                    self.status.textColor = self.tokens.color("text-muted")
+                    self.status.stringValue = "Saved new copy to \(path)"
+                    self.didSaveCopy()
+                case .savedWithoutHistory(let path, let warning):
+                    self.showError("Saved new copy to \(path), but couldn’t add it to History: \(warning)")
+                }
+            case .failure(let error):
+                guard self.state.fail(generation: generation) else { return }
+                self.showError("Couldn’t save new copy: \(error.localizedDescription)")
+            }
+            self.updateControls()
+        }
+    }
+
+    private func defaultOutputFilename(_ date: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        return "Captures_\(formatter.string(from: date))_edited.\(outputExtension)"
+    }
+
+    private var outputExtension: String {
+        ["png", "jpg", "webp"][max(0, min(2, outputFormat?.indexOfSelectedItem ?? 0))]
+    }
+
+    private func updateOutputFilenameExtension() {
+        guard !outputFilename.stringValue.isEmpty else { return }
+        let base = (outputFilename.stringValue as NSString).deletingPathExtension
+        if !base.isEmpty { outputFilename.stringValue = "\(base).\(outputExtension)" }
+    }
+
+    private func normalizedOutputFilename() -> String? {
+        let name = outputFilename.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != ".", name != "..",
+              (name as NSString).lastPathComponent == name else {
+            showError("Enter a filename without folders."); return nil
+        }
+        let base = (name as NSString).deletingPathExtension
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !base.isEmpty else { showError("Enter a filename."); return nil }
+        return "\(base).\(outputExtension)"
+    }
+
+    private func publishOutputLocation() {
+        outputLocation.stringValue = outputDirectory
+        outputLocation.toolTip = outputDirectory
     }
 
     private func outputOptions() -> [String: Any]? {
@@ -733,6 +893,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         sectionControl?.isEnabled = ready
         outputFormat?.isEnabled = ready; outputQuality?.isEnabled = ready
         previewOutputButton?.isEnabled = ready
+        outputFilename.isEnabled = ready
+        changeOutputDirectoryButton?.isEnabled = ready
+        saveNewCopyButton?.isEnabled = ready && !outputDirectory.isEmpty
         outputPreviewMode?.isEnabled = ready && encodedOutput != nil
         updateOutputOptionControls()
         layerTable?.isEnabled = ready

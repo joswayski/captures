@@ -106,9 +106,15 @@ final class AppBridgeTests: XCTestCase {
     func testArtifactRequiresPathsAndHistoryMetadata() {
         XCTAssertNil(CaptureArtifact(["entry": ["id": "missing"]]))
         let artifact = CaptureArtifact(["entry": ["id": "one", "width": 800, "height": 600,
-            "created_at": "2026-09-18T00:00:00Z"], "image_path": "/image.png", "preview_path": "/preview.png"])
+            "created_at": "2026-09-18T00:00:00Z", "mode": "window"],
+            "image_path": "/image.png", "preview_path": "/preview.png"])
         XCTAssertEqual(artifact?.id, "one")
         XCTAssertEqual(artifact?.width, 800)
+        XCTAssertEqual(artifact?.mode, "window")
+        let legacy = CaptureArtifact(["entry": ["id": "legacy", "width": 1, "height": 1,
+            "created_at": "2026-09-18T00:00:00Z"], "image_path": "/image.png",
+            "preview_path": "/preview.png"])
+        XCTAssertEqual(legacy?.mode, "region")
     }
 
     func testLiveOptionValidationAndExplicitRoot() throws {
