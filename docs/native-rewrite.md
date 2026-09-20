@@ -23,7 +23,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices | Audio meter/device-change parity, physical recording/audio acceptance, recording editor and transcoded exports |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared v1 draft storage ([#594](https://github.com/joswayski/captures/pull/594)); document crop/translation/canvas size, lossless image transforms and undo/redo with shipping-TypeScript fixtures ([#595](https://github.com/joswayski/captures/pull/595)) | Native screenshot rendering/editing/input/export comparison, then recording playback/timeline/editing/export |
+| Editors | Shared v1 draft storage ([#594](https://github.com/joswayski/captures/pull/594)); document geometry/undo with shipping-TypeScript fixtures ([#595](https://github.com/joswayski/captures/pull/595)); real image-layer renderer and worker-owned draft/edit sessions with retained C-ABI pixel frames | Native screenshot host UI/input, annotations/export comparison, then recording playback/timeline/editing/export |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -36,8 +36,8 @@ with those flows; its tests retain both screenshot-child and saved-notice covera
 Superseded parent PRs may be closed rather than separately merged because the
 repository uses squash merges. Their functionality must not be counted as missing.
 
-Next implementation boundary: render the shared screenshot document into real
-pixels, then connect crop/image transforms and undo/redo in both AppKit and wgpu.
+Next implementation boundary: connect the shared screenshot session, crop/image
+transforms and undo/redo to History and editor controls in both AppKit and wgpu.
 Native live capture on Wayland remains explicitly
 gated; no stub or X11 result closes that platform gate. Merging development slices
 does not authorize a native release, renderer cutover or removal of Tauri.
@@ -365,6 +365,20 @@ lossless D4 bitmap orientation and arbitrary layer rotation while explicitly
 rejecting unsupported visible annotation layers and invalid or oversized inputs.
 It performs no host I/O and is not wired to AppKit or wgpu UI; macOS, Windows,
 X11 and Wayland native editor acceptance therefore remains `not implemented`.
+
+The shared editor-session boundary now opens isolated History screenshots and
+version-1 drafts, owns decoded image assets and snapshot history, and validates
+and renders edits before replacing the current state. Crop/canvas sizing,
+document commits and undo/redo retain previous frames safely through `Arc`;
+the versioned C ABI exposes independently retained frames without JSON pixels.
+Draft save/discard are explicit worker operations; save failures do not mark
+edits persisted, and discard does not remove a draft if its original cannot be
+reopened. Existing draft storage is atomic per file, not a multi-file transaction.
+Image input bytes/dimensions and the aggregate decoded asset pixels are bounded;
+drafts cannot load arbitrary filesystem/network image sources. Visible unsupported
+annotations remain errors rather than silently missing output. This is the same
+host-independent implementation for macOS, Windows, X11 and Wayland; host UI and
+physical editor acceptance on all four remain `not implemented` / unverified.
 
 New Capture connects its persisted shortcut, tray action and workspace entry to
 fixed-glass screenshot controls on both hosts. Region, Window and Full screen

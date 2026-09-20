@@ -18,6 +18,7 @@ captures-recording = { path = "../captures-recording" }
 captures-recording-platform = { path = "../captures-recording-platform" }
 captures-settings = { path = "../captures-settings" }
 chrono.workspace = true
+image.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

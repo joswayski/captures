@@ -255,8 +255,10 @@ Shared Rust now defines the screenshot editor's layered document, crop/translati
 orientation geometry, canvas sizing and bounded snapshot history, checked against
 the shipping TypeScript behavior. A shared renderer now flattens real image layers,
 including crop geometry, lossless orientation, opacity and blending, without host
-I/O; text, drawing tools and native editor presentation remain unconnected. These
-prerequisites do not complete screenshot-editor acceptance.
+I/O. Worker-owned editor sessions add draft restore/save/discard, transactional
+crop/resize/undo, and retained pixel frames for native hosts. Text, drawing tools
+and native editor presentation remain unconnected. These prerequisites do not
+complete screenshot-editor acceptance.
 Editing, OS shortcut takeover, login items,
 single-instance relaunch and updates are not connected to the native hosts yet. Windows/Linux
 renderer selection and full feature/design parity remain open. The
