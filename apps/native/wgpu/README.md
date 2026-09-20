@@ -87,19 +87,52 @@ privacy against disposable loopback servers. Physical input/AT acceptance remain
 History → Edit screenshot opens a worker-owned crop/canvas/draft editor. Undo/redo,
 Save draft, confirmed Discard edits, and unsaved-close choices preserve the original
 capture and exports. Closing without saving preserves any older saved draft.
+Geometry → Draw crop selects on the preview, including reverse and outside-image
+drags. Free, 1:1, 4:3, 3:2 and 16:9 presets use shared Rust geometry; hold Shift
+to lock the current ratio. Apply crop commits; Cancel, Escape or switching panels
+abandons the selection without editing or saving. Numeric crop fields remain usable.
 The Layers panel selects front-to-back layers and connects visibility, locking,
 image rename, opacity, X/Y movement, duplicate, delete and adjacent ordering.
 Shared Rust preserves locked boundaries and makes every accepted edit undoable.
+Draw adds filled rectangles and ellipses with the shipping default annotation color
+and rounded rectangle corners. Drag previews are transient; release creates one
+selected layer and undo step. Escape, focus loss, close or switching panels cancels
+the unfinished drag. Reverse and off-canvas drags use document coordinates; partial
+overhang stays clipped and fully outside shapes expand the canvas. Zero-width or
+zero-height drags add nothing. The chosen tool remains active. Resize grips and
+other drawing tools remain unconnected.
+Layers → Annotation style now edits closed-shape fill/stroke toggles, stroke/fill
+colors, stroke width and drop-shadow color, opacity, blur and offsets. Color pickers
+and hex fields edit local values; Apply style sends only changed fields as one
+undoable patch. Reset fields or changing the selected layer drops unapplied values.
+Shared Rust supplies shadow defaults/clamps; toggling shadow off preserves its
+stored custom settings. Hidden and locked annotations remain editable. Open shapes
+and paths omit fill/stroke toggles, while images and text have no annotation controls.
+Applying styles invalidates encoded previews without writing files or drafts.
+Import image opens a single-file PNG/JPEG/WebP/TIFF picker without blocking draft
+saves or close. The worker bounds and decodes the file, honors EXIF orientation,
+then imports below the selected visible image using shared placement/expansion.
+Undo/redo and saved drafts own the imported pixels; the external file is never
+modified and is not needed after draft saving. Cancel and failed imports leave
+the document unchanged. Batch/drag-and-drop and other formats remain open.
+RGB/grayscale ICC imports convert to sRGB with straight alpha preserved; untagged
+images assume sRGB. Unsupported/malformed ICC profiles (including CMYK), PNG
+gamma/chromaticity-only metadata and CICP return recoverable errors asking for an
+sRGB conversion first. Import normalizes to 8-bit RGBA, not HDR/wide-gamut editing.
 The Output panel offers PNG/JPEG/WebP, Preserve/Compress/Maximum quality, custom
 PNG palette sizes and an optional hard byte limit. Preview output runs the real
 shared encoder and decoder on the worker, reports the exact byte count, and
 switches between edited and encoded pixels. Changing options or editing clears
 stale output; encoding errors retain the draft and allow retry. Preview does not
-write files or change undo/redo. Edited-file saving and clipboard are still open.
+write files or change undo/redo. Save new copy and lossless edited-image Copy pixels
+are connected. Linux enables arboard's
+native Wayland data-control backend before its X11 fallback. Compositors without
+`ext-data-control-v1` or `wlr-data-control` return a recoverable clipboard error.
+This does not enable Wayland capture or close editor/input parity.
 Normal quit drains edits and saves dirty sessions; a save failure cancels quit and
 keeps the editor recoverable. Drafts live in `editor-drafts` beside the selected
-History root, never the installed Tauri data. Annotation tools and edited-image
-export are not connected yet. The same Windows/X11/Wayland host code is present;
+History root, never the installed Tauri data. Other annotation tools remain unconnected.
+The same Windows/X11/Wayland host code is present;
 only private-X11/software-GL presentation has been exercised.
 
 Run `python apps/native/x11_editor_smoke.py --binary
@@ -305,3 +338,11 @@ window lifecycle but cannot establish real-GPU performance, desktop-compositor
 behavior, energy use, multi-monitor DPI, or screen-reader/IME acceptance. Test X11
 and Wayland separately. CI Windows is also not a substitute for maintainer desktop
 testing. No platform parity row is closed by this workbench.
+
+Run `python apps/native/wayland_clipboard_smoke.py --binary
+apps/native/wgpu/target/release/wayland_clipboard_probe` to test clipboard
+transport independently of host UI. It starts disposable headless Sway with X11
+disabled, publishes a 3×2 asymmetric RGBA image, independently decodes two
+`image/png` pastes, and verifies the selection owner remains alive. This proves
+the supported wlroots data-control path, not physical compositor, editor input,
+accessibility, capture, or clipboard-manager acceptance.

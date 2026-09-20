@@ -36,8 +36,8 @@ with those flows; its tests retain both screenshot-child and saved-notice covera
 Superseded parent PRs may be closed rather than separately merged because the
 repository uses squash merges. Their functionality must not be counted as missing.
 
-Next implementation boundary: connect shared image transforms and host-owned image
-pick/decode UI to both editor hosts, and remaining output actions to AppKit.
+Next implementation boundary: connect remaining annotation styles and drawing tools
+to AppKit while preserving the shared editor command boundary.
 Shared commands and encoding remain prerequisites, not native editor/output acceptance.
 Native live capture on Wayland remains explicitly
 gated; no stub or X11 result closes that platform gate. Merging development slices
@@ -462,8 +462,17 @@ Real X11 input checks cover asymmetric movement, half-opacity/hidden preview
 pixels, locks, ordering, deletion, empty-document undo and saved-layer reopening
 in dark and light, including minimum-window scrolling. Windows and Wayland use
 this implementation but remain presentation-unverified; AppKit layer controls
-are described below. Merge/flatten, image import, image transforms and drawing tools
-are not connected by this panel slice.
+are described below. Image layers expose lossless left/right rotation and
+horizontal/vertical flips through shared commands, including hidden and locked
+images. The wgpu Draw panel commits filled rectangle and ellipse gestures only on
+release, selects their fresh stable IDs, and preserves reverse/off-canvas coordinates;
+Escape cancels transient geometry. Its annotation-style controls edit shape/path
+fill, stroke and shadow values as one explicit transaction. The wgpu import action
+picks one PNG/JPEG/WebP/TIFF independently of the session worker, validates color
+metadata, normalizes supported RGB/grayscale sources to straight-alpha sRGB RGBA8,
+and retains imported pixels in drafts without the source file. Private-X11 tests cover
+these controls in both appearances; Windows and Wayland remain presentation-unverified.
+Merge/flatten and other drawing tools remain unconnected.
 
 The wgpu Output panel now previews shared PNG/JPEG/WebP encoding with the shipping
 quality modes, palette controls and hard byte budget. Encoding and decoding run
@@ -512,9 +521,8 @@ geometry, failure/close/output/import behavior and rendered light/dark fixtures.
 Physical AppKit input, accessibility and IME acceptance remain unverified.
 
 Across both hosts, physical input/accessibility/IME acceptance remains open.
-Non-AppKit image-transform controls and image import, annotation tools, AppKit
-edited-image export and
-recording editing are not connected; the screenshot-editor parity gate stays open.
+AppKit annotation styles and drawing tools, edited-image clipboard output and recording
+editing are not connected; the screenshot-editor parity gate stays open.
 
 New Capture connects its persisted shortcut, tray action and workspace entry to
 fixed-glass screenshot controls on both hosts. Region, Window and Full screen

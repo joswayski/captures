@@ -148,6 +148,10 @@ enum Job {
         path: PathBuf,
         preview: Option<PreviewGuard>,
     },
+    CopyPixels {
+        pixels: Arc<image::RgbaImage>,
+        reply: Sender<Result<(), String>>,
+    },
     Shutdown,
 }
 
@@ -799,6 +803,11 @@ impl Live {
                         preview,
                         result: copy_image(&path, &mut clipboard),
                     },
+                    Job::CopyPixels { pixels, reply } => {
+                        // The workspace owns X11 clipboard data beyond any editor's lifetime.
+                        let _ = reply.send(copy_pixels(&pixels, &mut clipboard));
+                        continue;
+                    }
                 };
                 if out.send(reply).is_err() {
                     break;
@@ -4230,8 +4239,13 @@ impl Live {
                     match settings() {
                         Ok(settings) => {
                             let mode = selected_entry.as_ref().and_then(|entry| entry.mode).unwrap_or(captures_capture::CaptureMode::Region);
+                            let clipboard = self.tx.clone();
                             let editor = self.editors.entry(id.clone()).or_insert_with(|| {
-                                crate::editor::Editor::open(ui.ctx(), self.root.clone(), id, settings.output_directory.into(), mode)
+                                crate::editor::Editor::open(ui.ctx(), self.root.clone(), id, settings.output_directory.into(), mode, move |pixels| {
+                                    let (reply, rx) = mpsc::channel();
+                                    clipboard.send(Job::CopyPixels { pixels, reply }).map_err(|_| "Clipboard worker stopped.".to_owned())?;
+                                    rx.recv().map_err(|_| "Clipboard worker stopped.".to_owned())?
+                                })
                             });
                             editor.focus(ui.ctx());
                         }
@@ -4636,6 +4650,13 @@ fn decode(path: &Path) -> Result<Decoded, String> {
 
 fn copy_image(path: &Path, clipboard: &mut Option<arboard::Clipboard>) -> Result<(), String> {
     let image = image::open(path).map_err(|e| e.to_string())?.into_rgba8();
+    copy_pixels(&image, clipboard)
+}
+
+fn copy_pixels(
+    image: &image::RgbaImage,
+    clipboard: &mut Option<arboard::Clipboard>,
+) -> Result<(), String> {
     if clipboard.is_none() {
         *clipboard = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
     }
@@ -4645,7 +4666,7 @@ fn copy_image(path: &Path, clipboard: &mut Option<arboard::Clipboard>) -> Result
         .set_image(arboard::ImageData {
             width: image.width() as usize,
             height: image.height() as usize,
-            bytes: Cow::Owned(image.into_raw()),
+            bytes: Cow::Borrowed(image.as_raw()),
         })
         .map_err(|e| format!("Could not copy image: {e}"))
 }

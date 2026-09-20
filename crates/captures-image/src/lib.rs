@@ -12,12 +12,13 @@ pub use png::{
     png_palette_colors_for_quality,
 };
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle};
-use image::{Pixel, Rgba, RgbaImage};
+use image::{GrayImage, Pixel, Rgba, RgbaImage};
 use tiny_skia::{
-    FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, PathSegment, Pixmap, Stroke, Transform,
+    FillRule, LineCap, LineJoin, Mask, Paint, Path, PathBuilder, PathSegment, Pixmap, Stroke,
+    Transform,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -153,6 +154,51 @@ pub enum BlendMode {
     Overlay,
     Darken,
     Lighten,
+}
+
+/// Maximum Canvas shadow blur accepted by the shipping editor renderer.
+pub const DROP_SHADOW_BLUR_MAX: f32 = 100.0;
+/// Maximum absolute Canvas shadow offset accepted by the shipping editor renderer.
+pub const DROP_SHADOW_OFFSET_MAX: f32 = 500.0;
+
+/// Canvas-style shadow applied independently to each fill and stroke paint.
+/// Blur and offsets are measured in output pixels and are not transformed with
+/// layer geometry.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DropShadow {
+    pub color: [u8; 4],
+    pub blur: f32,
+    pub offset_x: f32,
+    pub offset_y: f32,
+}
+
+impl DropShadow {
+    fn validate(self, layer_id: u64) -> Result<(), String> {
+        if !self.blur.is_finite()
+            || self.blur < 0.0
+            || self.blur > DROP_SHADOW_BLUR_MAX
+            || !self.offset_x.is_finite()
+            || self.offset_x.abs() > DROP_SHADOW_OFFSET_MAX
+            || !self.offset_y.is_finite()
+            || self.offset_y.abs() > DROP_SHADOW_OFFSET_MAX
+        {
+            return Err(format!("Layer {layer_id} has invalid drop shadow"));
+        }
+        Ok(())
+    }
+
+    fn is_visible(self) -> bool {
+        self.color[3] != 0 && (self.blur > 0.0 || self.offset_x != 0.0 || self.offset_y != 0.0)
+    }
+
+    /// Conservative padding used by the shipping editor's painted-bounds policy.
+    pub fn painted_bounds_padding(self) -> f32 {
+        if self.color[3] == 0 {
+            0.0
+        } else {
+            (self.blur * 2.0 + self.offset_x.abs().max(self.offset_y.abs())).ceil()
+        }
+    }
 }
 
 impl BlendMode {
@@ -446,9 +492,7 @@ impl Layer {
         })
     }
 
-    /// Axis-aligned bounds after rotation, including the stroke. Empty or invalid
-    /// geometry (including an invalid font) has no bounds.
-    pub fn bounds(&self) -> Option<Bounds> {
+    fn painted_bounds(&self, padding: f32) -> Option<Bounds> {
         let geometry_bounds = self.geometry_bounds().ok()??;
         let center = self
             .rotation_origin
@@ -470,11 +514,29 @@ impl Layer {
             painted_bounds.width += self.stroke_width;
             painted_bounds.height += self.stroke_width;
         }
+        painted_bounds.x -= padding;
+        painted_bounds.y -= padding;
+        painted_bounds.width += padding * 2.0;
+        painted_bounds.height += padding * 2.0;
         Bounds::from_points(
             painted_bounds
                 .corners()
                 .map(|p| rotate(p, center, self.rotation_degrees)),
         )
+    }
+
+    /// Axis-aligned bounds after rotation, including the stroke. Empty or invalid
+    /// geometry (including an invalid font) has no bounds.
+    pub fn bounds(&self) -> Option<Bounds> {
+        self.painted_bounds(0.0)
+    }
+
+    /// Conservative axis-aligned painted bounds for this layer and shadow.
+    ///
+    /// The existing geometric hit policy remains unchanged; callers that trim
+    /// or clip rendered output can opt into these broader painted bounds.
+    pub fn bounds_with_shadow(&self, shadow: DropShadow) -> Option<Bounds> {
+        self.painted_bounds(shadow.painted_bounds_padding())
     }
 
     /// Hit testing uses source pixels. Unfilled shapes select their outline,
@@ -714,10 +776,169 @@ fn push_rounded_rectangle(path: &mut PathBuilder, rect: tiny_skia::Rect, radius:
     path.close();
 }
 
-fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
+#[derive(Clone, Copy)]
+enum PathPaint<'a> {
+    Fill,
+    Stroke(&'a Stroke),
+}
+
+fn expanded(bounds: Bounds, amount: f32) -> Bounds {
+    Bounds {
+        x: bounds.x - amount,
+        y: bounds.y - amount,
+        width: bounds.width + amount * 2.0,
+        height: bounds.height + amount * 2.0,
+    }
+}
+
+fn intersection(a: Bounds, b: Bounds) -> Option<Bounds> {
+    let left = a.x.max(b.x);
+    let top = a.y.max(b.y);
+    let right = (a.x + a.width).min(b.x + b.width);
+    let bottom = (a.y + a.height).min(b.y + b.height);
+    (right > left && bottom > top).then_some(Bounds {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+    })
+}
+
+fn draw_path_shadow(
+    canvas: &mut Pixmap,
+    layer: &Layer,
+    path: &Path,
+    transform: Transform,
+    operation: PathPaint<'_>,
+    source_alpha: u8,
+    shadow: DropShadow,
+) -> Result<(), String> {
+    if source_alpha == 0 || !shadow.is_visible() {
+        return Ok(());
+    }
+    shadow.validate(layer.id)?;
+    let source_bounds = layer.bounds().ok_or("Invalid shadow source bounds")?;
+    // Chromium interprets Canvas shadowBlur as a Gaussian with sigma blur / 2.
+    // Twice the authored blur exceeds the finite three-sigma support used here,
+    // and matches the shipping editor's conservative painted-bounds policy.
+    let support = (shadow.blur * 2.0).ceil().max(1.0);
+    let canvas_in_source_space = Bounds {
+        x: -shadow.offset_x,
+        y: -shadow.offset_y,
+        width: canvas.width() as f32,
+        height: canvas.height() as f32,
+    };
+    let Some(target) = intersection(expanded(source_bounds, support), canvas_in_source_space)
+    else {
+        return Ok(());
+    };
+    // Only raster source pixels that can influence the clipped output. This
+    // bounds allocation and convolution by the output canvas plus blur support,
+    // even when authored geometry is far outside or much larger than the image.
+    let domain = expanded(target, support + 1.0);
+    let left = domain.x.floor();
+    let top = domain.y.floor();
+    let width = (domain.x + domain.width).ceil() - left;
+    let height = (domain.y + domain.height).ceil() - top;
+    if !(width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0)
+        || width > u32::MAX as f32
+        || height > u32::MAX as f32
+    {
+        return Err("Drop shadow raster is too large".into());
+    }
+    let (width, height) = (width as u32, height as u32);
+    let mut mask = Mask::new(width, height).ok_or("Drop shadow raster is too large")?;
+    let local_transform = transform.post_translate(-left, -top);
+    match operation {
+        PathPaint::Fill => {
+            mask.fill_path(path, FillRule::Winding, true, local_transform);
+        }
+        PathPaint::Stroke(stroke) => {
+            let outline = path
+                .stroke(stroke, 1.0)
+                .ok_or("Drop shadow stroke is too large")?;
+            mask.fill_path(&outline, FillRule::Winding, true, local_transform);
+        }
+    }
+    for coverage in mask.data_mut() {
+        *coverage = ((u16::from(*coverage) * u16::from(source_alpha) + 127) / 255) as u8;
+    }
+    let coverage = GrayImage::from_raw(width, height, mask.data().to_vec())
+        .ok_or("Invalid drop shadow raster")?;
+    drop(mask);
+    let coverage = if shadow.blur > 0.0 {
+        image::imageops::fast_blur(&coverage, shadow.blur / 2.0)
+    } else {
+        coverage
+    };
+    let mut pixels = Pixmap::new(width, height).ok_or("Drop shadow raster is too large")?;
+    for (pixel, coverage) in pixels.pixels_mut().iter_mut().zip(coverage.pixels()) {
+        let alpha = ((u16::from(coverage[0]) * u16::from(shadow.color[3]) + 127) / 255) as u8;
+        *pixel =
+            tiny_skia::ColorU8::from_rgba(shadow.color[0], shadow.color[1], shadow.color[2], alpha)
+                .premultiply();
+    }
+    canvas.draw_pixmap(
+        0,
+        0,
+        pixels.as_ref(),
+        &tiny_skia::PixmapPaint {
+            quality: tiny_skia::FilterQuality::Bilinear,
+            blend_mode: layer.blend_mode.raster(),
+            ..Default::default()
+        },
+        Transform::from_translate(left + shadow.offset_x, top + shadow.offset_y),
+        None,
+    );
+    Ok(())
+}
+
+fn fill_path(
+    canvas: &mut Pixmap,
+    layer: &Layer,
+    path: &Path,
+    transform: Transform,
+    color: [u8; 4],
+) {
+    canvas.fill_path(
+        path,
+        &paint(color, layer.blend_mode),
+        FillRule::Winding,
+        transform,
+        None,
+    );
+}
+
+fn stroke_path(
+    canvas: &mut Pixmap,
+    layer: &Layer,
+    path: &Path,
+    transform: Transform,
+    stroke: &Stroke,
+) {
+    canvas.stroke_path(
+        path,
+        &paint(layer.color, layer.blend_mode),
+        stroke,
+        transform,
+        None,
+    );
+}
+
+fn draw_layer(
+    canvas: &mut Pixmap,
+    layer: &Layer,
+    shadow: Option<&DropShadow>,
+) -> Result<(), String> {
     let Some(bounds) = layer.geometry_bounds()? else {
         return Ok(());
     };
+    if let Some(shadow) = shadow {
+        shadow.validate(layer.id)?;
+        if matches!(layer.shape, Shape::Image { .. } | Shape::Text { .. }) {
+            return Err(format!("Layer {} cannot render a drop shadow", layer.id));
+        }
+    }
     let center = layer.rotation_origin.unwrap_or_else(|| bounds.center());
     let transform = Transform::from_rotate_at(layer.rotation_degrees, center.x, center.y);
     if let Shape::Image {
@@ -796,30 +1017,23 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
 
     let mut path = PathBuilder::new();
     let mut closed = false;
+    let mut point_dot = false;
     match &layer.shape {
         Shape::Freehand(points) | Shape::Polygon(points) | Shape::TaperedArrow(points) => {
             if points.len() == 1 {
                 if layer.stroke_width > 0.0 {
                     path.push_circle(points[0].x, points[0].y, layer.stroke_width / 2.0);
-                    if let Some(path) = path.finish() {
-                        canvas.fill_path(
-                            &path,
-                            &paint(layer.color, layer.blend_mode),
-                            FillRule::Winding,
-                            transform,
-                            None,
-                        );
-                    }
+                    point_dot = true;
                 }
-                return Ok(());
-            }
-            path.move_to(points[0].x, points[0].y);
-            for point in &points[1..] {
-                path.line_to(point.x, point.y);
-            }
-            if matches!(layer.shape, Shape::Polygon(_) | Shape::TaperedArrow(_)) {
-                path.close();
-                closed = true;
+            } else {
+                path.move_to(points[0].x, points[0].y);
+                for point in &points[1..] {
+                    path.line_to(point.x, point.y);
+                }
+                if matches!(layer.shape, Shape::Polygon(_) | Shape::TaperedArrow(_)) {
+                    path.close();
+                    closed = true;
+                }
             }
         }
         Shape::SmoothPath(points) | Shape::ControlledPath(points) => {
@@ -899,17 +1113,24 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
     let Some(path) = path.finish() else {
         return Ok(());
     };
-    if closed && let Some(color) = layer.fill {
-        canvas.fill_path(
-            &path,
-            &paint(color, layer.blend_mode),
-            FillRule::Winding,
-            transform,
-            None,
-        );
+    if point_dot {
+        if let Some(shadow) = shadow.copied() {
+            draw_path_shadow(
+                canvas,
+                layer,
+                &path,
+                transform,
+                PathPaint::Fill,
+                layer.color[3],
+                shadow,
+            )?;
+            fill_path(canvas, layer, &path, transform, layer.color);
+        }
+        fill_path(canvas, layer, &path, transform, layer.color);
+        return Ok(());
     }
-    if layer.stroke_width > 0.0 {
-        let stroke = if matches!(layer.shape, Shape::TaperedArrow(_)) {
+    let stroke = (layer.stroke_width > 0.0).then(|| {
+        if matches!(layer.shape, Shape::TaperedArrow(_)) {
             tapered_arrow_stroke(layer.stroke_width)
         } else {
             Stroke {
@@ -918,19 +1139,56 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
                 line_join: LineJoin::Round,
                 ..Stroke::default()
             }
-        };
-        canvas.stroke_path(
-            &path,
-            &paint(layer.color, layer.blend_mode),
-            &stroke,
-            transform,
-            None,
-        );
+        }
+    });
+    if let Some(shadow) = shadow.copied() {
+        if closed && let Some(color) = layer.fill {
+            draw_path_shadow(
+                canvas,
+                layer,
+                &path,
+                transform,
+                PathPaint::Fill,
+                color[3],
+                shadow,
+            )?;
+            fill_path(canvas, layer, &path, transform, color);
+        }
+        if let Some(stroke) = stroke.as_ref() {
+            draw_path_shadow(
+                canvas,
+                layer,
+                &path,
+                transform,
+                PathPaint::Stroke(stroke),
+                layer.color[3],
+                shadow,
+            )?;
+            stroke_path(canvas, layer, &path, transform, stroke);
+        }
+    }
+    if closed && let Some(color) = layer.fill {
+        fill_path(canvas, layer, &path, transform, color);
+    }
+    if let Some(stroke) = stroke.as_ref() {
+        stroke_path(canvas, layer, &path, transform, stroke);
     }
     Ok(())
 }
 
 pub fn render(document: &Document) -> Result<RgbaImage, String> {
+    render_with_shadows(document, &BTreeMap::new())
+}
+
+/// Render with optional Canvas-style shadows keyed by layer id.
+///
+/// Shadows are supported for vector shape/path layers. Each fill and stroke is
+/// painted with its shadow and source first, then painted once more without the
+/// shadow to preserve the shipping editor's operation order.
+pub fn render_with_shadows(
+    document: &Document,
+    shadows: &BTreeMap<u64, DropShadow>,
+) -> Result<RgbaImage, String> {
     let (width, height) = document.source.dimensions();
     if width == 0 || height == 0 {
         return Err("Source image is empty".into());
@@ -942,6 +1200,15 @@ pub fn render(document: &Document) -> Result<RgbaImage, String> {
             || crop.y.checked_add(crop.height).is_none_or(|y| y > height))
     {
         return Err("Crop must be nonempty and inside the source image".into());
+    }
+    for layer in &document.layers {
+        layer.validate()?;
+        if let Some(shadow) = shadows.get(&layer.id) {
+            shadow.validate(layer.id)?;
+            if matches!(layer.shape, Shape::Image { .. } | Shape::Text { .. }) {
+                return Err(format!("Layer {} cannot render a drop shadow", layer.id));
+            }
+        }
     }
     let mut output = (*document.source).clone();
     if !document.layers.is_empty() {
@@ -959,7 +1226,7 @@ pub fn render(document: &Document) -> Result<RgbaImage, String> {
             }
         }
         for layer in &document.layers {
-            draw_layer(&mut canvas, layer)?;
+            draw_layer(&mut canvas, layer, shadows.get(&layer.id))?;
         }
         if blend_source {
             for (source, rendered) in output.pixels_mut().zip(canvas.pixels()) {
@@ -1009,7 +1276,7 @@ mod tests {
         let mut output = (*document.source).clone();
         let mut canvas = Pixmap::new(width, height).unwrap();
         for layer in &document.layers {
-            draw_layer(&mut canvas, layer).unwrap();
+            draw_layer(&mut canvas, layer, None).unwrap();
         }
         let bytes = canvas
             .pixels()

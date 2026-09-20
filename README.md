@@ -260,17 +260,24 @@ Shared Rust now defines the screenshot editor's layered document, crop/translati
 orientation geometry, canvas sizing and bounded snapshot history, checked against
 the shipping TypeScript behavior. A shared renderer now flattens real image layers
 and editor shapes, including closed annotations, curved lines, tapered arrows and
-freehand paths with crop geometry, rotation, opacity and blending, without host I/O.
+freehand paths with crop geometry, rotation, opacity, blending and enabled shape/path
+drop shadows, without host I/O.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
 resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
-pixel frames for native hosts. The shared C boundary accepts one borrowed decoded
-RGBA buffer into session-owned storage; native file decoding and controls remain
-unconnected.
+pixel frames for native hosts. Typed rectangle/ellipse creation and annotation-style
+patches are also available. The shared C boundary accepts one borrowed decoded RGBA
+buffer into session-owned storage; hosts own file decoding and interaction.
 Full-canvas photos rotate their canvas; layered overhang stays clipped and fully
-off-canvas transformed images expand the canvas so they are not lost.
+off-canvas transformed images expand the canvas so they are not lost. Shared
+interactive crop geometry also matches shipping bounds, aspect presets and Shift
+locking; physical input acceptance remains separate work.
 The Windows/Linux candidate opens screenshots from History in a native crop,
-canvas-size and draft editor with undo/redo. Its layer panel supports selection,
-visibility, locking, opacity, renaming, position, duplication, deletion and ordering.
+canvas-size and draft editor with undo/redo. **Draw crop** selects directly on the
+preview with free or preset aspect ratios and Shift ratio locking. Its layer panel
+supports selection, visibility, locking, opacity, renaming, position, duplication,
+deletion and ordering. **Draw** creates filled rectangles and ellipses, and annotation
+style controls edit shape/path colors, fill, stroke and shadows. Image layers expose
+lossless transforms and single-image import with retained draft pixels.
 Its Output panel previews PNG/JPEG/WebP quality and size limits, reports encoded
 bytes, and switches between the edited canvas and encoded output without saving.
 **Save new copy** exports to an editable destination path without replacing an
@@ -290,11 +297,10 @@ them in the draft without depending on the source file. ImageIO-supported source
 their first image; files without a usable color description are rejected rather than
 silently relabeled.
 Windows, Wayland and physical AppKit presentation remain unverified.
-Non-AppKit image-transform and image-import controls, text,
-annotation shadows, annotation tools, overwrite-original, edited-image clipboard
-output, and recording editing remain unconnected. The shared
-import/transform/render/export support is prerequisite work, not native
-editor acceptance. OS shortcut takeover, login items, single-instance relaunch and updates
+AppKit annotation styles and drawing tools, text, overwrite-original, edited-image
+clipboard output, and recording editing remain unconnected. Shared editor support
+is prerequisite work, not native editor acceptance. OS shortcut takeover, login items,
+single-instance relaunch and updates
 are not connected to the native hosts yet. Windows/Linux renderer selection and full
 feature/design parity remain open. The
 [migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;

@@ -4,8 +4,12 @@ import test from 'node:test';
 import {
   boundedCropRect,
   createScreenshotDocument,
+  cropDragAspectRatio,
   cropDocument,
   duplicateScreenshotElement,
+  elementBounds,
+  expandDocumentToFitBounds,
+  isFullyOutsideCanvas,
   reorderScreenshotLayers,
   resizeDocumentCanvas,
   transformImageElement,
@@ -131,7 +135,92 @@ function geometryCases() {
     { width: 100.49, height: 200.5 },
     { width: -7.25, height: 40_000.75 },
   ].map(size => ({ ...size, expected: resizeDocumentCanvas(document, size.width, size.height) }));
-  return { crops, translations, cropRects, canvasSizes };
+  return { crops, cropDrags: cropDragCases(), translations, cropRects, canvasSizes };
+}
+
+function cropDragCase(origin, bounds, initialPreset, initialShiftKey, updates) {
+  let shiftAspect = null;
+  let liveRect = null;
+  const step = ({ current, preset = 'free', presetAspect = null, shiftKey = false }) => {
+    const next = cropDragAspectRatio({
+      preset,
+      shiftKey,
+      origin,
+      current,
+      bounds,
+      shiftAspect,
+      liveRect,
+    });
+    liveRect = boundedCropRect(origin, current, bounds, next.aspectRatio);
+    shiftAspect = next.shiftAspect;
+    return { current, presetAspect, shiftKey, expected: liveRect };
+  };
+  const initial = step({
+    current: origin,
+    preset: initialPreset.preset,
+    presetAspect: initialPreset.aspect,
+    shiftKey: initialShiftKey,
+  });
+  return {
+    origin,
+    bounds,
+    initial,
+    updates: updates.map(step),
+  };
+}
+
+function cropDragCases() {
+  return [
+    cropDragCase(
+      { x: -31.25, y: 300.5 },
+      { width: 713, height: 257 },
+      { preset: 'free', aspect: null },
+      false,
+      [
+        { current: { x: 801.75, y: 19.5 } },
+        { current: { x: 113.49, y: 99.5 } },
+      ],
+    ),
+    ...[
+      [{ x: 611.125, y: 17.75 }, { x: -55.5, y: 249.875 }],
+      [{ x: 101.375, y: 233.5 }, { x: 699.75, y: -18.25 }],
+      [{ x: 611.125, y: 233.5 }, { x: -55.5, y: -18.25 }],
+      [{ x: 101.375, y: 17.75 }, { x: 799.75, y: 249.875 }],
+    ].map(([origin, current]) => cropDragCase(
+      origin,
+      { width: 713, height: 257 },
+      { preset: '16:9', aspect: 16 / 9 },
+      true,
+      [{ current, preset: '16:9', presetAspect: 16 / 9, shiftKey: true }],
+    )),
+    cropDragCase(
+      { x: 50, y: 50 },
+      { width: 1_000, height: 800 },
+      { preset: 'free', aspect: null },
+      false,
+      [
+        { current: { x: 250, y: 150 } },
+        { current: { x: 400, y: 600 }, shiftKey: true },
+        { current: { x: 120, y: 240 }, shiftKey: true },
+        { current: { x: 170, y: 90 }, shiftKey: false },
+        { current: { x: 400, y: 600 }, shiftKey: true },
+        { current: { x: 900, y: 300 }, preset: '16:9', presetAspect: 16 / 9, shiftKey: true },
+        { current: { x: 300, y: 700 }, shiftKey: true },
+      ],
+    ),
+    cropDragCase(
+      { x: 300.5, y: 120.5 },
+      { width: 713, height: 257 },
+      { preset: 'free', aspect: null },
+      true,
+      [
+        { current: { x: 304.25, y: 123.75 }, shiftKey: true },
+        { current: { x: 290.25, y: 131.75 }, shiftKey: true },
+        { current: { x: 304.25, y: 123.75 }, shiftKey: false },
+        { current: { x: 500.25, y: 220.75 }, shiftKey: true },
+      ],
+    ),
+  ];
 }
 
 function orientationCases() {
@@ -245,10 +334,135 @@ function shippingCases() {
     },
     document,
     ...geometryCases(),
+    shapeCreations: shapeCreationCases(),
     orientations: orientationCases(),
     layers,
     history: historyCases(),
   };
+}
+
+function shapeCreationCases() {
+  const input = {
+    width: 40,
+    height: 30,
+    background: '#ffffff',
+    futureDocument: { preserve: 'creation' },
+    elements: [{
+      id: 'existing-hidden-locked',
+      kind: 'image',
+      source: 'imported',
+      src: 'draft-asset:existing',
+      originalSrc: null,
+      name: 'existing.png',
+      sourceArtifactId: null,
+      x: 1.25,
+      y: -2.5,
+      width: 3,
+      height: 2,
+      naturalWidth: 3,
+      naturalHeight: 2,
+      locked: true,
+      visible: false,
+      opacity: 63,
+      blendMode: 'screen',
+      futureImage: ['keep'],
+    }],
+  };
+  const defaults = {
+    color: '#ff3b5c',
+    fill: '#ff3b5c',
+    strokeWidth: 8,
+    strokeEnabled: false,
+    dropShadow: false,
+  };
+  const vectors = [
+    {
+      name: 'reverse fractional rectangle remains clipped when partially overlapping',
+      shape: 'rectangle',
+      start: { x: 2.25, y: 15.5 },
+      end: { x: -3.75, y: 4.125 },
+    },
+    {
+      name: 'negative fully outside ellipse expands and translates every layer',
+      shape: 'ellipse',
+      start: { x: -30.25, y: -20.5 },
+      end: { x: -18.75, y: -12.25 },
+    },
+    {
+      name: 'right bottom fully outside rectangle expands without translation',
+      shape: 'rectangle',
+      start: { x: 46.25, y: 34.5 },
+      end: { x: 54.75, y: 41.25 },
+    },
+    {
+      name: 'custom ellipse retains style opacity and unknown style data',
+      shape: 'ellipse',
+      start: { x: 31.75, y: 3.25 },
+      end: { x: 17.125, y: 22.875 },
+      style: {
+        color: '#00ff00',
+        fill: null,
+        strokeWidth: 2.5,
+        strokeEnabled: true,
+        dropShadow: false,
+        futureStyle: { preserve: 7 },
+      },
+      opacity: 37.5,
+    },
+    {
+      name: 'default shadow padding keeps shadow-only canvas overlap clipped',
+      shape: 'rectangle',
+      start: { x: -25, y: 9.5 },
+      end: { x: -21, y: 14.5 },
+      style: { ...defaults, dropShadow: true },
+    },
+    {
+      name: 'custom shadow padding expands fully outside shape and translates siblings',
+      shape: 'ellipse',
+      start: { x: -50, y: -31.25 },
+      end: { x: -46, y: -26.75 },
+      style: {
+        color: '#5533cc',
+        fill: '#5533cc',
+        strokeWidth: 2,
+        strokeEnabled: false,
+        dropShadow: true,
+        dropShadowStyle: {
+          color: '#112233',
+          opacity: 80,
+          blur: 4,
+          offsetX: 9,
+          offsetY: -2,
+        },
+      },
+    },
+  ];
+  return vectors.map(({ name, shape, start, end, style, opacity }) => {
+    const request = { shape, start, end };
+    if (style) request.style = style;
+    if (opacity !== undefined) request.opacity = opacity;
+    const element = {
+      id: 'fixture-created-shape',
+      kind: 'shape',
+      shape,
+      x: start.x,
+      y: start.y,
+      endX: end.x,
+      endY: end.y,
+      controls: [],
+      style: style ?? defaults,
+      locked: false,
+      visible: true,
+      opacity: opacity ?? 100,
+      blendMode: 'source-over',
+    };
+    let expected = { ...structuredClone(input), elements: [...structuredClone(input.elements), element] };
+    const bounds = elementBounds(element);
+    if (isFullyOutsideCanvas(bounds, expected)) {
+      expected = expandDocumentToFitBounds(expected, bounds, 0);
+    }
+    return { name, input, request, expected };
+  });
 }
 
 function serializableCases() {
@@ -266,9 +480,11 @@ function fixtureText(cases) {
     `  "initialization": ${JSON.stringify(cases.initialization)},`,
     `  "document": ${JSON.stringify(cases.document)},`,
     `  "crops": ${array(cases.crops, '    ')},`,
+    `  "cropDrags": ${array(cases.cropDrags, '    ')},`,
     `  "translations": ${array(cases.translations, '    ')},`,
     `  "cropRects": ${array(cases.cropRects, '    ')},`,
     `  "canvasSizes": ${array(cases.canvasSizes, '    ')},`,
+    `  "shapeCreations": ${array(cases.shapeCreations, '    ')},`,
     `  "orientations": ${array(cases.orientations, '    ')},`,
     `  "layers": ${JSON.stringify(cases.layers)},`,
     '  "history": {',
@@ -296,6 +512,10 @@ if (process.argv.includes('--write')) {
     assert.ok(vectors.document.elements.some(element => element.visible === false));
     assert.ok(vectors.document.elements.some(element => element.locked === true));
     assert.ok(vectors.crops.some(entry => entry.start.x < 0));
+    assert.ok(vectors.cropDrags.some(entry => entry.updates.some(step => step.shiftKey)));
+    assert.equal(vectors.shapeCreations.length, 6);
+    assert.ok(vectors.shapeCreations.some(entry => entry.expected.width > entry.input.width));
+    assert.ok(vectors.shapeCreations.some(entry => entry.expected.elements[0].x > entry.input.elements[0].x));
     assert.ok(vectors.history.expected.some(entry => entry.undo === 100));
     assert.ok(vectors.history.expected.some(entry => entry.redo === 100));
     assert.equal(vectors.history.expected[0].changed, false);

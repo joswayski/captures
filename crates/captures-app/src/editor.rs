@@ -13,6 +13,10 @@ use serde_json::{Map, Value};
 pub const HISTORY_LIMIT: usize = 100;
 pub const MAX_CANVAS_DIMENSION: f64 = 32_768.;
 
+const fn default_opacity() -> f64 {
+    100.
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Point {
@@ -27,6 +31,80 @@ pub struct Rect {
     pub y: f64,
     pub width: f64,
     pub height: f64,
+}
+
+/// Transient geometry for one interactive crop drag.
+///
+/// Hosts own gesture lifetime and commit [`Self::rect`] separately through the
+/// existing crop command. `preset_aspect` is a positive width/height ratio;
+/// `None` (or an invalid ratio) means a free crop.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CropDrag {
+    origin: Point,
+    bounds: Rect,
+    last_rect: Rect,
+    latched_shift_aspect: Option<f64>,
+}
+
+impl CropDrag {
+    #[must_use]
+    pub fn new(origin: Point, bounds: Rect, preset_aspect: Option<f64>, shift_held: bool) -> Self {
+        let mut drag = Self {
+            origin,
+            bounds,
+            last_rect: bounded_crop_rect(origin, origin, bounds, None),
+            latched_shift_aspect: None,
+        };
+        drag.update(origin, preset_aspect, shift_held);
+        drag
+    }
+
+    /// Updates the crop preview and returns its canvas-clamped rectangle.
+    pub fn update(&mut self, current: Point, preset_aspect: Option<f64>, shift_held: bool) -> Rect {
+        let preset_aspect = valid_aspect(preset_aspect);
+        let aspect = if let Some(preset_aspect) = preset_aspect {
+            self.latched_shift_aspect = None;
+            Some(preset_aspect)
+        } else if !shift_held {
+            self.latched_shift_aspect = None;
+            None
+        } else {
+            let aspect = self.latched_shift_aspect.unwrap_or_else(|| {
+                crop_aspect_from_live_rect(self.last_rect)
+                    .unwrap_or_else(|| shift_locked_crop_aspect(self.origin, current, self.bounds))
+            });
+            self.latched_shift_aspect = Some(aspect);
+            Some(aspect)
+        };
+        self.last_rect = bounded_crop_rect(self.origin, current, self.bounds, aspect);
+        self.last_rect
+    }
+
+    #[must_use]
+    pub fn rect(&self) -> Rect {
+        self.last_rect
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ClosedShapeKind {
+    Rectangle,
+    Ellipse,
+}
+
+/// Inputs for one completed rectangle or ellipse gesture. Hosts keep transient
+/// pointer state outside the document and submit this value on completion.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClosedShapeCreate {
+    pub shape: ClosedShapeKind,
+    pub start: Point,
+    pub end: Point,
+    #[serde(default)]
+    pub style: ElementStyle,
+    #[serde(default = "default_opacity")]
+    pub opacity: f64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -185,6 +263,51 @@ impl ElementStyle {
     pub fn has_drop_shadow(&self) -> bool {
         self.drop_shadow.unwrap_or(false)
     }
+
+    #[must_use]
+    pub fn resolved_drop_shadow_style(&self) -> DropShadowStyle {
+        let width = self.stroke_width.max(1.);
+        let fallback = DropShadowStyle {
+            color: "#000000".into(),
+            opacity: 45.,
+            blur: (width * 0.85).max(6.),
+            offset_x: 0.,
+            offset_y: (width * 0.32).round().max(2.),
+            extra: Map::new(),
+        };
+        let Some(custom) = self.drop_shadow_style.as_ref() else {
+            return fallback;
+        };
+        let number = |value: f64, minimum: f64, maximum: f64, fallback: f64| {
+            if value.is_finite() {
+                value.clamp(minimum, maximum)
+            } else {
+                fallback
+            }
+        };
+        DropShadowStyle {
+            color: resolved_shadow_color(&custom.color).unwrap_or(fallback.color),
+            opacity: number(custom.opacity, 0., 100., fallback.opacity),
+            blur: number(custom.blur, 0., 100., fallback.blur),
+            offset_x: number(custom.offset_x, -500., 500., fallback.offset_x),
+            offset_y: number(custom.offset_y, -500., 500., fallback.offset_y),
+            extra: custom.extra.clone(),
+        }
+    }
+}
+
+impl Default for ElementStyle {
+    fn default() -> Self {
+        Self {
+            color: "#ff3b5c".into(),
+            fill: Some("#ff3b5c".into()),
+            stroke_width: 8.,
+            stroke_enabled: Some(false),
+            drop_shadow: Some(false),
+            drop_shadow_style: None,
+            extra: Map::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -197,6 +320,43 @@ pub struct DropShadowStyle {
     pub offset_y: f64,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+/// Partial annotation-style update used by native property controls. Fill and
+/// stroke-enabled changes apply only to closed shapes; all other fields apply
+/// to shapes and freehand paths without replacing omitted or unknown data.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnotationStylePatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "OptionalNullable::is_missing")]
+    pub fill: OptionalNullable<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop_shadow: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop_shadow_style: Option<DropShadowStylePatch>,
+}
+
+/// Partial shadow customization. Applying any setting enables the shadow and
+/// resolves omitted values through the shipping renderer defaults.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DropShadowStylePatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blur: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_y: Option<f64>,
 }
 
 /// Distinguishes an omitted legacy field from an explicit JSON `null`.
@@ -435,6 +595,9 @@ pub enum LayerEdit {
     Opacity {
         opacity: f64,
     },
+    AnnotationStyle {
+        patch: AnnotationStylePatch,
+    },
     Translate {
         delta_x: f64,
         delta_y: f64,
@@ -511,6 +674,66 @@ impl Document {
         self.height = clamp(height.round(), 1., MAX_CANVAS_DIMENSION);
     }
 
+    /// Append one completed rectangle or ellipse using the shipping editor's
+    /// layer defaults and fully-outside canvas expansion policy.
+    pub fn create_closed_shape(&mut self, create: ClosedShapeCreate) -> Result<String, String> {
+        if !create.start.x.is_finite()
+            || !create.start.y.is_finite()
+            || !create.end.x.is_finite()
+            || !create.end.y.is_finite()
+        {
+            return Err("Shape coordinates must be finite.".into());
+        }
+        if !create.opacity.is_finite() || !(0. ..=100.).contains(&create.opacity) {
+            return Err("Shape opacity must be between 0 and 100.".into());
+        }
+        if create.start.x == create.end.x || create.start.y == create.end.y {
+            return Err("Closed shapes must have positive width and height.".into());
+        }
+        if !create.style.stroke_width.is_finite() {
+            return Err("Shape stroke width must be finite.".into());
+        }
+
+        let id = loop {
+            let candidate = uuid::Uuid::new_v4().to_string();
+            if !self
+                .elements
+                .iter()
+                .any(|element| element.base().id == candidate)
+            {
+                break candidate;
+            }
+        };
+        let shape = match create.shape {
+            ClosedShapeKind::Rectangle => "rectangle",
+            ClosedShapeKind::Ellipse => "ellipse",
+        };
+        let element = ShapeElement {
+            base: ElementBase {
+                id: id.clone(),
+                x: create.start.x,
+                y: create.start.y,
+                rotation: None,
+                locked: false,
+                visible: true,
+                opacity: create.opacity,
+                blend_mode: "source-over".into(),
+            },
+            shape: shape.into(),
+            end_x: create.end.x,
+            end_y: create.end.y,
+            controls: Vec::new(),
+            style: create.style,
+            extra: Map::new(),
+        };
+        let bounds = closed_shape_bounds(&element);
+        self.elements.push(Element::Shape(element));
+        if fully_outside_canvas(bounds, self.width, self.height) {
+            self.expand_canvas_to_bounds(bounds);
+        }
+        Ok(id)
+    }
+
     pub fn crop(&mut self, crop: Rect) {
         let x = clamp(crop.x.round(), 0., (self.width - 1.).max(0.));
         let y = clamp(crop.y.round(), 0., (self.height - 1.).max(0.));
@@ -577,6 +800,20 @@ impl Document {
                     return Err("Layer opacity must be between 0 and 100.".into());
                 }
                 self.elements[index].base_mut().opacity = opacity;
+            }
+            LayerEdit::AnnotationStyle { patch } => {
+                let (style, closed) = match &mut self.elements[index] {
+                    Element::Shape(element) => (
+                        &mut element.style,
+                        matches!(
+                            element.shape.as_str(),
+                            "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
+                        ),
+                    ),
+                    Element::Path(element) => (&mut element.style, false),
+                    Element::Image(_) | Element::Text(_) => return Ok(()),
+                };
+                patch.apply(style, closed)?;
             }
             LayerEdit::Translate { delta_x, delta_y } => {
                 if !delta_x.is_finite() || !delta_y.is_finite() {
@@ -672,6 +909,138 @@ impl Document {
         self.height = (self.height + shift_y).max((fitted_y + bounds.height).ceil());
         self.translate(shift_x, shift_y);
     }
+}
+
+fn closed_shape_bounds(shape: &ShapeElement) -> Rect {
+    let left = shape.base.x.min(shape.end_x);
+    let top = shape.base.y.min(shape.end_y);
+    let stroke_extent = ((shape.style.stroke_width / 2.).ceil() + 1.).max(1.)
+        + annotation_drop_shadow_pad(&shape.style);
+    Rect {
+        x: left - stroke_extent,
+        y: top - stroke_extent,
+        width: (shape.base.x - shape.end_x).abs().max(1.) + stroke_extent * 2.,
+        height: (shape.base.y - shape.end_y).abs().max(1.) + stroke_extent * 2.,
+    }
+}
+
+fn annotation_drop_shadow_pad(style: &ElementStyle) -> f64 {
+    if !style.has_drop_shadow() {
+        return 0.;
+    }
+    let width = style.stroke_width.max(1.);
+    let fallback_opacity = 45.;
+    let fallback_blur = 6_f64.max(width * 0.85);
+    let fallback_offset_x = 0.;
+    let fallback_offset_y = 2_f64.max((width * 0.32).round());
+    let resolved = style.drop_shadow_style.as_ref();
+    let resolve = |value: Option<f64>, minimum: f64, maximum: f64, fallback: f64| {
+        value
+            .filter(|value| value.is_finite())
+            .map_or(fallback, |value| value.clamp(minimum, maximum))
+    };
+    let opacity = resolve(
+        resolved.map(|shadow| shadow.opacity),
+        0.,
+        100.,
+        fallback_opacity,
+    );
+    if opacity <= 0. {
+        return 0.;
+    }
+    let blur = resolve(resolved.map(|shadow| shadow.blur), 0., 100., fallback_blur);
+    let offset_x = resolve(
+        resolved.map(|shadow| shadow.offset_x),
+        -500.,
+        500.,
+        fallback_offset_x,
+    );
+    let offset_y = resolve(
+        resolved.map(|shadow| shadow.offset_y),
+        -500.,
+        500.,
+        fallback_offset_y,
+    );
+    (blur * 2. + offset_x.abs().max(offset_y.abs())).ceil()
+}
+
+impl AnnotationStylePatch {
+    fn apply(self, style: &mut ElementStyle, closed: bool) -> Result<(), String> {
+        if self
+            .stroke_width
+            .is_some_and(|stroke_width| !stroke_width.is_finite())
+        {
+            return Err("Annotation stroke width must be finite.".into());
+        }
+        if let Some(color) = self.color {
+            style.color = color;
+        }
+        if closed {
+            match self.fill {
+                OptionalNullable::Missing => {}
+                OptionalNullable::Null => style.fill = None,
+                OptionalNullable::Value(fill) => style.fill = Some(fill),
+            }
+            if let Some(stroke_enabled) = self.stroke_enabled {
+                style.stroke_enabled = Some(stroke_enabled);
+            }
+        }
+        if let Some(stroke_width) = self.stroke_width {
+            style.stroke_width = stroke_width;
+        }
+        if let Some(drop_shadow) = self.drop_shadow {
+            style.drop_shadow = Some(drop_shadow);
+        }
+        if let Some(patch) = self.drop_shadow_style.filter(|patch| !patch.is_empty()) {
+            let mut shadow = style.resolved_drop_shadow_style();
+            if let Some(color) = patch.color {
+                shadow.color = color;
+            }
+            if let Some(opacity) = patch.opacity {
+                shadow.opacity = opacity;
+            }
+            if let Some(blur) = patch.blur {
+                shadow.blur = blur;
+            }
+            if let Some(offset_x) = patch.offset_x {
+                shadow.offset_x = offset_x;
+            }
+            if let Some(offset_y) = patch.offset_y {
+                shadow.offset_y = offset_y;
+            }
+            style.drop_shadow = Some(true);
+            style.drop_shadow_style = Some(shadow);
+            style.drop_shadow_style = Some(style.resolved_drop_shadow_style());
+        }
+        Ok(())
+    }
+}
+
+impl DropShadowStylePatch {
+    fn is_empty(&self) -> bool {
+        self.color.is_none()
+            && self.opacity.is_none()
+            && self.blur.is_none()
+            && self.offset_x.is_none()
+            && self.offset_y.is_none()
+    }
+}
+
+fn resolved_shadow_color(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    let raw = trimmed.strip_prefix('#').unwrap_or(trimmed);
+    if !raw.is_ascii() {
+        return None;
+    }
+    let digits = match raw.len() {
+        3 => 3,
+        6.. => 6,
+        _ => return None,
+    };
+    raw.chars()
+        .take(digits)
+        .all(|character| character.is_ascii_hexdigit())
+        .then(|| value.chars().take(7).collect())
 }
 
 pub(crate) fn image_bounds(image: &ImageElement) -> Rect {
@@ -771,10 +1140,34 @@ pub fn bounded_crop_rect(start: Point, end: Point, bounds: Rect, aspect: Option<
     let x = start.x.min(end.x);
     let y = start.y.min(end.y);
     Rect {
-        x: x.round(),
-        y: y.round(),
-        width: (end.x - start.x).abs().round().max(1.),
-        height: (end.y - start.y).abs().round().max(1.),
+        x: js_round(x),
+        y: js_round(y),
+        width: js_round((end.x - start.x).abs()).max(1.),
+        height: js_round((end.y - start.y).abs()).max(1.),
+    }
+}
+
+const CROP_SHIFT_LOCK_MIN_SIZE: f64 = 8.;
+
+fn valid_aspect(aspect: Option<f64>) -> Option<f64> {
+    aspect.filter(|value| value.is_finite() && *value > 0.)
+}
+
+fn crop_aspect_from_live_rect(rect: Rect) -> Option<f64> {
+    (rect.width >= CROP_SHIFT_LOCK_MIN_SIZE && rect.height >= CROP_SHIFT_LOCK_MIN_SIZE)
+        .then_some(rect.width / rect.height)
+}
+
+fn shift_locked_crop_aspect(origin: Point, current: Point, bounds: Rect) -> f64 {
+    crop_aspect_from_live_rect(bounded_crop_rect(origin, current, bounds, None)).unwrap_or(1.)
+}
+
+fn js_round(value: f64) -> f64 {
+    let floor = value.floor();
+    if value - floor < 0.5 {
+        floor
+    } else {
+        floor + 1.
     }
 }
 

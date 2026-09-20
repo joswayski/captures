@@ -24,6 +24,46 @@ from gi.repository import GLib
 from x11_capture_smoke import ScreenSaver
 
 
+class FileRequest(dbus.service.Object):
+    @dbus.service.signal("org.freedesktop.portal.Request", signature="ua{sv}")
+    def Response(self, code, results):
+        pass
+
+
+class FileChooser(dbus.service.Object):
+    """Disposable file/folder portal transport fixture, not a physical dialog."""
+
+    def __init__(self, bus, selected):
+        self.name = dbus.service.BusName("org.freedesktop.portal.Desktop", bus=bus)
+        super().__init__(self.name, "/org/freedesktop/portal/desktop")
+        self.selected = selected
+        self.calls, self.requests = [], []
+        self.pending = None
+
+    @dbus.service.method("org.freedesktop.DBus.Properties", in_signature="ss", out_signature="v")
+    def Get(self, interface, property_name):
+        assert interface == "org.freedesktop.portal.FileChooser" and property_name == "version"
+        return dbus.UInt32(3)
+
+    @dbus.service.method("org.freedesktop.portal.FileChooser", in_signature="ssa{sv}",
+                         out_signature="o", sender_keyword="sender")
+    def OpenFile(self, parent, title, options, sender):
+        self.calls.append((title, options))
+        owner = sender.removeprefix(":").replace(".", "_")
+        path = f"/org/freedesktop/portal/desktop/request/{owner}/{options['handle_token']}"
+        request = FileRequest(self.name, path)
+        self.requests.append(request)
+        self.pending = request
+        return dbus.ObjectPath(path)
+
+    def respond(self, cancel):
+        self.pending.Response(1 if cancel else 0, {} if cancel else {
+            "uris": dbus.Array([self.selected.as_uri()], signature="s"),
+        })
+        self.pending = None
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
@@ -96,6 +136,15 @@ def main():
             "mousemove_relative", "--sync", "1", "0", "sleep", ".15", "mousedown", "1",
             "sleep", ".15", "mouseup", "1", "sleep", ".2")
 
+    def drag(start, end, shift=False):
+        run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start), "sleep", ".2")
+        if shift:
+            run("xdotool", "keydown", "Shift_L", "sleep", ".1")
+        run("xdotool", "mousedown", "1", "sleep", ".2", "mousemove", "--sync",
+            "--window", editor, *map(str, end), "sleep", ".3", "mouseup", "1", "sleep", ".2")
+        if shift:
+            run("xdotool", "keyup", "Shift_L")
+
     try:
         env["DISPLAY"] = ":" + spawn("xvfb", ["Xvfb", "-displayfd", "1", "-screen", "0",
             "1280x900x24", "-dpi", "96", "-nolisten", "tcp"], True)
@@ -105,6 +154,8 @@ def main():
         bus = dbus.bus.BusConnection(address)
         name = dbus.service.BusName("org.freedesktop.ScreenSaver", bus=bus, do_not_queue=True)
         saver = ScreenSaver(name, "/org/freedesktop/ScreenSaver")
+        imported_path = output / "Imported sample é.png"
+        chooser = FileChooser(bus, imported_path)
         loop = GLib.MainLoop()
         thread = threading.Thread(target=loop.run, daemon=True)
         thread.start()
@@ -134,7 +185,7 @@ def main():
             "auto_copy_to_clipboard": False, "show_mini_previews": False,
         }))
         app = spawn("app", [str(binary), "--live", "--history-root", str(history),
-                    "--settings-file", str(settings), "--quit-after", "360"])
+                    "--settings-file", str(settings), "--quit-after", "480"])
         root = wait(lambda: windows("Captures"), "History workspace")[0]
         run("xdotool", "windowmove", "--sync", root, "0", "0")
         time.sleep(1)
@@ -147,10 +198,10 @@ def main():
         pixel("editor-original", 10, 690,
               (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
 
-        def field(y, value):
-            click(editor, 78, y)
+        def field(y, value, x=78):
+            click(editor, x, y)
             run("xdotool", "key", "ctrl+a")
-            run("xdotool", "type", "--clearmodifiers", "--delay", "60", str(value))
+            run("xdotool", "type", "--clearmodifiers", "--delay", "60", "--", str(value))
             run("xdotool", "key", "Return", "sleep", ".2")
 
         draft = output / "editor-drafts" / artifact_id / "manifest.json"
@@ -162,9 +213,20 @@ def main():
             layer = document["elements"][0]
             return (document["width"], document["height"], layer["x"], layer["y"]) == (width, height, x, y)
 
+        def save_until(predicate, description):
+            def attempt():
+                # Save is idempotent; an edit can still be queued while X11
+                # exposes the prior idle title. Never retry a non-idempotent edit.
+                click(editor, 170, 62)
+                return predicate()
+            wait(attempt, description)
+            # The manifest is written before the worker's UI snapshot arrives.
+            # Do not type into fields that that snapshot is about to repopulate.
+            wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+                 "saved snapshot presented")
+
         def save(width, height, x, y):
-            click(editor, 170, 62)
-            wait(lambda: saved(width, height, x, y), f"saved {width}x{height} at {x},{y}")
+            save_until(lambda: saved(width, height, x, y), f"saved {width}x{height} at {x},{y}")
 
         def close(window):
             run("xdotool", "windowactivate", "--sync", window, "key", "alt+F4", "sleep", ".4")
@@ -180,12 +242,242 @@ def main():
             return json.loads(draft.read_text())["document"]["elements"] if draft.exists() else []
 
         def save_layers(predicate, description):
-            click(editor, 170, 62)
-            wait(lambda: predicate(layers()), description)
+            save_until(lambda: predicate(layers()), description)
             return layers()
+
+        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        click(editor, 736, 62)
+        drag((320, 250), (480, 370))
+        annotation = save_layers(lambda values: len(values) == 2, "annotation fixture")[-1]
+        click(editor, 463, 62)
+        click(editor, 79, 300)
+        save_layers(lambda values: values[-1]["locked"], "locked annotation remains style editable")
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "5")
+        shot(editor, "annotation-fields")
+        unchanged = draft.read_bytes()
+        click(editor, 50, 503)  # Unchanged Apply is disabled.
+        field(415, "#23b5a9")
+        assert draft.read_bytes() == unchanged
+        shot(editor, "annotation-unapplied")
+        pixel("annotation-unapplied", 400, 310, (255, 59, 92))
+        click(editor, 150, 503)  # Reset does not mutate the document.
+        assert draft.read_bytes() == unchanged
+        click(editor, 50, 503)  # A broken Reset would apply the staged cyan here.
+        save_layers(lambda values: values[-1]["style"]["fill"] == "#ff3b5c", "reset cleared staged fill")
+        field(415, "#23b5a9")
+        click(editor, 50, 503)
+        save_layers(lambda values: values[-1]["style"]["fill"] == "#23b5a9", "annotation fill")
+        shot(editor, "annotation-fill")
+        pixel("annotation-fill", 400, 310, (35, 181, 169))
+        click(editor, 35, 62)
+        save_layers(lambda values: values[-1]["style"]["fill"] == "#ff3b5c", "one-step style undo")
+        click(editor, 98, 62)
+        save_layers(lambda values: values[-1]["style"]["fill"] == "#23b5a9", "style redo")
+        click(editor, 15, 300)  # Enable stroke, then keep the final controls in view.
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "5")
+        field(256, "#3269d6")
+        field(300, 12, 130)
+        click(editor, 15, 344)  # Clear fill.
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "5")
+        click(editor, 50, 503)
+        save_layers(lambda values: values[-1]["style"]["fill"] is None and values[-1]["style"]["strokeWidth"] == 12, "annotation outline")
+        shot(editor, "annotation-outline")
+        pixel("annotation-outline", 400, 310, (40, 110, 166))
+        pixel("annotation-outline", 323, 310, (50, 105, 214))
+        click(editor, 15, 415)  # Restore fill; enter a different color from the stroke.
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "5")
+        field(415, "#23b5a9")
+        click(editor, 15, 459)  # Enable custom shadow controls.
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "25", "5")
+        shot(editor, "annotation-shadow-fields")
+        field(283, "#ff8800")
+        field(327, 80, 125)
+        field(371, 0)
+        field(415, 25, 90)
+        field(459, -12, 90)
+        click(editor, 50, 503)
+        styled = save_layers(lambda values: values[-1]["style"].get("dropShadowStyle", {}).get("offsetX") == 25, "custom annotation shadow")[-1]
+        assert styled["id"] == annotation["id"] and styled["locked"]
+        assert styled["style"]["dropShadowStyle"] == {"color": "#ff8800", "opacity": 80, "blur": 0, "offsetX": 25, "offsetY": -12}
+        shot(editor, "annotation-shadow")
+        pixel("annotation-shadow", 509, 310, (212, 131, 33), tolerance=1)
+        click(editor, 28, 283)
+        shot(editor, "annotation-color-picker")
+        run("xdotool", "key", "Escape", "sleep", ".2")
+        click(editor, 15, 212)  # Disable shadow without losing custom knobs.
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "5")
+        click(editor, 50, 503)
+        disabled = save_layers(lambda values: values[-1]["style"]["dropShadow"] is False, "shadow off")[-1]
+        assert disabled["style"]["dropShadowStyle"] == styled["style"]["dropShadowStyle"]
+        shot(editor, "annotation-shadow-off")
+        pixel("annotation-shadow-off", 509, 310, (40, 110, 166))
+        click(editor, 15, 459)
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "25", "5")
+        click(editor, 50, 503)
+        save_layers(lambda values: values[-1]["style"] == styled["style"], "shadow settings restored")
+        run("xdotool", "windowsize", "--sync", editor, "760", "540")
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "25", "5")
+        shot(editor, "annotation-minimum")
+        close(editor)
+        wait(lambda: not windows("Screenshot editor"), "styled editor closes")
+        editor = reopen()
+        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        shot(editor, "annotation-reopened")
+        pixel("annotation-reopened", 509, 310, (212, 131, 33), tolerance=1)
+        assert layers()[-1]["style"] == styled["style"]
+        assert (artifact / "capture.png").read_bytes() == original
+        click(editor, 275, 62)
+        click(editor, 55, 128)
+        wait(lambda: not draft.exists(), "discard annotation edits")
+        run("xdotool", "windowsize", "--sync", editor, "1000", "700")
+
+        # These synthetic hex colors are sRGB. Keep the fixture untagged rather
+        # than ImageMagick's gamma/chromaticity-only PNG; profiles have unit coverage.
+        run("convert", "-size", "120x80", "xc:#d53e55", "-fill", "#3cb371",
+            "-draw", "rectangle 10,9 39,29", "-fill", "#2d64bd",
+            "-draw", "rectangle 88,51 119,79", "-strip", "PNG32:" + str(imported_path))
+        imported_bytes = imported_path.read_bytes()
+        click(editor, 640, 62)
+        wait(lambda: chooser.pending, "image file picker opened")
+        title, options = chooser.calls[-1]
+        assert title == "Import image" and not options.get("directory", False)
+        assert not options.get("multiple", False)
+        shot(editor, "import-picker-pending")
+        save(640, 360, 0, 0)  # A waiting picker must not occupy the session worker.
+        before_import = draft.read_bytes()
+        GLib.idle_add(chooser.respond, True)
+        time.sleep(.4)
+        assert draft.read_bytes() == before_import
+
+        invalid = output / "broken.png"
+        invalid.write_text("not an image")
+        chooser.selected = invalid
+        click(editor, 640, 62)
+        wait(lambda: chooser.pending, "picker after cancellation")
+        GLib.idle_add(chooser.respond, False)
+        time.sleep(.8)
+        shot(editor, "import-decode-error")
+        assert draft.read_bytes() == before_import
+        chooser.selected = imported_path
+        click(editor, 640, 62)
+        wait(lambda: chooser.pending, "retry import")
+        GLib.idle_add(chooser.respond, False)
+        imported_layers = save_layers(lambda values: len(values) == 2, "imported owned layer")
+        imported_layer = imported_layers[-1]
+        imported_id = imported_layer["id"]
+        assert (imported_layer["name"], imported_layer["x"], imported_layer["y"],
+                imported_layer["width"], imported_layer["height"]) == (imported_path.name, 260, 360, 120, 80)
+        assert imported_layer["source"] == "imported" and imported_layer["src"].startswith("draft-asset:")
+        assert not imported_layer["locked"] and imported_layer["visible"] and imported_layer["opacity"] == 100
+        assert saved(640, 440, 0, 0)
+        shot(editor, "imported-canvas")
+        pixel("imported-canvas", 568, 537, (60, 179, 113))
+        pixel("imported-canvas", 674, 584, (45, 100, 189))
+        click(editor, 463, 62)
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "25", "4")
+        shot(editor, "imported-selected-layer")
+        click(editor, 78, 371)
+        run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
+        assert run("xclip", "-selection", "clipboard", "-o").decode() == imported_path.name
+        run("xdotool", "key", "Escape")  # The single-line name field scrolls; its value is intact.
+        run("xdotool", "windowsize", "--sync", editor, "760", "540")
+        shot(editor, "imported-minimum")
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "8", "5")
+        shot(editor, "imported-minimum-scrolled")
+        run("xdotool", "windowsize", "--sync", editor, "1000", "700")
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "12", "4")
+        assert imported_path.read_bytes() == imported_bytes
+        imported_path.unlink()  # A saved import must no longer depend on its source file.
+        click(editor, 35, 62)
+        save(640, 360, 0, 0)
+        assert len(layers()) == 1
+        click(editor, 98, 62)
+        save(640, 440, 0, 0)
+        assert layers()[-1]["id"] == imported_id
+        close(editor)
+        wait(lambda: not windows("Screenshot editor"), "imported draft closes")
+        editor = reopen()
+        shot(editor, "imported-reopened")
+        pixel("imported-reopened", 568, 537, (60, 179, 113))
+        assert layers()[-1]["id"] == imported_id
+        assert saved(640, 440, 0, 0)
+        # Discard returns to the original capture, without deleting exports or source data.
+        click(editor, 275, 62)
+        click(editor, 55, 128)
+        wait(lambda: not draft.exists(), "discard imported draft")
+        chooser.selected = artifact / "capture.png"
+        click(editor, 640, 62)
+        wait(lambda: chooser.pending, "picker before close")
+        close(editor)
+        wait(lambda: not windows("Screenshot editor"), "picker does not prevent closing")
+        editor = reopen()
+        GLib.idle_add(chooser.respond, False)  # Late result belongs to the old editor only.
+        time.sleep(.5)
+        save(640, 360, 0, 0)
+        assert len(layers()) == 1
+        assert (artifact / "capture.png").read_bytes() == original
 
         click(editor, 463, 62)  # Layers, preserving the Geometry panel's scroll position.
         shot(editor, "layers-original-locked")
+        click(editor, 88, 632)
+        shot(editor, "layers-transform-menu")
+        run("xdotool", "key", "Escape")
+
+        def transform(index, orientation, width, height):
+            click(editor, 88, 632)
+            click(editor, 58, 464 + 44 * index)
+            save_layers(lambda values: values[0].get("orientation") == orientation,
+                        f"transform {orientation}")
+            assert saved(width, height, 0, 0), "fresh photo rotates its canvas"
+            assert layers()[0]["locked"], "transform must not unlock the original"
+
+        def assert_transformed_pixels(name, gold_left, gold_above):
+            shot(editor, name)
+            pixels = run("convert", str(output / f"{name}.png"), "-crop", "754x610+238+89",
+                         "-depth", "8", "rgb:-")
+
+            def center(color):
+                points = [(i // 3 % 754, i // 3 // 754)
+                          for i in range(0, len(pixels), 3) if pixels[i:i + 3] == bytes(color)]
+                assert len(points) > 100, (name, color, "missing painted region")
+                xs, ys = zip(*points)
+                return (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+
+            gold, green = center((229, 179, 68)), center((46, 158, 113))
+            assert (gold[0] < green[0]) == gold_left, (name, gold, green)
+            assert (gold[1] < green[1]) == gold_above, (name, gold, green)
+
+        # The unequal, offset regions distinguish every menu action's direction.
+        transform(1, "rotate-90", 360, 640)
+        assert_transformed_pixels("layers-rotate-right", False, True)
+        close(editor)
+        editor = reopen()
+        click(editor, 463, 62)
+        assert_transformed_pixels("layers-transform-reopened", False, True)
+        transform(2, "transpose", 360, 640)
+        assert_transformed_pixels("layers-flip-horizontal", True, True)
+        click(editor, 36, 62)
+        save_layers(lambda values: values[0].get("orientation") == "rotate-90", "undo flip")
+        # Reopening starts a new undo history, so rotate left explicitly restores the photo.
+        transform(0, None, 640, 360)
+        transform(0, "rotate-270", 360, 640)
+        assert_transformed_pixels("layers-rotate-left", True, False)
+        transform(3, "transpose", 360, 640)
+        assert_transformed_pixels("layers-flip-vertical", True, True)
+        click(editor, 36, 62)
+        save_layers(lambda values: values[0].get("orientation") == "rotate-270", "undo vertical flip")
+        click(editor, 36, 62)
+        save_layers(lambda values: values[0].get("orientation") is None, "undo left rotation")
+        assert saved(640, 360, 0, 0)
+        click(editor, 17, 299)  # A hidden, locked image remains transformable.
+        save_layers(lambda values: not values[0]["visible"], "hide original before transform")
+        transform(2, "flip-horizontal", 640, 360)
+        assert not layers()[0]["visible"]
+        click(editor, 36, 62)
+        save_layers(lambda values: values[0].get("orientation") is None, "undo hidden transform")
+        click(editor, 36, 62)
+        save_layers(lambda values: values[0]["visible"], "restore original visibility")
+        assert_transformed_pixels("layers-transform-restored", True, True)
         click(editor, 47, 591)  # Duplicate the locked original, not delete or move it.
         first = save_layers(lambda values: len(values) == 2, "duplicate original")
         copy_id = first[1]["id"]
@@ -263,9 +555,112 @@ def main():
         wait(lambda: not draft.exists(), "discard layer edits")
         click(editor, 398, 62)  # Geometry has an independent scroll position.
 
-        for y, value in ((159, 40), (203, 30), (247, 360), (291, 240)):
-            field(y, value)
+        # At this size the preview is 1:1: image origin (238,89), size 640x360.
+        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+
+        click(editor, 736, 62)  # Draw keeps the chosen shape active after each release.
+        drag((658, 289), (538, 169))
+        rectangle = save_layers(lambda values: len(values) == 2, "reverse rectangle")[-1]
+        assert rectangle["kind"] == "shape" and rectangle["shape"] == "rectangle"
+        assert (rectangle["x"], rectangle["y"], rectangle["endX"], rectangle["endY"]) == (420, 200, 300, 80)
+        assert rectangle["style"]["fill"] == "#ff3b5c" and not rectangle["style"]["strokeEnabled"]
+        shot(editor, "shape-rectangle")
+        pixel("shape-rectangle", 600, 230, (255, 59, 92))
+        click(editor, 35, 62)
+        save_layers(lambda values: len(values) == 1, "single-step shape undo")
+        shot(editor, "shape-undone")
+        pixel("shape-undone", 600, 230, (40, 110, 166))
+        click(editor, 98, 62)
+        save_layers(lambda values: len(values) == 2 and values[-1]["id"] == rectangle["id"], "shape redo keeps id")
+        click(editor, 138, 138)  # Ellipse.
+        drag((608, 349), (778, 399))
+        ellipse = save_layers(lambda values: len(values) == 3, "ellipse layer")[-1]
+        assert ellipse["shape"] == "ellipse" and ellipse["id"] != rectangle["id"]
+        assert (ellipse["x"], ellipse["y"], ellipse["endX"], ellipse["endY"]) == (370, 260, 540, 310)
+        shot(editor, "shape-ellipse")
+        pixel("shape-ellipse", 693, 374, (255, 59, 92))
+        pixel("shape-ellipse", 610, 350, (40, 110, 166))
+        before_draw = draft.read_bytes()
+        run("xdotool", "mousemove", "--sync", "--window", editor, "320", "300", "mousedown", "1",
+            "sleep", ".2", "mousemove", "--sync", "--window", editor, "420", "380", "sleep", ".3")
+        shot(editor, "shape-transient")
+        assert draft.read_bytes() == before_draw
+        run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
+        save_layers(lambda values: len(values) == 3, "escape cancels shape")
+        drag((320, 300), (320, 380))  # Degenerate zero-width gesture.
+        save_layers(lambda values: len(values) == 3, "degenerate shape has no layer")
+        run("xdotool", "windowsize", "--sync", editor, "760", "540")
+        shot(editor, "shape-minimum")
+        close(editor)
+        wait(lambda: not windows("Screenshot editor"), "saved shapes close")
+        editor = reopen()
+        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        shot(editor, "shape-reopened")
+        pixel("shape-reopened", 600, 230, (255, 59, 92))
+        pixel("shape-reopened", 693, 374, (255, 59, 92))
+        assert layers()[-1]["id"] == ellipse["id"]
+        click(editor, 736, 62)
+        drag((298, 500), (358, 570))  # Fully outside the image grows the canvas.
+        outside = save_layers(lambda values: len(values) == 4, "outside shape retained")[-1]
+        assert outside["shape"] == "rectangle"
+        assert saved(640, 486, 0, 0)
+        shot(editor, "shape-outside-expanded")
+        assert (artifact / "capture.png").read_bytes() == original
+        click(editor, 275, 62)
+        click(editor, 55, 128)
+        wait(lambda: not draft.exists(), "discard shape edits")
+        click(editor, 398, 62)
+
+        click(editor, 159, 335)
+        drag((638, 359), (278, 119))  # Reverse drag: 40,30 with size 360x240.
+        shot(editor, "crop-selection")
+        run("xdotool", "windowsize", "--sync", editor, "760", "540")
+        shot(editor, "crop-selection-minimum")
+        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        assert not draft.exists(), "selection must not write a draft"
+        assert (artifact / "capture.png").read_bytes() == original
+        run("xdotool", "key", "Escape", "sleep", ".2")
+        shot(editor, "crop-cancelled")
+        save(640, 360, 0, 0)  # Escape must not crop or mutate the document.
+        before_selection = draft.read_bytes()
+        click(editor, 159, 335)
+        drag((278, 119), (438, 219), shift=True)
+        shot(editor, "crop-shift-square")
+        assert draft.read_bytes() == before_selection
         click(editor, 50, 335)
+        save(160, 160, -40, -30)
+        click(editor, 35, 62)
+        save(640, 360, 0, 0)
+        click(editor, 159, 335)
+        drag((638, 500), (278, 119))  # Starts below the image; clamps to y=360.
+        shot(editor, "crop-outside-start")
+        click(editor, 50, 335)
+        save(360, 330, -40, -30)
+        click(editor, 35, 62)
+        save(640, 360, 0, 0)
+        click(editor, 159, 335)
+        click(editor, 125, 379)
+        shot(editor, "crop-aspect-menu")
+        run("xdotool", "key", "Escape", "sleep", ".2")
+        click(editor, 125, 379)
+        click(editor, 106, 507)  # 4:3 preset takes precedence over Shift's square.
+        drag((278, 119), (438, 219), shift=True)
+        shot(editor, "crop-preset-four-three")
+        click(editor, 50, 335)
+        save(160, 120, -40, -30)
+        click(editor, 35, 62)
+        save(640, 360, 0, 0)
+        click(editor, 159, 335)
+        click(editor, 125, 379)
+        click(editor, 106, 419)  # Free for the following asymmetric crop.
+        drag((638, 359), (278, 119))
+        click(editor, 159, 335)  # Cancel restores numeric fields as well as pixels.
+        click(editor, 50, 335)
+        save(640, 360, 0, 0)
+        click(editor, 159, 335)
+        drag((638, 359), (278, 119))
+        click(editor, 50, 335)
+        run("xdotool", "windowsize", "--sync", editor, "1000", "700")
         save(360, 240, -40, -30)
         shot(editor, "editor-cropped")
         pixel("editor-cropped", 900, 400, (40, 110, 166))
@@ -327,8 +722,30 @@ def main():
         assert not (output / "exports").exists(), "preview must not publish files"
 
         exported = output / "exports" / "edited.webp"
-        field(602, exported)
-        click(editor, 65, 641)
+        initial_directory = output / "unchosen folder"
+        initial_directory.mkdir()
+        exported.parent.mkdir()
+        chooser.selected = exported.parent
+        chooser.calls.clear()
+        field(618, initial_directory / exported.name)
+        click(editor, 149, 584)
+        wait(lambda: len(chooser.calls) == 1, "folder dialog cancellation")
+        shot(editor, "export-folder-pending")
+        click(editor, 65, 657)  # Save is disabled until the folder choice completes.
+        assert not list(initial_directory.iterdir()) and not list(exported.parent.iterdir())
+        GLib.idle_add(chooser.respond, True)
+        time.sleep(.5)
+        click(editor, 149, 584)
+        wait(lambda: len(chooser.calls) == 2, "folder dialog selection")
+        GLib.idle_add(chooser.respond, False)
+        time.sleep(.5)
+        for title, options in chooser.calls:
+            assert title == "Choose save location" and options["directory"] and not options.get("multiple", False)
+            assert bytes(options["current_folder"]).rstrip(b"\0") == os.fsencode(initial_directory)
+        assert not list(initial_directory.iterdir()) and not list(exported.parent.iterdir())
+        assert draft.read_bytes() == saved_draft and len(list(history.glob("*/metadata.json"))) == 1
+        shot(editor, "export-folder-selected")
+        click(editor, 65, 657)
         wait(exported.exists, "new edited copy published")
         metadata = wait(lambda: [path for path in history.glob("*/metadata.json")
                                if path.parent != artifact], "new export in History")
@@ -346,7 +763,7 @@ def main():
         run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "12", "5")
         shot(editor, "export-saved-scrolled")
         run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "4")
-        click(editor, 65, 641)  # Same filename must fail rather than replace.
+        click(editor, 65, 657)  # Same filename must fail rather than replace.
         shot(editor, "export-collision")
         assert exported.read_bytes() == exported_bytes
         assert len(list(history.glob("*/metadata.json"))) == 2
@@ -355,8 +772,8 @@ def main():
         history.rename(output / "previous-history")
         history.write_text("blocks History creation")
         recovered = output / "exports" / "recovered.webp"
-        field(629, recovered)  # The collision error adds 27px above the panel.
-        click(editor, 65, 668)
+        field(645, recovered)  # The collision error adds 27px above the panel.
+        click(editor, 65, 657)  # Editing the destination clears the collision error.
         wait(recovered.exists, "file saved despite unavailable History")
         assert recovered.read_bytes() == exported_bytes
         run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "5")
@@ -369,10 +786,26 @@ def main():
         (output / "previous-history").rename(history)
         assert draft.read_bytes() == saved_draft
         assert (artifact / "capture.png").read_bytes() == original
+
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "4")
+        click(editor, 170, 657)  # Copy the edited canvas, not the History source.
+        wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+             "edited clipboard copy completes")
+        copied = run("xclip", "-selection", "clipboard", "-t", "image/png", "-o")
+        clipboard_png = output / "clipboard-edited.png"
+        clipboard_png.write_bytes(copied)
+        assert run("identify", "-format", "%wx%h", str(clipboard_png)) == b"480x300"
+        for x, y, expected in ((70, 80, (229, 179, 68)), (450, 250, (46, 158, 113))):
+            assert run("convert", str(clipboard_png), "-crop", f"1x1+{x}+{y}", "-depth", "8", "rgb:-") == bytes(expected)
+        assert draft.read_bytes() == saved_draft and len(list(history.glob("*/metadata.json"))) == 2
+        assert len(list((output / "exports").iterdir())) == 2
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "5")
+        shot(editor, "clipboard-copied")
         click(editor, 398, 62)  # Geometry restores its own scroll position.
 
         close(editor)
         wait(lambda: not windows("Screenshot editor"), "saved editor closes")
+        assert run("xclip", "-selection", "clipboard", "-t", "image/png", "-o") == copied, "workspace retains clipboard after editor closes"
         editor = reopen()
         shot(editor, "editor-reopened")
         pixel("editor-reopened", 900, 400, (46, 158, 113))
@@ -414,14 +847,28 @@ def main():
         assert (artifact / "capture.png").read_bytes() == original
         (output / "result.json").write_text(json.dumps({
             "passed": True, "appearance": args.appearance,
-            "checks": ["crop", "canvas", "undo-redo", "draft-reopen", "close-preserves-draft",
+            "checks": ["crop", "crop-pointer-reverse", "crop-escape-no-mutation", "crop-transient-no-write",
+                       "crop-shift-square", "crop-outside-start-clamping", "crop-preset-precedes-shift",
+                       "crop-cancel-restores-fields", "crop-popup-escape",
+                       "shape-reverse-rectangle-ellipse-pixels", "shape-single-undo-redo-stable-id",
+                       "shape-transient-escape-degenerate", "shape-draft-reopen-outside-expansion",
+                       "annotation-unapplied-reset-noop", "annotation-locked-fill-stroke-pixels",
+                       "annotation-style-undo-redo", "annotation-shadow-toggle-retains-custom",
+                       "annotation-color-picker-minimum-reopen-pixels",
+                       "canvas", "undo-redo", "draft-reopen", "close-preserves-draft",
+                       "image-picker-pending-cancel-retry", "image-import-exact-pixels",
+                       "image-import-owned-draft-reopen", "image-picker-stale-close-result",
                        "explicit-discard", "save-error", "quit-error-retry", "original-unchanged",
                        "layer-duplicate-rename-move", "layer-opacity-visibility-pixels",
                        "layer-lock-order-delete", "layer-draft-reopen", "layer-undo-redo",
-                       "layer-empty-undo", "output-png-jpeg-webp", "output-comparison",
+                       "layer-empty-undo", "image-transform-four-actions-pixels",
+                       "image-transform-locked-hidden", "image-transform-canvas-draft-undo",
+                       "output-png-jpeg-webp", "output-comparison",
                        "output-budget-error-retry", "output-no-draft-or-file-write",
                        "output-png-palette-minimum-scroll", "export-new-copy-history",
-                       "export-collision-original-protection", "export-history-warning-recovery"],
+                       "export-collision-original-protection", "export-history-warning-recovery",
+                       "folder-portal-cancel-select-filename-no-persistence",
+                       "clipboard-edited-pixels-no-persistence", "clipboard-survives-editor-close"],
             "originalSha256": hashlib.sha256(original).hexdigest(),
         }, indent=2) + "\n")
         print("PASS native editor: layers, crop, canvas, undo/redo, draft reopen, close/discard, save/quit recovery, original unchanged")
