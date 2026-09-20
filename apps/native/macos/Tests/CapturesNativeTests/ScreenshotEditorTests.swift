@@ -327,6 +327,8 @@ final class ScreenshotEditorTests: XCTestCase {
             let layers = [
                 layer(id: "locked-background", name: "Original screenshot", x: 0, y: 0,
                       visible: true, locked: true, opacity: 100),
+                layer(id: "hidden-locked", name: "Hidden locked reference", x: 12, y: 8,
+                      visible: false, locked: true, opacity: 75),
                 layer(id: "hidden-image", name: "A layer name long enough to require truncation in the panel",
                       x: 43.5, y: -12.25, visible: false, locked: false, opacity: 57.5),
             ]
@@ -346,6 +348,18 @@ final class ScreenshotEditorTests: XCTestCase {
             let opacityField = try field("Layer opacity", in: layerPanel)
             XCTAssertLessThan(opacityLabel.frame.minY, opacityField.frame.minY,
                               "top-down layer controls place labels above fields")
+            let table = try XCTUnwrap(descendants(in: layerPanel).compactMap { $0 as? NSTableView }.first)
+            let combinedStateCell = try XCTUnwrap(table.view(atColumn: 0, row: 1,
+                                                              makeIfNecessary: true))
+            let combinedState = try XCTUnwrap(combinedStateCell.subviews.compactMap {
+                $0 as? NSTextField
+            }.first { $0 !== combinedStateCell.textField })
+            XCTAssertEqual(combinedState.stringValue, "Image · Hidden · Locked")
+            XCTAssertLessThanOrEqual(combinedState.frame.maxX, table.tableColumns[0].width,
+                                     "complete layer metadata fits inside the list column")
+            XCTAssertLessThanOrEqual(combinedState.intrinsicContentSize.width,
+                                     combinedState.frame.width,
+                                     "combined Hidden and Locked metadata is not truncated")
             try render(controller.root, name: "screenshot-editor-layers-\(appearance)")
 
             worker.failLayerAction = "duplicate"

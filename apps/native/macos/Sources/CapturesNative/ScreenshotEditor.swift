@@ -567,12 +567,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let layer = layers[row]
         let cell = NSTableCellView()
         let title = NSTextField(labelWithString: layer.name)
-        title.frame = NSRect(x: 8, y: 4, width: 140, height: 22)
+        title.frame = NSRect(x: 8, y: 4, width: 112, height: 22)
         title.lineBreakMode = .byTruncatingTail; title.toolTip = layer.name
         title.textColor = tokens.color("text")
         let detail = NSTextField(labelWithString:
             "\(layer.kind.rawValue.capitalized)\(layer.visible ? "" : " · Hidden")\(layer.locked ? " · Locked" : "")")
-        detail.frame = NSRect(x: 152, y: 4, width: 96, height: 22)
+        detail.frame = NSRect(x: 124, y: 4, width: 124, height: 22)
         detail.alignment = .right; detail.font = .systemFont(ofSize: 10)
         detail.textColor = tokens.color("text-muted"); detail.toolTip = detail.stringValue
         cell.addSubview(title); cell.addSubview(detail); cell.textField = title
