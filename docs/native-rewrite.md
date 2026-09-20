@@ -465,9 +465,9 @@ screen-scale `max(1.5, 3 / displayScale)` gesture cancellation policy. Creation
 and transient host previews share one public tapered-arrow polygon helper with
 the renderer. TypeScript-derived bounds cover reverse/fractional geometry,
 partial clipping, shadow-only overlap and fully-outside sibling translation;
-session tests cover pixels, rollback, undo/redo and draft reopen. This prepares
-AppKit, Windows, X11 and Wayland without connecting controls or completing
-physical, input or accessibility acceptance on any platform.
+session tests cover pixels, rollback, undo/redo and draft reopen. This is shared
+preparation for AppKit, Windows, X11 and Wayland. Connected host controls are tracked
+below; physical, input and accessibility acceptance remain open on every platform.
 
 The shared layer command also accepts typed partial style patches for existing
 shape and freehand-path annotations. Locked and hidden annotations remain editable;
