@@ -260,7 +260,8 @@ the shipping TypeScript behavior. A shared renderer now flattens real image laye
 and editor shapes, including closed annotations, curved lines, tapered arrows and
 freehand paths with crop geometry, rotation, opacity and blending, without host I/O.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
-resize/lossless image transforms/undo, and retained pixel frames for native hosts.
+resize/lossless image transforms/undo, typed rectangle/ellipse creation, and retained
+pixel frames for native hosts. Drawing-tool presentation is not connected yet.
 Full-canvas photos rotate their canvas; layered overhang stays clipped and fully
 off-canvas transformed images expand the canvas so they are not lost.
 The Windows/Linux candidate opens screenshots from History in a native crop,

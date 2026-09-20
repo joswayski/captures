@@ -1,5 +1,6 @@
 use captures_app::editor::{
-    Document, DocumentHistory, Element, ImageTransform, LayerEdit, Point, Rect, bounded_crop_rect,
+    ClosedShapeCreate, Document, DocumentHistory, Element, ImageTransform, LayerEdit, Point, Rect,
+    bounded_crop_rect,
 };
 use captures_history::editor_draft::{self, SaveRequest};
 use serde::Deserialize;
@@ -14,6 +15,7 @@ struct Fixture {
     translations: Vec<TranslationCase>,
     crop_rects: Vec<DocumentCropCase>,
     canvas_sizes: Vec<CanvasSizeCase>,
+    shape_creations: Vec<ShapeCreationCase>,
     orientations: Vec<OrientationCase>,
     layers: Value,
     history: HistoryCase,
@@ -79,6 +81,14 @@ struct DocumentCropCase {
 struct CanvasSizeCase {
     width: f64,
     height: f64,
+    expected: Value,
+}
+
+#[derive(Deserialize)]
+struct ShapeCreationCase {
+    name: String,
+    input: Document,
+    request: ClosedShapeCreate,
     expected: Value,
 }
 
@@ -196,6 +206,20 @@ fn initialization_crop_translation_and_canvas_size_match_typescript() {
     for case in fixture.canvas_sizes {
         let mut document: Document = serde_json::from_value(fixture.document.clone()).unwrap();
         document.resize_canvas(case.width, case.height);
+        assert_json_equivalent(serde_json::to_value(document).unwrap(), case.expected);
+    }
+}
+
+#[test]
+fn closed_shape_creation_and_outside_expansion_match_typescript() {
+    for case in fixture().shape_creations {
+        let mut document = case.input;
+        let id = document.create_closed_shape(case.request).unwrap();
+        let Some(Element::Shape(created)) = document.elements.last_mut() else {
+            panic!("{} did not append a shape", case.name)
+        };
+        assert_eq!(created.base.id, id);
+        created.base.id = "fixture-created-shape".into();
         assert_json_equivalent(serde_json::to_value(document).unwrap(), case.expected);
     }
 }

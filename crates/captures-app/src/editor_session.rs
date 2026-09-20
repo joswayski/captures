@@ -15,7 +15,9 @@ use image::{ImageFormat, ImageReader, RgbaImage};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    editor::{Document, DocumentHistory, Element, LayerEdit, OptionalNullable, Rect},
+    editor::{
+        ClosedShapeCreate, Document, DocumentHistory, Element, LayerEdit, OptionalNullable, Rect,
+    },
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS, render},
 };
 
@@ -41,6 +43,10 @@ pub enum Request {
     ResizeCanvas {
         width: f64,
         height: f64,
+    },
+    CreateClosedShape {
+        #[serde(flatten)]
+        create: ClosedShapeCreate,
     },
     Layer {
         id: String,
@@ -179,6 +185,11 @@ impl EditorSession {
                 next.redo();
             }
             Request::Commit { document } => {
+                next.commit(document);
+            }
+            Request::CreateClosedShape { create } => {
+                let mut document = next.current().clone();
+                document.create_closed_shape(create)?;
                 next.commit(document);
             }
             Request::Layer { id, edit } => {
