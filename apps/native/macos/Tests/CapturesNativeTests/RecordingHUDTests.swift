@@ -26,7 +26,7 @@ final class RecordingHUDTests: XCTestCase {
             XCTAssertEqual(hud.frame.size, NSSize(width: 430, height: 102))
             XCTAssertTrue(hud.subviews.allSatisfy { $0.frame.maxX <= 430 && $0.frame.maxY <= 102 },
                 "compact controls must not clip")
-            XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 5,
+            XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 6,
                 "mic-less sessions keep mute unavailable")
             let microphone = try XCTUnwrap(hud.subviews.compactMap { $0 as? CaptureButton }
                 .first { $0.accessibilityLabel()?.contains("Microphone unavailable") == true })
@@ -44,11 +44,11 @@ final class RecordingHUDTests: XCTestCase {
                 try render(hud, window: window, name: "recording-hud-dark-busy")
             }
             hud.setLifecycleActionsEnabled(true)
-            XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 5)
+            XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 6)
             hud.setMicrophone(muted: false, available: true)
             XCTAssertTrue(microphone.isEnabled)
             XCTAssertEqual(microphone.accessibilityLabel(), "Mute microphone")
-            XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 6)
+            XCTAssertEqual(hud.subviews.compactMap { $0 as? CaptureButton }.filter(\.isEnabled).count, 7)
             try render(hud, window: window, name: "recording-hud-\(appearance)-unmuted")
             let bitmap = try XCTUnwrap(microphone.bitmapImageRepForCachingDisplay(in: microphone.bounds))
             microphone.cacheDisplay(in: microphone.bounds, to: bitmap)
@@ -76,6 +76,11 @@ final class RecordingHUDTests: XCTestCase {
             try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Restart recording" })
                 .performClick(nil)
             XCTAssertTrue(restarted)
+            var screenshot = false
+            hud.screenshot = { screenshot = true }
+            try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Take region screenshot" })
+                .performClick(nil)
+            XCTAssertTrue(screenshot)
             hud.setPaused(false, elapsedMilliseconds: 94_000)
             XCTAssertFalse(hud.paused)
             try render(hud, window: window, name: "recording-hud-\(appearance)-running")

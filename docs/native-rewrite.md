@@ -270,6 +270,20 @@ Stop, Discard, Restart/countdown, session loss and teardown clear hidden state; 
 checks reject stale restoration. Linux requires a live SNI host and restores the HUD plus
 workspace on host loss. Windows/AppKit physical acceptance remains open and Wayland stays gated.
 
+The recording Screenshot slice gives an accepted recording a temporary child
+capture generation instead of replacing or reopening its disarmed parent. The child
+owns region selection, screenshot countdown, Escape and one persistence commit;
+cancel, stale replies and cleanup cannot cancel or commit the recording generation.
+AppKit and wgpu reuse the existing region capture, native History, mini-preview and
+auto-copy paths while preserving running/paused, microphone, guide and hidden-control
+state. AppKit and Windows use their capture-UI exclusion policy. X11 hides the HUD
+and guide from the still image, but its selector remains visible in the ongoing
+recording because X11 cannot exclude overlay windows. Private-X11 acceptance covers
+running publication, paused countdown cancellation, selection Escape, asymmetric
+saved pixels, same-session continuity, final decode and recovery cleanup. AppKit CI
+renders/tests the enabled HUD; real macOS/Windows capture and Wayland remain open,
+so this does not close the Recording HUD parity gate.
+
 New Capture connects its persisted shortcut, tray action and workspace entry to
 fixed-glass screenshot controls on both hosts. Region, Window and Full screen
 share one prepared Rust session and desktop snapshot, retaining selections across

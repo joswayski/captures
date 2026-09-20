@@ -177,6 +177,18 @@ enum CapturePhase {
     RecordingDiscarding,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum RecordingScreenshotPhase {
+    WaitingForHud,
+    Preparing,
+    Selecting,
+    Countdown {
+        rect: SelectionRect,
+        after_countdown: bool,
+    },
+    Capturing,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CaptureRequest {
     NewCapture,
@@ -214,6 +226,9 @@ enum SelectorMessage {
         muted: bool,
     },
     RestartRecording {
+        generation: u64,
+    },
+    StartRecordingScreenshot {
         generation: u64,
     },
     ConfirmRestartRecording {
@@ -582,6 +597,12 @@ pub struct Live {
     recording_last_snapshot_poll: Instant,
     recording_has_started: bool,
     recording_restart_confirmation: bool,
+    recording_screenshot_flow: Option<CaptureFlow>,
+    recording_screenshot_phase: Option<RecordingScreenshotPhase>,
+    recording_screenshot_hide_started: Option<Instant>,
+    recording_screenshot_session: Option<Box<RegionSession>>,
+    recording_screenshot_texture: Option<egui::TextureHandle>,
+    recording_screenshot_settings: Option<AppSettings>,
     recording_controls_hidden: Option<u64>,
     recording_hidden_notice_until: Option<Instant>,
     recording_restore_available: bool,
@@ -762,6 +783,12 @@ impl Live {
             recording_last_snapshot_poll: Instant::now(),
             recording_has_started: false,
             recording_restart_confirmation: false,
+            recording_screenshot_flow: None,
+            recording_screenshot_phase: None,
+            recording_screenshot_hide_started: None,
+            recording_screenshot_session: None,
+            recording_screenshot_texture: None,
+            recording_screenshot_settings: None,
             recording_controls_hidden: None,
             recording_hidden_notice_until: None,
             recording_restore_available: false,
@@ -932,6 +959,11 @@ impl Live {
         self.flow = Some(flow);
         self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
         self.include_cursor = settings.show_cursor_in_screenshots;
+        self.recording_screenshot_settings = matches!(
+            request,
+            CaptureRequest::NewCapture | CaptureRequest::Recording(_)
+        )
+        .then(|| settings.clone());
         match request {
             CaptureRequest::NewCapture | CaptureRequest::Recording(_) => {
                 self.selector_scope_generation.store(0, Ordering::Release);
@@ -1001,6 +1033,9 @@ impl Live {
         // Cancel preparation/countdown before draining work. CaptureFlow::cancel
         // leaves a capture that already crossed its persistence commit point alone.
         self.selector_scope_generation.store(0, Ordering::Release);
+        if let Some(flow) = &self.recording_screenshot_flow {
+            flow.cancel();
+        }
         let drain_recording_worker = is_recording_phase(self.capture_phase);
         if let Some(flow) = &self.flow {
             let generation = flow.generation();
@@ -1052,6 +1087,8 @@ impl Live {
         self.flow = None;
         self.capture_phase = None;
         self.region_session = None;
+        self.recording_screenshot_flow = None;
+        self.recording_screenshot_session = None;
         self.window_session = None;
     }
 
@@ -1135,6 +1172,51 @@ impl Live {
             .map(|window| window.is_visible().is_some());
         while let Ok(message) = self.selector_rx.try_recv() {
             match message {
+                SelectorMessage::Cancel {
+                    generation,
+                    kind: SelectorKind::Region,
+                } if self
+                    .recording_screenshot_flow
+                    .as_ref()
+                    .is_some_and(|flow| flow.generation() == generation)
+                    && self.recording_screenshot_phase
+                        == Some(RecordingScreenshotPhase::Selecting) =>
+                {
+                    if let Some(flow) = &self.recording_screenshot_flow {
+                        flow.cancel();
+                    }
+                }
+                SelectorMessage::ConfirmRegion { generation, rect }
+                    if self.recording_screenshot_flow.as_ref().is_some_and(|flow| {
+                        flow.generation() == generation && flow.is_current()
+                    }) && self.recording_screenshot_phase
+                        == Some(RecordingScreenshotPhase::Selecting) =>
+                {
+                    let seconds = self
+                        .recording_screenshot_settings
+                        .as_ref()
+                        .map(|settings| settings.screenshot_countdown_seconds)
+                        .unwrap_or(0);
+                    let Some(flow) = &mut self.recording_screenshot_flow else {
+                        continue;
+                    };
+                    match flow.start_countdown(seconds) {
+                        Ok(()) => {
+                            self.recording_screenshot_phase =
+                                Some(RecordingScreenshotPhase::Countdown {
+                                    rect,
+                                    after_countdown: seconds > 0,
+                                });
+                            self.status =
+                                "Screenshot region confirmed. Press Escape to cancel.".into();
+                            request_hidden_root_paint(ctx);
+                        }
+                        Err(error) => {
+                            self.error = Some(error);
+                            self.finish_recording_screenshot(ctx, false);
+                        }
+                    }
+                }
                 SelectorMessage::Cancel { generation, kind }
                     if accepts_selector_action(
                         self.flow.as_ref().map(CaptureFlow::generation),
@@ -1336,6 +1418,15 @@ impl Live {
                     self.recording_restart_confirmation = true;
                     request_hidden_root_paint(ctx);
                 }
+                SelectorMessage::StartRecordingScreenshot { generation }
+                    if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
+                        && matches!(
+                            self.capture_phase,
+                            Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
+                        ) =>
+                {
+                    self.start_recording_screenshot(ctx);
+                }
                 SelectorMessage::CancelRestartRecording { generation }
                     if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation) =>
                 {
@@ -1462,6 +1553,7 @@ impl Live {
                 | SelectorMessage::ResumeRecording { .. }
                 | SelectorMessage::SetMicrophoneMuted { .. }
                 | SelectorMessage::RestartRecording { .. }
+                | SelectorMessage::StartRecordingScreenshot { .. }
                 | SelectorMessage::ConfirmRestartRecording { .. }
                 | SelectorMessage::CancelRestartRecording { .. }
                 | SelectorMessage::StopRecording { .. }
@@ -1658,6 +1750,7 @@ impl Live {
                             self.recording_segment_started = Some(Instant::now());
                             self.recording_snapshot_poll_pending = false;
                             self.recording_last_snapshot_poll = Instant::now();
+                            self.previews.restore_capture();
                             self.capture_phase = Some(CapturePhase::Recording);
                             self.status = "Recording in progress".into();
                             request_hidden_root_paint(ctx);
@@ -1913,6 +2006,68 @@ impl Live {
                     }
                     Some(CapturePhase::RecordingPaused) => {}
                     _ => ctx.request_repaint_after(Duration::from_millis(100)),
+                }
+            }
+        }
+        if let Some(flow) = &self.recording_screenshot_flow {
+            if !flow.is_current() {
+                self.finish_recording_screenshot(ctx, false);
+            } else {
+                let generation = flow.generation();
+                match self.recording_screenshot_phase {
+                    Some(RecordingScreenshotPhase::WaitingForHud)
+                        if self
+                            .recording_screenshot_hide_started
+                            .is_some_and(|started| {
+                                started.elapsed() >= Duration::from_millis(300)
+                            }) =>
+                    {
+                        let Some(display_id) = self.display_id.clone() else {
+                            self.error =
+                                Some("The recording display is no longer available.".into());
+                            self.finish_recording_screenshot(ctx, false);
+                            return;
+                        };
+                        let settings = self
+                            .recording_screenshot_settings
+                            .as_ref()
+                            .expect("recording screenshot retains settings");
+                        self.recording_screenshot_phase = Some(RecordingScreenshotPhase::Preparing);
+                        self.pending += 1;
+                        let _ = self.tx.send(Job::PrepareRegion {
+                            display_id,
+                            generation,
+                            freeze: settings.freeze_screen,
+                            include_cursor: settings.show_cursor_in_screenshots,
+                        });
+                    }
+                    Some(RecordingScreenshotPhase::WaitingForHud) => {
+                        ctx.request_repaint_after(Duration::from_millis(16));
+                    }
+                    Some(RecordingScreenshotPhase::Countdown {
+                        rect,
+                        after_countdown,
+                    }) if flow.countdown().remaining(Instant::now()) == 0 => {
+                        let Some(session) = self.recording_screenshot_session.take() else {
+                            self.error = Some("Region preparation was lost before capture.".into());
+                            self.finish_recording_screenshot(ctx, false);
+                            return;
+                        };
+                        self.recording_screenshot_texture = None;
+                        self.recording_screenshot_phase = Some(RecordingScreenshotPhase::Capturing);
+                        self.pending += 1;
+                        let _ = self.tx.send(Job::CaptureRegion {
+                            root: self.root.clone(),
+                            generation,
+                            session,
+                            rect,
+                            after_countdown,
+                        });
+                    }
+                    Some(RecordingScreenshotPhase::Countdown { .. }) => {
+                        ctx.request_repaint_after(Duration::from_millis(100));
+                    }
+                    _ => {}
                 }
             }
         }
@@ -2179,6 +2334,54 @@ impl Live {
                 }
                 Reply::RegionPrepared { generation, result } => {
                     self.pending = self.pending.saturating_sub(1);
+                    let recording_screenshot =
+                        self.recording_screenshot_flow.as_ref().is_some_and(|flow| {
+                            flow.generation() == generation && flow.is_current()
+                        }) && self.recording_screenshot_phase
+                            == Some(RecordingScreenshotPhase::Preparing);
+                    if recording_screenshot {
+                        match result {
+                            Ok(session) => {
+                                let expected = self
+                                    .displays
+                                    .iter()
+                                    .find(|display| Some(&display.id) == self.display_id.as_ref());
+                                if !expected.is_some_and(|display| {
+                                    same_display_geometry(display, session.display())
+                                }) {
+                                    self.error = Some(
+                                        "The recording display changed while preparing the screenshot."
+                                            .into(),
+                                    );
+                                    self.finish_recording_screenshot(ctx, false);
+                                    continue;
+                                }
+                                self.recording_screenshot_texture =
+                                    session.frozen_image().map(|image| {
+                                        ctx.load_texture(
+                                            format!("recording-screenshot-frozen-{generation}"),
+                                            egui::ColorImage::from_rgba_unmultiplied(
+                                                [image.width() as usize, image.height() as usize],
+                                                image.as_raw(),
+                                            ),
+                                            egui::TextureOptions::LINEAR,
+                                        )
+                                    });
+                                self.recording_screenshot_session = Some(session);
+                                self.region_selector.lock().unwrap().reset();
+                                self.recording_screenshot_phase =
+                                    Some(RecordingScreenshotPhase::Selecting);
+                                self.status =
+                                    "Select a screenshot region. Press Escape to cancel.".into();
+                                request_hidden_root_paint(ctx);
+                            }
+                            Err(error) => {
+                                self.error = Some(error);
+                                self.finish_recording_screenshot(ctx, false);
+                            }
+                        }
+                        continue;
+                    }
                     let accepted = accepts_prepare_reply(
                         self.flow.as_ref().map(CaptureFlow::generation),
                         generation,
@@ -2230,6 +2433,22 @@ impl Live {
                 }
                 Reply::RegionCaptured { generation, result } => {
                     self.pending = self.pending.saturating_sub(1);
+                    let recording_screenshot = self
+                        .recording_screenshot_flow
+                        .as_ref()
+                        .is_some_and(|flow| flow.generation() == generation)
+                        && self.recording_screenshot_phase
+                            == Some(RecordingScreenshotPhase::Capturing);
+                    if recording_screenshot {
+                        let captured = result.is_ok();
+                        self.finish_recording_screenshot(ctx, captured);
+                        match result {
+                            Ok(artifact) => self
+                                .accept_artifact(*artifact, "Screenshot captured while recording"),
+                            Err(error) => self.error = Some(error),
+                        }
+                        continue;
+                    }
                     let accepted = self
                         .flow
                         .as_ref()
@@ -2412,8 +2631,72 @@ impl Live {
         }
     }
 
+    fn start_recording_screenshot(&mut self, ctx: &egui::Context) {
+        let Some(parent) = self.flow.as_ref() else {
+            return;
+        };
+        let Some(settings) = self.recording_screenshot_settings.as_ref().cloned() else {
+            self.error = Some("Screenshot preferences are unavailable for this recording.".into());
+            return;
+        };
+        let Some(target) = self.countdown_target else {
+            self.error = Some("The recording display is no longer available.".into());
+            return;
+        };
+        let flow = match parent.begin_recording_screenshot(0) {
+            Ok(flow) => flow,
+            Err(error) => {
+                self.error = Some(format!("Could not start recording screenshot: {error}"));
+                return;
+            }
+        };
+        if let Err(error) =
+            self.previews
+                .begin_capture(&settings, Some(target), ctx.cumulative_frame_nr())
+        {
+            flow.cancel();
+            self.error = Some(error);
+            return;
+        }
+        self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
+        self.include_cursor = settings.show_cursor_in_screenshots;
+        self.recording_screenshot_flow = Some(flow);
+        self.recording_screenshot_phase = Some(RecordingScreenshotPhase::WaitingForHud);
+        self.recording_screenshot_hide_started = Some(Instant::now());
+        self.region_selector.lock().unwrap().reset();
+        self.status = "Preparing region screenshot… Press Escape to cancel.".into();
+        request_hidden_root_paint(ctx);
+        ctx.request_repaint_after(Duration::from_millis(300));
+    }
+
+    fn finish_recording_screenshot(&mut self, ctx: &egui::Context, preserve_auto_copy: bool) {
+        self.recording_screenshot_flow = None;
+        self.recording_screenshot_phase = None;
+        self.recording_screenshot_hide_started = None;
+        self.recording_screenshot_session = None;
+        self.recording_screenshot_texture = None;
+        self.region_selector.lock().unwrap().reset();
+        if !preserve_auto_copy {
+            self.previews.restore_capture();
+            self.auto_copy_on_capture = false;
+        }
+        self.status = if self.capture_phase == Some(CapturePhase::RecordingPaused) {
+            "Recording paused".into()
+        } else {
+            "Recording in progress".into()
+        };
+        request_hidden_root_paint(ctx);
+        ctx.request_repaint();
+    }
+
     fn finish_capture(&mut self, ctx: &egui::Context, preserve_auto_copy: bool) {
         self.selector_scope_generation.store(0, Ordering::Release);
+        self.recording_screenshot_flow = None;
+        self.recording_screenshot_phase = None;
+        self.recording_screenshot_hide_started = None;
+        self.recording_screenshot_session = None;
+        self.recording_screenshot_texture = None;
+        self.recording_screenshot_settings = None;
         self.flow = None;
         self.capture_phase = None;
         self.capture_waiting_for_hide = false;
@@ -2851,6 +3134,7 @@ impl Live {
             && self.flow.as_ref().is_some_and(CaptureFlow::is_current)
         {
             let tokens = t.clone();
+            let visible = self.recording_screenshot_flow.is_none();
             ctx.show_viewport_deferred(
                 egui::ViewportId::from_hash_of("recording-region-indicator"),
                 egui::ViewportBuilder::default()
@@ -2864,6 +3148,8 @@ impl Live {
                     .with_active(false)
                     .with_mouse_passthrough(true),
                 move |ui, _| {
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::Visible(visible));
                     ui.ctx()
                         .send_viewport_cmd(egui::ViewportCommand::ContentProtected(true));
                     crate::recording_region::show(ui, &tokens, rect);
@@ -2889,7 +3175,8 @@ impl Live {
                 _ => false,
             };
             let restart_confirmation = self.recording_restart_confirmation;
-            let controls_hidden = self.recording_controls_hidden == Some(generation);
+            let controls_hidden = self.recording_controls_hidden == Some(generation)
+                || self.recording_screenshot_flow.is_some();
             let hide_available = self.recording_restore_available;
             let busy = restart_confirmation
                 || matches!(
@@ -2964,6 +3251,9 @@ impl Live {
                             }
                             recording_hud::Action::Restart => {
                                 SelectorMessage::RestartRecording { generation }
+                            }
+                            recording_hud::Action::Screenshot => {
+                                SelectorMessage::StartRecordingScreenshot { generation }
                             }
                             recording_hud::Action::SetMicrophoneMuted(muted) => {
                                 SelectorMessage::SetMicrophoneMuted { generation, muted }
@@ -3163,30 +3453,59 @@ impl Live {
                 },
             );
         }
-        if self.capture_phase == Some(CapturePhase::RegionSelecting) {
+        if self.capture_phase == Some(CapturePhase::RegionSelecting)
+            || self.recording_screenshot_phase == Some(RecordingScreenshotPhase::Selecting)
+        {
             let t = t.clone();
-            let generation = self
-                .flow
-                .as_ref()
-                .expect("selection owns flow")
-                .generation();
+            let recording_screenshot =
+                self.recording_screenshot_phase == Some(RecordingScreenshotPhase::Selecting);
+            let generation = if recording_screenshot {
+                self.recording_screenshot_flow
+                    .as_ref()
+                    .expect("recording screenshot selection owns flow")
+                    .generation()
+            } else {
+                self.flow
+                    .as_ref()
+                    .expect("selection owns flow")
+                    .generation()
+            };
             let target = self.countdown_target.expect("region target validated");
             let selector = Arc::clone(&self.region_selector);
             let sender = self.selector_tx.clone();
-            let texture = self.region_texture.clone();
-            let auto_start = self.region_auto_start;
-            let (overlay_width, overlay_height) = self
-                .region_session
-                .as_ref()
-                .expect("selection owns region session")
-                .display()
-                .overlay_size();
+            let (texture, auto_start, display) = if recording_screenshot {
+                (
+                    self.recording_screenshot_texture.clone(),
+                    self.recording_screenshot_settings
+                        .as_ref()
+                        .is_some_and(|settings| settings.auto_start_on_selection),
+                    self.recording_screenshot_session
+                        .as_ref()
+                        .expect("recording screenshot selection owns region session")
+                        .display(),
+                )
+            } else {
+                (
+                    self.region_texture.clone(),
+                    self.region_auto_start,
+                    self.region_session
+                        .as_ref()
+                        .expect("selection owns region session")
+                        .display(),
+                )
+            };
+            let (overlay_width, overlay_height) = display.overlay_size();
             let overlay_bounds = captures_app::selection::Bounds {
                 width: overlay_width,
                 height: overlay_height,
             };
+            let viewport_id = if recording_screenshot {
+                egui::ViewportId::from_hash_of(("recording-screenshot-selector", generation))
+            } else {
+                egui::ViewportId::from_hash_of("region-selector")
+            };
             ctx.show_viewport_deferred(
-                egui::ViewportId::from_hash_of("region-selector"),
+                viewport_id,
                 capture_viewport(
                     "Captures Region Selection",
                     target.monitor,
@@ -3283,6 +3602,36 @@ impl Live {
                     }
                 },
             );
+        }
+        if let Some(flow) = &self.recording_screenshot_flow
+            && let Some(RecordingScreenshotPhase::Countdown { .. }) =
+                self.recording_screenshot_phase
+        {
+            let clock = flow.countdown();
+            if clock.remaining(Instant::now()) > 0 {
+                let t = t.clone();
+                let generation = flow.generation();
+                let target = self.countdown_target.expect("countdown target validated");
+                ctx.show_viewport_deferred(
+                    egui::ViewportId::from_hash_of(("recording-screenshot-countdown", generation)),
+                    capture_viewport(
+                        "Captures Screenshot Countdown",
+                        target.monitor,
+                        target.position,
+                        target.size,
+                    ),
+                    move |ui, _| {
+                        if ui.input(|i| {
+                            i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)
+                        }) {
+                            captures_app::capture_flow::cancel(generation);
+                            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                        }
+                        crate::countdown::show(ui, &t, clock.remaining(Instant::now()).max(1));
+                        ui.ctx().request_repaint_after(Duration::from_millis(100));
+                    },
+                );
+            }
         }
         if let Some(flow) = &self.flow
             && !self.capture_waiting_for_hide
