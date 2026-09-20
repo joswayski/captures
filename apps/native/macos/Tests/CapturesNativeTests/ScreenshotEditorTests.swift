@@ -458,11 +458,13 @@ final class ScreenshotEditorTests: XCTestCase {
                 $0 as? NSTextField
             }.first { $0 !== combinedStateCell.textField })
             XCTAssertEqual(combinedState.stringValue, "Image · Hidden · Locked")
-            XCTAssertLessThanOrEqual(combinedState.frame.maxX, combinedStateCell.bounds.width - 8,
-                                     "metadata respects the actual laid-out cell trailing inset")
+            XCTAssertLessThanOrEqual(combinedState.frame.maxX, combinedStateCell.visibleRect.maxX - 8,
+                                     "metadata respects the clipped cell's visible trailing inset")
             XCTAssertLessThanOrEqual(combinedState.intrinsicContentSize.width,
                                      combinedState.frame.width,
                                      "combined Hidden and Locked metadata is not truncated")
+            XCTAssertLessThanOrEqual(table.rect(ofRow: 2).maxY, table.visibleRect.maxY,
+                                     "the initial three-layer fixture does not expose a partial row")
             try render(controller.root, name: "screenshot-editor-layers-\(appearance)")
 
             worker.failLayerAction = "duplicate"
