@@ -262,7 +262,9 @@ freehand paths with crop geometry, rotation, opacity and blending, without host 
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
 resize/lossless image transforms/undo, and retained pixel frames for native hosts.
 Full-canvas photos rotate their canvas; layered overhang stays clipped and fully
-off-canvas transformed images expand the canvas so they are not lost.
+off-canvas transformed images expand the canvas so they are not lost. Shared
+interactive crop geometry also matches shipping bounds, aspect presets and Shift
+locking, but host gesture controls and physical acceptance remain separate work.
 The Windows/Linux candidate opens screenshots from History in a native crop,
 canvas-size and draft editor with undo/redo. Its layer panel supports selection,
 visibility, locking, opacity, renaming, position, duplication, deletion and ordering.
