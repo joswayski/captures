@@ -85,11 +85,20 @@ Preview builds automatically publish installed-app changes from `main`, and may 
 
 ## Optional cloud accounts — in development
 
-Local screenshots, GIFs, and recordings never require an account. The website
-shows an unavailable notice at `/account`; sign-in and account creation are not
-available. A provider-independent users table is retained in PostgreSQL for
-future development. Hosted uploads, sharing, and browser or desktop sign-in are
-not implemented yet.
+Local screenshots, GIFs, and recordings never require an account and never upload
+automatically. The website and Rust API implement optional email-code sign-in and
+image sharing, disabled until the operator enables and configures the services.
+When enabled, `/account` accepts static PNG, JPEG, and WebP images (20 MiB and
+32 megapixels maximum; 100 images or 1 GiB per account). Uploads stay private until
+you create a link. Unlisted links work for anyone who has the URL; public links
+permit search indexing; private links work only for the owner. Links can have a
+password and expiry. Password-protected, private, and unlisted links request no
+indexing, but this is not a guarantee against third-party copying. Revocation and
+deletion deny subsequent image requests, including previously unlocked links;
+already downloaded images cannot be recalled. Image metadata is stripped during
+upload normalization. Desktop sign-in, native uploads, and GIF/video sharing remain
+future work after the native rewrite. No public gallery or account usernames are
+required for this first slice.
 
 ## Wishlist
 
@@ -98,7 +107,7 @@ not implemented yet.
 - Repeat the previous capture area
 - Pinned captures that stay above other windows
 - Editable click highlights and keystroke overlays after recording
-- Hosted sharing with shareable `captur.es/<id>` links
+- Native uploads and GIF/video sharing (image links use `captur.es/s/<id>`)
 - Faster recording on Windows and Linux
 
 ## Platform status

@@ -1,19 +1,37 @@
-# Captures account API foundation
+# Captures accounts and image sharing API
 
-The Rust/Axum service retains a provider-independent PostgreSQL users table and
-startup migrations for future account development. Authentication, account
-provisioning, and lifecycle webhooks are not available. There are no uploads,
-billing, public profiles, organizations, or desktop login.
+Rust/Axum owns PostgreSQL accounts, SES email OTP, opaque sessions, account-owned
+images, and access-controlled sharing from private R2 storage. Accounts and
+sharing default to disabled. Native account UI, billing, public profiles,
+organizations, and GIF/video sharing are not implemented.
 
 ## Endpoints
 
 | Route | Contract |
 | --- | --- |
 | `GET /health` | Public liveness; not a database readiness probe |
-| `GET /api/account/me` | Always 503 with `Cache-Control: no-store`; credentials do not enable access |
+| `POST /api/auth/email/request` | `{email}` → 202 `{challengeId}`; throttled requests also return synthetic IDs without sending mail |
+| `POST /api/auth/email/verify` | `{challengeId,code,transport:"cookie"\|"bearer"}` → `{user:{id,email},token?}` |
+| `GET /api/account/me` | `{user:{id,email}}`; 401 signed out, 503 when disabled |
+| `POST /api/auth/logout` | Revoke the current session, clear cookie; 204 |
+| `GET, POST /api/uploads` | List owner images; POST raw PNG/JPEG/WebP bytes with matching Content-Type |
+| `GET /api/uploads/<id>/media` | Owner-only normalized image |
+| `DELETE /api/uploads/<id>` | Deny access immediately, delete object with durable retry; 204 |
+| `POST /api/uploads/<id>/shares` | `{visibility,password?,expiresAt?}` → share; owner-only |
+| `GET /api/shares/<id>` | Metadata; protected links return `passwordRequired:true,mediaUrl:null` until authorized |
+| `GET /api/shares/<id>/media` | Authorize each request, proxy image bytes; never redirect to storage |
+| `POST /api/shares/<id>/unlock` | `{password}` → 204 and 15-minute per-share viewer cookie |
+| `POST /api/shares/<id>/revoke` | Owner-only immediate denial of subsequent requests; 204 |
 
-The website shows an unavailable notice at `/account`. It does not create sessions,
-forward access tokens, or connect to the Rust API. Local desktop capture is unaffected.
+Account and media responses are `no-store`. Browser writes require the exact
+`AUTH_ALLOWED_ORIGIN`; native JSON/bearer clients omit browser Origin/cookies.
+User IDs serialize as decimal strings. Errors are JSON `{error,attemptsRemaining?}`.
+Codes use six A–Z/0–9 characters, expire in ten minutes, allow three guesses, and
+are HMAC-bound to their challenge/email. Requests allow 3/email/15m, 5/email/day,
+10/IP/hour, 500 globally/hour, serialized in PostgreSQL across replicas. New
+challenges supersede older ones. Code-delivery failures consume the challenge.
+Sessions use hashed random 32-byte tokens with 30-day expiry and logout revocation.
+Raw tokens, codes, IPs, emails and provider credentials must not be logged.
 
 ## Runtime configuration
 
@@ -26,8 +44,50 @@ files itself. Never put secrets in the image or desktop bundle.
 | `MIGRATION_DATABASE_URL` | Captures migration role, direct port **5432**, same host and database; required at startup |
 | `CAPTURES_API_BIND` | `127.0.0.1:3001`; image uses `0.0.0.0:3001` |
 | `RUST_LOG` | Optional filter; do not enable request/body or SQL parameter logging in production |
+| `AUTH_ENABLED` | `false`; explicit `true` requires all auth settings below |
+| `AUTH_SECRET` | Stable, app/environment-specific random secret of at least 32 bytes; rotating invalidates challenges, not sessions |
+| `AUTH_ALLOWED_ORIGIN` | Exact browser origin, e.g. `https://captur.es`, no trailing slash |
+| `AWS_REGION` | SES region; AWS default credential/workload-identity chain |
+| `SES_FROM_ADDRESS`, `SES_CONFIGURATION_SET` | Verified SES sender and transactional configuration set |
+| `AUTH_TRUST_CF_CONNECTING_IP` | `false`; enable only behind ingress restricted to trusted Cloudflare proxy paths; otherwise socket peer IP is used |
+| `AUTH_INSECURE_LOOPBACK_COOKIE` | `false`; local HTTP development only, requires loopback API bind and permits loopback HTTP origin |
+| `SHARING_ENABLED` | `false`; `true` also requires auth and all R2 settings |
+| `R2_ACCOUNT_ID` | Cloudflare account ID; derives the HTTPS R2 endpoint, region `auto` |
+| `R2_BUCKET` | `staging-captures` or `production-captures`; private, no r2.dev/custom public domain |
+| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Environment/bucket-scoped Object Read & Write credentials, separate from SES AWS identity |
 
-The Node website receives neither database URL nor account secrets.
+Enabled-but-incomplete configuration fails startup. Health is liveness, not an SES
+delivery test: activation still requires a real delivery/upload/view/revoke smoke
+test. Keep the deployment's explicit auth/sharing gates off until that rollout.
+Use the existing environment application secret JSON; preserve database/webhook
+keys. The app reads process environment (it does not fetch Secrets Manager itself).
+The Node website receives neither database URLs nor account/storage secrets.
+
+## Storage and viewer policy
+
+Uploads are static PNG/JPEG/WebP, at most 20 MiB and 32 megapixels, normalized to
+strip metadata/trailing payloads. JPEG normalization re-encodes the image. Per-user
+row locks reserve a maximum of 100 images/1 GiB, counting unfinished/deleting rows.
+Keys are generated by the API as `images/<uuid>`. No storage credentials or signed
+download URLs reach clients. Uploads proxy through the API; this trades origin
+bandwidth for validation without bucket CORS. Account quotas are initial limits,
+not a billing plan. Upload bandwidth/edge abuse controls must be configured before
+opening registration broadly.
+
+Unlisted means anyone with the link, public permits indexing, private means owner
+only. Passwords use salted Argon2id. Unlocks allow 20/IP/15m, 50/share/15m,
+1000 globally/hour in PostgreSQL; viewer grants store only token hashes. The API
+checks revocation, expiry, upload state and owner suspension on every request and
+again after fetching R2 bytes. Completed downloads/in-flight response bytes cannot
+be recalled. Unlisted/private/password pages and images request no indexing;
+public password-free images/pages may index. There is no public gallery/sitemap.
+
+Deletion first records `deleting`, denying reads even if R2 fails. Every five
+minutes cleanup retries deletes and removes pending uploads older than one hour.
+Completed ready media has no automatic expiry. Expiring/revoking a share does not
+delete the owner's upload. Auth challenges/sessions receive seven-day expired
+retention cleanup on issuance; viewer grants and unlock attempts are cleaned by
+the sharing worker. Do not cache `/api/*`, `/account`, or `/s/*` in a proxy/CDN.
 
 ## Shared cluster, dedicated database, separate credentials
 
@@ -54,8 +114,9 @@ defaults. Pinning migrations does not change those defaults or move existing tab
 
 Users retain an internal bigint ID, nullable email, verification state (false by
 default), creation/update timestamps, and disabled/deleted timestamps. Deleted
-rows must have no email. There is no public identifier or email uniqueness
-constraint. No account writes are currently exposed by the service.
+rows must have no email. Emails are trimmed/lowercased with a uniqueness index;
+the migration fails on conflicting existing emails instead of merging identities.
+No public user identifier or mandatory username is added.
 
 ```dotenv
 DATABASE_URL=postgresql://captures_app:PASSWORD@HOST:6432/captures?sslmode=verify-full
@@ -101,6 +162,8 @@ After migration, use the table-owning migration role to grant runtime access:
 ```sql
 GRANT USAGE ON SCHEMA public TO captures_app;
 GRANT SELECT, INSERT, UPDATE ON users TO captures_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON auth_email_challenges, account_sessions,
+    uploads, shares, share_viewer_grants, share_unlock_attempts TO captures_app;
 GRANT USAGE ON SEQUENCE users_id_seq TO captures_app;
 ```
 
@@ -217,7 +280,7 @@ configuration skips notification. A failed notification can be retried without
 overwriting the image. Publication does not deploy or configure secrets.
 
 - `captur.es/api/*` and `api.captur.es/api/*` route to `captures-api`, including
-  feedback, Preview updater manifests, and the unavailable account endpoint.
+  feedback, Preview updater manifests, accounts, and image sharing.
 - Other `captur.es` requests route to `captures-web`.
 - Keep Rust `/health` internal. No native login or token storage is implemented or
   claimed tested on macOS, Windows, or Linux.

@@ -1,6 +1,12 @@
+pub mod auth;
 mod config;
+mod email;
 mod public_api;
+mod sharing;
+mod storage;
 
+#[cfg(test)]
+mod account_tests;
 #[cfg(test)]
 mod regression_tests;
 
@@ -8,8 +14,6 @@ use std::{str::FromStr, time::Duration};
 
 use axum::{
     Json, Router,
-    http::{HeaderValue, StatusCode, header},
-    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use config::Config;
@@ -66,6 +70,26 @@ async fn main() {
         std::process::exit(2)
     });
     let bind = config.bind;
+    let discord_webhook_url = config.discord_webhook_url.clone();
+    let auth_state = auth::AuthState::new(pool.clone(), config.auth).await;
+    let store = config.storage.map(|config| {
+        std::sync::Arc::new(storage::R2Store::new(config))
+            as std::sync::Arc<dyn storage::ObjectStore>
+    });
+    let sharing_state = sharing::SharingState::new(auth_state.clone(), store);
+    let cleanup = sharing_state.clone();
+    let cleanup_task = tokio::spawn(async move {
+        if cleanup.store.is_none() {
+            return;
+        }
+        let mut interval = tokio::time::interval(Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            if cleanup.cleanup().await.is_err() {
+                tracing::warn!("sharing cleanup will retry");
+            }
+        }
+    });
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .unwrap_or_else(|_| {
@@ -73,27 +97,54 @@ async fn main() {
             std::process::exit(2)
         });
     tracing::info!(%bind, "captures API listening");
-    axum::serve(listener, router(config.discord_webhook_url))
-        .with_graceful_shutdown(shutdown())
-        .await
-        .unwrap_or_else(|_| eprintln!("server stopped unexpectedly"));
+    axum::serve(
+        listener,
+        app_router(discord_webhook_url, auth_state, sharing_state)
+            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown())
+    .await
+    .unwrap_or_else(|_| eprintln!("server stopped unexpectedly"));
+    cleanup_task.abort();
     pool.close().await;
 }
 
+#[cfg(test)]
 fn router(discord_webhook_url: Option<String>) -> Router {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://test@127.0.0.1/test")
+        .unwrap();
+    let auth = auth::AuthState::disabled(pool);
+    app_router(
+        discord_webhook_url,
+        auth.clone(),
+        sharing::SharingState::new(auth, None),
+    )
+}
+
+fn public_router(discord_webhook_url: Option<String>) -> Router {
     Router::new()
         .route("/health", get(|| async { Json(json!({"status":"ok"})) }))
         .route(
             "/api/health",
             get(|| async { Json(json!({"status":"ok"})) }),
         )
-        .route("/api/account/me", get(account_unavailable))
         .route("/api/updates/preview", get(public_api::preview))
         .route(
             "/api/feedback",
             post(public_api::feedback).options(public_api::feedback_options),
         )
         .with_state(public_api::ApiState::new(discord_webhook_url))
+}
+
+fn app_router(
+    discord_webhook_url: Option<String>,
+    auth_state: auth::AuthState,
+    sharing_state: sharing::SharingState,
+) -> Router {
+    public_router(discord_webhook_url)
+        .merge(auth::router(auth_state))
+        .merge(sharing::router(sharing_state))
 }
 
 async fn connect(url: &str) -> Result<PgPool, sqlx::Error> {
@@ -128,18 +179,6 @@ async fn migrate(url: &str) -> Result<(), &'static str> {
     result
         .map_err(|_| "database migration timed out")?
         .map_err(|_| "database migration failed")
-}
-
-async fn account_unavailable() -> Response {
-    let mut response = (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(json!({"error": "Accounts are not available"})),
-    )
-        .into_response();
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
 }
 
 async fn shutdown() {

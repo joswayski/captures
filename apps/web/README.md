@@ -65,7 +65,9 @@ The Node process serves the site:
    request headers.
 3. Hashed `/assets/*` files and other public files are served as static assets
    with long-lived cache headers.
-4. Unknown paths return the in-app 404 page.
+4. `/account` provides optional sign-in and the image library; `/s/<id>` renders
+   access-controlled share pages, with fresh server-side metadata.
+5. Unknown paths return the in-app 404 page.
 
 Nitro is the Node adapter. The Rust API owns `captur.es/api/*`; the frontend
 does not define API routes.
@@ -124,12 +126,14 @@ the edge; HTML and `/api/*` go to the origin.
 3. SSL/TLS → Overview: **Full (Strict)**.
 4. SSL/TLS → Edge Certificates: enable Universal SSL.
 
-Cache behavior comes from origin headers plus two Cache Rules:
+Required cache behavior comes from origin headers plus two Cache Rules. The
+account/share bypass below must be verified before activation; this code change
+does not update live Cloudflare rules.
 
 | Rule | Match | Action |
 | --- | --- | --- |
 | Hashed assets | hostname is `captur.es` and URI Path starts with `/assets/` | Eligible for cache, Edge TTL 1 year, respect origin `Cache-Control` |
-| Dynamic | hostname is `captur.es` and (URI Path equals `/` or starts with `/api/`) | Bypass cache |
+| Dynamic | hostname is `captur.es` and (URI Path equals `/`, `/account`, `/api`, or `/s`, or starts with `/account/`, `/api/`, or `/s/`) | Bypass cache |
 
 The homepage already sends `Cache-Control: private` and `Vary` on the OS hint
 headers, so a missed Bypass rule still should not share one download button
@@ -140,21 +144,25 @@ a purge. Purge `/` only if a stale homepage HTML response is stuck at the edge.
 
 ## Optional accounts
 
-`/account` is an unavailable notice, not a requirement for downloading or using
-Captures. Sign-in, account creation, uploads, and sharing are not implemented.
-The web app has no authentication provider, session middleware, login callback,
-or account-related environment variables. Its `/api/account/me` endpoint always
-returns 503 with `Cache-Control: no-store`, even if a request supplies credentials.
-Removed `/api/auth/*` routes return 404.
+`/account` uses the Rust API's email-code sign-in and secure HttpOnly cookie,
+then lists owner images and their links. Authentication is optional; no tokens
+are stored in localStorage. When the API disables accounts, the page shows an
+unavailable notice. Static image uploads, deletion, link creation/revocation,
+passwords and expiry are implemented; native app integration follows the rewrite.
 
-The Node process receives neither `DATABASE_URL` nor `MIGRATION_DATABASE_URL`.
-The Rust service in [`../api`](../api/README.md) retains the general users table
-and startup migrations for future development; the website does not call it.
-`captur.es` serves `captures-web`, while `api.captur.es/api/*` routes to the
-separate Rust service. The npm package remains `@captures/web`.
+Browser calls remain same-origin `/api/*`. Set **server-only**
+`CAPTURES_API_ORIGIN` on the Node website to the trusted internal Rust API origin
+(`http://captures-api` in production: Service port 80 forwards to container port
+3001; local default `http://127.0.0.1:3001`).
+Share-page SSR forwards the viewer cookie to that origin only, rejects redirects,
+and never caches metadata. Node receives no database, SES or R2 credentials.
+See [`../api`](../api/README.md) for auth and storage configuration.
 
-Account HTML and API responses remain `no-store`. The feedback and updater
-routes are unchanged. `npm run test:accounts --workspace @captures/web` verifies
-the unavailable page, rejected credential-bearing requests, removed login
-routes, and public website against the production build (included in
-`npm run check`). No authentication service or email delivery is used.
+`/account` and `/s/*` send `no-store` and `Referrer-Policy: no-referrer`.
+Public password-free share pages may index; all other states send noindex.
+Noindex is a crawler instruction, not access control. Media authorization is
+enforced again by Rust, so stale page HTML cannot bypass revocation. Configure
+the same-origin API routing and dynamic cache bypass before activation. The
+development Vite proxy routes `/api` to the local API; production ingress must
+do this separately. `npm test --workspace @captures/web` covers validation and
+indexing policy. End-to-end account/storage tests live in the Rust API suite.
