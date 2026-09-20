@@ -20,7 +20,7 @@ use captures_app::shortcuts::{CaptureShortcut, CaptureShortcuts};
 use crate::{
     emit,
     live::{CaptureRequest, HistoryFilter, Live},
-    options::{Options, Scene},
+    options::{HudState, Options, Scene},
     preferences::Preferences,
     recording_hud, shortcut_input,
     tokens::{self, Tokens},
@@ -79,6 +79,7 @@ pub struct Workbench {
     live: Option<Live>,
     live_preferences: bool,
     root_hidden: bool,
+    root_was_focused: bool,
     tray: Option<Tray>,
     tray_error: Option<String>,
     shortcuts: ShortcutOwner,
@@ -218,6 +219,7 @@ impl Workbench {
             live,
             live_preferences: false,
             root_hidden: false,
+            root_was_focused: false,
             tray,
             tray_error,
             shortcuts,
@@ -256,23 +258,40 @@ impl Workbench {
     }
 
     fn handle_tray_action(&mut self, action: TrayAction, ctx: &egui::Context) {
+        let restored_controls = self
+            .live
+            .as_mut()
+            .is_some_and(|live| live.show_recording_controls(ctx));
         match action {
             TrayAction::NewCapture => {
+                if restored_controls {
+                    return;
+                }
                 if let Some(live) = &mut self.live {
                     live.request_capture(CaptureRequest::NewCapture);
                 }
             }
+            TrayAction::ShowRecordingControls => {}
             TrayAction::CaptureDisplay => {
+                if restored_controls {
+                    return;
+                }
                 if let Some(live) = &mut self.live {
                     live.request_capture(CaptureRequest::Display);
                 }
             }
             TrayAction::CaptureRegion => {
+                if restored_controls {
+                    return;
+                }
                 if let Some(live) = &mut self.live {
                     live.request_capture(CaptureRequest::Region);
                 }
             }
             TrayAction::CaptureWindow => {
+                if restored_controls {
+                    return;
+                }
                 if let Some(live) = &mut self.live {
                     live.request_capture(CaptureRequest::Window);
                 }
@@ -309,6 +328,9 @@ impl Workbench {
                     "The system tray host stopped. Closing this window will quit Captures.".into(),
                 );
                 self.tray.take();
+                if let Some(live) = &mut self.live {
+                    live.set_recording_restore_available(false, ctx);
+                }
                 self.show_root(ctx);
             }
             TrayAction::Quit => self.quit(ctx),
@@ -374,11 +396,17 @@ impl Workbench {
     }
 
     fn sync_shortcut_routing(&self) {
-        let (enabled, selector_generation) = self.live.as_ref().map_or((false, None), |live| {
-            shortcut_routing_state(live.can_launch_capture(), live.selector_generation())
-        });
+        let (enabled, selector_generation, restore_only) =
+            self.live.as_ref().map_or((false, None, false), |live| {
+                shortcut_routing_state(
+                    live.can_launch_capture(),
+                    live.selector_generation(),
+                    live.recording_controls_hidden(),
+                )
+            });
         if let Some(shortcuts) = self.shortcuts.0.borrow().as_ref() {
             shortcuts.set_selector_generation(selector_generation);
+            shortcuts.set_restore_only(restore_only);
             shortcuts.set_enabled(enabled);
         }
     }
@@ -467,7 +495,7 @@ impl Workbench {
     }
 
     fn preferences(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        if self.preferences_state.ui(ui, t) {
+        if self.preferences_state.ui(ui, t, false) {
             self.change_scene(Scene::History);
         }
     }
@@ -554,20 +582,33 @@ impl Workbench {
     }
 
     fn hud(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        if matches!(
-            recording_hud::show(
-                ui,
-                t,
-                recording_hud::View {
-                    paused: self.paused,
-                    elapsed_ms: 24_000,
-                    notice: "These controls won’t show in recordings",
-                    warning: false,
-                },
-            ),
-            Some(recording_hud::Action::Pause | recording_hud::Action::Resume)
+        if let Some(action) = recording_hud::show(
+            ui,
+            t,
+            recording_hud::View {
+                paused: self.paused,
+                busy: self.options.hud_state == HudState::Busy,
+                has_microphone: self.options.hud_state != HudState::NoMicrophone,
+                microphone_muted: self.options.hud_state == HudState::Muted,
+                elapsed_ms: 24_000,
+                notice: "These controls won’t show in recordings",
+                warning: false,
+                hide_available: false,
+            },
         ) {
-            self.paused = !self.paused;
+            match action {
+                recording_hud::Action::Pause | recording_hud::Action::Resume => {
+                    self.paused = !self.paused;
+                }
+                recording_hud::Action::SetMicrophoneMuted(muted) => {
+                    self.options.hud_state = if muted {
+                        HudState::Muted
+                    } else {
+                        HudState::Unmuted
+                    };
+                }
+                _ => {}
+            }
         }
     }
 
@@ -795,6 +836,7 @@ impl eframe::App for Workbench {
             }
         }
         if let Some(live) = &mut self.live {
+            live.set_recording_restore_available(self.tray.is_some(), ctx);
             live.logic(ctx, frame);
         }
         self.sync_shortcuts(ctx);
@@ -808,6 +850,13 @@ impl eframe::App for Workbench {
             self.root_hidden = true;
         }
         let root_focused = ctx.input(|input| input.viewport().focused.unwrap_or(false));
+        if root_focused
+            && !self.root_was_focused
+            && let Some(live) = &mut self.live
+        {
+            live.show_recording_controls(ctx);
+        }
+        self.root_was_focused = root_focused;
         let shortcuts_suspended =
             shortcuts_should_be_suspended(self.live_preferences, !self.root_hidden, root_focused);
         self.sync_shortcut_suspension(shortcuts_suspended);
@@ -821,6 +870,9 @@ impl eframe::App for Workbench {
         if let (Some(action), Some(live)) = (shortcut_action, &mut self.live)
             && !live.apply_selector_shortcut(action, ctx)
         {
+            if action == CaptureShortcut::NewCapture && live.show_recording_controls(ctx) {
+                return;
+            }
             live.request_capture(match action {
                 CaptureShortcut::NewCapture => CaptureRequest::NewCapture,
                 CaptureShortcut::Region => CaptureRequest::Region,
@@ -969,7 +1021,7 @@ impl eframe::App for Workbench {
                         self.preferences_state.sidebar(ui, &t);
                     });
                 egui::CentralPanel::default().show(ui, |ui| {
-                    if self.preferences_state.ui(ui, &t) {
+                    if self.preferences_state.ui(ui, &t, true) {
                         self.live_preferences = false;
                     }
                 });
@@ -1386,10 +1438,12 @@ fn shortcuts_should_be_suspended(
 fn shortcut_routing_state(
     can_launch_capture: bool,
     selector_generation: Option<u64>,
-) -> (bool, Option<u64>) {
+    recording_controls_hidden: bool,
+) -> (bool, Option<u64>, bool) {
     (
-        can_launch_capture || selector_generation.is_some(),
+        can_launch_capture || selector_generation.is_some() || recording_controls_hidden,
         selector_generation,
+        recording_controls_hidden,
     )
 }
 
@@ -1438,9 +1492,22 @@ mod tests {
     }
     #[test]
     fn shortcuts_enable_idle_launch_or_the_current_selector_only() {
-        assert_eq!(shortcut_routing_state(true, None), (true, None));
-        assert_eq!(shortcut_routing_state(false, Some(42)), (true, Some(42)));
-        assert_eq!(shortcut_routing_state(false, None), (false, None));
+        assert_eq!(
+            shortcut_routing_state(true, None, false),
+            (true, None, false)
+        );
+        assert_eq!(
+            shortcut_routing_state(false, Some(42), false),
+            (true, Some(42), false)
+        );
+        assert_eq!(
+            shortcut_routing_state(false, None, false),
+            (false, None, false)
+        );
+        assert_eq!(
+            shortcut_routing_state(false, None, true),
+            (true, None, true)
+        );
     }
     #[test]
     fn image_has_top_right_sun_and_bottom_green_strip() {

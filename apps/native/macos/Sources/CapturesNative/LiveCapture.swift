@@ -91,6 +91,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private let showPreferences: () -> Void
     private let captureStateChanged: (Bool) -> Void
     private let selectorGenerationChanged: (UInt64?) -> Void
+    private let recordingControlsVisibilityChanged: (Bool) -> Void
     private let reportError: (String) -> Void
     private weak var miniPreviews: MiniPreviewController?
     private weak var miniPreviewActions: MiniPreviewActions?
@@ -136,12 +137,29 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private let recordingGate = RecordingGenerationGate()
     private var recordingSession: NativeRecordingSession?
     private var recordingHUD: RecordingHUDPanel?
+    private var recordingRegionPanel: RecordingRegionPanel?
+    private var recordingHiddenNotice: RecordingControlsHiddenNoticePanel?
+    private var recordingHiddenNoticeTimer: Timer?
+    private lazy var recordingSavedNotice: RecordingSavedNoticeController = {
+        let controller = RecordingSavedNoticeController(tokens: tokens)
+        controller.save = { [weak self] id, completion in
+            guard let self, let artifact = self.artifacts.first(where: { $0.id == id }) else {
+                completion(.failure(AppBridgeError.backend("The recording is no longer in Capture History.")))
+                return
+            }
+            self.save(artifact, completion: completion)
+        }
+        return controller
+    }()
+    private(set) var recordingControlsHidden = false
     private var recordingPollTimer: Timer?
     private var recordingPollPending = false
     private var recordingLifecycle = RecordingLifecycleGate()
     private var preparingRecording = false
     private var recordingPendingStart = false
     private var activeRecordingGeneration: UInt64?
+    private var recordingDisplay: DisplayItem?
+    private var recordingPreferences: CapturePreferences?
     private var selectorShortcutGeneration: UInt64? {
         didSet {
             if oldValue != selectorShortcutGeneration {
@@ -170,6 +188,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
          initialSelectionID: String? = nil,
          captureStateChanged: @escaping (Bool) -> Void = { _ in },
          selectorGenerationChanged: @escaping (UInt64?) -> Void = { _ in },
+         recordingControlsVisibilityChanged: @escaping (Bool) -> Void = { _ in },
          reportError: @escaping (String) -> Void = { _ in },
          showPreferences: @escaping () -> Void) {
         self.root = root; self.window = window; self.tokens = tokens
@@ -179,6 +198,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         self.initialSelectionID = initialSelectionID
         self.captureStateChanged = captureStateChanged
         self.selectorGenerationChanged = selectorGenerationChanged
+        self.recordingControlsVisibilityChanged = recordingControlsVisibilityChanged
         self.reportError = reportError
         super.init(); build(); loadInitial()
     }
@@ -234,7 +254,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         deleteButton = button("Delete from history", frame: NSRect(x: 758, y: 594, width: 166, height: 34)) { [weak self] in self?.confirmDelete() }
         clearHistoryButton = button("Clear history…", frame: NSRect(x: 28, y: 594, width: 180, height: 34)) { [weak self] in self?.confirmClearHistory() }
         status = title("Loading capture history…", frame: NSRect(x: 28, y: 642, width: 944, height: 24), muted: true)
-        let limits = title("Screenshots and H.264 MP4 recordings are kept in native History. Recording restart, mute, hide, and screenshots while recording remain unavailable in this first native slice.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
+        let limits = title("Screenshots and H.264 MP4 recordings are kept in native History. Screenshots while recording remain unavailable in this native slice.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
         limits.maximumNumberOfLines = 2; updateActions()
     }
 
@@ -340,6 +360,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     @discardableResult func capture(_ kind: StillCaptureKind) -> Bool {
+        recordingSavedNotice.dismiss()
         let index = displayMenu.indexOfSelectedItem
         guard !capturing, displays.indices.contains(index), !historyRoot.isEmpty else { return false }
         windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
@@ -382,6 +403,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     @discardableResult func newCapture(recordingTarget: UnifiedCaptureTarget? = nil) -> Bool {
+        recordingSavedNotice.dismiss()
         let index = displayMenu.indexOfSelectedItem
         guard !capturing, displays.indices.contains(index), !historyRoot.isEmpty else { return false }
         windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
@@ -591,13 +613,20 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     return
                 }
                 do {
-                    let (session, _) = try result.get()
+                    let (session, snapshot) = try result.get()
                     self.recordingSession = session
+                    self.recordingDisplay = display
+                    self.recordingPreferences = preferences
                     self.recordingPendingStart = true
                     self.recordingGate.set(generation)
                     self.activeRecordingGeneration = generation
                     _ = try AppBridge.flow(["operation": "start_countdown",
                         "generation": generation, "seconds": preferences.recording.countdown])
+                    if let region = snapshot.region {
+                        let guide = RecordingRegionPanel(screen: screen, region: region, tokens: self.tokens)
+                        self.recordingRegionPanel = guide
+                        guide.orderFrontRegardless()
+                    }
                     if preferences.recording.countdown > 0 {
                         let countdown = ScreenshotCountdownPanel(screen: screen, tokens: self.tokens,
                             remaining: preferences.recording.countdown)
@@ -806,9 +835,14 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                     let hud = RecordingHUDPanel(screen: screen, tokens: self.tokens,
                         excludedFromCapture: self.recordingCapabilities?.controlsExcluded == true)
                     hud.hud.pauseOrResume = { [weak self] in self?.pauseOrResumeRecording() }
+                    hud.hud.toggleMicrophone = { [weak self] in self?.toggleRecordingMicrophone() }
+                    hud.hud.restart = { [weak self] in self?.confirmRestartRecording() }
                     hud.hud.stop = { [weak self] in self?.stopRecording() }
                     hud.hud.discard = { [weak self] in self?.discardRecording() }
+                    hud.hud.hide = { [weak self] in self?.hideRecordingControls() }
                     hud.hud.setPaused(false, elapsedMilliseconds: snapshot.elapsedMilliseconds)
+                    hud.hud.setMicrophone(muted: snapshot.microphoneMuted,
+                        available: snapshot.hasMicrophone)
                     hud.hud.setWarning(snapshot.warning)
                     self.recordingHUD = hud; hud.orderFrontRegardless()
                     self.status.stringValue = snapshot.warning ?? "Recording in progress…"
@@ -820,6 +854,47 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 }
             }
         }
+    }
+
+    func hideRecordingControls() {
+        guard recordingSession != nil, let hud = recordingHUD,
+              !recordingLifecycle.busy, !recordingControlsHidden,
+              let screen = hud.screen ?? recordingDisplay.flatMap(screen(for:)) else { return }
+        recordingControlsHidden = true
+        hud.orderOut(nil)
+        let notice = RecordingControlsHiddenNoticePanel(screen: screen, tokens: tokens)
+        recordingHiddenNotice = notice
+        notice.orderFrontRegardless()
+        recordingHiddenNoticeTimer?.invalidate()
+        recordingHiddenNoticeTimer = Timer.scheduledTimer(withTimeInterval: 6.2,
+            repeats: false) { [weak self, weak notice] _ in
+                guard let self, self.recordingHiddenNotice === notice else { return }
+                notice?.close()
+                self.recordingHiddenNotice = nil
+                self.recordingHiddenNoticeTimer = nil
+            }
+        recordingControlsVisibilityChanged(true)
+    }
+
+    @discardableResult func showRecordingControls() -> Bool {
+        guard recordingSession != nil, let hud = recordingHUD, recordingControlsHidden else {
+            return false
+        }
+        recordingControlsHidden = false
+        recordingHiddenNoticeTimer?.invalidate(); recordingHiddenNoticeTimer = nil
+        recordingHiddenNotice?.close(); recordingHiddenNotice = nil
+        hud.sharingType = recordingCapabilities?.controlsExcluded == true ? .none : .readOnly
+        hud.orderFrontRegardless()
+        recordingControlsVisibilityChanged(false)
+        return true
+    }
+
+    private func clearRecordingControlsHiddenState() {
+        let changed = recordingControlsHidden
+        recordingControlsHidden = false
+        recordingHiddenNoticeTimer?.invalidate(); recordingHiddenNoticeTimer = nil
+        recordingHiddenNotice?.close(); recordingHiddenNotice = nil
+        if changed { recordingControlsVisibilityChanged(false) }
     }
 
     private func finishSelectorForRecording(generation: UInt64) {
@@ -897,6 +972,128 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         RunLoop.main.add(timer, forMode: .common)
     }
 
+    private func toggleRecordingMicrophone() {
+        guard let session = recordingSession, let hud = recordingHUD,
+              let generation = activeRecordingGeneration,
+              recordingLifecycle.begin() else { return }
+        let muted = !hud.hud.microphoneMuted
+        let excludeCapturesApp = recordingCapabilities?.controlsExcluded == true
+        hud.hud.setLifecycleActionsEnabled(false)
+        status.stringValue = muted ? "Muting microphone…" : "Unmuting microphone…"
+        run({ [recordingGate] in
+            try session.setMicrophoneMuted(muted, generation: generation,
+                excludeCapturesApp: excludeCapturesApp, gate: recordingGate)
+        }) { [weak self] result in
+            guard let self, self.recordingSession === session else { return }
+            switch result {
+            case .success(let snapshot):
+                self.recordingLifecycle.end()
+                hud.hud.setLifecycleActionsEnabled(true)
+                hud.hud.setPaused(snapshot.state == "paused",
+                    elapsedMilliseconds: snapshot.elapsedMilliseconds)
+                hud.hud.setMicrophone(muted: snapshot.microphoneMuted,
+                    available: snapshot.hasMicrophone)
+                hud.hud.setWarning(snapshot.warning)
+                self.status.stringValue = snapshot.warning
+                    ?? (snapshot.state == "paused" ? "Recording paused." : "Recording in progress…")
+            case .failure(let mutationError):
+                // The shared owner may have durably completed the old segment
+                // before cancellation or a replacement-device failure. Read its
+                // state on the same worker before deciding how to preserve it.
+                self.run({ try session.snapshot() }) { [weak self] snapshotResult in
+                    guard let self, self.recordingSession === session else { return }
+                    self.recordingLifecycle.end()
+                    hud.hud.setLifecycleActionsEnabled(true)
+                    switch snapshotResult {
+                    case .success(let snapshot) where snapshot.state == "failed":
+                        self.preserveFailedRecording(session,
+                            warning: mutationError.localizedDescription)
+                    case .success(let snapshot):
+                        hud.hud.setPaused(snapshot.state == "paused",
+                            elapsedMilliseconds: snapshot.elapsedMilliseconds)
+                        hud.hud.setMicrophone(muted: snapshot.microphoneMuted,
+                            available: snapshot.hasMicrophone)
+                        self.stopRecording()
+                        self.showError("Couldn’t change microphone; saving the existing take",
+                            mutationError)
+                    case .failure(let snapshotError):
+                        self.preserveFailedRecording(session,
+                            warning: "\(mutationError.localizedDescription); \(snapshotError.localizedDescription)")
+                    }
+                }
+            }
+        }
+    }
+
+    private func restartRecording() {
+        guard let session = recordingSession, let hud = recordingHUD,
+              let generation = activeRecordingGeneration,
+              let display = recordingDisplay, let preferences = recordingPreferences,
+              recordingLifecycle.begin() else { return }
+        do {
+            _ = try AppBridge.flow([
+                "operation": "restart_countdown", "generation": generation,
+                "seconds": preferences.recording.countdown,
+            ])
+        } catch {
+            recordingLifecycle.end()
+            showError("Couldn’t restart recording", error)
+            return
+        }
+
+        clearRecordingControlsHiddenState()
+        hud.hud.setLifecycleActionsEnabled(false)
+        hud.orderOut(nil)
+        recordingPollTimer?.invalidate(); recordingPollTimer = nil
+        recordingPendingStart = true
+        snapshotPending = false
+        status.stringValue = "Restarting recording…"
+        run({ try session.restart() }) { [weak self] result in
+            guard let self, self.recordingSession === session else { return }
+            do {
+                let snapshot = try result.get()
+                let flow = try AppBridge.flow(["operation": "poll", "generation": generation])
+                guard flow["current"] as? Bool == true else {
+                    self.recordingLifecycle.end()
+                    self.discardRecording()
+                    return
+                }
+                self.recordingHUD?.close(); self.recordingHUD = nil
+                if preferences.recording.countdown > 0,
+                   let screen = self.screen(for: display) {
+                    let countdown = ScreenshotCountdownPanel(screen: screen, tokens: self.tokens,
+                        remaining: preferences.recording.countdown)
+                    self.countdownPanel = countdown; countdown.orderFrontRegardless()
+                }
+                let tick: () -> Void = { [weak self] in
+                    self?.tickCountdown(display: display, preferences: preferences,
+                        generation: generation)
+                }
+                let timer = Timer(timeInterval: 0.1, repeats: true) { _ in tick() }
+                self.countdownTimer = timer; RunLoop.main.add(timer, forMode: .common)
+                self.recordingLifecycle.end()
+                self.status.stringValue = snapshot.warning
+                    ?? "Recording ready. Press Escape to cancel."
+                tick()
+            } catch {
+                self.preserveFailedRecording(session, warning: error.localizedDescription)
+            }
+        }
+    }
+
+    private func confirmRestartRecording() {
+        guard !recordingLifecycle.busy else { return }
+        let alert = NSAlert()
+        alert.messageText = "Restart recording?"
+        alert.informativeText =
+            "The current recording will be deleted and a new countdown will begin."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Restart")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        restartRecording()
+    }
+
     private func pollRecording() {
         guard !recordingPollPending, !recordingLifecycle.busy,
               let session = recordingSession,
@@ -926,6 +1123,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 }
                 self.recordingHUD?.hud.setPaused(snapshot.state == "paused",
                     elapsedMilliseconds: snapshot.elapsedMilliseconds)
+                self.recordingHUD?.hud.setMicrophone(muted: snapshot.microphoneMuted,
+                    available: snapshot.hasMicrophone)
                 self.recordingHUD?.hud.setWarning(snapshot.warning)
                 if let warning = snapshot.warning { self.status.stringValue = warning }
             case .failure(let error):
@@ -941,6 +1140,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         recordingGate.set(nil); activeRecordingGeneration = nil
         recordingLifecycle.end()
         recordingSession = nil
+        clearRecordingControlsHiddenState()
         recordingHUD?.close(); recordingHUD = nil
         Self.queue.async { withExtendedLifetime(session) {} }
         finishCapture()
@@ -950,6 +1150,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private func stopRecording() {
         guard let session = recordingSession, recordingLifecycle.begin() else { return }
+        let noticeScreen = recordingHUD?.screen ?? recordingDisplay.flatMap(screen(for:))
+        clearRecordingControlsHiddenState()
         recordingHUD?.hud.setLifecycleActionsEnabled(false)
         recordingPollTimer?.invalidate(); recordingPollTimer = nil
         status.stringValue = "Finalizing recording…"
@@ -969,10 +1171,16 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 self.finishCapture()
                 let finalStatus = finalized.warning
                     ?? "Recording saved to \(finalized.path)"
+                let noticeGeneration = self.recordingSavedNotice.model.generation
                 self.loadHistory(select: finalized.id) { [weak self] in
                     guard let self,
+                          self.recordingSavedNotice.model.generation == noticeGeneration,
+                          !self.capturing,
                           self.artifacts.contains(where: { $0.id == finalized.id }) else { return }
                     self.status.stringValue = finalStatus
+                    if let noticeScreen {
+                        self.recordingSavedNotice.present(artifactID: finalized.id, screen: noticeScreen)
+                    }
                 }
             case .failure(let error):
                 self.preserveFailedRecording(session, warning: error.localizedDescription)
@@ -982,6 +1190,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private func discardRecording() {
         guard let session = recordingSession, recordingLifecycle.begin() else { return }
+        clearRecordingControlsHiddenState()
         recordingHUD?.hud.setLifecycleActionsEnabled(false)
         recordingPollTimer?.invalidate(); recordingPollTimer = nil
         status.stringValue = "Discarding recording…"
@@ -1010,6 +1219,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     func finishCapture(restoreWindow: Bool = true, restorePreview: Bool = true) {
+        recordingSavedNotice.dismiss()
+        recordingRegionPanel?.close(); recordingRegionPanel = nil
+        clearRecordingControlsHiddenState()
         if let session = recordingSession {
             recordingPollTimer?.invalidate(); recordingPollTimer = nil
             recordingGate.set(nil); activeRecordingGeneration = nil
@@ -1040,6 +1252,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         unifiedSession = nil; unifiedTarget = nil; unifiedDisplay = nil; unifiedScreen = nil
         unifiedControlsState = .initial
         preparingUnified = false; preparingRecording = false; recordingPendingStart = false
+        recordingDisplay = nil; recordingPreferences = nil
         recordingCapabilities = nil; microphoneDevices = []
         if let generation = flowGeneration {
             _ = try? AppBridge.flow(["operation": "finish", "generation": generation])
@@ -1160,7 +1373,8 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         guard let index = selectedIndex, artifacts.indices.contains(index) else { return }; let artifact = artifacts[index]
         save(artifact)
     }
-    private func save(_ artifact: CaptureArtifact) {
+    private func save(_ artifact: CaptureArtifact,
+                      completion: ((Result<String, Error>) -> Void)? = nil) {
         let noun = artifact.isRecording ? "recording" : "image"
         status.stringValue = "Saving \(noun)…"
         miniPreviews?.setStatus("Saving…", for: artifact.id)
@@ -1168,7 +1382,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             let preferences = try CapturePreferences.load(path: settingsPath)
             let result = try transport.request(["operation": artifact.isRecording ? "save_recording" : "save_screenshot", "root": historyRoot, "id": artifact.id,
                 "directory": preferences.directory, "format": preferences.format])
-            guard let value = result["artifact"] as? [String: Any], let updated = CaptureArtifact(value), let path = result["path"] as? String else { throw AppBridgeError.invalidResponse }
+            guard let value = result["artifact"] as? [String: Any], let updated = CaptureArtifact(value),
+                  let path = result["path"] as? String,
+                  !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { throw AppBridgeError.invalidResponse }
             return (updated, path)
         }) { [weak self] result in
             guard let self else { return }
@@ -1176,9 +1393,14 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 if let current = self.artifacts.firstIndex(where: { $0.id == artifact.id }) { self.artifacts[current] = value.0 }
                 self.status.stringValue = "Saved \(noun) to \(value.1)"
                 self.miniPreviews?.setStatus("Saved", for: artifact.id)
+                completion?(.success(value.1))
+                if completion == nil {
+                    self.recordingSavedNotice.savedFromHistory(artifactID: artifact.id, path: value.1)
+                }
             case .failure(let error):
                 self.showError("Couldn’t save \(noun)", error)
                 self.miniPreviews?.setStatus("Save failed", for: artifact.id)
+                completion?(.failure(error))
             }; self.updateActions()
         }
     }

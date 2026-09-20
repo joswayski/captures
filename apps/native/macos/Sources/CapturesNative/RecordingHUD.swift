@@ -18,14 +18,21 @@ final class RecordingHUDView: NSView {
     private let statusLabel = NSTextField(labelWithString: "RECORDING")
     private let noticeLabel = NSTextField(labelWithString: "These controls won’t show in recordings")
     private let pauseButton: CaptureButton
+    private let microphoneButton: CaptureButton
     private var lifecycleButtons: [CaptureButton] = []
+    private var lifecycleActionsEnabled = true
     private var elapsedMilliseconds: UInt64 = 0
     private var resumedAt: Date?
     private var timer: Timer?
     private(set) var paused = false
+    private(set) var microphoneMuted = false
+    private var microphoneAvailable = false
     var pauseOrResume: () -> Void = {}
+    var toggleMicrophone: () -> Void = {}
+    var restart: () -> Void = {}
     var stop: () -> Void = {}
     var discard: () -> Void = {}
+    var hide: () -> Void = {}
 
     override var isFlipped: Bool { true }
 
@@ -35,10 +42,11 @@ final class RecordingHUDView: NSView {
             ? "These controls won’t show in recordings"
             : "These controls will appear in recordings"
         pauseButton = CaptureButton("Ⅱ", frame: .zero, tokens: tokens, glass: true) {}
+        microphoneButton = CaptureButton("", frame: .zero, tokens: tokens, glass: true) {}
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassStrong.rawValue).cgColor
-        layer?.cornerRadius = tokens.number("r-2xl")
+        layer?.cornerRadius = tokens.number("r-xl")
         layer?.borderWidth = 1
         layer?.borderColor = tokens.color(RecordingHUDColorToken.glassBorder.rawValue).cgColor
         layer?.shadowColor = NSColor.black.cgColor; layer?.shadowOpacity = 0.44
@@ -66,24 +74,35 @@ final class RecordingHUDView: NSView {
 
         let stop = hudButton("■", x: 104, help: "Stop and save recording") { [weak self] in self?.stop() }
         stop.signal = true; stop.setAccessibilityLabel("Stop recording")
-        pauseButton.frame = NSRect(x: 144, y: 35, width: 38, height: 42)
+        pauseButton.frame = NSRect(x: 144, y: 39, width: 38, height: 34)
         pauseButton.actionBlock = { [weak self] in self?.pauseOrResume() }
         pauseButton.setAccessibilityLabel("Pause recording"); addSubview(pauseButton)
-        unavailable("↻", x: 184, label: "Restart recording is unavailable in this version")
+        let restart = hudButton("↻", x: 184, help: "Restart recording") {
+            [weak self] in self?.restart()
+        }
+        restart.setAccessibilityLabel("Restart recording")
         unavailable("⌗", x: 224, label: "Screenshot during recording is unavailable in this version")
         unavailable("—", x: 264, label: "Audio meter is unavailable in this version")
-        unavailable("♩", x: 304, label: "Microphone mute is unavailable in this version")
+        microphoneButton.frame = NSRect(x: 304, y: 39, width: 38, height: 34)
+        microphoneButton.actionBlock = { [weak self] in self?.toggleMicrophone() }
+        addSubview(microphoneButton)
         let trash = hudButton("⌫", x: 344, help: "Discard recording") { [weak self] in self?.discard() }
         trash.setAccessibilityLabel("Discard recording")
-        lifecycleButtons = [stop, pauseButton, trash]
-        unavailable("◉̸", x: 384, label: "Hide controls is unavailable in this version")
+        lifecycleButtons = [stop, pauseButton, restart, microphoneButton, trash]
+        let hide = hudButton("◉̸", x: 384, help: "Hide recording controls") {
+            [weak self] in self?.hide()
+        }
+        hide.setAccessibilityLabel("Hide recording controls")
+        lifecycleButtons.append(hide)
+        for case let button as CaptureButton in subviews { button.hudControl = true }
         setPaused(false, elapsedMilliseconds: 0)
+        setMicrophone(muted: false, available: false)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     private func hudButton(_ title: String, x: CGFloat, help: String,
                            action: @escaping () -> Void) -> CaptureButton {
-        let button = CaptureButton(title, frame: NSRect(x: x, y: 35, width: 38, height: 42),
+        let button = CaptureButton(title, frame: NSRect(x: x, y: 39, width: 38, height: 34),
             tokens: tokens, glass: true, action: action)
         button.toolTip = help; addSubview(button); return button
     }
@@ -116,11 +135,27 @@ final class RecordingHUDView: NSView {
         noticeLabel.setAccessibilityLabel(noticeLabel.stringValue)
     }
 
+    func setMicrophone(muted: Bool, available: Bool) {
+        microphoneMuted = muted
+        microphoneAvailable = available
+        microphoneButton.icon = .microphone(muted: muted)
+        microphoneButton.selected = muted
+        microphoneButton.isEnabled = available && lifecycleActionsEnabled
+        let action = muted ? "Unmute microphone" : "Mute microphone"
+        let unavailable = "Microphone unavailable because no microphone was selected"
+        microphoneButton.toolTip = available ? action : unavailable
+        microphoneButton.setAccessibilityLabel(available ? action : unavailable)
+        microphoneButton.setAccessibilityValue(muted ? 1 : 0)
+        microphoneButton.needsDisplay = true
+    }
+
     func setLifecycleActionsEnabled(_ enabled: Bool) {
+        lifecycleActionsEnabled = enabled
         lifecycleButtons.forEach {
             $0.isEnabled = enabled
             $0.needsDisplay = true
         }
+        microphoneButton.isEnabled = enabled && microphoneAvailable
     }
 
     private func updateTimer() {
@@ -148,5 +183,62 @@ final class RecordingHUDPanel: NSPanel {
         hasShadow = false; level = .floating; collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         sharingType = excludedFromCapture ? .none : .readOnly
         contentView = hud
+    }
+}
+
+final class RecordingControlsHiddenNoticeView: NSView {
+    override var isFlipped: Bool { true }
+
+    init(frame: NSRect, tokens: Tokens) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassStrong.rawValue).cgColor
+        layer?.cornerRadius = tokens.number("r-xl")
+        layer?.borderWidth = 1
+        layer?.borderColor = tokens.color(RecordingHUDColorToken.glassBorder.rawValue).cgColor
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOpacity = 0.4
+        layer?.shadowRadius = 18
+        layer?.shadowOffset = NSSize(width: 0, height: -6)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel("Recording controls hidden")
+
+        let title = NSTextField(labelWithString: "Recording controls hidden")
+        title.frame = NSRect(x: 20, y: 14, width: 320, height: 22)
+        title.alignment = .center
+        title.font = .systemFont(ofSize: 15, weight: .semibold)
+        title.textColor = tokens.color(RecordingHUDColorToken.glassText.rawValue)
+        addSubview(title)
+
+        let detail = NSTextField(wrappingLabelWithString:
+            "Open Captures from the menu bar, reactivate the app, or press New Capture to bring them back.")
+        detail.frame = NSRect(x: 20, y: 40, width: 320, height: 42)
+        detail.alignment = .center
+        detail.font = .systemFont(ofSize: 11, weight: .medium)
+        detail.textColor = tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue)
+        addSubview(detail)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+final class RecordingControlsHiddenNoticePanel: NSPanel {
+    init(screen: NSScreen, tokens: Tokens) {
+        let size = NSSize(width: 360, height: 96)
+        let visible = screen.visibleFrame
+        let origin = NSPoint(x: visible.midX - size.width / 2, y: visible.minY + 23)
+        super.init(contentRect: NSRect(origin: origin, size: size), styleMask: [.borderless],
+            backing: .buffered, defer: false)
+        title = "Recording controls hidden"
+        isReleasedWhenClosed = false
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        level = .floating
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        sharingType = .none
+        ignoresMouseEvents = true
+        contentView = RecordingControlsHiddenNoticeView(
+            frame: NSRect(origin: .zero, size: size), tokens: tokens)
     }
 }

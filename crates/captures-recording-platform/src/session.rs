@@ -102,6 +102,20 @@ impl RecordingSession {
         exclude_captures_app: bool,
         is_current: impl Fn() -> bool,
     ) -> Result<RecordingSessionSnapshot, String> {
+        self.start_with(exclude_captures_app, is_current, start_native_segment)
+    }
+
+    fn start_with(
+        &mut self,
+        exclude_captures_app: bool,
+        is_current: impl Fn() -> bool,
+        open: impl FnOnce(
+            &RecordingOptions,
+            &Path,
+            &DisplayDescriptor,
+            bool,
+        ) -> Result<NativeRecordingSegment, String>,
+    ) -> Result<RecordingSessionSnapshot, String> {
         if !matches!(
             self.manifest.state,
             RecordingState::Countdown | RecordingState::Paused
@@ -117,7 +131,7 @@ impl RecordingSession {
         let path = self
             .directory
             .join(format!("segment-{:03}.mp4", self.manifest.segments.len()));
-        let segment = match start_native_segment(
+        let segment = match open(
             &self.manifest.options,
             &path,
             &self.display,
@@ -184,12 +198,137 @@ impl RecordingSession {
         Ok(self.snapshot())
     }
 
+    /// Change only the microphone's live mute state. A running take completes
+    /// its current segment before the option is durably changed, then opens a
+    /// new segment with the same target and all other options. Paused sessions
+    /// persist the option without resuming. Completed media remains recoverable
+    /// if cancellation or engine startup prevents the replacement segment.
+    pub fn set_microphone_muted(
+        &mut self,
+        muted: bool,
+        exclude_captures_app: bool,
+        is_current: impl Fn() -> bool,
+    ) -> Result<RecordingSessionSnapshot, String> {
+        self.set_microphone_muted_with(
+            muted,
+            exclude_captures_app,
+            is_current,
+            start_native_segment,
+        )
+    }
+
+    fn set_microphone_muted_with(
+        &mut self,
+        muted: bool,
+        exclude_captures_app: bool,
+        is_current: impl Fn() -> bool,
+        open: impl FnOnce(
+            &RecordingOptions,
+            &Path,
+            &DisplayDescriptor,
+            bool,
+        ) -> Result<NativeRecordingSegment, String>,
+    ) -> Result<RecordingSessionSnapshot, String> {
+        if !is_current() {
+            return Err("Recording cancelled".into());
+        }
+        if !matches!(
+            self.manifest.state,
+            RecordingState::Recording | RecordingState::Paused
+        ) {
+            return Err("Microphone mute can only change while recording or paused".into());
+        }
+        if self.manifest.options.audio.microphone_device_id.is_none() {
+            return Err("Recording does not have a selected microphone".into());
+        }
+        if self.manifest.options.audio.microphone_muted == muted {
+            return Ok(self.snapshot());
+        }
+
+        let was_recording = self.manifest.state == RecordingState::Recording;
+        if was_recording {
+            self.complete_active()?;
+            self.transition(RecordingState::Paused, now_ms())
+                .map_err(|error| self.fail(error))?;
+        }
+
+        let mut options = self.manifest.options.clone();
+        options.audio.microphone_muted = muted;
+        self.persist_options(options)
+            .map_err(|error| self.fail(error))?;
+
+        if was_recording {
+            self.start_with(exclude_captures_app, is_current, open)
+        } else {
+            Ok(self.snapshot())
+        }
+    }
+
     pub fn pause(&mut self) -> Result<RecordingSessionSnapshot, String> {
         if self.manifest.state != RecordingState::Recording {
             return Err("Recording is not running".into());
         }
         self.complete_active()?;
         self.transition(RecordingState::Paused, now_ms())
+            .map_err(|error| self.fail(error))?;
+        Ok(self.snapshot())
+    }
+
+    /// Replace the current take while retaining its target and options. Every
+    /// path removed here belongs to this session's recovery bundle; unrelated
+    /// bundles under the same root are never scanned or removed.
+    pub fn restart(&mut self) -> Result<RecordingSessionSnapshot, String> {
+        if !matches!(
+            self.manifest.state,
+            RecordingState::Recording | RecordingState::Paused | RecordingState::Failed
+        ) {
+            return Err("Recording is not running, paused, or failed".into());
+        }
+        if let Some(segment) = self.active.take()
+            && let Err(error) = segment.discard()
+        {
+            return Err(self.fail(error.to_string()));
+        }
+        self.started_at_ms = None;
+
+        let mut take_paths = self
+            .manifest
+            .segments
+            .iter()
+            .flat_map(|segment| {
+                [
+                    Some(self.directory.join(&segment.relative_path)),
+                    segment
+                        .system_audio_relative_path
+                        .as_ref()
+                        .map(|path| self.directory.join(path)),
+                    segment
+                        .microphone_relative_path
+                        .as_ref()
+                        .map(|path| self.directory.join(path)),
+                ]
+                .into_iter()
+                .flatten()
+            })
+            .collect::<Vec<_>>();
+        take_paths.extend(
+            ["assembled.mp4", "assembled.gif", "poster.png"].map(|path| self.directory.join(path)),
+        );
+        for path in take_paths {
+            if let Err(error) = std::fs::remove_file(&path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(self.fail(format!(
+                    "Could not remove replaced recording media {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+
+        self.manifest.segments.clear();
+        self.manifest.final_path = None;
+        self.manifest.last_error = None;
+        self.transition(RecordingState::Countdown, now_ms())
             .map_err(|error| self.fail(error))?;
         Ok(self.snapshot())
     }
@@ -396,6 +535,16 @@ impl RecordingSession {
         self.store.save(&self.manifest).map_err(string)
     }
 
+    fn persist_options(&mut self, options: RecordingOptions) -> Result<(), String> {
+        let now = now_ms();
+        self.coordinator
+            .update_options(&self.manifest.session_id, options.clone(), now)
+            .map_err(string)?;
+        self.manifest.options = options;
+        self.manifest.updated_at_ms = now;
+        self.store.save(&self.manifest).map_err(string)
+    }
+
     fn fail(&mut self, message: String) -> String {
         let now = now_ms();
         // A metadata write can fail while the engine is still running. Stop it
@@ -447,7 +596,8 @@ fn now_ms() -> u64 {
 mod tests {
     use super::*;
     use captures_recording::{
-        AudioOptions, CaptureRect, GifOptions, MaxResolution, RecordingKind, RecordingTarget,
+        AudioOptions, CaptureRect, GifOptions, MaxResolution, RecordingKind,
+        RecordingSegmentManifest, RecordingTarget,
     };
 
     fn display() -> DisplayDescriptor {
@@ -543,6 +693,284 @@ mod tests {
     }
 
     #[test]
+    fn paused_microphone_mute_is_durable_and_survives_resume_cancellation_and_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let display = display();
+        let mut options = options(&display);
+        options.audio.microphone_device_id = Some("fixture-microphone".into());
+        let mut session = RecordingSession::prepare(root.path().into(), options, display).unwrap();
+        session
+            .transition(RecordingState::Recording, now_ms().saturating_sub(1_000))
+            .unwrap();
+        session.pause().unwrap();
+        let elapsed = session.snapshot().elapsed_ms;
+
+        let muted = session.set_microphone_muted(true, false, || true).unwrap();
+        assert_eq!(muted.state, RecordingState::Paused);
+        assert!(muted.options.audio.microphone_muted);
+        assert_eq!(muted.elapsed_ms, elapsed);
+        assert_eq!(session.manifest.options, muted.options);
+        assert_eq!(
+            session.store.load(&session.manifest.session_id).unwrap(),
+            session.manifest
+        );
+
+        let before = session.manifest.clone();
+        let unchanged = session.set_microphone_muted(true, false, || true).unwrap();
+        assert_eq!(unchanged, muted);
+        assert_eq!(
+            session.manifest, before,
+            "unchanged mute must not rotate media"
+        );
+
+        assert_eq!(
+            session.start(false, || false).unwrap_err(),
+            "Recording cancelled"
+        );
+        assert_eq!(session.manifest, before);
+        assert!(session.snapshot().options.audio.microphone_muted);
+
+        let restarted = session.restart().unwrap();
+        assert_eq!(restarted.state, RecordingState::Countdown);
+        assert!(restarted.options.audio.microphone_muted);
+        assert_eq!(
+            restarted.options.audio.microphone_device_id.as_deref(),
+            Some("fixture-microphone")
+        );
+    }
+
+    #[test]
+    fn microphone_mute_rejects_stale_invalid_and_micless_sessions_without_mutation() {
+        let root = tempfile::tempdir().unwrap();
+        let display = display();
+        let mut selected = options(&display);
+        selected.audio.microphone_device_id = Some("fixture-microphone".into());
+        let mut session =
+            RecordingSession::prepare(root.path().join("selected"), selected, display.clone())
+                .unwrap();
+        let before = session.manifest.clone();
+        assert_eq!(
+            session
+                .set_microphone_muted(true, false, || false)
+                .unwrap_err(),
+            "Recording cancelled"
+        );
+        assert_eq!(session.manifest, before);
+        assert_eq!(
+            session
+                .set_microphone_muted(true, false, || true)
+                .unwrap_err(),
+            "Microphone mute can only change while recording or paused"
+        );
+        assert_eq!(session.manifest, before);
+
+        let mut micless =
+            RecordingSession::prepare(root.path().join("micless"), options(&display), display)
+                .unwrap();
+        micless
+            .transition(RecordingState::Recording, now_ms())
+            .unwrap();
+        micless.pause().unwrap();
+        let before = micless.manifest.clone();
+        assert_eq!(
+            micless
+                .set_microphone_muted(true, false, || true)
+                .unwrap_err(),
+            "Recording does not have a selected microphone"
+        );
+        assert_eq!(micless.manifest, before);
+    }
+
+    #[test]
+    fn unchanged_running_mute_does_not_complete_or_reopen_a_segment() {
+        let root = tempfile::tempdir().unwrap();
+        let display = display();
+        let mut options = options(&display);
+        options.audio.microphone_device_id = Some("fixture-microphone".into());
+        let mut session = RecordingSession::prepare(root.path().into(), options, display).unwrap();
+        session
+            .transition(RecordingState::Recording, now_ms())
+            .unwrap();
+
+        let snapshot = session
+            .set_microphone_muted_with(
+                false,
+                false,
+                || true,
+                |_, _, _, _| panic!("unchanged mute opened a recording engine"),
+            )
+            .unwrap();
+
+        assert_eq!(snapshot.state, RecordingState::Recording);
+        assert!(session.manifest.segments.is_empty());
+    }
+
+    #[test]
+    fn running_mute_preserves_completed_media_when_reopening_fails() {
+        let root = tempfile::tempdir().unwrap();
+        let display = display();
+        let mut options = options(&display);
+        options.audio.microphone_device_id = Some("fixture-microphone".into());
+        let mut session = RecordingSession::prepare(root.path().into(), options, display).unwrap();
+        let media = session.directory.join("segment-000.mp4");
+        std::fs::write(&media, b"accepted media").unwrap();
+        session.manifest.segments.push(RecordingSegmentManifest {
+            index: 0,
+            relative_path: "segment-000.mp4".into(),
+            system_audio_relative_path: None,
+            system_audio_offset_ms: 0,
+            system_audio_warning: None,
+            microphone_relative_path: Some("segment-000-microphone.wav".into()),
+            microphone_offset_ms: 0,
+            microphone_warning: None,
+            started_at_ms: 1,
+            duration_ms: 500,
+            width: 310,
+            height: 170,
+            size_bytes: 14,
+            dropped_frames: 0,
+            complete: true,
+        });
+        session.store.save(&session.manifest).unwrap();
+        session
+            .transition(RecordingState::Recording, now_ms().saturating_sub(500))
+            .unwrap();
+
+        let error = session
+            .set_microphone_muted_with(
+                true,
+                false,
+                || true,
+                |_, _, _, _| Err("replacement microphone could not open".into()),
+            )
+            .unwrap_err();
+
+        assert_eq!(error, "replacement microphone could not open");
+        assert_eq!(session.snapshot().state, RecordingState::Failed);
+        assert!(session.snapshot().options.audio.microphone_muted);
+        assert_eq!(session.manifest.segments.len(), 1);
+        assert_eq!(std::fs::read(media).unwrap(), b"accepted media");
+        assert_eq!(
+            session.store.load(&session.manifest.session_id).unwrap(),
+            session.manifest
+        );
+    }
+
+    #[test]
+    fn paused_restart_replaces_only_its_take_and_resets_elapsed_time() {
+        let root = tempfile::tempdir().unwrap();
+        let unrelated = root.path().join("unrelated-recovery-bundle");
+        std::fs::create_dir(&unrelated).unwrap();
+        std::fs::write(unrelated.join("segment-000.mp4"), b"other take").unwrap();
+        let display = display();
+        let mut session =
+            RecordingSession::prepare(root.path().into(), options(&display), display).unwrap();
+        session
+            .transition(RecordingState::Recording, now_ms().saturating_sub(2_000))
+            .unwrap();
+        session.pause().unwrap();
+        let expected_options = session.manifest.options.clone();
+        for (path, bytes) in [
+            ("segment-000.mp4", b"old video".as_slice()),
+            ("segment-000-system.wav", b"old system audio".as_slice()),
+            ("segment-000-microphone.wav", b"old microphone".as_slice()),
+            ("assembled.mp4", b"old assembly".as_slice()),
+            ("poster.png", b"old poster".as_slice()),
+        ] {
+            std::fs::write(session.directory.join(path), bytes).unwrap();
+        }
+        session.manifest.segments.push(RecordingSegmentManifest {
+            index: 0,
+            relative_path: "segment-000.mp4".into(),
+            system_audio_relative_path: Some("segment-000-system.wav".into()),
+            system_audio_offset_ms: 0,
+            system_audio_warning: Some("old warning".into()),
+            microphone_relative_path: Some("segment-000-microphone.wav".into()),
+            microphone_offset_ms: 0,
+            microphone_warning: None,
+            started_at_ms: 1,
+            duration_ms: 2_000,
+            width: 310,
+            height: 170,
+            size_bytes: 9,
+            dropped_frames: 0,
+            complete: true,
+        });
+        session.store.save(&session.manifest).unwrap();
+
+        let restarted = session.restart().unwrap();
+
+        assert_eq!(restarted.state, RecordingState::Countdown);
+        assert_eq!(restarted.elapsed_ms, 0);
+        assert_eq!(restarted.options, expected_options);
+        assert!(session.manifest.segments.is_empty());
+        assert_eq!(session.manifest.last_error, None);
+        for path in [
+            "segment-000.mp4",
+            "segment-000-system.wav",
+            "segment-000-microphone.wav",
+            "assembled.mp4",
+            "poster.png",
+        ] {
+            assert!(
+                !session.directory.join(path).exists(),
+                "{path} was retained"
+            );
+        }
+        assert_eq!(
+            std::fs::read(unrelated.join("segment-000.mp4")).unwrap(),
+            b"other take"
+        );
+        assert_eq!(
+            session.store.load(&session.manifest.session_id).unwrap(),
+            session.manifest
+        );
+    }
+
+    #[test]
+    fn restart_reports_cleanup_failure_without_forgetting_old_media() {
+        let root = tempfile::tempdir().unwrap();
+        let display = display();
+        let mut session =
+            RecordingSession::prepare(root.path().into(), options(&display), display).unwrap();
+        session
+            .transition(RecordingState::Recording, now_ms().saturating_sub(500))
+            .unwrap();
+        session.pause().unwrap();
+        session.manifest.segments.push(RecordingSegmentManifest {
+            index: 0,
+            relative_path: "segment-000.mp4".into(),
+            system_audio_relative_path: None,
+            system_audio_offset_ms: 0,
+            system_audio_warning: None,
+            microphone_relative_path: None,
+            microphone_offset_ms: 0,
+            microphone_warning: None,
+            started_at_ms: 1,
+            duration_ms: 500,
+            width: 310,
+            height: 170,
+            size_bytes: 1,
+            dropped_frames: 0,
+            complete: true,
+        });
+        let old_media = session.directory.join("segment-000.mp4");
+        std::fs::create_dir(&old_media).unwrap();
+        session.store.save(&session.manifest).unwrap();
+
+        let error = session.restart().unwrap_err();
+
+        assert!(error.contains("Could not remove replaced recording media"));
+        assert_eq!(session.manifest.state, RecordingState::Failed);
+        assert_eq!(session.manifest.segments.len(), 1);
+        assert!(old_media.is_dir());
+        assert_eq!(
+            session.store.load(&session.manifest.session_id).unwrap(),
+            session.manifest
+        );
+    }
+
+    #[test]
     fn invalid_options_do_not_create_a_recovery_bundle() {
         let root = tempfile::tempdir().unwrap();
         let display = display();
@@ -566,10 +994,7 @@ mod tests {
         assert!(std::env::var_os("WAYLAND_DISPLAY").is_none());
         let display = captures_capture::XcapBackend.displays().unwrap().remove(0);
         let root = tempfile::tempdir().unwrap();
-        let mut session =
-            RecordingSession::prepare(root.path().into(), options(&display), display.clone())
-                .unwrap();
-        for (index, color) in ["#c02040", "#2070c0"].into_iter().enumerate() {
+        let set_background = |color: &str| {
             assert!(
                 Command::new("hsetroot")
                     .args(["-solid", color])
@@ -577,23 +1002,11 @@ mod tests {
                     .unwrap()
                     .success()
             );
-            assert_eq!(
-                session.start(false, || true).unwrap().state,
-                RecordingState::Recording
-            );
-            assert!(
-                session.start(false, || true).is_err(),
-                "duplicate Start must not open another engine"
-            );
-            thread::sleep(Duration::from_millis(350));
-            assert_eq!(session.pause().unwrap().state, RecordingState::Paused);
-            assert!(session.active.is_none());
-            let segment = &session.manifest.segments[index];
-            assert!(segment.complete && segment.duration_ms > 0 && segment.size_bytes > 0);
-            assert_eq!((segment.width, segment.height), (310, 170));
+        };
+        let first_pixel = |path: &Path| {
             let frame = Command::new("ffmpeg")
                 .args(["-v", "error", "-i"])
-                .arg(session.directory.join(&segment.relative_path))
+                .arg(path)
                 .args([
                     "-frames:v",
                     "1",
@@ -613,18 +1026,75 @@ mod tests {
                 String::from_utf8_lossy(&frame.stderr)
             );
             assert_eq!(frame.stdout.len(), 12);
+            [frame.stdout[0], frame.stdout[1], frame.stdout[2]]
+        };
+
+        // Restarting from both Paused and Recording must remove the replaced
+        // pixels, reset elapsed time, and reuse the original target/options.
+        let mut restarted =
+            RecordingSession::prepare(root.path().into(), options(&display), display.clone())
+                .unwrap();
+        let replaced_path = restarted.directory.join("segment-000.mp4");
+        set_background("#c02040");
+        restarted.start(false, || true).unwrap();
+        thread::sleep(Duration::from_millis(350));
+        restarted.pause().unwrap();
+        assert!(restarted.snapshot().elapsed_ms > 0);
+        assert!(replaced_path.is_file());
+        let paused_restart = restarted.restart().unwrap();
+        assert_eq!(paused_restart.state, RecordingState::Countdown);
+        assert_eq!(paused_restart.elapsed_ms, 0);
+        assert!(!replaced_path.exists());
+
+        set_background("#2070c0");
+        restarted.start(false, || true).unwrap();
+        thread::sleep(Duration::from_millis(350));
+        assert!(restarted.snapshot().elapsed_ms > 0);
+        let running_restart = restarted.restart().unwrap();
+        assert_eq!(running_restart.state, RecordingState::Countdown);
+        assert_eq!(running_restart.elapsed_ms, 0);
+        assert!(!replaced_path.exists());
+
+        set_background("#20a050");
+        restarted.start(false, || true).unwrap();
+        thread::sleep(Duration::from_millis(350));
+        restarted.pause().unwrap();
+        let pixel = first_pixel(&replaced_path);
+        for (actual, expected) in pixel.into_iter().zip([32u8, 160, 80]) {
+            assert!(actual.abs_diff(expected) <= 6, "encoded pixel {pixel:?}");
+        }
+        restarted.discard().unwrap();
+
+        let mut session =
+            RecordingSession::prepare(root.path().into(), options(&display), display.clone())
+                .unwrap();
+        for (index, color) in ["#c02040", "#2070c0"].into_iter().enumerate() {
+            set_background(color);
+            assert_eq!(
+                session.start(false, || true).unwrap().state,
+                RecordingState::Recording
+            );
+            assert!(
+                session.start(false, || true).is_err(),
+                "duplicate Start must not open another engine"
+            );
+            thread::sleep(Duration::from_millis(350));
+            assert_eq!(session.pause().unwrap().state, RecordingState::Paused);
+            assert!(session.active.is_none());
+            let segment = &session.manifest.segments[index];
+            assert!(segment.complete && segment.duration_ms > 0 && segment.size_bytes > 0);
+            assert_eq!((segment.width, segment.height), (310, 170));
+            let pixel = first_pixel(&session.directory.join(&segment.relative_path));
             let expected = if index == 0 {
                 [192u8, 32, 64]
             } else {
                 [32u8, 112, 192]
             };
-            for pixel in frame.stdout.chunks_exact(3) {
-                for (actual, expected) in pixel.iter().zip(expected) {
-                    assert!(
-                        actual.abs_diff(expected) <= 6,
-                        "encoded pixel {pixel:?}, expected {expected}"
-                    );
-                }
+            for (actual, expected) in pixel.into_iter().zip(expected) {
+                assert!(
+                    actual.abs_diff(expected) <= 6,
+                    "encoded pixel {pixel:?}, expected {expected}"
+                );
             }
             assert_eq!(
                 session.store.load(&session.manifest.session_id).unwrap(),

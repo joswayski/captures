@@ -25,6 +25,7 @@ enum CaptureButtonIcon {
     case record
     case window
     case display
+    case microphone(muted: Bool)
 }
 
 // NSButton keeps keyboard activation, target/action and accessibility behavior;
@@ -35,6 +36,9 @@ final class CaptureButton: NSButton {
     var glass = false
     var primary = false
     var signal = false
+    var hudControl = false { didSet { updateTrackingAreas(); needsDisplay = true } }
+    private var hoverTracking: NSTrackingArea?
+    private var hovered = false
     var icon: CaptureButtonIcon?
     var actionBlock: (() -> Void)?
     var enterActionBlock: (() -> Void)?
@@ -54,6 +58,21 @@ final class CaptureButton: NSButton {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @objc private func activate() { actionBlock?() }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        hoverTracking = nil
+        if hudControl {
+            let tracking = NSTrackingArea(rect: .zero,
+                options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                owner: self, userInfo: nil)
+            addTrackingArea(tracking); hoverTracking = tracking
+        }
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
@@ -78,31 +97,51 @@ final class CaptureButton: NSButton {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        let radius = tokens.number(hudControl ? "r-sm" : "r-md")
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
-            xRadius: tokens.number("r-md"), yRadius: tokens.number("r-md"))
-        let fill = !isEnabled ? (glass ? "glass" : "surface-sunken")
-            : signal ? "theme-signal-surface"
-            : primary ? "theme-accent"
-            : cell?.isHighlighted == true ? (glass ? "glass-active" : "surface-active")
-            : selected ? (glass ? "glass-active" : "surface-selected") : (glass ? "glass-raised" : "control")
-        tokens.color(fill).setFill()
-        path.fill()
-        tokens.color(signal && isEnabled ? "theme-signal"
-            : primary && isEnabled ? "theme-accent"
-            : selected && isEnabled ? "theme-accent"
-            : (glass ? "glass-border" : "control-border")).setStroke()
-        path.lineWidth = 1
-        path.stroke()
+            xRadius: radius, yRadius: radius)
+        if hudControl {
+            let active = cell?.isHighlighted == true
+            let fill: String? = !isEnabled ? nil
+                : signal ? (hovered || active ? "theme-signal" : "theme-signal-surface")
+                : active || selected ? "glass-active" : hovered ? "glass-hover" : nil
+            if let fill { tokens.color(fill).setFill(); path.fill() }
+            if isEnabled && (signal || selected) {
+                tokens.color(signal ? "theme-signal" : "theme-accent")
+                    .withAlphaComponent(signal ? 0.4 : 0.3).setStroke()
+                path.lineWidth = 1; path.stroke()
+            }
+        } else {
+            let fill = !isEnabled ? (glass ? "glass" : "surface-sunken")
+                : signal ? "theme-signal-surface"
+                : primary ? "theme-accent"
+                : cell?.isHighlighted == true ? (glass ? "glass-active" : "surface-active")
+                : selected ? (glass ? "glass-active" : "surface-selected") : (glass ? "glass-raised" : "control")
+            tokens.color(fill).setFill()
+            path.fill()
+            tokens.color(signal && isEnabled ? "theme-signal"
+                : primary && isEnabled ? "theme-accent"
+                : selected && isEnabled ? "theme-accent"
+                : (glass ? "glass-border" : "control-border")).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
         let font = NSFont.systemFont(ofSize: tokens.number("text-md"), weight: .medium)
-        let foreground = tokens.color(isEnabled
+        var foreground = tokens.color(isEnabled
             ? (signal ? "theme-signal"
                 : primary ? "theme-accent-ink" : glass ? "glass-text" : "text")
             : (glass ? "glass-text-subtle" : "text-faint"))
+        if hudControl {
+            foreground = tokens.color(!isEnabled ? "glass-text-subtle"
+                : signal && !hovered && cell?.isHighlighted != true ? "theme-signal"
+                : selected ? "theme-accent"
+                : hovered || cell?.isHighlighted == true ? "glass-text" : "glass-text-muted")
+        }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font, .foregroundColor: foreground,
         ]
         let size = (title as NSString).size(withAttributes: attributes)
-        let iconWidth: CGFloat = icon == nil ? 0 : 20
+        let iconWidth: CGFloat = icon == nil ? 0 : (title.isEmpty ? 14 : 20)
         let startX = (bounds.width - size.width - iconWidth) / 2
         if let icon { draw(icon, in: NSRect(x: startX, y: (bounds.height - 14) / 2,
             width: 14, height: 14), color: foreground) }
@@ -144,6 +183,33 @@ final class CaptureButton: NSButton {
             stand.line(to: NSPoint(x: rect.midX, y: rect.minY))
             stand.move(to: NSPoint(x: rect.midX - 3, y: rect.minY))
             stand.line(to: NSPoint(x: rect.midX + 3, y: rect.minY)); stand.stroke()
+        case .microphone(let muted):
+            // The geometry below is bottom-up; NSButton draws in flipped coordinates.
+            NSGraphicsContext.saveGraphicsState()
+            defer { NSGraphicsContext.restoreGraphicsState() }
+            if isFlipped {
+                let transform = NSAffineTransform()
+                transform.translateX(by: 0, yBy: rect.minY + rect.maxY)
+                transform.scaleX(by: 1, yBy: -1)
+                transform.concat()
+            }
+            let capsule = NSBezierPath(roundedRect: NSRect(x: rect.midX - 2.5, y: rect.minY + 5,
+                width: 5, height: 8), xRadius: 2.5, yRadius: 2.5)
+            capsule.lineWidth = 1.4; capsule.stroke()
+            let stand = NSBezierPath(); stand.lineWidth = 1.4
+            stand.move(to: NSPoint(x: rect.minX + 2, y: rect.minY + 8))
+            stand.curve(to: NSPoint(x: rect.maxX - 2, y: rect.minY + 8),
+                controlPoint1: NSPoint(x: rect.minX + 2, y: rect.minY + 1),
+                controlPoint2: NSPoint(x: rect.maxX - 2, y: rect.minY + 1))
+            stand.move(to: NSPoint(x: rect.midX, y: rect.minY + 3))
+            stand.line(to: NSPoint(x: rect.midX, y: rect.minY))
+            stand.move(to: NSPoint(x: rect.midX - 3, y: rect.minY))
+            stand.line(to: NSPoint(x: rect.midX + 3, y: rect.minY)); stand.stroke()
+            if muted {
+                let slash = NSBezierPath(); slash.lineWidth = 1.6
+                slash.move(to: NSPoint(x: rect.minX, y: rect.maxY))
+                slash.line(to: NSPoint(x: rect.maxX, y: rect.minY)); slash.stroke()
+            }
         }
     }
 }
@@ -179,21 +245,25 @@ final class RootWindowCloseHandler: NSObject, NSWindowDelegate {
 
 final class LiveStatusActions: NSObject {
     private let newCaptureAction: () -> Void
+    private let showRecordingControlsAction: () -> Void
     private let captureAction: (StillCaptureKind) -> Void
     private let historyAction: () -> Void
     private let preferencesAction: () -> Void
     private let outputFolderAction: () -> Void
     private let quitAction: () -> Void
 
-    init(newCapture: @escaping () -> Void, capture: @escaping (StillCaptureKind) -> Void,
+    init(newCapture: @escaping () -> Void, showRecordingControls: @escaping () -> Void = {},
+         capture: @escaping (StillCaptureKind) -> Void,
          history: @escaping () -> Void, preferences: @escaping () -> Void,
          outputFolder: @escaping () -> Void, quit: @escaping () -> Void) {
-        newCaptureAction = newCapture; captureAction = capture; historyAction = history
+        newCaptureAction = newCapture; showRecordingControlsAction = showRecordingControls
+        captureAction = capture; historyAction = history
         preferencesAction = preferences; outputFolderAction = outputFolder
         quitAction = quit
     }
 
     @objc func newCapture() { newCaptureAction() }
+    @objc func showRecordingControls() { showRecordingControlsAction() }
     @objc func captureRegion() { captureAction(.region) }
     @objc func captureWindow() { captureAction(.window) }
     @objc func captureDisplay() { captureAction(.display) }
@@ -205,6 +275,7 @@ final class LiveStatusActions: NSObject {
     func makeMenu() -> NSMenu {
         let menu = NSMenu()
         add("New Capture…", action: #selector(newCapture), to: menu)
+        add("Show Recording Controls", action: #selector(showRecordingControls), to: menu)
         add("Screenshot Region", action: #selector(captureRegion), to: menu)
         add("Screenshot Window", action: #selector(captureWindow), to: menu)
         add("Screenshot Display", action: #selector(captureDisplay), to: menu)
@@ -240,8 +311,9 @@ func captureShortcutSignature(_ settings: [String: Any]) -> [String] {
         recording.string("window_shortcut"), recording.string("display_shortcut")]
 }
 
-func captureShortcutsEnabled(captureBusy: Bool, selectorGeneration: UInt64? = nil) -> Bool {
-    !captureBusy || selectorGeneration != nil
+func captureShortcutsEnabled(captureBusy: Bool, selectorGeneration: UInt64? = nil,
+                             recordingControlsHidden: Bool = false) -> Bool {
+    !captureBusy || selectorGeneration != nil || recordingControlsHidden
 }
 
 func captureShortcutsSuspended(preferencesFocused: Bool) -> Bool { preferencesFocused }
@@ -289,6 +361,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var preview: PreviewView?
     private var table: NSTableView?
     private var preferencesController: PreferencesController?
+    private var feedbackController: FeedbackController?
     private var liveController: LiveCaptureController?
     private var miniPreviews: MiniPreviewController?
     private var miniPreviewActions: MiniPreviewActions?
@@ -424,6 +497,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard options.live else { return true }
+        if liveController?.showRecordingControls() == true { return true }
         switch liveReopenAction(hasVisibleWindows: flag) {
         case .focusExisting:
             window.makeKeyAndOrderFront(nil)
@@ -443,6 +517,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         guard appearance == "system" else { return }
         resolvedTokens = makeTokens()
         preferencesController?.restyle()
+        feedbackController?.restyle(tokens)
         liveStyleRevision += 1
         rebuildRenderedLiveWorkspaceIfNeeded()
     }
@@ -497,6 +572,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     self?.updateCaptureShortcuts(settings: settings)
                 }, showHistory: { [weak self] in self?.showHistory() },
                    liveCaptureAvailable: options.live,
+                   showFeedback: { [weak self] in self?.showFeedback() },
                    initialAppearance: options.appearanceOverride ? options.appearance : nil,
                    initialTheme: options.themeOverride ? options.theme : nil)
             } catch {
@@ -551,6 +627,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     }
                 }, selectorGenerationChanged: { [weak self] generation in
                     self?.shortcutSelectorGeneration = generation
+                    self?.updateShortcutState()
+                }, recordingControlsVisibilityChanged: { [weak self] _ in
                     self?.updateShortcutState()
                 }, reportError: { [weak self] message in
                     self?.presentHostError(title: "Capture Failed", message: message)
@@ -609,6 +687,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         let actions = LiveStatusActions(newCapture: { [weak self] in
             self?.preferencesController?.flush()
             self?.launchNewCapture()
+        }, showRecordingControls: { [weak self] in
+            _ = self?.liveController?.showRecordingControls()
         }, capture: { [weak self] kind in
             self?.preferencesController?.flush()
             self?.launchCapture(kind)
@@ -685,8 +765,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             reportShortcutError(error)
             return
         }
+        let controlsHidden = liveController?.recordingControlsHidden == true
+        captureShortcuts.setRestoreOnly(controlsHidden)
         let enabled = captureShortcutsEnabled(captureBusy: captureBusy,
-            selectorGeneration: shortcutSelectorGeneration)
+            selectorGeneration: shortcutSelectorGeneration,
+            recordingControlsHidden: controlsHidden)
         if enabled != shortcutEnabled {
             captureShortcuts.setEnabled(enabled)
             shortcutEnabled = enabled
@@ -696,11 +779,14 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private func drainCaptureShortcuts() {
         guard !terminating, !preferencesFocused,
               captureShortcutsEnabled(captureBusy: captureBusy,
-                  selectorGeneration: shortcutSelectorGeneration),
+                  selectorGeneration: shortcutSelectorGeneration,
+                  recordingControlsHidden: liveController?.recordingControlsHidden == true),
               let captureShortcuts else { return }
         do {
             while let action = try captureShortcuts.nextAction() {
-                if shortcutSelectorGeneration != nil {
+                if liveController?.recordingControlsHidden == true {
+                    if action == .newCapture { _ = liveController?.showRecordingControls() }
+                } else if shortcutSelectorGeneration != nil {
                     _ = liveController?.selectUnifiedTargetFromShortcut(action)
                 } else if action.mode == .record, let target = action.target {
                     launchNewCapture(recordingTarget: target)
@@ -746,6 +832,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func launchNewCapture(recordingTarget: UnifiedCaptureTarget? = nil) {
+        if liveController?.showRecordingControls() == true { return }
         guard liveController?.newCapture(recordingTarget: recordingTarget) == true else {
             presentHostError(title: "Capture Unavailable",
                 message: "The capture workspace is still loading or another capture is already active.")
@@ -774,6 +861,14 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         updateShortcutState()
+    }
+
+    private func showFeedback() {
+        if feedbackController == nil {
+            feedbackController = FeedbackController(tokens: tokens, live: options.live)
+        }
+        feedbackController?.restyle(tokens)
+        feedbackController?.present(on: window)
     }
 
     private func openOutputFolder() {

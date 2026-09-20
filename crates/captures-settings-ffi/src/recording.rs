@@ -33,6 +33,13 @@ enum RecordingRequest {
         exclude_captures_app: bool,
     },
     Pause,
+    SetMicrophoneMuted {
+        muted: bool,
+        generation: u64,
+        #[serde(default)]
+        exclude_captures_app: bool,
+    },
+    Restart,
     Stop,
     Finish {
         history_root: PathBuf,
@@ -138,8 +145,9 @@ pub unsafe extern "C" fn captures_recording_prepare_v1(
 }
 
 /// Execute one blocking lifecycle operation. `is_current` is required for start
-/// and may be called twice from this worker; it must only read a thread-safe host
-/// cancellation gate. Other operations ignore callback/context/generation.
+/// and set_microphone_muted and may be called more than once from this worker; it
+/// must only read a thread-safe host cancellation gate. Other operations ignore
+/// callback/context/generation.
 ///
 /// # Safety
 /// `handle` is uniquely owned, live, and serialized for the full call.
@@ -174,6 +182,21 @@ pub unsafe extern "C" fn captures_recording_request_v1(
                 Ok(json!({"snapshot":snapshot}))
             }
             RecordingRequest::Pause => Ok(json!({"snapshot":session.pause()?})),
+            RecordingRequest::SetMicrophoneMuted {
+                muted,
+                generation,
+                exclude_captures_app,
+            } => {
+                let callback =
+                    is_current.ok_or("set_microphone_muted requires an is_current callback")?;
+                let snapshot = session.set_microphone_muted(muted, exclude_captures_app, || {
+                    // SAFETY: callback/context validity is part of this function's contract.
+                    let host_current = unsafe { callback(context, generation) };
+                    host_current && captures_app::capture_flow::is_current(generation)
+                })?;
+                Ok(json!({"snapshot":snapshot}))
+            }
+            RecordingRequest::Restart => Ok(json!({"snapshot":session.restart()?})),
             RecordingRequest::Stop => Ok(json!({"snapshot":session.stop()?})),
             RecordingRequest::Finish {
                 history_root,
@@ -359,6 +382,30 @@ mod tests {
     }
 
     #[test]
+    fn restart_request_is_serialized_and_rejects_countdown_without_mutation() {
+        let root = tempfile::tempdir().unwrap();
+        let (handle, bundle) = prepared_session(root.path());
+        let restart = CString::new(r#"{"operation":"restart"}"#).unwrap();
+        let response = take(unsafe {
+            captures_recording_request_v1(handle, restart.as_ptr(), None, ptr::null_mut())
+        });
+        assert_eq!(response["ok"], false);
+        assert_eq!(
+            response["error"],
+            "Recording is not running, paused, or failed"
+        );
+        assert!(bundle.is_dir());
+
+        let discard = CString::new(r#"{"operation":"discard"}"#).unwrap();
+        let discarded = take(unsafe {
+            captures_recording_request_v1(handle, discard.as_ptr(), None, ptr::null_mut())
+        });
+        assert_eq!(discarded["ok"], true);
+        assert!(!bundle.exists());
+        unsafe { captures_recording_free_v1(handle) };
+    }
+
+    #[test]
     fn shared_flow_cancellation_rejects_start_even_when_host_gate_accepts() {
         let root = tempfile::tempdir().unwrap();
         let (handle, bundle) = prepared_session(root.path());
@@ -389,6 +436,61 @@ mod tests {
             "host and shared cancellation gates are both checked"
         );
         assert!(!bundle.exists());
+        unsafe { captures_recording_free_v1(handle) };
+    }
+
+    #[test]
+    fn microphone_mute_requires_both_host_and_shared_generation_gates() {
+        let root = tempfile::tempdir().unwrap();
+        let (handle, bundle) = prepared_session(root.path());
+        let generation = 0x1234_5680_u64;
+        let mute = CString::new(
+            json!({
+                "operation":"set_microphone_muted",
+                "muted":true,
+                "generation":generation,
+                "exclude_captures_app":true
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let mut callback = CallbackState {
+            calls: 0,
+            generation: 0,
+        };
+        let host_stale = take(unsafe {
+            captures_recording_request_v1(
+                handle,
+                mute.as_ptr(),
+                Some(cancel_start),
+                (&raw mut callback).cast(),
+            )
+        });
+        assert_eq!(host_stale["ok"], false);
+        assert_eq!(host_stale["error"], "Recording cancelled");
+        assert_eq!(callback.calls, 1);
+        assert_eq!(callback.generation, generation);
+
+        callback.calls = 0;
+        let shared_stale = take(unsafe {
+            captures_recording_request_v1(
+                handle,
+                mute.as_ptr(),
+                Some(accept_start),
+                (&raw mut callback).cast(),
+            )
+        });
+        assert_eq!(shared_stale["ok"], false);
+        assert_eq!(shared_stale["error"], "Recording cancelled");
+        assert_eq!(callback.calls, 1);
+        assert!(bundle.is_dir(), "stale mute must not discard the session");
+
+        let discard = CString::new(r#"{"operation":"discard"}"#).unwrap();
+        let discarded = take(unsafe {
+            captures_recording_request_v1(handle, discard.as_ptr(), None, ptr::null_mut())
+        });
+        assert_eq!(discarded["ok"], true);
         unsafe { captures_recording_free_v1(handle) };
     }
 }

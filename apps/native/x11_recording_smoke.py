@@ -6,9 +6,12 @@ ImageMagick, FFmpeg and FFprobe. Uses actual input and persisted media, no app h
 """
 import argparse
 import json
+import math
 import os
 from pathlib import Path
+import re
 import select
+import struct
 import subprocess
 import threading
 import time
@@ -18,6 +21,7 @@ import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 from Xlib import X, display, protocol
+from Xlib.ext import shape
 
 from x11_capture_smoke import ScreenSaver
 
@@ -26,6 +30,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--restart-only", action="store_true",
+                        help="stop after running/paused Restart and replacement-media checks")
+    parser.add_argument("--hide-controls-only", action="store_true",
+                        help="exercise real-SNI Hide/restore, tray loss and finalized media")
+    parser.add_argument("--ready-notice-only", action="store_true",
+                        help="exercise recording-ready save/retry/reveal, expiry and dismissal")
+    parser.add_argument("--appearance", choices=("dark", "light"), default="dark")
+    parser.add_argument("--virtual-microphone", action="store_true",
+                        help="use a disposable PulseAudio null-sink monitor to verify mute segments")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -40,6 +53,7 @@ def main():
         env[variable] = str(path)
     children, logs = [], []
     loop = None
+    panel = None
 
     def spawn(name, command, announce=False):
         stdout = subprocess.PIPE if announce else (output / f"{name}.jsonl").open("w")
@@ -61,7 +75,8 @@ def main():
         return subprocess.check_output(command, env=env, timeout=30)
 
     def windows(title):
-        result = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", f"^{title}$"],
+        result = subprocess.run(["xdotool", "search", "--onlyvisible", "--name",
+                                 f"^{re.escape(title)}$"],
                                 env=env, capture_output=True, text=True, timeout=5)
         assert result.returncode in (0, 1), result.stderr
         return result.stdout.split()
@@ -83,6 +98,32 @@ def main():
             "mousemove", "--sync", "--window", window, str(x - 1), str(y),
             "mousemove_relative", "--sync", "1", "0", "sleep", ".15", "mousedown", "1",
             "sleep", ".15", "mouseup", "1")
+
+    def window_geometry(window):
+        values = {}
+        for line in run("xdotool", "getwindowgeometry", "--shell", window).decode().splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                values[key] = value
+        return values
+
+    def menu_action(label):
+        labels = ["New Capture", "Show recording controls", "Capture display",
+                  "Capture region", "Capture window", "History", "Preferences",
+                  "Open output folder", "Quit Captures"]
+        panel_ids = run("xdotool", "search", "--onlyvisible", "--class", "xfce4-panel").decode().split()
+        tray = next(window for window in panel_ids if int(window_geometry(window)["WIDTH"]) >= 24)
+        geometry = window_geometry(tray)
+        run("xdotool", "mousemove", "--window", tray, str(int(geometry["WIDTH"]) // 2),
+            str(int(geometry["HEIGHT"]) // 2), "click", "3", "sleep", ".4")
+        popup_ids = run("xdotool", "search", "--onlyvisible", "--class", ".*").decode().split()
+        popup = next(window for window in popup_ids
+                     if b"_MENU" in run("xprop", "-id", window, "_NET_WM_WINDOW_TYPE"))
+        popup_geometry = window_geometry(popup)
+        run("xdotool", "mousemove", "--window", popup,
+            str(int(popup_geometry["WIDTH"]) // 2),
+            str(int((labels.index(label) + .5) * int(popup_geometry["HEIGHT"]) / len(labels))),
+            "click", "1")
 
     def manifest():
         files = list((output / "recording-recovery").glob("*/manifest.json"))
@@ -115,7 +156,18 @@ def main():
                 run("xdotool", "key", chord, "sleep", ".2")
                 assert windows("Captures Capture Controls") == [selector]
                 assert manifest() is None and not history()
-        run("xdotool", "key", "Return")
+            # Do not drag this corner again: the retained selection correctly
+            # treats that as a NW resize and collapses it toward the SE corner.
+            # Validate the preserved target after confirmation instead.
+        for _ in range(20):
+            run("xdotool", "windowactivate", "--sync", selector, "key", "Return")
+            time.sleep(.25)
+            if manifest() is not None:
+                break
+        assert manifest() is not None, "recording confirmation never reached preparation"
+        assert manifest()["options"]["target"]["rect"] == {
+            "x": 140, "y": 180, "width": 310, "height": 170,
+        }, "recording must retain the selected region across target shortcuts"
 
     def running_hud():
         wait(lambda: (value := manifest()) and value["state"] == "recording", "durable Recording")
@@ -123,16 +175,24 @@ def main():
         time.sleep(.5)
         return hud
 
+    def restart(hud, name):
+        click(hud, 218, 54)
+        confirmation = wait(lambda: windows("Restart recording?"), "restart confirmation")[0]
+        shot(confirmation, name)
+        click(confirmation, 104, 115)
+
     def history():
         return set((output / "history").glob("*/metadata.json"))
 
     def finished(expected_count):
         wait(lambda: len(history()) == expected_count, "History publication count")
         wait(lambda: not windows("Captures Recording Controls"), "HUD removal")
+        wait(lambda: not windows("Captures Recording Region"), "region guide removal")
         wait(lambda: manifest() is None, "recovery source cleanup")
         # Disk cleanup precedes the worker reply. Only the event-thread finish
         # restores the previously visible root and releases the capture flow.
         wait(lambda: windows("Captures"), "workspace restoration after worker completion")
+        time.sleep(.3)
 
     try:
         env["DISPLAY"] = ":" + spawn("xvfb", ["Xvfb", "-displayfd", "1", "-screen", "0",
@@ -147,11 +207,48 @@ def main():
         threading.Thread(target=loop.run, daemon=True).start()
         spawn("openbox", ["openbox", "--sm-disable"])
         spawn("picom", ["picom", "--config", "/dev/null", "--backend", "xrender"])
+        if args.hide_controls_only or args.ready_notice_only:
+            config = output / "config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml"
+            config.parent.mkdir(parents=True)
+            config.write_text('''<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-panel" version="1.0">
+ <property name="configver" type="int" value="2"/>
+ <property name="panels" type="array"><value type="int" value="1"/>
+  <property name="panel-1" type="empty">
+   <property name="position" type="string" value="p=0;x=1200;y=24"/>
+   <property name="position-locked" type="bool" value="true"/>
+   <property name="disable-struts" type="bool" value="true"/>
+   <property name="length" type="uint" value="1"/>
+   <property name="length-adjust" type="bool" value="true"/>
+   <property name="size" type="uint" value="32"/>
+   <property name="plugin-ids" type="array"><value type="int" value="1"/></property>
+  </property>
+ </property>
+ <property name="plugins" type="empty">
+  <property name="plugin-1" type="string" value="systray">
+   <property name="hide-new-items" type="bool" value="false"/>
+   <property name="icon-size" type="uint" value="24"/>
+  </property>
+ </property>
+</channel>''')
+            panel = spawn("sni-panel", ["xfce4-panel", "--disable-wm-check", "--sm-client-disable"])
+            wait(lambda: bus.name_has_owner("org.kde.StatusNotifierWatcher"), "real SNI watcher")
+        if args.virtual_microphone:
+            spawn("pulseaudio", ["pulseaudio", "--daemonize=no", "--exit-idle-time=-1"])
+            wait(lambda: subprocess.run(["pactl", "info"], env=env, capture_output=True).returncode == 0,
+                 "PulseAudio virtual microphone server")
+            run("pactl", "load-module", "module-null-sink", "sink_name=captures",
+                "sink_properties=device.description=CapturesVirtualMicrophone")
+            run("pactl", "set-default-source", "captures.monitor")
+            tone = output / "microphone-tone.wav"
+            run("ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                "sine=frequency=730:sample_rate=48000", "-t", "120", str(tone))
+            spawn("microphone-tone", ["paplay", "--device=captures", str(tone)])
         time.sleep(1)
         run("hsetroot", "-solid", "#c02040")
         settings = output / "settings.json"
         settings.write_text(json.dumps({
-            "settings_schema_version": 5, "appearance": "dark", "theme": "mustard",
+            "settings_schema_version": 5, "appearance": args.appearance, "theme": "mustard",
             "output_directory": str(output / "exports"),
             "new_capture_shortcut": "Ctrl+Shift+F10", "region_shortcut": "Ctrl+Shift+F7",
             "window_shortcut": "Ctrl+Shift+F8", "display_shortcut": "Ctrl+Shift+F9",
@@ -162,8 +259,19 @@ def main():
                           "video_shortcut": "Ctrl+Alt+R", "window_shortcut": "Ctrl+Alt+W",
                           "display_shortcut": "Ctrl+Alt+D",
                           "highlight_clicks": False, "capture_system_audio": False,
-                          "microphone_device_id": None, "open_editor_after_recording": False},
+                          "microphone_device_id": "default" if args.virtual_microphone else None,
+                          "open_editor_after_recording": False},
         }))
+        if args.ready_notice_only:
+            # Observe the exact OS-launch argument without opening a file manager.
+            # Export itself still uses the real Rust worker and filesystem.
+            tools = output / "tools"
+            tools.mkdir()
+            opener = tools / "xdg-open"
+            opener.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" > "$CAPTURES_TEST_REVEAL"\n')
+            opener.chmod(0o755)
+            env["PATH"] = str(tools) + os.pathsep + env["PATH"]
+            env["CAPTURES_TEST_REVEAL"] = str(output / "revealed-path.txt")
         app = spawn("app", [str(binary), "--live", "--history-root", str(output / "history"),
                             "--settings-file", str(settings), "--quit-after", "120"])
         root = wait(lambda: windows("Captures"), "capture workspace")[0]
@@ -171,10 +279,212 @@ def main():
         run("xdotool", "key", "ctrl+alt+w")
         select_recording("recording-selector", shortcuts=True)
         countdown = wait(lambda: windows("Captures Recording Countdown"), "recording countdown")[0]
+        guide = wait(lambda: windows("Captures Recording Region"), "countdown region guide")[0]
         shot(countdown, "recording-countdown")
         run("xdotool", "key", "ctrl+alt+d")
         hud = running_hud()
         shot(hud, "hud-running")
+        assert windows("Captures Recording Region") == [guide]
+        shot("root", "recording-region-running")
+        # The guide must really be click-through, not just omit UI handlers.
+        connection = display.Display(env["DISPLAY"])
+        try:
+            window = connection.create_resource_object("window", int(guide))
+            assert not window.shape_get_rectangles(shape.SK.Input).rectangles
+        finally:
+            connection.close()
+        # Probe every inner edge, where an inward/antialiased border would leak.
+        for x, y in [(140, 180), (449, 180), (140, 349), (449, 349), (295, 265)]:
+            pixel = run("import", "-window", "root", "-crop", f"1x1+{x}+{y}",
+                        "-depth", "8", "rgb:-")
+            assert tuple(pixel[:3]) == (192, 32, 64), (x, y, pixel)
+        border = run("import", "-window", "root", "-crop", "1x1+139+220", "-depth", "8", "rgb:-")
+        assert tuple(border[:3]) == (255, 202, 40), border
+        veil = run("import", "-window", "root", "-crop", "1x1+100+220", "-depth", "8", "rgb:-")
+        assert 0 < veil[0] < 192, veil
+        if args.ready_notice_only:
+            def notice_click(window, x, y):
+                # Notifications do not activate the root or accept WM activation.
+                # Like click(), deliver a position event even for repeated clicks.
+                run("xdotool", "mousemove", "--sync", "--window", window, str(x - 1), str(y),
+                    "mousemove_relative", "--sync", "1", "0",
+                    "sleep", ".15", "mousedown", "1", "sleep", ".15", "mouseup", "1")
+                time.sleep(.3)
+
+            def stop_with_notice(hud, count):
+                click(hud, 142, 54)
+                wait(lambda: len(history()) == count, "recording publication")
+                notice = wait(lambda: windows("Recording ready"), "recording-ready notice")[0]
+                wait(lambda: manifest() is None, "finalization cleanup")
+                assert not windows("Captures Recording Controls")
+                assert not windows("Captures Recording Region")
+                assert run("xdotool", "getwindowfocus").decode().strip() != notice
+                time.sleep(.4)
+                return notice
+
+            notice = stop_with_notice(hud, 1)
+            shot(notice, "notice-ready")
+            metadata = next(iter(history()))
+            media = metadata.parent / "media.mp4"
+            run("ffmpeg", "-v", "error", "-i", str(media), "-f", "null", "-")
+            original = media.read_bytes()
+            # Close the root normally into its real SNI tray: the notice must
+            # continue accepting actions and expiring with no visible root.
+            connection = display.Display(env["DISPLAY"])
+            try:
+                window = connection.create_resource_object("window", int(root))
+                window.send_event(protocol.event.ClientMessage(
+                    window=window, client_type=connection.intern_atom("WM_PROTOCOLS"),
+                    data=(32, [connection.intern_atom("WM_DELETE_WINDOW"), X.CurrentTime, 0, 0, 0])))
+                connection.sync()
+            finally:
+                connection.close()
+            wait(lambda: not windows("Captures"), "root hidden in tray")
+            exports = output / "exports"
+            exports.write_text("blocked output directory")
+            notice_click(notice, 300, 89)
+            wait(lambda: windows("Could not save recording"), "save failure presented")
+            shot(notice, "notice-save-error")
+            assert json.loads(metadata.read_text())["saved_path"] is None
+            assert media.read_bytes() == original and windows("Could not save recording")
+            exports.unlink()
+            notice_click(notice, 300, 89)
+            wait(lambda: windows("Recording saved"), "saved state presented")
+            saved = Path(wait(lambda: json.loads(metadata.read_text()).get("saved_path"), "notice export"))
+            assert saved.parent == exports and saved.read_bytes() == original
+            assert len(list(exports.iterdir())) == 1
+            shot(notice, "notice-saved")
+            saved.unlink()
+            notice_click(notice, 300, 89)
+            wait(lambda: windows("Could not show recording"), "missing export error presented")
+            assert not (output / "revealed-path.txt").exists()
+            shot(notice, "notice-reveal-error")
+            saved.write_bytes(original)
+            notice_click(notice, 300, 89)
+            wait(lambda: not windows("Could not show recording"), "successful reveal dismissal")
+            wait(lambda: (output / "revealed-path.txt").exists(), "OS reveal launcher")
+            assert (output / "revealed-path.txt").read_text().strip() == str(exports)
+            assert len(history()) == 1 and saved.read_bytes() == original
+
+            for count, action in [(2, "expiry"), (3, "dismiss"), (4, "new-capture")]:
+                run("xdotool", "key", "ctrl+shift+F10")
+                select_recording(f"notice-{action}-selector")
+                hud = running_hud()
+                time.sleep(.4)
+                notice = stop_with_notice(hud, count)
+                assert not windows("Captures"), "background completion must not show root"
+                if action == "expiry":
+                    time.sleep(13)
+                    assert windows("Recording ready"), "notice expired too early"
+                    wait(lambda: not windows("Recording ready"), "15.2-second expiry with hidden root")
+                elif action == "dismiss":
+                    notice_click(notice, 423, 18)
+                    wait(lambda: not windows("Recording ready"), "explicit notice dismissal")
+                else:
+                    run("xdotool", "key", "ctrl+shift+F10")
+                    wait(lambda: windows("Captures Capture Controls"), "capture after notice")
+                    assert not windows("Recording ready"), "notice leaked into next capture"
+                    run("xdotool", "key", "Escape")
+                    wait(lambda: not windows("Captures Capture Controls"), "capture cancellation")
+                assert len(history()) == count and saved.read_bytes() == original
+                assert manifest() is None
+            menu_action("Quit Captures")
+            assert app.wait(timeout=10) == 0
+            (output / "acceptance-ready-notice.json").write_text(json.dumps({
+                "appearance": args.appearance, "real_recording_decode": True,
+                "nonactivating": True, "hidden_root_actions_and_expiry": True,
+                "save_error_retry": True, "byte_identical_export": True,
+                "missing_export_reveal_error": True, "reveal_path": str(exports),
+                "expiry_preserves_history": True, "dismiss_preserves_history": True,
+                "new_capture_clears_notice": True, "clean_exit": True,
+                "scope": "Private X11/software GL; OS reveal launcher intercepted; no hardware/AT acceptance",
+            }, indent=2))
+            print("PASS recording notice: actual finalization, save failure/retry, byte-identical export, "
+                  "reveal path/error, hidden-root expiry, dismiss, next capture and clean exit")
+            return
+        if args.hide_controls_only:
+            watcher = dbus.Interface(
+                bus.get_object("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher"),
+                "org.freedesktop.DBus.Properties")
+            wait(lambda: watcher.Get("org.kde.StatusNotifierWatcher",
+                                     "RegisteredStatusNotifierItems"),
+                 "Captures registered in real SNI tray")
+            bundle = next((output / "recording-recovery").glob("*/manifest.json")).parent
+            click(hud, 398, 54)
+            wait(lambda: not windows("Captures Recording Controls"), "running HUD hidden")
+            assert windows("Captures Recording Region") == [guide]
+            shot("root", "recording-region-hidden-hud")
+            notice = wait(lambda: windows("Recording controls hidden"), "temporary hidden notice")[0]
+            shot(notice, "recording-controls-hidden-running")
+            before = manifest()
+            assert (before["state"] == "recording" and len(before["segments"]) == 1
+                    and not before["segments"][0]["complete"])
+            run("xdotool", "key", "ctrl+shift+F9", "ctrl+alt+r", "sleep", ".3")
+            assert (not windows("Captures Capture Controls")
+                    and manifest()["session_id"] == before["session_id"])
+            run("xdotool", "key", "ctrl+shift+F10")
+            hud = wait(lambda: windows("Captures Recording Controls"),
+                       "New Capture shortcut restores HUD")[0]
+            assert manifest()["session_id"] == before["session_id"] and not history()
+
+            click(hud, 178, 54)
+            wait(lambda: (value := manifest()) and value["state"] == "paused", "pause completed")
+            hud = wait(lambda: windows("Captures Recording Controls"), "paused HUD")[0]
+            click(hud, 398, 54)
+            wait(lambda: not windows("Captures Recording Controls"), "paused HUD hidden")
+            menu_action("Show recording controls")
+            hud = wait(lambda: windows("Captures Recording Controls"),
+                       "real tray action restores paused HUD")[0]
+            assert (manifest()["state"] == "paused"
+                    and manifest()["session_id"] == before["session_id"])
+            assert windows("Captures Recording Region") == [guide]
+            shot(hud, "recording-controls-restored-paused")
+
+            click(hud, 398, 54)
+            wait(lambda: not windows("Captures Recording Controls"), "HUD hidden before tray loss")
+            run("xfce4-panel", "--quit")
+            panel.wait(timeout=10)
+            hud = wait(lambda: windows("Captures Recording Controls"),
+                       "tray-host loss restores controls")[0]
+            root = wait(lambda: windows("Captures"), "tray-host loss restores workspace")[0]
+            shot("root", "recording-controls-tray-loss-restored")
+            assert (manifest()["state"] == "paused"
+                    and manifest()["session_id"] == before["session_id"])
+
+            click(hud, 142, 54)
+            metadata = wait(lambda: list((output / "history").glob("*/metadata.json")),
+                            "hidden/restored recording publication")
+            assert len(metadata) == 1
+            media = metadata[0].parent / "media.mp4"
+            run("ffmpeg", "-v", "error", "-i", str(media), "-f", "null", "-")
+            pixels = run("ffmpeg", "-v", "error", "-i", str(media), "-frames:v", "1",
+                         "-f", "rawvideo", "-pix_fmt", "rgb24", "-")
+            # OpenH264 quantizes edge blocks: a separate encode of a uniform
+            # RGB(192,32,64) buffer has up to 18 levels of corner error and
+            # matches this recording byte-for-byte after decoding. The raw
+            # composited edge probes above stay exact; this codec tolerance
+            # still rejects either the dim veil or accent border in the MP4.
+            for x, y in [(0, 0), (309, 0), (0, 169), (309, 169), (155, 85)]:
+                offset = (y * 310 + x) * 3
+                actual = pixels[offset:offset + 3]
+                assert len(actual) == 3 and all(abs(a - e) <= 20 for a, e in
+                    zip(actual, (192, 32, 64))), (x, y, actual)
+            finished(1)
+            assert manifest() is None and not bundle.exists()
+            acceptance = {
+                "running_hide": True, "paused_hide": True,
+                "new_capture_shortcut_restore": True, "real_sni_restore": True,
+                "tray_host_loss_restore": True, "same_session": True,
+                "busy_shortcuts_suppressed": True, "history_publication": True,
+                "decoded_output": True, "source_cleanup": True,
+                "region_guide_preserved": True, "region_guide_click_through": True,
+                "region_guide_clean_inner_edges": True, "region_guide_cleanup": True,
+            }
+            (output / "acceptance-hide-controls.json").write_text(
+                json.dumps(acceptance, indent=2))
+            print("PASS native recording Hide: running/paused preservation, New Capture and real "
+                  "SNI restore, tray-host-loss recovery, finalized decode and cleanup")
+            return
         run("xdotool", "key", "ctrl+alt+r", "ctrl+shift+F9")
         assert not windows("Captures Capture Controls")
         # Escape only cancels before engine handoff, not an accepted recording.
@@ -182,16 +492,70 @@ def main():
         time.sleep(.3)
         assert manifest()["state"] == "recording"
         assert windows("Captures Recording Controls")
+        if args.virtual_microphone:
+            click(hud, 318, 54)
+            wait(lambda: (value := manifest()) and value["state"] == "recording"
+                 and value["options"]["audio"]["microphone_muted"]
+                 and len(value["segments"]) == 2, "running microphone mute segment")
+            shot(hud, "hud-muted")
+            click(hud, 318, 54)
+            wait(lambda: (value := manifest()) and value["state"] == "recording"
+                 and not value["options"]["audio"]["microphone_muted"]
+                 and len(value["segments"]) == 3, "running microphone unmute segment")
+            shot(hud, "hud-unmuted")
         click(hud, 178, 54)
         wait(lambda: (value := manifest()) and value["state"] == "paused", "pause completed")
-        hud = wait(lambda: windows("Captures Recording Controls"), "paused HUD")[0]
         time.sleep(.3)
+        hud = wait(lambda: windows("Captures Recording Controls"), "paused HUD")[0]
         shot(hud, "hud-paused")
-        run("hsetroot", "-solid", "#2070c0")
-        click(hud, 178, 54)
-        wait(lambda: (value := manifest()) and value["state"] == "recording", "resume completed")
-        hud = wait(lambda: windows("Captures Recording Controls"), "resumed HUD")[0]
+
+        # Paused Restart replaces the accepted take and rearms Escape for its
+        # stored countdown. Cancelling that countdown discards the replacement.
+        restart(hud, "restart-confirmation-paused")
+        countdown = wait(lambda: windows("Captures Recording Countdown"),
+                         "paused restart countdown")[0]
+        wait(lambda: (value := manifest()) and value["state"] == "countdown"
+             and not value["segments"], "paused restart reset")
+        shot(countdown, "recording-restart-countdown")
+        run("xdotool", "key", "Escape")
+        wait(lambda: not windows("Captures Recording Countdown"), "restart countdown cancellation")
+        finished(0)
+        assert not history()
         time.sleep(.5)
+
+        # Running Restart also drops the old segment. The final MP4 must contain
+        # only blue replacement pixels, not the red media recorded before Restart.
+        run("xdotool", "key", "ctrl+shift+F10")
+        select_recording("running-restart-selector")
+        hud = running_hud()
+        restart(hud, "restart-confirmation-running")
+        wait(lambda: (value := manifest()) and value["state"] == "countdown"
+             and not value["segments"], "running restart reset")
+        run("hsetroot", "-solid", "#2070c0")
+        hud = running_hud()
+        time.sleep(.5)
+        if args.virtual_microphone:
+            click(hud, 318, 54)
+            wait(lambda: (value := manifest()) and value["state"] == "recording"
+                 and value["options"]["audio"]["microphone_muted"]
+                 and len(value["segments"]) == 2, "published recording mute segment")
+            time.sleep(.6)
+            click(hud, 318, 54)
+            wait(lambda: (value := manifest()) and value["state"] == "recording"
+                 and not value["options"]["audio"]["microphone_muted"]
+                 and len(value["segments"]) == 3, "published recording unmute segment")
+            segments = manifest()["segments"]
+            assert segments[0]["microphone_relative_path"]
+            assert segments[1]["microphone_relative_path"] is None
+            assert segments[2]["microphone_relative_path"]
+            mute_start = segments[0]["duration_ms"] / 1000
+            mute_end = mute_start + segments[1]["duration_ms"] / 1000
+            print(f"Microphone mute interval: {mute_start:.3f}–{mute_end:.3f}s")
+            bundle = next((output / "recording-recovery").glob("*/manifest.json")).parent
+            microphone = bundle / segments[2]["microphone_relative_path"]
+            # Stream startup is not sample delivery. Require actual buffered PCM
+            # before Stop; a broken unmute must time out rather than pass on metadata.
+            wait(lambda: microphone.stat().st_size > 192000, "unmuted microphone sample delivery")
         click(hud, 142, 54)
         metadata = wait(lambda: list((output / "history").glob("*/metadata.json")), "History publication")
         assert len(metadata) == 1
@@ -199,16 +563,46 @@ def main():
         assert entry["kind"] == "video" and entry["mime_type"] == "video/mp4", entry
         assert (entry["width"], entry["height"]) == (310, 170), entry
         assert entry["target"]["rect"] == {"x": 140, "y": 180, "width": 310, "height": 170}
-        assert entry["saved_path"] is None and not entry["has_microphone_audio"]
+        assert entry["saved_path"] is None
+        assert entry["has_microphone_audio"] == args.virtual_microphone, entry
         media = metadata[0].parent / "media.mp4"
         frames = run("ffmpeg", "-v", "error", "-i", str(media), "-vf", "crop=2:2:40:40",
                      "-f", "rawvideo", "-pix_fmt", "rgb24", "-")
         assert len(frames) >= 24
-        for actual, expected in ((frames[:3], (192, 32, 64)), (frames[-3:], (32, 112, 192))):
+        for actual, expected in ((frames[:3], (32, 112, 192)), (frames[-3:], (32, 112, 192))):
             assert all(abs(a - e) <= 6 for a, e in zip(actual, expected)), (actual, expected)
+        microphone_rms = None
+        if args.virtual_microphone:
+            pcm = run("ffmpeg", "-v", "error", "-i", str(media), "-map", "0:a:0",
+                      "-ac", "1", "-ar", "24000", "-f", "f32le", "-")
+            samples = [sample[0] for sample in struct.iter_unpack("<f", pcm)]
+            def rms(begin, end):
+                window = samples[int(begin * 24000):int(end * 24000)]
+                assert len(window) >= 2400, "need at least 100 ms away from AAC boundaries"
+                return math.sqrt(sum(value * value for value in window) / len(window))
+            # Inspect the interior of the first take, not its padded encoder-drain tail.
+            microphone_rms = [rms(.2, mute_start / 2),
+                              rms(mute_start + .2, mute_end - .2),
+                              rms(mute_end + .2, len(samples) / 24000 - .1)]
+            assert microphone_rms[0] > .01 and microphone_rms[2] > .01, microphone_rms
+            assert microphone_rms[1] < .001, microphone_rms
+            print(f"PASS microphone waveform RMS: audible/muted/audible {microphone_rms}")
         assert (metadata[0].parent / "preview.png").is_file()
         finished(1)
         published = history()
+        if args.restart_only:
+            (output / "acceptance-restart.json").write_text(json.dumps({
+                "region": entry["target"]["rect"], "duration_ms": entry["duration_ms"],
+                "first_pixel": list(frames[:3]), "last_pixel": list(frames[-3:]),
+                "paused_restart": True, "running_restart": True,
+                "virtual_microphone_mute": args.virtual_microphone,
+                "microphone_rms": microphone_rms,
+                "restart_countdown_escape_discarded": True,
+                "replacement_only_media": True, "source_cleanup": True,
+            }, indent=2))
+            print("PASS native recording Restart: paused/running replacement, countdown Escape, "
+                  "replacement-only decoded pixels and source cleanup")
+            return
 
         # A countdown Escape discards only its prepared bundle, never an earlier take.
         run("xdotool", "key", "ctrl+shift+F10")
@@ -324,11 +718,13 @@ def main():
             "first_pixel": list(frames[:3]), "last_pixel": list(frames[-3:]),
             "pause_resume": True, "history_publication": True,
             "running_escape_ignored": True, "countdown_escape_discarded": True,
+            "paused_restart": True, "running_restart": True,
+            "restart_countdown_escape_discarded": True,
             "explicit_discard": True, "session_lock_preserved": True, "child_close_saved": True,
             "application_quit_saved": True,
             "recording_shortcuts": True, "shortcut_mode_switch": True,
         }, indent=2))
-        print("PASS native recording: recording shortcuts/mode switching, selector/countdown, pause/resume, MP4 pixels, History, "
+        print("PASS native recording: recording shortcuts/mode switching, selector/countdown, pause/resume/restart, replacement-only MP4 pixels, History, "
               "Escape scope, explicit discard, lock/child-close/application-quit preservation and source cleanup")
     finally:
         if loop is not None:

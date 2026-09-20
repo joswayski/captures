@@ -6,8 +6,11 @@ use crate::tokens::Tokens;
 pub enum Action {
     Pause,
     Resume,
+    Restart,
     Stop,
+    SetMicrophoneMuted(bool),
     Discard,
+    Hide,
 }
 
 #[derive(Clone, Copy)]
@@ -25,21 +28,40 @@ enum Icon {
 
 pub struct View<'a> {
     pub paused: bool,
+    pub busy: bool,
+    pub has_microphone: bool,
+    pub microphone_muted: bool,
     pub elapsed_ms: u64,
     pub notice: &'a str,
     pub warning: bool,
+    pub hide_available: bool,
 }
 
 pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action> {
     let mut action = None;
     tokens.glass_controls(ui);
+    let widgets = &mut ui.visuals_mut().widgets;
+    for widget in [&mut widgets.inactive, &mut widgets.noninteractive] {
+        widget.bg_fill = egui::Color32::TRANSPARENT;
+        widget.weak_bg_fill = egui::Color32::TRANSPARENT;
+    }
+    for widget in [
+        &mut widgets.inactive,
+        &mut widgets.noninteractive,
+        &mut widgets.hovered,
+        &mut widgets.active,
+        &mut widgets.open,
+    ] {
+        widget.bg_stroke = Stroke::NONE;
+        widget.corner_radius = (tokens.number("r-sm") as u8).into();
+    }
     ui.add_space(6.);
     ui.horizontal(|ui| {
         ui.add_space(6.);
         egui::Frame::new()
             .fill(tokens.color("glass-strong"))
             .stroke(Stroke::new(1., tokens.color("glass-border")))
-            .corner_radius(tokens.number("r-2xl") as u8)
+            .corner_radius(tokens.number("r-xl") as u8)
             .inner_margin(egui::Margin::symmetric(12, 8))
             .show(ui, |ui| {
                 ui.set_width(394.);
@@ -78,8 +100,16 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                                 });
                             },
                         );
-                        if control(ui, Icon::Stop, "Stop and save recording", true, tokens)
-                            .clicked()
+                        if control(
+                            ui,
+                            Icon::Stop,
+                            "Stop and save recording",
+                            true,
+                            !view.busy,
+                            false,
+                            tokens,
+                        )
+                        .clicked()
                         {
                             action = Some(Action::Stop);
                         }
@@ -92,6 +122,8 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                                 "Pause recording"
                             },
                             false,
+                            !view.busy,
+                            false,
                             tokens,
                         )
                         .clicked()
@@ -102,12 +134,19 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                                 Action::Pause
                             });
                         }
-                        unavailable(
+                        if control(
                             ui,
                             Icon::Restart,
                             "Restart recording",
-                            "Restart is not available in this build",
-                        );
+                            false,
+                            !view.busy,
+                            false,
+                            tokens,
+                        )
+                        .clicked()
+                        {
+                            action = Some(Action::Restart);
+                        }
                         unavailable(
                             ui,
                             Icon::Screenshot,
@@ -120,22 +159,63 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                             "System audio",
                             "Audio controls are set before recording",
                         );
-                        unavailable(
+                        let microphone_label = if view.microphone_muted {
+                            "Unmute microphone"
+                        } else {
+                            "Mute microphone"
+                        };
+                        if view.has_microphone {
+                            if control(
+                                ui,
+                                Icon::Microphone,
+                                microphone_label,
+                                false,
+                                !view.busy,
+                                view.microphone_muted,
+                                tokens,
+                            )
+                            .clicked()
+                            {
+                                action = Some(Action::SetMicrophoneMuted(!view.microphone_muted));
+                            }
+                        } else {
+                            unavailable(
+                                ui,
+                                Icon::Microphone,
+                                "Microphone unavailable: no microphone selected",
+                                "Select a microphone before starting a recording",
+                            );
+                        }
+                        if control(
                             ui,
-                            Icon::Microphone,
-                            "Microphone",
-                            "Microphone controls are set before recording",
-                        );
-                        if control(ui, Icon::Discard, "Discard recording", false, tokens).clicked()
+                            Icon::Discard,
+                            "Discard recording",
+                            false,
+                            !view.busy,
+                            false,
+                            tokens,
+                        )
+                        .clicked()
                         {
                             action = Some(Action::Discard);
                         }
-                        unavailable(
+                        if control(
                             ui,
                             Icon::Hide,
-                            "Hide recording controls",
-                            "Hiding controls is not available in this build",
-                        );
+                            if view.hide_available {
+                                "Hide recording controls"
+                            } else {
+                                "Hide unavailable because no tray restore path is available"
+                            },
+                            false,
+                            !view.busy && view.hide_available,
+                            false,
+                            tokens,
+                        )
+                        .clicked()
+                        {
+                            action = Some(Action::Hide);
+                        }
                     });
                 });
             });
@@ -148,26 +228,64 @@ fn control(
     icon: Icon,
     description: &str,
     signal: bool,
+    enabled: bool,
+    selected: bool,
     tokens: &Tokens,
 ) -> egui::Response {
-    let mut button = egui::Button::new("").min_size(Vec2::splat(32.));
-    if signal {
-        button = button.fill(tokens.color("theme-signal"));
-    }
-    let response = ui.add(button).on_hover_text(description);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, description));
-    paint_icon(
-        ui,
-        response.rect,
-        icon,
-        ui.visuals().widgets.active.fg_stroke.color,
-    );
-    response
+    ui.scope(|ui| {
+        let mut button = egui::Button::new("").min_size(Vec2::splat(32.));
+        if signal {
+            let widgets = &mut ui.visuals_mut().widgets;
+            widgets.inactive.weak_bg_fill = tokens.color("theme-signal-surface");
+            widgets.inactive.bg_stroke =
+                Stroke::new(1., tokens.color("theme-signal").gamma_multiply(0.4));
+            widgets.hovered.weak_bg_fill = tokens.color("theme-signal");
+            widgets.active.weak_bg_fill = tokens.color("theme-signal");
+        } else if selected && enabled {
+            button = button
+                .fill(tokens.color("glass-active"))
+                .stroke(Stroke::new(
+                    1.,
+                    tokens.color("theme-accent").gamma_multiply(0.3),
+                ));
+        }
+        let response = ui.add_enabled(enabled, button).on_hover_text(description);
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, description)
+        });
+        if response.has_focus() {
+            ui.painter().rect_stroke(
+                response.rect,
+                tokens.number("r-sm") as u8,
+                Stroke::new(2., tokens.color("theme-accent")),
+                StrokeKind::Inside,
+            );
+        }
+        let color = tokens.color(if !enabled {
+            "glass-text-subtle"
+        } else if signal && !response.hovered() && !response.is_pointer_button_down_on() {
+            "theme-signal"
+        } else if selected {
+            "theme-accent"
+        } else if response.hovered() || response.is_pointer_button_down_on() {
+            "glass-text"
+        } else {
+            "glass-text-muted"
+        });
+        paint_icon(ui, response.rect, icon, color);
+        response
+    })
+    .inner
 }
 
 fn unavailable(ui: &mut egui::Ui, icon: Icon, label: &str, description: &str) {
     let response = ui
-        .add_enabled(false, egui::Button::new("").min_size(Vec2::splat(32.)))
+        .add_enabled(
+            false,
+            egui::Button::new("")
+                .frame(false)
+                .min_size(Vec2::splat(32.)),
+        )
         .on_disabled_hover_text(description);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, false, label));
     paint_icon(

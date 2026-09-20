@@ -48,25 +48,42 @@ physical Windows/macOS, Wayland and screen-reader acceptance remain open.
 ## Shared recording runtime
 
 `captures-recording-platform::RecordingSession` owns a durable recovery bundle
-and the existing platform engine across start, pause/resume, stop, discard and
+and the existing platform engine across start, pause/resume, restart, stop, discard and
 MP4/GIF finalization into private History. Run its blocking methods on a worker.
 Hosts still own permissions, countdown presentation, window exclusion and the
 capture-generation cancellation gate passed to `start`; `prepare` never records.
 Failed assembly/publication keeps source segments. Successful video publication
 removes the draft only after Ready metadata is saved; GIFs keep editable sources.
 Post-publication housekeeping failures return the saved artifact with a warning.
+Restart discards only that session's active and completed segments, retains its
+target/options, resets elapsed time, and returns to the stored countdown. The
+same capture generation rearms global Escape for that countdown before either
+host can open the replacement engine.
 Both hosts connect Video-only Record controls and region/window/display recording
 shortcuts. From idle the keys open Record on that target; in an open selector,
 screenshot and recording keys switch mode/target in place. Busy recording phases
-and focused Preferences suppress capture shortcuts. Native recording editing,
+and focused Preferences suppress capture shortcuts. Hidden recording controls are the exception:
+only New Capture is routed, and it restores the same generation without launching another capture.
+Native recording editing,
 GIF conversion and media-tool bundling remain unconnected. History **Save file**
 copies original video/GIF bytes to the configured output folder without encoding
 or overwriting another file. Repeated Save reuses the export; deleting it allows
 another copy from private History. **Show in Folder** reveals the exported copy,
 which survives deleting or clearing History. The poster remains the native preview.
 
-Linux CI records an asymmetric 310×170 region on a private Xvfb display, pauses
-and resumes, independently decodes the saved colors with FFmpeg, publishes video
+Successful finalization also opens a nonactivating fixed-glass **Recording ready**
+notice at the display work area's top right. It reuses History's Save file operation
+and changes to **Recording saved** / Show in Folder after export. Save failure and
+missing-file reveal errors remain retryable; Dismiss and the 15.2-second expiry
+never delete media. Expiry pauses during saving and restarts on completion/error.
+A new capture clears the notice, and stale callbacks cannot reopen a dismissed
+or replaced notice. Because native recording editing is not connected, this appears
+after finalization rather than the shipping editor-close trigger. Physical input,
+compositor, multi-display and accessibility acceptance remain open.
+
+Linux CI records an asymmetric 310×170 region on a private Xvfb display, pauses,
+resumes and restarts from running/paused, independently decodes replacement pixels
+with FFmpeg, publishes video
 and GIF History entries, and exercises cancellation and persistence failures:
 
 ```sh
@@ -78,6 +95,15 @@ env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 CAPTURES_TEST_PRIVATE_X11=1 \
 
 This needs `xvfb`, `xauth`, `hsetroot`, FFmpeg and FFprobe. It is not physical
 Windows/macOS, audio-device, multi-display or Wayland acceptance.
+
+The native recording Hide slice removes the AppKit or wgpu HUD without changing
+the accepted session, timer, pause/microphone state, capture generation or media.
+A 6.2-second click-through fixed-glass notice explains restoration; no collapsed
+replacement strip remains. Menu bar/tray actions, app reactivation and the configured
+New Capture shortcut restore controls under the persisted capture-exclusion policy.
+Linux enables Hide only while a real SNI host supplies a restoration path, and tray-host
+loss restores the HUD and workspace. AppKit and Windows still require physical-host
+compositor and accessibility acceptance; Wayland remains gated.
 
 ## Resident lifecycle and screenshot shortcuts
 

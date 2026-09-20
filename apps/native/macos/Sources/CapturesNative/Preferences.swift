@@ -153,6 +153,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private let shortcutPolicy: ShortcutPolicy
     private let shortcutDisplay: ShortcutDisplay
     private let showHistory: () -> Void
+    private let showFeedback: () -> Void
     private let liveCaptureAvailable: Bool
     private var settings: [String: Any] = [:]
     private var scroll = NSScrollView()
@@ -189,9 +190,11 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
          },
          shortcutDisplay: @escaping ShortcutDisplay = { try NativeCaptureShortcuts.display($0) },
          showHistory: @escaping () -> Void, liveCaptureAvailable: Bool = false,
+         showFeedback: @escaping () -> Void = {},
          initialAppearance: String? = nil, initialTheme: String? = nil) {
         self.root = root; self.store = store; tokensProvider = tokens
         self.appearanceChanged = appearanceChanged; self.showHistory = showHistory
+        self.showFeedback = showFeedback
         self.settingsChanged = settingsChanged
         self.settingsPersisted = settingsPersisted
         self.shortcutPolicy = shortcutPolicy; self.shortcutDisplay = shortcutDisplay
@@ -579,7 +582,8 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     }
     private func aboutCard(_ y: CGFloat) -> CGFloat {
         let card = card("about", title: "About", description: "Captures native development fixture.", y: y, height: 150)
-        disabledRow("Capture History", detail: "Existing synthetic fixture — open with --scene history.", y: 88, parent: card)
+        rowTitle("Send feedback", detail: "No captures or diagnostics are attached.", y: 88, parent: card)
+        _ = actionButton("Open", x: 558, y: 95, width: 120, parent: card) { [weak self] in self?.showFeedback() }
         return y + card.frame.height + 22
     }
 

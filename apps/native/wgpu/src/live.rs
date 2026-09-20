@@ -107,6 +107,7 @@ enum Job {
     Execute {
         request: Request,
         preview: Option<PreviewGuard>,
+        notice: Option<crate::recording_saved_notice::Guard>,
     },
     PrepareRegion {
         display_id: String,
@@ -154,6 +155,7 @@ enum Reply {
     HistoryLoaded(Result<Vec<Artifact>, String>),
     Executed {
         preview: Option<PreviewGuard>,
+        notice: Option<crate::recording_saved_notice::Guard>,
         result: Result<Box<Response>, String>,
     },
     HistoryCleared(Result<Box<Response>, String>),
@@ -232,6 +234,10 @@ enum CapturePhase {
     Recording,
     RecordingPausing,
     RecordingPaused,
+    RecordingMuting {
+        paused: bool,
+    },
+    RecordingRestarting,
     RecordingFinalizing,
     RecordingDiscarding,
 }
@@ -268,10 +274,26 @@ enum SelectorMessage {
     ResumeRecording {
         generation: u64,
     },
+    SetMicrophoneMuted {
+        generation: u64,
+        muted: bool,
+    },
+    RestartRecording {
+        generation: u64,
+    },
+    ConfirmRestartRecording {
+        generation: u64,
+    },
+    CancelRestartRecording {
+        generation: u64,
+    },
     StopRecording {
         generation: u64,
     },
     DiscardRecording {
+        generation: u64,
+    },
+    HideRecordingControls {
         generation: u64,
     },
     SwitchControlsDisplay {
@@ -599,6 +621,11 @@ pub struct Live {
     selector_rx: Receiver<SelectorMessage>,
     preview_tx: Sender<PreviewMessage>,
     preview_rx: Receiver<PreviewMessage>,
+    notice_tx: Sender<crate::recording_saved_notice::Action>,
+    notice_rx: Receiver<crate::recording_saved_notice::Action>,
+    recording_notice: Option<crate::recording_saved_notice::Notice>,
+    recording_notice_generation: u64,
+    recording_notice_target: Option<CaptureTarget>,
     previews: MiniPreviews,
     root_hide_deferred: bool,
     open_history_requested: bool,
@@ -625,6 +652,10 @@ pub struct Live {
     recording_snapshot_poll_pending: bool,
     recording_last_snapshot_poll: Instant,
     recording_has_started: bool,
+    recording_restart_confirmation: bool,
+    recording_controls_hidden: Option<u64>,
+    recording_hidden_notice_until: Option<Instant>,
+    recording_restore_available: bool,
     history_refresh_status: Option<String>,
     can_hide: Option<bool>,
     confirm_delete: Option<String>,
@@ -640,6 +671,7 @@ impl Live {
         let (out, rx) = mpsc::channel();
         let (selector_tx, selector_rx) = mpsc::channel();
         let (preview_tx, preview_rx) = mpsc::channel();
+        let (notice_tx, notice_rx) = mpsc::channel();
         let capture_ctx = ctx.clone();
         let worker = thread::spawn(move || {
             // Retain ownership on X11. Disk decode and clipboard encoding never
@@ -649,7 +681,11 @@ impl Live {
                 let reply = match job {
                     Job::Shutdown => break,
                     Job::LoadHistory { root } => Reply::HistoryLoaded(load_history(&root)),
-                    Job::Execute { request, preview } => {
+                    Job::Execute {
+                        request,
+                        preview,
+                        notice,
+                    } => {
                         let clearing = matches!(request, Request::ClearHistory { .. });
                         let result = captures_app::execute(request)
                             .map(Box::new)
@@ -657,7 +693,11 @@ impl Live {
                         if clearing {
                             Reply::HistoryCleared(result)
                         } else {
-                            Reply::Executed { preview, result }
+                            Reply::Executed {
+                                preview,
+                                notice,
+                                result,
+                            }
                         }
                     }
                     Job::PrepareRegion {
@@ -776,6 +816,11 @@ impl Live {
             selector_rx,
             preview_tx,
             preview_rx,
+            notice_tx,
+            notice_rx,
+            recording_notice: None,
+            recording_notice_generation: 0,
+            recording_notice_target: None,
             previews: MiniPreviews::default(),
             root_hide_deferred: false,
             open_history_requested: false,
@@ -802,6 +847,10 @@ impl Live {
             recording_snapshot_poll_pending: false,
             recording_last_snapshot_poll: Instant::now(),
             recording_has_started: false,
+            recording_restart_confirmation: false,
+            recording_controls_hidden: None,
+            recording_hidden_notice_until: None,
+            recording_restore_available: false,
             history_refresh_status: None,
             can_hide: None,
             confirm_delete: None,
@@ -820,6 +869,33 @@ impl Live {
 
     pub fn can_launch_capture(&self) -> bool {
         self.pending == 0 && !self.is_capturing() && self.requested_capture.is_none()
+    }
+
+    pub fn recording_controls_hidden(&self) -> bool {
+        recording_controls_hidden(
+            self.recording_controls_hidden,
+            self.flow.as_ref().map(CaptureFlow::generation),
+        )
+    }
+
+    pub fn set_recording_restore_available(&mut self, available: bool, ctx: &egui::Context) {
+        self.recording_restore_available = available;
+        if !available {
+            self.show_recording_controls(ctx);
+        }
+    }
+
+    pub fn show_recording_controls(&mut self, ctx: &egui::Context) -> bool {
+        if !self.recording_controls_hidden() {
+            self.recording_controls_hidden = None;
+            self.recording_hidden_notice_until = None;
+            return false;
+        }
+        self.recording_controls_hidden = None;
+        self.recording_hidden_notice_until = None;
+        ctx.request_repaint_of(egui::ViewportId::from_hash_of("recording-controls"));
+        request_hidden_root_paint(ctx);
+        true
     }
 
     pub fn selector_generation(&self) -> Option<u64> {
@@ -859,6 +935,14 @@ impl Live {
     }
 
     pub fn request_capture(&mut self, request: CaptureRequest) {
+        self.recording_notice = None;
+        self.recording_notice_target = None;
+        if request == CaptureRequest::NewCapture && self.recording_controls_hidden() {
+            // The shipping New Capture action restores a hidden active HUD; it
+            // never starts a second capture or replaces the accepted take.
+            self.requested_capture = None;
+            return;
+        }
         if self.pending > 0 || self.is_capturing() || self.requested_capture.is_some() {
             self.error = Some("Another capture or history action is still in progress.".into());
         } else {
@@ -1002,6 +1086,8 @@ impl Live {
     }
 
     pub fn flush(&mut self) {
+        self.recording_notice = None;
+        self.recording_notice_target = None;
         // Cancel preparation/countdown before draining work. CaptureFlow::cancel
         // leaves a capture that already crossed its persistence commit point alone.
         self.selector_scope_generation.store(0, Ordering::Release);
@@ -1016,6 +1102,7 @@ impl Live {
                             | CapturePhase::Recording
                             | CapturePhase::RecordingPausing
                             | CapturePhase::RecordingPaused
+                            | CapturePhase::RecordingMuting { .. }
                     )
                 )
             {
@@ -1064,6 +1151,7 @@ impl Live {
         let _ = self.tx.send(Job::Execute {
             request,
             preview: None,
+            notice: None,
         });
     }
 
@@ -1079,6 +1167,7 @@ impl Live {
         let _ = self.tx.send(Job::Execute {
             request,
             preview: Some(preview),
+            notice: None,
         });
     }
 
@@ -1157,6 +1246,14 @@ impl Live {
     }
 
     pub fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if self
+            .recording_notice
+            .as_ref()
+            .is_some_and(|notice| notice.expired(Instant::now()))
+        {
+            self.recording_notice = None;
+            self.recording_notice_target = None;
+        }
         self.can_hide = frame
             .winit_window()
             .map(|window| window.is_visible().is_some());
@@ -1330,6 +1427,78 @@ impl Live {
                         ),
                     });
                 }
+                SelectorMessage::SetMicrophoneMuted { generation, muted }
+                    if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
+                        && matches!(
+                            self.capture_phase,
+                            Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
+                        ) =>
+                {
+                    let paused = self.capture_phase == Some(CapturePhase::RecordingPaused);
+                    self.capture_phase = Some(CapturePhase::RecordingMuting { paused });
+                    self.status = if muted {
+                        "Muting microphone…".into()
+                    } else {
+                        "Unmuting microphone…".into()
+                    };
+                    self.recording_worker
+                        .send(recording::Command::SetMicrophoneMuted {
+                            generation,
+                            muted,
+                            exclude_captures_app: recording_controls_are_excluded(
+                                self.include_recording_controls,
+                            ),
+                        });
+                }
+                SelectorMessage::RestartRecording { generation }
+                    if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
+                        && matches!(
+                            self.capture_phase,
+                            Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
+                        ) =>
+                {
+                    self.recording_restart_confirmation = true;
+                    request_hidden_root_paint(ctx);
+                }
+                SelectorMessage::CancelRestartRecording { generation }
+                    if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation) =>
+                {
+                    self.recording_restart_confirmation = false;
+                    request_hidden_root_paint(ctx);
+                }
+                SelectorMessage::ConfirmRestartRecording { generation }
+                    if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
+                        && self.recording_restart_confirmation
+                        && matches!(
+                            self.capture_phase,
+                            Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
+                        ) =>
+                {
+                    self.recording_restart_confirmation = false;
+                    let seconds = self
+                        .recording_snapshot
+                        .as_ref()
+                        .map(|snapshot| snapshot.options.countdown_seconds)
+                        .unwrap_or(0);
+                    let Some(flow) = &mut self.flow else {
+                        continue;
+                    };
+                    match flow.restart_countdown(seconds) {
+                        Ok(()) => {
+                            self.recording_controls_hidden = None;
+                            self.recording_hidden_notice_until = None;
+                            self.capture_phase = Some(CapturePhase::RecordingRestarting);
+                            self.status = "Restarting recording…".into();
+                            self.recording_worker
+                                .send(recording::Command::Restart { generation });
+                            request_hidden_root_paint(ctx);
+                        }
+                        Err(error) => {
+                            self.error =
+                                Some(format!("Could not arm restarted recording Escape: {error}"));
+                        }
+                    }
+                }
                 SelectorMessage::StopRecording { generation }
                     if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
                         && matches!(
@@ -1355,6 +1524,21 @@ impl Live {
                     self.status = "Discarding recording…".into();
                     self.recording_worker
                         .send(recording::Command::Discard { generation });
+                }
+                SelectorMessage::HideRecordingControls { generation }
+                    if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
+                        && self.recording_restore_available
+                        && matches!(
+                            self.capture_phase,
+                            Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
+                        ) =>
+                {
+                    self.recording_controls_hidden = Some(generation);
+                    self.recording_hidden_notice_until =
+                        Some(Instant::now() + Duration::from_millis(6_200));
+                    self.recording_restart_confirmation = false;
+                    request_hidden_root_paint(ctx);
+                    ctx.request_repaint_after(Duration::from_millis(6_200));
                 }
                 SelectorMessage::SwitchControlsDisplay {
                     generation,
@@ -1400,8 +1584,13 @@ impl Live {
                 | SelectorMessage::StartRecording { .. }
                 | SelectorMessage::PauseRecording { .. }
                 | SelectorMessage::ResumeRecording { .. }
+                | SelectorMessage::SetMicrophoneMuted { .. }
+                | SelectorMessage::RestartRecording { .. }
+                | SelectorMessage::ConfirmRestartRecording { .. }
+                | SelectorMessage::CancelRestartRecording { .. }
                 | SelectorMessage::StopRecording { .. }
                 | SelectorMessage::DiscardRecording { .. }
+                | SelectorMessage::HideRecordingControls { .. }
                 | SelectorMessage::SwitchControlsDisplay { .. }
                 | SelectorMessage::Cancel { .. } => {}
             }
@@ -1635,6 +1824,83 @@ impl Live {
                         }
                     }
                 }
+                recording::Event::MicrophoneMuted { generation, result }
+                    if accepts_recording_event(
+                        self.flow.as_ref().map(CaptureFlow::generation),
+                        generation,
+                        self.flow.as_ref().is_some_and(CaptureFlow::is_current),
+                        self.capture_phase,
+                        |phase| matches!(phase, CapturePhase::RecordingMuting { .. }),
+                    ) =>
+                {
+                    match result {
+                        Ok(snapshot) => {
+                            self.recording_segment_started =
+                                snapshot_interpolation_origin(snapshot.state, Instant::now());
+                            self.capture_phase =
+                                Some(if snapshot.state == RecordingState::Paused {
+                                    CapturePhase::RecordingPaused
+                                } else {
+                                    CapturePhase::Recording
+                                });
+                            self.status = if snapshot.state == RecordingState::Paused {
+                                "Recording paused".into()
+                            } else {
+                                "Recording in progress".into()
+                            };
+                            self.recording_snapshot = Some(snapshot);
+                        }
+                        Err(failure) => {
+                            self.error = Some(format!(
+                                "Could not change microphone; accepted media was preserved: {}",
+                                failure.error
+                            ));
+                            if failure
+                                .snapshot
+                                .is_some_and(|snapshot| snapshot.state == RecordingState::Failed)
+                            {
+                                self.finish_capture(ctx, false);
+                            } else if self.recording_has_started {
+                                self.capture_phase = Some(CapturePhase::RecordingFinalizing);
+                                self.status =
+                                    "Microphone change failed; preserving recording…".into();
+                                self.recording_worker.send(recording::Command::Finish {
+                                    generation,
+                                    history_root: self.root.clone(),
+                                });
+                            } else {
+                                self.finish_capture(ctx, false);
+                            }
+                        }
+                    }
+                }
+                recording::Event::Restarted { generation, result }
+                    if accepts_recording_event(
+                        self.flow.as_ref().map(CaptureFlow::generation),
+                        generation,
+                        self.flow.as_ref().is_some_and(CaptureFlow::is_current),
+                        self.capture_phase,
+                        |phase| phase == CapturePhase::RecordingRestarting,
+                    ) =>
+                {
+                    match result {
+                        Ok(snapshot) => {
+                            self.recording_has_started = false;
+                            self.recording_snapshot = Some(snapshot);
+                            self.recording_segment_started = None;
+                            self.recording_snapshot_poll_pending = false;
+                            self.capture_phase = Some(CapturePhase::RecordingCountdown);
+                            self.status = "Recording ready. Press Escape to cancel.".into();
+                            request_hidden_root_paint(ctx);
+                        }
+                        Err(error) => {
+                            self.error = Some(format!(
+                                "Could not restart recording; recovery files were preserved: {error}"
+                            ));
+                            self.finish_capture(ctx, false);
+                        }
+                    }
+                }
                 recording::Event::Finished { generation, result }
                     if accepts_recording_event(
                         self.flow.as_ref().map(CaptureFlow::generation),
@@ -1646,6 +1912,15 @@ impl Live {
                 {
                     match result {
                         Ok(finalized) => {
+                            self.recording_notice_generation =
+                                self.recording_notice_generation.wrapping_add(1);
+                            self.recording_notice =
+                                Some(crate::recording_saved_notice::Notice::new(
+                                    finalized.entry.id.clone(),
+                                    self.recording_notice_generation,
+                                    Instant::now(),
+                                ));
+                            self.recording_notice_target = self.countdown_target;
                             self.status = finalized.warning.map_or_else(
                                 || format!("Recording saved to {}", finalized.path.display()),
                                 |warning| {
@@ -1658,6 +1933,7 @@ impl Live {
                             self.history_refresh_status = Some(self.status.clone());
                             self.finish_capture(ctx, false);
                             self.load_history();
+                            request_hidden_root_paint(ctx);
                         }
                         Err(error) => {
                             self.error = Some(error);
@@ -1685,6 +1961,8 @@ impl Live {
                 | recording::Event::Prepared { .. }
                 | recording::Event::Started { .. }
                 | recording::Event::Paused { .. }
+                | recording::Event::MicrophoneMuted { .. }
+                | recording::Event::Restarted { .. }
                 | recording::Event::Finished { .. }
                 | recording::Event::Discarded { .. } => {}
             }
@@ -1702,10 +1980,18 @@ impl Live {
         if let Some(flow) = &self.flow {
             if !flow.is_current() {
                 match self.capture_phase {
+                    Some(CapturePhase::RecordingRestarting) => {
+                        let generation = flow.generation();
+                        self.recording_worker
+                            .send(recording::Command::Discard { generation });
+                        self.capture_phase = Some(CapturePhase::RecordingDiscarding);
+                        self.status = "Discarding cancelled recording restart…".into();
+                    }
                     Some(
                         CapturePhase::Recording
                         | CapturePhase::RecordingPausing
                         | CapturePhase::RecordingPaused
+                        | CapturePhase::RecordingMuting { .. }
                         | CapturePhase::RecordingStarting,
                     ) if self.recording_has_started => {
                         let generation = flow.generation();
@@ -1983,7 +2269,11 @@ impl Live {
                         }
                     }
                 }
-                Reply::Executed { preview, result } => {
+                Reply::Executed {
+                    preview,
+                    notice,
+                    result,
+                } => {
                     self.pending = self.pending.saturating_sub(1);
                     if self.capture_phase == Some(CapturePhase::DisplayCapturing) {
                         self.capture_in_flight = false;
@@ -1992,6 +2282,14 @@ impl Live {
                     }
                     match result {
                         Err(error) => {
+                            if let Some(guard) = notice {
+                                if self.recording_notice.as_mut().is_some_and(|current| {
+                                    current.save_result(&guard, Err(error.clone()), Instant::now())
+                                }) {
+                                    request_hidden_root_paint(ctx);
+                                }
+                                continue;
+                            }
                             if let Some(preview) = preview {
                                 if let Some(card) = self
                                     .previews
@@ -2007,6 +2305,25 @@ impl Live {
                             }
                         }
                         Ok(response) => {
+                            if let Some(guard) = notice {
+                                let path = match response.as_ref() {
+                                    Response::Saved { artifact, path }
+                                        if artifact.entry.id == guard.artifact_id =>
+                                    {
+                                        Some(path.clone())
+                                    }
+                                    _ => None,
+                                };
+                                self.apply(*response, false);
+                                if let Some(path) = path
+                                    && self.recording_notice.as_mut().is_some_and(|current| {
+                                        current.save_result(&guard, Ok(path), Instant::now())
+                                    })
+                                {
+                                    request_hidden_root_paint(ctx);
+                                }
+                                continue;
+                            }
                             let announce = preview.as_ref().is_none_or(|preview| {
                                 self.previews
                                     .accepts(&preview.artifact_id, preview.generation)
@@ -2272,6 +2589,9 @@ impl Live {
         self.recording_segment_started = None;
         self.recording_snapshot_poll_pending = false;
         self.recording_has_started = false;
+        self.recording_restart_confirmation = false;
+        self.recording_controls_hidden = None;
+        self.recording_hidden_notice_until = None;
         self.root_hide_deferred = false;
         if !preserve_auto_copy {
             self.previews.restore_capture();
@@ -2360,6 +2680,9 @@ impl Live {
                 self.accept_artifact(artifact, "Full display captured as PNG");
             }
             Response::Saved { artifact, path } => {
+                if announce && let Some(notice) = &mut self.recording_notice {
+                    notice.mark_saved(&artifact.entry.id, path.clone(), Instant::now());
+                }
                 if let Some(item) = self
                     .artifacts
                     .iter_mut()
@@ -2393,6 +2716,76 @@ impl Live {
         settings: Result<AppSettings, String>,
     ) {
         self.capture_viewports(ctx, tokens);
+        while let Ok(action) = self.notice_rx.try_recv() {
+            use crate::recording_saved_notice::Action;
+            match action {
+                Action::Dismiss(guard)
+                    if self
+                        .recording_notice
+                        .as_ref()
+                        .is_some_and(|n| n.guard == guard) =>
+                {
+                    self.recording_notice = None;
+                    self.recording_notice_target = None;
+                }
+                Action::Reveal(guard, path)
+                    if self
+                        .recording_notice
+                        .as_ref()
+                        .is_some_and(|n| n.guard == guard) =>
+                {
+                    if let Err(error) = reveal(&path) {
+                        if let Some(notice) = &mut self.recording_notice {
+                            notice.fail(
+                                format!("Could not show the recording in its folder: {error}"),
+                                Instant::now(),
+                            );
+                        }
+                    } else {
+                        self.recording_notice = None;
+                        self.recording_notice_target = None;
+                    }
+                }
+                Action::Save(guard)
+                    if self
+                        .recording_notice
+                        .as_ref()
+                        .is_some_and(|n| n.guard == guard) =>
+                {
+                    let directory = settings
+                        .as_ref()
+                        .map(|s| PathBuf::from(&s.output_directory));
+                    match directory {
+                        Ok(directory) => {
+                            let accepted =
+                                self.recording_notice.as_mut().and_then(|n| n.begin_save());
+                            if let Some(guard) = accepted {
+                                self.pending += 1;
+                                let _ = self.tx.send(Job::Execute {
+                                    request: Request::SaveRecording {
+                                        root: self.root.clone(),
+                                        id: guard.artifact_id.clone(),
+                                        directory,
+                                    },
+                                    preview: None,
+                                    notice: Some(guard),
+                                });
+                            }
+                        }
+                        Err(error) => {
+                            if let Some(notice) = &mut self.recording_notice {
+                                notice.fail(
+                                    format!("Could not save the recording: {error}"),
+                                    Instant::now(),
+                                );
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.recording_notice_viewport(ctx, tokens);
         if self.flow.is_none()
             && let Ok(settings) = &settings
         {
@@ -2676,23 +3069,129 @@ impl Live {
         );
     }
 
+    fn recording_notice_viewport(&self, ctx: &egui::Context, tokens: &Tokens) {
+        let (Some(notice), Some(target)) = (&self.recording_notice, self.recording_notice_target)
+        else {
+            return;
+        };
+        let Some(bounds) = target.preview_bounds else {
+            return;
+        };
+        let scale = bounds.scale_factor.max(1.0) as f32;
+        let work_right = (bounds.work_x + bounds.work_width as i32) as f32 / scale;
+        let work_top = bounds.work_y as f32 / scale;
+        let position = egui::pos2(
+            work_right - crate::recording_saved_notice::SIZE.x - 16.,
+            work_top + 16.,
+        );
+        let sender = self.notice_tx.clone();
+        let notice = notice.clone();
+        let tokens = tokens.clone();
+        let builder = egui::ViewportBuilder::default()
+            .with_title(notice.title())
+            .with_position(position)
+            .with_inner_size(crate::recording_saved_notice::SIZE)
+            .with_min_inner_size(crate::recording_saved_notice::SIZE)
+            .with_max_inner_size(crate::recording_saved_notice::SIZE)
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_transparent(true)
+            .with_has_shadow(false)
+            .with_always_on_top()
+            .with_taskbar(false)
+            .with_active(false);
+        #[cfg(target_os = "linux")]
+        let builder = builder
+            .with_window_type(egui::X11WindowType::Notification)
+            .with_override_redirect(true);
+        let viewport =
+            egui::ViewportId::from_hash_of(("recording-saved-notice", notice.guard.generation));
+        ctx.show_viewport_deferred(viewport, builder, move |ui, _| {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::ContentProtected(true));
+            if notice.expired(Instant::now())
+                || ui.input(|input| input.viewport().close_requested())
+            {
+                let _ = sender.send(crate::recording_saved_notice::Action::Dismiss(
+                    notice.guard.clone(),
+                ));
+                request_hidden_root_paint(ui.ctx());
+                ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+            } else if let Some(action) = crate::recording_saved_notice::show(ui, &tokens, &notice) {
+                let _ = sender.send(action);
+                request_hidden_root_paint(ui.ctx());
+                ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+            }
+            if let Some(remaining) = notice.remaining(Instant::now()) {
+                ui.ctx().request_repaint_after(remaining);
+            }
+        });
+        // Worker replies update this deferred callback on the root. Paint the
+        // child too: it must not require pointer motion to leave "Saving…".
+        // This does not schedule another root frame or an idle repaint loop.
+        ctx.request_repaint_of(viewport);
+    }
+
     fn capture_viewports(&mut self, ctx: &egui::Context, t: &Tokens) {
+        // The guide belongs to the recording, not the HUD. Keep it during
+        // countdown, pause, restart and Hide; dropping the snapshot closes it.
+        if let (Some(snapshot), Some(target)) = (&self.recording_snapshot, self.countdown_target)
+            && let RecordingTarget::Region { rect, .. } = snapshot.options.target
+            && self.flow.as_ref().is_some_and(CaptureFlow::is_current)
+        {
+            let tokens = t.clone();
+            ctx.show_viewport_deferred(
+                egui::ViewportId::from_hash_of("recording-region-indicator"),
+                egui::ViewportBuilder::default()
+                    .with_title("Captures Recording Region")
+                    .with_position(target.position)
+                    .with_inner_size(target.size)
+                    .with_transparent(true)
+                    .with_decorations(false)
+                    .with_always_on_top()
+                    .with_taskbar(false)
+                    .with_active(false)
+                    .with_mouse_passthrough(true),
+                move |ui, _| {
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::ContentProtected(true));
+                    crate::recording_region::show(ui, &tokens, rect);
+                },
+            );
+        }
         if matches!(
             self.capture_phase,
-            Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
+            Some(
+                CapturePhase::Recording
+                    | CapturePhase::RecordingPaused
+                    | CapturePhase::RecordingMuting { .. }
+            )
         ) && let (Some(flow), Some(snapshot), Some(target)) = (
             &self.flow,
             self.recording_snapshot.clone(),
             self.countdown_target,
         ) {
             let generation = flow.generation();
-            let paused = self.capture_phase == Some(CapturePhase::RecordingPaused);
+            let paused = match self.capture_phase {
+                Some(CapturePhase::RecordingPaused) => true,
+                Some(CapturePhase::RecordingMuting { paused }) => paused,
+                _ => false,
+            };
+            let restart_confirmation = self.recording_restart_confirmation;
+            let controls_hidden = self.recording_controls_hidden == Some(generation);
+            let hide_available = self.recording_restore_available;
+            let busy = restart_confirmation
+                || matches!(
+                    self.capture_phase,
+                    Some(CapturePhase::RecordingMuting { .. })
+                );
             let elapsed_ms = interpolated_recording_elapsed(
                 snapshot.elapsed_ms,
                 self.recording_segment_started
                     .map(|started| started.elapsed()),
             );
             let sender = self.selector_tx.clone();
+            let confirmation_sender = self.selector_tx.clone();
             let tokens = t.clone();
             let include_controls = self.include_recording_controls;
             let warning = snapshot.warning.clone();
@@ -2711,7 +3210,9 @@ impl Live {
                     .with_decorations(false)
                     .with_always_on_top(),
                 move |ui, _| {
-                    if ui.input(|input| input.viewport().close_requested()) {
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::Visible(!controls_hidden));
+                    if !controls_hidden && ui.input(|input| input.viewport().close_requested()) {
                         let _ = sender.send(SelectorMessage::StopRecording { generation });
                         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
                         return;
@@ -2734,9 +3235,13 @@ impl Live {
                         &tokens,
                         recording_hud::View {
                             paused,
+                            busy,
+                            has_microphone: snapshot.options.audio.microphone_device_id.is_some(),
+                            microphone_muted: snapshot.options.audio.microphone_muted,
                             elapsed_ms,
                             notice,
                             warning: warning.is_some(),
+                            hide_available,
                         },
                     ) {
                         let message = match action {
@@ -2746,11 +3251,20 @@ impl Live {
                             recording_hud::Action::Resume => {
                                 SelectorMessage::ResumeRecording { generation }
                             }
+                            recording_hud::Action::Restart => {
+                                SelectorMessage::RestartRecording { generation }
+                            }
+                            recording_hud::Action::SetMicrophoneMuted(muted) => {
+                                SelectorMessage::SetMicrophoneMuted { generation, muted }
+                            }
                             recording_hud::Action::Stop => {
                                 SelectorMessage::StopRecording { generation }
                             }
                             recording_hud::Action::Discard => {
                                 SelectorMessage::DiscardRecording { generation }
+                            }
+                            recording_hud::Action::Hide => {
+                                SelectorMessage::HideRecordingControls { generation }
                             }
                         };
                         let _ = sender.send(message);
@@ -2761,6 +3275,86 @@ impl Live {
                     }
                 },
             );
+            if controls_hidden
+                && self
+                    .recording_hidden_notice_until
+                    .is_some_and(|deadline| deadline > Instant::now())
+            {
+                let notice_tokens = t.clone();
+                ctx.show_viewport_deferred(
+                    egui::ViewportId::from_hash_of("recording-controls-hidden"),
+                    egui::ViewportBuilder::default()
+                        .with_title("Recording controls hidden")
+                        .with_inner_size([360., 96.])
+                        .with_position(position + egui::vec2(35., 3.))
+                        .with_transparent(true)
+                        .with_decorations(false)
+                        .with_always_on_top()
+                        .with_mouse_passthrough(true),
+                    move |ui, _| {
+                        notice_tokens.glass_controls(ui);
+                        egui::Frame::new()
+                            .fill(notice_tokens.color("glass-strong"))
+                            .stroke(egui::Stroke::new(
+                                1.,
+                                notice_tokens.color("glass-border"),
+                            ))
+                            .corner_radius(notice_tokens.number("r-xl") as u8)
+                            .inner_margin(egui::Margin::symmetric(20, 14))
+                            .show(ui, |ui| {
+                                ui.set_width(320.);
+                                ui.vertical_centered(|ui| {
+                                    ui.strong("Recording controls hidden");
+                                    ui.label(
+                                        "Open Captures from the tray, reactivate the app, or press New Capture to bring them back.",
+                                    );
+                                });
+                            });
+                    },
+                );
+            }
+            if restart_confirmation {
+                let tokens = t.clone();
+                ctx.show_viewport_deferred(
+                    egui::ViewportId::from_hash_of("recording-restart-confirmation"),
+                    egui::ViewportBuilder::default()
+                        .with_title("Restart recording?")
+                        .with_inner_size([360., 150.])
+                        .with_position(position + egui::vec2(35., -170.))
+                        .with_always_on_top()
+                        .with_resizable(false),
+                    move |ui, _| {
+                        tokens.glass_controls(ui);
+                        if ui.input(|input| input.viewport().close_requested()) {
+                            let _ = confirmation_sender
+                                .send(SelectorMessage::CancelRestartRecording { generation });
+                            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                            return;
+                        }
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(14.);
+                            ui.heading("Restart recording?");
+                            ui.label(
+                                "The current recording will be deleted and a new countdown will begin.",
+                            );
+                            ui.add_space(10.);
+                            ui.horizontal(|ui| {
+                                if ui.button("Cancel").clicked() {
+                                    let _ = confirmation_sender.send(
+                                        SelectorMessage::CancelRestartRecording { generation },
+                                    );
+                                }
+                                if ui.button("Restart").clicked() {
+                                    let _ = confirmation_sender.send(
+                                        SelectorMessage::ConfirmRestartRecording { generation },
+                                    );
+                                }
+                            });
+                        });
+                        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                    },
+                );
+            }
         }
         if self.capture_phase == Some(CapturePhase::ControlsSelecting) {
             let t = t.clone();
@@ -3323,6 +3917,13 @@ impl Live {
     }
 }
 
+fn recording_controls_hidden(
+    hidden_generation: Option<u64>,
+    active_generation: Option<u64>,
+) -> bool {
+    hidden_generation.is_some() && hidden_generation == active_generation
+}
+
 fn capture_target(
     frame: &eframe::Frame,
     displays: &[DisplayDescriptor],
@@ -3586,6 +4187,8 @@ fn is_recording_phase(phase: Option<CapturePhase>) -> bool {
                 | CapturePhase::Recording
                 | CapturePhase::RecordingPausing
                 | CapturePhase::RecordingPaused
+                | CapturePhase::RecordingMuting { .. }
+                | CapturePhase::RecordingRestarting
                 | CapturePhase::RecordingFinalizing
                 | CapturePhase::RecordingDiscarding
         )
@@ -3662,6 +4265,12 @@ fn copy_image(path: &Path, clipboard: &mut Option<arboard::Clipboard>) -> Result
 }
 
 fn reveal(path: &Path) -> std::io::Result<()> {
+    if !path.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("saved file no longer exists: {}", path.display()),
+        ));
+    }
     #[cfg(target_os = "windows")]
     let result = Command::new("explorer")
         .arg(format!("/select,{}", path.display()))
@@ -4545,5 +5154,13 @@ mod tests {
             2.,
             1.5,
         ));
+    }
+
+    #[test]
+    fn stale_hidden_generation_cannot_resurrect_ended_or_replaced_controls() {
+        assert!(recording_controls_hidden(Some(41), Some(41)));
+        assert!(!recording_controls_hidden(Some(41), Some(42)));
+        assert!(!recording_controls_hidden(Some(41), None));
+        assert!(!recording_controls_hidden(None, Some(41)));
     }
 }

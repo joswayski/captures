@@ -70,6 +70,11 @@ final class NativeCaptureShortcuts {
         _ = try? Self.request(["operation": "enabled", "enabled": enabled])
     }
 
+    func setRestoreOnly(_ restoreOnly: Bool) {
+        guard !closed else { return }
+        _ = try? Self.request(["operation": "restore_only", "restore_only": restoreOnly])
+    }
+
     func setSuspended(_ suspended: Bool) throws {
         guard !closed else { return }
         _ = try Self.request(["operation": "suspended", "suspended": suspended])

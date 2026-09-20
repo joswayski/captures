@@ -43,14 +43,46 @@ It is excluded from captures by default and retained when the include-in-capture
 preference is enabled.
 Record creates H.264 MP4 recordings with the stored FPS, maximum resolution,
 countdown, cursor, click-highlight, desktop-audio and microphone defaults where
-the current platform reports support. Pause/resume, Stop and Discard run from a
-fixed-glass native HUD; successful output is listed in native History with its
+the current platform reports support. Pause/resume, confirmed Restart using the
+stored countdown, Stop and Discard run from a
+fixed-glass native HUD. Hide removes that HUD while preserving the current take and shows
+a temporary noninteractive fixed-glass notice. The tray, app reactivation, or configured
+New Capture shortcut restores it; Hide is disabled if no tray restore path exists, and Linux
+tray-host loss restores the HUD and workspace. Microphone mute/unmute rotates the active segment without
+changing the selected device or global preference, while paused changes remain
+paused; mic-less sessions explain why the control is unavailable. Successful output is listed in native History with its
 poster and metadata. The native recording editor is not connected yet.
+After finalization, a fixed-glass Recording ready notice offers Save file using
+the current output folder, followed by Show in Folder for the saved copy. It does
+not activate the root; hidden-root actions and expiry work through one-shot
+wakeups. The 15.2-second expiry pauses during a save and resets after its result;
+errors allow retry. Dismiss/expiry never delete media, and a new capture clears
+the notice. This is a finalization trigger until the native editor is connected.
+A passive region guide remains visible through countdown, pause, restart and
+hidden controls. Its veil and accent border are painted strictly outside the
+recorded rectangle, with outward pixel rounding at fractional scale. It accepts
+no input and closes with the recording; display/window recordings have no guide.
+The private-X11 recording smoke checks input passthrough, clean inner-edge pixels,
+decoded output, Hide/restore preservation and end/cancellation cleanup. Windows
+and physical macOS/compositor/mixed-DPI acceptance remain open; Wayland stays gated.
 Windows/X11 use the shipping
 synthetic cursor arrow, not the actual system cursor image. Other capture defaults remain unconnected;
 other scenes remain fixtures. The selector fixture handles window-focused Escape
 only, while live capture uses the shared process-wide Escape cancellation handler.
-Login, feedback and updating remain visibly unavailable.
+Preferences → About → Send feedback uses the shared Rust client on a separate
+worker. Only explicit Send in `--live` can contact captur.es; fixture mode keeps
+submission disabled. The form previews the included app/system context, retains
+drafts on errors and navigation, and prevents duplicate sends while pending.
+Captures, files, and diagnostics are never attached. Login and updating remain
+visibly unavailable.
+
+Feedback input/retry verification uses a rejecting loopback proxy, never the
+production service: `python apps/native/x11_feedback_smoke.py --binary
+apps/native/wgpu/target/release/captures-wgpu-workbench --output feedback-smoke`.
+It runs on private X11/software GL and checks empty/pending submission gates,
+retained text through navigation and failure, offline retry, and clean exit in
+both appearances. Shared client tests cover HTTP success, cooldown and payload
+privacy against disposable loopback servers. Physical input/AT acceptance remains open.
 
 The candidate tests whether shared custom components are viable. It is not a
 retained widget renderer: egui rebuilds the visible UI on an event-driven repaint,
@@ -124,7 +156,7 @@ quits so the process cannot be stranded. Opening the output folder also requires
 | --- | --- | --- |
 | Preferences | Persisted appearance/presets/custom colors, capture/media defaults, folder picker, Find, save errors/retry | OS integrations, full font/visual/input parity |
 | History | Empty/100/1,000 rows, filters, virtualized scrolling, selection, image-backed rows | Real files, open/delete, thumbnail cache pressure: rows intentionally share one synthetic texture |
-| HUD | Running/paused fixture matching the bounded live controls; fixed glass palette even in light mode | Restart, screenshot-during-recording, microphone mute and Hide controls |
+| HUD | Running/paused/muted/busy/no-microphone fixture matching the bounded live controls; fixed glass palette even in light mode; live Hide/temporary notice/restore | Screenshot during recording |
 | Preview | Cold/reused texture, fade/settle, reset mid-animation, explicit Reduce motion, optional transparent native window | **Not the shipping dust effect**: no isolated-chip blur, dust trajectories, source treatment or pile/drag/hit-region parity |
 | Editor | 2048×1152 synthetic image, clipped canvas, pan/zoom/rotate, separate outline/text layers, editable text field | Real document, layer editing/undo/export; outlines/text do not rotate with the image |
 | Capture Controls | Unified Screenshot/Record and Region/Window/Full screen controls over one prepared session; recording options, frozen/live previews, aspect/display pickers, keyboard confirm/cancel and draggable toolbar | Fixture uses synthetic pixels; recording editor/export remains unconnected |
@@ -170,6 +202,9 @@ cargo +1.95.0 clippy --manifest-path apps/native/wgpu/Cargo.toml --locked --all-
 python -m unittest discover -s apps/native -p 'test_*.py'
 python apps/native/wgpu/smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-smoke
 python apps/native/profile.py --renderer wgpu --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-resources
+/usr/bin/python3 apps/native/x11_recording_smoke.py --hide-controls-only \
+  --binary apps/native/wgpu/target/release/captures-wgpu-workbench \
+  --output /tmp/native-x11-hide-controls
 sudo apt-get install xfce4-panel xdg-utils
 /usr/bin/python3 apps/native/x11_preview_smoke.py --lifecycle \
   --binary apps/native/wgpu/target/release/captures-wgpu-workbench \

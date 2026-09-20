@@ -1,11 +1,14 @@
 mod capture_controls;
 mod countdown;
+mod feedback;
 mod live;
 mod mini_preview;
 mod options;
 mod preferences;
 mod recording;
 mod recording_hud;
+mod recording_region;
+mod recording_saved_notice;
 mod selector;
 mod shortcut_input;
 mod tokens;

@@ -147,9 +147,31 @@ and `python3-xlib`, then run:
   --output /tmp/native-x11-recording
 ```
 
+Pass `--hide-controls-only` for focused running/paused Hide checks through a real
+Xfce SNI tray, configured New Capture shortcut restoration, tray-host-loss recovery,
+finalized media decode and recovery cleanup.
+
+Pass `--ready-notice-only --appearance dark` (and repeat with `light`) to exercise
+real recording finalization followed by notice save failure/retry, byte-identical
+export, missing-file reveal, expiry with a hidden root, dismissal and cleanup
+before another capture. The test intercepts only the `xdg-open` launcher to check
+its path without opening a file manager. It never uses installed capture data.
+
+Add `--virtual-microphone` when PulseAudio, `pactl`, `paplay`, and the ALSA Pulse
+plugin are installed. The test feeds a 730 Hz tone into a disposable null-sink
+monitor, drives running mute/unmute through the real HUD, checks durable segment
+boundaries and finalized microphone metadata, then decodes AAC to assert audible,
+silent, and audible intervals. It waits for actual PCM delivery after Unmute,
+not just stream startup. This verifies synthetic audio routing, not physical
+microphone fidelity or gapless device/encoder transitions.
+
+Pass `--restart-only` for the focused running/paused Restart, restarted-countdown
+Escape, replacement-pixel decode and source-cleanup checkpoint.
+
 The output directory must not exist. The test drives real selector/HUD input,
-checks pause/resume, decodes saved MP4 pixels with FFmpeg, verifies History and
-source cleanup, and distinguishes countdown cancellation, running Escape,
+checks pause/resume plus running/paused restart, decodes replacement-only MP4
+pixels with FFmpeg, verifies History and source cleanup, and distinguishes initial
+and restarted countdown cancellation, running Escape,
 explicit discard, session-loss preservation, HUD close and whole-application quit.
 Session lock is simulated;
 physical keyboard/display/audio, permissions and hardware compositor acceptance

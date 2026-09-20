@@ -75,6 +75,9 @@ def main():
         "history-populated": ["--scene", "history", "--history-count", "1000"],
         "hud-running": ["--scene", "hud", "--appearance", "light"],
         "hud-paused": ["--scene", "hud", "--exercise", "--screenshot-after", "3"],
+        "hud-muted": ["--scene", "hud", "--hud-state", "muted"],
+        "hud-busy": ["--scene", "hud", "--hud-state", "busy"],
+        "hud-no-microphone": ["--scene", "hud", "--hud-state", "no-microphone"],
         "preview-before": ["--scene", "preview"],
         "preview-after": ["--scene", "preview", "--exercise", "--screenshot-after", "3"],
         "preview-reduced": ["--scene", "preview", "--exercise", "--reduced-motion", "--screenshot-after", "3"],
@@ -138,7 +141,7 @@ def main():
             targets = [e["windowSelection"] for e in actions]
             if targets != ["project", "export", "display", "display", "terminal", None]:
                 raise RuntimeError(f"Window fixture did not exercise frontmost/window/display/cancel: {targets}")
-    print("PASS: static redraw guard, 29 viewport captures, 42 scripted actions; "
+    print("PASS: static redraw guard, 32 viewport captures, 42 scripted actions; "
           + ("hidden visibility verified" if hidden_supported else "hidden idle UNSUPPORTED, not accepted"))
 
 
