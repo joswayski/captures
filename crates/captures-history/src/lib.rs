@@ -1,5 +1,7 @@
 //! Host-independent capture history persistence and basic PNG encoding.
 
+pub mod editor_draft;
+
 use std::{
     fs,
     path::{Path, PathBuf},
