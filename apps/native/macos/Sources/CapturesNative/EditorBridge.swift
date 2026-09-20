@@ -1,0 +1,204 @@
+import Foundation
+import CoreGraphics
+import CCapturesSettings
+
+struct NativeEditorSnapshot: Equatable {
+    let artifactID: String
+    let width: Double
+    let height: Double
+    let canUndo: Bool
+    let canRedo: Bool
+    let unsavedChanges: Bool
+    let hasDraft: Bool
+
+    init?(_ value: [String: Any]) {
+        guard let artifactID = value["artifact_id"] as? String,
+              let document = value["document"] as? [String: Any],
+              let width = document["width"] as? NSNumber,
+              let height = document["height"] as? NSNumber,
+              let canUndo = value["can_undo"] as? Bool,
+              let canRedo = value["can_redo"] as? Bool,
+              let unsavedChanges = value["unsaved_changes"] as? Bool,
+              let hasDraft = value["has_draft"] as? Bool,
+              width.doubleValue > 0, height.doubleValue > 0 else { return nil }
+        self.artifactID = artifactID
+        self.width = width.doubleValue; self.height = height.doubleValue
+        self.canUndo = canUndo; self.canRedo = canRedo
+        self.unsavedChanges = unsavedChanges; self.hasDraft = hasDraft
+    }
+}
+
+struct EditorPresentation {
+    let snapshot: NativeEditorSnapshot
+    let image: CGImage
+}
+
+/// Independently retained immutable Rust pixels. The CGImage provider retains
+/// this frame, so draws may safely finish after a later edit or session close.
+final class NativeEditorFrame {
+    private let handle: OpaquePointer
+
+    init(handle: OpaquePointer) { self.handle = handle }
+    deinit { captures_editor_frame_free_v1(handle) }
+
+    func image() throws -> CGImage {
+        var pixels = CapturesRegionPixels()
+        guard captures_editor_frame_pixels_v1(handle, &pixels),
+              let data = pixels.data, pixels.width > 0, pixels.height > 0 else {
+            throw AppBridgeError.invalidResponse
+        }
+        let retained = Unmanaged.passRetained(self)
+        guard let provider = CGDataProvider(dataInfo: retained.toOpaque(), data: data,
+            size: pixels.length, releaseData: { info, _, _ in
+                if let info { Unmanaged<NativeEditorFrame>.fromOpaque(info).release() }
+            }) else {
+            retained.release(); throw AppBridgeError.invalidResponse
+        }
+        guard let image = CGImage(width: Int(pixels.width), height: Int(pixels.height),
+            bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: pixels.bytes_per_row,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+        else { throw AppBridgeError.invalidResponse }
+        return image
+    }
+}
+
+private final class NativeEditorSession {
+    private let handle: OpaquePointer
+
+    private init(handle: OpaquePointer) { self.handle = handle }
+    deinit { captures_editor_free_v1(handle) }
+
+    static func open(historyRoot: String, draftsRoot: String,
+                     artifactID: String) throws -> (NativeEditorSession, NativeEditorSnapshot) {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "history_root": historyRoot, "drafts_root": draftsRoot,
+            "artifact_id": artifactID,
+        ], options: [.sortedKeys])
+        var response: UnsafeMutablePointer<CChar>?
+        let handle = String(decoding: data, as: UTF8.self).withCString {
+            captures_editor_open_v1($0, &response)
+        }
+        defer { captures_settings_free_v1(response) }
+        do {
+            guard let response else { throw AppBridgeError.invalidResponse }
+            let result = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+            guard let handle, let snapshot = NativeEditorSnapshot(result) else {
+                throw AppBridgeError.invalidResponse
+            }
+            return (NativeEditorSession(handle: handle), snapshot)
+        } catch {
+            captures_editor_free_v1(handle)
+            throw error
+        }
+    }
+
+    func request(_ object: [String: Any]) throws -> NativeEditorSnapshot {
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        let response = String(decoding: data, as: UTF8.self).withCString {
+            captures_editor_request_v1(handle, $0)
+        }
+        guard let response else { throw AppBridgeError.invalidResponse }
+        defer { captures_settings_free_v1(response) }
+        let result = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+        guard let snapshot = NativeEditorSnapshot(result) else { throw AppBridgeError.invalidResponse }
+        return snapshot
+    }
+
+    func presentation(_ snapshot: NativeEditorSnapshot) throws -> EditorPresentation {
+        guard let handle = captures_editor_frame_v1(handle) else {
+            throw AppBridgeError.invalidResponse
+        }
+        let frame = NativeEditorFrame(handle: handle)
+        return EditorPresentation(snapshot: snapshot, image: try frame.image())
+    }
+}
+
+protocol EditorWorking: AnyObject {
+    func open(historyRoot: String, draftsRoot: String, artifactID: String,
+              completion: @escaping (Result<EditorPresentation, Error>) -> Void)
+    func request(_ object: [String: Any],
+                 completion: @escaping (Result<EditorPresentation, Error>) -> Void)
+    func close()
+    func prepareForTermination() -> Result<Void, Error>
+}
+
+/// The opaque mutable session never leaves this queue. Frame ownership is split
+/// before delivery to AppKit and remains valid independently of the session.
+final class EditorWorker: EditorWorking {
+    private static let queue = DispatchQueue(label: "es.captures.native.editor",
+                                             qos: .userInitiated)
+    private final class Storage {
+        var session: NativeEditorSession?
+        var snapshot: NativeEditorSnapshot?
+    }
+    private let storage = Storage()
+
+    deinit {
+        let storage = storage
+        Self.queue.async { storage.snapshot = nil; storage.session = nil }
+    }
+
+    func open(historyRoot: String, draftsRoot: String, artifactID: String,
+              completion: @escaping (Result<EditorPresentation, Error>) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            let result = Result { () throws -> EditorPresentation in
+                storage.session = nil; storage.snapshot = nil
+                let (session, snapshot) = try NativeEditorSession.open(
+                    historyRoot: historyRoot, draftsRoot: draftsRoot, artifactID: artifactID)
+                storage.session = session; storage.snapshot = snapshot
+                return try session.presentation(snapshot)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func request(_ object: [String: Any],
+                 completion: @escaping (Result<EditorPresentation, Error>) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            let result = Result { () throws -> EditorPresentation in
+                guard let session = storage.session else {
+                    throw AppBridgeError.backend("The screenshot editor is closed.")
+                }
+                let snapshot = try session.request(object)
+                storage.snapshot = snapshot
+                return try session.presentation(snapshot)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func close() {
+        let storage = storage
+        Self.queue.async {
+            storage.snapshot = nil
+            storage.session = nil
+        }
+    }
+
+    /// Called on AppKit's termination path. It waits behind every accepted edit,
+    /// saves the newest state, and frees only after that save succeeds.
+    func prepareForTermination() -> Result<Void, Error> {
+        let storage = storage
+        Self.queue.sync {
+            Result {
+                guard let session = storage.session else { return }
+                if storage.snapshot?.unsavedChanges == true {
+                    storage.snapshot = try session.request([
+                        "operation": "save_draft",
+                        "updated_at_ms": Self.timestamp(),
+                    ])
+                }
+                storage.snapshot = nil; storage.session = nil
+            }
+        }
+    }
+
+    static func flush() { queue.sync {} }
+    static func timestamp(_ date: Date = Date()) -> UInt64 {
+        UInt64(max(0, date.timeIntervalSince1970 * 1_000))
+    }
+}

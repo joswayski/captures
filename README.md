@@ -243,8 +243,11 @@ hosts offer counted All, Screenshots, Video and GIF history filters; filtering
 does not delete captures or exports. After finalization, a temporary **Recording ready**
 notice offers Save file, then Show in Folder after saving a permanent copy. Dismissing
 or letting it expire preserves History and exports; failed saves can be retried.
-The native editor is not connected, so this notice appears immediately rather than
-after closing an editor. Real macOS and
+The AppKit History view enables **Edit screenshot** for screenshots only. Its first
+native editor slice restores and saves isolated drafts, previews shared-Rust crop
+and canvas-resize operations, and supports Undo, Redo and confirmed draft discard;
+the original History image and its exports remain unchanged. Recording completion
+still presents its notice immediately because recording editing is unsupported. Real macOS and
 Windows recording, audio devices, multi-display and hardware acceptance remain open;
 Wayland recording is gated with the rest of native capture.
 Native Preferences also includes an optional feedback form. Sending shares only
@@ -256,8 +259,9 @@ orientation geometry, canvas sizing and bounded snapshot history, checked agains
 the shipping TypeScript behavior. A shared renderer now flattens real image layers,
 including crop geometry, lossless orientation, opacity and blending, without host
 I/O. Worker-owned editor sessions add draft restore/save/discard, transactional
-crop/resize/undo, and retained pixel frames for native hosts. Text, drawing tools
-and native editor presentation remain unconnected. These prerequisites do not
+crop/resize/undo, and retained pixel frames for native hosts. AppKit connects those
+operations to its first screenshot-editor window; the wgpu host, text, drawing tools
+and edited-output export remain unconnected. This first host slice does not
 complete screenshot-editor acceptance.
 Editing, OS shortcut takeover, login items,
 single-instance relaunch and updates are not connected to the native hosts yet. Windows/Linux

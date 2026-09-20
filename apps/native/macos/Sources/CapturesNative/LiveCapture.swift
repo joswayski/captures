@@ -151,6 +151,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         }
         return controller
     }()
+    private var screenshotEditor: ScreenshotEditorController?
     private(set) var recordingControlsHidden = false
     private var recordingPollTimer: Timer?
     private var recordingPollPending = false
@@ -185,6 +186,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private var windowButton: CaptureButton!
     private var saveButton: CaptureButton!
     private var copyButton: CaptureButton!
+    private var editButton: CaptureButton!
     private var revealButton: CaptureButton!
     private var deleteButton: CaptureButton!
     private var clearHistoryButton: CaptureButton!
@@ -256,13 +258,14 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         preview = NSImageView(frame: previewPanel.bounds.insetBy(dx: 16, dy: 16)); preview.imageScaling = .scaleProportionallyUpOrDown
         preview.setAccessibilityLabel("Selected capture preview"); previewPanel.addSubview(preview)
         detail = title("Select a capture to preview it.", frame: NSRect(x: 372, y: 560, width: 600, height: 24), muted: true)
-        saveButton = button("Save image", frame: NSRect(x: 372, y: 594, width: 118, height: 34)) { [weak self] in self?.save() }
-        copyButton = button("Copy image", frame: NSRect(x: 500, y: 594, width: 118, height: 34)) { [weak self] in self?.copyImage() }
-        revealButton = button("Show in Folder", frame: NSRect(x: 628, y: 594, width: 120, height: 34)) { [weak self] in self?.reveal() }
-        deleteButton = button("Delete from history", frame: NSRect(x: 758, y: 594, width: 166, height: 34)) { [weak self] in self?.confirmDelete() }
+        editButton = button("Edit screenshot", frame: NSRect(x: 372, y: 594, width: 104, height: 34)) { [weak self] in self?.editScreenshot() }
+        saveButton = button("Save image", frame: NSRect(x: 484, y: 594, width: 104, height: 34)) { [weak self] in self?.save() }
+        copyButton = button("Copy image", frame: NSRect(x: 596, y: 594, width: 104, height: 34)) { [weak self] in self?.copyImage() }
+        revealButton = button("Show in Folder", frame: NSRect(x: 708, y: 594, width: 120, height: 34)) { [weak self] in self?.reveal() }
+        deleteButton = button("Delete from history", frame: NSRect(x: 836, y: 594, width: 136, height: 34)) { [weak self] in self?.confirmDelete() }
         clearHistoryButton = button("Clear history…", frame: NSRect(x: 28, y: 594, width: 180, height: 34)) { [weak self] in self?.confirmClearHistory() }
         status = title("Loading capture history…", frame: NSRect(x: 28, y: 642, width: 944, height: 24), muted: true)
-        let limits = title("Screenshots and H.264 MP4 recordings are kept in native History. Recording playback and editing remain unavailable in this native slice.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
+        let limits = title("Screenshots support native crop, canvas resize and recoverable editor drafts. Recording playback and editing remain unavailable.", frame: NSRect(x: 28, y: 674, width: 944, height: 38), muted: true)
         limits.maximumNumberOfLines = 2; updateActions()
     }
 
@@ -1490,6 +1493,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         saveButton?.needsDisplay = true
         saveButton?.isEnabled = selected && !busy
         copyButton?.isEnabled = selectedScreenshot && selectedImage != nil && !busy
+        editButton?.isEnabled = selectedScreenshot && selectedImage != nil && !busy
         deleteButton?.isEnabled = selected && !busy
         revealButton?.isEnabled = selected && selectedIndex.flatMap { artifacts[$0].savedPath } != nil
         clearHistoryButton?.isEnabled = !artifacts.isEmpty && !busy
@@ -1537,7 +1541,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
                 self.selectedImage = image; self.preview.image = image
                 self.detail.stringValue = artifact.isRecording
                     ? "\(artifact.width) × \(artifact.height) · \(artifact.kind == "gif" ? "GIF" : "H.264 MP4") · Editor unavailable"
-                    : "\(artifact.width) × \(artifact.height) · PNG"
+                    : "\(artifact.width) × \(artifact.height) · PNG · Editor available"
             case .failure(let error):
                 self.showError(artifact.isRecording
                     ? "Couldn’t decode recording poster" : "Couldn’t decode screenshot", error)
@@ -1557,6 +1561,16 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private func save() {
         guard let index = selectedIndex, artifacts.indices.contains(index) else { return }; let artifact = artifacts[index]
         save(artifact)
+    }
+    private func editScreenshot() {
+        guard let index = selectedIndex, artifacts.indices.contains(index),
+              !artifacts[index].isRecording, !historyRoot.isEmpty else { return }
+        if screenshotEditor == nil {
+            screenshotEditor = ScreenshotEditorController(tokens: tokens) {
+                [weak self] message in self?.reportError(message)
+            }
+        }
+        screenshotEditor?.present(artifact: artifacts[index], historyRoot: historyRoot)
     }
     private func save(_ artifact: CaptureArtifact,
                       completion: ((Result<String, Error>) -> Void)? = nil) {
@@ -1662,5 +1676,9 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     // One process-wide queue also drains operations from a closed workspace view.
-    static func flush() { queue.sync {} }
+    func prepareEditorForTermination() -> Bool {
+        screenshotEditor?.prepareForTermination() ?? true
+    }
+
+    static func flush() { queue.sync {}; EditorWorker.flush() }
 }

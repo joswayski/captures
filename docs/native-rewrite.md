@@ -377,8 +377,20 @@ reopened. Existing draft storage is atomic per file, not a multi-file transactio
 Image input bytes/dimensions and the aggregate decoded asset pixels are bounded;
 drafts cannot load arbitrary filesystem/network image sources. Visible unsupported
 annotations remain errors rather than silently missing output. This is the same
-host-independent implementation for macOS, Windows, X11 and Wayland; host UI and
-physical editor acceptance on all four remain `not implemented` / unverified.
+host-independent implementation for macOS, Windows, X11 and Wayland.
+
+The first AppKit editor-host slice enables **Edit screenshot** only for screenshot
+History entries. A dedicated serialized worker owns the shared Rust session and
+publishes independently retained RGBA frames to a fit preview. The window exposes
+crop geometry, canvas sizing, Undo/Redo, explicit draft save and confirmed draft
+discard; shared Rust remains the only geometry/render authority. Drafts live in an
+isolated `editor-drafts` sibling of native History and reopen with the screenshot.
+Closing an unsaved session offers save-and-close, close without saving the current
+session (retaining any older saved draft), or cancel. Quit drains accepted work and
+cancels termination if its draft save fails. Recordings, annotations and edited-image
+export remain explicitly unsupported. AppKit CI covers bridge lifetime, state,
+failure/close behavior and rendered light/dark fixtures, but physical macOS and all
+wgpu host acceptance remain unverified, so no editor parity gate closes here.
 
 New Capture connects its persisted shortcut, tray action and workspace entry to
 fixed-glass screenshot controls on both hosts. Region, Window and Full screen
