@@ -570,7 +570,8 @@ final class ScreenshotEditorTests: XCTestCase {
         let opened = expectation(description: "open for export")
         worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
                     artifactID: fixture.id) { result in
-            XCTAssertNoThrow(try result.get()); opened.fulfill()
+            if case .failure(let error) = result { XCTFail("open failed: \(error)") }
+            opened.fulfill()
         }
         wait(for: [opened], timeout: 5)
 
