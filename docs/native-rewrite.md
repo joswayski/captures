@@ -438,6 +438,16 @@ this implementation but remain presentation-unverified; AppKit layer controls
 are in progress. Merge/flatten, image import, image transforms and drawing tools
 are not connected by this panel slice.
 
+The wgpu Output panel now previews shared PNG/JPEG/WebP encoding with the shipping
+quality modes, palette controls and hard byte budget. Encoding and decoding run
+on the editor worker; the UI reports actual encoded bytes and switches between
+the edited canvas and decoded output. Edits and option changes invalidate the
+previous comparison; encoding failures retain recoverable edits and allow retry.
+Preview never writes files or saves a draft. The same Windows/X11/Wayland host
+code is implemented; private-X11 and unit checks do not establish physical-host
+acceptance. AppKit output controls and edited-file save/clipboard remain separate
+parity work.
+
 The AppKit editor host now enables **Edit screenshot** only for screenshot History
 entries. Its dedicated serialized worker owns the shared Rust session and publishes
 independently retained RGBA frames to a fit preview. The window exposes crop geometry,

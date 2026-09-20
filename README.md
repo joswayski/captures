@@ -264,6 +264,8 @@ resize/undo, and retained pixel frames for native hosts.
 The Windows/Linux candidate opens screenshots from History in a native crop,
 canvas-size and draft editor with undo/redo. Its layer panel supports selection,
 visibility, locking, opacity, renaming, position, duplication, deletion and ordering.
+Its Output panel previews PNG/JPEG/WebP quality and size limits, reports encoded
+bytes, and switches between the edited canvas and encoded output without saving.
 Closing can save or keep the previous draft; explicit Discard edits restores the
 original. Failed saves keep edits open and cancel normal quit. Private-X11 checks
 cover both appearances, persisted drafts, real preview pixels and error recovery.

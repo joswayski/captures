@@ -11,7 +11,9 @@ use std::{
 
 use captures_app::{
     editor::{Document, Element, LayerEdit, LayerPlacement, Rect},
-    editor_session::{EditorSession, OpenRequest, Request},
+    editor_session::{
+        EditorSession, ExportFormat, ExportOptions, ExportQuality, OpenRequest, PngOptions, Request,
+    },
 };
 use eframe::egui::{self, RichText};
 use image::RgbaImage;
@@ -20,6 +22,7 @@ use crate::tokens::Tokens;
 
 enum Job {
     Apply(Request),
+    Preview(ExportOptions),
     Flush(Sender<Result<(), String>>),
     Shutdown,
 }
@@ -27,6 +30,7 @@ enum Job {
 struct Presented {
     document: Arc<Document>,
     pixels: Arc<RgbaImage>,
+    output: Option<(RgbaImage, usize)>,
     can_undo: bool,
     can_redo: bool,
     unsaved: bool,
@@ -39,6 +43,7 @@ impl Presented {
         Self {
             document: Arc::new(snapshot.document.clone()),
             pixels: session.pixels(),
+            output: None,
             can_undo: snapshot.can_undo,
             can_redo: snapshot.can_redo,
             unsaved: snapshot.unsaved_changes,
@@ -47,12 +52,22 @@ impl Presented {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Section {
+    Geometry,
+    Layers,
+    Output,
+}
+
 struct View {
     presented: Option<Presented>,
     texture: Option<egui::TextureHandle>,
     crop: [f64; 4],
     canvas: [f64; 2],
-    show_layers: bool,
+    section: Section,
+    export_options: ExportOptions,
+    output: Option<(egui::TextureHandle, usize)>,
+    show_output: bool,
     selected_layer: Option<String>,
     layer_name: String,
     layer_opacity: f64,
@@ -72,7 +87,16 @@ impl Default for View {
             texture: None,
             crop: [0., 0., 1., 1.],
             canvas: [1., 1.],
-            show_layers: false,
+            section: Section::Geometry,
+            export_options: ExportOptions {
+                format: ExportFormat::Png,
+                quality: ExportQuality::Preserve,
+                quality_value: 80,
+                max_size_bytes: None,
+                png: PngOptions::default(),
+            },
+            output: None,
+            show_output: false,
             selected_layer: None,
             layer_name: String::new(),
             layer_opacity: 100.,
@@ -106,12 +130,13 @@ impl View {
         }
         self.pending = false;
         match result {
-            Ok(presented) => {
+            Ok(mut presented) => {
                 let changed = self
                     .presented
                     .as_ref()
                     .is_none_or(|old| !Arc::ptr_eq(&old.pixels, &presented.pixels));
                 if changed {
+                    self.invalidate_output();
                     let image = &presented.pixels;
                     self.texture = Some(ctx.load_texture(
                         "edited-screenshot",
@@ -123,6 +148,20 @@ impl View {
                     ));
                     self.canvas = [f64::from(image.width()), f64::from(image.height())];
                     self.crop = [0., 0., self.canvas[0], self.canvas[1]];
+                }
+                if let Some((image, length)) = presented.output.take() {
+                    self.output = Some((
+                        ctx.load_texture(
+                            "encoded-screenshot",
+                            egui::ColorImage::from_rgba_unmultiplied(
+                                [image.width() as usize, image.height() as usize],
+                                image.as_raw(),
+                            ),
+                            egui::TextureOptions::LINEAR,
+                        ),
+                        length,
+                    ));
+                    self.show_output = true;
                 }
                 self.presented = Some(presented);
                 self.select_layer(self.selected_layer.clone());
@@ -143,7 +182,21 @@ impl View {
     }
 
     fn submit(&mut self, tx: &Sender<Job>, request: Request) {
-        match tx.send(Job::Apply(request)) {
+        self.submit_job(tx, Job::Apply(request));
+    }
+
+    fn invalidate_output(&mut self) {
+        self.output = None;
+        self.show_output = false;
+    }
+
+    fn preview(&mut self, tx: &Sender<Job>) {
+        self.invalidate_output();
+        self.submit_job(tx, Job::Preview(self.export_options));
+    }
+
+    fn submit_job(&mut self, tx: &Sender<Job>, job: Job) {
+        match tx.send(job) {
             Ok(()) => {
                 self.pending = true;
                 self.error = None;
@@ -239,6 +292,18 @@ impl Editor {
                         .and_then(|session| {
                             session.execute(request)?;
                             Ok(Presented::from_session(session))
+                        }),
+                    Job::Preview(options) => session
+                        .as_ref()
+                        .ok_or_else(|| "Editor is unavailable.".to_owned())
+                        .and_then(|session| {
+                            let bytes = session.encode_export(options)?;
+                            let image = image::load_from_memory(&bytes)
+                                .map_err(|error| error.to_string())?
+                                .into_rgba8();
+                            let mut presented = Presented::from_session(session);
+                            presented.output = Some((image, bytes.len()));
+                            Ok(presented)
                         }),
                     Job::Flush(reply) => {
                         let result = session.as_mut().map_or(Ok(()), save_dirty);
@@ -363,8 +428,9 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 }
                 if ui.add_enabled(view.presented.is_some(), egui::Button::new("Discard edits…")).clicked() { view.confirm_discard = true; }
                 ui.separator();
-                ui.selectable_value(&mut view.show_layers, false, "Geometry");
-                ui.selectable_value(&mut view.show_layers, true, "Layers");
+                ui.selectable_value(&mut view.section, Section::Geometry, "Geometry");
+                ui.selectable_value(&mut view.section, Section::Layers, "Layers");
+                ui.selectable_value(&mut view.section, Section::Output, "Output");
             });
         });
         if let Some(error) = &view.error { ui.colored_label(tokens.color("theme-signal"), error); }
@@ -393,9 +459,13 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         }
     });
     egui::Panel::left("editor-geometry").resizable(false).exact_size(230.).show(ui, |ui| {
-        egui::ScrollArea::vertical().id_salt(view.show_layers).auto_shrink([false, false]).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt(view.section).auto_shrink([false, false]).show(ui, |ui| {
         ui.add_enabled_ui(!view.pending && view.presented.is_some(), |ui| {
-            if view.show_layers {
+            if view.section == Section::Output {
+                show_output(ui, tokens, view, tx);
+                return;
+            }
+            if view.section == Section::Layers {
                 show_layers(ui, view, tx);
                 return;
             }
@@ -425,11 +495,16 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         });
         ui.add_space(tokens.number("s-6"));
         ui.label(RichText::new("Native editor preview").color(tokens.color("text-muted")));
-        ui.small("Geometry, layers and drafts are connected. Drawing tools and edited-image export are still in development.");
+        ui.small("Geometry, layers, drafts and output preview are connected. Drawing tools, saving edited files and clipboard output are still in development.");
         });
     });
     egui::CentralPanel::default().show(ui, |ui| {
-        if let Some(texture) = &view.texture {
+        let texture = if view.show_output && view.section == Section::Output {
+            view.output.as_ref().map(|(texture, _)| texture)
+        } else {
+            view.texture.as_ref()
+        };
+        if let Some(texture) = texture {
             ui.add(
                 egui::Image::new(texture)
                     .fit_to_exact_size(ui.available_size())
@@ -445,6 +520,79 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             });
         }
     });
+}
+
+fn show_output(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
+    ui.heading("Output preview");
+    let previous = view.export_options;
+    let options = &mut view.export_options;
+    ui.label("Format");
+    ui.horizontal(|ui| {
+        for (value, label) in [
+            (ExportFormat::Png, "PNG"),
+            (ExportFormat::Jpeg, "JPEG"),
+            (ExportFormat::Webp, "WebP"),
+        ] {
+            ui.selectable_value(&mut options.format, value, label);
+        }
+    });
+    ui.label("Quality");
+    for (value, label) in [
+        (ExportQuality::Preserve, "Preserve"),
+        (ExportQuality::Compress, "Compress"),
+        (ExportQuality::Maximum, "Maximum file size"),
+    ] {
+        if ui.radio_value(&mut options.quality, value, label).changed() {
+            options.max_size_bytes = (value == ExportQuality::Maximum).then_some(1_000_000);
+        }
+    }
+    if options.quality == ExportQuality::Compress {
+        ui.horizontal(|ui| {
+            ui.label("Quality value");
+            let minimum = if options.format == ExportFormat::Jpeg {
+                40
+            } else {
+                1
+            };
+            options.quality_value = options.quality_value.clamp(minimum, 100);
+            ui.add(egui::DragValue::new(&mut options.quality_value).range(minimum..=100));
+        });
+        if options.format == ExportFormat::Png {
+            let mut palette = options.png.max_colors.is_some();
+            if ui.checkbox(&mut palette, "Custom PNG colors").changed() {
+                options.png.max_colors = palette.then_some(128);
+            }
+            if let Some(colors) = &mut options.png.max_colors {
+                ui.add(
+                    egui::DragValue::new(colors)
+                        .range(2..=256)
+                        .suffix(" colors"),
+                );
+            }
+        }
+    }
+    if let Some(bytes) = &mut options.max_size_bytes {
+        ui.add(
+            egui::DragValue::new(bytes)
+                .range(0..=u64::MAX)
+                .suffix(" bytes"),
+        );
+    }
+    if *options != previous {
+        view.invalidate_output();
+    }
+    ui.add_space(tokens.number("s-2"));
+    if ui.button("Preview output").clicked() {
+        view.preview(tx);
+    }
+    if let Some((_, length)) = &view.output {
+        ui.label(format!("Encoded size: {length} bytes"));
+        ui.selectable_value(&mut view.show_output, false, "Edited canvas");
+        ui.selectable_value(&mut view.show_output, true, "Encoded output");
+    } else {
+        ui.label("Preview to calculate encoded size.");
+    }
+    ui.small("Preview does not save a file or a draft. JPEG flattens transparency onto white.");
 }
 
 fn layer_label(element: &Element) -> &str {
@@ -619,6 +767,7 @@ mod tests {
         Presented {
             document: Arc::new(Document::new_capture("fixture", 7., 3., None)),
             pixels: Arc::new(RgbaImage::new(7, 3)),
+            output: None,
             can_undo: unsaved,
             can_redo: false,
             unsaved,
@@ -719,6 +868,78 @@ mod tests {
                 height: 2.,
             },
         }
+    }
+
+    #[test]
+    fn output_worker_decodes_formats_and_preserves_dirty_state_on_failure_and_retry() {
+        let (data, id) = fixture();
+        let ctx = egui::Context::default();
+        let editor = Editor::open(&ctx, data.path().join("history"), id);
+        receive(&editor, &ctx);
+        editor.view.lock().unwrap().submit(&editor.tx, crop());
+        receive(&editor, &ctx);
+        let pixels = editor
+            .view
+            .lock()
+            .unwrap()
+            .presented
+            .as_ref()
+            .unwrap()
+            .pixels
+            .clone();
+        for format in [ExportFormat::Png, ExportFormat::Jpeg, ExportFormat::Webp] {
+            {
+                let mut view = editor.view.lock().unwrap();
+                view.export_options.format = format;
+                view.export_options.quality = if format == ExportFormat::Jpeg {
+                    ExportQuality::Compress
+                } else {
+                    ExportQuality::Preserve
+                };
+                view.preview(&editor.tx);
+                assert!(view.pending && view.output.is_none() && !view.show_output);
+            }
+            let result = editor
+                .rx
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap()
+                .unwrap();
+            let (image, length) = result.output.as_ref().unwrap();
+            assert_eq!(image.dimensions(), (4, 2));
+            assert!(*length > 0 && result.unsaved && result.can_undo && !result.has_draft);
+            if format != ExportFormat::Jpeg {
+                assert_eq!(image.get_pixel(0, 0).0, [62, 71, 9, 255]);
+                assert_eq!(image.get_pixel(3, 1).0, [155, 142, 9, 255]);
+            }
+            assert!(Arc::ptr_eq(&pixels, &result.pixels));
+            editor.view.lock().unwrap().receive(&ctx, Ok(result));
+            assert!(editor.view.lock().unwrap().show_output);
+        }
+        {
+            let mut view = editor.view.lock().unwrap();
+            view.export_options.max_size_bytes = Some(0);
+            view.preview(&editor.tx);
+        }
+        receive(&editor, &ctx);
+        {
+            let mut view = editor.view.lock().unwrap();
+            assert!(view.error.is_some() && view.output.is_none() && !view.show_output);
+            assert!(view.unsaved() && !view.pending && !view.closed);
+            view.export_options.max_size_bytes = None;
+            view.preview(&editor.tx);
+        }
+        receive(&editor, &ctx);
+        assert!(editor.view.lock().unwrap().output.is_some());
+        editor
+            .view
+            .lock()
+            .unwrap()
+            .submit(&editor.tx, Request::Undo);
+        receive(&editor, &ctx);
+        let view = editor.view.lock().unwrap();
+        assert!(view.output.is_none() && !view.show_output);
+        assert!(view.presented.as_ref().unwrap().can_redo);
+        assert!(!data.path().join("editor-drafts").exists());
     }
 
     #[test]
