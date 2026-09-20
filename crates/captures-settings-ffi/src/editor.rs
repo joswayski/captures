@@ -1,7 +1,7 @@
 //! Serialized-worker editor handles and independently retained immutable frames.
 
 use super::region::{RegionPixels, response, text};
-use captures_app::editor_session::{EditorSession, OpenRequest, Request};
+use captures_app::editor_session::{EditorSession, ExportOptions, OpenRequest, Request};
 use image::RgbaImage;
 use serde_json::json;
 use std::{
@@ -67,6 +67,84 @@ pub unsafe extern "C" fn captures_editor_request_v1(
         Ok(snapshot) => json!({"ok":true,"result":snapshot}),
         Err(error) => json!({"ok":false,"error":error}),
     })
+}
+
+/// Encode on the session worker without changing editor state or doing I/O.
+/// Returns independently owned bytes and an owned metadata/error JSON response.
+///
+/// # Safety
+/// Non-null session is live and not accessed/freed concurrently. Input is readable
+/// NUL-terminated UTF-8. Non-null output is aligned writable pointer storage; free
+/// its JSON with captures_settings_free_v1. Null output refuses the operation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_encode_v1(
+    session: *const EditorSession,
+    options_json: *const c_char,
+    output: *mut *mut c_char,
+) -> *mut Vec<u8> {
+    if output.is_null() {
+        return ptr::null_mut();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains readable input and a live serialized session.
+        let options = serde_json::from_str::<ExportOptions>(unsafe { text(options_json) }?)
+            .map_err(|error| error.to_string())?;
+        let session = unsafe { session.as_ref() }.ok_or("editor handle is null")?;
+        session.encode_export(options)
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    let (handle, value) = match result {
+        Ok(bytes) => {
+            let value = json!({"ok":true,"result":{"length":bytes.len()}});
+            (Box::into_raw(Box::new(bytes)), value)
+        }
+        Err(error) => (ptr::null_mut(), json!({"ok":false,"error":error})),
+    };
+    // SAFETY: caller supplies aligned writable pointer storage.
+    unsafe { output.write(response(value)) };
+    handle
+}
+
+#[repr(C)]
+pub struct EditorBytes {
+    pub data: *const u8,
+    pub length: usize,
+}
+
+/// Borrow encoded bytes; false leaves output unchanged.
+///
+/// # Safety
+/// Non-null export is a live handle from captures_editor_encode_v1, retained
+/// throughout all reads. Non-null output is aligned writable EditorBytes storage.
+/// Never mutate/free the data pointer. The handle may outlive the editor session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_export_bytes_v1(
+    export: *const Vec<u8>,
+    output: *mut EditorBytes,
+) -> bool {
+    if export.is_null() || output.is_null() {
+        return false;
+    }
+    // SAFETY: caller retains live export storage and aligned writable output.
+    let bytes = unsafe { &*export };
+    unsafe {
+        output.write(EditorBytes {
+            data: bytes.as_ptr(),
+            length: bytes.len(),
+        })
+    };
+    true
+}
+
+/// # Safety
+/// Null or a live export from captures_editor_encode_v1, released exactly once
+/// after all byte borrows end. May run on a different thread from the session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_export_free_v1(export: *mut Vec<u8>) {
+    if !export.is_null() {
+        // SAFETY: caller transfers unique ownership after all reads finish.
+        drop(unsafe { Box::from_raw(export) });
+    }
 }
 
 /// Retain the current frame without copying pixels; null input returns null.
@@ -187,7 +265,50 @@ mod tests {
                 false
             );
             let current = captures_editor_frame_v1(session);
+            let options =
+                c"{\"format\":\"png\",\"quality\":\"preserve\",\"quality_value\":100,\"png\":{}}";
+            let exported = captures_editor_encode_v1(session, options.as_ptr(), &mut output);
+            assert!(!exported.is_null());
+            let encoded_response = take_json(output);
+            assert_eq!(encoded_response["ok"], true);
+            assert_eq!(encoded_response["result"].as_object().unwrap().len(), 1);
+            let before = take_json(captures_editor_request_v1(
+                session,
+                c"{\"operation\":\"snapshot\"}".as_ptr(),
+            ));
+            for invalid in [
+                c"{bad",
+                c"{\"format\":\"gif\",\"quality\":\"preserve\",\"quality_value\":100,\"png\":{}}",
+                c"{\"format\":\"png\",\"quality\":\"unknown\",\"quality_value\":100,\"png\":{}}",
+                c"{\"format\":\"png\",\"quality\":\"preserve\",\"quality_value\":256,\"png\":{}}",
+                c"{\"format\":\"png\",\"quality\":\"maximum\",\"quality_value\":100,\"max_size_bytes\":0,\"png\":{}}",
+            ] {
+                assert!(captures_editor_encode_v1(session, invalid.as_ptr(), &mut output).is_null());
+                assert_eq!(take_json(output)["ok"], false);
+                assert_eq!(take_json(captures_editor_request_v1(session, c"{\"operation\":\"snapshot\"}".as_ptr())), before);
+            }
+            assert_eq!(
+                take_json(captures_editor_request_v1(
+                    session,
+                    c"{\"operation\":\"undo\"}".as_ptr()
+                ))["ok"],
+                true
+            );
             captures_editor_free_v1(session);
+            let mut bytes = EditorBytes {
+                data: ptr::null(),
+                length: 0,
+            };
+            assert!(!captures_editor_export_bytes_v1(exported, ptr::null_mut()));
+            assert!(captures_editor_export_bytes_v1(exported, &mut bytes));
+            assert_eq!(encoded_response["result"]["length"], bytes.length);
+            let decoded =
+                image::load_from_memory(std::slice::from_raw_parts(bytes.data, bytes.length))
+                    .unwrap()
+                    .into_rgba8();
+            assert_eq!(decoded.dimensions(), (2, 1));
+            assert_eq!(decoded.as_raw(), &[40, 0, 9, 255, 80, 0, 9, 255]);
+            captures_editor_export_free_v1(exported);
             let mut pixels = RegionPixels {
                 data: ptr::null(),
                 length: 0,
@@ -221,6 +342,23 @@ mod tests {
         unsafe {
             assert!(captures_editor_open_v1(ptr::null(), ptr::null_mut()).is_null());
             let mut output = ptr::null_mut();
+            assert!(captures_editor_encode_v1(ptr::null(), ptr::null(), ptr::null_mut()).is_null());
+            for options in [
+                ptr::null(),
+                c"{\"format\":\"png\",\"quality\":\"preserve\",\"quality_value\":100,\"png\":{}}"
+                    .as_ptr(),
+            ] {
+                assert!(captures_editor_encode_v1(ptr::null(), options, &mut output).is_null());
+                assert_eq!(take_json(output)["ok"], false);
+            }
+            let mut bytes = EditorBytes {
+                data: ptr::null(),
+                length: 91,
+            };
+            assert!(!captures_editor_export_bytes_v1(ptr::null(), &mut bytes));
+            assert_eq!(bytes.length, 91);
+            assert!(bytes.data.is_null());
+            captures_editor_export_free_v1(ptr::null_mut());
             assert!(captures_editor_open_v1(ptr::null(), &mut output).is_null());
             assert_eq!(take_json(output)["ok"], false);
             assert_eq!(

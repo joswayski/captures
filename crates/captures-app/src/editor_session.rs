@@ -22,6 +22,8 @@ use crate::{
 const ASSET_PREFIX: &str = "draft-asset:";
 const MAX_METADATA_BYTES: u64 = 8 * 1024 * 1024;
 
+pub use captures_image::{ExportFormat, ExportOptions, ExportQuality, PngOptions};
+
 #[derive(Debug, Deserialize)]
 pub struct OpenRequest {
     pub history_root: PathBuf,
@@ -151,6 +153,13 @@ impl EditorSession {
     #[must_use]
     pub fn pixels(&self) -> Arc<RgbaImage> {
         self.pixels.clone()
+    }
+
+    /// Encode the current rendered frame on the session worker. The owned bytes
+    /// outlive edits/close. This does not save a draft, change undo/redo, or write
+    /// any files; hosts own file publication and clipboard operations.
+    pub fn encode_export(&self, options: ExportOptions) -> Result<Vec<u8>, String> {
+        captures_image::encode_export(&self.pixels, options)
     }
 
     pub fn execute(&mut self, request: Request) -> Result<(), String> {

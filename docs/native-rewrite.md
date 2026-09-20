@@ -395,6 +395,16 @@ drafts cannot load arbitrary filesystem/network image sources. Visible unsupport
 annotations remain errors rather than silently missing output. This is the same
 host-independent implementation for macOS, Windows, X11 and Wayland.
 
+Editor sessions can encode the current edited frame through the shared PNG/JPEG/
+WebP quality and hard-byte-budget policy. The C ABI returns independently owned
+encoded bytes, borrowed through an explicit pointer/length view and released
+separately from the session. Options and result metadata use JSON; image bytes
+never do. Encoding success or failure leaves document, undo/redo, draft dirty
+state and original History files unchanged. Hosts still own save dialogs, file
+publication, overwrite and clipboard behavior. This shared prerequisite is
+unit-verified in the Linux orb; it does not connect native export controls or
+complete macOS, Windows, X11 or Wayland output/physical acceptance.
+
 Shared layer commands now cover visibility, locking, opacity, movement, deletion,
 duplication, image renaming and ordering through the same transactional session
 and C ABI. Shipping TypeScript fixtures check all four duplicate element kinds

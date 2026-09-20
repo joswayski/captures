@@ -190,6 +190,30 @@ CapturesEditorFrame *captures_editor_frame_v1(const CapturesEditorSession *sessi
 bool captures_editor_frame_pixels_v1(const CapturesEditorFrame *frame, CapturesRegionPixels *output);
 void captures_editor_frame_free_v1(CapturesEditorFrame *frame);
 
+/* Encode the current edited frame on the serialized session worker. No file or
+ * clipboard I/O, no draft save, and no change to document/undo/redo/dirty state.
+ * Options JSON: {format:"png"|"jpeg"|"webp", quality:"preserve"|"compress"|"maximum",
+ * quality_value:0..255, max_size_bytes:unsigned|null, png:{max_colors:unsigned|null}}.
+ * max_size_bytes and max_colors may be omitted. Other fields are required.
+ * Uses the shared shipping format/quality/clamping and hard-byte-budget policy.
+ * NULL output refuses encoding; otherwise it receives owned {ok,result:{length}}
+ * or {ok:false,error} JSON, freed with captures_settings_free_v1. Failure returns
+ * NULL. Inputs remain live/readable for the call; never call/free the session
+ * concurrently. Hosts choose destinations, publish files, and update clipboard.
+ * The export owns immutable encoded bytes independently of edits/session close;
+ * it can move to another thread. No pixels or encoded bytes are placed in JSON. */
+typedef struct CapturesEditorExport CapturesEditorExport;
+typedef struct {
+    const uint8_t *data;
+    size_t length;
+} CapturesEditorBytes;
+CapturesEditorExport *captures_editor_encode_v1(const CapturesEditorSession *session,
+    const char *options_json, char **output);
+/* Borrow while export is live; false for NULL input/output leaves output unchanged.
+ * Never mutate/free data. Release export exactly once after all borrows end. */
+bool captures_editor_export_bytes_v1(const CapturesEditorExport *exported, CapturesEditorBytes *output);
+void captures_editor_export_free_v1(CapturesEditorExport *exported); /* NULL allowed */
+
 /* Allocation-free macOS window-radius fallback in points. Pass the current OS
  * major version from ProcessInfo. No OS access or session handle is required. */
 double captures_macos_window_corner_radius_v1(int64_t major_version);

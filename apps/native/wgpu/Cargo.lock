@@ -786,6 +786,7 @@ dependencies = [
  "jpeg-encoder",
  "png 0.17.16",
  "quantette",
+ "serde",
  "tiny-skia",
  "webp",
 ]
