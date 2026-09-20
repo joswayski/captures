@@ -516,6 +516,44 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual((try field("Layer Y", in: controller.root)).stringValue, "16.75")
     }
 
+    func testImageTransformCommandsKeepHiddenLockedSelectionAndInvalidateOutput() throws {
+        _ = NSApplication.shared
+        let transformed = layer(id: "stable-image", name: "Hidden locked image", x: 31.5, y: -14.25,
+                                visible: false, locked: true, opacity: 67)
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true,
+                                                          layers: [transformed]))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                     worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showOutput(in: controller.root)
+        try button("Preview output", in: controller.root).performClick(nil)
+        let previewMode = try segmented("Output preview image", in: controller.root)
+        XCTAssertEqual(previewMode.selectedSegment, 1)
+        try showLayers(in: controller.root)
+
+        for title in ["Rotate left", "Rotate right", "Flip horizontal", "Flip vertical"] {
+            XCTAssertTrue(try button(title, in: controller.root).isEnabled,
+                          "hidden and locked image layers remain transformable")
+            try button(title, in: controller.root).performClick(nil)
+            XCTAssertEqual((try field("Layer name", in: controller.root)).stringValue,
+                           "Hidden locked image", "stable selection survives each reply")
+        }
+        let transforms = worker.requests.compactMap { request -> String? in
+            guard request["operation"] as? String == "layer",
+                  request["id"] as? String == "stable-image",
+                  let edit = request["edit"] as? [String: Any],
+                  edit["action"] as? String == "image_transform" else { return nil }
+            return edit["transform"] as? String
+        }
+        XCTAssertEqual(transforms, ["rotate-counterclockwise", "rotate-clockwise",
+                                    "flip-horizontal", "flip-vertical"])
+        XCTAssertEqual(previewMode.selectedSegment, 0)
+        XCTAssertFalse(previewMode.isEnabled,
+                       "an accepted image transform invalidates stale encoded output")
+        XCTAssertTrue(controller.state.snapshot?.unsavedChanges == true)
+    }
+
     func testRejectedDuplicateAndDeletionKeepRecoverableStableSelection() throws {
         _ = NSApplication.shared
         let back = layer(id: "back", name: "Back", x: 0, y: 0, visible: true,
@@ -808,6 +846,29 @@ final class ScreenshotEditorTests: XCTestCase {
         }
     }
 
+    func testImageTransformRenderedStates() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let transformed = layer(id: "stable-image", name: "Hidden locked asymmetric image",
+                                    x: 37.5, y: -11.25, visible: false, locked: true, opacity: 64)
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true,
+                                                              draft: true, layers: [transformed]))
+            let controller = ScreenshotEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showLayers(in: controller.root)
+            try scrollImageImportVisible(in: controller.root)
+            try render(controller.root, name: "screenshot-editor-transform-controls-\(appearance)")
+
+            worker.failLayerAction = "image_transform"
+            worker.failureMessage = "The selected image transform could not be applied. The hidden locked layer, asymmetric pixels, draft, undo history, and selection remain recoverable."
+            try button("Rotate right", in: controller.root).performClick(nil)
+            try render(controller.root,
+                       name: "screenshot-editor-transform-error-minimum-\(appearance)")
+        }
+    }
+
     func testRealBridgeCropSaveReopenDiscardAndRetainedFrame() throws {
         _ = NSApplication.shared
         let fixture = try makeHistoryFixture()
@@ -1072,6 +1133,72 @@ final class ScreenshotEditorTests: XCTestCase {
         reopened.close(); EditorWorker.flush()
     }
 
+    func testRealBridgeImageTransformPixelsUndoRedoAndDraftReopen() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let worker = EditorWorker()
+        let opened = expectation(description: "open for transform")
+        var layerID: String?
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                    artifactID: fixture.id) { result in
+            layerID = (try? result.get())?.snapshot.layers.first?.id
+            opened.fulfill()
+        }
+        wait(for: [opened], timeout: 5)
+        let selectedID = try XCTUnwrap(layerID)
+        let transform = expectation(description: "rotate clockwise")
+        worker.request(["operation": "layer", "id": selectedID,
+                        "edit": ["action": "image_transform", "transform": "rotate-clockwise"]]) {
+            result in
+            let value = try? result.get()
+            XCTAssertEqual(value?.snapshot.artifactID, fixture.id)
+            XCTAssertEqual(value?.snapshot.layers.first?.id, selectedID)
+            XCTAssertEqual(value?.image.width, 3); XCTAssertEqual(value?.image.height, 7)
+            if let image = value?.image {
+                XCTAssertEqual(self.rgba(image, x: 0, y: 0), [0, 142, 19, 255])
+                XCTAssertEqual(self.rgba(image, x: 2, y: 6), [186, 0, 19, 255])
+            }
+            transform.fulfill()
+        }
+        wait(for: [transform], timeout: 5)
+
+        let undone = expectation(description: "undo transform")
+        worker.request(["operation": "undo"]) { result in
+            let value = try? result.get()
+            XCTAssertEqual(value?.image.width, 7); XCTAssertEqual(value?.image.height, 3)
+            if let image = value?.image {
+                XCTAssertEqual(self.rgba(image, x: 6, y: 2), [186, 142, 19, 255])
+            }
+            undone.fulfill()
+        }
+        wait(for: [undone], timeout: 5)
+        let redone = expectation(description: "redo transform")
+        worker.request(["operation": "redo"]) { result in
+            XCTAssertEqual((try? result.get().image.width), 3); redone.fulfill()
+        }
+        wait(for: [redone], timeout: 5)
+        let saved = expectation(description: "save transformed draft")
+        worker.request(["operation": "save_draft", "updated_at_ms": 789]) { result in
+            XCTAssertFalse((try? result.get().snapshot.unsavedChanges) ?? true); saved.fulfill()
+        }
+        wait(for: [saved], timeout: 5)
+        worker.close(); EditorWorker.flush()
+
+        let reopened = EditorWorker()
+        let restored = expectation(description: "reopen transformed draft")
+        reopened.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                      artifactID: fixture.id) { result in
+            let value = try? result.get()
+            XCTAssertEqual(value?.snapshot.layers.first?.id, selectedID)
+            XCTAssertTrue(value?.snapshot.hasDraft == true)
+            XCTAssertEqual(value?.image.width, 3); XCTAssertEqual(value?.image.height, 7)
+            restored.fulfill()
+        }
+        wait(for: [restored], timeout: 5)
+        reopened.close(); EditorWorker.flush()
+    }
+
     private func snapshot(id: String, width: Double = 640, height: Double = 360,
                           unsaved: Bool = false, draft: Bool = false,
                           layers: [[String: Any]] = []) -> NativeEditorSnapshot {
@@ -1129,7 +1256,9 @@ final class ScreenshotEditorTests: XCTestCase {
     private func scrollImageImportVisible(in view: NSView) throws {
         let control = try button("Add image…", in: view)
         let scroll = try XCTUnwrap(control.enclosingScrollView)
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: 42))
+        let document = try XCTUnwrap(scroll.documentView)
+        let bottom = max(0, document.bounds.height - scroll.contentView.bounds.height)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: bottom))
         scroll.reflectScrolledClipView(scroll.contentView)
         view.layoutSubtreeIfNeeded()
     }

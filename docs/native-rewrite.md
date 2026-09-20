@@ -501,6 +501,9 @@ normalizing EXIF orientation and straight-alpha sRGB RGBA8 pixels before the wor
 copies them into the shared session. Imported layers reopen without their source file;
 ImageIO-supported sources use their first image, and files without a usable color
 description are rejected instead of silently relabeled.
+Image layers expose shared rotate-left, rotate-right, flip-horizontal and flip-vertical
+commands, including hidden or locked layers; shared Rust owns orientation, canvas fit,
+clipping and expansion policy while AppKit retains the stable selected layer.
 Closing an unsaved session offers save-and-close,
 close without saving the current session (retaining any older persisted draft), or
 cancel. Quit drains accepted work and cancels termination if its draft save fails.
@@ -509,7 +512,7 @@ geometry, failure/close/output/import behavior and rendered light/dark fixtures.
 Physical AppKit input, accessibility and IME acceptance remain unverified.
 
 Across both hosts, physical input/accessibility/IME acceptance remains open.
-Image-transform controls, non-AppKit image import, annotation tools, AppKit
+Non-AppKit image-transform controls and image import, annotation tools, AppKit
 edited-image export and
 recording editing are not connected; the screenshot-editor parity gate stays open.
 

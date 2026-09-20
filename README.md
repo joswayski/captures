@@ -280,7 +280,8 @@ Closing can save or keep the previous draft; explicit Discard edits restores the
 original. Failed draft saves keep edits open and cancel normal quit. Private-X11 checks
 cover both appearances, persisted drafts, real preview pixels and error recovery.
 AppKit now connects the same crop, canvas-resize and draft operations in its own
-window, along with native image-layer controls and PNG/JPEG/WebP output previews
+window, along with native image-layer controls, lossless rotate/flip actions, and
+PNG/JPEG/WebP output previews
 that report exact encoded size without saving. Its **Save new copy** controls choose
 a folder and filename, publish without replacing files, and preserve the draft. AppKit
 also imports one still image at a time as a new image layer using its color-managed
@@ -289,7 +290,7 @@ them in the draft without depending on the source file. ImageIO-supported source
 their first image; files without a usable color description are rejected rather than
 silently relabeled.
 Windows, Wayland and physical AppKit presentation remain unverified.
-Native image-transform controls, non-AppKit image-import controls, text,
+Non-AppKit image-transform and image-import controls, text,
 annotation shadows, annotation tools, overwrite-original, edited-image clipboard
 output, and recording editing remain unconnected. The shared
 import/transform/render/export support is prerequisite work, not native

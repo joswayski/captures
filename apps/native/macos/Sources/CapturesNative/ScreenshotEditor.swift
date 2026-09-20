@@ -113,6 +113,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var deleteButton: CaptureButton!
     private var moveUpButton: CaptureButton!
     private var moveDownButton: CaptureButton!
+    private var rotateLeftButton: CaptureButton!
+    private var rotateRightButton: CaptureButton!
+    private var flipHorizontalButton: CaptureButton!
+    private var flipVerticalButton: CaptureButton!
     private var importImageButton: CaptureButton!
     private var undoButton: CaptureButton!
     private var redoButton: CaptureButton!
@@ -455,7 +459,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         panelScroll.autoresizingMask = [.width, .height]
         panelScroll.hasVerticalScroller = true; panelScroll.scrollerStyle = .overlay
         panelScroll.drawsBackground = false
-        layerContent.frame = NSRect(x: 0, y: 0, width: 272, height: 432)
+        layerContent.frame = NSRect(x: 0, y: 0, width: 272, height: 550)
         panelScroll.documentView = layerContent; layersPanel.addSubview(panelScroll)
 
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 272, height: 106))
@@ -494,15 +498,37 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         moveButton = button("Move", frame: NSRect(x: 184, y: 276, width: 88, height: 30),
                             parent: layerContent) { [weak self] in self?.moveLayer() }
 
-        duplicateButton = button("Duplicate", frame: NSRect(x: 0, y: 314, width: 128, height: 30),
+        panelFieldLabel("Transform", x: 0, y: 314, parent: layerContent)
+        rotateLeftButton = button("Rotate left", frame: NSRect(x: 0, y: 334, width: 128, height: 30),
+                                  parent: layerContent) {
+            [weak self] in
+            self?.transformLayer("rotate-counterclockwise", message: "Rotating layer left…")
+        }
+        rotateRightButton = button("Rotate right", frame: NSRect(x: 144, y: 334, width: 128, height: 30),
+                                   parent: layerContent) {
+            [weak self] in
+            self?.transformLayer("rotate-clockwise", message: "Rotating layer right…")
+        }
+        flipHorizontalButton = button("Flip horizontal", frame: NSRect(x: 0, y: 372, width: 128, height: 30),
+                                      parent: layerContent) {
+            [weak self] in
+            self?.transformLayer("flip-horizontal", message: "Flipping layer horizontally…")
+        }
+        flipVerticalButton = button("Flip vertical", frame: NSRect(x: 144, y: 372, width: 128, height: 30),
+                                    parent: layerContent) {
+            [weak self] in
+            self?.transformLayer("flip-vertical", message: "Flipping layer vertically…")
+        }
+
+        duplicateButton = button("Duplicate", frame: NSRect(x: 0, y: 410, width: 128, height: 30),
                                  parent: layerContent) { [weak self] in self?.duplicateLayer() }
-        deleteButton = button("Delete", frame: NSRect(x: 144, y: 314, width: 128, height: 30),
+        deleteButton = button("Delete", frame: NSRect(x: 144, y: 410, width: 128, height: 30),
                               parent: layerContent) { [weak self] in self?.deleteLayer() }
-        moveUpButton = button("Move up", frame: NSRect(x: 0, y: 352, width: 128, height: 30),
+        moveUpButton = button("Move up", frame: NSRect(x: 0, y: 448, width: 128, height: 30),
                               parent: layerContent) { [weak self] in self?.reorderLayer(up: true) }
-        moveDownButton = button("Move down", frame: NSRect(x: 144, y: 352, width: 128, height: 30),
+        moveDownButton = button("Move down", frame: NSRect(x: 144, y: 448, width: 128, height: 30),
                                 parent: layerContent) { [weak self] in self?.reorderLayer(up: false) }
-        importImageButton = button("Add image…", frame: NSRect(x: 0, y: 398, width: 272, height: 34),
+        importImageButton = button("Add image…", frame: NSRect(x: 0, y: 494, width: 272, height: 34),
                                    parent: layerContent) { [weak self] in self?.chooseImage() }
         importImageButton.primary = true
     }
@@ -895,6 +921,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                    "delta_y": y - layer.y], message: "Moving layer…")
     }
 
+    private func transformLayer(_ transform: String, message: String) {
+        guard let layer = selectedLayer, layer.kind == .image else { return }
+        layerCommand(layer, edit: ["action": "image_transform", "transform": transform],
+                     message: message)
+    }
+
     private func duplicateLayer() {
         guard let layer = selectedLayer else { return }
         let newID = UUID().uuidString.lowercased()
@@ -1030,6 +1062,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let layer = ready ? selectedLayer : nil
         let image = layer?.kind == .image
         layerName.isEnabled = image; renameButton?.isEnabled = image
+        rotateLeftButton?.isEnabled = image; rotateRightButton?.isEnabled = image
+        flipHorizontalButton?.isEnabled = image; flipVerticalButton?.isEnabled = image
         layerOpacity.isEnabled = layer != nil; opacityButton?.isEnabled = layer != nil
         visibilityButton?.isEnabled = layer != nil; lockButton?.isEnabled = layer != nil
         duplicateButton?.isEnabled = layer != nil
