@@ -37,6 +37,69 @@ use crate::{
 };
 use crate::{recording, recording_hud, tokens::Tokens};
 
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub(super) enum HistoryFilter {
+    #[default]
+    All,
+    Screenshots,
+    Video,
+    Gif,
+}
+
+impl HistoryFilter {
+    const ALL: [Self; 4] = [Self::All, Self::Screenshots, Self::Video, Self::Gif];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Screenshots => "Screenshots",
+            Self::Video => "Video",
+            Self::Gif => "GIF",
+        }
+    }
+
+    pub(super) fn matches(self, kind: captures_history::ArtifactKind) -> bool {
+        use captures_history::ArtifactKind;
+        matches!(
+            (self, kind),
+            (Self::All, _)
+                | (Self::Screenshots, ArtifactKind::Screenshot)
+                | (Self::Video, ArtifactKind::Video)
+                | (Self::Gif, ArtifactKind::Gif)
+        )
+    }
+
+    // The live workspace and disposable fixture use the same filter controls.
+    pub(super) fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        kinds: impl Iterator<Item = captures_history::ArtifactKind>,
+    ) -> bool {
+        let mut counts = [0usize; 4];
+        for kind in kinds {
+            for (index, filter) in Self::ALL.iter().enumerate() {
+                counts[index] += usize::from(filter.matches(kind));
+            }
+        }
+        let before = *self;
+        ui.horizontal_wrapped(|ui| {
+            for (filter, count) in Self::ALL.into_iter().zip(counts) {
+                let label = format!("{} {count}", filter.label());
+                if ui
+                    .add_enabled(
+                        filter == Self::All || count > 0,
+                        egui::Button::new(label).selected(*self == filter),
+                    )
+                    .clicked()
+                {
+                    *self = filter;
+                }
+            }
+        });
+        *self != before
+    }
+}
+
 enum Job {
     LoadHistory {
         root: PathBuf,
@@ -512,6 +575,7 @@ pub struct Live {
     displays: Vec<DisplayDescriptor>,
     display_id: Option<String>,
     artifacts: Vec<Artifact>,
+    history_filter: HistoryFilter,
     selection: Selection,
     texture: Option<egui::TextureHandle>,
     preview_loading: bool,
@@ -688,6 +752,7 @@ impl Live {
             displays: vec![],
             display_id: None,
             artifacts: vec![],
+            history_filter: HistoryFilter::All,
             selection: Selection::default(),
             texture: None,
             preview_loading: false,
@@ -1060,11 +1125,35 @@ impl Live {
     }
 
     fn select(&mut self, id: String) {
+        if let Some(item) = self.artifacts.iter().find(|item| item.entry.id == id)
+            && !self.history_filter.matches(item.entry.kind)
+        {
+            self.history_filter = HistoryFilter::All;
+        }
         self.selection.begin(id);
         self.texture = None;
         self.decoded_path = None;
         self.preview_loading = true;
         self.load_selected();
+    }
+
+    fn refresh_history_selection(&mut self) {
+        let visible = |item: &&Artifact| self.history_filter.matches(item.entry.kind);
+        let id = self
+            .artifacts
+            .iter()
+            .filter(visible)
+            .find(|item| self.selection.id.as_deref() == Some(item.entry.id.as_str()))
+            .or_else(|| self.artifacts.iter().find(visible))
+            .map(|item| item.entry.id.clone());
+        self.selection.clear();
+        self.texture = None;
+        self.decoded_path = None;
+        self.preview_loading = false;
+        self.confirm_delete = None;
+        if let Some(id) = id {
+            self.select(id);
+        }
     }
 
     pub fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
@@ -2260,14 +2349,8 @@ impl Live {
                 self.previews.clear(&removed);
                 self.confirm_clear_history = false;
                 self.confirm_delete = None;
-                self.selection.clear();
-                self.texture = None;
-                self.decoded_path = None;
-                self.preview_loading = false;
                 self.artifacts = artifacts;
-                if let Some(id) = self.artifacts.first().map(|item| item.entry.id.clone()) {
-                    self.select(id);
-                }
+                self.refresh_history_selection();
                 self.status = self
                     .history_refresh_status
                     .take()
@@ -2292,13 +2375,7 @@ impl Live {
                 self.previews.remove(&id);
                 self.artifacts.retain(|item| item.entry.id != id);
                 self.confirm_delete = None;
-                self.selection.clear();
-                self.texture = None;
-                self.decoded_path = None;
-                self.preview_loading = false;
-                if let Some(id) = self.artifacts.first().map(|item| item.entry.id.clone()) {
-                    self.select(id);
-                }
+                self.refresh_history_selection();
                 self.status = "Removed from capture history; exported files were kept".into();
             }
             Response::PermissionGranted => {
@@ -2966,10 +3043,10 @@ impl Live {
             ui.horizontal(|ui| {
                 ui.heading("Captures");
                 ui.label(
-                    RichText::new("Native screenshot capture").color(t.color("text-muted")),
+                    RichText::new("Native capture workspace").color(t.color("text-muted")),
                 );
             });
-            ui.label("Display, region and window capture with countdown, cursor inclusion, automatic copy, save format/folder preferences, and one latest mini preview. Recording and editing are not connected yet.");
+            ui.label("Capture screenshots or record video from a display, region or window. Browse capture history below; native editing is not connected yet.");
             ui.horizontal(|ui| {
                 egui::ComboBox::from_label("Display")
                     .selected_text(self.displays.iter().find(|d| Some(&d.id) == self.display_id.as_ref()).map_or("No display", |d| d.name.as_str()))
@@ -3014,10 +3091,20 @@ impl Live {
                         .small()
                         .color(t.color("text-muted")),
                 );
+                if self
+                    .history_filter
+                    .ui(ui, self.artifacts.iter().map(|item| item.entry.kind))
+                {
+                    self.confirm_clear_history = false;
+                    self.refresh_history_selection();
+                }
                 if ui
                     .add_enabled(
-                        self.pending == 0 && !self.artifacts.is_empty(),
-                        egui::Button::new("Clear history…"),
+                        self.pending == 0
+                            && self.artifacts.iter().any(|item| {
+                                item.entry.kind == captures_history::ArtifactKind::Screenshot
+                            }),
+                        egui::Button::new("Clear screenshots…"),
                     )
                     .clicked()
                 {
@@ -3054,49 +3141,54 @@ impl Live {
                         });
                     });
                 }
-                if self.artifacts.is_empty() {
-                    ui.label("No captures yet");
+                let visible: Vec<usize> = self
+                    .artifacts
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, item)| self.history_filter.matches(item.entry.kind))
+                    .map(|(index, _)| index)
+                    .collect();
+                if visible.is_empty() {
+                    ui.label(if self.artifacts.is_empty() {
+                        "No captures yet"
+                    } else {
+                        "No captures match this filter"
+                    });
                 }
-                egui::ScrollArea::vertical().show_rows(
-                    ui,
-                    40.,
-                    self.artifacts.len(),
-                    |ui, rows| {
-                        for row in rows {
-                            let item = &self.artifacts[row].entry;
-                            let id = item.id.clone();
-                            let date = chrono::DateTime::parse_from_rfc3339(&item.created_at)
-                                .map(|date| {
-                                    date.with_timezone(&chrono::Local)
-                                        .format("%b %d, %H:%M")
-                                        .to_string()
-                                })
-                                .unwrap_or_else(|_| item.created_at.clone());
-                            if ui
-                                .add_sized(
-                                    [ui.available_width(), 40.],
-                                    egui::Button::new(format!(
-                                        "{} · {}×{}\n{}",
-                                        match item.kind {
-                                            captures_history::ArtifactKind::Screenshot =>
-                                                "Screenshot",
-                                            captures_history::ArtifactKind::Video => "Video",
-                                            captures_history::ArtifactKind::Gif => "GIF",
-                                        },
-                                        item.width,
-                                        item.height,
-                                        date
-                                    ))
-                                    .wrap_mode(egui::TextWrapMode::Extend)
-                                    .selected(self.selection.id.as_deref() == Some(&id)),
-                                )
-                                .clicked()
-                            {
-                                self.select(id);
-                            }
+                egui::ScrollArea::vertical().show_rows(ui, 40., visible.len(), |ui, rows| {
+                    for row in rows {
+                        let item = &self.artifacts[visible[row]].entry;
+                        let id = item.id.clone();
+                        let date = chrono::DateTime::parse_from_rfc3339(&item.created_at)
+                            .map(|date| {
+                                date.with_timezone(&chrono::Local)
+                                    .format("%b %d, %H:%M")
+                                    .to_string()
+                            })
+                            .unwrap_or_else(|_| item.created_at.clone());
+                        if ui
+                            .add_sized(
+                                [ui.available_width(), 40.],
+                                egui::Button::new(format!(
+                                    "{} · {}×{}\n{}",
+                                    match item.kind {
+                                        captures_history::ArtifactKind::Screenshot => "Screenshot",
+                                        captures_history::ArtifactKind::Video => "Video",
+                                        captures_history::ArtifactKind::Gif => "GIF",
+                                    },
+                                    item.width,
+                                    item.height,
+                                    date
+                                ))
+                                .wrap_mode(egui::TextWrapMode::Extend)
+                                .selected(self.selection.id.as_deref() == Some(&id)),
+                            )
+                            .clicked()
+                        {
+                            self.select(id);
                         }
-                    },
-                );
+                    }
+                });
             });
 
         egui::CentralPanel::default().show(ui, |ui| {
@@ -3581,6 +3673,88 @@ fn reveal(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_filters_preserve_ids_and_invalidate_hidden_preview_work() {
+        use captures_history::ArtifactKind;
+        let root = tempfile::tempdir().unwrap();
+        let original = preview_artifact(root.path(), [47, 83, 129, 255]);
+        let artifacts = || {
+            [
+                ("v1", ArtifactKind::Video),
+                ("s1", ArtifactKind::Screenshot),
+                ("g1", ArtifactKind::Gif),
+                ("s2", ArtifactKind::Screenshot),
+                ("v2", ArtifactKind::Video),
+            ]
+            .into_iter()
+            .map(|(id, kind)| {
+                let mut item = Artifact {
+                    entry: original.entry.clone(),
+                    image_path: original.image_path.clone(),
+                    preview_path: original.preview_path.clone(),
+                };
+                item.entry.id = id.into();
+                item.entry.kind = kind;
+                item
+            })
+            .collect::<Vec<_>>()
+        };
+        let mut live = Live::new(egui::Context::default(), Some(root.path().into()));
+        live.apply(
+            Response::History {
+                artifacts: artifacts(),
+            },
+            false,
+        );
+        let original_decode = live.selection.generation;
+        live.decoded_path = Some(original.image_path.clone());
+        live.confirm_delete = Some("v1".into());
+        live.history_filter = HistoryFilter::Screenshots;
+        live.refresh_history_selection();
+        assert_eq!(live.selection.id.as_deref(), Some("s1"));
+        assert!(!live.selection.accepts(original_decode));
+        assert!(live.decoded_path.is_none());
+        assert!(live.confirm_delete.is_none());
+
+        live.select("s2".into());
+        live.apply(
+            Response::History {
+                artifacts: artifacts(),
+            },
+            false,
+        );
+        assert_eq!(live.history_filter, HistoryFilter::Screenshots);
+        assert_eq!(live.selection.id.as_deref(), Some("s2"));
+        live.apply(Response::Deleted { id: "s2".into() }, false);
+        assert_eq!(live.selection.id.as_deref(), Some("s1"));
+        live.apply(Response::Deleted { id: "s1".into() }, false);
+        assert_eq!(live.history_filter, HistoryFilter::Screenshots);
+        assert!(live.selection.id.is_none());
+        assert!(!live.preview_loading);
+        assert_eq!(
+            live.artifacts.len(),
+            3,
+            "filtering must not remove other kinds"
+        );
+
+        live.history_filter = HistoryFilter::Gif;
+        live.refresh_history_selection();
+        assert_eq!(live.selection.id.as_deref(), Some("g1"));
+        live.apply(
+            Response::History {
+                artifacts: artifacts().into_iter().take(1).collect(),
+            },
+            false,
+        );
+        assert_eq!(live.history_filter, HistoryFilter::Gif);
+        assert!(live.selection.id.is_none());
+        // An explicit capture/preview reveal must never select a hidden row.
+        live.select("v1".into());
+        assert_eq!(live.history_filter, HistoryFilter::All);
+        assert_eq!(live.selection.id.as_deref(), Some("v1"));
+        live.flush();
+    }
 
     fn preview_target() -> CaptureTarget {
         CaptureTarget {

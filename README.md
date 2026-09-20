@@ -220,7 +220,9 @@ are saved on session loss instead of being discarded; failed finalization retain
 recovery data. Linux cannot exclude the controls from captured pixels, and native
 Hide controls is not connected yet. Restart, mute, screenshots
 during recording, recording playback/editing/export and GIF conversion remain
-unconnected; History displays recording posters and metadata only. Real macOS and
+unconnected; History displays recording posters and metadata only. Both native
+hosts offer counted All, Screenshots, Video and GIF history filters; filtering
+does not delete captures or exports. Real macOS and
 Windows recording, audio devices, multi-display and hardware acceptance remain open;
 Wayland recording is gated with the rest of native capture.
 Editing, OS shortcut takeover, login items,

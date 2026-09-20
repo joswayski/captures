@@ -3,6 +3,78 @@ import XCTest
 @testable import CapturesNative
 
 final class HistoryClearTests: XCTestCase {
+    func testMixedHistoryFiltersRetainSelectionAndHandleEmptyRefresh() throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let image = PreviewView.fixtureImage(scale: 1)
+        let path = directory.appendingPathComponent("fixture.png")
+        try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])).write(to: path)
+        for appearance in ["light", "dark"] {
+            let frame = NSRect(x: 0, y: 0, width: 1000, height: 720)
+            let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let root = Surface(frame: frame); window.contentView = root
+            let tokens = try XCTUnwrap(Tokens.variants["\(appearance)-mustard"])
+            root.wantsLayer = true; root.layer!.backgroundColor = tokens.color("surface-canvas").cgColor
+            window.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
+            let transport = HistoryTransport(path: path.path, width: image.width, height: image.height,
+                failPartway: false, kinds: ["video", "screenshot", "gif", "screenshot", "video"])
+            let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
+                historyRoot: directory.path, settingsPath: nil, transport: transport, showPreferences: {})
+            defer { withExtendedLifetime(controller) {} }
+            window.makeKeyAndOrderFront(nil)
+            let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? NSTableView)
+            func button(_ title: String) throws -> CaptureButton {
+                try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }.first { $0.title == title })
+            }
+            func detailContains(_ text: String) -> Bool {
+                root.subviews.compactMap { ($0 as? NSTextField)?.stringValue }.contains { $0.contains(text) }
+            }
+            try waitUntil { table.numberOfRows == 5 && detailContains("H.264 MP4") }
+            XCTAssertEqual(try button("All 5").state, .on)
+            try button("Screenshots 2").performClick(nil)
+            try waitUntil { table.numberOfRows == 2 && detailContains("\(image.width + 1) × \(image.height) · PNG") }
+            table.selectRowIndexes([1], byExtendingSelection: false)
+            try waitUntil { detailContains("\(image.width + 3) × \(image.height) · PNG") }
+            transport.promote(id: "item-3")
+            try button("Refresh").performClick(nil)
+            try waitUntil { table.selectedRow == 0 && detailContains("\(image.width + 3) × \(image.height) · PNG") }
+            XCTAssertEqual(try button("Screenshots 2").state, .on)
+            try button("Video 2").performClick(nil)
+            try waitUntil { table.numberOfRows == 2 && detailContains("H.264 MP4") }
+            XCTAssertFalse(try button("Copy image").isEnabled)
+            try button("GIF 1").performClick(nil)
+            try waitUntil { table.numberOfRows == 1 && detailContains("GIF · Editor unavailable") }
+            XCTAssertEqual(try button("GIF 1").state, .on)
+            XCTAssertFalse(try button("Save image").isEnabled)
+            for title in ["All 5", "Screenshots 2", "Video 2", "GIF 1"] {
+                XCTAssertTrue(root.bounds.contains(try button(title).frame))
+            }
+            if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
+                window.display(); root.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(root.bitmapImageRepForCachingDisplay(in: root.bounds))
+                root.cacheDisplay(in: root.bounds, to: bitmap)
+                let folder = URL(fileURLWithPath: output)
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                    .write(to: folder.appendingPathComponent("history-filter-\(appearance)-gif.png"))
+            }
+            transport.remove(kind: "gif")
+            try button("Refresh").performClick(nil)
+            try waitUntil { table.numberOfRows == 0 && detailContains("No captures match this filter") }
+            XCTAssertEqual(table.selectedRow, -1)
+            XCTAssertFalse(try button("GIF 0").isEnabled)
+            XCTAssertEqual(try button("GIF 0").state, .on)
+            XCTAssertFalse(try button("Delete from history").isEnabled)
+            try button("All 4").performClick(nil)
+            try waitUntil { table.numberOfRows == 4 }
+            XCTAssertEqual(transport.clearCount, 0, "filtering never deletes files")
+        }
+    }
+
     func testCancelConfirmationClearAndPartialFailureRefresh() throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -92,11 +164,26 @@ private final class HistoryTransport: AppTransport {
     private var clears = 0
     private var failPartway: Bool
 
-    init(path: String, width: Int, height: Int, failPartway: Bool) {
+    init(path: String, width: Int, height: Int, failPartway: Bool,
+         kinds: [String] = ["screenshot", "screenshot"]) {
         self.failPartway = failPartway
-        artifacts = ["one", "two"].map { id in
-            ["entry": ["id": id, "width": width, "height": height, "created_at": "2026-09-18T00:00:00Z"],
+        artifacts = kinds.enumerated().map { index, kind in
+            ["entry": ["id": "item-\(index)", "kind": kind, "width": width + index, "height": height,
+                       "created_at": "2026-09-18T00:00:0\(kinds.count - index)Z"],
              "image_path": path, "preview_path": path]
+        }
+    }
+
+    func remove(kind: String) {
+        lock.lock(); defer { lock.unlock() }
+        artifacts.removeAll { ($0["entry"] as? [String: Any])?["kind"] as? String == kind }
+    }
+
+    func promote(id: String) {
+        lock.lock(); defer { lock.unlock() }
+        for index in artifacts.indices {
+            guard var entry = artifacts[index]["entry"] as? [String: Any], entry["id"] as? String == id else { continue }
+            entry["created_at"] = "2026-09-19T00:00:00Z"; artifacts[index]["entry"] = entry
         }
     }
 
