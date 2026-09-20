@@ -165,6 +165,7 @@ final class RecordingHUDTests: XCTestCase {
         XCTAssertEqual(background.alphaComponent, expected.alphaComponent, accuracy: 0.001)
         let window = NSWindow(contentRect: notice.bounds, styleMask: [.borderless],
             backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
         window.contentView = notice
         defer { window.close() }
         try render(notice, window: window, name: "recording-controls-hidden-notice")
