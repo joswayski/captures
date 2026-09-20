@@ -262,7 +262,10 @@ the shipping TypeScript behavior. A shared renderer now flattens real image laye
 and editor shapes, including closed annotations, curved lines, tapered arrows and
 freehand paths with crop geometry, rotation, opacity and blending, without host I/O.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
-resize/lossless image transforms/undo, and retained pixel frames for native hosts.
+resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
+pixel frames for native hosts. The shared C boundary accepts one borrowed decoded
+RGBA buffer into session-owned storage; native file decoding and controls remain
+unconnected.
 Full-canvas photos rotate their canvas; layered overhang stays clipped and fully
 off-canvas transformed images expand the canvas so they are not lost.
 The Windows/Linux candidate opens screenshots from History in a native crop,
@@ -281,11 +284,11 @@ window, along with native image-layer controls and PNG/JPEG/WebP output previews
 that report exact encoded size without saving. Its **Save new copy** controls choose
 a folder and filename, publish without replacing files, and preserve the draft.
 Windows, Wayland and physical AppKit presentation remain unverified.
-Native image-transform controls, text, annotation shadows, annotation tools, save
-overwrite-original, edited-image clipboard output, and recording editing remain
-unconnected. The shared image-transform command and
-rendering/export support are prerequisites, not native editor acceptance. OS shortcut
-takeover, login items, single-instance relaunch and updates
+Native image-transform and image-import controls, host file decoding/pickers, text,
+annotation shadows, annotation tools, overwrite-original, edited-image clipboard
+output, and recording editing remain unconnected. The shared
+import/transform/render/export support is prerequisite work, not native
+editor acceptance. OS shortcut takeover, login items, single-instance relaunch and updates
 are not connected to the native hosts yet. Windows/Linux renderer selection and full
 feature/design parity remain open. The
 [migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;

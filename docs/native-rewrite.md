@@ -23,7 +23,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices | Audio meter/device-change parity, physical recording/audio acceptance, recording editor and transcoded exports |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared v1 draft storage ([#594](https://github.com/joswayski/captures/pull/594)); document geometry/undo with shipping-TypeScript fixtures ([#595](https://github.com/joswayski/captures/pull/595)); real image/annotation rendering and worker-owned draft/edit sessions with retained C-ABI pixel frames; lossless image-transform command; shipping screenshot export encoding policy shared in Rust | Remaining native screenshot host controls/input, annotations/export UI and comparison acceptance, then recording playback/timeline/editing/export |
+| Editors | Shared v1 draft storage ([#594](https://github.com/joswayski/captures/pull/594)); document geometry/undo with shipping-TypeScript fixtures ([#595](https://github.com/joswayski/captures/pull/595)); real image/annotation rendering and worker-owned draft/edit sessions with retained C-ABI pixel frames; lossless image-transform and decoded-RGBA image-import commands; shipping screenshot export encoding policy shared in Rust | Remaining native screenshot host controls/input, annotations/export UI and comparison acceptance, then recording playback/timeline/editing/export |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -36,9 +36,9 @@ with those flows; its tests retain both screenshot-child and saved-notice covera
 Superseded parent PRs may be closed rather than separately merged because the
 repository uses squash merges. Their functionality must not be counted as missing.
 
-Next implementation boundary: connect shared image transforms and remaining output
-actions to both editor hosts. Shared commands and encoding remain prerequisites,
-not native editor/output acceptance.
+Next implementation boundary: connect shared image transforms and host-owned image
+pick/decode UI to both editor hosts, and remaining output actions to AppKit.
+Shared commands and encoding remain prerequisites, not native editor/output acceptance.
 Native live capture on Wayland remains explicitly
 gated; no stub or X11 result closes that platform gate. Merging development slices
 does not authorize a native release, renderer cutover or removal of Tauri.
@@ -395,6 +395,23 @@ drafts cannot load arbitrary filesystem/network image sources. Visible unsupport
 annotations remain errors rather than silently missing output. This is the same
 host-independent implementation for macOS, Windows, X11 and Wayland.
 
+The session also accepts one host-decoded in-memory RGBA image at a time without
+putting pixels or asset URLs in JSON. It matches shipping visible-layer target
+resolution, natural edge placement, capped stack sizing and fully-outside canvas
+expansion, then validates retained asset limits, renders and commits one undo step
+atomically. Imported assets survive undo/redo and draft save/reopen. Hosts still own
+file decoding, pickers and batch/drag presentation; none is connected by this shared
+prerequisite.
+
+`captures_editor_import_image_v1` exposes that single-image operation on the
+serialized C session boundary. Hosts pass borrowed top-down straight-alpha sRGB
+RGBA8 rows plus JSON name/selection/point metadata; the adapter validates shared
+render limits and all length/stride/pointer arithmetic before reading, copies into
+session-owned storage, and returns the stable layer ID with the current snapshot.
+Failures preserve document, frame, history, assets and files. This is an import
+transport prerequisite only: decoding, file pickers, clipboard, batch import and
+macOS, Windows, X11 or Wayland host acceptance remain open.
+
 Editor sessions can encode the current edited frame through the shared PNG/JPEG/
 WebP quality and hard-byte-budget policy. The C ABI returns independently owned
 encoded bytes, borrowed through an explicit pointer/length view and released
@@ -486,8 +503,8 @@ failure/close/output behavior and rendered light/dark fixtures. Physical AppKit 
 accessibility and IME acceptance remain unverified.
 
 Across both hosts, physical input/accessibility/IME acceptance remains open.
-Image-transform controls, annotation tools, AppKit edited-image export and recording
-editing are not connected; the screenshot-editor parity gate stays open.
+Image-transform/import controls, annotation tools, AppKit edited-image export and
+recording editing are not connected; the screenshot-editor parity gate stays open.
 
 New Capture connects its persisted shortcut, tray action and workspace entry to
 fixed-glass screenshot controls on both hosts. Region, Window and Full screen

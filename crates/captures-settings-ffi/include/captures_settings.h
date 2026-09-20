@@ -180,6 +180,19 @@ typedef struct CapturesEditorSession CapturesEditorSession;
 typedef struct CapturesEditorFrame CapturesEditorFrame;
 CapturesEditorSession *captures_editor_open_v1(const char *request_json, char **output);
 char *captures_editor_request_v1(CapturesEditorSession *session, const char *request_json);
+/* Import one host-decoded image on the serialized session worker. request_json is
+ * {name,selected_id?,point?:{x,y}} and never contains pixels or asset URLs.
+ * pixels describes borrowed top-down straight-alpha sRGB RGBA8; padded rows are
+ * accepted. The descriptor, JSON and actual RGBA bytes in each row must remain
+ * readable, initialized and live for the call; padding need not be initialized and
+ * is never read. The function validates dimensions, stride, length and pointer
+ * arithmetic before reading/copying, then owns an independent image.
+ * Success returns owned {ok:true,result:{layer_id,snapshot}}; failure returns
+ * {ok:false,error} without changing document/frame/history/assets or writing files.
+ * Free the response with captures_settings_free_v1. Never access/free the session
+ * concurrently. Hosts retain decoding, picker, clipboard and batch policy. */
+char *captures_editor_import_image_v1(CapturesEditorSession *session,
+    const CapturesRegionPixels *pixels, const char *request_json);
 void captures_editor_free_v1(CapturesEditorSession *session);
 /* Retain on the worker without copying pixels. The frame may move to the UI and
  * outlive subsequent edits or session free. Release exactly once after all image

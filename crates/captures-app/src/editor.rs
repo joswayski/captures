@@ -674,7 +674,7 @@ impl Document {
     }
 }
 
-fn image_bounds(image: &ImageElement) -> Rect {
+pub(crate) fn image_bounds(image: &ImageElement) -> Rect {
     let local = Rect {
         x: image.base.x,
         y: image.base.y,
