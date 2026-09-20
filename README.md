@@ -260,11 +260,15 @@ the shipping TypeScript behavior. A shared renderer now flattens real image laye
 and the five closed annotation shapes, including crop geometry, rotation, opacity
 and blending, without host I/O. Worker-owned editor sessions add draft restore/save/
 discard, transactional crop/resize/undo, and retained pixel frames for native hosts.
-AppKit connects crop, canvas resize and draft operations to its first screenshot-
-editor window. Text, open/freehand drawing, host annotation controls and edited-
-output export remain unconnected. This first host slice does not complete screenshot-
-editor acceptance.
-Editing, OS shortcut takeover, login items,
+The Windows/Linux candidate first connected screenshots from History to a native crop,
+canvas-size and draft editor with undo/redo. Closing can save or keep the previous
+draft; explicit Discard edits restores the original. Failed saves keep edits open
+and cancel normal quit. Private-X11 checks cover both appearances, persisted drafts,
+real preview pixels and error recovery. AppKit now connects the same crop, canvas-
+resize and draft operations in its own window. Windows, Wayland and physical AppKit
+presentation remain unverified.
+Annotation tools, edited-image export, and recording editing remain unconnected.
+OS shortcut takeover, login items,
 single-instance relaunch and updates are not connected to the native hosts yet. Windows/Linux
 renderer selection and full feature/design parity remain open. The
 [migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;

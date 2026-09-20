@@ -612,6 +612,7 @@ pub struct Live {
     displays: Vec<DisplayDescriptor>,
     display_id: Option<String>,
     artifacts: Vec<Artifact>,
+    editors: HashMap<String, crate::editor::Editor>,
     history_filter: HistoryFilter,
     selection: Selection,
     texture: Option<egui::TextureHandle>,
@@ -813,6 +814,7 @@ impl Live {
             displays: vec![],
             display_id: None,
             artifacts: vec![],
+            editors: HashMap::new(),
             history_filter: HistoryFilter::All,
             selection: Selection::default(),
             texture: None,
@@ -1117,7 +1119,15 @@ impl Live {
         }
     }
 
+    pub fn flush_editors(&self, ctx: &egui::Context) -> Result<(), String> {
+        for editor in self.editors.values() {
+            editor.flush(ctx)?;
+        }
+        Ok(())
+    }
+
     pub fn flush(&mut self) {
+        self.editors.clear();
         self.recording_notice = None;
         self.recording_notice_target = None;
         // Cancel preparation/countdown before draining work. CaptureFlow::cancel
@@ -1283,6 +1293,10 @@ impl Live {
     }
 
     pub fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        for editor in self.editors.values() {
+            editor.receive(ctx);
+        }
+        self.editors.retain(|_, editor| !editor.closed());
         if self
             .recording_notice
             .as_ref()
@@ -2998,6 +3012,9 @@ impl Live {
         tokens: &Tokens,
         settings: Result<AppSettings, String>,
     ) {
+        for editor in self.editors.values() {
+            editor.show(ctx, tokens);
+        }
         self.capture_viewports(ctx, tokens);
         while let Ok(action) = self.notice_rx.try_recv() {
             use crate::recording_saved_notice::Action;
@@ -3989,7 +4006,7 @@ impl Live {
                     RichText::new("Native capture workspace").color(t.color("text-muted")),
                 );
             });
-            ui.label("Capture screenshots or record video from a display, region or window. Browse capture history below; native editing is not connected yet.");
+            ui.label("Capture screenshots or record video from a display, region or window. Open screenshots from History to crop, resize the canvas and keep edits as drafts.");
             ui.horizontal(|ui| {
                 egui::ComboBox::from_label("Display")
                     .selected_text(self.displays.iter().find(|d| Some(&d.id) == self.display_id.as_ref()).map_or("No display", |d| d.name.as_str()))
@@ -4200,6 +4217,15 @@ impl Live {
                     && let Err(error) = reveal(Path::new(path))
                 {
                     self.error = Some(format!("Could not reveal export: {error}"));
+                }
+                if ui.add_enabled(selected_is_screenshot && self.pending == 0,
+                    egui::Button::new("Edit screenshot")).clicked()
+                    && let Some(id) = selected.clone()
+                {
+                    let editor = self.editors.entry(id.clone()).or_insert_with(|| {
+                        crate::editor::Editor::open(ui.ctx(), self.root.clone(), id)
+                    });
+                    editor.focus(ui.ctx());
                 }
             });
             if let Some(entry) = selected_entry.filter(|entry| entry.kind.is_recording()) {

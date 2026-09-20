@@ -355,24 +355,22 @@ crop, translation, canvas sizing, lossless D4 image orientation and 100-snapshot
 undo/redo semantics. TypeScript-generated vectors cover fractional/off-canvas
 geometry, hidden and locked layers, every orientation and history branching.
 Unknown document fields survive native operations, remaining compatible with the
-opaque version-1 draft manifest. No host UI or renderer is connected, so macOS,
-Windows, X11 and Wayland remain `not implemented` for native editor acceptance.
+opaque version-1 draft manifest. This prerequisite alone does not close a native
+editor acceptance gate; the first connected host slice is recorded below.
 
 The first shared editor-rendering unit converts visible image layers into the
 existing `captures-image` compositor using caller-supplied in-memory assets. It
 retains canvas background/alpha, clipping, order, opacity, six blend modes,
 lossless D4 bitmap orientation and arbitrary layer rotation while explicitly
 rejecting unsupported visible annotation layers and invalid or oversized inputs.
-It performs no host I/O and is not wired to AppKit or wgpu UI; macOS, Windows,
-X11 and Wayland native editor acceptance therefore remains `not implemented`.
+It performs no host I/O; host sessions supply the decoded assets.
 
 The closed-shape renderer follow-up adds rectangle, ellipse, triangle, diamond
 and star layers in shared stack order with shipping drag-box geometry, rounded
 rectangle corners, star proportions, authored rotation origin, fill/stroke
 defaults, opacity and blending. Visible text, line/arrow, freehand and drop-shadow
 content remains an explicit rendering error rather than disappearing. This is
-still shared-core preparation only: no host presentation is connected, and macOS,
-Windows, X11 and Wayland editor acceptance remains `not implemented`.
+shared rendering support, not native drawing-tool presentation or full acceptance.
 
 The shared editor-session boundary now opens isolated History screenshots and
 version-1 drafts, owns decoded image assets and snapshot history, and validates
@@ -387,18 +385,35 @@ drafts cannot load arbitrary filesystem/network image sources. Visible unsupport
 annotations remain errors rather than silently missing output. This is the same
 host-independent implementation for macOS, Windows, X11 and Wayland.
 
-The first AppKit editor-host slice enables **Edit screenshot** only for screenshot
-History entries. A dedicated serialized worker owns the shared Rust session and
-publishes independently retained RGBA frames to a fit preview. The window exposes
-crop geometry, canvas sizing, Undo/Redo, explicit draft save and confirmed draft
-discard; shared Rust remains the only geometry/render authority. Drafts live in an
-isolated `editor-drafts` sibling of native History and reopen with the screenshot.
-Closing an unsaved session offers save-and-close, close without saving the current
-session (retaining any older saved draft), or cancel. Quit drains accepted work and
-cancels termination if its draft save fails. Recordings, annotations and edited-image
-export remain explicitly unsupported. AppKit CI covers bridge lifetime, state,
-failure/close behavior and rendered light/dark fixtures, but physical macOS and all
-wgpu host acceptance remain unverified, so no editor parity gate closes here.
+The first wgpu editor window now opens isolated History screenshots on its own
+serialized worker, with fit preview, numeric crop/canvas fields, undo/redo,
+save draft and confirmed discard. Closing unsaved edits offers save, keep the last
+persisted draft without saving the new edits, or cancel. Normal quit drains queued
+edits and saves dirty sessions; failure cancels quit and focuses the recoverable
+editor. The original History PNG and exports remain unchanged. Live workspace and
+editor windows use persisted appearance without first visiting Preferences.
+`apps/native/x11_editor_smoke.py` checks real input, asymmetric crop/resize pixels,
+draft geometry/reopen, prior-draft preservation, discard, failed save/quit and
+successful quit retry in dark and light. Minimum-size error/scroll states are
+visually inspected. Unit tests cover queued edits and stale replies during close.
+Status: X11 verified on private software GL; Windows and Wayland use the same
+implemented host but remain presentation-unverified.
+
+The AppKit editor host now enables **Edit screenshot** only for screenshot History
+entries. Its dedicated serialized worker owns the shared Rust session and publishes
+independently retained RGBA frames to a fit preview. The window exposes crop geometry,
+canvas sizing, Undo/Redo, explicit draft save and confirmed draft discard; shared Rust
+remains the only geometry/render authority. Drafts use the same isolated sibling root
+and reopen with the screenshot. Closing an unsaved session offers save-and-close,
+close without saving the current session (retaining any older persisted draft), or
+cancel. Quit drains accepted work and cancels termination if its draft save fails.
+AppKit CI covers bridge lifetime, pending-edit ownership, locale-aware geometry,
+failure/close behavior and rendered light/dark fixtures. Physical AppKit input,
+accessibility and IME acceptance remain unverified.
+
+Across both hosts, physical input/accessibility/IME acceptance remains open.
+Annotation tools, edited-image export and recording editing are not connected;
+the screenshot-editor parity gate stays open.
 
 New Capture connects its persisted shortcut, tray action and workspace entry to
 fixed-glass screenshot controls on both hosts. Region, Window and Full screen
