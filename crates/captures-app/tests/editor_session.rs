@@ -1,7 +1,9 @@
 use std::{fs, path::Path, sync::Arc};
 
 use captures_app::{
-    editor::{Element, ImageOrientation, OptionalNullable, Point, Rect},
+    editor::{
+        AnnotationStylePatch, Element, ImageOrientation, LayerEdit, OptionalNullable, Point, Rect,
+    },
     editor_session::{EditorSession, ImportImage, OpenRequest, Request},
 };
 use captures_capture::CaptureMode;
@@ -370,6 +372,8 @@ fn annotation_style_json_patches_locked_hidden_layers_and_preserves_history_and_
     assert!(editor.snapshot().can_redo);
     let retained_frame = editor.pixels();
     let retained_snapshot = serde_json::to_value(editor.snapshot()).unwrap();
+    let manifest_path = data.path().join("drafts").join(&id).join("manifest.json");
+    let retained_manifest = fs::read(&manifest_path).unwrap();
     for request in [
         layer(
             "capture-background",
@@ -389,6 +393,13 @@ fn annotation_style_json_patches_locked_hidden_layers_and_preserves_history_and_
             "locked-shape",
             json!({"action": "annotation_style", "patch": {}}),
         ),
+        layer(
+            "locked-shape",
+            json!({
+                "action": "annotation_style",
+                "patch": {"dropShadowStyle": {}}
+            }),
+        ),
     ] {
         editor.execute(request).unwrap();
         assert_eq!(
@@ -397,6 +408,7 @@ fn annotation_style_json_patches_locked_hidden_layers_and_preserves_history_and_
         );
         assert!(Arc::ptr_eq(&retained_frame, &editor.pixels()));
         assert!(editor.snapshot().can_redo);
+        assert_eq!(fs::read(&manifest_path).unwrap(), retained_manifest);
     }
     assert!(
         editor
@@ -426,6 +438,28 @@ fn annotation_style_json_patches_locked_hidden_layers_and_preserves_history_and_
     );
     assert!(Arc::ptr_eq(&retained_frame, &editor.pixels()));
     assert!(editor.snapshot().can_redo);
+    for stroke_width in [f64::NAN, f64::INFINITY] {
+        assert!(
+            editor
+                .execute(Request::Layer {
+                    id: "hidden-path".into(),
+                    edit: LayerEdit::AnnotationStyle {
+                        patch: AnnotationStylePatch {
+                            stroke_width: Some(stroke_width),
+                            ..Default::default()
+                        },
+                    },
+                })
+                .is_err()
+        );
+        assert_eq!(
+            serde_json::to_value(editor.snapshot()).unwrap(),
+            retained_snapshot
+        );
+        assert!(Arc::ptr_eq(&retained_frame, &editor.pixels()));
+        assert!(editor.snapshot().can_redo);
+        assert_eq!(fs::read(&manifest_path).unwrap(), retained_manifest);
+    }
 
     editor.execute(Request::Redo).unwrap();
     editor
