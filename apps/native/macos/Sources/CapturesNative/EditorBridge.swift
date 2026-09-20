@@ -2,6 +2,41 @@ import Foundation
 import CoreGraphics
 import CCapturesSettings
 
+struct NativeEditorLayer: Equatable {
+    enum Kind: String {
+        case image, text, shape, path
+    }
+
+    let id: String
+    let name: String
+    let kind: Kind
+    let visible: Bool
+    let locked: Bool
+    let opacity: Double
+    let x: Double
+    let y: Double
+
+    init?(_ value: [String: Any]) {
+        guard let id = value["id"] as? String, !id.isEmpty,
+              let rawKind = value["kind"] as? String,
+              let kind = Kind(rawValue: rawKind),
+              let visible = value["visible"] as? Bool,
+              let locked = value["locked"] as? Bool,
+              let opacity = value["opacity"] as? NSNumber,
+              let x = value["x"] as? NSNumber,
+              let y = value["y"] as? NSNumber else { return nil }
+        self.id = id; self.kind = kind
+        self.visible = visible; self.locked = locked
+        self.opacity = opacity.doubleValue; self.x = x.doubleValue; self.y = y.doubleValue
+        switch kind {
+        case .image: name = (value["name"] as? String) ?? "Image"
+        case .text: name = "Text"
+        case .shape: name = "Shape"
+        case .path: name = "Drawing"
+        }
+    }
+}
+
 struct NativeEditorSnapshot: Equatable {
     let artifactID: String
     let width: Double
@@ -10,6 +45,8 @@ struct NativeEditorSnapshot: Equatable {
     let canRedo: Bool
     let unsavedChanges: Bool
     let hasDraft: Bool
+    /// Shared documents store back-to-front. Native layer panels display front-to-back.
+    let layers: [NativeEditorLayer]
 
     init?(_ value: [String: Any]) {
         guard let artifactID = value["artifact_id"] as? String,
@@ -21,10 +58,14 @@ struct NativeEditorSnapshot: Equatable {
               let unsavedChanges = value["unsaved_changes"] as? Bool,
               let hasDraft = value["has_draft"] as? Bool,
               width.doubleValue > 0, height.doubleValue > 0 else { return nil }
+        let elements = document["elements"] as? [[String: Any]] ?? []
+        let layers = elements.compactMap(NativeEditorLayer.init)
+        guard layers.count == elements.count else { return nil }
         self.artifactID = artifactID
         self.width = width.doubleValue; self.height = height.doubleValue
         self.canUndo = canUndo; self.canRedo = canRedo
         self.unsavedChanges = unsavedChanges; self.hasDraft = hasDraft
+        self.layers = Array(layers.reversed())
     }
 }
 

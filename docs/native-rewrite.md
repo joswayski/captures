@@ -392,7 +392,8 @@ and reorder placements across locked boundaries. Hidden layers remain editable;
 locked layers block movement/deletion/reordering but permit the other panel
 actions. Duplicates share owned image assets and remain draft-compatible.
 These commands are a shared prerequisite on all four platforms; layer-panel
-controls and physical acceptance are not connected by this slice.
+controls are now connected in the AppKit editor. Other host controls and physical
+acceptance remain separate parity work.
 
 The first wgpu editor window now opens isolated History screenshots on its own
 serialized worker, with fit preview, numeric crop/canvas fields, undo/redo,
@@ -412,7 +413,11 @@ The AppKit editor host now enables **Edit screenshot** only for screenshot Histo
 entries. Its dedicated serialized worker owns the shared Rust session and publishes
 independently retained RGBA frames to a fit preview. The window exposes crop geometry,
 canvas sizing, Undo/Redo, explicit draft save and confirmed draft discard; shared Rust
-remains the only geometry/render authority. Drafts use the same isolated sibling root
+remains the only geometry/render authority. Geometry and Layers views retain the fit
+preview; the front-to-back layer panel exposes visibility, lock, opacity, absolute
+X/Y movement through shared deltas, image rename, duplicate, delete and adjacent
+ordering. Stable IDs preserve selection across replies, and shared Rust remains the
+authority for locked barriers and duplicate behavior. Drafts use the same isolated sibling root
 and reopen with the screenshot. Closing an unsaved session offers save-and-close,
 close without saving the current session (retaining any older persisted draft), or
 cancel. Quit drains accepted work and cancels termination if its draft save fails.
