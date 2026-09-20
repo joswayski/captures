@@ -569,6 +569,12 @@ final class ScreenshotEditorTests: XCTestCase {
         _ = NSApplication.shared
         let fixture = try makeHistoryFixture(transparentOrigin: true)
         defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let fixtureData = try Data(contentsOf: fixture.history.appendingPathComponent(fixture.id)
+            .appendingPathComponent("capture.png"))
+        let fixtureSource = try XCTUnwrap(CGImageSourceCreateWithData(fixtureData as CFData, nil))
+        XCTAssertEqual(renderedAlphaRange(try XCTUnwrap(
+            CGImageSourceCreateImageAtIndex(fixtureSource, 0, nil))).lowerBound, 0,
+            "the real-bridge fixture itself retains transparency")
         let worker = EditorWorker()
         let opened = expectation(description: "open for export")
         worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
@@ -699,7 +705,12 @@ final class ScreenshotEditorTests: XCTestCase {
         let entry = history.appendingPathComponent(id)
         try FileManager.default.createDirectory(at: entry, withIntermediateDirectories: true)
         let image = CGImage.fixture(width: 7, height: 3, transparentOrigin: transparentOrigin)
-        let png = try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+        let encoded = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+            encoded, "public.png" as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        let png = encoded as Data
         try png.write(to: entry.appendingPathComponent("capture.png"))
         try png.write(to: entry.appendingPathComponent("preview.png"))
         let metadata: [String: Any] = [
@@ -721,20 +732,18 @@ final class ScreenshotEditorTests: XCTestCase {
     }
 
     private func renderedAlphaRange(_ image: CGImage) -> ClosedRange<UInt8> {
-        var pixels = [UInt8](repeating: 0, count: image.width * image.height * 4)
-        let rendered = pixels.withUnsafeMutableBytes { storage -> Bool in
+        var alpha = [UInt8](repeating: 0, count: image.width * image.height)
+        let rendered = alpha.withUnsafeMutableBytes { storage -> Bool in
             guard let base = storage.baseAddress,
                   let context = CGContext(data: base, width: image.width, height: image.height,
-                                          bitsPerComponent: 8, bytesPerRow: image.width * 4,
-                                          space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                          bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue
-                                              | CGImageAlphaInfo.premultipliedLast.rawValue)
+                                          bitsPerComponent: 8, bytesPerRow: image.width,
+                                          space: nil,
+                                          bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue)
             else { return false }
             context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
             return true
         }
         guard rendered else { return 0...0 }
-        let alpha = stride(from: 3, to: pixels.count, by: 4).map { pixels[$0] }
         return (alpha.min() ?? 0)...(alpha.max() ?? 0)
     }
 }
