@@ -406,8 +406,21 @@ draft geometry/reopen, prior-draft preservation, discard, failed save/quit and
 successful quit retry in dark and light. Minimum-size error/scroll states are
 visually inspected. Unit tests cover queued edits and stale replies during close.
 Status: X11 verified on private software GL; Windows and Wayland use the same
-implemented host but remain presentation-unverified; AppKit presentation is in
-progress. Physical input/accessibility/IME acceptance remains open everywhere.
+implemented host but remain presentation-unverified.
+
+The AppKit editor host now enables **Edit screenshot** only for screenshot History
+entries. Its dedicated serialized worker owns the shared Rust session and publishes
+independently retained RGBA frames to a fit preview. The window exposes crop geometry,
+canvas sizing, Undo/Redo, explicit draft save and confirmed draft discard; shared Rust
+remains the only geometry/render authority. Drafts use the same isolated sibling root
+and reopen with the screenshot. Closing an unsaved session offers save-and-close,
+close without saving the current session (retaining any older persisted draft), or
+cancel. Quit drains accepted work and cancels termination if its draft save fails.
+AppKit CI covers bridge lifetime, pending-edit ownership, locale-aware geometry,
+failure/close behavior and rendered light/dark fixtures. Physical AppKit input,
+accessibility and IME acceptance remain unverified.
+
+Across both hosts, physical input/accessibility/IME acceptance remains open.
 Annotation tools, edited-image export and recording editing are not connected;
 the screenshot-editor parity gate stays open.
 

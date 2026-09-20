@@ -481,6 +481,12 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !options.live }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Drain the editor's dedicated worker before capture teardown. A failed
+        // draft save keeps its session/window recoverable and cancels this quit.
+        if liveController?.prepareEditorForTermination() == false {
+            terminating = false
+            return .terminateCancel
+        }
         terminating = true
         performTermination(flushPreferences: { [weak self] in self?.preferencesController?.flush() },
             cancelCapture: { [weak self] in self?.liveController?.finishCapture(restoreWindow: false) },
@@ -898,6 +904,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     @discardableResult private func discardLiveWorkspaceForStyleChange() -> Bool {
         guard scene == "live", !captureBusy,
               renderedLiveStyleRevision != liveStyleRevision else { return false }
+        guard liveController?.prepareEditorForTermination() != false else { return false }
         liveController?.finishCapture(restoreWindow: false)
         liveController = nil
         liveContent = nil
