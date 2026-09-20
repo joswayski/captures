@@ -457,6 +457,13 @@ Preview never writes files or saves a draft. The same Windows/X11/Wayland host
 code is implemented; private-X11 and unit checks do not establish physical-host
 acceptance. Its **Save new copy** action runs shared publication on the same worker,
 starts in the configured output directory and accepts an editable full path.
+**Change…** uses the existing rfd native folder picker to change that directory
+without changing the filename. Cancellation preserves the destination; selection
+does not persist anything. The dialog runs independently of the session worker,
+so closing/quit still drains edits and saves drafts, and closed editors ignore late
+dialog results. Private-X11 tests exercise the real rfd/portal transport against a
+disposable chooser fixture, not a physical desktop dialog; Windows/Wayland native
+picker presentation and accessibility remain unverified.
 It never replaces existing files; successful exports add a distinct History entry
 without modifying the original or draft. A post-publication History failure shows
 the saved path and warning. Accepted writes drain before application quit.
@@ -467,8 +474,8 @@ file output. The workspace retains clipboard ownership after an editor closes;
 normal quit drains accepted copies. X11 checks read the actual PNG selection and
 verify edited pixels before and after editor close. Linux currently uses arboard's
 X11/XWayland backend; native Wayland clipboard support is not enabled. Windows uses
-the existing platform backend but remains physically unverified. Native save
-dialogs, overwrite-original, AppKit output controls and physical acceptance remain
+the existing platform backend but remains physically unverified. Overwrite-original,
+AppKit output controls and physical acceptance remain
 separate work.
 
 The AppKit editor host now enables **Edit screenshot** only for screenshot History

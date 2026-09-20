@@ -24,6 +24,47 @@ from gi.repository import GLib
 from x11_capture_smoke import ScreenSaver
 
 
+class FolderRequest(dbus.service.Object):
+    @dbus.service.signal("org.freedesktop.portal.Request", signature="ua{sv}")
+    def Response(self, code, results):
+        pass
+
+
+class FolderChooser(dbus.service.Object):
+    """Disposable portal transport fixture; this is not a real desktop dialog."""
+
+    def __init__(self, bus, selected):
+        self.name = dbus.service.BusName("org.freedesktop.portal.Desktop", bus=bus)
+        super().__init__(self.name, "/org/freedesktop/portal/desktop")
+        self.selected = selected
+        self.calls, self.requests = [], []
+        self.pending = None
+
+    @dbus.service.method("org.freedesktop.DBus.Properties", in_signature="ss", out_signature="v")
+    def Get(self, interface, property_name):
+        assert interface == "org.freedesktop.portal.FileChooser" and property_name == "version"
+        return dbus.UInt32(3)
+
+    @dbus.service.method("org.freedesktop.portal.FileChooser", in_signature="ssa{sv}",
+                         out_signature="o", sender_keyword="sender")
+    def OpenFile(self, parent, title, options, sender):
+        self.calls.append((title, options))
+        token = options["handle_token"]
+        owner = sender.removeprefix(":").replace(".", "_")
+        path = f"/org/freedesktop/portal/desktop/request/{owner}/{token}"
+        request = FolderRequest(self.name, path)
+        self.requests.append(request)
+        self.pending = request
+        return dbus.ObjectPath(path)
+
+    def respond(self, cancel):
+        self.pending.Response(1 if cancel else 0, {} if cancel else {
+            "uris": dbus.Array([self.selected.as_uri()], signature="s"),
+        })
+        self.pending = None
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
@@ -105,6 +146,7 @@ def main():
         bus = dbus.bus.BusConnection(address)
         name = dbus.service.BusName("org.freedesktop.ScreenSaver", bus=bus, do_not_queue=True)
         saver = ScreenSaver(name, "/org/freedesktop/ScreenSaver")
+        chooser = FolderChooser(bus, output / "exports")
         loop = GLib.MainLoop()
         thread = threading.Thread(target=loop.run, daemon=True)
         thread.start()
@@ -162,9 +204,16 @@ def main():
             layer = document["elements"][0]
             return (document["width"], document["height"], layer["x"], layer["y"]) == (width, height, x, y)
 
+        def save_until(predicate, description):
+            def attempt():
+                # Save is idempotent. X11 can still expose the previous idle title
+                # while an edit is queued, so an early Save click may be disabled.
+                click(editor, 170, 62)
+                return predicate()
+            wait(attempt, description)
+
         def save(width, height, x, y):
-            click(editor, 170, 62)
-            wait(lambda: saved(width, height, x, y), f"saved {width}x{height} at {x},{y}")
+            save_until(lambda: saved(width, height, x, y), f"saved {width}x{height} at {x},{y}")
 
         def close(window):
             run("xdotool", "windowactivate", "--sync", window, "key", "alt+F4", "sleep", ".4")
@@ -180,8 +229,7 @@ def main():
             return json.loads(draft.read_text())["document"]["elements"] if draft.exists() else []
 
         def save_layers(predicate, description):
-            click(editor, 170, 62)
-            wait(lambda: predicate(layers()), description)
+            save_until(lambda: predicate(layers()), description)
             return layers()
 
         click(editor, 463, 62)  # Layers, preserving the Geometry panel's scroll position.
@@ -327,8 +375,28 @@ def main():
         assert not (output / "exports").exists(), "preview must not publish files"
 
         exported = output / "exports" / "edited.webp"
-        field(602, exported)
-        click(editor, 65, 641)
+        initial_directory = output / "unchosen folder"
+        initial_directory.mkdir()
+        exported.parent.mkdir()
+        field(618, initial_directory / exported.name)
+        click(editor, 149, 584)
+        wait(lambda: len(chooser.calls) == 1, "folder dialog cancellation")
+        shot(editor, "export-folder-pending")
+        click(editor, 65, 657)  # Save is disabled until the folder choice completes.
+        assert not list(initial_directory.iterdir()) and not list(exported.parent.iterdir())
+        GLib.idle_add(chooser.respond, True)
+        time.sleep(.5)
+        click(editor, 149, 584)
+        wait(lambda: len(chooser.calls) == 2, "folder dialog selection")
+        GLib.idle_add(chooser.respond, False)
+        time.sleep(.5)
+        for title, options in chooser.calls:
+            assert title == "Choose save location" and options["directory"] and not options.get("multiple", False)
+            assert bytes(options["current_folder"]).rstrip(b"\0") == os.fsencode(initial_directory)
+        assert not list(initial_directory.iterdir()) and not list(exported.parent.iterdir())
+        assert draft.read_bytes() == saved_draft and len(list(history.glob("*/metadata.json"))) == 1
+        shot(editor, "export-folder-selected")
+        click(editor, 65, 657)
         wait(exported.exists, "new edited copy published")
         metadata = wait(lambda: [path for path in history.glob("*/metadata.json")
                                if path.parent != artifact], "new export in History")
@@ -346,7 +414,7 @@ def main():
         run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "12", "5")
         shot(editor, "export-saved-scrolled")
         run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "4")
-        click(editor, 65, 641)  # Same filename must fail rather than replace.
+        click(editor, 65, 657)  # Same filename must fail rather than replace.
         shot(editor, "export-collision")
         assert exported.read_bytes() == exported_bytes
         assert len(list(history.glob("*/metadata.json"))) == 2
@@ -355,8 +423,8 @@ def main():
         history.rename(output / "previous-history")
         history.write_text("blocks History creation")
         recovered = output / "exports" / "recovered.webp"
-        field(629, recovered)  # The collision error adds 27px above the panel.
-        click(editor, 65, 668)
+        field(645, recovered)  # The collision error adds 27px above the panel.
+        click(editor, 65, 657)  # Editing the destination clears the collision error.
         wait(recovered.exists, "file saved despite unavailable History")
         assert recovered.read_bytes() == exported_bytes
         run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "5")
@@ -371,7 +439,7 @@ def main():
         assert (artifact / "capture.png").read_bytes() == original
 
         run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "4")
-        click(editor, 170, 641)  # Copy the edited canvas, not the History source.
+        click(editor, 170, 657)  # Copy the edited canvas, not the History source.
         wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
              "edited clipboard copy completes")
         copied = run("xclip", "-selection", "clipboard", "-t", "image/png", "-o")
@@ -438,6 +506,7 @@ def main():
                        "output-budget-error-retry", "output-no-draft-or-file-write",
                        "output-png-palette-minimum-scroll", "export-new-copy-history",
                        "export-collision-original-protection", "export-history-warning-recovery",
+                       "folder-portal-cancel-select-filename-no-persistence",
                        "clipboard-edited-pixels-no-persistence", "clipboard-survives-editor-close"],
             "originalSha256": hashlib.sha256(original).hexdigest(),
         }, indent=2) + "\n")

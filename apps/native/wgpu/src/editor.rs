@@ -80,6 +80,7 @@ struct View {
     output: Option<(egui::TextureHandle, usize)>,
     show_output: bool,
     destination: String,
+    folder_picker: Option<Receiver<Option<PathBuf>>>,
     output_notice: Option<String>,
     history_changed: bool,
     selected_layer: Option<String>,
@@ -112,6 +113,7 @@ impl Default for View {
             output: None,
             show_output: false,
             destination: String::new(),
+            folder_picker: None,
             output_notice: None,
             history_changed: false,
             selected_layer: None,
@@ -252,6 +254,57 @@ impl View {
     fn copy(&mut self, tx: &Sender<Job>) {
         self.output_notice = None;
         self.submit_job(tx, Job::Copy);
+    }
+
+    fn choose_folder(&mut self, ctx: &egui::Context) {
+        if self.folder_picker.is_some() {
+            return;
+        }
+        let directory = PathBuf::from(&self.destination)
+            .parent()
+            .map(|path| path.to_owned())
+            .unwrap_or_default();
+        let (tx, rx) = mpsc::channel();
+        self.folder_picker = Some(rx);
+        let ctx = ctx.clone();
+        let viewport = ctx.viewport_id();
+        // A native dialog must not occupy the session worker: closing/quit still
+        // drains edits and saves drafts without waiting for a folder selection.
+        thread::spawn(move || {
+            let selected = rfd::FileDialog::new()
+                .set_title("Choose save location")
+                .set_directory(directory)
+                .pick_folder();
+            let _ = tx.send(selected);
+            wake(&ctx, viewport);
+        });
+    }
+
+    fn receive_folder(&mut self) -> bool {
+        let Some(result) = self.folder_picker.as_ref().map(Receiver::try_recv) else {
+            return false;
+        };
+        if matches!(result, Err(mpsc::TryRecvError::Empty)) {
+            return false;
+        }
+        self.folder_picker = None;
+        if self.closed {
+            return false;
+        }
+        match result {
+            Ok(Some(directory)) => {
+                let destination = PathBuf::from(&self.destination);
+                self.destination = directory
+                    .join(destination.file_name().unwrap_or_default())
+                    .to_string_lossy()
+                    .into_owned();
+                self.output_notice = None;
+                self.error = None;
+            }
+            Ok(None) => {} // Cancellation preserves the path and current session.
+            Err(_) => self.error = Some("Save location could not be changed. Try again.".into()),
+        }
+        true
     }
 
     fn submit_job(&mut self, tx: &Sender<Job>, job: Job) {
@@ -449,6 +502,9 @@ impl Editor {
     }
 
     pub fn receive(&self, ctx: &egui::Context) {
+        if self.view.lock().unwrap().receive_folder() {
+            ctx.request_repaint_of(self.viewport);
+        }
         while let Ok(result) = self.rx.try_recv() {
             self.view.lock().unwrap().receive(ctx, result);
             ctx.request_repaint_of(self.viewport);
@@ -717,11 +773,32 @@ fn show_output(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<
     }
     ui.small("Preview does not save a file or a draft. JPEG flattens transparency onto white.");
     ui.separator();
-    ui.label("New copy destination");
-    ui.add(egui::TextEdit::singleline(&mut view.destination).desired_width(ui.available_width()))
-        .on_hover_text(&view.destination);
     ui.horizontal(|ui| {
-        if ui.button("Save new copy").clicked() {
+        ui.label("Save location");
+        if ui
+            .add_enabled(view.folder_picker.is_none(), egui::Button::new("Change…"))
+            .on_hover_text("Choose a folder; keep the current filename")
+            .clicked()
+        {
+            view.choose_folder(ui.ctx());
+        }
+    });
+    if ui
+        .add(egui::TextEdit::singleline(&mut view.destination).desired_width(ui.available_width()))
+        .on_hover_text(&view.destination)
+        .changed()
+    {
+        view.output_notice = None;
+        view.error = None;
+    }
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(
+                view.folder_picker.is_none(),
+                egui::Button::new("Save new copy"),
+            )
+            .clicked()
+        {
             view.save_new(tx);
         }
         if ui.button("Copy pixels").clicked() {
@@ -954,6 +1031,58 @@ mod tests {
         Arc::make_mut(&mut empty.document).elements.clear();
         view.receive(&ctx, Ok(empty));
         assert!(view.selected_layer.is_none());
+    }
+
+    #[test]
+    fn folder_selection_preserves_filename_and_cancelled_or_stale_results_preserve_state() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented(true)));
+        let frame = view.presented.as_ref().unwrap().pixels.clone();
+        let document = view.presented.as_ref().unwrap().document.clone();
+        let old_path = PathBuf::from("old folder").join("capture.é.webp");
+        view.destination = old_path.to_string_lossy().into_owned();
+        view.output_notice = Some("Previous result".into());
+        let (tx, rx) = mpsc::channel();
+        view.folder_picker = Some(rx);
+        view.receive_folder();
+        assert!(view.folder_picker.is_some() && !view.pending);
+        tx.send(None).unwrap();
+        view.receive_folder();
+        assert!(view.folder_picker.is_none());
+        assert_eq!(PathBuf::from(&view.destination), old_path);
+        assert_eq!(view.output_notice.as_deref(), Some("Previous result"));
+
+        let (tx, rx) = mpsc::channel();
+        view.folder_picker = Some(rx);
+        drop(tx);
+        view.receive_folder();
+        assert!(view.error.is_some() && view.folder_picker.is_none());
+        assert_eq!(PathBuf::from(&view.destination), old_path);
+        let (tx, rx) = mpsc::channel();
+        view.folder_picker = Some(rx);
+        tx.send(Some(PathBuf::from("chosen folder"))).unwrap();
+        view.receive_folder();
+        let chosen = PathBuf::from("chosen folder").join("capture.é.webp");
+        assert_eq!(PathBuf::from(&view.destination), chosen);
+        assert!(view.output_notice.is_none() && view.error.is_none() && !view.pending);
+        assert!(view.unsaved() && view.presented.as_ref().unwrap().can_undo);
+        assert!(Arc::ptr_eq(
+            &view.presented.as_ref().unwrap().pixels,
+            &frame
+        ));
+        assert!(Arc::ptr_eq(
+            &view.presented.as_ref().unwrap().document,
+            &document
+        ));
+
+        let (tx, rx) = mpsc::channel();
+        view.folder_picker = Some(rx);
+        view.closed = true;
+        tx.send(Some(PathBuf::from("stale folder"))).unwrap();
+        view.receive_folder();
+        assert_eq!(PathBuf::from(&view.destination), chosen);
+        assert!(view.closed && view.folder_picker.is_none());
     }
 
     #[test]
@@ -1384,7 +1513,11 @@ mod tests {
             })
             .unwrap();
         editor.tx.send(Job::Copy).unwrap();
+        let (folder_reply, folder_result) = mpsc::channel();
+        editor.view.lock().unwrap().folder_picker = Some(folder_result);
         editor.flush(&ctx).unwrap();
+        assert!(editor.view.lock().unwrap().folder_picker.is_some());
+        drop(folder_reply); // Quit drained output without waiting for the native dialog.
         let pixels = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(pixels.dimensions(), (4, 2));
         assert_eq!(pixels.get_pixel(0, 0).0, [62, 71, 9, 255]);
