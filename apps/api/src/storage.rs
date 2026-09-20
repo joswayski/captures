@@ -46,7 +46,6 @@ pub trait ObjectStore: Send + Sync {
     ) -> Result<(), ()>;
     async fn abort_multipart(&self, key: &str, upload_id: &str) -> Result<(), ()>;
     async fn head(&self, key: &str) -> Result<i64, ()>;
-    async fn delete(&self, key: &str) -> Result<(), ()>;
 }
 
 pub struct R2Store {
@@ -174,16 +173,6 @@ impl ObjectStore for R2Store {
             .map_err(|_| ())?
             .content_length()
             .ok_or(())
-    }
-    async fn delete(&self, key: &str) -> Result<(), ()> {
-        self.client
-            .delete_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .send()
-            .await
-            .map(|_| ())
-            .map_err(|_| ())
     }
 }
 

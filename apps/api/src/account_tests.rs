@@ -44,12 +44,18 @@ struct Objects {
     created_keys: Mutex<Vec<String>>,
     complete_calls: AtomicUsize,
     fail_abort: AtomicBool,
-    fail_delete: AtomicBool,
     fail_head_once: AtomicBool,
 }
 impl Objects {
     fn stage(&self, asset: &str, bytes: &[u8]) {
-        let key = format!("assets/{asset}");
+        let key = self
+            .created_keys
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|key| key.ends_with(&format!("/{asset}")))
+            .unwrap()
+            .clone();
         self.pending
             .lock()
             .unwrap()
@@ -57,6 +63,16 @@ impl Objects {
             .find(|x| x.0 == key)
             .unwrap()
             .1 = bytes.to_vec();
+    }
+
+    fn key_for(&self, asset: &str) -> String {
+        self.created_keys
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|key| key.ends_with(&format!("/{asset}")))
+            .unwrap()
+            .clone()
     }
 }
 #[async_trait]
@@ -126,13 +142,6 @@ impl ObjectStore for Objects {
             .map(|x| x.len() as i64)
             .ok_or(())
     }
-    async fn delete(&self, key: &str) -> Result<(), ()> {
-        if self.fail_delete.load(Ordering::SeqCst) {
-            return Err(());
-        }
-        self.complete.lock().unwrap().remove(key);
-        Ok(())
-    }
 }
 
 async fn database() -> (PgPool, PgPool, String) {
@@ -159,6 +168,7 @@ async fn database() -> (PgPool, PgPool, String) {
         .await
         .unwrap();
     crate::MIGRATOR.run(&pool).await.unwrap();
+    crate::backfill_user_external_ids(&pool).await.unwrap();
     (admin, pool, name)
 }
 async fn finish(admin: PgPool, pool: PgPool, name: &str) {
@@ -282,9 +292,14 @@ async fn create_asset(
     let data = body(r).await;
     let id = data["id"].as_str().unwrap().to_owned();
     assert_eq!(data["partCount"], 1);
-    assert_eq!(
-        store.created_keys.lock().unwrap().last().unwrap(),
-        &format!("assets/{id}")
+    assert!(
+        store
+            .created_keys
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .ends_with(&format!("/{id}"))
     );
     store.stage(&id, bytes);
     let part = call(
@@ -508,7 +523,7 @@ async fn postgres_asset_multipart_lifecycle_media_authorization_and_cleanup() {
         .status(),
         StatusCode::BAD_REQUEST
     );
-    let state: String = sqlx::query_scalar("SELECT state FROM assets WHERE id=$1")
+    let state: String = sqlx::query_scalar("SELECT state FROM assets WHERE external_id=$1")
         .bind(&pending)
         .fetch_one(&pool)
         .await
@@ -535,11 +550,11 @@ async fn postgres_asset_multipart_lifecycle_media_authorization_and_cleanup() {
     )
     .await;
     assert_eq!(
-        store.complete.lock().unwrap()[&format!("assets/{gif}")],
+        store.complete.lock().unwrap()[&store.key_for(&gif)],
         b"GIF89a-exact"
     );
     assert_eq!(
-        store.complete.lock().unwrap()[&format!("assets/{video}")],
+        store.complete.lock().unwrap()[&store.key_for(&video)],
         b"video-exact"
     );
     assert_eq!(
@@ -568,7 +583,7 @@ async fn postgres_asset_multipart_lifecycle_media_authorization_and_cleanup() {
     assert_eq!(
         body(media).await,
         json!({
-            "key": format!("assets/{video}"),
+            "key": store.key_for(&video),
             "contentType": "video/webm",
             "name": "clip.webm",
             "byteSize": 11
@@ -666,8 +681,9 @@ async fn postgres_asset_multipart_lifecycle_media_authorization_and_cleanup() {
         .status(),
         StatusCode::NO_CONTENT
     );
+    sharing.cleanup().await.unwrap();
     assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM assets WHERE id=$1")
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM assets WHERE external_id=$1 AND state='cancelled' AND multipart_upload_id IS NOT NULL")
             .bind(&pending)
             .fetch_one(&pool)
             .await
@@ -675,25 +691,25 @@ async fn postgres_asset_multipart_lifecycle_media_authorization_and_cleanup() {
         1
     );
     store.fail_abort.store(false, Ordering::SeqCst);
-    store.fail_delete.store(true, Ordering::SeqCst);
     sharing.cleanup().await.unwrap();
     assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM assets WHERE id=$1")
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM assets WHERE external_id=$1 AND state='cancelled' AND deleted_at IS NOT NULL AND multipart_upload_id IS NULL")
             .bind(&pending)
             .fetch_one(&pool)
             .await
             .unwrap(),
         1
     );
-    store.fail_delete.store(false, Ordering::SeqCst);
     sharing.cleanup().await.unwrap();
     assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM assets WHERE id=$1")
-            .bind(&pending)
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-        0
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM assets WHERE external_id=$1 AND state='cancelled'"
+        )
+        .bind(&pending)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1
     );
     finish(admin, pool, &name).await;
 }
@@ -740,7 +756,7 @@ async fn postgres_share_updates_passwords_expiry_and_revocation() {
     assert_eq!(body(unchanged).await["share"]["id"], sid);
     assert_eq!(body(edited).await["share"]["id"], sid);
     assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM shares WHERE asset_id=$1 AND active")
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM shares s JOIN assets a ON a.id=s.asset_id WHERE a.external_id=$1 AND s.active")
             .bind(&asset)
             .fetch_one(&pool)
             .await
@@ -776,7 +792,7 @@ async fn postgres_share_updates_passwords_expiry_and_revocation() {
     assert_eq!(
         body(media).await,
         json!({
-            "key": format!("assets/{asset}"),
+            "key": store.key_for(&asset),
             "contentType": "image/svg+xml",
             "name": "unsafe.svg",
             "byteSize": 29
@@ -1001,7 +1017,7 @@ async fn postgres_asset_and_share_id_collisions_preserve_existing_rows() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO assets(id,user_id,name,content_type,byte_size,state) VALUES('collision001',$1,'existing','image/png',1,'ready')").bind(user).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO assets(external_id,user_id,storage_key,name,content_type,byte_size,state) VALUES('collision001',$1,'assets/collision001','existing','image/png',1,'ready')").bind(user).execute(&pool).await.unwrap();
     store
         .complete
         .lock()
@@ -1011,23 +1027,357 @@ async fn postgres_asset_and_share_id_collisions_preserve_existing_rows() {
     let app = crate::app_router(None, sharing.auth.clone(), sharing.clone());
     let asset = create_asset(&app, &store, &token, "new", "image/png", b"n").await;
     assert_eq!(asset, "freshasset01");
-    let existing: String = sqlx::query_scalar("SELECT name FROM assets WHERE id='collision001'")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let existing: String =
+        sqlx::query_scalar("SELECT name FROM assets WHERE external_id='collision001'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(existing, "existing");
-    sqlx::query("INSERT INTO shares(id,asset_id) VALUES('sharesame001','collision001')")
+    sqlx::query("INSERT INTO shares(id,asset_id) SELECT 'sharesame001',id FROM assets WHERE external_id='collision001'")
         .execute(&pool)
         .await
         .unwrap();
     let share = set_share(&app, &token, &asset, json!({"enabled":true})).await;
     assert_eq!(body(share).await["share"]["id"], "freshshare01");
     let old_asset: String =
-        sqlx::query_scalar("SELECT asset_id FROM shares WHERE id='sharesame001'")
+        sqlx::query_scalar("SELECT a.external_id FROM shares s JOIN assets a ON a.id=s.asset_id WHERE s.id='sharesame001'")
             .fetch_one(&pool)
             .await
             .unwrap();
     assert_eq!(old_asset, "collision001");
     assert_eq!(COLLISION_CALLS.load(Ordering::SeqCst), 4);
+    finish(admin, pool, &name).await;
+}
+
+#[tokio::test]
+#[ignore = "requires disposable local TEST_DATABASE_URL"]
+async fn postgres_trash_retains_bytes_restores_privately_and_audits_password_attempts() {
+    let (admin, pool, name) = database().await;
+    let mail = Arc::new(Mail::default());
+    let store = Arc::new(Objects::default());
+    let (app, sharing) = app(&pool, mail.clone(), store.clone());
+    let owner = login(&app, &mail, "trash@example.com").await;
+    let other = login(&app, &mail, "other@example.com").await;
+    let me = body(call(&app, "GET", "/api/account/me", Some(&owner), None, None).await).await;
+    let external_user = me["user"]["id"].as_str().unwrap();
+    assert_eq!(external_user.len(), 12);
+    assert!(me["user"].get("internal_id").is_none());
+    let id = create_asset(
+        &app,
+        &store,
+        &owner,
+        "kept.gif",
+        "image/gif",
+        b"GIF89a-retained",
+    )
+    .await;
+    let expected_key = format!("assets/{external_user}/{id}");
+    assert_eq!(store.key_for(&id), expected_key);
+    let internal: (i64, i64) = sqlx::query_as("SELECT a.id,u.id FROM assets a JOIN users u ON u.id=a.user_id WHERE a.external_id=$1 AND u.external_id=$2")
+        .bind(&id).bind(external_user).fetch_one(&pool).await.unwrap();
+    assert!(internal.0 > 0 && internal.1 > 0);
+    let share = body(
+        set_share(
+            &app,
+            &owner,
+            &id,
+            json!({"enabled":true,"password":"right-password"}),
+        )
+        .await,
+    )
+    .await;
+    let sid = share["share"]["id"].as_str().unwrap();
+    let mut viewer_cookie = String::new();
+    for (password, status) in [
+        ("wrong-password", StatusCode::UNAUTHORIZED),
+        ("right-password", StatusCode::NO_CONTENT),
+    ] {
+        let mut request = Request::post(format!("/api/shares/{sid}/unlock"))
+            .header("origin", "https://captur.es")
+            .header("content-type", "application/json")
+            .header("user-agent", "audit-test-browser")
+            .header("cf-connecting-ip", "203.0.113.8")
+            .body(Body::from(json!({"password":password}).to_string()))
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(
+            "198.51.100.9:4567".parse::<SocketAddr>().unwrap(),
+        ));
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), status);
+        if status == StatusCode::NO_CONTENT {
+            viewer_cookie = response.headers()[header::SET_COOKIE]
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap()
+                .to_owned();
+        }
+    }
+    let audit: Vec<(String,String,String,i64)> = sqlx::query_as("SELECT host(source_ip),user_agent,outcome,octet_length(ip_hash)::bigint FROM share_unlock_attempts WHERE share_id=$1 ORDER BY id")
+        .bind(sid).fetch_all(&pool).await.unwrap();
+    assert_eq!(
+        audit,
+        vec![
+            (
+                "198.51.100.9".into(),
+                "audit-test-browser".into(),
+                "denied".into(),
+                32
+            ),
+            (
+                "198.51.100.9".into(),
+                "audit-test-browser".into(),
+                "granted".into(),
+                32
+            )
+        ]
+    );
+    assert_eq!(
+        call(
+            &app,
+            "DELETE",
+            &format!("/api/assets/{id}"),
+            Some(&owner),
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        body(call(&app, "GET", "/api/assets", Some(&owner), None, None).await).await["assets"],
+        json!([])
+    );
+    let trash = body(
+        call(
+            &app,
+            "GET",
+            "/api/assets?deleted=true",
+            Some(&owner),
+            None,
+            None,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(trash["assets"][0]["id"], id);
+    assert!(trash["assets"][0]["deletedAt"].is_string());
+    assert!(trash["assets"][0]["share"].is_null());
+    assert!(trash["assets"][0].get("internalId").is_none());
+    assert_eq!(
+        body(
+            call(
+                &app,
+                "GET",
+                "/api/assets?deleted=true",
+                Some(&other),
+                None,
+                None
+            )
+            .await
+        )
+        .await["assets"],
+        json!([])
+    );
+    for path in [
+        format!("/api/media/assets/{id}"),
+        format!("/api/media/shares/{sid}"),
+        format!("/api/shares/{sid}"),
+    ] {
+        assert_eq!(
+            call(&app, "GET", &path, Some(&owner), Some(&viewer_cookie), None)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
+        set_share(&app, &owner, &id, json!({"enabled":true}))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("/api/assets/{id}/restore"),
+            Some(&other),
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    sharing.cleanup().await.unwrap();
+    assert_eq!(
+        store.complete.lock().unwrap()[&expected_key],
+        b"GIF89a-retained"
+    );
+    let restored = body(
+        call(
+            &app,
+            "POST",
+            &format!("/api/assets/{id}/restore"),
+            Some(&owner),
+            None,
+            None,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(restored["id"], id);
+    assert!(restored["deletedAt"].is_null() && restored["share"].is_null());
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &format!("/api/media/assets/{id}"),
+            Some(&owner),
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &format!("/api/media/shares/{sid}"),
+            None,
+            Some(&viewer_cookie),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    let replacement = body(set_share(&app, &owner, &id, json!({"enabled":true})).await).await;
+    assert_ne!(replacement["share"]["id"], sid);
+    sqlx::query("UPDATE share_unlock_attempts SET created_at=now()-interval '30 days'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sharing.cleanup().await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM share_unlock_attempts")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        2
+    );
+    finish(admin, pool, &name).await;
+}
+
+static USER_COLLISION_CALLS: AtomicUsize = AtomicUsize::new(0);
+fn user_collision_ids() -> String {
+    if USER_COLLISION_CALLS.fetch_add(1, Ordering::SeqCst) == 0 {
+        "occupied0001"
+    } else {
+        "freshuser001"
+    }
+    .into()
+}
+
+#[tokio::test]
+#[ignore = "requires disposable local TEST_DATABASE_URL"]
+async fn postgres_user_external_id_collision_and_existing_email() {
+    USER_COLLISION_CALLS.store(0, Ordering::SeqCst);
+    let (admin, pool, name) = database().await;
+    sqlx::query(
+        "INSERT INTO users(external_id,email) VALUES('occupied0001','existing@example.com')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mail = Arc::new(Mail::default());
+    let (_, mut sharing) = app(&pool, mail.clone(), Arc::new(Objects::default()));
+    sharing.auth.new_user_id = user_collision_ids;
+    let app = crate::app_router(None, sharing.auth.clone(), sharing);
+    let token = login(&app, &mail, "new@example.com").await;
+    assert_eq!(USER_COLLISION_CALLS.load(Ordering::SeqCst), 2);
+    let user = body(call(&app, "GET", "/api/account/me", Some(&token), None, None).await).await;
+    assert_eq!(
+        user["user"],
+        json!({"id":"freshuser001","email":"new@example.com"})
+    );
+    let again = login(&app, &mail, "new@example.com").await;
+    assert_eq!(
+        body(call(&app, "GET", "/api/account/me", Some(&again), None, None).await).await,
+        user
+    );
+    sqlx::query("UPDATE users SET disabled_at=now() WHERE email='new@example.com'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let challenge = request_code(&app, "new@example.com").await;
+    let code = mail.sent.lock().unwrap().last().unwrap().1.clone();
+    assert_eq!(
+        verify(&app, &challenge, &code, "bearer").await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM users")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        2
+    );
+    finish(admin, pool, &name).await;
+}
+
+#[tokio::test]
+#[ignore = "requires disposable local TEST_DATABASE_URL"]
+async fn postgres_forward_migration_preserves_legacy_assets_and_backfills_users() {
+    let (admin, pool, name) = database().await;
+    // This is the unique disposable database created above, never a shared schema.
+    sqlx::raw_sql("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+        .execute(&pool)
+        .await
+        .unwrap();
+    for sql in [
+        include_str!("../migrations/0001_accounts.sql"),
+        include_str!("../migrations/0002_email_auth.sql"),
+        include_str!("../migrations/0003_sharing.sql"),
+    ] {
+        sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+    }
+    sqlx::raw_sql("INSERT INTO users(email) VALUES('legacy@example.com'); INSERT INTO assets(id,user_id,name,content_type,byte_size,state) SELECT 'legacyfile01',id,'old.gif','image/gif',7,'ready' FROM users; INSERT INTO shares(id,asset_id) VALUES('legacyshare1','legacyfile01');").execute(&pool).await.unwrap();
+    sqlx::raw_sql(include_str!(
+        "../migrations/0004_external_ids_soft_delete_audit.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (a, b) = tokio::join!(
+        crate::backfill_user_external_ids(&pool),
+        crate::backfill_user_external_ids(&pool)
+    );
+    a.unwrap();
+    b.unwrap();
+    let row:(i64,String,String,String)=sqlx::query_as("SELECT a.id,a.external_id,a.storage_key,u.external_id FROM shares s JOIN assets a ON a.id=s.asset_id JOIN users u ON u.id=a.user_id WHERE s.id='legacyshare1'").fetch_one(&pool).await.unwrap();
+    assert!(row.0 > 0);
+    assert_eq!(row.1, "legacyfile01");
+    assert_eq!(row.2, "assets/legacyfile01");
+    assert_eq!(row.3.len(), 12);
+    crate::backfill_user_external_ids(&pool).await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT external_id FROM users")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        row.3
+    );
+    assert!(
+        sqlx::query("INSERT INTO users(email) VALUES('missing-id@example.com')")
+            .execute(&pool)
+            .await
+            .is_err()
+    );
     finish(admin, pool, &name).await;
 }

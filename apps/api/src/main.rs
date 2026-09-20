@@ -174,12 +174,57 @@ async fn migrate(url: &str) -> Result<(), &'static str> {
         .await
         .map_err(|_| "database migration connection timed out")?
         .map_err(|_| "database migration connection failed")?;
-    let result = tokio::time::timeout(Duration::from_secs(300), MIGRATOR.run(&pool)).await;
+    let result = tokio::time::timeout(Duration::from_secs(300), async {
+        MIGRATOR.run(&pool).await.map_err(|_| ())?;
+        backfill_user_external_ids(&pool).await.map_err(|_| ())
+    })
+    .await;
     // Close the DDL connection even on failure; runtime uses its own credentials.
     pool.close().await;
     result
         .map_err(|_| "database migration timed out")?
         .map_err(|_| "database migration failed")
+}
+
+async fn backfill_user_external_ids(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    // Migration's advisory lock is released before this application-data step.
+    // A separate transaction lock serializes ID generation across API replicas.
+    sqlx::query("SELECT pg_advisory_xact_lock(219398741223::bigint)")
+        .execute(&mut *tx)
+        .await?;
+    let required: bool = sqlx::query_scalar("SELECT NOT attnotnull FROM pg_attribute WHERE attrelid='public.users'::regclass AND attname='external_id'")
+        .fetch_one(&mut *tx).await?;
+    if !required {
+        return tx.commit().await;
+    }
+    let ids: Vec<i64> =
+        sqlx::query_scalar("SELECT id FROM users WHERE external_id IS NULL ORDER BY id FOR UPDATE")
+            .fetch_all(&mut *tx)
+            .await?;
+    for id in ids {
+        let mut assigned = false;
+        for _ in 0..8 {
+            let external_id = nanoid::nanoid!(12);
+            let result = sqlx::query("UPDATE users SET external_id=$2 WHERE id=$1 AND external_id IS NULL AND NOT EXISTS(SELECT 1 FROM users WHERE external_id=$2)")
+                .bind(id).bind(external_id).execute(&mut *tx).await?;
+            if result.rows_affected() == 1 {
+                assigned = true;
+                break;
+            }
+            tracing::warn!(
+                kind = "user_id",
+                "public id collision during backfill; regenerating"
+            );
+        }
+        if !assigned {
+            return Err(sqlx::Error::RowNotFound);
+        }
+    }
+    sqlx::query("ALTER TABLE users ALTER COLUMN external_id SET NOT NULL")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await
 }
 
 async fn shutdown() {

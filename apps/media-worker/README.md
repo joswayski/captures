@@ -8,7 +8,10 @@ uploads, managed by the API. The Worker does not issue signed GET URLs.
 Every request, including HEAD and video ranges, calls
 `GET /api/media/{assets|shares}/<id>` with `x-captures-media-key` and the viewer's
 Cookie/Authorization headers. The API returns `{key,name,contentType,byteSize}`.
-For a share, `key` identifies its asset, not the share ID. No authorization or
+For a share, `key` identifies its asset, not the share ID. New keys are
+`assets/<user external_id>/<asset external_id>` (two 12-character NanoIDs).
+Legacy flat `assets/<asset external_id>` keys remain readable only when the API
+authorizes them. Internal bigint IDs never appear in object paths. No authorization or
 media response is cached; redirects and API/storage failures deny the request.
 Stopping a share denies subsequent authorizations. An already authorized stream,
 browser memory, or saved download cannot be recalled.

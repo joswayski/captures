@@ -44,30 +44,26 @@ impl SharingState {
     }
     pub async fn cleanup(&self) -> Result<(), ShareError> {
         let store = self.store()?;
-        sqlx::query("UPDATE assets SET state='deleting' WHERE state='pending' AND created_at<now()-interval '7 days'")
+        sqlx::query("UPDATE assets SET state='cancelled',deleted_at=now() WHERE state='pending' AND created_at<now()-interval '7 days'")
             .execute(&self.auth.pool).await?;
-        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
-            "SELECT id,multipart_upload_id FROM assets WHERE state='deleting' LIMIT 100",
+        let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
+            "SELECT id,storage_key,multipart_upload_id FROM assets WHERE state='cancelled' AND multipart_upload_id IS NOT NULL LIMIT 100",
         )
         .fetch_all(&self.auth.pool)
         .await?;
-        for (id, upload) in rows {
+        for (id, storage_key, upload) in rows {
             if let Some(u) = upload
-                && store.abort_multipart(&key(&id), &u).await.is_err()
+                && store.abort_multipart(&storage_key, &u).await.is_err()
             {
                 continue;
             }
-            if store.delete(&key(&id)).await.is_err() {
-                continue;
-            }
-            sqlx::query("DELETE FROM assets WHERE id=$1 AND state='deleting'")
-                .bind(id)
-                .execute(&self.auth.pool)
-                .await?;
-        }
-        sqlx::query("DELETE FROM share_unlock_attempts WHERE created_at<now()-interval '1 day'")
+            sqlx::query(
+                "UPDATE assets SET multipart_upload_id=NULL WHERE id=$1 AND state='cancelled'",
+            )
+            .bind(id)
             .execute(&self.auth.pool)
             .await?;
+        }
         Ok(())
     }
 }
@@ -75,6 +71,7 @@ pub fn router(s: SharingState) -> Router {
     Router::new()
         .route("/api/assets", get(list).post(create))
         .route("/api/assets/{id}", delete(remove))
+        .route("/api/assets/{id}/restore", post(restore))
         .route("/api/assets/{id}/parts", post(part))
         .route("/api/assets/{id}/complete", post(complete))
         .route("/api/media/assets/{id}", get(owner_media))
@@ -134,8 +131,8 @@ fn missing() -> ShareError {
 fn bad(s: &'static str) -> ShareError {
     ShareError(StatusCode::BAD_REQUEST, s)
 }
-fn key(id: &str) -> String {
-    format!("assets/{id}")
+fn key(user: &str, asset: &str) -> String {
+    format!("assets/{user}/{asset}")
 }
 
 #[derive(Serialize, FromRow)]
@@ -149,25 +146,34 @@ struct Share {
 #[derive(Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
 struct Asset {
-    id: String,
+    #[serde(skip)]
+    internal_id: i64,
+    #[serde(rename = "id")]
+    external_id: String,
     name: String,
     content_type: String,
     byte_size: i64,
     created_at: DateTime<Utc>,
+    deleted_at: Option<DateTime<Utc>>,
     #[sqlx(skip)]
     share: Option<Share>,
 }
 async fn asset(tx: &mut Transaction<'_, Postgres>, id: &str) -> Result<Asset, ShareError> {
-    let mut a:Asset=sqlx::query_as("SELECT id,name,content_type,byte_size,created_at FROM assets WHERE id=$1 AND state='ready'").bind(id).fetch_one(&mut **tx).await?;
-    a.share=sqlx::query_as("SELECT id,password_hash IS NOT NULL password_protected,expires_at,shared_at FROM shares WHERE asset_id=$1 AND active").bind(id).fetch_optional(&mut **tx).await?;
+    let mut a:Asset=sqlx::query_as("SELECT id internal_id,external_id,name,content_type,byte_size,created_at,deleted_at FROM assets WHERE external_id=$1 AND state='ready'").bind(id).fetch_one(&mut **tx).await?;
+    a.share=sqlx::query_as("SELECT id,password_hash IS NOT NULL password_protected,expires_at,shared_at FROM shares WHERE asset_id=$1 AND active").bind(a.internal_id).fetch_optional(&mut **tx).await?;
     Ok(a)
 }
-async fn list(State(s): State<SharingState>, h: HeaderMap) -> Result<Json<Value>, ShareError> {
+async fn list(
+    State(s): State<SharingState>,
+    h: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Value>, ShareError> {
     let u = s.auth.authenticate(&h).await?;
     s.store()?;
-    let mut rows:Vec<Asset>=sqlx::query_as("SELECT id,name,content_type,byte_size,created_at FROM assets WHERE user_id=$1 AND state='ready' ORDER BY created_at DESC").bind(u.id).fetch_all(&s.auth.pool).await?;
+    let deleted = q.get("deleted").is_some_and(|v| v == "true");
+    let mut rows:Vec<Asset>=sqlx::query_as("SELECT id internal_id,external_id,name,content_type,byte_size,created_at,deleted_at FROM assets WHERE user_id=$1 AND state='ready' AND (($2 AND deleted_at IS NOT NULL) OR (NOT $2 AND deleted_at IS NULL)) ORDER BY created_at DESC").bind(u.internal_id).bind(deleted).fetch_all(&s.auth.pool).await?;
     for a in &mut rows {
-        a.share=sqlx::query_as("SELECT id,password_hash IS NOT NULL password_protected,expires_at,shared_at FROM shares WHERE asset_id=$1 AND active").bind(&a.id).fetch_optional(&s.auth.pool).await?;
+        a.share=sqlx::query_as("SELECT id,password_hash IS NOT NULL password_protected,expires_at,shared_at FROM shares WHERE asset_id=$1 AND active").bind(a.internal_id).fetch_optional(&s.auth.pool).await?;
     }
     Ok(Json(json!({"assets":rows})))
 }
@@ -193,8 +199,9 @@ async fn create(
     let store = s.store()?;
     for _ in 0..8 {
         let id = (s.new_id)();
+        let storage_key = key(&u.external_id, &id);
         let mut tx = s.auth.pool.begin().await?;
-        let result=sqlx::query("INSERT INTO assets(id,user_id,name,content_type,byte_size,state) VALUES($1,$2,$3,$4,$5,'pending') ON CONFLICT(id) DO NOTHING").bind(&id).bind(u.id).bind(&b.name).bind(&b.content_type).bind(b.byte_size).execute(&mut *tx).await?;
+        let result=sqlx::query("INSERT INTO assets(external_id,user_id,storage_key,name,content_type,byte_size,state) VALUES($1,$2,$3,$4,$5,$6,'pending') ON CONFLICT(external_id) DO NOTHING").bind(&id).bind(u.internal_id).bind(&storage_key).bind(&b.name).bind(&b.content_type).bind(b.byte_size).execute(&mut *tx).await?;
         if result.rows_affected() == 0 {
             tracing::warn!(kind = "asset_id", "public id collision; regenerating");
             continue;
@@ -202,10 +209,10 @@ async fn create(
         // Reserve in PostgreSQL before touching storage. A failed transaction's
         // multipart upload is collected by the bucket's incomplete-upload policy.
         let upload = store
-            .create_multipart(&key(&id), &b.content_type)
+            .create_multipart(&storage_key, &b.content_type)
             .await
             .map_err(|_| unavailable())?;
-        sqlx::query("UPDATE assets SET multipart_upload_id=$2 WHERE id=$1")
+        sqlx::query("UPDATE assets SET multipart_upload_id=$2 WHERE external_id=$1")
             .bind(&id)
             .bind(upload)
             .execute(&mut *tx)
@@ -231,15 +238,15 @@ async fn part(
 ) -> Result<Json<Value>, ShareError> {
     s.auth.check_mutation(&h)?;
     let u = s.auth.authenticate(&h).await?;
-    let row:Option<(String,i64)>=sqlx::query_as("SELECT multipart_upload_id,byte_size FROM assets WHERE id=$1 AND user_id=$2 AND state='pending'").bind(&id).bind(u.id).fetch_optional(&s.auth.pool).await?;
-    let (upload, bytes) = row.ok_or_else(missing)?;
+    let row:Option<(String,i64,String)>=sqlx::query_as("SELECT multipart_upload_id,byte_size,storage_key FROM assets WHERE external_id=$1 AND user_id=$2 AND state='pending' AND deleted_at IS NULL").bind(&id).bind(u.internal_id).fetch_optional(&s.auth.pool).await?;
+    let (upload, bytes, storage_key) = row.ok_or_else(missing)?;
     let (_, count) = multipart_shape(bytes).map_err(|_| bad("Invalid upload"))?;
     if b.part_number < 1 || b.part_number > count {
         return Err(bad("Invalid part number"));
     }
     let (url, headers) = s
         .store()?
-        .sign_part(&key(&id), &upload, b.part_number)
+        .sign_part(&storage_key, &upload, b.part_number)
         .await
         .map_err(|_| unavailable())?;
     Ok(Json(json!({"url":url,"headers":headers})))
@@ -264,8 +271,8 @@ async fn complete(
     s.auth.check_mutation(&h)?;
     let u = s.auth.authenticate(&h).await?;
     let mut tx = s.auth.pool.begin().await?;
-    let row:Option<(String,String,i64)>=sqlx::query_as("SELECT state,COALESCE(multipart_upload_id,''),byte_size FROM assets WHERE id=$1 AND user_id=$2 FOR UPDATE").bind(&id).bind(u.id).fetch_optional(&mut *tx).await?;
-    let (state, upload, bytes) = row.ok_or_else(missing)?;
+    let row:Option<(String,String,i64,String)>=sqlx::query_as("SELECT state,COALESCE(multipart_upload_id,''),byte_size,storage_key FROM assets WHERE external_id=$1 AND user_id=$2 AND deleted_at IS NULL FOR UPDATE").bind(&id).bind(u.internal_id).fetch_optional(&mut *tx).await?;
+    let (state, upload, bytes, storage_key) = row.ok_or_else(missing)?;
     if state == "ready" {
         return Ok(Json(asset(&mut tx, &id).await?));
     }
@@ -282,10 +289,10 @@ async fn complete(
         return Err(bad("All upload parts are required in order"));
     }
     let store = s.store()?;
-    if store.head(&key(&id)).await.ok() != Some(bytes) {
+    if store.head(&storage_key).await.ok() != Some(bytes) {
         store
             .complete_multipart(
-                &key(&id),
+                &storage_key,
                 &upload,
                 b.parts
                     .into_iter()
@@ -295,10 +302,10 @@ async fn complete(
             .await
             .map_err(|_| unavailable())?;
     }
-    if store.head(&key(&id)).await.map_err(|_| unavailable())? != bytes {
+    if store.head(&storage_key).await.map_err(|_| unavailable())? != bytes {
         return Err(bad("Finalized object size does not match"));
     }
-    sqlx::query("UPDATE assets SET state='ready',multipart_upload_id=NULL WHERE id=$1")
+    sqlx::query("UPDATE assets SET state='ready',multipart_upload_id=NULL WHERE external_id=$1")
         .bind(&id)
         .execute(&mut *tx)
         .await?;
@@ -313,21 +320,57 @@ async fn remove(
 ) -> Result<StatusCode, ShareError> {
     s.auth.check_mutation(&h)?;
     let u = s.auth.authenticate(&h).await?;
+    let mut tx = s.auth.pool.begin().await?;
     s.store()?;
-    let row:Option<Option<String>>=sqlx::query_scalar("UPDATE assets SET state='deleting' WHERE id=$1 AND user_id=$2 RETURNING multipart_upload_id").bind(&id).bind(u.id).fetch_optional(&s.auth.pool).await?;
-    let upload = row.ok_or_else(missing)?;
-    if let Some(x) = upload
-        && s.store()?.abort_multipart(&key(&id), &x).await.is_err()
-    {
-        return Ok(StatusCode::NO_CONTENT);
-    }
-    if s.store()?.delete(&key(&id)).await.is_ok() {
-        sqlx::query("DELETE FROM assets WHERE id=$1 AND state='deleting'")
-            .bind(id)
-            .execute(&s.auth.pool)
+    let row: Option<(i64, String)> = sqlx::query_as(
+        "SELECT id,state FROM assets WHERE external_id=$1 AND user_id=$2 FOR UPDATE",
+    )
+    .bind(&id)
+    .bind(u.internal_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (internal_id, state) = row.ok_or_else(missing)?;
+    if state == "ready" {
+        sqlx::query("UPDATE assets SET deleted_at=COALESCE(deleted_at,now()) WHERE id=$1")
+            .bind(internal_id)
+            .execute(&mut *tx)
             .await?;
+        sqlx::query("UPDATE shares SET active=false WHERE asset_id=$1 AND active")
+            .bind(internal_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM share_viewer_grants WHERE share_id IN (SELECT id FROM shares WHERE asset_id=$1)").bind(internal_id).execute(&mut *tx).await?;
+    } else {
+        sqlx::query(
+            "UPDATE assets SET state='cancelled',deleted_at=COALESCE(deleted_at,now()) WHERE id=$1",
+        )
+        .bind(internal_id)
+        .execute(&mut *tx)
+        .await?;
     }
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn restore(
+    State(s): State<SharingState>,
+    Path(id): Path<String>,
+    h: HeaderMap,
+) -> Result<Json<Asset>, ShareError> {
+    s.auth.check_mutation(&h)?;
+    s.store()?;
+    let u = s.auth.authenticate(&h).await?;
+    let mut tx = s.auth.pool.begin().await?;
+    let found: Option<i64> = sqlx::query_scalar("SELECT id FROM assets WHERE external_id=$1 AND user_id=$2 AND state='ready' AND deleted_at IS NOT NULL FOR UPDATE")
+        .bind(&id).bind(u.internal_id).fetch_optional(&mut *tx).await?;
+    let internal_id = found.ok_or_else(missing)?;
+    sqlx::query("UPDATE assets SET deleted_at=NULL WHERE id=$1")
+        .bind(internal_id)
+        .execute(&mut *tx)
+        .await?;
+    let restored = asset(&mut tx, &id).await?;
+    tx.commit().await?;
+    Ok(Json(restored))
 }
 
 fn require_worker(s: &SharingState, h: &HeaderMap) -> Result<(), ShareError> {
@@ -354,16 +397,16 @@ async fn owner_media(
 ) -> Result<Json<Value>, ShareError> {
     require_worker(&s, &h)?;
     let u = s.auth.authenticate(&h).await?;
-    let row: Option<(String, String, i64)> = sqlx::query_as(
-        "SELECT content_type,name,byte_size FROM assets WHERE id=$1 AND user_id=$2 AND state='ready'",
+    let row: Option<(String, String, i64, String)> = sqlx::query_as(
+        "SELECT content_type,name,byte_size,storage_key FROM assets WHERE external_id=$1 AND user_id=$2 AND state='ready' AND deleted_at IS NULL",
     )
     .bind(&id)
-    .bind(u.id)
+    .bind(u.internal_id)
     .fetch_optional(&s.auth.pool)
     .await?;
-    let (t, n, size) = row.ok_or_else(missing)?;
+    let (t, n, size, storage_key) = row.ok_or_else(missing)?;
     Ok(Json(
-        json!({"key":key(&id),"contentType":t,"name":n,"byteSize":size}),
+        json!({"key":storage_key,"contentType":t,"name":n,"byteSize":size}),
     ))
 }
 
@@ -393,20 +436,18 @@ async fn update_share(
         .try_acquire_owned()
         .map_err(|_| unavailable())?;
     let mut tx = s.auth.pool.begin().await?;
-    let found: Option<String> = sqlx::query_scalar(
-        "SELECT id FROM assets WHERE id=$1 AND user_id=$2 AND state='ready' FOR UPDATE",
+    let found: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM assets WHERE external_id=$1 AND user_id=$2 AND state='ready' AND deleted_at IS NULL FOR UPDATE",
     )
     .bind(&id)
-    .bind(u.id)
+    .bind(u.internal_id)
     .fetch_optional(&mut *tx)
     .await?;
-    if found.is_none() {
-        return Err(missing());
-    }
+    let asset_internal_id = found.ok_or_else(missing)?;
     let current: Option<(String, Option<String>, Option<DateTime<Utc>>)> = sqlx::query_as(
         "SELECT id,password_hash,expires_at FROM shares WHERE asset_id=$1 AND active FOR UPDATE",
     )
-    .bind(&id)
+    .bind(asset_internal_id)
     .fetch_optional(&mut *tx)
     .await?;
     if !b.enabled {
@@ -446,7 +487,7 @@ async fn update_share(
             .await?;
         sid
     } else {
-        insert_share(&mut tx, &id, &password, expiry, s.new_id).await?
+        insert_share(&mut tx, asset_internal_id, &password, expiry, s.new_id).await?
     };
     let row:Share=sqlx::query_as("SELECT id,password_hash IS NOT NULL password_protected,expires_at,shared_at FROM shares WHERE id=$1").bind(sid).fetch_one(&mut *tx).await?;
     tx.commit().await?;
@@ -454,7 +495,7 @@ async fn update_share(
 }
 async fn insert_share(
     tx: &mut Transaction<'_, Postgres>,
-    asset: &str,
+    asset: i64,
     password: &Option<String>,
     expiry: Option<DateTime<Utc>>,
     next_id: fn() -> String,
@@ -515,7 +556,7 @@ fn patch_expiry(
 #[derive(FromRow)]
 struct Access {
     id: String,
-    asset_id: String,
+    storage_key: String,
     user_id: i64,
     password_hash: Option<String>,
     expires_at: Option<DateTime<Utc>>,
@@ -525,11 +566,11 @@ struct Access {
 }
 async fn access(s: &SharingState, id: &str) -> Result<Access, ShareError> {
     s.store()?;
-    sqlx::query_as("SELECT s.id,s.asset_id,a.user_id,s.password_hash,s.expires_at,a.name,a.content_type,a.byte_size FROM shares s JOIN assets a ON a.id=s.asset_id JOIN users u ON u.id=a.user_id WHERE s.id=$1 AND s.active AND (s.expires_at IS NULL OR s.expires_at>now()) AND a.state='ready' AND u.disabled_at IS NULL AND u.deleted_at IS NULL").bind(id).fetch_optional(&s.auth.pool).await?.ok_or_else(missing)
+    sqlx::query_as("SELECT s.id,a.storage_key,a.user_id,s.password_hash,s.expires_at,a.name,a.content_type,a.byte_size FROM shares s JOIN assets a ON a.id=s.asset_id JOIN users u ON u.id=a.user_id WHERE s.id=$1 AND s.active AND (s.expires_at IS NULL OR s.expires_at>now()) AND a.state='ready' AND a.deleted_at IS NULL AND u.disabled_at IS NULL AND u.deleted_at IS NULL").bind(id).fetch_optional(&s.auth.pool).await?.ok_or_else(missing)
 }
 async fn permitted(s: &SharingState, a: &Access, h: &HeaderMap) -> Result<bool, ShareError> {
     if let Ok(u) = s.auth.authenticate(h).await
-        && u.id == a.user_id
+        && u.internal_id == a.user_id
     {
         return Ok(true);
     }
@@ -576,7 +617,7 @@ async fn shared_media(
         return Err(ShareError(StatusCode::UNAUTHORIZED, "Password required"));
     }
     Ok(Json(
-        json!({"key":key(&a.asset_id),"contentType":a.content_type,"name":a.name,"byteSize":a.byte_size}),
+        json!({"key":a.storage_key,"contentType":a.content_type,"name":a.name,"byteSize":a.byte_size}),
     ))
 }
 #[derive(Deserialize)]
@@ -601,7 +642,12 @@ async fn unlock(
         .clone()
         .try_acquire_owned()
         .map_err(|_| unavailable())?;
+    let source_ip = s.auth.source_ip(&h, peer.ip())?;
     let ip = s.auth.source_hash(&h, peer.ip())?;
+    let user_agent = h
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.chars().take(512).collect::<String>());
     let mut tx = s.auth.pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(734894239112::bigint)")
         .execute(&mut *tx)
@@ -613,10 +659,12 @@ async fn unlock(
             "Too many requests",
         ));
     }
-    sqlx::query("INSERT INTO share_unlock_attempts(share_id,ip_hash) VALUES($1,$2)")
+    let attempt_id: i64 = sqlx::query_scalar("INSERT INTO share_unlock_attempts(share_id,ip_hash,source_ip,user_agent) VALUES($1,$2,$3::inet,$4) RETURNING id")
         .bind(&id)
         .bind(ip)
-        .execute(&mut *tx)
+        .bind(source_ip.to_string())
+        .bind(user_agent)
+        .fetch_one(&mut *tx)
         .await?;
     tx.commit().await?;
     let expected = hash.clone();
@@ -631,6 +679,10 @@ async fn unlock(
     .await
     .map_err(|_| unavailable())?;
     if !valid {
+        sqlx::query("UPDATE share_unlock_attempts SET outcome='denied' WHERE id=$1")
+            .bind(attempt_id)
+            .execute(&s.auth.pool)
+            .await?;
         return Err(ShareError(StatusCode::UNAUTHORIZED, "Incorrect password"));
     }
     // Serialize the grant insertion against password edits and disabling. An
@@ -638,6 +690,11 @@ async fn unlock(
     let mut tx = s.auth.pool.begin().await?;
     let current:Option<Option<String>>=sqlx::query_scalar("SELECT password_hash FROM shares WHERE id=$1 AND active AND (expires_at IS NULL OR expires_at>now()) FOR UPDATE").bind(&id).fetch_optional(&mut *tx).await?;
     if current != Some(Some(hash)) {
+        sqlx::query("UPDATE share_unlock_attempts SET outcome='denied' WHERE id=$1")
+            .bind(attempt_id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         return Err(ShareError(
             StatusCode::UNAUTHORIZED,
             "Share access changed; try again",
@@ -647,6 +704,10 @@ async fn unlock(
     sqlx::query("INSERT INTO share_viewer_grants(token_hash,share_id) VALUES($1,$2)")
         .bind(Sha256::digest(&token).to_vec())
         .bind(&id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE share_unlock_attempts SET outcome='granted' WHERE id=$1")
+        .bind(attempt_id)
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;

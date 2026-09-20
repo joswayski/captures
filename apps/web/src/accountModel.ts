@@ -11,6 +11,7 @@ export type Asset = {
   contentType: string;
   byteSize: number;
   createdAt: string;
+  deletedAt: string | null;
   share: AssetShare | null;
 };
 

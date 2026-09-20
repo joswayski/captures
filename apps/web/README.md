@@ -148,7 +148,9 @@ a purge. Purge `/` only if a stale homepage HTML response is stuck at the edge.
 then lists owner captures and their links. Authentication is optional; no tokens
 are stored in localStorage. When the API disables accounts, the page shows an
 unavailable notice. Multipart direct-to-R2 uploads, deletion, one editable share
-link per capture, passwords and expiry are implemented; native app integration
+link per capture, passwords and expiry are implemented. Trash keeps completed files
+in private R2 indefinitely; Restore returns them to the library without reactivating
+old links. No permanent-delete operation is exposed. Native app integration
 follows the rewrite. GIF, video and raster files render in place; unknown or
 unsafe inline formats are offered as downloads.
 

@@ -14,12 +14,13 @@ organizations are not implemented.
 | `POST /api/auth/email/verify` | `{challengeId,code,transport:"cookie"\|"bearer"}` → `{user:{id,email},token?}` |
 | `GET /api/account/me` | `{user:{id,email}}`; 401 signed out, 503 when disabled |
 | `POST /api/auth/logout` | Revoke the current session, clear cookie; 204 |
-| `GET /api/assets` | `{assets:[{id,name,contentType,byteSize,createdAt,share}]}`; completed owner assets |
+| `GET /api/assets` | Active completed owner assets; `?deleted=true` lists restorable completed tombstones with `deletedAt` |
 | `POST /api/assets` | `{name,contentType,byteSize}` → 201 `{id,partSize,partCount}` |
 | `POST /api/assets/<id>/parts` | `{partNumber}` → direct R2 `{url,headers}` |
 | `POST /api/assets/<id>/complete` | `{parts:[{partNumber,etag}]}` → completed asset |
 | `GET /api/media/assets/<id>` | Worker-only owner authorization → `{key,name,contentType,byteSize}`; no file bytes |
-| `DELETE /api/assets/<id>` | Abort pending or deny/delete completed asset with durable retry; 204 |
+| `DELETE /api/assets/<id>` | Cancel pending uploads or soft-delete completed assets and revoke sharing; 204 |
+| `POST /api/assets/<id>/restore` | Restore an owner’s completed tombstone without restoring old shares/grants |
 | `PUT /api/assets/<id>/share` | `{enabled,password?,expiresAt?}` → `{share}`; owner-only |
 | `GET /api/shares/<id>` | Metadata; protected links return `passwordRequired:true,mediaUrl:null` until authorized |
 | `GET /api/media/shares/<id>` | Worker-only share authorization → `{key,name,contentType,byteSize}`; no file bytes |
@@ -27,8 +28,8 @@ organizations are not implemented.
 
 Account and media responses are `no-store`. Browser writes require the exact
 `AUTH_ALLOWED_ORIGIN`; native JSON/bearer clients omit browser Origin/cookies.
-User IDs serialize as decimal strings. Errors are JSON `{error,attemptsRemaining?}`.
-Asset, share, and auth-challenge IDs are 12-character NanoIDs. Each ID is reserved
+User and asset IDs in browser JSON are 12-character NanoIDs; internal bigint keys
+never leave the API. Share and auth-challenge IDs are also 12-character NanoIDs. Each ID is reserved
 in PostgreSQL with bounded collision retries; logs record only the ID kind, never
 the colliding value. Codes use six A–Z/0–9 characters, expire in ten minutes,
 allow three guesses, and
@@ -73,7 +74,8 @@ The Node website receives neither database URLs nor account/storage secrets.
 
 The API preserves original bytes and imposes no product account, size, dimension,
 or link-count quota. It creates direct presigned multipart uploads at
-`assets/<id>`. Each part URL is a 15-minute upload authorization, separate from
+`assets/<users.external_id>/<assets.external_id>`. Existing rows retain their legacy `assets/<asset-id>`
+`storage_key`; migration performs no live R2 copy or rename. Each part URL is a 15-minute upload authorization, separate from
 viewer access; an owner can request a replacement part URL. The service chooses
 `max(64 MiB, ceil(byteSize/10000))` chunks, increasing them dynamically as needed.
 R2's inherent provider limits are 5 TiB per object, 10,000 parts, and 5 MiB–5 GiB
@@ -106,13 +108,24 @@ every request rechecks the active share, expiry, asset state, and owner state.
 Changing/removing a password or stopping sharing invalidates grants. Re-enabling a
 disabled share creates a new 12-character URL, permanently invalidating the old one.
 
-Deletion first records `deleting`, denying reads even if R2 fails. Every five
-minutes cleanup retries failed deletes and removes pending uploads older than seven
-days, matching the bucket's incomplete-multipart lifecycle policy.
+Deletion tombstones completed rows, revokes shares/grants transactionally, and
+retains completed R2 bytes indefinitely (including their storage cost). Restore
+only clears the completed tombstone; it performs no R2 operation and does not
+revive old sharing access. Every five minutes cleanup retries aborting canceled or
+seven-day-old pending multipart uploads; incomplete uploads are not restorable files.
 Completed ready media has no automatic expiry. Expiring/revoking a share does not
 delete the owner's upload. Auth challenges/sessions receive seven-day expired
 retention cleanup on issuance. Share edits/deletion remove viewer grants;
-the sharing cleanup task removes old unlock attempts. Do not cache `/api/*`, `/account`,
+Password-unlock attempts are retained for investigation with the existing HMAC IP
+value plus trusted-source PostgreSQL `inet`, a 512-character user-agent bound, and
+pending/denied/granted outcome (older rows have unknown outcome). Throttled requests
+that do not reach password verification are not added to this investigation table.
+Raw IP follows the same socket-peer or explicitly
+trusted Cloudflare selection as rate limiting and is never logged. Behind a proxy,
+the visitor address requires the explicitly trusted Cloudflare configuration;
+otherwise the address is the socket peer, not a claim about the visitor's identity.
+User-agent is client supplied. OTP storage
+remains HMAC-only. Do not cache `/api/*`, `/account`,
 `/s/*`, or `/media/*` in a proxy/CDN.
 
 ## Shared cluster, dedicated database, separate credentials
@@ -138,11 +151,21 @@ shadows that table. With normal lookup, use `SELECT * FROM users` and
 If lookup was customized, check `SHOW search_path` and correct the role/database
 defaults. Pinning migrations does not change those defaults or move existing tables.
 
-Users retain an internal bigint ID, nullable email, verification state (false by
+Users retain an internal bigint `id` and have a unique, mandatory 12-character
+NanoID `external_id`, nullable email, verification state (false by
 default), creation/update timestamps, and disabled/deleted timestamps. Deleted
 rows must have no email. Emails are trimmed/lowercased with a uniqueness index;
 the migration fails on conflicting existing emails instead of merging identities.
-No public user identifier or mandatory username is added.
+No mandatory username is added.
+
+Assets likewise have bigint `id` and unique NanoID `external_id`; `shares.asset_id`
+references the internal bigint. JSON `id` fields and URLs always use external IDs.
+Forward migration 0004 preserves existing IDs, relationships, and stored object
+keys. Startup backfills missing user NanoIDs under a replica-wide database lock
+before enforcing NOT NULL and listening. Do not mix old API binaries with this
+schema: coordinate the compatible API rollout with migrations. No existing R2
+objects are moved by a database migration. Older deletion operations that already
+removed bytes cannot be undone by this change.
 
 ```dotenv
 DATABASE_URL=postgresql://captures_app:PASSWORD@HOST:6432/captures?sslmode=verify-full
@@ -190,7 +213,8 @@ GRANT USAGE ON SCHEMA public TO captures_app;
 GRANT SELECT, INSERT, UPDATE ON users TO captures_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON auth_email_challenges, account_sessions,
     assets, shares, share_viewer_grants, share_unlock_attempts TO captures_app;
-GRANT USAGE ON SEQUENCE users_id_seq TO captures_app;
+GRANT USAGE ON SEQUENCE users_id_seq, assets_id_seq,
+    share_unlock_attempts_id_seq TO captures_app;
 ```
 
 Object ownership and name lookup are separate. Using `public` removes the need

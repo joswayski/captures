@@ -42,6 +42,18 @@ test("authorizes every viewer and denies before R2", async () => {
   } finally { fixture.restore(); }
 });
 
+test("owner-prefixed keys use external IDs while legacy keys remain readable", async () => {
+  for (const key of [`assets/UserNano1234/${id}`, `assets/${id}`, `assets/42/${id}`, `assets/UserNano1234/OtherAsset12`, `assets/UserNano1234/../${id}`]) {
+    const fixture = setup(() => Response.json({ key, name: "file.png", contentType: "image/png", byteSize: 10 }));
+    try {
+      const response = await handleRequest(new Request(`https://x/media/assets/${id}`), fixture.env);
+      const expected = key === `assets/UserNano1234/${id}` || key === `assets/${id}`;
+      assert.equal(response.status, expected ? 200 : 502, key);
+      assert.equal(fixture.gets, expected ? 1 : 0, key);
+    } finally { fixture.restore(); }
+  }
+});
+
 test("revocation is checked on the next request", async () => {
   let allowed = true;
   const fixture = setup(() => allowed ? Response.json({ key: `assets/${id}`, name: "x", contentType: "image/png", byteSize: 10 }) : new Response(null, { status: 404 }));

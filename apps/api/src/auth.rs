@@ -31,6 +31,7 @@ const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 #[derive(Clone)]
 pub struct AuthState {
     pub pool: PgPool,
+    pub(crate) new_user_id: fn() -> String,
     inner: Option<Arc<Enabled>>,
 }
 struct Enabled {
@@ -43,13 +44,11 @@ struct Enabled {
 
 #[derive(Clone, Debug, Serialize, FromRow)]
 pub struct User {
-    #[serde(serialize_with = "serialize_id")]
-    pub id: i64,
+    #[serde(skip)]
+    pub internal_id: i64,
+    #[serde(rename = "id")]
+    pub external_id: String,
     pub email: String,
-}
-
-fn serialize_id<S: serde::Serializer>(id: &i64, serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.serialize_str(&id.to_string())
 }
 
 #[derive(Debug)]
@@ -83,7 +82,11 @@ impl IntoResponse for AuthError {
 
 impl AuthState {
     pub fn disabled(pool: PgPool) -> Self {
-        Self { pool, inner: None }
+        Self {
+            pool,
+            inner: None,
+            new_user_id: || nanoid::nanoid!(12),
+        }
     }
 
     pub fn check_mutation(&self, headers: &HeaderMap) -> Result<(), AuthError> {
@@ -103,10 +106,15 @@ impl AuthState {
         ))
     }
 
+    pub fn source_ip(&self, headers: &HeaderMap, peer: IpAddr) -> Result<IpAddr, AuthError> {
+        Ok(source_ip(self.enabled()?, headers, peer))
+    }
+
     #[cfg(test)]
     pub fn for_test(pool: PgPool, mailer: Arc<dyn Mailer>, origin: &str) -> Self {
         Self {
             pool,
+            new_user_id: || nanoid::nanoid!(12),
             inner: Some(Arc::new(Enabled {
                 secret: vec![42; 32],
                 mailer,
@@ -130,7 +138,11 @@ impl AuthState {
         } else {
             None
         };
-        Self { pool, inner }
+        Self {
+            pool,
+            inner,
+            new_user_id: || nanoid::nanoid!(12),
+        }
     }
 
     fn enabled(&self) -> Result<&Enabled, AuthError> {
@@ -145,7 +157,7 @@ impl AuthState {
             .or_else(|| cookie(headers))
             .ok_or_else(unauthorized)?;
         let hash = Sha256::digest(token.as_bytes()).to_vec();
-        sqlx::query_as("SELECT u.id, u.email FROM account_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND u.disabled_at IS NULL AND u.deleted_at IS NULL AND u.email IS NOT NULL")
+        sqlx::query_as("SELECT u.id internal_id,u.external_id,u.email FROM account_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND u.disabled_at IS NULL AND u.deleted_at IS NULL AND u.email IS NOT NULL")
             .bind(hash).fetch_optional(&self.pool).await.map_err(db_error)?.ok_or_else(unauthorized)
     }
 }
@@ -314,13 +326,37 @@ async fn verify_code(
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;
-    let user:User=sqlx::query_as("INSERT INTO users(email,email_verified) VALUES($1,true) ON CONFLICT(email) WHERE email IS NOT NULL DO UPDATE SET email_verified=true,updated_at=now() WHERE users.disabled_at IS NULL AND users.deleted_at IS NULL RETURNING id,email").bind(&challenge.email).fetch_optional(&mut *tx).await.map_err(db_error)?.ok_or_else(unauthorized)?;
+    let mut user: Option<User> = None;
+    for _ in 0..8 {
+        let external_id = (state.new_user_id)();
+        user=sqlx::query_as("INSERT INTO users(external_id,email,email_verified) VALUES($1,$2,true) ON CONFLICT DO NOTHING RETURNING id internal_id,external_id,email")
+            .bind(external_id).bind(&challenge.email).fetch_optional(&mut *tx).await.map_err(db_error)?;
+        if user.is_some() {
+            break;
+        }
+        user=sqlx::query_as("UPDATE users SET email_verified=true,updated_at=now() WHERE email=$1 AND disabled_at IS NULL AND deleted_at IS NULL RETURNING id internal_id,external_id,email")
+            .bind(&challenge.email).fetch_optional(&mut *tx).await.map_err(db_error)?;
+        if user.is_some() {
+            break;
+        }
+        let disabled: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE email=$1)")
+                .bind(&challenge.email)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db_error)?;
+        if disabled {
+            return Err(unauthorized());
+        }
+        tracing::warn!(kind = "user_id", "public id collision; regenerating");
+    }
+    let user = user.ok_or_else(|| db_error(sqlx::Error::RowNotFound))?;
     let bytes: [u8; 32] = rand::random();
     let token = URL_SAFE_NO_PAD.encode(bytes);
     let hash = Sha256::digest(token.as_bytes()).to_vec();
     sqlx::query("INSERT INTO account_sessions(token_hash,user_id,expires_at) VALUES($1,$2,$3)")
         .bind(hash)
-        .bind(user.id)
+        .bind(user.internal_id)
         .bind(Utc::now() + Duration::days(30))
         .execute(&mut *tx)
         .await

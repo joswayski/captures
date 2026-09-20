@@ -30,6 +30,7 @@ test("multipart upload sends bounded slices directly to R2 and completes with ET
     contentType: "application/octet-stream",
     byteSize: 6,
     createdAt: "2026-01-01T00:00:00Z",
+    deletedAt: null,
     share: null,
   };
   const fetcher = async (

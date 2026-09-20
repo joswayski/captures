@@ -89,8 +89,8 @@ async function authorize(request: Request, env: Env, kind: MediaKind, id: string
   if (!data || typeof data !== "object") return error(502);
   const value = data as Record<string, unknown>;
   // Shares have their own ID; only the API can resolve it to an asset key.
-  if (typeof value.key !== "string" || !/^assets\/[A-Za-z0-9_-]{12}$/.test(value.key) ||
-      (kind === "assets" && value.key !== `assets/${id}`) ||
+  if (typeof value.key !== "string" || !/^assets\/(?:[A-Za-z0-9_-]{12}\/)?[A-Za-z0-9_-]{12}$/.test(value.key) ||
+      (kind === "assets" && !value.key.endsWith(`/${id}`)) ||
       typeof value.name !== "string" || value.name.length < 1 || value.name.length > 1024 ||
       typeof value.contentType !== "string" || value.contentType.length > 255 ||
       typeof value.byteSize !== "number" || !Number.isSafeInteger(value.byteSize) || value.byteSize < 0) return error(502);

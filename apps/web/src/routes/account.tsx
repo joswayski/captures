@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Link2Off, Share2 } from "lucide-react";
+import { Link2Off, Share2, Trash2, Undo2 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
   assetMediaKind,
@@ -242,24 +242,37 @@ function Login({ onAuthenticated }: { onAuthenticated: (user: User) => void }) {
 
 function Library({ user }: { user: User }) {
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [trash, setTrash] = useState(false);
+  const [revision, setRevision] = useState(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");
   const [loading, setLoading] = useState(true);
   const uploadController = useRef<AbortController | null>(null);
   const refresh = useCallback(async () => {
-    try {
-      setAssets((await api<{ assets: Asset[] }>("/api/assets")).assets);
-      setError("");
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
+    setRevision((value) => value + 1);
   }, []);
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    const controller = new AbortController();
+    setLoading(true);
+    void api<{ assets: Asset[] }>(
+      trash ? "/api/assets?deleted=true" : "/api/assets",
+      { signal: controller.signal },
+    )
+      .then(({ assets }) => {
+        if (!controller.signal.aborted) {
+          setAssets(assets);
+          setError("");
+        }
+      })
+      .catch((e: Error) => {
+        if (!controller.signal.aborted) setError(e.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [trash, revision]);
   async function upload(file?: File) {
     if (!file) return;
     const problem = validateUpload(file);
@@ -295,36 +308,57 @@ function Library({ user }: { user: User }) {
       <section className="library-heading">
         <div>
           <p className="account-identity">Signed in as {user.email}</p>
-          <h1>Your captures</h1>
+          <h1>{trash ? "Trash" : "Your captures"}</h1>
           <p className="lede">
-            Upload screenshots, GIFs, videos, or other files. Captures stay
-            private until you share them.
+            {trash
+              ? "Your files are kept until you restore them. Old share links stay disabled."
+              : "Upload screenshots, GIFs, videos, or other files. Captures stay private until you share them."}
           </p>
         </div>
-        <div className="upload-controls">
-          <label
-            className={`primary-button upload-button ${busy ? "is-disabled" : ""}`}
-          >
-            {busy ? progress || "Uploading…" : "Upload capture"}
-            <input
-              type="file"
-              disabled={busy}
-              onChange={(e) => {
-                void upload(e.target.files?.[0]);
-                e.target.value = "";
-              }}
-            />
-          </label>
-          {busy && (
-            <button
-              className="text-button"
-              onClick={() => uploadController.current?.abort()}
+        {!trash && (
+          <div className="upload-controls">
+            <label
+              className={`primary-button upload-button ${busy ? "is-disabled" : ""}`}
             >
-              Cancel upload
-            </button>
-          )}
-        </div>
+              {busy ? progress || "Uploading…" : "Upload capture"}
+              <input
+                type="file"
+                disabled={busy}
+                onChange={(e) => {
+                  void upload(e.target.files?.[0]);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+            {busy && (
+              <button
+                className="text-button"
+                onClick={() => uploadController.current?.abort()}
+              >
+                Cancel upload
+              </button>
+            )}
+          </div>
+        )}
       </section>
+      <nav className="library-tabs" aria-label="Capture library">
+        <button
+          className="secondary-button"
+          aria-pressed={!trash}
+          disabled={busy}
+          onClick={() => setTrash(false)}
+        >
+          Captures
+        </button>
+        <button
+          className="secondary-button"
+          aria-pressed={trash}
+          disabled={busy}
+          onClick={() => setTrash(true)}
+        >
+          Trash
+        </button>
+      </nav>
       {error && (
         <p role="alert" className="error-box">
           {error}
@@ -334,8 +368,12 @@ function Library({ user }: { user: User }) {
         <p role="status">Loading captures…</p>
       ) : assets.length === 0 && !error ? (
         <div className="empty-state">
-          <h2>No captures yet</h2>
-          <p>Your uploaded captures will appear here.</p>
+          <h2>{trash ? "Trash is empty" : "No captures yet"}</h2>
+          <p>
+            {trash
+              ? "Deleted captures will appear here. Nothing is permanently removed."
+              : "Your uploaded captures will appear here."}
+          </p>
         </div>
       ) : (
         <div className="upload-grid">
@@ -404,14 +442,25 @@ function UploadCard({
   }
   return (
     <article className="upload-card">
-      <AssetPreview asset={asset} />
+      {asset.deletedAt ? (
+        <div className="download-preview">
+          <Trash2 size={24} aria-hidden="true" />
+          <p>In Trash</p>
+        </div>
+      ) : (
+        <AssetPreview asset={asset} />
+      )}
       <div className="upload-meta">
         <div>
           <strong title={asset.name}>{asset.name}</strong>
           <span>{formatBytes(asset.byteSize)}</span>
         </div>
-        <time dateTime={asset.createdAt}>
-          {new Date(asset.createdAt).toLocaleDateString()}
+        <time
+          dateTime={asset.deletedAt || asset.createdAt}
+          title={new Date(asset.deletedAt || asset.createdAt).toLocaleString()}
+        >
+          {asset.deletedAt && "Deleted "}
+          {new Date(asset.deletedAt || asset.createdAt).toLocaleDateString()}
         </time>
       </div>
       {asset.share && (
@@ -451,7 +500,29 @@ function UploadCard({
           </div>
         </div>
       )}
-      {open ? (
+      {asset.deletedAt ? (
+        <div className="card-actions">
+          <button
+            className="secondary-button"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await api(`/api/assets/${asset.id}/restore`, {
+                  method: "POST",
+                });
+                await refresh();
+              } catch (e) {
+                setError((e as Error).message);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            <Undo2 size={18} aria-hidden="true" /> Restore
+          </button>
+        </div>
+      ) : open ? (
         <form className="share-form" onSubmit={saveShare}>
           <p>
             {asset.share
@@ -567,22 +638,26 @@ function UploadCard({
           </div>
           <button
             className="danger-button"
+            disabled={busy}
             onClick={async () => {
               if (
                 !confirm(
-                  "Delete this capture and disable its share link? This cannot be undone.",
+                  "Move this capture to Trash? Its share link will stop working. You can restore the file later.",
                 )
               )
                 return;
+              setBusy(true);
               try {
                 await api(`/api/assets/${asset.id}`, { method: "DELETE" });
                 await refresh();
               } catch (e) {
                 setError((e as Error).message);
+              } finally {
+                setBusy(false);
               }
             }}
           >
-            Delete
+            Move to Trash
           </button>
         </div>
       )}

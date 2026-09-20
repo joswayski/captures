@@ -95,7 +95,11 @@ no indexing. Uploads go directly to private R2; a Cloudflare Worker delivers dow
 after an uncached API authorization check, without sending file bytes through the API.
 Stopping sharing denies subsequent requests, including from previously
 unlocked browsers, but downloads already authorized or completed cannot be recalled. Website account
-and sharing flows are implemented. Desktop sign-in, native uploads, and a native
+and sharing flows are implemented. Moving an uploaded file to Trash disables its
+link but retains the file in private storage indefinitely; Restore returns it to
+your library without reactivating the old link. Password attempts record source
+IP, browser user-agent, time, and outcome for investigation; an activity-view UI
+is not implemented yet. Desktop sign-in, native uploads, and a native
 Share button are not: native integration follows the rewrite.
 
 ## Wishlist
