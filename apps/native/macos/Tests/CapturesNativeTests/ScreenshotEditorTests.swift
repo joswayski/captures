@@ -331,6 +331,123 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(panel.canCreateDirectories); XCTAssertEqual(panel.directoryURL?.path, "/first folder")
     }
 
+    func testImagePickerImportsStraightRgbaAndSelectsReturnedStableID() throws {
+        _ = NSApplication.shared
+        let background = layer(id: "background", name: "Original", x: 0, y: 0,
+                               visible: true, locked: true, opacity: 100)
+        let selected = layer(id: "selected", name: "Selected", x: 17, y: -9,
+                             visible: false, locked: false, opacity: 63)
+        let imported = layer(id: "returned-id", name: "Asymmetric import", x: 41, y: 23,
+                             visible: true, locked: false, opacity: 100)
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [background, selected]))
+        worker.importLayerID = "returned-id"
+        worker.importedSnapshot = snapshot(id: "shot", unsaved: true,
+                                           layers: [background, selected, imported])
+        var pickerCompletion: ((URL?) -> Void)?
+        let bytes = Data([11, 29, 47, 61, 73, 89, 101, 127, 131, 149, 167, 191,
+                          193, 211, 223, 239, 17, 37, 59, 83, 97, 109, 137, 251])
+        let controller = ScreenshotEditorController(
+            tokens: Tokens.variants["light-mustard"]!, worker: worker,
+            imagePicker: { _, completion in pickerCompletion = completion },
+            imageDecoder: { url in
+                XCTAssertEqual(url.path, "/tmp/asymmetric.png")
+                return EditorDecodedImage(data: bytes, width: 3, height: 2,
+                                          bytesPerRow: 12, name: "Asymmetric import")
+            })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showLayers(in: controller.root)
+
+        try button("Add image…", in: controller.root).performClick(nil)
+        XCTAssertFalse(controller.state.busy, "the picker does not occupy the session worker")
+        pickerCompletion?(URL(fileURLWithPath: "/tmp/asymmetric.png"))
+        waitUntil { worker.imports.count == 1 && !controller.state.busy }
+
+        let call = try XCTUnwrap(worker.imports.first)
+        XCTAssertEqual(call.image.data, bytes)
+        XCTAssertEqual(call.image.width, 3); XCTAssertEqual(call.image.height, 2)
+        XCTAssertEqual(call.image.bytesPerRow, 12); XCTAssertEqual(call.selectedID, "selected")
+        XCTAssertEqual((try field("Layer name", in: controller.root)).stringValue,
+                       "Asymmetric import", "the FFI-returned stable ID is selected")
+        XCTAssertTrue(controller.state.snapshot?.unsavedChanges == true)
+
+        let panel = ScreenshotEditorController.imagePanel()
+        XCTAssertEqual(panel.title, "Choose image")
+        XCTAssertEqual(panel.message, "Choose an image to add as a new layer")
+        XCTAssertTrue(panel.canChooseFiles); XCTAssertFalse(panel.canChooseDirectories)
+        XCTAssertFalse(panel.allowsMultipleSelection)
+    }
+
+    func testDecodedImportWaitsBehindAcceptedEditAndLateOrCancelledPickerRepliesAreIgnored() throws {
+        _ = NSApplication.shared
+        let background = layer(id: "background", name: "Original", x: 0, y: 0,
+                               visible: true, locked: true, opacity: 100)
+        let selected = layer(id: "selected", name: "Selected", x: 17, y: -9,
+                             visible: true, locked: false, opacity: 63)
+        let imported = layer(id: "queued-import", name: "Queued", x: 8, y: 5,
+                             visible: true, locked: false, opacity: 100)
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [background, selected]))
+        worker.importLayerID = "queued-import"
+        worker.importedSnapshot = snapshot(id: "shot", unsaved: true,
+                                           layers: [background, selected, imported])
+        let decodeStarted = DispatchSemaphore(value: 0)
+        let allowDecode = DispatchSemaphore(value: 0)
+        var pickerCompletion: ((URL?) -> Void)?
+        let controller = ScreenshotEditorController(
+            tokens: Tokens.variants["light-mustard"]!, worker: worker,
+            imagePicker: { _, completion in pickerCompletion = completion },
+            imageDecoder: { _ in
+                decodeStarted.signal(); _ = allowDecode.wait(timeout: .now() + 2)
+                return EditorDecodedImage(data: Data(repeating: 0x7f, count: 8),
+                                          width: 2, height: 1, bytesPerRow: 8, name: "Queued")
+            })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showLayers(in: controller.root)
+
+        try button("Add image…", in: controller.root).performClick(nil)
+        pickerCompletion?(nil)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertTrue(worker.imports.isEmpty, "picker cancellation has no editor side effect")
+
+        try button("Add image…", in: controller.root).performClick(nil)
+        pickerCompletion?(URL(fileURLWithPath: "/tmp/queued.png"))
+        XCTAssertEqual(decodeStarted.wait(timeout: .now() + 2), .success)
+        worker.deferRequests = true
+        try button("Hide", in: controller.root).performClick(nil)
+        XCTAssertTrue(controller.state.busy)
+        allowDecode.signal()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertTrue(worker.imports.isEmpty, "decoded pixels wait behind the accepted edit")
+        worker.deferRequests = false
+        worker.completePending(with: snapshot(id: "shot", unsaved: true,
+                                              layers: [background, selected]))
+        waitUntil { worker.imports.count == 1 && !controller.state.busy }
+
+        let lateStarted = DispatchSemaphore(value: 0)
+        let allowLate = DispatchSemaphore(value: 0)
+        var lateCompletion: ((URL?) -> Void)?
+        let lateWorker = FakeEditorWorker(snapshot: snapshot(id: "late"))
+        let late = ScreenshotEditorController(
+            tokens: Tokens.variants["dark-mustard"]!, worker: lateWorker,
+            imagePicker: { _, completion in lateCompletion = completion },
+            imageDecoder: { _ in
+                lateStarted.signal(); _ = allowLate.wait(timeout: .now() + 2)
+                return EditorDecodedImage(data: Data(repeating: 0xff, count: 4),
+                                          width: 1, height: 1, bytesPerRow: 4, name: "Late")
+            })
+        defer { late.window.orderOut(nil) }
+        late.present(artifact: artifact(id: "late"), historyRoot: "/native/History")
+        try showLayers(in: late.root)
+        try button("Add image…", in: late.root).performClick(nil)
+        lateCompletion?(URL(fileURLWithPath: "/tmp/late.png"))
+        XCTAssertEqual(lateStarted.wait(timeout: .now() + 2), .success)
+        XCTAssertFalse(late.windowShouldClose(late.window))
+        allowLate.signal()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertTrue(lateWorker.imports.isEmpty, "a closed editor rejects late decoded pixels")
+    }
+
     func testLayerSnapshotOrderAndCommandsUseStableIDs() throws {
         _ = NSApplication.shared
         let background = layer(id: "background", name: "Original screenshot", x: 0, y: 0,
@@ -634,6 +751,59 @@ final class ScreenshotEditorTests: XCTestCase {
         }
     }
 
+    func testImageImportRenderedStates() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let background = layer(id: "background", name: "Original screenshot", x: 0, y: 0,
+                                   visible: true, locked: true, opacity: 100)
+            let imported = layer(id: "imported", name: "Asymmetric transparent overlay", x: 37, y: -11,
+                                 visible: true, locked: false, opacity: 100)
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [background]))
+            worker.importLayerID = "imported"
+            worker.importedSnapshot = snapshot(id: "shot", unsaved: true,
+                                               layers: [background, imported])
+            var pickerCompletion: ((URL?) -> Void)?
+            var decodeError: String?
+            let controller = ScreenshotEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker,
+                imagePicker: { _, completion in pickerCompletion = completion },
+                imageDecoder: { _ in
+                    if let decodeError { throw AppBridgeError.backend(decodeError) }
+                    return EditorDecodedImage(data: Data([
+                        211, 17, 53, 255, 29, 197, 71, 127,
+                        83, 37, 223, 191, 149, 101, 47, 255,
+                    ]), width: 2, height: 2, bytesPerRow: 8,
+                        name: "Asymmetric transparent overlay")
+                })
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showLayers(in: controller.root)
+            try scrollImageImportVisible(in: controller.root)
+            try render(controller.root, name: "screenshot-editor-import-normal-\(appearance)")
+
+            try button("Add image…", in: controller.root).performClick(nil)
+            pickerCompletion?(URL(fileURLWithPath: "/tmp/import.png"))
+            waitUntil { worker.imports.count == 1 && !controller.state.busy }
+            try render(controller.root, name: "screenshot-editor-import-success-\(appearance)")
+
+            decodeError = "The selected file does not contain a decodable still image."
+            try button("Add image…", in: controller.root).performClick(nil)
+            pickerCompletion?(URL(fileURLWithPath: "/tmp/not-an-image.txt"))
+            waitUntil { labels(in: controller.root).contains { $0.contains("decodable still image") } }
+            try render(controller.root, name: "screenshot-editor-import-error-\(appearance)")
+
+            decodeError = nil; worker.failImport = true
+            worker.failureMessage = "The decoded image exceeds the retained editor asset budget. The current draft, layer selection, undo history, and previously imported pixels remain open and recoverable."
+            try button("Add image…", in: controller.root).performClick(nil)
+            pickerCompletion?(URL(fileURLWithPath: "/tmp/too-large.png"))
+            waitUntil { !controller.state.busy && labels(in: controller.root).contains {
+                $0.contains("retained editor asset budget")
+            } }
+            try render(controller.root,
+                       name: "screenshot-editor-import-error-minimum-\(appearance)")
+        }
+    }
+
     func testRealBridgeCropSaveReopenDiscardAndRetainedFrame() throws {
         _ = NSApplication.shared
         let fixture = try makeHistoryFixture()
@@ -767,7 +937,7 @@ final class ScreenshotEditorTests: XCTestCase {
 
         let collision = expectation(description: "reject overwrite")
         worker.saveNew(request) { result in
-            XCTAssertThrowsError(try result.get())
+            if case .success = result { XCTFail("an existing export must not be overwritten") }
             collision.fulfill()
         }
         wait(for: [collision], timeout: 5)
@@ -783,6 +953,119 @@ final class ScreenshotEditorTests: XCTestCase {
                          "quit drains an accepted publication before freeing the session")
         XCTAssertTrue(FileManager.default.fileExists(atPath: drainedOutput.path))
         wait(for: [drained], timeout: 5)
+    }
+
+    func testImageIODecoderAppliesExifOrientationAndProducesStraightSrgbRgba() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourcePixels: [[UInt8]] = [
+            [10, 20, 30, 255], [40, 50, 60, 255],
+            [70, 80, 90, 128], [100, 110, 120, 255],
+            [130, 140, 150, 255], [160, 170, 180, 255],
+        ]
+        let oriented = root.appendingPathComponent("asymmetric-oriented.tiff")
+        try writeTiff(url: oriented, width: 2, height: 3, bytes: sourcePixels.flatMap { $0 },
+                      colorSpace: try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB)),
+                      bitsPerPixel: 32, alpha: .last, orientation: 6)
+        let decoded = try EditorImageDecoder.decode(oriented)
+        XCTAssertEqual(decoded.width, 3); XCTAssertEqual(decoded.height, 2)
+        XCTAssertEqual(decoded.bytesPerRow, 12); XCTAssertEqual(decoded.name, "asymmetric-oriented")
+        let expected: [[UInt8]] = [sourcePixels[4], sourcePixels[2], sourcePixels[0],
+                                   sourcePixels[5], sourcePixels[3], sourcePixels[1]]
+        for (index, value) in expected.enumerated() {
+            let actual = Array(decoded.data[(index * 4)..<(index * 4 + 4)])
+            for channel in 0..<4 {
+                XCTAssertEqual(Double(actual[channel]), Double(value[channel]), accuracy: 2,
+                               "oriented pixel \(index), channel \(channel)")
+            }
+        }
+
+        let p3URL = root.appendingPathComponent("display-p3.tiff")
+        let p3 = try XCTUnwrap(CGColorSpace(name: CGColorSpace.displayP3))
+        try writeTiff(url: p3URL, width: 1, height: 1, bytes: [180, 80, 40, 255],
+                      colorSpace: p3, bitsPerPixel: 32, alpha: .last)
+        let convertedP3 = try EditorImageDecoder.decode(p3URL)
+        XCTAssertEqual(convertedP3.data[3], 255)
+        XCTAssertNotEqual(Array(convertedP3.data.prefix(3)), [180, 80, 40],
+                          "Display P3 samples are color-converted, not relabeled as sRGB")
+
+        let cmykURL = root.appendingPathComponent("cmyk.tiff")
+        try writeTiff(url: cmykURL, width: 1, height: 1, bytes: [0, 255, 255, 0],
+                      colorSpace: CGColorSpaceCreateDeviceCMYK(), bitsPerPixel: 32, alpha: .none)
+        let convertedCMYK = try EditorImageDecoder.decode(cmykURL)
+        XCTAssertGreaterThan(convertedCMYK.data[0], 200)
+        XCTAssertLessThan(convertedCMYK.data[1], 40)
+        XCTAssertLessThan(convertedCMYK.data[2], 40)
+        XCTAssertEqual(convertedCMYK.data[3], 255)
+    }
+
+    func testRealBridgeImportedPixelsSurviveSourceRemovalDraftSaveAndReopen() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let external = fixture.root.appendingPathComponent("external.png")
+        let importPixels = Data([
+            211, 17, 53, 255, 29, 197, 71, 127,
+            83, 37, 223, 191, 149, 101, 47, 255,
+        ])
+        try importPixels.write(to: external)
+        let decoded = EditorDecodedImage(data: importPixels, width: 2, height: 2,
+                                         bytesPerRow: 8, name: "Detached source")
+        let worker = EditorWorker()
+        let opened = expectation(description: "open for import")
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                    artifactID: fixture.id) { result in
+            if case .failure(let error) = result { XCTFail("open failed: \(error)") }
+            opened.fulfill()
+        }
+        wait(for: [opened], timeout: 5)
+        let imported = expectation(description: "import")
+        var importedLayerID: String?
+        worker.importImage(decoded, selectedID: nil) { result in
+            let value = try? result.get()
+            importedLayerID = value?.layerID
+            XCTAssertTrue(value?.presentation.snapshot.unsavedChanges == true)
+            XCTAssertEqual(value?.presentation.snapshot.layers.first?.name, "Detached source")
+            imported.fulfill()
+        }
+        wait(for: [imported], timeout: 5)
+        try FileManager.default.removeItem(at: external)
+        let undone = expectation(description: "undo imported layer")
+        worker.request(["operation": "undo"]) { result in
+            XCTAssertFalse((try? result.get().snapshot.layers.contains {
+                $0.id == importedLayerID
+            }) ?? true)
+            undone.fulfill()
+        }
+        wait(for: [undone], timeout: 5)
+        let redone = expectation(description: "redo imported layer")
+        worker.request(["operation": "redo"]) { result in
+            XCTAssertTrue((try? result.get().snapshot.layers.contains {
+                $0.id == importedLayerID
+            }) ?? false)
+            redone.fulfill()
+        }
+        wait(for: [redone], timeout: 5)
+        let saved = expectation(description: "save imported draft")
+        worker.request(["operation": "save_draft", "updated_at_ms": 456]) { result in
+            XCTAssertFalse((try? result.get().snapshot.unsavedChanges) ?? true); saved.fulfill()
+        }
+        wait(for: [saved], timeout: 5)
+        worker.close(); EditorWorker.flush()
+
+        let reopened = EditorWorker()
+        let restored = expectation(description: "restore imported draft")
+        reopened.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                      artifactID: fixture.id) { result in
+            let value = try? result.get()
+            XCTAssertEqual(value?.snapshot.layers.first?.id, importedLayerID)
+            XCTAssertEqual(value?.snapshot.layers.first?.name, "Detached source")
+            XCTAssertTrue(value?.snapshot.hasDraft == true)
+            restored.fulfill()
+        }
+        wait(for: [restored], timeout: 5)
+        reopened.close(); EditorWorker.flush()
     }
 
     private func snapshot(id: String, width: Double = 640, height: Double = 360,
@@ -839,6 +1122,14 @@ final class ScreenshotEditorTests: XCTestCase {
         view.layoutSubtreeIfNeeded()
     }
 
+    private func scrollImageImportVisible(in view: NSView) throws {
+        let control = try button("Add image…", in: view)
+        let scroll = try XCTUnwrap(control.enclosingScrollView)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 42))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        view.layoutSubtreeIfNeeded()
+    }
+
     private func popup(_ label: String, in view: NSView) throws -> NSPopUpButton {
         try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSPopUpButton }
             .first { $0.accessibilityLabel() == label })
@@ -880,6 +1171,23 @@ final class ScreenshotEditorTests: XCTestCase {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
         try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: url)
+    }
+
+    private func writeTiff(url: URL, width: Int, height: Int, bytes: [UInt8],
+                           colorSpace: CGColorSpace, bitsPerPixel: Int,
+                           alpha: CGImageAlphaInfo, orientation: Int? = nil) throws {
+        let bytesPerRow = width * bitsPerPixel / 8
+        let provider = try XCTUnwrap(CGDataProvider(data: Data(bytes) as CFData))
+        let image = try XCTUnwrap(CGImage(width: width, height: height, bitsPerComponent: 8,
+            bitsPerPixel: bitsPerPixel, bytesPerRow: bytesPerRow, space: colorSpace,
+            bitmapInfo: CGBitmapInfo(rawValue: alpha.rawValue), provider: provider,
+            decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(
+            url as CFURL, "public.tiff" as CFString, 1, nil))
+        var properties: [CFString: Any] = [:]
+        if let orientation { properties[kCGImagePropertyOrientation] = orientation }
+        CGImageDestinationAddImage(destination, image, properties as CFDictionary)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
     }
 
     private func makeHistoryFixture(transparentOrigin: Bool = false) throws
@@ -940,6 +1248,7 @@ private final class FakeEditorWorker: EditorWorking {
     var requests: [[String: Any]] = []
     var encodes: [[String: Any]] = []
     var saves: [[String: Any]] = []
+    var imports: [(image: EditorDecodedImage, selectedID: String?)] = []
     var openArtifactIDs: [String] = []
     var closeCount = 0
     var draftsRoot: String?
@@ -950,6 +1259,9 @@ private final class FakeEditorWorker: EditorWorking {
     var deferEncodes = false
     var failEncode = false
     var saveResult: Result<EditorSavePresentation, Error> = .success(.saved(path: "/output/edited.png"))
+    var importLayerID = "imported-layer"
+    var failImport = false
+    var importedSnapshot: NativeEditorSnapshot?
     var response: (([String: Any]) -> NativeEditorSnapshot?)?
     var terminationResult: Result<Void, Error> = .success(())
     private var pendingCompletion: ((Result<EditorPresentation, Error>) -> Void)?
@@ -1014,6 +1326,18 @@ private final class FakeEditorWorker: EditorWorking {
                  completion: @escaping (Result<EditorSavePresentation, Error>) -> Void) {
         saves.append(request)
         completion(saveResult)
+    }
+
+    func importImage(_ image: EditorDecodedImage, selectedID: String?,
+                     completion: @escaping (Result<EditorImportPresentation, Error>) -> Void) {
+        imports.append((image, selectedID))
+        if failImport {
+            completion(.failure(AppBridgeError.backend(failureMessage))); return
+        }
+        if let importedSnapshot { snapshot = importedSnapshot }
+        completion(.success(EditorImportPresentation(layerID: importLayerID,
+            presentation: EditorPresentation(snapshot: snapshot,
+                image: CGImage.fixture(width: Int(snapshot.width), height: Int(snapshot.height))))))
     }
 
     private func output() -> EditorOutputPresentation {

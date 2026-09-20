@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 struct ScreenshotEditorState: Equatable {
     private(set) var generation = 0
@@ -82,6 +83,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let dimensions = NSTextField(labelWithString: "")
     private let geometryPanel = Surface()
     private let layersPanel = Surface()
+    private let layerContent = Surface()
     private let outputPanel = Surface()
     private let outputContent = Surface()
     private let layerName = NSTextField()
@@ -111,6 +113,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var deleteButton: CaptureButton!
     private var moveUpButton: CaptureButton!
     private var moveDownButton: CaptureButton!
+    private var importImageButton: CaptureButton!
     private var undoButton: CaptureButton!
     private var redoButton: CaptureButton!
     private var saveButton: CaptureButton!
@@ -133,13 +136,23 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var outputDirectory = ""
     private let directoryPicker: ((NSWindow, URL?, @escaping (URL?) -> Void) -> Void)?
     private let didSaveCopy: () -> Void
+    private let imagePicker: ((NSWindow, @escaping (URL?) -> Void) -> Void)?
+    private let imageDecoder: (URL) throws -> EditorDecodedImage
+    private static let imageDecodeQueue = DispatchQueue(label: "es.captures.native.editor-image-decode",
+                                                        qos: .userInitiated)
+    private var importToken = 0
+    private var importLoading = false
+    private var pendingImport: (image: EditorDecodedImage, generation: Int, artifactID: String)?
 
     init(tokens: Tokens, worker: EditorWorking = EditorWorker(), numberLocale: Locale = .current,
          reportError: @escaping (String) -> Void = { _ in },
          directoryPicker: ((NSWindow, URL?, @escaping (URL?) -> Void) -> Void)? = nil,
-         didSaveCopy: @escaping () -> Void = {}) {
+         didSaveCopy: @escaping () -> Void = {},
+         imagePicker: ((NSWindow, @escaping (URL?) -> Void) -> Void)? = nil,
+         imageDecoder: @escaping (URL) throws -> EditorDecodedImage = EditorImageDecoder.decode) {
         self.tokens = tokens; self.worker = worker; self.reportError = reportError
         self.directoryPicker = directoryPicker; self.didSaveCopy = didSaveCopy
+        self.imagePicker = imagePicker; self.imageDecoder = imageDecoder
         editorNumberFormatter = NumberFormatter()
         outputIntegerFormatter = NumberFormatter()
         editorNumberFormatter.locale = numberLocale
@@ -183,6 +196,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
             return
         }
+        cancelPendingImport()
         let generation = state.beginOpen(artifactID: artifact.id)
         self.historyRoot = historyRoot
         captureMode = artifact.mode
@@ -211,10 +225,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.showError("Couldn’t open screenshot: \(error.localizedDescription)")
             }
             self.updateControls()
+            self.submitPendingImportIfReady()
         }
     }
 
     func prepareForTermination() -> Bool {
+        cancelPendingImport()
         let result = worker.prepareForTermination()
         switch result {
         case .success:
@@ -435,6 +451,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func buildLayersPanel() {
+        let panelScroll = NSScrollView(frame: layersPanel.bounds)
+        panelScroll.autoresizingMask = [.width, .height]
+        panelScroll.hasVerticalScroller = true; panelScroll.scrollerStyle = .overlay
+        panelScroll.drawsBackground = false
+        layerContent.frame = NSRect(x: 0, y: 0, width: 272, height: 432)
+        panelScroll.documentView = layerContent; layersPanel.addSubview(panelScroll)
+
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 272, height: 106))
         scroll.hasVerticalScroller = true; scroll.drawsBackground = false
         layerTable = NSTableView(frame: scroll.bounds)
@@ -442,43 +465,46 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         column.width = 252; layerTable.addTableColumn(column); layerTable.headerView = nil
         layerTable.rowHeight = 32; layerTable.dataSource = self; layerTable.delegate = self
         layerTable.allowsEmptySelection = false; layerTable.setAccessibilityLabel("Screenshot layers")
-        scroll.documentView = layerTable; layersPanel.addSubview(scroll)
+        scroll.documentView = layerTable; layerContent.addSubview(scroll)
 
-        panelFieldLabel("Name", x: 0, y: 112, parent: layersPanel)
+        panelFieldLabel("Name", x: 0, y: 112, parent: layerContent)
         layerName.frame = NSRect(x: 0, y: 130, width: 190, height: 30)
         layerName.setAccessibilityLabel("Layer name")
         layerName.alignment = .left; layerName.placeholderString = "Layer name"
-        layersPanel.addSubview(layerName)
+        layerContent.addSubview(layerName)
         renameButton = button("Rename", frame: NSRect(x: 196, y: 130, width: 76, height: 30),
-                              parent: layersPanel) { [weak self] in self?.renameLayer() }
+                              parent: layerContent) { [weak self] in self?.renameLayer() }
         visibilityButton = button("Hide", frame: NSRect(x: 0, y: 168, width: 128, height: 30),
-                                  parent: layersPanel) { [weak self] in self?.toggleVisibility() }
+                                  parent: layerContent) { [weak self] in self?.toggleVisibility() }
         lockButton = button("Lock", frame: NSRect(x: 144, y: 168, width: 128, height: 30),
-                            parent: layersPanel) { [weak self] in self?.toggleLock() }
+                            parent: layerContent) { [weak self] in self?.toggleLock() }
 
-        panelFieldLabel("Opacity (0–100)", x: 0, y: 204, parent: layersPanel)
+        panelFieldLabel("Opacity (0–100)", x: 0, y: 204, parent: layerContent)
         configure(layerOpacity, frame: NSRect(x: 0, y: 222, width: 216, height: 30),
-                  label: "Layer opacity", parent: layersPanel)
+                  label: "Layer opacity", parent: layerContent)
         opacityButton = button("Set", frame: NSRect(x: 222, y: 222, width: 50, height: 30),
-                               parent: layersPanel) { [weak self] in self?.setOpacity() }
+                               parent: layerContent) { [weak self] in self?.setOpacity() }
 
-        panelFieldLabel("X", x: 0, y: 258, parent: layersPanel)
-        panelFieldLabel("Y", x: 92, y: 258, parent: layersPanel)
+        panelFieldLabel("X", x: 0, y: 258, parent: layerContent)
+        panelFieldLabel("Y", x: 92, y: 258, parent: layerContent)
         configure(layerX, frame: NSRect(x: 0, y: 276, width: 86, height: 30),
-                  label: "Layer X", parent: layersPanel)
+                  label: "Layer X", parent: layerContent)
         configure(layerY, frame: NSRect(x: 92, y: 276, width: 86, height: 30),
-                  label: "Layer Y", parent: layersPanel)
+                  label: "Layer Y", parent: layerContent)
         moveButton = button("Move", frame: NSRect(x: 184, y: 276, width: 88, height: 30),
-                            parent: layersPanel) { [weak self] in self?.moveLayer() }
+                            parent: layerContent) { [weak self] in self?.moveLayer() }
 
         duplicateButton = button("Duplicate", frame: NSRect(x: 0, y: 314, width: 128, height: 30),
-                                 parent: layersPanel) { [weak self] in self?.duplicateLayer() }
+                                 parent: layerContent) { [weak self] in self?.duplicateLayer() }
         deleteButton = button("Delete", frame: NSRect(x: 144, y: 314, width: 128, height: 30),
-                              parent: layersPanel) { [weak self] in self?.deleteLayer() }
+                              parent: layerContent) { [weak self] in self?.deleteLayer() }
         moveUpButton = button("Move up", frame: NSRect(x: 0, y: 352, width: 128, height: 30),
-                              parent: layersPanel) { [weak self] in self?.reorderLayer(up: true) }
+                              parent: layerContent) { [weak self] in self?.reorderLayer(up: true) }
         moveDownButton = button("Move down", frame: NSRect(x: 144, y: 352, width: 128, height: 30),
-                                parent: layersPanel) { [weak self] in self?.reorderLayer(up: false) }
+                                parent: layerContent) { [weak self] in self?.reorderLayer(up: false) }
+        importImageButton = button("Add image…", frame: NSRect(x: 0, y: 398, width: 272, height: 34),
+                                   parent: layerContent) { [weak self] in self?.chooseImage() }
+        importImageButton.primary = true
     }
 
     @objc private func changeSection() {
@@ -537,6 +563,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.showError("Output preview failed: \(error.localizedDescription)")
             }
             self.updateControls()
+            self.submitPendingImportIfReady()
         }
     }
 
@@ -611,6 +638,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.showError("Couldn’t save new copy: \(error.localizedDescription)")
             }
             self.updateControls()
+            self.submitPendingImportIfReady()
         }
     }
 
@@ -737,6 +765,103 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                      message: layer.visible ? "Hiding layer…" : "Showing layer…")
     }
 
+    private func chooseImage() {
+        guard let artifactID = state.artifactID, state.snapshot != nil, !state.busy,
+              !importLoading else { return }
+        importToken += 1
+        let token = importToken
+        let generation = state.generation
+        let completion: (URL?) -> Void = { [weak self] url in
+            DispatchQueue.main.async {
+                guard let self, self.importToken == token,
+                      self.state.generation == generation,
+                      self.state.artifactID == artifactID,
+                      let url else { return }
+                self.importLoading = true
+                self.status.textColor = self.tokens.color("text-muted")
+                self.status.stringValue = "Reading image…"
+                self.updateControls()
+                let decoder = self.imageDecoder
+                Self.imageDecodeQueue.async {
+                    let result = Result { try decoder(url) }
+                    DispatchQueue.main.async {
+                        guard self.importToken == token,
+                              self.state.generation == generation,
+                              self.state.artifactID == artifactID else { return }
+                        switch result {
+                        case .success(let image):
+                            self.pendingImport = (image, generation, artifactID)
+                            self.submitPendingImportIfReady()
+                        case .failure(let error):
+                            self.importLoading = false
+                            self.showError("Couldn’t import image: \(error.localizedDescription)")
+                            self.updateControls()
+                        }
+                    }
+                }
+            }
+        }
+        if let imagePicker {
+            imagePicker(window, completion)
+            return
+        }
+        let panel = Self.imagePanel()
+        panel.beginSheetModal(for: window) { response in
+            completion(response == .OK ? panel.url : nil)
+        }
+    }
+
+    static func imagePanel() -> NSOpenPanel {
+        let panel = NSOpenPanel()
+        panel.title = "Choose image"
+        panel.message = "Choose an image to add as a new layer"
+        panel.prompt = "Add Image"
+        panel.allowedContentTypes = [.image]
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        return panel
+    }
+
+    private func submitPendingImportIfReady() {
+        guard let pendingImport else { return }
+        guard pendingImport.generation == state.generation,
+              pendingImport.artifactID == state.artifactID, state.snapshot != nil else {
+            cancelPendingImport(); return
+        }
+        guard !state.busy, let generation = state.beginCommand() else { return }
+        self.pendingImport = nil
+        let token = importToken
+        let selectedID = selectedLayerID
+        status.textColor = tokens.color("text-muted")
+        status.stringValue = "Adding image layer…"
+        updateControls()
+        worker.importImage(pendingImport.image, selectedID: selectedID) { [weak self] result in
+            guard let self, self.importToken == token else { return }
+            self.importLoading = false
+            switch result {
+            case .success(let imported):
+                guard self.state.complete(imported.presentation.snapshot,
+                                          generation: generation) else { return }
+                self.invalidateOutput()
+                self.preferredLayerID = imported.layerID
+                self.publish(imported.presentation, resetCrop: false)
+                self.status.textColor = self.tokens.color("text-muted")
+                self.status.stringValue = "Image added. Unsaved changes."
+            case .failure(let error):
+                guard self.state.fail(generation: generation) else { return }
+                self.showError("Couldn’t import image: \(error.localizedDescription)")
+            }
+            self.updateControls()
+        }
+    }
+
+    private func cancelPendingImport() {
+        importToken += 1
+        importLoading = false
+        pendingImport = nil
+    }
+
     private func toggleLock() {
         guard let layer = selectedLayer else { return }
         layerCommand(layer, edit: ["action": "lock", "locked": !layer.locked],
@@ -857,6 +982,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.publishSelectedLayerFields()
             }
             self.updateControls()
+            self.submitPendingImportIfReady()
         }
     }
 
@@ -877,6 +1003,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func closeNow() {
+        cancelPendingImport()
         closeAfterCommand = false; selectedLayerID = nil; preferredLayerID = nil
         state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
         worker.close(); window.orderOut(nil); updateControls()
@@ -899,6 +1026,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         outputPreviewMode?.isEnabled = ready && encodedOutput != nil
         updateOutputOptionControls()
         layerTable?.isEnabled = ready
+        importImageButton?.isEnabled = ready && !importLoading
         let layer = ready ? selectedLayer : nil
         let image = layer?.kind == .image
         layerName.isEnabled = image; renameButton?.isEnabled = image

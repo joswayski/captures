@@ -495,15 +495,22 @@ stale output; previewing has no draft, undo, clipboard or file side effects. **S
 copy** chooses a directory independently of the worker, then serializes publication on
 that worker. It never replaces a file or mutates the draft; successful publication adds
 a distinct History entry, and partial History failure preserves the saved path. Drafts use
-the same isolated sibling root and reopen with the screenshot. Closing an unsaved session offers save-and-close,
+the same isolated sibling root and reopen with the screenshot. The Layers view also
+imports one still image at a time through AppKit's color-managed ImageIO decoder,
+normalizing EXIF orientation and straight-alpha sRGB RGBA8 pixels before the worker
+copies them into the shared session. Imported layers reopen without their source file;
+ImageIO-supported sources use their first image, and files without a usable color
+description are rejected instead of silently relabeled.
+Closing an unsaved session offers save-and-close,
 close without saving the current session (retaining any older persisted draft), or
 cancel. Quit drains accepted work and cancels termination if its draft save fails.
-AppKit CI covers bridge/export lifetime, pending-edit ownership, locale-aware geometry,
-failure/close/output behavior and rendered light/dark fixtures. Physical AppKit input,
-accessibility and IME acceptance remain unverified.
+AppKit CI covers bridge/export/import lifetime, pending-edit ownership, locale-aware
+geometry, failure/close/output/import behavior and rendered light/dark fixtures.
+Physical AppKit input, accessibility and IME acceptance remain unverified.
 
 Across both hosts, physical input/accessibility/IME acceptance remains open.
-Image-transform/import controls, annotation tools, AppKit edited-image export and
+Image-transform controls, non-AppKit image import, annotation tools, AppKit
+edited-image export and
 recording editing are not connected; the screenshot-editor parity gate stays open.
 
 New Capture connects its persisted shortcut, tray action and workspace entry to
