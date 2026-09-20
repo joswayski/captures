@@ -385,6 +385,15 @@ drafts cannot load arbitrary filesystem/network image sources. Visible unsupport
 annotations remain errors rather than silently missing output. This is the same
 host-independent implementation for macOS, Windows, X11 and Wayland.
 
+Shared layer commands now cover visibility, locking, opacity, movement, deletion,
+duplication, image renaming and ordering through the same transactional session
+and C ABI. Shipping TypeScript fixtures check all four duplicate element kinds
+and reorder placements across locked boundaries. Hidden layers remain editable;
+locked layers block movement/deletion/reordering but permit the other panel
+actions. Duplicates share owned image assets and remain draft-compatible.
+These commands are a shared prerequisite on all four platforms; layer-panel
+controls and physical acceptance are not connected by this slice.
+
 The first wgpu editor window now opens isolated History screenshots on its own
 serialized worker, with fit preview, numeric crop/canvas fields, undo/redo,
 save draft and confirmed discard. Closing unsaved edits offers save, keep the last

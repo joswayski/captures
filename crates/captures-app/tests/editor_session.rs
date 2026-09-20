@@ -37,6 +37,80 @@ fn crop() -> Request {
 }
 
 #[test]
+fn layer_json_commands_render_transactionally_and_restore_shared_assets() {
+    let (data, id, original) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    let layer = |id: &str, edit| {
+        serde_json::from_value::<Request>(json!({
+            "operation": "layer", "id": id, "edit": edit,
+        }))
+        .unwrap()
+    };
+    editor
+        .execute(layer(
+            "capture-background",
+            json!({
+                "action": "duplicate", "new_id": "copy",
+            }),
+        ))
+        .unwrap();
+    editor
+        .execute(layer(
+            "copy",
+            json!({
+                "action": "translate", "delta_x": -22, "delta_y": -23,
+            }),
+        ))
+        .unwrap();
+    assert_eq!(editor.pixels().get_pixel(3, 1).0, [31, 0, 19, 255]);
+    editor
+        .execute(layer(
+            "copy",
+            json!({"action": "visibility", "visible": false}),
+        ))
+        .unwrap();
+    assert_eq!(editor.pixels().as_ref(), &original);
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.pixels().get_pixel(3, 1).0, [31, 0, 19, 255]);
+    assert!(editor.snapshot().can_redo);
+    let frame = editor.pixels();
+    // Locked no-ops and invalid edits cannot destroy redo or the retained frame.
+    editor
+        .execute(layer("capture-background", json!({"action": "delete"})))
+        .unwrap();
+    assert!(
+        editor
+            .execute(layer("copy", json!({"action": "opacity", "opacity": 101})))
+            .is_err()
+    );
+    assert!(editor.snapshot().can_redo);
+    assert!(Arc::ptr_eq(&frame, &editor.pixels()));
+    editor
+        .execute(layer("copy", json!({"action": "opacity", "opacity": 50})))
+        .unwrap();
+    let pixel = editor.pixels().get_pixel(3, 1).0;
+    assert!((61..=63).contains(&pixel[0]) && (34..=36).contains(&pixel[1]));
+    assert_eq!(&pixel[2..], &[19, 255]);
+    assert!(!editor.snapshot().can_redo);
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 7 })
+        .unwrap();
+    let restored = open(data.path(), &id).unwrap();
+    assert_eq!(restored.snapshot().document, editor.snapshot().document);
+    assert_eq!(restored.pixels(), editor.pixels());
+    assert_eq!(
+        fs::read_dir(data.path().join("drafts").join(&id).join("assets"))
+            .unwrap()
+            .count(),
+        1
+    );
+    let disk = image::open(data.path().join("history").join(id).join("capture.png"))
+        .unwrap()
+        .into_rgba8();
+    assert_eq!(disk, original);
+}
+
+#[test]
 fn crop_undo_branch_failure_and_retained_frames_have_transactional_semantics() {
     let (data, id, original) = setup();
     let mut editor = open(data.path(), &id).unwrap();

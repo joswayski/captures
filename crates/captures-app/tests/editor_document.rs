@@ -1,5 +1,5 @@
 use captures_app::editor::{
-    Document, DocumentHistory, Element, ImageTransform, Point, Rect, bounded_crop_rect,
+    Document, DocumentHistory, Element, ImageTransform, LayerEdit, Point, Rect, bounded_crop_rect,
 };
 use captures_history::editor_draft::{self, SaveRequest};
 use serde::Deserialize;
@@ -15,6 +15,7 @@ struct Fixture {
     crop_rects: Vec<DocumentCropCase>,
     canvas_sizes: Vec<CanvasSizeCase>,
     orientations: Vec<OrientationCase>,
+    layers: Value,
     history: HistoryCase,
 }
 
@@ -232,6 +233,182 @@ fn unknown_and_legacy_optional_data_round_trip_without_loss() {
     };
     assert!(shape.style.has_stroke());
     assert!(!shape.style.has_drop_shadow());
+}
+
+#[test]
+fn layer_order_and_duplication_match_shipping_including_locked_boundaries_and_unknowns() {
+    let fixture = fixture();
+    let mut initial: Document = serde_json::from_value(fixture.document).unwrap();
+    initial.elements = serde_json::from_value(fixture.layers["elements"].clone()).unwrap();
+    for case in fixture.layers["reorders"].as_array().unwrap() {
+        let mut document = initial.clone();
+        document
+            .edit_layer(
+                case["moved"].as_str().unwrap(),
+                LayerEdit::Reorder {
+                    target_id: case["target"].as_str().unwrap().into(),
+                    placement: serde_json::from_value(case["placement"].clone()).unwrap(),
+                },
+            )
+            .unwrap();
+        let actual: Vec<_> = document
+            .elements
+            .iter()
+            .map(|element| element.base().id.as_str())
+            .collect();
+        assert_eq!(
+            serde_json::to_value(actual).unwrap(),
+            case["expected"],
+            "{case}"
+        );
+        for before in &initial.elements {
+            assert_eq!(
+                document
+                    .elements
+                    .iter()
+                    .find(|element| element.base().id == before.base().id),
+                Some(before)
+            );
+        }
+    }
+    for case in fixture.layers["duplicates"].as_array().unwrap() {
+        let mut document = initial.clone();
+        let input: Element = serde_json::from_value(case["input"].clone()).unwrap();
+        document.elements = vec![input.clone()];
+        document
+            .edit_layer(
+                &input.base().id,
+                LayerEdit::Duplicate {
+                    new_id: case["expected"]["id"].as_str().unwrap().into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(document.elements[0], input);
+        assert_json_equivalent(
+            serde_json::to_value(&document.elements[1]).unwrap(),
+            case["expected"].clone(),
+        );
+    }
+}
+
+#[test]
+fn layer_flags_hidden_moves_and_rejections_preserve_other_document_data() {
+    let mut document: Document = serde_json::from_value(fixture().document).unwrap();
+    let before = document.clone();
+    for edit in [
+        LayerEdit::Delete,
+        LayerEdit::Translate {
+            delta_x: 13.5,
+            delta_y: -8.25,
+        },
+    ] {
+        document.edit_layer("locked-text", edit).unwrap();
+        assert_eq!(document, before);
+    }
+    document
+        .edit_layer(
+            "hidden-image",
+            LayerEdit::Translate {
+                delta_x: 13.5,
+                delta_y: -8.25,
+            },
+        )
+        .unwrap();
+    let image = document.elements[0].base();
+    assert_eq!((image.x, image.y, image.visible), (-13.75, 6.5, false));
+    document
+        .edit_layer("locked-text", LayerEdit::Opacity { opacity: 42.5 })
+        .unwrap();
+    assert_eq!(document.elements[1].base().opacity, 42.5);
+    document
+        .edit_layer("locked-text", LayerEdit::Visibility { visible: false })
+        .unwrap();
+    assert!(!document.elements[1].base().visible);
+    document
+        .edit_layer(
+            "hidden-image",
+            LayerEdit::Rename {
+                name: "  Better name  ".into(),
+            },
+        )
+        .unwrap();
+    let Element::Image(image) = &document.elements[0] else {
+        panic!()
+    };
+    assert_eq!(image.name, "Better name");
+    let valid = document.clone();
+    for edit in [
+        LayerEdit::Opacity { opacity: -0.01 },
+        LayerEdit::Opacity { opacity: 100.01 },
+        LayerEdit::Opacity { opacity: f64::NAN },
+        LayerEdit::Translate {
+            delta_x: f64::INFINITY,
+            delta_y: 0.,
+        },
+        LayerEdit::Duplicate {
+            new_id: "shape".into(),
+        },
+    ] {
+        assert!(document.edit_layer("hidden-image", edit).is_err());
+        assert_eq!(document, valid);
+    }
+    document
+        .edit_layer("locked-text", LayerEdit::Lock { locked: false })
+        .unwrap();
+    document
+        .edit_layer("locked-text", LayerEdit::Delete)
+        .unwrap();
+    assert_eq!(document.elements.len(), 3);
+    assert_eq!(document.elements[1], before.elements[2]);
+    assert_eq!(document.extra, before.extra);
+}
+
+#[test]
+fn overflowing_hidden_layer_movement_cannot_make_an_unreadable_draft() {
+    let initial: Document = serde_json::from_value(fixture().document).unwrap();
+    for original in initial.elements {
+        let mut document = Document {
+            width: 20.,
+            height: 10.,
+            background: None,
+            elements: vec![original],
+            extra: Default::default(),
+        };
+        let id = document.elements[0].base().id.clone();
+        document
+            .edit_layer(&id, LayerEdit::Lock { locked: false })
+            .unwrap();
+        document
+            .edit_layer(&id, LayerEdit::Visibility { visible: false })
+            .unwrap();
+        document
+            .edit_layer(
+                &id,
+                LayerEdit::Translate {
+                    delta_x: 1e308,
+                    delta_y: -1e308,
+                },
+            )
+            .unwrap();
+        let before = document.clone();
+        assert!(
+            document
+                .edit_layer(
+                    &id,
+                    LayerEdit::Translate {
+                        delta_x: 1e308,
+                        delta_y: -1e308
+                    }
+                )
+                .is_err()
+        );
+        assert_eq!(document, before);
+        let encoded = serde_json::to_value(&document).unwrap();
+        assert_eq!(
+            serde_json::from_value::<Document>(encoded).unwrap(),
+            document
+        );
+    }
 }
 
 #[test]

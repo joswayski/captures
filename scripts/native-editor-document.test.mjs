@@ -5,6 +5,8 @@ import {
   boundedCropRect,
   createScreenshotDocument,
   cropDocument,
+  duplicateScreenshotElement,
+  reorderScreenshotLayers,
   resizeDocumentCanvas,
   transformImageElement,
   translateElement,
@@ -222,6 +224,20 @@ function historyCases() {
 }
 
 function shippingCases() {
+  const elements = [...document.elements, { ...document.elements[0], id: 'above', visible: true }];
+  const layers = {
+    elements,
+    reorders: elements.flatMap(moved => elements.flatMap(target => ['before', 'after'].map(placement => ({
+      moved: moved.id,
+      target: target.id,
+      placement,
+      expected: reorderScreenshotLayers(elements, moved.id, target.id, placement).map(element => element.id),
+    })))),
+    duplicates: document.elements.map(input => ({
+      input,
+      expected: duplicateScreenshotElement(input, `${input.id}-copy`),
+    })),
+  };
   return {
     initialization: {
       input: { src: 'draft-asset:background', width: 19.5, height: 11.25, sourceArtifactId: 'capture-1' },
@@ -230,6 +246,7 @@ function shippingCases() {
     document,
     ...geometryCases(),
     orientations: orientationCases(),
+    layers,
     history: historyCases(),
   };
 }
@@ -253,6 +270,7 @@ function fixtureText(cases) {
     `  "cropRects": ${array(cases.cropRects, '    ')},`,
     `  "canvasSizes": ${array(cases.canvasSizes, '    ')},`,
     `  "orientations": ${array(cases.orientations, '    ')},`,
+    `  "layers": ${JSON.stringify(cases.layers)},`,
     '  "history": {',
     `    "initial": ${JSON.stringify(cases.history.initial)},`,
     `    "operations": ${array(cases.history.operations, '      ')},`,
@@ -273,6 +291,8 @@ if (process.argv.includes('--write')) {
   test('vectors cover geometry, every D4 state, unknown data, and history boundaries', () => {
     const vectors = shippingCases();
     assert.equal(vectors.orientations.length, 32);
+    assert.equal(vectors.layers.reorders.length, 50);
+    assert.equal(vectors.layers.duplicates.length, 4);
     assert.ok(vectors.document.elements.some(element => element.visible === false));
     assert.ok(vectors.document.elements.some(element => element.locked === true));
     assert.ok(vectors.crops.some(entry => entry.start.x < 0));
