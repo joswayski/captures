@@ -10,7 +10,10 @@ import {
   cropDocument,
   duplicateScreenshotElement,
   elementBounds,
+  elementLocalBounds,
+  elementWorldPoint,
   expandDocumentToFitBounds,
+  hitTestElement,
   isFullyOutsideCanvas,
   reorderScreenshotLayers,
   resizeDocumentCanvas,
@@ -339,10 +342,70 @@ function shippingCases() {
     shapeCreations: shapeCreationCases(),
     openShapeCreations: openShapeCreationCases(),
     freehandCreations: freehandCreationCases(),
+    hitTests: hitTestCases(),
     orientations: orientationCases(),
     layers,
     history: historyCases(),
   };
+}
+
+function hitTestCases() {
+  const image = { ...document.elements[0], id: 'image', visible: true };
+  const shape = document.elements[2];
+  const path = document.elements[3];
+  const variants = [
+    image,
+    { ...image, rotation: 0.67, orientation: 'rotate-90' },
+    ...['rectangle', 'ellipse'].map(kind => ({
+      ...shape, shape: kind, rotation: -0.39,
+      style: { ...style, strokeEnabled: false, dropShadow: true },
+    })),
+    ...['line', 'arrow'].flatMap(kind => [
+      { ...shape, shape: kind, controls: [] },
+      { ...shape, shape: kind, controls: [{ x: 21.25, y: 279.75 }], rotation: 0.41 },
+      { ...shape, shape: kind, rotation: -0.79, style: { ...style, dropShadow: true } },
+    ]),
+    { ...shape, endX: shape.x, endY: shape.y, controls: [] },
+    { ...path, points: [] },
+    { ...path, points: [path.points[0]], rotation: 0.33 },
+    { ...path, rotation: -0.51 },
+  ];
+  const scenario = (name, elements, queries, bounds = null) => ({
+    name, input: { ...document, elements }, bounds,
+    queries: queries.map(({ point, tolerance }) => ({
+      point, tolerance, expected: hitTestElement(elements, point, tolerance)?.id ?? null,
+    })),
+  });
+  const cases = variants.map((element, index) => {
+    const bounds = elementLocalBounds(element);
+    // Both sides of every local edge, with and without document-space tolerance.
+    // Rotation distinguishes local boxes from world-axis-aligned bounding boxes.
+    const queries = [0, 8].flatMap(tolerance => [-0.125, 0.125].flatMap(offset => [
+      { x: bounds.x - tolerance + offset, y: bounds.y + bounds.height * 0.37 },
+      { x: bounds.x + bounds.width + tolerance + offset, y: bounds.y + bounds.height * 0.61 },
+      { x: bounds.x + bounds.width * 0.23, y: bounds.y - tolerance + offset },
+      { x: bounds.x + bounds.width * 0.71, y: bounds.y + bounds.height + tolerance + offset },
+    ].map(local => ({ point: elementWorldPoint(element, local), tolerance }))));
+    return scenario(`geometry-${index}-${element.kind}`, [element], queries, bounds);
+  });
+  const center = { x: image.x + image.width / 2, y: image.y + image.height / 2 };
+  const queries = [{ point: center, tolerance: 0 }];
+  cases.push(
+    scenario('frontmost', [image, { ...image, id: 'front' }], queries),
+    scenario('hidden-locked', [image, { ...image, id: 'locked', locked: true }, { ...image, id: 'hidden', visible: false }], queries),
+    scenario('transparent-still-selectable', [image, { ...image, id: 'transparent', opacity: 0 }], queries),
+    scenario('miss-front-hit-back', [image, { ...image, id: 'front', x: 999 }], queries),
+    scenario('empty', [], queries),
+    scenario('inclusive-image-edge', [image], [
+      { point: { x: image.x - 8, y: center.y }, tolerance: 8 },
+      { point: { x: image.x + image.width, y: image.y + image.height }, tolerance: 0 },
+    ]),
+    // A needless inverse rotation at zero loses precision on this exact edge.
+    scenario('fractional-unrotated-edge', [{ ...image, x: 0.3 }], [
+      { point: { x: 0.3, y: center.y }, tolerance: 0 },
+    ]),
+  );
+  return cases;
 }
 
 function shapeCreationCases() {
@@ -727,6 +790,7 @@ function fixtureText(cases) {
     `  "shapeCreations": ${array(cases.shapeCreations, '    ')},`,
     `  "openShapeCreations": ${array(cases.openShapeCreations, '    ')},`,
     `  "freehandCreations": ${array(cases.freehandCreations, '    ')},`,
+    `  "hitTests": ${array(cases.hitTests, '    ')},`,
     `  "orientations": ${array(cases.orientations, '    ')},`,
     `  "layers": ${JSON.stringify(cases.layers)},`,
     '  "history": {',
@@ -745,6 +809,21 @@ if (process.argv.includes('--write')) {
 } else {
   test('native editor vectors match the shipping TypeScript oracle', async () => {
     assert.deepEqual(JSON.parse(await readFile(fixture, 'utf8')), serializableCases());
+  });
+  test('selection vectors distinguish local edges, layer order and transparent content', () => {
+    const cases = hitTestCases();
+    for (const entry of cases.filter(entry => entry.bounds)) {
+      assert.equal(entry.queries.filter(query => query.expected !== null).length, 8);
+      assert.equal(entry.queries.filter(query => query.expected === null).length, 8);
+    }
+    const expected = name => cases.find(entry => entry.name === name).queries.map(query => query.expected);
+    assert.deepEqual(expected('frontmost'), ['front']);
+    assert.deepEqual(expected('hidden-locked'), ['image']);
+    assert.deepEqual(expected('transparent-still-selectable'), ['transparent']);
+    assert.deepEqual(expected('miss-front-hit-back'), ['image']);
+    assert.deepEqual(expected('empty'), [null]);
+    assert.deepEqual(expected('inclusive-image-edge'), ['image', 'image']);
+    assert.deepEqual(expected('fractional-unrotated-edge'), ['image']);
   });
   test('vectors cover geometry, every D4 state, unknown data, and history boundaries', () => {
     const vectors = shippingCases();

@@ -23,7 +23,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices | Audio meter/device-change parity, physical recording/audio acceptance, recording editor and transcoded exports |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared v1 draft storage ([#594](https://github.com/joswayski/captures/pull/594)); document geometry/undo with shipping-TypeScript fixtures ([#595](https://github.com/joswayski/captures/pull/595)); real image/annotation rendering and worker-owned draft/edit sessions with retained C-ABI pixel frames; lossless image-transform and decoded-RGBA image-import commands; shipping screenshot export encoding policy shared in Rust | Remaining native screenshot host controls/input, annotations/export UI and comparison acceptance, then recording playback/timeline/editing/export |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, import, image transforms, annotation styles, Rectangle/Ellipse/Line/Arrow/Pen and save-new-copy | Canvas manipulation, resize/rotate/snap/pan/zoom, text/background/erase, remaining output controls and Tauri design parity; recording playback/timeline/editing/export |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -40,12 +40,29 @@ The screenshot-editor stacks from
 [#633](https://github.com/joswayski/captures/pull/633) (AppKit) and
 [#634](https://github.com/joswayski/captures/pull/634) (wgpu and shared prerequisites)
 are combined in this tree. Both hosts connect layers, import, lossless transforms,
-output previews, save-new-copy and rectangle/ellipse drawing. The wgpu host also
-connects crop gestures, clipboard output, annotation styles, Line/Arrow and Pen.
+output previews, save-new-copy and rectangle/ellipse drawing. AppKit now also
+connects annotation styles ([#637](https://github.com/joswayski/captures/pull/637))
+and Line/Arrow/Pen ([#638](https://github.com/joswayski/captures/pull/638)), matching
+the existing wgpu command boundary. The wgpu host additionally connects crop gestures
+and clipboard output. The AppKit drawing slice passed 136 Swift tests in macOS CI;
+its light/dark transient, committed, dot and minimum-size error fixtures were inspected.
 These are development implementations, not completed platform acceptance gates.
 
-Next implementation boundary: connect remaining annotation styles and drawing tools
-to AppKit while preserving the shared editor command boundary.
+Next implementation boundary: canvas click-selection and transactional drag-move
+in both hosts. Shared `Element::selection_bounds` and `Document::hit_test` now match
+the shipping rotated local-box picking rules, including stroke/shadow padding,
+curved lines/arrows, empty/dot paths, hidden/locked layers and zero-opacity content.
+Shipping-TypeScript fixtures exercise both sides of boundaries and exact fractional
+edges. Unsupported text layout returns an explicit error; no approximate font
+metrics or silent selection through unsupported content. These read-only APIs are
+not yet bound to host pointer input or selection chrome. Resize/rotate/snap and
+pan/zoom follow the initial select/move slice, then text/background and remaining output.
+
+All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
+are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow
+integration, physical cross-platform acceptance, and renderer/distribution/cutover.
+This is not a near-release checklist or a percentage-complete claim: implemented
+features still need acceptance, and the native editor still has a workbench layout.
 Shared commands and encoding remain prerequisites, not native editor/output acceptance.
 Native live capture on Wayland remains explicitly
 gated; no stub or X11 result closes that platform gate. Merging development slices

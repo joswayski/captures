@@ -561,6 +561,57 @@ impl Element {
         }
     }
 
+    /// Shipping unrotated selection bounds, including annotation padding, not
+    /// painted-pixel bounds. The center is also the element's rotation pivot.
+    /// Text requires native font layout and is deliberately unsupported here.
+    pub fn selection_bounds(&self) -> Result<Rect, String> {
+        match self {
+            Self::Image(image) => Ok(Rect {
+                x: image.base.x,
+                y: image.base.y,
+                width: image.width,
+                height: image.height,
+            }),
+            Self::Text(_) => Err("Text selection requires native text layout.".into()),
+            Self::Shape(shape) => match shape.shape.as_str() {
+                "rectangle" | "ellipse" => Ok(closed_shape_bounds(shape)),
+                "line" | "arrow" => {
+                    let shadow_pad = annotation_drop_shadow_pad(&shape.style);
+                    if shape.shape == "arrow" {
+                        let polygon = arrow_fill_polygon(shape);
+                        if polygon.len() >= 3 {
+                            return Ok(bounds_from_points(&polygon, 1. + shadow_pad));
+                        }
+                    }
+                    let vertices = std::iter::once(Point {
+                        x: shape.base.x,
+                        y: shape.base.y,
+                    })
+                    .chain(shape.controls.iter().copied())
+                    .chain(std::iter::once(Point {
+                        x: shape.end_x,
+                        y: shape.end_y,
+                    }))
+                    .collect::<Vec<_>>();
+                    let padding =
+                        ((shape.style.stroke_width / 2.).ceil() + 1.).max(1.) + shadow_pad;
+                    Ok(bounds_from_points(
+                        &sample_controlled_path(&vertices, 48),
+                        padding,
+                    ))
+                }
+                _ => Err("Unsupported shape selection geometry.".into()),
+            },
+            Self::Path(path) if path.points.is_empty() => Ok(Rect {
+                x: path.base.x,
+                y: path.base.y,
+                width: 1.,
+                height: 1.,
+            }),
+            Self::Path(path) => Ok(freehand_path_bounds(path)),
+        }
+    }
+
     fn base_mut(&mut self) -> &mut ElementBase {
         match self {
             Self::Image(element) => &mut element.base,
@@ -661,6 +712,50 @@ pub enum LayerPlacement {
 }
 
 impl Document {
+    /// Picks the frontmost visible, unlocked layer using the shipping editor's
+    /// rotated local bounding box. Opacity and transparent pixels do not affect
+    /// picking. Coordinates and nonnegative tolerance are in document pixels;
+    /// hosts convert pointer/zoom coordinates and own selection/gesture state.
+    ///
+    /// A visible, unlocked unsupported element encountered before a hit returns
+    /// an error rather than silently selecting through it. Hidden/locked text
+    /// does not block picking. This query never edits the document or history.
+    pub fn hit_test(&self, point: Point, tolerance: f64) -> Result<Option<&Element>, String> {
+        if !point.x.is_finite() || !point.y.is_finite() || !tolerance.is_finite() || tolerance < 0.
+        {
+            return Err(
+                "Hit testing requires finite coordinates and nonnegative tolerance.".into(),
+            );
+        }
+        for element in self.elements.iter().rev() {
+            let base = element.base();
+            if !base.visible || base.locked {
+                continue;
+            }
+            let bounds = element.selection_bounds()?;
+            let Point { mut x, mut y } = point;
+            // Match the shipping zero-angle shortcut: subtracting/adding the
+            // pivot can otherwise move an exact fractional edge outside.
+            if base.rotation() != 0. {
+                let center_x = bounds.x + bounds.width / 2.;
+                let center_y = bounds.y + bounds.height / 2.;
+                let (sin, cos) = (-base.rotation()).sin_cos();
+                let delta_x = point.x - center_x;
+                let delta_y = point.y - center_y;
+                x = center_x + delta_x * cos - delta_y * sin;
+                y = center_y + delta_x * sin + delta_y * cos;
+            }
+            if x >= bounds.x - tolerance
+                && x <= bounds.x + bounds.width + tolerance
+                && y >= bounds.y - tolerance
+                && y <= bounds.y + bounds.height + tolerance
+            {
+                return Ok(Some(element));
+            }
+        }
+        Ok(None)
+    }
+
     #[must_use]
     pub fn new_capture(
         src: impl Into<String>,

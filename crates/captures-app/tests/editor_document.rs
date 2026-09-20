@@ -20,9 +20,25 @@ struct Fixture {
     shape_creations: Vec<ShapeCreationCase>,
     open_shape_creations: Vec<OpenShapeCreationCase>,
     freehand_creations: Vec<FreehandCreationCase>,
+    hit_tests: Vec<HitTestCase>,
     orientations: Vec<OrientationCase>,
     layers: Value,
     history: HistoryCase,
+}
+
+#[derive(Deserialize)]
+struct HitTestCase {
+    name: String,
+    input: Document,
+    bounds: Option<Rect>,
+    queries: Vec<HitTestQuery>,
+}
+
+#[derive(Deserialize)]
+struct HitTestQuery {
+    point: Point,
+    tolerance: f64,
+    expected: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -201,6 +217,111 @@ fn assert_json_equivalent(actual: Value, expected: Value) {
         }
         (actual, expected) => assert_eq!(actual, expected),
     }
+}
+
+#[test]
+fn canvas_selection_bounds_and_hits_match_typescript() {
+    for case in fixture().hit_tests {
+        if let Some(expected) = case.bounds {
+            let actual = case.input.elements[0].selection_bounds().unwrap();
+            for (actual, expected) in [
+                (actual.x, expected.x),
+                (actual.y, expected.y),
+                (actual.width, expected.width),
+                (actual.height, expected.height),
+            ] {
+                assert!(
+                    (actual - expected).abs() < 1e-9,
+                    "{}: {actual} != {expected}",
+                    case.name
+                );
+            }
+        }
+        for query in case.queries {
+            let hit = case.input.hit_test(query.point, query.tolerance).unwrap();
+            assert_eq!(
+                hit.map(|element| element.base().id.as_str()),
+                query.expected.as_deref(),
+                "{} at {:?}, tolerance {}",
+                case.name,
+                query.point,
+                query.tolerance,
+            );
+        }
+    }
+}
+
+#[test]
+fn canvas_selection_reports_unsupported_layout_and_invalid_pointer_inputs() {
+    let mut input = fixture().hit_tests.remove(0).input;
+    let point = Point { x: 0., y: 20. };
+    let mut text = fixture().document["elements"][1].clone();
+    text["locked"] = json!(false);
+    input.elements.push(serde_json::from_value(text).unwrap());
+    assert!(
+        input
+            .hit_test(point, 0.)
+            .unwrap_err()
+            .contains("text layout")
+    );
+    assert!(input.elements[1].selection_bounds().is_err());
+    let Element::Text(text) = &mut input.elements[1] else {
+        panic!()
+    };
+    text.base.visible = false;
+    assert_eq!(
+        input.hit_test(point, 0.).unwrap().unwrap().base().id,
+        "image"
+    );
+    let Element::Text(text) = &mut input.elements[1] else {
+        panic!()
+    };
+    text.base.visible = true;
+    text.base.locked = true;
+    assert_eq!(
+        input.hit_test(point, 0.).unwrap().unwrap().base().id,
+        "image"
+    );
+    let front = input.elements[0].clone();
+    let Element::Text(text) = &mut input.elements[1] else {
+        panic!()
+    };
+    text.base.locked = false;
+    input.elements.push(front);
+    assert_eq!(
+        input.hit_test(point, 0.).unwrap().unwrap().base().id,
+        "image"
+    );
+    for (point, tolerance) in [
+        (
+            Point {
+                x: f64::NAN,
+                y: 20.,
+            },
+            0.,
+        ),
+        (
+            Point {
+                x: 0.,
+                y: f64::INFINITY,
+            },
+            0.,
+        ),
+        (point, f64::NAN),
+        (point, f64::INFINITY),
+        (point, -1.),
+    ] {
+        assert!(input.hit_test(point, tolerance).is_err());
+    }
+    let mut shape = fixture().document["elements"][2].clone();
+    shape["shape"] = json!("future-shape");
+    input.elements.push(serde_json::from_value(shape).unwrap());
+    assert!(
+        input
+            .hit_test(point, 0.)
+            .unwrap_err()
+            .contains("Unsupported shape")
+    );
 }
 
 #[test]
