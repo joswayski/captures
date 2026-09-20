@@ -176,6 +176,9 @@ cargo +1.95.0 clippy --manifest-path apps/native/wgpu/Cargo.toml --locked --all-
 python -m unittest discover -s apps/native -p 'test_*.py'
 python apps/native/wgpu/smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-smoke
 python apps/native/profile.py --renderer wgpu --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-resources
+/usr/bin/python3 apps/native/x11_recording_smoke.py --hide-controls-only \
+  --binary apps/native/wgpu/target/release/captures-wgpu-workbench \
+  --output /tmp/native-x11-hide-controls
 sudo apt-get install xfce4-panel xdg-utils
 /usr/bin/python3 apps/native/x11_preview_smoke.py --lifecycle \
   --binary apps/native/wgpu/target/release/captures-wgpu-workbench \

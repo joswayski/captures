@@ -160,7 +160,8 @@ fn dispatch(event: GlobalHotKeyEvent) {
     if let Some(dispatcher) = dispatcher {
         let wake = {
             let mut routes = dispatcher.routes.lock().unwrap();
-            let blocked = !crate::capture_flow::shortcuts_allowed(routes.selector_generation);
+            let blocked = !routes.restore_only
+                && !crate::capture_flow::shortcuts_allowed(routes.selector_generation);
             routes.event(event.id, event.state, blocked)
         };
         if wake {
@@ -427,7 +428,8 @@ impl CaptureShortcuts {
         (routes.enabled
             && !routes.suspended
             && (!routes.restore_only || pending == Some(CaptureShortcut::NewCapture))
-            && crate::capture_flow::shortcuts_allowed(routes.selector_generation))
+            && (routes.restore_only
+                || crate::capture_flow::shortcuts_allowed(routes.selector_generation)))
         .then_some(pending)
         .flatten()
     }

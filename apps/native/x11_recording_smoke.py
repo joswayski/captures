@@ -281,7 +281,8 @@ def main():
             notice = wait(lambda: windows("Recording controls hidden"), "temporary hidden notice")[0]
             shot(notice, "recording-controls-hidden-running")
             before = manifest()
-            assert before["state"] == "recording" and before["segments"] == []
+            assert (before["state"] == "recording" and len(before["segments"]) == 1
+                    and not before["segments"][0]["complete"])
             run("xdotool", "key", "ctrl+shift+F9", "ctrl+alt+r", "sleep", ".3")
             assert (not windows("Captures Capture Controls")
                     and manifest()["session_id"] == before["session_id"])

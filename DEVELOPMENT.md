@@ -147,6 +147,10 @@ and `python3-xlib`, then run:
   --output /tmp/native-x11-recording
 ```
 
+Pass `--hide-controls-only` for focused running/paused Hide checks through a real
+Xfce SNI tray, configured New Capture shortcut restoration, tray-host-loss recovery,
+finalized media decode and recovery cleanup.
+
 Add `--virtual-microphone` when PulseAudio, `pactl`, `paplay`, and the ALSA Pulse
 plugin are installed. The test feeds a 730 Hz tone into a disposable null-sink
 monitor, drives running mute/unmute through the real HUD, checks durable segment
