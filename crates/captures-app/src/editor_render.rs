@@ -3,16 +3,18 @@
 //! Image assets are supplied by exact document `src`, so rendering performs no
 //! filesystem, network, host-font, or UI access. The five closed annotation
 //! shapes, curved lines, tapered arrows, and freehand paths are rendered; text
-//! and annotation shadows remain explicit unsupported cases.
+//! remains an explicit unsupported case.
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use captures_image::{BlendMode, Layer, Point, Shape};
+use captures_image::{
+    BlendMode, DROP_SHADOW_BLUR_MAX, DROP_SHADOW_OFFSET_MAX, DropShadow, Layer, Point, Shape,
+};
 use image::{Rgba, RgbaImage};
 
 use crate::editor::{
-    Document, Element, ImageElement, ImageOrientation, PathElement, Point as EditorPoint,
-    ShapeElement,
+    Document, DropShadowStyle, Element, ElementStyle, ImageElement, ImageOrientation, PathElement,
+    Point as EditorPoint, ShapeElement,
 };
 
 pub const MAX_RENDER_DIMENSION: u32 = 16_384;
@@ -21,7 +23,7 @@ pub const MAX_RENDER_PIXELS: u64 = 100_000_000;
 /// Render supported visible layers in document order through `captures-image`.
 ///
 /// The input document and shared assets are borrowed and never mutated. Text
-/// and enabled annotation shadows are rejected rather than silently omitted.
+/// is rejected rather than silently omitted.
 pub fn render(
     document: &Document,
     assets: &BTreeMap<String, Arc<RgbaImage>>,
@@ -50,6 +52,7 @@ pub fn render(
     }
 
     let mut layers = Vec::new();
+    let mut shadows = BTreeMap::new();
     for (index, element) in document.elements.iter().enumerate() {
         if !element.base().visible {
             continue;
@@ -57,17 +60,95 @@ pub fn render(
         let id = u64::try_from(index).map_err(|_| "too many editor layers to render".to_owned())?;
         match element {
             Element::Image(image) => layers.push(image_layer(id, image, assets)?),
-            Element::Shape(shape) => layers.push(shape_layer(id, shape)?),
-            Element::Path(path) => layers.push(path_layer(id, path)?),
+            Element::Shape(shape) => {
+                layers.push(shape_layer(id, shape)?);
+                if shape.style.has_drop_shadow() {
+                    shadows.insert(id, drop_shadow(&shape.style));
+                }
+            }
+            Element::Path(path) => {
+                layers.push(path_layer(id, path)?);
+                if path.style.has_drop_shadow() {
+                    shadows.insert(id, drop_shadow(&path.style));
+                }
+            }
             Element::Text(_) => {}
         }
     }
 
-    captures_image::render(&captures_image::Document {
-        source: Arc::new(RgbaImage::from_pixel(width, height, background)),
-        crop: None,
-        layers,
-    })
+    captures_image::render_with_shadows(
+        &captures_image::Document {
+            source: Arc::new(RgbaImage::from_pixel(width, height, background)),
+            crop: None,
+            layers,
+        },
+        &shadows,
+    )
+}
+
+fn drop_shadow(style: &ElementStyle) -> DropShadow {
+    const DEFAULT_OPACITY: f64 = 45.0;
+
+    let width = style.stroke_width.max(1.0);
+    let fallback = DropShadowStyle {
+        color: "#000000".into(),
+        opacity: DEFAULT_OPACITY,
+        blur: (width * 0.85).max(6.0),
+        offset_x: 0.0,
+        offset_y: (width * 0.32).round().max(2.0),
+        extra: Default::default(),
+    };
+    let custom = style.drop_shadow_style.as_ref().unwrap_or(&fallback);
+    let number = |value: f64, min: f64, max: f64, fallback: f64| {
+        if value.is_finite() {
+            value.clamp(min, max)
+        } else {
+            fallback
+        }
+    };
+    let [red, green, blue] = parse_shadow_color(&custom.color).unwrap_or([0, 0, 0]);
+    DropShadow {
+        color: [
+            red,
+            green,
+            blue,
+            (number(custom.opacity, 0.0, 100.0, fallback.opacity) * 2.55).round() as u8,
+        ],
+        blur: number(
+            custom.blur,
+            0.0,
+            f64::from(DROP_SHADOW_BLUR_MAX),
+            fallback.blur,
+        ) as f32,
+        offset_x: number(
+            custom.offset_x,
+            -f64::from(DROP_SHADOW_OFFSET_MAX),
+            f64::from(DROP_SHADOW_OFFSET_MAX),
+            fallback.offset_x,
+        ) as f32,
+        offset_y: number(
+            custom.offset_y,
+            -f64::from(DROP_SHADOW_OFFSET_MAX),
+            f64::from(DROP_SHADOW_OFFSET_MAX),
+            fallback.offset_y,
+        ) as f32,
+    }
+}
+
+fn parse_shadow_color(value: &str) -> Option<[u8; 3]> {
+    let raw = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    let expanded;
+    let hex = if raw.len() == 3 && raw.is_ascii() {
+        expanded = raw
+            .chars()
+            .flat_map(|character| [character, character])
+            .collect::<String>();
+        expanded.as_str()
+    } else {
+        raw.get(..6)?
+    };
+    let channel = |start| u8::from_str_radix(&hex[start..start + 2], 16).ok();
+    Some([channel(0)?, channel(2)?, channel(4)?])
 }
 
 fn image_layer(
@@ -658,12 +739,6 @@ fn validate_shape(element: &ShapeElement) -> Result<(), String> {
             element.base.id, element.shape
         ));
     }
-    if element.style.has_drop_shadow() {
-        return Err(format!(
-            "shape layer {} uses unsupported drop shadow",
-            element.base.id
-        ));
-    }
     let closed = matches!(
         element.shape.as_str(),
         "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
@@ -716,12 +791,6 @@ fn validate_path(element: &PathElement) -> Result<(), String> {
         ));
     }
     blend_mode(&element.base.blend_mode, "path", &element.base.id)?;
-    if element.style.has_drop_shadow() {
-        return Err(format!(
-            "path layer {} uses unsupported drop shadow",
-            element.base.id
-        ));
-    }
     let stroke_width = element.style.stroke_width as f32;
     if !element.style.stroke_width.is_finite()
         || !stroke_width.is_finite()
@@ -979,6 +1048,49 @@ mod tests {
             }
             None => assert!(actual.is_empty()),
         }
+    }
+
+    #[test]
+    fn drop_shadow_metrics_match_shipping_defaults_and_custom_clamping() {
+        let mut style = ElementStyle {
+            color: "#fff".into(),
+            fill: None,
+            stroke_width: 8.0,
+            stroke_enabled: None,
+            drop_shadow: Some(true),
+            drop_shadow_style: None,
+            extra: Default::default(),
+        };
+        assert_eq!(
+            drop_shadow(&style),
+            DropShadow {
+                color: [0, 0, 0, 115],
+                blur: 6.8,
+                offset_x: 0.0,
+                offset_y: 3.0,
+            }
+        );
+
+        style.drop_shadow_style = Some(DropShadowStyle {
+            color: "#1aB2c3ff".into(),
+            opacity: 120.0,
+            blur: f64::NAN,
+            offset_x: -700.0,
+            offset_y: f64::INFINITY,
+            extra: Default::default(),
+        });
+        assert_eq!(
+            drop_shadow(&style),
+            DropShadow {
+                color: [0x1a, 0xb2, 0xc3, 255],
+                blur: 6.8,
+                offset_x: -500.0,
+                offset_y: 3.0,
+            }
+        );
+
+        style.drop_shadow_style.as_mut().unwrap().color = "invalid".into();
+        assert_eq!(drop_shadow(&style).color[..3], [0, 0, 0]);
     }
 
     #[test]

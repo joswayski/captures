@@ -23,7 +23,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices | Audio meter/device-change parity, physical recording/audio acceptance, recording editor and transcoded exports |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared v1 draft storage ([#594](https://github.com/joswayski/captures/pull/594)); document geometry/undo with shipping-TypeScript fixtures ([#595](https://github.com/joswayski/captures/pull/595)); real image/annotation rendering and worker-owned draft/edit sessions with retained C-ABI pixel frames; lossless image-transform command; shipping screenshot export encoding policy shared in Rust | Remaining native screenshot host controls/input, annotations/export UI and comparison acceptance, then recording playback/timeline/editing/export |
+| Editors | Shared v1 draft storage ([#594](https://github.com/joswayski/captures/pull/594)); document geometry/undo with shipping-TypeScript fixtures ([#595](https://github.com/joswayski/captures/pull/595)); real image/annotation rendering, including shape/path shadows, and worker-owned draft/edit sessions with retained C-ABI pixel frames; lossless image-transform command; shipping screenshot export encoding policy shared in Rust | Remaining native screenshot host controls/input, annotations/export UI and comparison acceptance, then recording playback/timeline/editing/export |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -378,9 +378,12 @@ The open-stroke renderer follow-up matches shipping straight, quadratic and
 multi-control lines, filled tapered arrows and midpoint-smoothed freehand paths.
 Shared rendering preserves their authored rotation origins, round line/freehand
 strokes, mitered tapered-arrow outlines, opacity, blending, clipping and layer order.
-Visible text and enabled annotation shadows remain explicit errors. This remains
-host-independent preparation only; host drawing-tool presentation and physical
-acceptance are not part of this slice.
+The next renderer slice adds enabled shape/path drop shadows with shipping defaults,
+custom clamping, per-fill/per-stroke paint order, opacity, blending, rotation and
+clipping. Chromium Canvas2D references quantify the bounded Gaussian approximation;
+shadow-aware painted bounds expand without changing geometric hit tests. Visible text
+remains an explicit error. This remains host-independent preparation only; host shadow
+controls, drawing-tool presentation and physical acceptance are not part of this slice.
 
 The shared editor-session boundary now opens isolated History screenshots and
 version-1 drafts, owns decoded image assets and snapshot history, and validates
@@ -392,7 +395,7 @@ edits persisted, and discard does not remove a draft if its original cannot be
 reopened. Existing draft storage is atomic per file, not a multi-file transaction.
 Image input bytes/dimensions and the aggregate decoded asset pixels are bounded;
 drafts cannot load arbitrary filesystem/network image sources. Visible unsupported
-annotations remain errors rather than silently missing output. This is the same
+text remains an error rather than silently missing output. This is the same
 host-independent implementation for macOS, Windows, X11 and Wayland.
 
 Editor sessions can encode the current edited frame through the shared PNG/JPEG/
