@@ -301,6 +301,15 @@ Stop, Discard, Restart/countdown, session loss and teardown clear hidden state; 
 checks reject stale restoration. Linux requires a live SNI host and restores the HUD plus
 workspace on host loss. Windows/AppKit physical acceptance remains open and Wayland stays gated.
 
+The screenshot-editor shared-core prerequisite models the persisted layered
+document separately from the bitmap renderer and ports initialization, bounded
+crop, translation, canvas sizing, lossless D4 image orientation and 100-snapshot
+undo/redo semantics. TypeScript-generated vectors cover fractional/off-canvas
+geometry, hidden and locked layers, every orientation and history branching.
+Unknown document fields survive native operations, remaining compatible with the
+opaque version-1 draft manifest. No host UI or renderer is connected, so macOS,
+Windows, X11 and Wayland remain `not implemented` for native editor acceptance.
+
 New Capture connects its persisted shortcut, tray action and workspace entry to
 fixed-glass screenshot controls on both hosts. Region, Window and Full screen
 share one prepared Rust session and desktop snapshot, retaining selections across
