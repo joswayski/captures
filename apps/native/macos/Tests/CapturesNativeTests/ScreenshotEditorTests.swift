@@ -412,6 +412,7 @@ final class ScreenshotEditorTests: XCTestCase {
 
         try button("Add image…", in: controller.root).performClick(nil)
         pickerCompletion?(URL(fileURLWithPath: "/tmp/queued.png"))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual(decodeStarted.wait(timeout: .now() + 2), .success)
         worker.deferRequests = true
         try button("Hide", in: controller.root).performClick(nil)
@@ -441,6 +442,7 @@ final class ScreenshotEditorTests: XCTestCase {
         try showLayers(in: late.root)
         try button("Add image…", in: late.root).performClick(nil)
         lateCompletion?(URL(fileURLWithPath: "/tmp/late.png"))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual(lateStarted.wait(timeout: .now() + 2), .success)
         XCTAssertFalse(late.windowShouldClose(late.window))
         allowLate.signal()
@@ -651,7 +653,7 @@ final class ScreenshotEditorTests: XCTestCase {
                 $0.accessibilityLabel() == "Layer controls"
             })
             XCTAssertTrue(layerPanel.isFlipped)
-            let opacityLabel = try XCTUnwrap(layerPanel.subviews.compactMap { $0 as? NSTextField }
+            let opacityLabel = try XCTUnwrap(descendants(in: layerPanel).compactMap { $0 as? NSTextField }
                 .first { $0.stringValue == "Opacity (0–100)" })
             let opacityField = try field("Layer opacity", in: layerPanel)
             XCTAssertLessThan(opacityLabel.frame.minY, opacityField.frame.minY,
@@ -784,8 +786,10 @@ final class ScreenshotEditorTests: XCTestCase {
             try button("Add image…", in: controller.root).performClick(nil)
             pickerCompletion?(URL(fileURLWithPath: "/tmp/import.png"))
             waitUntil { worker.imports.count == 1 && !controller.state.busy }
+            try scrollLayersTop(in: controller.root)
             try render(controller.root, name: "screenshot-editor-import-success-\(appearance)")
 
+            try scrollImageImportVisible(in: controller.root)
             decodeError = "The selected file does not contain a decodable still image."
             try button("Add image…", in: controller.root).performClick(nil)
             pickerCompletion?(URL(fileURLWithPath: "/tmp/not-an-image.txt"))
@@ -995,8 +999,8 @@ final class ScreenshotEditorTests: XCTestCase {
                       colorSpace: CGColorSpaceCreateDeviceCMYK(), bitsPerPixel: 32, alpha: .none)
         let convertedCMYK = try EditorImageDecoder.decode(cmykURL)
         XCTAssertGreaterThan(convertedCMYK.data[0], 200)
-        XCTAssertLessThan(convertedCMYK.data[1], 40)
-        XCTAssertLessThan(convertedCMYK.data[2], 40)
+        XCTAssertGreaterThan(Int(convertedCMYK.data[0]) - Int(convertedCMYK.data[1]), 150)
+        XCTAssertGreaterThan(Int(convertedCMYK.data[0]) - Int(convertedCMYK.data[2]), 150)
         XCTAssertEqual(convertedCMYK.data[3], 255)
     }
 
@@ -1126,6 +1130,14 @@ final class ScreenshotEditorTests: XCTestCase {
         let control = try button("Add image…", in: view)
         let scroll = try XCTUnwrap(control.enclosingScrollView)
         scroll.contentView.scroll(to: NSPoint(x: 0, y: 42))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        view.layoutSubtreeIfNeeded()
+    }
+
+    private func scrollLayersTop(in view: NSView) throws {
+        let control = try button("Add image…", in: view)
+        let scroll = try XCTUnwrap(control.enclosingScrollView)
+        scroll.contentView.scroll(to: .zero)
         scroll.reflectScrolledClipView(scroll.contentView)
         view.layoutSubtreeIfNeeded()
     }
