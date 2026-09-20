@@ -368,9 +368,18 @@ It performs no host I/O; host sessions supply the decoded assets.
 The closed-shape renderer follow-up adds rectangle, ellipse, triangle, diamond
 and star layers in shared stack order with shipping drag-box geometry, rounded
 rectangle corners, star proportions, authored rotation origin, fill/stroke
-defaults, opacity and blending. Visible text, line/arrow, freehand and drop-shadow
-content remains an explicit rendering error rather than disappearing. This is
-shared rendering support, not native drawing-tool presentation or full acceptance.
+defaults, opacity and blending. At that checkpoint, visible text, line/arrow,
+freehand and drop-shadow content was an explicit rendering error rather than
+disappearing. This is shared rendering support, not native drawing-tool presentation
+or full acceptance.
+
+The open-stroke renderer follow-up matches shipping straight, quadratic and
+multi-control lines, filled tapered arrows and midpoint-smoothed freehand paths.
+Shared rendering preserves their authored rotation origins, round line/freehand
+strokes, mitered tapered-arrow outlines, opacity, blending, clipping and layer order.
+Visible text and enabled annotation shadows remain explicit errors. This remains
+host-independent preparation only; host drawing-tool presentation and physical
+acceptance are not part of this slice.
 
 The shared editor-session boundary now opens isolated History screenshots and
 version-1 drafts, owns decoded image assets and snapshot history, and validates

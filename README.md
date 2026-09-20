@@ -257,22 +257,23 @@ send feedback, and failed requests preserve the draft for retry.
 Shared Rust now defines the screenshot editor's layered document, crop/translation/
 orientation geometry, canvas sizing and bounded snapshot history, checked against
 the shipping TypeScript behavior. A shared renderer now flattens real image layers
-and the five closed annotation shapes, including crop geometry, rotation, opacity
-and blending, without host I/O. Worker-owned editor sessions add draft restore/save/
-discard, transactional crop/resize/undo, and retained pixel frames for native hosts.
+and editor shapes, including closed annotations, curved lines, tapered arrows and
+freehand paths with crop geometry, rotation, opacity and blending, without host I/O.
+Worker-owned editor sessions add draft restore/save/discard, transactional crop/
+resize/undo, and retained pixel frames for native hosts.
 The Windows/Linux candidate opens screenshots from History in a native crop,
 canvas-size and draft editor with undo/redo. Its layer panel supports selection,
 visibility, locking, opacity, renaming, position, duplication, deletion and ordering.
 Closing can save or keep the previous draft; explicit Discard edits restores the
 original. Failed saves keep edits open and cancel normal quit. Private-X11 checks
-cover both appearances, persisted drafts,
-real preview pixels and error recovery. AppKit now connects the same crop, canvas-
-resize and draft operations in its own window. Windows, Wayland and physical AppKit
-presentation remain unverified.
-Annotation tools, edited-image export, and recording editing remain unconnected.
-OS shortcut takeover, login items,
-single-instance relaunch and updates are not connected to the native hosts yet. Windows/Linux
-renderer selection and full feature/design parity remain open. The
+cover both appearances, persisted drafts, real preview pixels and error recovery.
+AppKit now connects the same crop, canvas-resize and draft operations in its own
+window. Windows, Wayland and physical AppKit presentation remain unverified.
+Text, annotation shadows, annotation tools, edited-image export, and recording editing
+remain unconnected. This shared rendering support does not complete native editor
+acceptance. OS shortcut takeover, login items, single-instance relaunch and updates
+are not connected to the native hosts yet. Windows/Linux renderer selection and full
+feature/design parity remain open. The
 [migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;
 existing Preview features remain available during development. The wgpu candidate
 does not yet support hidden-window idle on Wayland; see its
