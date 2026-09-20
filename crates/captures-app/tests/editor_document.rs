@@ -216,6 +216,137 @@ fn all_d4_orientations_left_compose_and_preserve_center_like_typescript() {
 }
 
 #[test]
+fn fresh_photo_rotation_fits_the_canvas_while_layered_overhang_stays_clipped() {
+    let mut fresh = Document::new_capture("asset://fresh", 7., 3., None);
+    fresh
+        .edit_layer(
+            "capture-background",
+            LayerEdit::ImageTransform {
+                transform: ImageTransform::RotateClockwise,
+            },
+        )
+        .unwrap();
+    assert_eq!((fresh.width, fresh.height), (3., 7.));
+    let Element::Image(image) = &fresh.elements[0] else {
+        panic!()
+    };
+    assert_eq!((image.base.x, image.base.y), (0., 0.));
+    assert_eq!((image.width, image.height), (3., 7.));
+
+    let mut layered = Document::new_capture("asset://layered", 7., 3., None);
+    let Element::Image(mut overlay) = layered.elements[0].clone() else {
+        panic!()
+    };
+    overlay.base.id = "overlay".into();
+    overlay.base.x = 1.;
+    overlay.base.y = 1.;
+    overlay.width = 2.;
+    overlay.height = 1.;
+    layered.elements.push(Element::Image(overlay.clone()));
+    layered
+        .edit_layer(
+            "capture-background",
+            LayerEdit::ImageTransform {
+                transform: ImageTransform::RotateClockwise,
+            },
+        )
+        .unwrap();
+    assert_eq!((layered.width, layered.height), (7., 3.));
+    let Element::Image(rotated) = &layered.elements[0] else {
+        panic!()
+    };
+    assert_eq!((rotated.base.x, rotated.base.y), (2., -2.));
+    assert_eq!(layered.elements[1], Element::Image(overlay));
+}
+
+#[test]
+fn fully_off_canvas_transform_expands_and_translates_every_layer() {
+    let mut document = Document::new_capture("asset://outside", 7., 3., None);
+    let Element::Image(image) = &mut document.elements[0] else {
+        panic!()
+    };
+    image.base.x = -10.;
+    image.base.y = 1.;
+    let Element::Image(mut hidden) = document.elements[0].clone() else {
+        panic!()
+    };
+    hidden.base.id = "hidden".into();
+    hidden.base.x = 2.;
+    hidden.base.y = 2.;
+    hidden.base.visible = false;
+    document.elements.push(Element::Image(hidden));
+
+    document
+        .edit_layer(
+            "capture-background",
+            LayerEdit::ImageTransform {
+                transform: ImageTransform::RotateClockwise,
+            },
+        )
+        .unwrap();
+    assert_eq!((document.width, document.height), (15., 7.));
+    let Element::Image(rotated) = &document.elements[0] else {
+        panic!()
+    };
+    assert_eq!((rotated.base.x, rotated.base.y), (0., 0.));
+    assert_eq!((rotated.width, rotated.height), (3., 7.));
+    assert_eq!(
+        (document.elements[1].base().x, document.elements[1].base().y),
+        (10., 3.)
+    );
+}
+
+#[test]
+fn hidden_images_skip_fresh_photo_fit_and_fill_tolerance_is_strict() {
+    let mut hidden = Document::new_capture("asset://hidden", 7., 3., None);
+    let Element::Image(image) = &mut hidden.elements[0] else {
+        panic!()
+    };
+    image.base.visible = false;
+    hidden
+        .edit_layer(
+            "capture-background",
+            LayerEdit::ImageTransform {
+                transform: ImageTransform::RotateClockwise,
+            },
+        )
+        .unwrap();
+    assert_eq!((hidden.width, hidden.height), (7., 3.));
+    let Element::Image(image) = &hidden.elements[0] else {
+        panic!()
+    };
+    assert_eq!((image.base.x, image.base.y), (2., -2.));
+    assert_eq!((image.width, image.height), (3., 7.));
+
+    let rotate = |x| {
+        let mut document = Document::new_capture("asset://tolerance", 7., 3., None);
+        let Element::Image(image) = &mut document.elements[0] else {
+            panic!()
+        };
+        image.base.x = x;
+        document
+            .edit_layer(
+                "capture-background",
+                LayerEdit::ImageTransform {
+                    transform: ImageTransform::RotateClockwise,
+                },
+            )
+            .unwrap();
+        document
+    };
+    let inside = rotate(0.009);
+    assert_eq!((inside.width, inside.height), (4., 7.));
+    assert!((inside.elements[0].base().x - 0.009).abs() < 1e-12);
+    assert_eq!(inside.elements[0].base().y, 0.);
+    let boundary = rotate(0.01);
+    assert_eq!((boundary.width, boundary.height), (7., 3.));
+    assert_eq!(
+        (boundary.elements[0].base().x, boundary.elements[0].base().y),
+        (2.01, -2.)
+    );
+}
+
+#[test]
 fn unknown_and_legacy_optional_data_round_trip_without_loss() {
     let value = fixture().document;
     let document: Document = serde_json::from_value(value.clone()).unwrap();
