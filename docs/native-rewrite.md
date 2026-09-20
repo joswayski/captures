@@ -469,6 +469,21 @@ session tests cover pixels, rollback, undo/redo and draft reopen. This is shared
 preparation for AppKit, Windows, X11 and Wayland. Connected host controls are tracked
 below; physical, input and accessibility acceptance remain open on every platform.
 
+Shared sessions can create one completed freehand path from ordered document-space
+samples, existing element styles and opacity. Creation assigns the stable layer ID
+and shipping null-fill, unlocked, visible and source-over defaults; one-point and
+repeated-point paths remain valid. Authored sample bounds plus stroke and resolved
+shadow padding preserve partial clipping and drive fully-outside canvas expansion,
+including translation of every existing sibling and every path sample. Hosts retain
+the shipping `1.5 / displayScale` pointer-sampling threshold, transient gesture state
+and cancellation. A public centerline helper uses the compositor's midpoint-quadratic
+sampling so native previews do not duplicate smoothing math. TypeScript-derived
+vectors cover fractional/negative geometry, sample hulls that differ from the smooth
+centerline, shadow-only overlap and outside translation; session tests cover pixels,
+rollback, undo/redo and v1 draft reopen. This is shared preparation for AppKit,
+Windows, X11 and Wayland. Freehand host controls and physical/input/accessibility
+acceptance remain open on all four platforms.
+
 The shared layer command also accepts typed partial style patches for existing
 shape and freehand-path annotations. Locked and hidden annotations remain editable;
 closed-shape-only fill/stroke toggles do not mutate open shapes or paths, and shadow
