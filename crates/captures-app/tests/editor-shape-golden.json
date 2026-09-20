@@ -1,0 +1,233 @@
+[
+  {
+    "element": {
+      "id": "fixture-rectangle",
+      "kind": "shape",
+      "shape": "rectangle",
+      "x": 73.25,
+      "y": 42.25,
+      "endX": -12.75,
+      "endY": -11.5,
+      "controls": [],
+      "style": {
+        "color": "#1256aacc",
+        "fill": "#ef7139b3",
+        "strokeWidth": 3.25
+      },
+      "locked": true,
+      "visible": true,
+      "opacity": 67,
+      "blendMode": "screen"
+    },
+    "expected": {
+      "variant": "rounded-rectangle",
+      "rect": {
+        "x": -12.75,
+        "y": -11.5,
+        "width": 86,
+        "height": 53.75
+      },
+      "radius": 8.958333333333334,
+      "points": []
+    }
+  },
+  {
+    "element": {
+      "id": "fixture-ellipse",
+      "kind": "shape",
+      "shape": "ellipse",
+      "x": 75.375,
+      "y": 40.5,
+      "endX": -12.125,
+      "endY": -11.875,
+      "controls": [],
+      "style": {
+        "color": "#1256aacc",
+        "fill": "#ef7139b3",
+        "strokeWidth": 3.25
+      },
+      "locked": false,
+      "visible": true,
+      "opacity": 67,
+      "blendMode": "screen"
+    },
+    "expected": {
+      "variant": "ellipse",
+      "rect": {
+        "x": -12.125,
+        "y": -11.875,
+        "width": 87.5,
+        "height": 52.375
+      },
+      "radius": null,
+      "points": []
+    }
+  },
+  {
+    "element": {
+      "id": "fixture-triangle",
+      "kind": "shape",
+      "shape": "triangle",
+      "x": 77.5,
+      "y": 38.75,
+      "endX": -11.5,
+      "endY": -12.25,
+      "controls": [],
+      "style": {
+        "color": "#1256aacc",
+        "fill": "#ef7139b3",
+        "strokeWidth": 3.25
+      },
+      "locked": true,
+      "visible": true,
+      "opacity": 67,
+      "blendMode": "screen"
+    },
+    "expected": {
+      "variant": "polygon",
+      "rect": {
+        "x": -11.5,
+        "y": -12.25,
+        "width": 89,
+        "height": 51
+      },
+      "radius": null,
+      "points": [
+        {
+          "x": 33,
+          "y": -12.25
+        },
+        {
+          "x": 77.5,
+          "y": 38.75
+        },
+        {
+          "x": -11.5,
+          "y": 38.75
+        }
+      ]
+    }
+  },
+  {
+    "element": {
+      "id": "fixture-diamond",
+      "kind": "shape",
+      "shape": "diamond",
+      "x": 79.625,
+      "y": 37,
+      "endX": -10.875,
+      "endY": -12.625,
+      "controls": [],
+      "style": {
+        "color": "#1256aacc",
+        "fill": "#ef7139b3",
+        "strokeWidth": 3.25
+      },
+      "locked": false,
+      "visible": true,
+      "opacity": 67,
+      "blendMode": "screen"
+    },
+    "expected": {
+      "variant": "polygon",
+      "rect": {
+        "x": -10.875,
+        "y": -12.625,
+        "width": 90.5,
+        "height": 49.625
+      },
+      "radius": null,
+      "points": [
+        {
+          "x": 34.375,
+          "y": -12.625
+        },
+        {
+          "x": 79.625,
+          "y": 12.1875
+        },
+        {
+          "x": 34.375,
+          "y": 37
+        },
+        {
+          "x": -10.875,
+          "y": 12.1875
+        }
+      ]
+    }
+  },
+  {
+    "element": {
+      "id": "fixture-star",
+      "kind": "shape",
+      "shape": "star",
+      "x": 81.75,
+      "y": 35.25,
+      "endX": -10.25,
+      "endY": -13,
+      "controls": [],
+      "style": {
+        "color": "#1256aacc",
+        "fill": "#ef7139b3",
+        "strokeWidth": 3.25
+      },
+      "locked": true,
+      "visible": true,
+      "opacity": 67,
+      "blendMode": "screen"
+    },
+    "expected": {
+      "variant": "polygon",
+      "rect": {
+        "x": -10.25,
+        "y": -13,
+        "width": 92,
+        "height": 48.25
+      },
+      "radius": null,
+      "points": [
+        {
+          "x": 35.75,
+          "y": -13
+        },
+        {
+          "x": 46.29486742612697,
+          "y": 3.513161354174713
+        },
+        {
+          "x": 79.49859974957707,
+          "y": 3.669965010704394
+        },
+        {
+          "x": 52.811953902335055,
+          "y": 14.032463645825286
+        },
+        {
+          "x": 62.78812160545377,
+          "y": 30.64253498929561
+        },
+        {
+          "x": 35.75,
+          "y": 20.533749999999998
+        },
+        {
+          "x": 8.71187839454624,
+          "y": 30.64253498929561
+        },
+        {
+          "x": 18.688046097664945,
+          "y": 14.032463645825288
+        },
+        {
+          "x": -7.9985997495770675,
+          "y": 3.669965010704397
+        },
+        {
+          "x": 25.20513257387303,
+          "y": 3.5131613541747138
+        }
+      ]
+    }
+  }
+]
