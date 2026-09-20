@@ -1,5 +1,6 @@
 use captures_app::editor::{
-    Document, DocumentHistory, Element, ImageTransform, LayerEdit, Point, Rect, bounded_crop_rect,
+    CropDrag, Document, DocumentHistory, Element, ImageTransform, LayerEdit, Point, Rect,
+    bounded_crop_rect,
 };
 use captures_history::editor_draft::{self, SaveRequest};
 use serde::Deserialize;
@@ -11,6 +12,7 @@ struct Fixture {
     initialization: InitializationCase,
     document: Value,
     crops: Vec<CropCase>,
+    crop_drags: Vec<CropDragCase>,
     translations: Vec<TranslationCase>,
     crop_rects: Vec<DocumentCropCase>,
     canvas_sizes: Vec<CanvasSizeCase>,
@@ -48,6 +50,23 @@ struct CropCase {
 struct Bounds {
     width: f64,
     height: f64,
+}
+
+#[derive(Deserialize)]
+struct CropDragCase {
+    origin: Point,
+    bounds: Bounds,
+    initial: CropDragStep,
+    updates: Vec<CropDragStep>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CropDragStep {
+    current: Point,
+    preset_aspect: Option<f64>,
+    shift_key: bool,
+    expected: Rect,
 }
 
 impl Bounds {
@@ -197,6 +216,28 @@ fn initialization_crop_translation_and_canvas_size_match_typescript() {
         let mut document: Document = serde_json::from_value(fixture.document.clone()).unwrap();
         document.resize_canvas(case.width, case.height);
         assert_json_equivalent(serde_json::to_value(document).unwrap(), case.expected);
+    }
+}
+
+#[test]
+fn interactive_crop_drag_matches_typescript_state_transitions() {
+    for case in fixture().crop_drags {
+        let bounds = case.bounds.as_rect();
+        let mut drag = CropDrag::new(
+            case.origin,
+            bounds,
+            case.initial.preset_aspect,
+            case.initial.shift_key,
+        );
+        assert_eq!(drag.rect(), case.initial.expected);
+
+        for step in case.updates {
+            assert_eq!(
+                drag.update(step.current, step.preset_aspect, step.shift_key),
+                step.expected
+            );
+            assert_eq!(drag.rect(), step.expected);
+        }
     }
 }
 

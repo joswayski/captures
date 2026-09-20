@@ -29,6 +29,59 @@ pub struct Rect {
     pub height: f64,
 }
 
+/// Transient geometry for one interactive crop drag.
+///
+/// Hosts own gesture lifetime and commit [`Self::rect`] separately through the
+/// existing crop command. `preset_aspect` is a positive width/height ratio;
+/// `None` (or an invalid ratio) means a free crop.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CropDrag {
+    origin: Point,
+    bounds: Rect,
+    last_rect: Rect,
+    latched_shift_aspect: Option<f64>,
+}
+
+impl CropDrag {
+    #[must_use]
+    pub fn new(origin: Point, bounds: Rect, preset_aspect: Option<f64>, shift_held: bool) -> Self {
+        let mut drag = Self {
+            origin,
+            bounds,
+            last_rect: bounded_crop_rect(origin, origin, bounds, None),
+            latched_shift_aspect: None,
+        };
+        drag.update(origin, preset_aspect, shift_held);
+        drag
+    }
+
+    /// Updates the crop preview and returns its canvas-clamped rectangle.
+    pub fn update(&mut self, current: Point, preset_aspect: Option<f64>, shift_held: bool) -> Rect {
+        let preset_aspect = valid_aspect(preset_aspect);
+        let aspect = if let Some(preset_aspect) = preset_aspect {
+            self.latched_shift_aspect = None;
+            Some(preset_aspect)
+        } else if !shift_held {
+            self.latched_shift_aspect = None;
+            None
+        } else {
+            let aspect = self.latched_shift_aspect.unwrap_or_else(|| {
+                crop_aspect_from_live_rect(self.last_rect)
+                    .unwrap_or_else(|| shift_locked_crop_aspect(self.origin, current, self.bounds))
+            });
+            self.latched_shift_aspect = Some(aspect);
+            Some(aspect)
+        };
+        self.last_rect = bounded_crop_rect(self.origin, current, self.bounds, aspect);
+        self.last_rect
+    }
+
+    #[must_use]
+    pub fn rect(&self) -> Rect {
+        self.last_rect
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Document {
@@ -771,10 +824,34 @@ pub fn bounded_crop_rect(start: Point, end: Point, bounds: Rect, aspect: Option<
     let x = start.x.min(end.x);
     let y = start.y.min(end.y);
     Rect {
-        x: x.round(),
-        y: y.round(),
-        width: (end.x - start.x).abs().round().max(1.),
-        height: (end.y - start.y).abs().round().max(1.),
+        x: js_round(x),
+        y: js_round(y),
+        width: js_round((end.x - start.x).abs()).max(1.),
+        height: js_round((end.y - start.y).abs()).max(1.),
+    }
+}
+
+const CROP_SHIFT_LOCK_MIN_SIZE: f64 = 8.;
+
+fn valid_aspect(aspect: Option<f64>) -> Option<f64> {
+    aspect.filter(|value| value.is_finite() && *value > 0.)
+}
+
+fn crop_aspect_from_live_rect(rect: Rect) -> Option<f64> {
+    (rect.width >= CROP_SHIFT_LOCK_MIN_SIZE && rect.height >= CROP_SHIFT_LOCK_MIN_SIZE)
+        .then_some(rect.width / rect.height)
+}
+
+fn shift_locked_crop_aspect(origin: Point, current: Point, bounds: Rect) -> f64 {
+    crop_aspect_from_live_rect(bounded_crop_rect(origin, current, bounds, None)).unwrap_or(1.)
+}
+
+fn js_round(value: f64) -> f64 {
+    let floor = value.floor();
+    if value - floor < 0.5 {
+        floor
+    } else {
+        floor + 1.
     }
 }
 
