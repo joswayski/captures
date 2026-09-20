@@ -11,8 +11,8 @@ enum FeedbackBridge {
                 let pointer = String(decoding: data, as: UTF8.self).withCString { captures_feedback_request_v1($0) }
                 guard let pointer else { throw AppBridgeError.invalidResponse }
                 defer { captures_settings_free_v1(pointer) }
-                let data = Data(bytes: pointer, count: strlen(pointer))
-                guard let response = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let responseData = Data(bytes: pointer, count: strlen(pointer))
+                guard let response = try JSONSerialization.jsonObject(with: responseData) as? [String: Any],
                       let ok = response["ok"] as? Bool else { throw AppBridgeError.invalidResponse }
                 guard ok else { throw AppBridgeError.backend(response.string("error", "Feedback could not be sent.")) }
                 guard let value = response["result"] as? [String: Any] else { throw AppBridgeError.invalidResponse }
@@ -49,8 +49,8 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
         let bounds = NSRect(x: 0, y: 0, width: 620, height: 656)
         root = Surface(frame: bounds)
         window = NSWindow(contentRect: bounds, styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
         super.init()
+        window.isReleasedWhenClosed = false
         window.title = "Send feedback"; window.delegate = self
         window.contentView = root
         let inset = tokens.number("s-6")

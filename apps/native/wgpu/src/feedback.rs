@@ -87,6 +87,37 @@ impl Feedback {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, t: &Tokens, live: bool) {
         self.poll();
+        // Keep submission/status reachable even when system details or errors
+        // wrap, or the host reserves space for lifecycle warnings below us.
+        egui::Panel::bottom("feedback-actions").show(ui, |ui| {
+            ui.set_max_width(664.);
+            if !live {
+                ui.label("Fixture mode — sending feedback is disabled.");
+            }
+            if let Some(result) = &self.result {
+                match result {
+                    Ok(()) => {
+                        ui.colored_label(t.color("positive-text"), "Thanks — feedback sent.");
+                    }
+                    Err(error) => {
+                        ui.colored_label(t.color("danger-text"), error);
+                    }
+                }
+            }
+            if ui
+                .add_enabled(
+                    self.can_submit(live),
+                    egui::Button::new(if self.pending.is_some() {
+                        "Sending…"
+                    } else {
+                        "Send feedback"
+                    }),
+                )
+                .clicked()
+            {
+                self.submit(ui.ctx(), live);
+            }
+        });
         egui::ScrollArea::vertical().id_salt("feedback-form").show(ui, |ui| {
             ui.set_max_width(664.);
             if ui.button("Back to Preferences").clicked() { self.open = false; }
@@ -122,17 +153,6 @@ impl Feedback {
                 ui.label(format!("System: {} · {} · {}", context.os, context.os_version, context.arch));
             } else { ui.label("Loading local app and system details…"); }
             ui.add_space(t.number("s-6"));
-            if !live { ui.label("Fixture mode — sending feedback is disabled."); }
-            if let Some(result) = &self.result {
-                match result {
-                    Ok(()) => { ui.colored_label(t.color("positive-text"), "Thanks — feedback sent."); }
-                    Err(error) => { ui.colored_label(t.color("danger-text"), error); }
-                }
-            }
-            if ui.add_enabled(self.can_submit(live), egui::Button::new(
-                if self.pending.is_some() { "Sending…" } else { "Send feedback" })).clicked() {
-                self.submit(ui.ctx(), live);
-            }
         });
     }
 }
