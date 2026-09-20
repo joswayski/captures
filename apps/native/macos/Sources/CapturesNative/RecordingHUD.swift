@@ -30,6 +30,7 @@ final class RecordingHUDView: NSView {
     var pauseOrResume: () -> Void = {}
     var toggleMicrophone: () -> Void = {}
     var restart: () -> Void = {}
+    var screenshot: () -> Void = {}
     var stop: () -> Void = {}
     var discard: () -> Void = {}
     var hide: () -> Void = {}
@@ -81,14 +82,17 @@ final class RecordingHUDView: NSView {
             [weak self] in self?.restart()
         }
         restart.setAccessibilityLabel("Restart recording")
-        unavailable("⌗", x: 224, label: "Screenshot during recording is unavailable in this version")
+        let screenshot = hudButton("⌗", x: 224, help: "Take region screenshot") {
+            [weak self] in self?.screenshot()
+        }
+        screenshot.setAccessibilityLabel("Take region screenshot")
         unavailable("—", x: 264, label: "Audio meter is unavailable in this version")
         microphoneButton.frame = NSRect(x: 304, y: 39, width: 38, height: 34)
         microphoneButton.actionBlock = { [weak self] in self?.toggleMicrophone() }
         addSubview(microphoneButton)
         let trash = hudButton("⌫", x: 344, help: "Discard recording") { [weak self] in self?.discard() }
         trash.setAccessibilityLabel("Discard recording")
-        lifecycleButtons = [stop, pauseButton, restart, microphoneButton, trash]
+        lifecycleButtons = [stop, pauseButton, restart, screenshot, microphoneButton, trash]
         let hide = hudButton("◉̸", x: 384, help: "Hide recording controls") {
             [weak self] in self?.hide()
         }

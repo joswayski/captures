@@ -64,6 +64,11 @@ shortcuts. From idle the keys open Record on that target; in an open selector,
 screenshot and recording keys switch mode/target in place. Busy recording phases
 and focused Preferences suppress capture shortcuts. Hidden recording controls are the exception:
 only New Capture is routed, and it restores the same generation without launching another capture.
+The HUD Screenshot action opens the existing region selector under a temporary child
+generation while the accepted recording keeps running or paused. Escape cancels only
+the selector/countdown, and a completed still follows normal History, mini-preview
+and auto-copy behavior. AppKit/Windows apply capture exclusion; X11 hides the HUD and
+guide from the still but cannot exclude the selector from ongoing recording pixels.
 Native recording editing,
 GIF conversion and media-tool bundling remain unconnected. History **Save file**
 copies original video/GIF bytes to the configured output folder without encoding
