@@ -1,5 +1,254 @@
 [
   {
+    "name": "top-edge-preserves-sub-half-floating-point-rounding",
+    "document": {
+      "width": 7,
+      "height": 5,
+      "background": null,
+      "elements": [
+        {
+          "id": "sub-half-target",
+          "kind": "image",
+          "source": "imported",
+          "src": "fixture:sub-half-target",
+          "originalSrc": null,
+          "name": "sub-half-target.png",
+          "sourceArtifactId": null,
+          "x": 0.49999999999999994,
+          "y": 2,
+          "width": 3,
+          "height": 2,
+          "naturalWidth": 3,
+          "naturalHeight": 2,
+          "locked": false,
+          "visible": true,
+          "opacity": 100,
+          "blendMode": "source-over"
+        }
+      ]
+    },
+    "selectedId": null,
+    "point": {
+      "x": 1,
+      "y": 1.9
+    },
+    "natural": {
+      "width": 3,
+      "height": 1
+    },
+    "expected": {
+      "target": {
+        "x": 0.49999999999999994,
+        "y": 2,
+        "width": 3,
+        "height": 2
+      },
+      "placement": "top",
+      "position": {
+        "x": 0,
+        "y": 1,
+        "width": 3,
+        "height": 1
+      },
+      "fullyOutside": false,
+      "output": {
+        "width": 7,
+        "height": 5,
+        "elements": [
+          {
+            "id": "sub-half-target",
+            "x": 0.49999999999999994,
+            "y": 2,
+            "width": 3,
+            "height": 2
+          },
+          {
+            "id": "new-import",
+            "x": 0,
+            "y": 1,
+            "width": 3,
+            "height": 1
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "negative-half-ties-round-toward-positive-infinity",
+    "document": {
+      "width": 9,
+      "height": 7,
+      "background": null,
+      "elements": [
+        {
+          "id": "negative-half-target",
+          "kind": "image",
+          "source": "imported",
+          "src": "fixture:negative-half-target",
+          "originalSrc": null,
+          "name": "negative-half-target.png",
+          "sourceArtifactId": null,
+          "x": -2,
+          "y": -3,
+          "width": 6,
+          "height": 5,
+          "naturalWidth": 6,
+          "naturalHeight": 5,
+          "locked": false,
+          "visible": true,
+          "opacity": 100,
+          "blendMode": "source-over"
+        }
+      ]
+    },
+    "selectedId": null,
+    "point": {
+      "x": 1,
+      "y": -1
+    },
+    "natural": {
+      "width": 3,
+      "height": 1
+    },
+    "expected": {
+      "target": {
+        "x": -2,
+        "y": -3,
+        "width": 6,
+        "height": 5
+      },
+      "placement": "stack",
+      "position": {
+        "x": 0,
+        "y": -1,
+        "width": 3,
+        "height": 1
+      },
+      "fullyOutside": true,
+      "output": {
+        "width": 27,
+        "height": 25,
+        "elements": [
+          {
+            "id": "negative-half-target",
+            "x": -2,
+            "y": -2,
+            "width": 6,
+            "height": 5
+          },
+          {
+            "id": "new-import",
+            "x": 0,
+            "y": 0,
+            "width": 3,
+            "height": 1
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "right-edge-resolves-rotated-visible-target-bounds",
+    "document": {
+      "width": 29,
+      "height": 23,
+      "background": null,
+      "elements": [
+        {
+          "id": "hidden-front",
+          "kind": "image",
+          "source": "imported",
+          "src": "fixture:hidden-front",
+          "originalSrc": null,
+          "name": "hidden-front.png",
+          "sourceArtifactId": null,
+          "x": 9,
+          "y": 3,
+          "width": 13,
+          "height": 11,
+          "naturalWidth": 13,
+          "naturalHeight": 11,
+          "locked": false,
+          "visible": false,
+          "opacity": 100,
+          "blendMode": "source-over"
+        },
+        {
+          "id": "rotated-locked",
+          "kind": "image",
+          "source": "imported",
+          "src": "fixture:rotated-locked",
+          "originalSrc": null,
+          "name": "rotated-locked.png",
+          "sourceArtifactId": null,
+          "x": 5,
+          "y": 4,
+          "width": 8,
+          "height": 4,
+          "naturalWidth": 8,
+          "naturalHeight": 4,
+          "locked": true,
+          "visible": true,
+          "opacity": 100,
+          "blendMode": "source-over",
+          "rotation": 1.5707963267948966
+        }
+      ]
+    },
+    "selectedId": "hidden-front",
+    "point": {
+      "x": 11.1,
+      "y": 6
+    },
+    "natural": {
+      "width": 5,
+      "height": 3
+    },
+    "expected": {
+      "target": {
+        "x": 7,
+        "y": 1.9999999999999998,
+        "width": 4,
+        "height": 8
+      },
+      "placement": "right",
+      "position": {
+        "x": 11,
+        "y": 5,
+        "width": 5,
+        "height": 3
+      },
+      "fullyOutside": false,
+      "output": {
+        "width": 29,
+        "height": 23,
+        "elements": [
+          {
+            "id": "hidden-front",
+            "x": 9,
+            "y": 3,
+            "width": 13,
+            "height": 11
+          },
+          {
+            "id": "rotated-locked",
+            "x": 5,
+            "y": 4,
+            "width": 8,
+            "height": 4
+          },
+          {
+            "id": "new-import",
+            "x": 11,
+            "y": 5,
+            "width": 5,
+            "height": 3
+          }
+        ]
+      }
+    }
+  },
+  {
     "name": "negative-left-edge-natural-size",
     "document": {
       "width": 23,

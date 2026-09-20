@@ -591,7 +591,12 @@ fn position_imported_image(
 }
 
 fn js_round(value: f64) -> f64 {
-    (value + 0.5).floor()
+    let lower = value.floor();
+    if value - lower < 0.5 {
+        lower
+    } else {
+        lower + 1.
+    }
 }
 
 fn fully_outside_canvas(bounds: Rect, width: f64, height: f64) -> bool {
@@ -764,6 +769,20 @@ mod tests {
         }
     }
 
+    fn assert_rect_close(actual: Rect, expected: Rect, context: &str) {
+        for (actual, expected) in [
+            (actual.x, expected.x),
+            (actual.y, expected.y),
+            (actual.width, expected.width),
+            (actual.height, expected.height),
+        ] {
+            assert!(
+                (actual - expected).abs() <= 1e-12,
+                "{context}: expected {expected}, got {actual}"
+            );
+        }
+    }
+
     #[test]
     fn placement_and_expansion_match_shipping_typescript_fixture() {
         let fixture: Vec<ImportFixture> =
@@ -771,7 +790,11 @@ mod tests {
         for case in fixture {
             let (target, placement, point) =
                 import_placement(&case.document, case.selected_id.as_deref(), case.point);
-            assert_eq!(target, case.expected.target, "{} target", case.name);
+            assert_rect_close(
+                target,
+                case.expected.target,
+                &format!("{} target", case.name),
+            );
             assert_eq!(
                 placement,
                 match case.expected.placement.as_str() {

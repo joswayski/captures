@@ -38,6 +38,48 @@ const image = (id, x, y, width, height, options = {}) => ({
 function inputs() {
   return [
     {
+      name: 'top-edge-preserves-sub-half-floating-point-rounding',
+      document: {
+        width: 7,
+        height: 5,
+        background: null,
+        elements: [image('sub-half-target', 0.49999999999999994, 2, 3, 2)],
+      },
+      selectedId: null,
+      point: { x: 1, y: 1.9 },
+      natural: { width: 3, height: 1 },
+    },
+    {
+      name: 'negative-half-ties-round-toward-positive-infinity',
+      document: {
+        width: 9,
+        height: 7,
+        background: null,
+        elements: [image('negative-half-target', -2, -3, 6, 5)],
+      },
+      selectedId: null,
+      point: { x: 1, y: -1 },
+      natural: { width: 3, height: 1 },
+    },
+    {
+      name: 'right-edge-resolves-rotated-visible-target-bounds',
+      document: {
+        width: 29,
+        height: 23,
+        background: null,
+        elements: [
+          image('hidden-front', 9, 3, 13, 11, { visible: false }),
+          image('rotated-locked', 5, 4, 8, 4, {
+            locked: true,
+            rotation: Math.PI / 2,
+          }),
+        ],
+      },
+      selectedId: 'hidden-front',
+      point: { x: 11.1, y: 6 },
+      natural: { width: 5, height: 3 },
+    },
+    {
       name: 'negative-left-edge-natural-size',
       document: {
         width: 23,
@@ -164,17 +206,27 @@ function shippingCase(input) {
 }
 
 const shippingCases = () => inputs().map(shippingCase);
+const serializableCases = () => JSON.parse(JSON.stringify(shippingCases()));
 
 if (process.argv.includes('--write')) {
   await mkdir(directory, { recursive: true });
-  await writeFile(fixture, `${JSON.stringify(shippingCases(), null, 2)}\n`);
+  await writeFile(fixture, `${JSON.stringify(serializableCases(), null, 2)}\n`);
 } else {
   test('native image-import vectors match shipping TypeScript placement', async () => {
-    assert.deepEqual(JSON.parse(await readFile(fixture, 'utf8')), shippingCases());
+    assert.deepEqual(JSON.parse(await readFile(fixture, 'utf8')), serializableCases());
   });
 
   test('image-import vectors discriminate target, sizing, and expansion policies', () => {
     const cases = shippingCases();
+    const subHalf = cases.find(entry => entry.name.startsWith('top-edge'));
+    assert.equal(subHalf.expected.placement, 'top');
+    assert.equal(subHalf.expected.position.x, 0);
+    const negativeHalf = cases.find(entry => entry.name.startsWith('negative-half'));
+    assert.ok(Object.is(negativeHalf.expected.position.x, -0));
+    assert.equal(negativeHalf.expected.position.y, -1);
+    const rotated = cases.find(entry => entry.name.startsWith('right-edge'));
+    assert.equal(rotated.expected.placement, 'right');
+    assert.notEqual(rotated.expected.target.width, rotated.document.elements[1].width);
     assert.ok(cases.some(entry => entry.expected.position.x < 0));
     assert.ok(cases.some(entry => entry.expected.placement === 'stack'));
     assert.ok(cases.some(entry => entry.expected.fullyOutside));
