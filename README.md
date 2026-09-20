@@ -262,7 +262,8 @@ freehand paths with crop geometry, rotation, opacity, blending and enabled shape
 drop shadows, without host I/O.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
 resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
-pixel frames for native hosts. Typed rectangle/ellipse creation is also available.
+pixel frames for native hosts. Typed rectangle/ellipse and straight-line/arrow
+creation are also available; native hosts still own drawing gestures and cancellation.
 Shared annotation-style patches can update existing
 shape/path colors, closed-shape fill/stroke controls, widths and shadow settings
 without replacing documents.
