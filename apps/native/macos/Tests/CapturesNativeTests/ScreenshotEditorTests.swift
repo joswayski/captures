@@ -140,6 +140,127 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(rect, ["x": 1.5, "y": 2.25, "width": 300.75, "height": 150.5])
     }
 
+    func testLayerSnapshotOrderAndCommandsUseStableIDs() throws {
+        _ = NSApplication.shared
+        let background = layer(id: "background", name: "Original screenshot", x: 0, y: 0,
+                               visible: true, locked: true, opacity: 100)
+        let foreground = layer(id: "foreground", name: "A very long foreground image layer name",
+                               x: 13.5, y: -7.25, visible: false, locked: false, opacity: 42.5)
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [background, foreground]))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                     worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showLayers(in: controller.root)
+
+        XCTAssertEqual(controller.state.snapshot?.layers.map(\.id), ["foreground", "background"])
+        let nameField = try field("Layer name", in: controller.root)
+        XCTAssertNil(nameField.formatter, "layer names must not use the numeric geometry formatter")
+        XCTAssertTrue(nameField.isEditable); XCTAssertEqual(nameField.alignment, .left)
+        XCTAssertEqual(nameField.placeholderString, "Layer name")
+        XCTAssertEqual(nameField.stringValue,
+                       "A very long foreground image layer name")
+        XCTAssertEqual((try field("Layer X", in: controller.root)).stringValue, "13.5")
+        XCTAssertEqual((try field("Layer Y", in: controller.root)).stringValue, "-7.25")
+        XCTAssertEqual(try button("Show", in: controller.root).isEnabled, true,
+                       "hidden layers remain editable")
+
+        try button("Show", in: controller.root).performClick(nil)
+        let visibility = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertEqual(visibility["action"] as? String, "visibility")
+        XCTAssertEqual(visibility["visible"] as? Bool, true)
+        XCTAssertEqual(worker.requests.last?["id"] as? String, "foreground")
+
+        (try field("Layer X", in: controller.root)).stringValue = "29.5"
+        (try field("Layer Y", in: controller.root)).stringValue = "4.75"
+        try button("Move", in: controller.root).performClick(nil)
+        let move = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertEqual(move["action"] as? String, "translate")
+        XCTAssertEqual(move["delta_x"] as? Double, 16)
+        XCTAssertEqual(move["delta_y"] as? Double, 12)
+
+        (try field("Layer name", in: controller.root)).stringValue = "Foreground renamed"
+        try button("Rename", in: controller.root).performClick(nil)
+        XCTAssertEqual((worker.requests.last?["edit"] as? [String: Any])?["action"] as? String, "rename")
+        XCTAssertEqual((worker.requests.last?["edit"] as? [String: Any])?["name"] as? String,
+                       "Foreground renamed")
+        (try field("Layer opacity", in: controller.root)).stringValue = "73.25"
+        try button("Set", in: controller.root).performClick(nil)
+        XCTAssertEqual((worker.requests.last?["edit"] as? [String: Any])?["opacity"] as? Double, 73.25)
+        try button("Lock", in: controller.root).performClick(nil)
+        XCTAssertEqual((worker.requests.last?["edit"] as? [String: Any])?["locked"] as? Bool, true)
+
+        worker.response = { request in
+            guard let edit = request["edit"] as? [String: Any],
+                  edit["action"] as? String == "duplicate",
+                  let newID = edit["new_id"] as? String else { return nil }
+            return self.snapshot(id: "shot", unsaved: true,
+                layers: [background, foreground,
+                         self.layer(id: newID, name: "A very long foreground image layer name copy",
+                                    x: 37.5, y: 16.75, visible: true, locked: false, opacity: 42.5)])
+        }
+        try button("Duplicate", in: controller.root).performClick(nil)
+        XCTAssertEqual((try field("Layer name", in: controller.root)).stringValue,
+                       "A very long foreground image layer name copy")
+        XCTAssertEqual((try field("Layer X", in: controller.root)).stringValue, "37.5")
+        XCTAssertEqual((try field("Layer Y", in: controller.root)).stringValue, "16.75")
+    }
+
+    func testRejectedDuplicateAndDeletionKeepRecoverableStableSelection() throws {
+        _ = NSApplication.shared
+        let back = layer(id: "back", name: "Back", x: 0, y: 0, visible: true,
+                         locked: true, opacity: 100)
+        let middle = layer(id: "middle", name: "Middle", x: 8, y: 21, visible: true,
+                           locked: false, opacity: 80)
+        let front = layer(id: "front", name: "Front", x: -3, y: 5, visible: false,
+                          locked: false, opacity: 60)
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [back, middle, front]))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showLayers(in: controller.root)
+        let table = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSTableView }.first)
+        table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+        controller.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification,
+                                                              object: table))
+        XCTAssertEqual((try field("Layer name", in: controller.root)).stringValue, "Middle")
+
+        try button("Move up", in: controller.root).performClick(nil)
+        let reorder = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        XCTAssertEqual(reorder["action"] as? String, "reorder")
+        XCTAssertEqual(reorder["target_id"] as? String, "front")
+        XCTAssertEqual(reorder["placement"] as? String, "before")
+
+        worker.failLayerAction = "duplicate"
+        try button("Duplicate", in: controller.root).performClick(nil)
+        XCTAssertEqual((try field("Layer name", in: controller.root)).stringValue, "Middle")
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("fixture save failed") })
+
+        worker.failLayerAction = nil
+        worker.response = { request in
+            guard let edit = request["edit"] as? [String: Any], edit["action"] as? String == "delete"
+            else { return nil }
+            return self.snapshot(id: "shot", unsaved: true, layers: [back, front])
+        }
+        try button("Delete", in: controller.root).performClick(nil)
+        XCTAssertEqual((try field("Layer name", in: controller.root)).stringValue, "Back",
+                       "deletion selects the nearest surviving panel row")
+        XCTAssertFalse(try button("Move", in: controller.root).isEnabled)
+        XCTAssertFalse(try button("Delete", in: controller.root).isEnabled)
+        XCTAssertTrue(try button("Hide", in: controller.root).isEnabled,
+                      "locked layers still permit visibility")
+        XCTAssertTrue(try button("Duplicate", in: controller.root).isEnabled,
+                      "locked layers still permit duplication")
+
+        worker.response = { request in
+            guard request["operation"] as? String == "undo" else { return nil }
+            return self.snapshot(id: "shot", unsaved: true, layers: [back, middle, front])
+        }
+        try button("Undo", in: controller.root).performClick(nil)
+        XCTAssertEqual((try field("Layer name", in: controller.root)).stringValue, "Back",
+                       "undo retains a still-existing stable layer selection")
+    }
+
     func testEditorControlsRenderAndSendSharedGeometryCommands() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
@@ -148,6 +269,15 @@ final class ScreenshotEditorTests: XCTestCase {
                 tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            let geometry = try XCTUnwrap(descendants(in: controller.root).first {
+                $0.accessibilityLabel() == "Geometry controls"
+            })
+            XCTAssertTrue(geometry.isFlipped)
+            let cropLabel = try XCTUnwrap(geometry.subviews.compactMap { $0 as? NSTextField }
+                .first { $0.stringValue == "X" })
+            let cropField = try field("Crop X", in: geometry)
+            XCTAssertLessThan(cropLabel.frame.minY, cropField.frame.minY,
+                              "top-down geometry places labels above fields")
             (try field("Crop X", in: controller.root)).stringValue = "13"
             (try field("Crop Y", in: controller.root)).stringValue = "7"
             (try field("Crop width", in: controller.root)).stringValue = "321"
@@ -188,6 +318,48 @@ final class ScreenshotEditorTests: XCTestCase {
             try render(try XCTUnwrap(discardSheet.contentView),
                        name: "screenshot-editor-discard-\(appearance)")
             controller.window.endSheet(discardSheet, returnCode: .alertSecondButtonReturn)
+        }
+    }
+
+    func testLayerPanelRenderedStates() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let layers = [
+                layer(id: "locked-background", name: "Original screenshot", x: 0, y: 0,
+                      visible: true, locked: true, opacity: 100),
+                layer(id: "hidden-image", name: "A layer name long enough to require truncation in the panel",
+                      x: 43.5, y: -12.25, visible: false, locked: false, opacity: 57.5),
+            ]
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true,
+                                                              draft: true, layers: layers))
+            let controller = ScreenshotEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showLayers(in: controller.root)
+            let layerPanel = try XCTUnwrap(descendants(in: controller.root).first {
+                $0.accessibilityLabel() == "Layer controls"
+            })
+            XCTAssertTrue(layerPanel.isFlipped)
+            let opacityLabel = try XCTUnwrap(layerPanel.subviews.compactMap { $0 as? NSTextField }
+                .first { $0.stringValue == "Opacity (0–100)" })
+            let opacityField = try field("Layer opacity", in: layerPanel)
+            XCTAssertLessThan(opacityLabel.frame.minY, opacityField.frame.minY,
+                              "top-down layer controls place labels above fields")
+            try render(controller.root, name: "screenshot-editor-layers-\(appearance)")
+
+            worker.failLayerAction = "duplicate"
+            worker.failureMessage = "The selected layer could not be duplicated because its shared image asset is unavailable. The current draft remains open and recoverable."
+            try button("Duplicate", in: controller.root).performClick(nil)
+            try render(controller.root, name: "screenshot-editor-layers-error-minimum-\(appearance)")
+
+            let emptyWorker = FakeEditorWorker(snapshot: snapshot(id: "empty"))
+            let empty = ScreenshotEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: emptyWorker)
+            defer { empty.window.orderOut(nil) }
+            empty.present(artifact: artifact(id: "empty"), historyRoot: "/native/History")
+            try showLayers(in: empty.root)
+            try render(empty.root, name: "screenshot-editor-layers-empty-\(appearance)")
         }
     }
 
@@ -244,12 +416,20 @@ final class ScreenshotEditorTests: XCTestCase {
     }
 
     private func snapshot(id: String, width: Double = 640, height: Double = 360,
-                          unsaved: Bool = false, draft: Bool = false) -> NativeEditorSnapshot {
+                          unsaved: Bool = false, draft: Bool = false,
+                          layers: [[String: Any]] = []) -> NativeEditorSnapshot {
         NativeEditorSnapshot([
-            "artifact_id": id, "document": ["width": width, "height": height],
+            "artifact_id": id, "document": ["width": width, "height": height,
+                                                  "elements": layers],
             "can_undo": unsaved, "can_redo": false,
             "unsaved_changes": unsaved, "has_draft": draft,
         ])!
+    }
+
+    private func layer(id: String, name: String, x: Double, y: Double, visible: Bool,
+                       locked: Bool, opacity: Double) -> [String: Any] {
+        ["kind": "image", "id": id, "name": name, "x": x, "y": y,
+         "visible": visible, "locked": locked, "opacity": opacity]
     }
 
     private func artifact(id: String) -> CaptureArtifact {
@@ -267,6 +447,13 @@ final class ScreenshotEditorTests: XCTestCase {
     private func field(_ label: String, in view: NSView) throws -> NSTextField {
         try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSTextField }
             .first { $0.accessibilityLabel() == label })
+    }
+
+    private func showLayers(in view: NSView) throws {
+        let sections = try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSSegmentedControl }
+            .first { $0.accessibilityLabel() == "Editor section" })
+        sections.selectedSegment = 1
+        _ = sections.sendAction(sections.action, to: sections.target)
     }
 
     private func labels(in view: NSView) -> [String] {
@@ -339,8 +526,10 @@ private final class FakeEditorWorker: EditorWorking {
     var closeCount = 0
     var draftsRoot: String?
     var failOperation: String?
+    var failLayerAction: String?
     var failureMessage = "fixture save failed"
     var deferRequests = false
+    var response: (([String: Any]) -> NativeEditorSnapshot?)?
     var terminationResult: Result<Void, Error> = .success(())
     private var pendingCompletion: ((Result<EditorPresentation, Error>) -> Void)?
 
@@ -360,10 +549,15 @@ private final class FakeEditorWorker: EditorWorking {
         if object["operation"] as? String == failOperation {
             completion(.failure(AppBridgeError.backend(failureMessage))); return
         }
+        if let edit = object["edit"] as? [String: Any],
+           edit["action"] as? String == failLayerAction {
+            completion(.failure(AppBridgeError.backend(failureMessage))); return
+        }
         if deferRequests {
             pendingCompletion = completion
             return
         }
+        if let returnedSnapshot = response?(object) { snapshot = returnedSnapshot }
         completion(.success(EditorPresentation(snapshot: snapshot,
             image: CGImage.fixture(width: Int(snapshot.width), height: Int(snapshot.height)))))
     }

@@ -435,14 +435,18 @@ Real X11 input checks cover asymmetric movement, half-opacity/hidden preview
 pixels, locks, ordering, deletion, empty-document undo and saved-layer reopening
 in dark and light, including minimum-window scrolling. Windows and Wayland use
 this implementation but remain presentation-unverified; AppKit layer controls
-are in progress. Merge/flatten, image import, image transforms and drawing tools
+are described below. Merge/flatten, image import, image transforms and drawing tools
 are not connected by this panel slice.
 
 The AppKit editor host now enables **Edit screenshot** only for screenshot History
 entries. Its dedicated serialized worker owns the shared Rust session and publishes
 independently retained RGBA frames to a fit preview. The window exposes crop geometry,
 canvas sizing, Undo/Redo, explicit draft save and confirmed draft discard; shared Rust
-remains the only geometry/render authority. Drafts use the same isolated sibling root
+remains the only geometry/render authority. Geometry and Layers views retain the fit
+preview; the front-to-back layer panel exposes visibility, lock, opacity, absolute
+X/Y movement through shared deltas, image rename, duplicate, delete and adjacent
+ordering. Stable IDs preserve selection across replies, and shared Rust remains the
+authority for locked barriers and duplicate behavior. Drafts use the same isolated sibling root
 and reopen with the screenshot. Closing an unsaved session offers save-and-close,
 close without saving the current session (retaining any older persisted draft), or
 cancel. Quit drains accepted work and cancels termination if its draft save fails.

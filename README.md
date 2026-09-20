@@ -245,7 +245,9 @@ notice offers Save file, then Show in Folder after saving a permanent copy. Dism
 or letting it expire preserves History and exports; failed saves can be retried.
 The AppKit History view enables **Edit screenshot** for screenshots only. Its first
 native editor slice restores and saves isolated drafts, previews shared-Rust crop
-and canvas-resize operations, and supports Undo, Redo and confirmed draft discard;
+and canvas-resize operations, and supports Undo, Redo and confirmed draft discard.
+Its Layers panel connects shared visibility, lock, opacity, movement, image rename,
+duplicate, delete and adjacent ordering commands while preserving locked barriers;
 the original History image and its exports remain unchanged. Recording completion
 still presents its notice immediately because recording editing is unsupported. Real macOS and
 Windows recording, audio devices, multi-display and hardware acceptance remain open;
@@ -268,7 +270,8 @@ Closing can save or keep the previous draft; explicit Discard edits restores the
 original. Failed saves keep edits open and cancel normal quit. Private-X11 checks
 cover both appearances, persisted drafts, real preview pixels and error recovery.
 AppKit now connects the same crop, canvas-resize and draft operations in its own
-window. Windows, Wayland and physical AppKit presentation remain unverified.
+window, along with native image-layer controls. Windows, Wayland and physical
+AppKit presentation remain unverified.
 Text, annotation shadows, annotation tools, edited-image export, and recording editing
 remain unconnected. This shared rendering support does not complete native editor
 acceptance. OS shortcut takeover, login items, single-instance relaunch and updates
