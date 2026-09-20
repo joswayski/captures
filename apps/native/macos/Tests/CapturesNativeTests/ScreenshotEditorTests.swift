@@ -221,6 +221,8 @@ final class ScreenshotEditorTests: XCTestCase {
         try showLayers(in: controller.root)
         let table = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSTableView }.first)
         table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+        controller.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification,
+                                                              object: table))
         XCTAssertEqual((try field("Layer name", in: controller.root)).stringValue, "Middle")
 
         try button("Move up", in: controller.root).performClick(nil)
