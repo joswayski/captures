@@ -1,20 +1,23 @@
 //! Shipping screenshot export policy, independent of host UI and filesystem I/O.
 
 use image::RgbaImage;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     PNG_MAXIMUM_COLOR_STEPS, composite_onto_white, encode_jpeg, encode_png_export,
     encode_png_export_dithered, encode_webp, png_palette_colors_for_quality,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ExportFormat {
     Png,
     Jpeg,
     Webp,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ExportQuality {
     #[default]
     Preserve,
@@ -22,12 +25,12 @@ pub enum ExportQuality {
     Maximum,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PngOptions {
     pub max_colors: Option<u16>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ExportOptions {
     pub format: ExportFormat,
     pub quality: ExportQuality,

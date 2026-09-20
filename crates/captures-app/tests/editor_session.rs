@@ -37,6 +37,78 @@ fn crop() -> Request {
 }
 
 #[test]
+fn exports_encode_current_pixels_without_mutating_session_or_original_files() {
+    use captures_app::editor_session::ExportOptions;
+
+    let (data, id, _) = setup();
+    let directory = data.path().join("history").join(&id);
+    let original = fs::read(directory.join("capture.png")).unwrap();
+    let metadata = fs::read(directory.join("metadata.json")).unwrap();
+    let mut editor = open(data.path(), &id).unwrap();
+    let mut document = editor.snapshot().document.clone();
+    document.background = None;
+    editor.execute(Request::Commit { document }).unwrap();
+    editor.execute(crop()).unwrap();
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 6.,
+            height: 3.,
+        })
+        .unwrap();
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 9.,
+            height: 5.,
+        })
+        .unwrap();
+    editor.execute(Request::Undo).unwrap();
+    assert!(editor.snapshot().can_undo && editor.snapshot().can_redo);
+    assert!(editor.snapshot().unsaved_changes);
+    let before = serde_json::to_value(editor.snapshot()).unwrap();
+    let pixels = editor.pixels();
+    let expected = RgbaImage::from_fn(6, 3, |x, y| {
+        // Crop translates layers without destroying off-canvas source pixels.
+        if x < 5 && y < 2 {
+            Rgba([(x + 2) as u8 * 31, (y + 1) as u8 * 71, 19, 255])
+        } else {
+            Rgba([0, 0, 0, 0])
+        }
+    });
+    for format in ["png", "jpeg", "webp"] {
+        let options: ExportOptions = serde_json::from_value(json!({
+            "format":format, "quality":"preserve", "quality_value":100, "png":{},
+        }))
+        .unwrap();
+        let bytes = editor.encode_export(options).unwrap();
+        let decoded = image::load_from_memory(&bytes).unwrap().into_rgba8();
+        assert_eq!(decoded.dimensions(), (6, 3));
+        if format == "jpeg" {
+            assert!(decoded.pixels().all(|pixel| pixel[3] == 255));
+            assert!(
+                decoded.get_pixel(5, 2).0[..3]
+                    .iter()
+                    .all(|channel| *channel >= 250)
+            );
+            assert!(decoded.get_pixel(0, 0)[0] < 100);
+        } else {
+            assert_eq!(decoded, expected);
+        }
+        let limited = ExportOptions {
+            max_size_bytes: Some(0),
+            ..options
+        };
+        assert!(editor.encode_export(limited).is_err());
+        assert_eq!(serde_json::to_value(editor.snapshot()).unwrap(), before);
+        assert!(Arc::ptr_eq(&pixels, &editor.pixels()));
+    }
+    assert!(!data.path().join("drafts").exists());
+    assert_eq!(fs::read(directory.join("capture.png")).unwrap(), original);
+    assert_eq!(fs::read(directory.join("metadata.json")).unwrap(), metadata);
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.pixels().dimensions(), (9, 5));
+}
+
+#[test]
 fn layer_json_commands_render_transactionally_and_restore_shared_assets() {
     let (data, id, original) = setup();
     let mut editor = open(data.path(), &id).unwrap();
