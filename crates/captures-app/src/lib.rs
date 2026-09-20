@@ -2,6 +2,7 @@
 //! Images stay in owned buffers/files, never JSON/base64. No browser or host window APIs.
 
 pub mod capture_flow;
+pub mod editor;
 pub mod preview;
 pub mod region;
 pub mod selection;
