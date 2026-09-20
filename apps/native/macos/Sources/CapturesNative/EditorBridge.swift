@@ -183,7 +183,7 @@ final class EditorWorker: EditorWorking {
     /// saves the newest state, and frees only after that save succeeds.
     func prepareForTermination() -> Result<Void, Error> {
         let storage = storage
-        Self.queue.sync {
+        return Self.queue.sync {
             Result {
                 guard let session = storage.session else { return }
                 if storage.snapshot?.unsavedChanges == true {
