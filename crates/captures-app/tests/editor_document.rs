@@ -4,7 +4,7 @@ use captures_app::editor::{
 };
 use captures_history::editor_draft::{self, SaveRequest};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -221,6 +221,26 @@ fn closed_shape_creation_and_outside_expansion_match_typescript() {
         assert_eq!(created.base.id, id);
         created.base.id = "fixture-created-shape".into();
         assert_json_equivalent(serde_json::to_value(document).unwrap(), case.expected);
+    }
+}
+
+#[test]
+fn degenerate_closed_shape_creation_is_rejected_without_inventing_pixels() {
+    let original = Document::new_capture("asset://original", 7., 3., None);
+    for (start, end) in [
+        (json!({"x": 2, "y": 1}), json!({"x": 2, "y": 2})),
+        (json!({"x": 2, "y": 1}), json!({"x": 4, "y": 1})),
+        (json!({"x": 2, "y": 1}), json!({"x": 2, "y": 1})),
+    ] {
+        let create: ClosedShapeCreate = serde_json::from_value(json!({
+            "shape": "rectangle",
+            "start": start,
+            "end": end,
+        }))
+        .unwrap();
+        let mut document = original.clone();
+        assert!(document.create_closed_shape(create).is_err());
+        assert_eq!(document, original);
     }
 }
 

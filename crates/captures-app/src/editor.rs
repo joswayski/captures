@@ -563,6 +563,9 @@ impl Document {
         if !create.opacity.is_finite() || !(0. ..=100.).contains(&create.opacity) {
             return Err("Shape opacity must be between 0 and 100.".into());
         }
+        if create.start.x == create.end.x || create.start.y == create.end.y {
+            return Err("Closed shapes must have positive width and height.".into());
+        }
         if !create.style.stroke_width.is_finite() {
             return Err("Shape stroke width must be finite.".into());
         }
@@ -773,13 +776,54 @@ impl Document {
 fn closed_shape_bounds(shape: &ShapeElement) -> Rect {
     let left = shape.base.x.min(shape.end_x);
     let top = shape.base.y.min(shape.end_y);
-    let stroke_extent = ((shape.style.stroke_width / 2.).ceil() + 1.).max(1.);
+    let stroke_extent = ((shape.style.stroke_width / 2.).ceil() + 1.).max(1.)
+        + annotation_drop_shadow_pad(&shape.style);
     Rect {
         x: left - stroke_extent,
         y: top - stroke_extent,
         width: (shape.base.x - shape.end_x).abs().max(1.) + stroke_extent * 2.,
         height: (shape.base.y - shape.end_y).abs().max(1.) + stroke_extent * 2.,
     }
+}
+
+fn annotation_drop_shadow_pad(style: &ElementStyle) -> f64 {
+    if !style.has_drop_shadow() {
+        return 0.;
+    }
+    let width = style.stroke_width.max(1.);
+    let fallback_opacity = 45.;
+    let fallback_blur = 6_f64.max(width * 0.85);
+    let fallback_offset_x = 0.;
+    let fallback_offset_y = 2_f64.max((width * 0.32).round());
+    let resolved = style.drop_shadow_style.as_ref();
+    let resolve = |value: Option<f64>, minimum: f64, maximum: f64, fallback: f64| {
+        value
+            .filter(|value| value.is_finite())
+            .map_or(fallback, |value| value.clamp(minimum, maximum))
+    };
+    let opacity = resolve(
+        resolved.map(|shadow| shadow.opacity),
+        0.,
+        100.,
+        fallback_opacity,
+    );
+    if opacity <= 0. {
+        return 0.;
+    }
+    let blur = resolve(resolved.map(|shadow| shadow.blur), 0., 100., fallback_blur);
+    let offset_x = resolve(
+        resolved.map(|shadow| shadow.offset_x),
+        -500.,
+        500.,
+        fallback_offset_x,
+    );
+    let offset_y = resolve(
+        resolved.map(|shadow| shadow.offset_y),
+        -500.,
+        500.,
+        fallback_offset_y,
+    );
+    (blur * 2. + offset_x.abs().max(offset_y.abs())).ceil()
 }
 
 fn image_bounds(image: &ImageElement) -> Rect {

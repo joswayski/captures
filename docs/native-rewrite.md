@@ -428,8 +428,10 @@ Shared editor sessions can also create completed rectangle and ellipse layers fr
 typed start/end geometry, existing element styles and opacity. The command assigns
 the stable layer ID and shipping unlocked/visible/source-over defaults, preserves
 partial clipping, and expands/translates the document only when the annotation is
-fully outside. TypeScript-derived reverse/fractional vectors and rendered session
-tests cover transaction rollback, undo/redo and draft reopen. This is a drawing-tool
+fully outside, including painted bounds from enabled default or custom shadows.
+Degenerate closed-shape geometry is rejected transactionally instead of becoming a
+synthetic filled pixel. TypeScript-derived reverse/fractional vectors and rendered
+session tests cover rollback, undo/redo and draft reopen. This is a drawing-tool
 prerequisite shared by macOS, Windows, X11 and Wayland; no host creation gesture or
 physical-platform acceptance is included.
 

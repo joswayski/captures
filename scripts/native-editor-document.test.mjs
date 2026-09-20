@@ -323,6 +323,33 @@ function shapeCreationCases() {
       },
       opacity: 37.5,
     },
+    {
+      name: 'default shadow padding keeps shadow-only canvas overlap clipped',
+      shape: 'rectangle',
+      start: { x: -25, y: 9.5 },
+      end: { x: -21, y: 14.5 },
+      style: { ...defaults, dropShadow: true },
+    },
+    {
+      name: 'custom shadow padding expands fully outside shape and translates siblings',
+      shape: 'ellipse',
+      start: { x: -50, y: -31.25 },
+      end: { x: -46, y: -26.75 },
+      style: {
+        color: '#5533cc',
+        fill: '#5533cc',
+        strokeWidth: 2,
+        strokeEnabled: false,
+        dropShadow: true,
+        dropShadowStyle: {
+          color: '#112233',
+          opacity: 80,
+          blur: 4,
+          offsetX: 9,
+          offsetY: -2,
+        },
+      },
+    },
   ];
   return vectors.map(({ name, shape, start, end, style, opacity }) => {
     const request = { shape, start, end };
@@ -398,7 +425,7 @@ if (process.argv.includes('--write')) {
     assert.ok(vectors.document.elements.some(element => element.visible === false));
     assert.ok(vectors.document.elements.some(element => element.locked === true));
     assert.ok(vectors.crops.some(entry => entry.start.x < 0));
-    assert.equal(vectors.shapeCreations.length, 4);
+    assert.equal(vectors.shapeCreations.length, 6);
     assert.ok(vectors.shapeCreations.some(entry => entry.expected.width > entry.input.width));
     assert.ok(vectors.shapeCreations.some(entry => entry.expected.elements[0].x > entry.input.elements[0].x));
     assert.ok(vectors.history.expected.some(entry => entry.undo === 100));

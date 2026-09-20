@@ -429,21 +429,35 @@ fn closed_shape_json_creation_renders_and_rolls_back_history_before_draft_reopen
     assert!(editor.snapshot().can_redo);
     let before_failure = serde_json::to_value(editor.snapshot()).unwrap();
     let retained_frame = editor.pixels();
-    let unsupported_shadow: Request = serde_json::from_value(json!({
+    let degenerate: Request = serde_json::from_value(json!({
+        "operation": "create_closed_shape",
+        "shape": "rectangle",
+        "start": {"x": 4, "y": 2},
+        "end": {"x": 4, "y": 6}
+    }))
+    .unwrap();
+    assert!(editor.execute(degenerate).is_err());
+    assert_eq!(
+        serde_json::to_value(editor.snapshot()).unwrap(),
+        before_failure
+    );
+    assert!(Arc::ptr_eq(&retained_frame, &editor.pixels()));
+    assert!(editor.snapshot().can_redo);
+    let invalid_fill: Request = serde_json::from_value(json!({
         "operation": "create_closed_shape",
         "shape": "ellipse",
         "start": {"x": 7, "y": 1},
         "end": {"x": 11, "y": 6},
         "style": {
             "color": "#00ff00",
-            "fill": "#00ff00",
+            "fill": "not-a-color",
             "strokeWidth": 3,
             "strokeEnabled": false,
-            "dropShadow": true
+            "dropShadow": false
         }
     }))
     .unwrap();
-    assert!(editor.execute(unsupported_shadow).is_err());
+    assert!(editor.execute(invalid_fill).is_err());
     assert_eq!(
         serde_json::to_value(editor.snapshot()).unwrap(),
         before_failure
