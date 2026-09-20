@@ -216,6 +216,7 @@ final class ScreenshotEditorTests: XCTestCase {
 
         budget.stringValue = "10000"
         worker.failEncode = true
+        worker.failureMessage = "fixture encode failed"
         try button("Preview output", in: controller.root).performClick(nil)
         XCTAssertFalse(controller.state.busy)
         XCTAssertNotNil(controller.state.snapshot)
@@ -589,9 +590,9 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(String(data: outputs["webp"]?.data.subdata(in: 8..<12) ?? Data(),
                               encoding: .ascii), "WEBP")
         XCTAssertEqual(outputs["png"]?.image.width, 7); XCTAssertEqual(outputs["webp"]?.image.height, 3)
-        XCTAssertEqual(rgba(try XCTUnwrap(outputs["png"]?.image), x: 0, y: 0)[3], 0,
+        XCTAssertEqual(renderedAlphaRange(try XCTUnwrap(outputs["png"]?.image)).lowerBound, 0,
                        "PNG preview preserves alpha")
-        XCTAssertEqual(rgba(try XCTUnwrap(outputs["jpeg"]?.image), x: 0, y: 0)[3], 255,
+        XCTAssertEqual(renderedAlphaRange(try XCTUnwrap(outputs["jpeg"]?.image)), 255...255,
                        "JPEG preview reflects shared white compositing")
         worker.close(); EditorWorker.flush()
         XCTAssertFalse(outputs["webp"]?.data.isEmpty ?? true,
@@ -715,6 +716,24 @@ final class ScreenshotEditorTests: XCTestCase {
               let pointer = CFDataGetBytePtr(data) else { return [] }
         let offset = y * image.bytesPerRow + x * 4
         return Array(UnsafeBufferPointer(start: pointer + offset, count: 4))
+    }
+
+    private func renderedAlphaRange(_ image: CGImage) -> ClosedRange<UInt8> {
+        var pixels = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        let rendered = pixels.withUnsafeMutableBytes { storage -> Bool in
+            guard let base = storage.baseAddress,
+                  let context = CGContext(data: base, width: image.width, height: image.height,
+                                          bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                                          space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                          bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue
+                                              | CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            return true
+        }
+        guard rendered else { return 0...0 }
+        let alpha = stride(from: 3, to: pixels.count, by: 4).map { pixels[$0] }
+        return (alpha.min() ?? 0)...(alpha.max() ?? 0)
     }
 }
 
