@@ -230,7 +230,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         detail = title("Select a capture to preview it.", frame: NSRect(x: 372, y: 560, width: 600, height: 24), muted: true)
         saveButton = button("Save image", frame: NSRect(x: 372, y: 594, width: 118, height: 34)) { [weak self] in self?.save() }
         copyButton = button("Copy image", frame: NSRect(x: 500, y: 594, width: 118, height: 34)) { [weak self] in self?.copyImage() }
-        revealButton = button("Reveal export", frame: NSRect(x: 628, y: 594, width: 120, height: 34)) { [weak self] in self?.reveal() }
+        revealButton = button("Show in Folder", frame: NSRect(x: 628, y: 594, width: 120, height: 34)) { [weak self] in self?.reveal() }
         deleteButton = button("Delete from history", frame: NSRect(x: 758, y: 594, width: 166, height: 34)) { [weak self] in self?.confirmDelete() }
         clearHistoryButton = button("Clear history…", frame: NSRect(x: 28, y: 594, width: 180, height: 34)) { [weak self] in self?.confirmClearHistory() }
         status = title("Loading capture history…", frame: NSRect(x: 28, y: 642, width: 944, height: 24), muted: true)
@@ -1087,12 +1087,13 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         let selected = selectedIndex.map { artifacts.indices.contains($0) } == true
         let selectedScreenshot = selectedIndex.map { artifacts.indices.contains($0) && !artifacts[$0].isRecording } == true
         let busy = capturing || clearingHistory
-        saveButton?.isEnabled = selectedScreenshot && !busy
+        saveButton?.title = selected && !selectedScreenshot ? "Save file" : "Save image"
+        saveButton?.setAccessibilityLabel(saveButton?.title)
+        saveButton?.needsDisplay = true
+        saveButton?.isEnabled = selected && !busy
         copyButton?.isEnabled = selectedScreenshot && selectedImage != nil && !busy
         deleteButton?.isEnabled = selected && !busy
-        revealButton?.isEnabled = selected && selectedIndex.flatMap {
-            artifacts[$0].mediaPath ?? artifacts[$0].savedPath
-        } != nil
+        revealButton?.isEnabled = selected && selectedIndex.flatMap { artifacts[$0].savedPath } != nil
         clearHistoryButton?.isEnabled = !artifacts.isEmpty && !busy
         captureButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
         regionButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
@@ -1160,11 +1161,12 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
         save(artifact)
     }
     private func save(_ artifact: CaptureArtifact) {
-        status.stringValue = "Saving image…"
+        let noun = artifact.isRecording ? "recording" : "image"
+        status.stringValue = "Saving \(noun)…"
         miniPreviews?.setStatus("Saving…", for: artifact.id)
         run({ [transport, historyRoot, settingsPath] in
             let preferences = try CapturePreferences.load(path: settingsPath)
-            let result = try transport.request(["operation": "save_screenshot", "root": historyRoot, "id": artifact.id,
+            let result = try transport.request(["operation": artifact.isRecording ? "save_recording" : "save_screenshot", "root": historyRoot, "id": artifact.id,
                 "directory": preferences.directory, "format": preferences.format])
             guard let value = result["artifact"] as? [String: Any], let updated = CaptureArtifact(value), let path = result["path"] as? String else { throw AppBridgeError.invalidResponse }
             return (updated, path)
@@ -1172,10 +1174,10 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
             guard let self else { return }
             switch result { case .success(let value):
                 if let current = self.artifacts.firstIndex(where: { $0.id == artifact.id }) { self.artifacts[current] = value.0 }
-                self.status.stringValue = "Saved image to \(value.1)"; self.table.reloadData()
+                self.status.stringValue = "Saved \(noun) to \(value.1)"
                 self.miniPreviews?.setStatus("Saved", for: artifact.id)
             case .failure(let error):
-                self.showError("Couldn’t save image", error)
+                self.showError("Couldn’t save \(noun)", error)
                 self.miniPreviews?.setStatus("Save failed", for: artifact.id)
             }; self.updateActions()
         }
@@ -1203,7 +1205,7 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     func refreshHistory() { loadHistory() }
     private func reveal() {
         guard let index = selectedIndex, artifacts.indices.contains(index),
-              let path = artifacts[index].mediaPath ?? artifacts[index].savedPath else { return }
+              let path = artifacts[index].savedPath else { return }
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
     }
     private func confirmDelete() {

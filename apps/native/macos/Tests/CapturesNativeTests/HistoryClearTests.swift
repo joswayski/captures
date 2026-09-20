@@ -11,6 +11,12 @@ final class HistoryClearTests: XCTestCase {
         let image = PreviewView.fixtureImage(scale: 1)
         let path = directory.appendingPathComponent("fixture.png")
         try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])).write(to: path)
+        let settingsPath = directory.appendingPathComponent("settings.json").path
+        let settingsBridge = SettingsBridge()
+        var settings = try XCTUnwrap(settingsBridge.request(["operation": "load", "path": settingsPath])["settings"] as? [String: Any])
+        settings["output_directory"] = directory.appendingPathComponent("exports").path
+        settings["screenshot_format"] = "jpeg"
+        _ = try settingsBridge.request(["operation": "save", "path": settingsPath, "settings": settings])
         for appearance in ["light", "dark"] {
             let frame = NSRect(x: 0, y: 0, width: 1000, height: 720)
             let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
@@ -23,7 +29,7 @@ final class HistoryClearTests: XCTestCase {
             let transport = HistoryTransport(path: path.path, width: image.width, height: image.height,
                 failPartway: false, kinds: ["video", "screenshot", "gif", "screenshot", "video"])
             let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
-                historyRoot: directory.path, settingsPath: nil, transport: transport, showPreferences: {})
+                historyRoot: directory.path, settingsPath: settingsPath, transport: transport, showPreferences: {})
             defer { withExtendedLifetime(controller) {} }
             window.makeKeyAndOrderFront(nil)
             let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? NSTableView)
@@ -49,7 +55,14 @@ final class HistoryClearTests: XCTestCase {
             try button("GIF 1").performClick(nil)
             try waitUntil { table.numberOfRows == 1 && detailContains("GIF · Editor unavailable") }
             XCTAssertEqual(try button("GIF 1").state, .on)
-            XCTAssertFalse(try button("Save image").isEnabled)
+            XCTAssertTrue(try button("Save file").isEnabled)
+            XCTAssertFalse(try button("Show in Folder").isEnabled)
+            try button("Save file").performClick(nil)
+            try waitUntil { transport.saveCount == 1 && detailContains("Saved recording to") }
+            XCTAssertTrue(try button("Show in Folder").isEnabled)
+            XCTAssertFalse(try button("Copy image").isEnabled)
+            XCTAssertEqual(transport.savedDirectory, settings["output_directory"] as? String)
+            XCTAssertEqual(table.selectedRow, 0)
             for title in ["All 5", "Screenshots 2", "Video 2", "GIF 1"] {
                 XCTAssertTrue(root.bounds.contains(try button(title).frame))
             }
@@ -167,6 +180,8 @@ private final class HistoryTransport: AppTransport {
     private var artifacts: [[String: Any]]
     private var clears = 0
     private var failPartway: Bool
+    private var saves = 0
+    private var exportDirectory: String?
 
     init(path: String, width: Int, height: Int, failPartway: Bool,
          kinds: [String] = ["screenshot", "screenshot"]) {
@@ -192,12 +207,23 @@ private final class HistoryTransport: AppTransport {
     }
 
     var clearCount: Int { lock.lock(); defer { lock.unlock() }; return clears }
+    var saveCount: Int { lock.lock(); defer { lock.unlock() }; return saves }
+    var savedDirectory: String? { lock.lock(); defer { lock.unlock() }; return exportDirectory }
 
     func request(_ object: [String: Any]) throws -> [String: Any] {
         lock.lock(); defer { lock.unlock() }
         switch object["operation"] as? String {
         case "history": return ["kind": "history", "artifacts": artifacts]
         case "displays": return ["kind": "displays", "displays": []]
+        case "save_recording":
+            guard let directory = object["directory"] as? String,
+                  let index = artifacts.firstIndex(where: { ($0["entry"] as? [String: Any])?["id"] as? String == object["id"] as? String }),
+                  var entry = artifacts[index]["entry"] as? [String: Any],
+                  entry["kind"] as? String == "gif" else { throw AppBridgeError.invalidResponse }
+            let path = URL(fileURLWithPath: directory).appendingPathComponent("saved.gif").path
+            entry["saved_path"] = path; artifacts[index]["entry"] = entry
+            saves += 1; exportDirectory = directory
+            return ["kind": "saved", "artifact": artifacts[index], "path": path]
         case "clear_history":
             clears += 1
             artifacts.removeFirst()

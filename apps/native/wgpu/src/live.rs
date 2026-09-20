@@ -3213,18 +3213,24 @@ impl Live {
                 }
                 if ui
                     .add_enabled(
-                        selected_is_screenshot && self.pending == 0,
-                        egui::Button::new("Save image"),
+                        selected.is_some() && self.pending == 0,
+                        egui::Button::new(if selected.is_some() && !selected_is_screenshot { "Save file" } else { "Save image" }),
                     )
                     .clicked()
                     && let Some(id) = selected.clone()
                 {
                     match settings() {
-                        Ok(settings) => self.send(Request::SaveScreenshot {
-                            root: self.root.clone(),
-                            id,
-                            directory: settings.output_directory.into(),
-                            format: settings.screenshot_format,
+                        Ok(settings) => self.send(if selected_is_screenshot {
+                            Request::SaveScreenshot {
+                                root: self.root.clone(), id,
+                                directory: settings.output_directory.into(),
+                                format: settings.screenshot_format,
+                            }
+                        } else {
+                            Request::SaveRecording {
+                                root: self.root.clone(), id,
+                                directory: settings.output_directory.into(),
+                            }
                         }),
                         Err(error) => self.error = Some(error),
                     }
@@ -3245,7 +3251,7 @@ impl Live {
                     .find(|a| Some(&a.entry.id) == selected.as_ref())
                     .and_then(|a| a.entry.saved_path.as_deref());
                 if ui
-                    .add_enabled(saved.is_some(), egui::Button::new("Reveal export"))
+                    .add_enabled(saved.is_some(), egui::Button::new("Show in Folder"))
                     .clicked()
                     && let Some(path) = saved
                     && let Err(error) = reveal(Path::new(path))
