@@ -23,7 +23,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices | Audio meter/device-change parity, physical recording/audio acceptance, recording editor and transcoded exports |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared v1 draft storage ([#594](https://github.com/joswayski/captures/pull/594)); document geometry/undo with shipping-TypeScript fixtures ([#595](https://github.com/joswayski/captures/pull/595)); real image-layer renderer and worker-owned draft/edit sessions with retained C-ABI pixel frames; shipping screenshot export encoding policy shared in Rust | Native screenshot host UI/input, annotations/export UI and comparison acceptance, then recording playback/timeline/editing/export |
+| Editors | Shared v1 draft storage ([#594](https://github.com/joswayski/captures/pull/594)); document geometry/undo with shipping-TypeScript fixtures ([#595](https://github.com/joswayski/captures/pull/595)); real image/annotation rendering and worker-owned draft/edit sessions with retained C-ABI pixel frames; lossless image-transform command; shipping screenshot export encoding policy shared in Rust | Remaining native screenshot host controls/input, annotations/export UI and comparison acceptance, then recording playback/timeline/editing/export |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -36,9 +36,9 @@ with those flows; its tests retain both screenshot-child and saved-notice covera
 Superseded parent PRs may be closed rather than separately merged because the
 repository uses squash merges. Their functionality must not be counted as missing.
 
-Next implementation boundary: connect the shared screenshot session, crop/image
-transforms, undo/redo and export policy to History and editor controls in both
-AppKit and wgpu. Shared encoding is a prerequisite, not native export acceptance.
+Next implementation boundary: connect shared image transforms and export policy to
+editor controls in both AppKit and wgpu. Shared commands and encoding are
+prerequisites, not native editor/output acceptance.
 Native live capture on Wayland remains explicitly
 gated; no stub or X11 result closes that platform gate. Merging development slices
 does not authorize a native release, renderer cutover or removal of Tauri.
@@ -406,11 +406,15 @@ unit-verified in the Linux orb; it does not connect native export controls or
 complete macOS, Windows, X11 or Wayland output/physical acceptance.
 
 Shared layer commands now cover visibility, locking, opacity, movement, deletion,
-duplication, image renaming and ordering through the same transactional session
-and C ABI. Shipping TypeScript fixtures check all four duplicate element kinds
-and reorder placements across locked boundaries. Hidden layers remain editable;
-locked layers block movement/deletion/reordering but permit the other panel
-actions. Duplicates share owned image assets and remain draft-compatible.
+duplication, image renaming, ordering and the four lossless image transforms through
+the same transactional session and C ABI. Shipping TypeScript fixtures check all
+four duplicate element kinds, reorder placements across locked boundaries and D4
+orientation composition. Hidden and locked images remain transformable; transform
+requests for non-image layers are no-ops, matching the shipping editor. Locked
+layers otherwise block movement/deletion/reordering but permit the other panel
+actions. A sole visible full-canvas image rotates its canvas, ordinary layered
+overhang remains clipped and a fully off-canvas result expands the document.
+Duplicates share owned image assets and remain draft-compatible.
 These commands are shared across all four platforms; host integration and
 physical acceptance are tracked separately below.
 

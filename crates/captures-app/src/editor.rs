@@ -429,6 +429,9 @@ pub enum LayerEdit {
     Lock {
         locked: bool,
     },
+    ImageTransform {
+        transform: ImageTransform,
+    },
     Opacity {
         opacity: f64,
     },
@@ -519,8 +522,9 @@ impl Document {
     }
 
     /// Match the shipping layer panel: locking prevents deletion, nudging and
-    /// reordering, but not visibility, opacity, rename or duplication. Hidden
-    /// layers remain editable from the panel. Rejected requests do not mutate.
+    /// reordering, but not image transforms, visibility, opacity, rename or
+    /// duplication. Hidden layers remain editable from the panel. Rejected
+    /// requests do not mutate.
     pub fn edit_layer(&mut self, id: &str, edit: LayerEdit) -> Result<(), String> {
         let Some(index) = self
             .elements
@@ -533,6 +537,41 @@ impl Document {
         match edit {
             LayerEdit::Visibility { visible } => self.elements[index].base_mut().visible = visible,
             LayerEdit::Lock { locked } => self.elements[index].base_mut().locked = locked,
+            LayerEdit::ImageTransform { transform } => {
+                let Element::Image(image) = &self.elements[index] else {
+                    return Ok(());
+                };
+                let rotates = matches!(
+                    transform,
+                    ImageTransform::RotateClockwise | ImageTransform::RotateCounterclockwise
+                );
+                let fills_canvas = image.base.visible
+                    && self
+                        .elements
+                        .iter()
+                        .filter(|element| element.base().visible)
+                        .count()
+                        == 1
+                    && image.base.x.abs() < 0.01
+                    && image.base.y.abs() < 0.01
+                    && (image.width - self.width).abs() < 0.01
+                    && (image.height - self.height).abs() < 0.01;
+                let Element::Image(image) = &mut self.elements[index] else {
+                    unreachable!()
+                };
+                image.transform(transform);
+                let bounds = image_bounds(image);
+
+                // Match the shipping action rather than only its D4 primitive:
+                // a fresh full-canvas photo rotates the canvas with the bitmap,
+                // layered overhang remains clipped, and a fully lost layer grows
+                // the canvas back around itself.
+                if rotates && fills_canvas {
+                    self.fit_canvas_to_bounds(bounds);
+                } else if fully_outside_canvas(bounds, self.width, self.height) {
+                    self.expand_canvas_to_bounds(bounds);
+                }
+            }
             LayerEdit::Opacity { opacity } => {
                 if !opacity.is_finite() || !(0. ..=100.).contains(&opacity) {
                     return Err("Layer opacity must be between 0 and 100.".into());
@@ -613,6 +652,82 @@ impl Document {
         }
         Ok(())
     }
+
+    fn fit_canvas_to_bounds(&mut self, bounds: Rect) {
+        let x = bounds.x.floor();
+        let y = bounds.y.floor();
+        let right = (bounds.x + bounds.width).ceil();
+        let bottom = (bounds.y + bounds.height).ceil();
+        self.width = (right - x).max(1.);
+        self.height = (bottom - y).max(1.);
+        self.translate(-x, -y);
+    }
+
+    fn expand_canvas_to_bounds(&mut self, bounds: Rect) {
+        let shift_x = (-bounds.x).ceil().max(0.);
+        let shift_y = (-bounds.y).ceil().max(0.);
+        let fitted_x = bounds.x + shift_x;
+        let fitted_y = bounds.y + shift_y;
+        self.width = (self.width + shift_x).max((fitted_x + bounds.width).ceil());
+        self.height = (self.height + shift_y).max((fitted_y + bounds.height).ceil());
+        self.translate(shift_x, shift_y);
+    }
+}
+
+fn image_bounds(image: &ImageElement) -> Rect {
+    let local = Rect {
+        x: image.base.x,
+        y: image.base.y,
+        width: image.width,
+        height: image.height,
+    };
+    let rotation = image.base.rotation();
+    if rotation == 0. {
+        return local;
+    }
+    let center_x = local.x + local.width / 2.;
+    let center_y = local.y + local.height / 2.;
+    let (sin, cos) = rotation.sin_cos();
+    let rotate = |x: f64, y: f64| Point {
+        x: center_x + (x - center_x) * cos - (y - center_y) * sin,
+        y: center_y + (x - center_x) * sin + (y - center_y) * cos,
+    };
+    let points = [
+        rotate(local.x, local.y),
+        rotate(local.x + local.width, local.y),
+        rotate(local.x + local.width, local.y + local.height),
+        rotate(local.x, local.y + local.height),
+    ];
+    let min_x = points
+        .iter()
+        .map(|point| point.x)
+        .fold(f64::INFINITY, f64::min);
+    let min_y = points
+        .iter()
+        .map(|point| point.y)
+        .fold(f64::INFINITY, f64::min);
+    let max_x = points
+        .iter()
+        .map(|point| point.x)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let max_y = points
+        .iter()
+        .map(|point| point.y)
+        .fold(f64::NEG_INFINITY, f64::max);
+    Rect {
+        x: min_x,
+        y: min_y,
+        width: (max_x - min_x).max(1.),
+        height: (max_y - min_y).max(1.),
+    }
+}
+
+fn fully_outside_canvas(bounds: Rect, width: f64, height: f64) -> bool {
+    const EPSILON: f64 = 0.5;
+    !(bounds.x + bounds.width > EPSILON
+        && width > bounds.x + EPSILON
+        && bounds.y + bounds.height > EPSILON
+        && height > bounds.y + EPSILON)
 }
 
 #[must_use]
