@@ -17,8 +17,12 @@ fn encode_png_with_quality(
     compression: CompressionType,
     filter: FilterType,
 ) -> Result<Vec<u8>, String> {
-    captures_history::encode_png_with_quality(image, compression, filter)
-        .map_err(|error| error.to_string())
+    captures_history::encode_png_with_quality(image, compression, filter).map_err(|error| {
+        match error {
+            captures_history::Error::Image(message) => message,
+            other => other.to_string(),
+        }
+    })
 }
 
 /// Encode a PNG for user export.
@@ -646,12 +650,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn indexed_png_packing_preserves_alpha_and_odd_row_boundaries() {
+    fn indexed_png_packing_preserves_pixels_alpha_and_row_boundaries() {
         for (colors, depth) in [
+            (1, png::BitDepth::One),
             (2, png::BitDepth::One),
             (3, png::BitDepth::Two),
+            (4, png::BitDepth::Two),
             (5, png::BitDepth::Four),
+            (16, png::BitDepth::Four),
             (17, png::BitDepth::Eight),
+            (256, png::BitDepth::Eight),
         ] {
             let palette: Vec<[u8; 4]> = (0..colors)
                 .map(|index| {
@@ -659,39 +667,109 @@ mod tests {
                     [value, 255 - value, value / 2, value]
                 })
                 .collect();
-            let width = 17;
-            let height = 19;
-            let indices: Vec<u8> = (0..width * height)
-                .map(|index| (index % colors) as u8)
-                .collect();
-            let bytes = encode_indexed_png(width, height, &palette, &indices).unwrap();
-            let reader = png::Decoder::new(std::io::Cursor::new(&bytes))
-                .read_info()
-                .unwrap();
-            assert_eq!(reader.info().bit_depth, depth);
-            assert_eq!(reader.info().color_type, png::ColorType::Indexed);
-            assert_eq!(
-                reader.info().srgb,
-                Some(png::SrgbRenderingIntent::Perceptual)
-            );
-            let decoded = image::load_from_memory(&bytes).unwrap().to_rgba8();
-            let expected: Vec<u8> = indices
-                .iter()
-                .flat_map(|&index| palette[usize::from(index)])
-                .collect();
-            assert_eq!(decoded.as_raw(), &expected);
+            for width in [1_u32, 2, 3, 7, 8, 9, 17] {
+                let height = 19;
+                let indices: Vec<u8> = (0..width * height)
+                    .map(|index| (index % colors) as u8)
+                    .collect();
+                let bytes = encode_indexed_png(width, height, &palette, &indices)
+                    .expect("indexed PNG encoded");
+                let reader = png::Decoder::new(std::io::Cursor::new(&bytes))
+                    .read_info()
+                    .expect("PNG header");
+                assert_eq!(reader.info().bit_depth, depth);
+                assert_eq!(reader.info().color_type, png::ColorType::Indexed);
+                assert_eq!(
+                    reader.info().srgb,
+                    Some(png::SrgbRenderingIntent::Perceptual)
+                );
+                let decoded = image::load_from_memory(&bytes)
+                    .expect("packed PNG decodes")
+                    .to_rgba8();
+                assert_eq!(decoded.dimensions(), (width, height));
+                let expected: Vec<u8> = indices
+                    .iter()
+                    .flat_map(|&index| palette[usize::from(index)])
+                    .collect();
+                assert_eq!(
+                    decoded.as_raw(),
+                    &expected,
+                    "{colors} colors, width {width}"
+                );
+            }
         }
     }
 
     #[test]
-    fn exact_palette_keeps_first_seen_order_revisited_colors_and_alpha() {
+    fn exact_palette_preserves_runs_revisited_colors_and_alpha() {
         let palette = vec![[0, 0, 0, 0], [0, 0, 0, 255], [7, 13, 19, 127]];
         let indices = vec![0, 0, 1, 1, 0, 0, 2, 2, 0, 1, 2, 2];
         let image = RgbaImage::from_fn(6, 2, |x, y| {
             Rgba(palette[usize::from(indices[(y * 6 + x) as usize])])
         });
+        assert_eq!(exact_indexed_rgba(&image, 0), None);
         assert_eq!(exact_indexed_rgba(&image, 2), None);
         assert_eq!(exact_indexed_rgba(&image, 3), Some((palette, indices)));
+        assert_eq!(
+            exact_indexed_rgba(&RgbaImage::new(0, 0), 0),
+            Some((vec![], vec![]))
+        );
+
+        for colors in [256, 257] {
+            let image = RgbaImage::from_fn(colors * 2, 1, |x, _| {
+                Rgba([(x / 2) as u8, (x / 512) as u8, 3, 255])
+            });
+            let expected = (colors == 256).then(|| {
+                (
+                    (0..256).map(|i| [i as u8, 0, 3, 255]).collect(),
+                    (0..512).map(|i| (i / 2) as u8).collect(),
+                )
+            });
+            assert_eq!(exact_indexed_rgba(&image, 256), expected);
+        }
+    }
+
+    #[test]
+    fn flat_rgba_lookup_matches_coordinate_access_across_rows() {
+        for width in [1, 3, 17, 257] {
+            for height in [1, 2, 11] {
+                let image = RgbaImage::from_fn(width, height, |x, y| {
+                    Rgba([
+                        (x * 37) as u8,
+                        (y * 71) as u8,
+                        (x / 256 + y * 17) as u8,
+                        (x + y * 11) as u8,
+                    ])
+                });
+                for y in 0..height {
+                    for x in 0..width {
+                        assert_eq!(
+                            rgba_at(&image, y * width + x),
+                            image.get_pixel(x, y).0,
+                            "{width}x{height}, pixel ({x}, {y})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lossless_png_errors_keep_the_shipping_message_without_history_prefix() {
+        let image = RgbaImage::new(0, 1);
+        let expected = match captures_history::encode_png_with_quality(
+            &image,
+            CompressionType::Fast,
+            FilterType::Sub,
+        )
+        .unwrap_err()
+        {
+            captures_history::Error::Image(message) => message,
+            other => panic!("expected the history image error, got {other}"),
+        };
+        let actual = encode_png_export(&image, false, None).unwrap_err();
+        assert_eq!(actual, expected);
+        assert!(!actual.starts_with("image encoding failed:"));
     }
 
     // Regression oracle for the bounds-cache optimization: deliberately
@@ -740,10 +818,12 @@ mod tests {
     }
 
     #[test]
-    fn median_cut_matches_uncached_palette_order_and_indices() {
+    fn median_cut_matches_uncached_palette_order_indices_and_png_bytes() {
         let fixtures = [
             RgbaImage::new(0, 0),
             RgbaImage::from_pixel(1, 1, Rgba([13, 47, 99, 128])),
+            RgbaImage::from_pixel(9, 7, Rgba([13, 47, 99, 128])),
+            // Equal ranges exercise last-channel and first-box tie breaking.
             RgbaImage::from_fn(9, 9, |x, y| {
                 Rgba([
                     (x * 17) as u8,
@@ -762,14 +842,36 @@ mod tests {
             }),
         ];
         for image in &fixtures {
-            for colors in [0, 2, 3, 16, 64, 256, 300] {
+            for colors in [0, 1, 2, 3, 16, 64, 256, 300] {
                 for dither in [false, true] {
+                    let expected = uncached_median_cut(image, colors, dither);
                     assert_eq!(
                         median_cut_rgba(image, colors, dither),
-                        uncached_median_cut(image, colors, dither),
+                        expected,
                         "{:?}, {colors} colors, dither={dither}",
                         image.dimensions()
                     );
+                    // This fixture always exceeds the palette budget and has
+                    // partial alpha, so the shipping export must use median cut.
+                    if image.dimensions() == (23, 17) {
+                        let indexed = encode_indexed_png(23, 17, &expected.0, &expected.1).unwrap();
+                        let lossless = captures_history::encode_png(image).unwrap();
+                        let expected_png = if lossless.len() < indexed.len() {
+                            lossless
+                        } else {
+                            indexed
+                        };
+                        assert_eq!(
+                            encode_png_export_dithered(
+                                image,
+                                true,
+                                Some(colors.clamp(2, 256)),
+                                dither
+                            )
+                            .unwrap(),
+                            expected_png
+                        );
+                    }
                 }
             }
         }
