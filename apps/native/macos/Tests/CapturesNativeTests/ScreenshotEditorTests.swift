@@ -598,10 +598,10 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(String(data: outputs["webp"]?.data.subdata(in: 8..<12) ?? Data(),
                               encoding: .ascii), "WEBP")
         XCTAssertEqual(outputs["png"]?.image.width, 7); XCTAssertEqual(outputs["webp"]?.image.height, 3)
-        XCTAssertEqual(renderedAlphaRange(try XCTUnwrap(outputs["png"]?.image)).lowerBound, 0,
-                       "PNG preview preserves alpha")
+        XCTAssertEqual(renderedAlphaRange(try XCTUnwrap(outputs["png"]?.image)), 255...255,
+                       "the default editor background composites transparent source pixels")
         XCTAssertEqual(renderedAlphaRange(try XCTUnwrap(outputs["jpeg"]?.image)), 255...255,
-                       "JPEG preview reflects shared white compositing")
+                       "lossy output remains opaque")
         worker.close(); EditorWorker.flush()
         XCTAssertFalse(outputs["webp"]?.data.isEmpty ?? true,
                        "copied export bytes remain valid after session close")
