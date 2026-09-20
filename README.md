@@ -243,7 +243,7 @@ hosts offer counted All, Screenshots, Video and GIF history filters; filtering
 does not delete captures or exports. After finalization, a temporary **Recording ready**
 notice offers Save file, then Show in Folder after saving a permanent copy. Dismissing
 or letting it expire preserves History and exports; failed saves can be retried.
-The native editor is not connected, so this notice appears immediately rather than
+The native recording editor is not connected, so this notice appears immediately rather than
 after closing an editor. Real macOS and
 Windows recording, audio devices, multi-display and hardware acceptance remain open;
 Wayland recording is gated with the rest of native capture.
@@ -257,9 +257,14 @@ the shipping TypeScript behavior. A shared renderer now flattens real image laye
 and the five closed annotation shapes, including crop geometry, rotation, opacity
 and blending, without host I/O. Worker-owned editor sessions add draft restore/save/
 discard, transactional crop/resize/undo, and retained pixel frames for native hosts.
-Text, open/freehand drawing and native editor presentation remain unconnected. These
-prerequisites do not complete screenshot-editor acceptance.
-Editing, OS shortcut takeover, login items,
+The Windows/Linux candidate now opens screenshots from History in a native crop,
+canvas-size and draft editor with undo/redo. Closing can save or keep the previous
+draft; explicit Discard edits restores the original. Failed saves keep edits open
+and cancel normal quit. Private-X11 checks cover both appearances, persisted drafts,
+real preview pixels and error recovery. AppKit presentation is in progress; Windows
+and Wayland presentation and physical-platform acceptance remain unverified.
+Annotation tools, edited-image export, and recording editing remain unconnected.
+OS shortcut takeover, login items,
 single-instance relaunch and updates are not connected to the native hosts yet. Windows/Linux
 renderer selection and full feature/design parity remain open. The
 [migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;

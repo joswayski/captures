@@ -84,6 +84,23 @@ retained text through navigation and failure, offline retry, and clean exit in
 both appearances. Shared client tests cover HTTP success, cooldown and payload
 privacy against disposable loopback servers. Physical input/AT acceptance remains open.
 
+History → Edit screenshot opens a worker-owned crop/canvas/draft editor. Undo/redo,
+Save draft, confirmed Discard edits, and unsaved-close choices preserve the original
+capture and exports. Closing without saving preserves any older saved draft.
+Normal quit drains edits and saves dirty sessions; a save failure cancels quit and
+keeps the editor recoverable. Drafts live in `editor-drafts` beside the selected
+History root, never the installed Tauri data. Annotation tools and edited-image
+export are not connected yet. The same Windows/X11/Wayland host code is present;
+only private-X11/software-GL presentation has been exercised.
+
+Run `python apps/native/x11_editor_smoke.py --binary
+apps/native/wgpu/target/release/captures-wgpu-workbench --output editor-smoke
+--appearance light` (also run dark). It checks asymmetric crop/resize preview
+pixels, undo/redo, saved draft geometry and reopening, unsaved close, discard,
+filesystem save failure and cancelled quit, retry and clean exit. Screenshots
+include both appearances and minimum-size scroll/error states. This is not
+physical-desktop, accessibility, IME, or full editor parity acceptance.
+
 The candidate tests whether shared custom components are viable. It is not a
 retained widget renderer: egui rebuilds the visible UI on an event-driven repaint,
 while image textures remain resident until a scene closes. Static scenes request

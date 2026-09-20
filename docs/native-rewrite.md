@@ -355,24 +355,22 @@ crop, translation, canvas sizing, lossless D4 image orientation and 100-snapshot
 undo/redo semantics. TypeScript-generated vectors cover fractional/off-canvas
 geometry, hidden and locked layers, every orientation and history branching.
 Unknown document fields survive native operations, remaining compatible with the
-opaque version-1 draft manifest. No host UI or renderer is connected, so macOS,
-Windows, X11 and Wayland remain `not implemented` for native editor acceptance.
+opaque version-1 draft manifest. This prerequisite alone does not close a native
+editor acceptance gate; the first connected host slice is recorded below.
 
 The first shared editor-rendering unit converts visible image layers into the
 existing `captures-image` compositor using caller-supplied in-memory assets. It
 retains canvas background/alpha, clipping, order, opacity, six blend modes,
 lossless D4 bitmap orientation and arbitrary layer rotation while explicitly
 rejecting unsupported visible annotation layers and invalid or oversized inputs.
-It performs no host I/O and is not wired to AppKit or wgpu UI; macOS, Windows,
-X11 and Wayland native editor acceptance therefore remains `not implemented`.
+It performs no host I/O; host sessions supply the decoded assets.
 
 The closed-shape renderer follow-up adds rectangle, ellipse, triangle, diamond
 and star layers in shared stack order with shipping drag-box geometry, rounded
 rectangle corners, star proportions, authored rotation origin, fill/stroke
 defaults, opacity and blending. Visible text, line/arrow, freehand and drop-shadow
 content remains an explicit rendering error rather than disappearing. This is
-still shared-core preparation only: no host presentation is connected, and macOS,
-Windows, X11 and Wayland editor acceptance remains `not implemented`.
+shared rendering support, not native drawing-tool presentation or full acceptance.
 
 The shared editor-session boundary now opens isolated History screenshots and
 version-1 drafts, owns decoded image assets and snapshot history, and validates
@@ -385,8 +383,24 @@ reopened. Existing draft storage is atomic per file, not a multi-file transactio
 Image input bytes/dimensions and the aggregate decoded asset pixels are bounded;
 drafts cannot load arbitrary filesystem/network image sources. Visible unsupported
 annotations remain errors rather than silently missing output. This is the same
-host-independent implementation for macOS, Windows, X11 and Wayland; host UI and
-physical editor acceptance on all four remain `not implemented` / unverified.
+host-independent implementation for macOS, Windows, X11 and Wayland.
+
+The first wgpu editor window now opens isolated History screenshots on its own
+serialized worker, with fit preview, numeric crop/canvas fields, undo/redo,
+save draft and confirmed discard. Closing unsaved edits offers save, keep the last
+persisted draft without saving the new edits, or cancel. Normal quit drains queued
+edits and saves dirty sessions; failure cancels quit and focuses the recoverable
+editor. The original History PNG and exports remain unchanged. Live workspace and
+editor windows use persisted appearance without first visiting Preferences.
+`apps/native/x11_editor_smoke.py` checks real input, asymmetric crop/resize pixels,
+draft geometry/reopen, prior-draft preservation, discard, failed save/quit and
+successful quit retry in dark and light. Minimum-size error/scroll states are
+visually inspected. Unit tests cover queued edits and stale replies during close.
+Status: X11 verified on private software GL; Windows and Wayland use the same
+implemented host but remain presentation-unverified; AppKit presentation is in
+progress. Physical input/accessibility/IME acceptance remains open everywhere.
+Annotation tools, edited-image export and recording editing are not connected;
+the screenshot-editor parity gate stays open.
 
 New Capture connects its persisted shortcut, tray action and workspace entry to
 fixed-glass screenshot controls on both hosts. Region, Window and Full screen

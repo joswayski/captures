@@ -82,6 +82,12 @@ jobs:
       - name: Exercise native history deletion on private X11
         if: runner.os == 'Linux'
         run: python apps/native/x11_history_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-history
+      - name: Exercise screenshot editor pixels, drafts and save recovery on private X11
+        if: runner.os == 'Linux'
+        run: |
+          for appearance in dark light; do
+            /usr/bin/python3 apps/native/x11_editor_smoke.py --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-editor-$appearance"
+          done
       - name: Exercise real native mini previews on private X11
         if: runner.os == 'Linux'
         run: /usr/bin/python3 apps/native/x11_preview_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-preview --stack
@@ -105,6 +111,8 @@ jobs:
             native-x11-notice-dark
             native-x11-notice-light
             native-x11-history
+            native-x11-editor-dark
+            native-x11-editor-light
             native-x11-preview
             native-x11-lifecycle
           if-no-files-found: ignore
