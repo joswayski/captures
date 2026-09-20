@@ -691,7 +691,6 @@ dependencies = [
  "libc",
  "parking_lot",
  "png 0.17.16",
- "quantette",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -744,9 +743,12 @@ dependencies = [
 name = "captures-image"
 version = "0.1.0"
 dependencies = [
+ "captures-history",
  "fontdue",
  "image",
  "jpeg-encoder",
+ "png 0.17.16",
+ "quantette",
  "tiny-skia",
  "webp",
 ]

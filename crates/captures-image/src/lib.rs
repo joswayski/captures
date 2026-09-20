@@ -3,7 +3,14 @@
 //! owns neither editor state nor file/clipboard operations.
 
 mod encoding;
+mod export;
+mod png;
 pub use encoding::{composite_onto_white, encode_jpeg, encode_webp};
+pub use export::{ExportFormat, ExportOptions, ExportQuality, PngOptions, encode_export};
+pub use png::{
+    PNG_MAXIMUM_COLOR_STEPS, encode_png_export, encode_png_export_dithered,
+    png_palette_colors_for_quality,
+};
 
 use std::sync::Arc;
 
