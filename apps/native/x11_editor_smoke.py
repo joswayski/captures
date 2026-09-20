@@ -73,10 +73,10 @@ def main():
         time.sleep(.5)
         run("import", "-window", window, str(output / f"{name}.png"))
 
-    def pixel(name, x, y, expected):
+    def pixel(name, x, y, expected, tolerance=0):
         actual = run("convert", str(output / f"{name}.png"), "-crop", f"1x1+{x}+{y}",
                      "-depth", "8", "rgb:-")
-        assert actual == bytes(expected), (name, x, y, actual, expected)
+        assert len(actual) == 3 and all(abs(a - b) <= tolerance for a, b in zip(actual, expected)), (name, x, y, actual, expected)
 
     def wait(predicate, description):
         deadline = time.monotonic() + 20
@@ -132,7 +132,7 @@ def main():
             "auto_copy_to_clipboard": False, "show_mini_previews": False,
         }))
         app = spawn("app", [str(binary), "--live", "--history-root", str(history),
-                    "--settings-file", str(settings), "--quit-after", "240"])
+                    "--settings-file", str(settings), "--quit-after", "360"])
         root = wait(lambda: windows("Captures"), "History workspace")[0]
         run("xdotool", "windowmove", "--sync", root, "0", "0")
         time.sleep(1)
@@ -164,6 +164,103 @@ def main():
             click(editor, 170, 62)
             wait(lambda: saved(width, height, x, y), f"saved {width}x{height} at {x},{y}")
 
+        def close(window):
+            run("xdotool", "windowactivate", "--sync", window, "key", "alt+F4", "sleep", ".4")
+
+        def reopen():
+            click(root, 810, 191)
+            window = wait(lambda: windows("Screenshot editor"), "reopened editor")[0]
+            run("xdotool", "windowmove", "--sync", window, "100", "80")
+            time.sleep(.6)
+            return window
+
+        def layers():
+            return json.loads(draft.read_text())["document"]["elements"] if draft.exists() else []
+
+        def save_layers(predicate, description):
+            click(editor, 170, 62)
+            wait(lambda: predicate(layers()), description)
+            return layers()
+
+        click(editor, 463, 62)  # Layers, preserving the Geometry panel's scroll position.
+        shot(editor, "layers-original-locked")
+        click(editor, 47, 591)  # Duplicate the locked original, not delete or move it.
+        first = save_layers(lambda values: len(values) == 2, "duplicate original")
+        copy_id = first[1]["id"]
+        assert first[0]["locked"] and first[1]["visible"] and not first[1]["locked"]
+        assert (first[1]["x"], first[1]["y"]) == (24, 24)
+        assert first[0]["src"] == first[1]["src"]
+        long_name = "Layer with a deliberately long name to retain"
+        field(371, long_name)
+        click(editor, 182, 371)
+        save_layers(lambda values: values[-1]["name"] == long_name, "renamed image")
+        field(459, 190)
+        field(503, 70)
+        click(editor, 34, 547)
+        save_layers(lambda values: (values[-1]["x"], values[-1]["y"]) == (190, 70), "moved duplicate")
+        shot(editor, "layers-moved")
+        pixel("layers-moved", 591, 277, (229, 179, 68))
+        field(415, 50)
+        click(editor, 154, 415)
+        save_layers(lambda values: values[-1]["opacity"] == 50, "half opacity")
+        shot(editor, "layers-half-opacity")
+        pixel("layers-half-opacity", 591, 277, (134, 144, 117), tolerance=1)
+        click(editor, 15, 300)  # Hide the copy; the original blue pixel is restored.
+        save_layers(lambda values: not values[-1]["visible"], "hidden duplicate")
+        shot(editor, "layers-hidden")
+        pixel("layers-hidden", 591, 277, (40, 110, 166))
+        click(editor, 35, 62)  # Undo must restore the rendered half-opacity layer.
+        save_layers(lambda values: values[-1]["visible"], "undo visibility")
+        shot(editor, "layers-undo-visible")
+        pixel("layers-undo-visible", 591, 277, (134, 144, 117), tolerance=1)
+        click(editor, 79, 300)
+        save_layers(lambda values: values[-1]["locked"], "lock duplicate")
+        click(editor, 124, 591)  # Delete is disabled while locked.
+        save_layers(lambda values: len(values) == 2 and values[-1]["locked"], "locked layer retained")
+        shot(editor, "layers-locked")
+        click(editor, 79, 300)
+        save_layers(lambda values: not values[-1]["locked"], "unlock duplicate")
+        click(editor, 47, 591)
+        third = save_layers(lambda values: len(values) == 3, "second duplicate")[-1]["id"]
+        assert (layers()[-1]["x"], layers()[-1]["y"]) == (214, 94)
+        click(editor, 149, 547)  # Down: the third layer moves behind the first copy.
+        save_layers(lambda values: [value["id"] for value in values] == ["capture-background", third, copy_id], "reordered down")
+        shot(editor, "layers-reordered")
+        click(editor, 92, 547)
+        save_layers(lambda values: [value["id"] for value in values] == ["capture-background", copy_id, third], "reordered up")
+        click(editor, 124, 591)
+        save_layers(lambda values: len(values) == 2 and values[-1]["id"] == copy_id, "deleted selected copy")
+        click(editor, 35, 62)
+        save_layers(lambda values: len(values) == 3, "undo deletion")
+        click(editor, 98, 62)
+        save_layers(lambda values: len(values) == 2, "redo deletion")
+        close(editor)
+        wait(lambda: not windows("Screenshot editor"), "saved layers close")
+        editor = reopen()
+        click(editor, 463, 62)
+        shot(editor, "layers-reopened")
+        pixel("layers-reopened", 591, 277, (134, 144, 117), tolerance=1)
+        assert layers()[-1]["name"] == long_name
+        run("xdotool", "windowsize", "--sync", editor, "760", "540")
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "8", "5")
+        shot(editor, "layers-small-scrolled")
+        run("xdotool", "windowsize", "--sync", editor, "1000", "700")
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "12", "4")
+        click(editor, 100, 202)  # Select and explicitly unlock the original.
+        click(editor, 79, 300)
+        save_layers(lambda values: not values[0]["locked"], "unlock original")
+        click(editor, 124, 591)
+        save_layers(lambda values: [value["id"] for value in values] == [copy_id], "delete original layer")
+        click(editor, 124, 591)
+        save_layers(lambda values: len(values) == 0, "empty saved document")
+        shot(editor, "layers-empty")
+        click(editor, 35, 62)
+        save_layers(lambda values: [value["id"] for value in values] == [copy_id], "undo empty document")
+        click(editor, 275, 62)
+        click(editor, 55, 128)
+        wait(lambda: not draft.exists(), "discard layer edits")
+        click(editor, 398, 62)  # Geometry has an independent scroll position.
+
         for y, value in ((159, 40), (203, 30), (247, 360), (291, 240)):
             field(y, value)
         click(editor, 50, 335)
@@ -181,16 +278,6 @@ def main():
         save(480, 300, -40, -30)
         shot(editor, "editor-resized")
         pixel("editor-resized", 900, 400, (46, 158, 113))
-
-        def close(window):
-            run("xdotool", "windowactivate", "--sync", window, "key", "alt+F4", "sleep", ".4")
-
-        def reopen():
-            click(root, 810, 191)
-            window = wait(lambda: windows("Screenshot editor"), "reopened editor")[0]
-            run("xdotool", "windowmove", "--sync", window, "100", "80")
-            time.sleep(.6)
-            return window
 
         close(editor)
         wait(lambda: not windows("Screenshot editor"), "saved editor closes")
@@ -236,10 +323,13 @@ def main():
         (output / "result.json").write_text(json.dumps({
             "passed": True, "appearance": args.appearance,
             "checks": ["crop", "canvas", "undo-redo", "draft-reopen", "close-preserves-draft",
-                       "explicit-discard", "save-error", "quit-error-retry", "original-unchanged"],
+                       "explicit-discard", "save-error", "quit-error-retry", "original-unchanged",
+                       "layer-duplicate-rename-move", "layer-opacity-visibility-pixels",
+                       "layer-lock-order-delete", "layer-draft-reopen", "layer-undo-redo",
+                       "layer-empty-undo"],
             "originalSha256": hashlib.sha256(original).hexdigest(),
         }, indent=2) + "\n")
-        print("PASS native editor: crop, canvas, undo/redo, draft reopen, close/discard, save/quit recovery, original unchanged")
+        print("PASS native editor: layers, crop, canvas, undo/redo, draft reopen, close/discard, save/quit recovery, original unchanged")
     finally:
         for child in reversed(children):
             if child.poll() is None:
