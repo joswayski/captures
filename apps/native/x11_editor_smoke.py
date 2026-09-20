@@ -24,14 +24,14 @@ from gi.repository import GLib
 from x11_capture_smoke import ScreenSaver
 
 
-class FolderRequest(dbus.service.Object):
+class FileRequest(dbus.service.Object):
     @dbus.service.signal("org.freedesktop.portal.Request", signature="ua{sv}")
     def Response(self, code, results):
         pass
 
 
-class FolderChooser(dbus.service.Object):
-    """Disposable portal transport fixture; this is not a real desktop dialog."""
+class FileChooser(dbus.service.Object):
+    """Disposable file/folder portal transport fixture, not a physical dialog."""
 
     def __init__(self, bus, selected):
         self.name = dbus.service.BusName("org.freedesktop.portal.Desktop", bus=bus)
@@ -49,10 +49,9 @@ class FolderChooser(dbus.service.Object):
                          out_signature="o", sender_keyword="sender")
     def OpenFile(self, parent, title, options, sender):
         self.calls.append((title, options))
-        token = options["handle_token"]
         owner = sender.removeprefix(":").replace(".", "_")
-        path = f"/org/freedesktop/portal/desktop/request/{owner}/{token}"
-        request = FolderRequest(self.name, path)
+        path = f"/org/freedesktop/portal/desktop/request/{owner}/{options['handle_token']}"
+        request = FileRequest(self.name, path)
         self.requests.append(request)
         self.pending = request
         return dbus.ObjectPath(path)
@@ -146,7 +145,8 @@ def main():
         bus = dbus.bus.BusConnection(address)
         name = dbus.service.BusName("org.freedesktop.ScreenSaver", bus=bus, do_not_queue=True)
         saver = ScreenSaver(name, "/org/freedesktop/ScreenSaver")
-        chooser = FolderChooser(bus, output / "exports")
+        imported_path = output / "Imported sample é.png"
+        chooser = FileChooser(bus, imported_path)
         loop = GLib.MainLoop()
         thread = threading.Thread(target=loop.run, daemon=True)
         thread.start()
@@ -206,11 +206,15 @@ def main():
 
         def save_until(predicate, description):
             def attempt():
-                # Save is idempotent. X11 can still expose the previous idle title
-                # while an edit is queued, so an early Save click may be disabled.
+                # Save is idempotent; an edit can still be queued while X11
+                # exposes the prior idle title. Never retry a non-idempotent edit.
                 click(editor, 170, 62)
                 return predicate()
             wait(attempt, description)
+            # The manifest is written before the worker's UI snapshot arrives.
+            # Do not type into fields that that snapshot is about to repopulate.
+            wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+                 "saved snapshot presented")
 
         def save(width, height, x, y):
             save_until(lambda: saved(width, height, x, y), f"saved {width}x{height} at {x},{y}")
@@ -231,6 +235,91 @@ def main():
         def save_layers(predicate, description):
             save_until(lambda: predicate(layers()), description)
             return layers()
+
+        # These synthetic hex colors are sRGB. Keep the fixture untagged rather
+        # than ImageMagick's gamma/chromaticity-only PNG; profiles have unit coverage.
+        run("convert", "-size", "120x80", "xc:#d53e55", "-fill", "#3cb371",
+            "-draw", "rectangle 10,9 39,29", "-fill", "#2d64bd",
+            "-draw", "rectangle 88,51 119,79", "-strip", "PNG32:" + str(imported_path))
+        imported_bytes = imported_path.read_bytes()
+        click(editor, 640, 62)
+        wait(lambda: chooser.pending, "image file picker opened")
+        title, options = chooser.calls[-1]
+        assert title == "Import image" and not options.get("directory", False)
+        assert not options.get("multiple", False)
+        shot(editor, "import-picker-pending")
+        save(640, 360, 0, 0)  # A waiting picker must not occupy the session worker.
+        before_import = draft.read_bytes()
+        GLib.idle_add(chooser.respond, True)
+        time.sleep(.4)
+        assert draft.read_bytes() == before_import
+
+        invalid = output / "broken.png"
+        invalid.write_text("not an image")
+        chooser.selected = invalid
+        click(editor, 640, 62)
+        wait(lambda: chooser.pending, "picker after cancellation")
+        GLib.idle_add(chooser.respond, False)
+        time.sleep(.8)
+        shot(editor, "import-decode-error")
+        assert draft.read_bytes() == before_import
+        chooser.selected = imported_path
+        click(editor, 640, 62)
+        wait(lambda: chooser.pending, "retry import")
+        GLib.idle_add(chooser.respond, False)
+        imported_layers = save_layers(lambda values: len(values) == 2, "imported owned layer")
+        imported_layer = imported_layers[-1]
+        imported_id = imported_layer["id"]
+        assert (imported_layer["name"], imported_layer["x"], imported_layer["y"],
+                imported_layer["width"], imported_layer["height"]) == (imported_path.name, 260, 360, 120, 80)
+        assert imported_layer["source"] == "imported" and imported_layer["src"].startswith("draft-asset:")
+        assert not imported_layer["locked"] and imported_layer["visible"] and imported_layer["opacity"] == 100
+        assert saved(640, 440, 0, 0)
+        shot(editor, "imported-canvas")
+        pixel("imported-canvas", 568, 537, (60, 179, 113))
+        pixel("imported-canvas", 674, 584, (45, 100, 189))
+        click(editor, 463, 62)
+        shot(editor, "imported-selected-layer")
+        click(editor, 78, 371)
+        run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
+        assert run("xclip", "-selection", "clipboard", "-o").decode() == imported_path.name
+        run("xdotool", "key", "Escape")  # The single-line name field scrolls; its value is intact.
+        run("xdotool", "windowsize", "--sync", editor, "760", "540")
+        shot(editor, "imported-minimum")
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "8", "5")
+        shot(editor, "imported-minimum-scrolled")
+        run("xdotool", "windowsize", "--sync", editor, "1000", "700")
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "12", "4")
+        assert imported_path.read_bytes() == imported_bytes
+        imported_path.unlink()  # A saved import must no longer depend on its source file.
+        click(editor, 35, 62)
+        save(640, 360, 0, 0)
+        assert len(layers()) == 1
+        click(editor, 98, 62)
+        save(640, 440, 0, 0)
+        assert layers()[-1]["id"] == imported_id
+        close(editor)
+        wait(lambda: not windows("Screenshot editor"), "imported draft closes")
+        editor = reopen()
+        shot(editor, "imported-reopened")
+        pixel("imported-reopened", 568, 537, (60, 179, 113))
+        assert layers()[-1]["id"] == imported_id
+        assert saved(640, 440, 0, 0)
+        # Discard returns to the original capture, without deleting exports or source data.
+        click(editor, 275, 62)
+        click(editor, 55, 128)
+        wait(lambda: not draft.exists(), "discard imported draft")
+        chooser.selected = artifact / "capture.png"
+        click(editor, 640, 62)
+        wait(lambda: chooser.pending, "picker before close")
+        close(editor)
+        wait(lambda: not windows("Screenshot editor"), "picker does not prevent closing")
+        editor = reopen()
+        GLib.idle_add(chooser.respond, False)  # Late result belongs to the old editor only.
+        time.sleep(.5)
+        save(640, 360, 0, 0)
+        assert len(layers()) == 1
+        assert (artifact / "capture.png").read_bytes() == original
 
         click(editor, 463, 62)  # Layers, preserving the Geometry panel's scroll position.
         shot(editor, "layers-original-locked")
@@ -437,6 +526,8 @@ def main():
         initial_directory = output / "unchosen folder"
         initial_directory.mkdir()
         exported.parent.mkdir()
+        chooser.selected = exported.parent
+        chooser.calls.clear()
         field(618, initial_directory / exported.name)
         click(editor, 149, 584)
         wait(lambda: len(chooser.calls) == 1, "folder dialog cancellation")
@@ -558,6 +649,8 @@ def main():
         (output / "result.json").write_text(json.dumps({
             "passed": True, "appearance": args.appearance,
             "checks": ["crop", "canvas", "undo-redo", "draft-reopen", "close-preserves-draft",
+                       "image-picker-pending-cancel-retry", "image-import-exact-pixels",
+                       "image-import-owned-draft-reopen", "image-picker-stale-close-result",
                        "explicit-discard", "save-error", "quit-error-retry", "original-unchanged",
                        "layer-duplicate-rename-move", "layer-opacity-visibility-pixels",
                        "layer-lock-order-delete", "layer-draft-reopen", "layer-undo-redo",

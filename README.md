@@ -260,7 +260,8 @@ the shipping TypeScript behavior. A shared renderer now flattens real image laye
 and editor shapes, including closed annotations, curved lines, tapered arrows and
 freehand paths with crop geometry, rotation, opacity and blending, without host I/O.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
-resize/lossless image transforms/undo, and retained pixel frames for native hosts.
+resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
+pixel frames for native hosts.
 Full-canvas photos rotate their canvas; layered overhang stays clipped and fully
 off-canvas transformed images expand the canvas so they are not lost.
 The Windows/Linux candidate opens screenshots from History in a native crop,
@@ -268,6 +269,11 @@ canvas-size and draft editor with undo/redo. Its layer panel supports selection,
 visibility, locking, opacity, renaming, position, duplication, deletion and ordering.
 Image layers also expose lossless left/right rotations and horizontal/vertical
 flips, including when hidden or locked; each action supports undo and draft restore.
+**Import image** adds one PNG, JPEG, WebP or TIFF below the selected visible image,
+expanding the canvas when needed. Imports respect EXIF orientation, are undoable,
+and keep their own draft pixels so reopening does not require the source file.
+Supported RGB/grayscale ICC profiles convert to sRGB; unsupported profiles and
+PNG gamma/chromaticity-only or CICP metadata require conversion to sRGB first.
 Its Output panel previews PNG/JPEG/WebP quality and size limits, reports encoded
 bytes, and switches between the edited canvas and encoded output without saving.
 **Save new copy** exports to an editable destination path without replacing an
@@ -284,7 +290,8 @@ original. Failed draft saves keep edits open and cancel normal quit. Private-X11
 cover both appearances, persisted drafts, real preview pixels and error recovery.
 AppKit now connects the same crop, canvas-resize and draft operations in its own
 window. Windows, Wayland and physical AppKit presentation remain unverified.
-AppKit image-transform controls, text, annotation shadows, annotation tools,
+AppKit image-transform/import controls, batch/drag-and-drop import, text, annotation
+shadows, annotation tools,
 overwrite-original, AppKit edited-image clipboard/file output,
 and recording editing remain unconnected. These connected controls and shared
 rendering/export support do not complete native editor acceptance. OS shortcut

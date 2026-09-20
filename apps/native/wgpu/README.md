@@ -90,6 +90,16 @@ capture and exports. Closing without saving preserves any older saved draft.
 The Layers panel selects front-to-back layers and connects visibility, locking,
 image rename, opacity, X/Y movement, duplicate, delete and adjacent ordering.
 Shared Rust preserves locked boundaries and makes every accepted edit undoable.
+Import image opens a single-file PNG/JPEG/WebP/TIFF picker without blocking draft
+saves or close. The worker bounds and decodes the file, honors EXIF orientation,
+then imports below the selected visible image using shared placement/expansion.
+Undo/redo and saved drafts own the imported pixels; the external file is never
+modified and is not needed after draft saving. Cancel and failed imports leave
+the document unchanged. Batch/drag-and-drop and other formats remain open.
+RGB/grayscale ICC imports convert to sRGB with straight alpha preserved; untagged
+images assume sRGB. Unsupported/malformed ICC profiles (including CMYK), PNG
+gamma/chromaticity-only metadata and CICP return recoverable errors asking for an
+sRGB conversion first. Import normalizes to 8-bit RGBA, not HDR/wide-gamut editing.
 The Output panel offers PNG/JPEG/WebP, Preserve/Compress/Maximum quality, custom
 PNG palette sizes and an optional hard byte limit. Preview output runs the real
 shared encoder and decoder on the worker, reports the exact byte count, and
