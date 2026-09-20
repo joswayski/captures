@@ -341,6 +341,17 @@ impl Workbench {
         if self.quitting {
             return;
         }
+        if let Some(live) = &self.live
+            && let Err(error) = live.flush_editors(ctx)
+        {
+            self.action_error = Some(format!(
+                "Quit cancelled: screenshot edits could not be saved: {error}"
+            ));
+            // The failing editor focuses its recoverable session. Do not raise
+            // the root over that window and hide its save error.
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            return;
+        }
         self.quitting = true;
         self.preferences_state.flush();
         if let Some(live) = &mut self.live {
@@ -422,7 +433,7 @@ impl Workbench {
     }
 
     fn tokens(&mut self, ctx: &egui::Context) -> Tokens {
-        if self.options.scene == Scene::Preferences
+        if (self.options.live || self.options.scene == Scene::Preferences)
             && let Some((appearance, theme)) = self.preferences_state.appearance_theme()
         {
             self.options.appearance = appearance;
@@ -848,6 +859,16 @@ impl eframe::App for Workbench {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             self.root_hidden = true;
+        }
+        if self.options.live
+            && self.tray.is_none()
+            && !self.quitting
+            && ctx.input(|input| input.viewport().close_requested())
+        {
+            // A tray-less root close is also a normal quit: flush editor drafts
+            // before eframe destroys windows, and keep them open on failure.
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.quit(ctx);
         }
         let root_focused = ctx.input(|input| input.viewport().focused.unwrap_or(false));
         if root_focused

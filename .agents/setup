@@ -32,6 +32,7 @@ packages=(
   libwebkit2gtk-4.1-dev
   libxcb1-dev
   libxdo-dev
+  libxkbcommon-x11-0
   libxrandr-dev
   nasm
   openbox
