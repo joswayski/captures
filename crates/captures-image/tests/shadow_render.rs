@@ -88,6 +88,17 @@ fn reference_cases() -> Vec<ReferenceCase> {
     }
     vec![
         ReferenceCase {
+            name: "zero-blur-crisp-only",
+            document: solid_document(96, 72, [0, 0, 0, 0], zero_blur.clone()),
+            shadow: DropShadow {
+                color: [30, 190, 88, 0],
+                blur: 0.0,
+                offset_x: 9.0,
+                offset_y: -5.0,
+            },
+            expected: include_bytes!("fixtures/shadows/zero-blur-crisp-only.png"),
+        },
+        ReferenceCase {
             name: "zero-blur-fill-stroke",
             document: solid_document(96, 72, [0, 0, 0, 0], zero_blur),
             shadow: DropShadow {
@@ -147,11 +158,14 @@ fn shadows_track_chromium_canvas_references() {
         let actual =
             render_with_shadows(&case.document, &BTreeMap::from([(7, case.shadow)])).unwrap();
         assert_eq!(actual.dimensions(), expected.dimensions(), "{}", case.name);
+        let expected_width = expected.width();
 
         let mut total_difference = 0_u64;
         let mut maximum_difference = 0_u8;
+        let mut maximum_location = (0_u32, 0_u32, 0_usize);
         let mut changed_channels = 0_u64;
-        for (actual, expected) in actual.pixels().zip(expected.pixels()) {
+        for (pixel_index, (actual, expected)) in actual.pixels().zip(expected.pixels()).enumerate()
+        {
             let actual = [
                 (u16::from(actual[0]) * u16::from(actual[3]) / 255) as u8,
                 (u16::from(actual[1]) * u16::from(actual[3]) / 255) as u8,
@@ -164,16 +178,23 @@ fn shadows_track_chromium_canvas_references() {
                 (u16::from(expected[2]) * u16::from(expected[3]) / 255) as u8,
                 expected[3],
             ];
-            for (actual, expected) in actual.into_iter().zip(expected) {
+            for (channel, (actual, expected)) in actual.into_iter().zip(expected).enumerate() {
                 let difference = actual.abs_diff(expected);
                 total_difference += u64::from(difference);
-                maximum_difference = maximum_difference.max(difference);
+                if difference > maximum_difference {
+                    maximum_difference = difference;
+                    maximum_location = (
+                        pixel_index as u32 % expected_width,
+                        pixel_index as u32 / expected_width,
+                        channel,
+                    );
+                }
                 changed_channels += u64::from(difference != 0);
             }
         }
         let mean_difference = total_difference as f64 / actual.as_raw().len() as f64;
         eprintln!(
-            "{}: mean={mean_difference:.4}, max={maximum_difference}, changed={changed_channels}/{}",
+            "{}: mean={mean_difference:.4}, max={maximum_difference} at {maximum_location:?}, changed={changed_channels}/{}",
             case.name,
             actual.as_raw().len()
         );

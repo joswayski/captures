@@ -137,8 +137,11 @@ fn drop_shadow(style: &ElementStyle) -> DropShadow {
 
 fn parse_shadow_color(value: &str) -> Option<[u8; 3]> {
     let raw = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    if !raw.is_ascii() {
+        return None;
+    }
     let expanded;
-    let hex = if raw.len() == 3 && raw.is_ascii() {
+    let hex = if raw.len() == 3 {
         expanded = raw
             .chars()
             .flat_map(|character| [character, character])
@@ -1090,6 +1093,8 @@ mod tests {
         );
 
         style.drop_shadow_style.as_mut().unwrap().color = "invalid".into();
+        assert_eq!(drop_shadow(&style).color[..3], [0, 0, 0]);
+        style.drop_shadow_style.as_mut().unwrap().color = "#AéBCD".into();
         assert_eq!(drop_shadow(&style).color[..3], [0, 0, 0]);
     }
 

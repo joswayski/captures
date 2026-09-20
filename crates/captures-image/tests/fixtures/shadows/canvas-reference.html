@@ -51,6 +51,15 @@
     });
   });
 
+  make("zero-blur-crisp-only", 96, 72, (context) => {
+    shadowRectangle(context, {
+      x: 22, y: 18, width: 42, height: 27, radius: 5,
+      fill: "rgba(235,53,91,0.63)", stroke: "rgba(24,99,220,0.78)", lineWidth: 7,
+      opacity: 0.71, blend: "source-over",
+      shadowColor: "rgba(30,190,88,0)", blur: 0, offsetX: 9, offsetY: -5,
+    });
+  });
+
   make("rotated-blurred-multiply", 112, 88, (context) => {
     context.fillStyle = "rgb(207,181,144)";
     context.fillRect(0, 0, 112, 88);
