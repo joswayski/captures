@@ -310,6 +310,14 @@ Unknown document fields survive native operations, remaining compatible with the
 opaque version-1 draft manifest. No host UI or renderer is connected, so macOS,
 Windows, X11 and Wayland remain `not implemented` for native editor acceptance.
 
+The first shared editor-rendering unit converts visible image layers into the
+existing `captures-image` compositor using caller-supplied in-memory assets. It
+retains canvas background/alpha, clipping, order, opacity, six blend modes,
+lossless D4 bitmap orientation and arbitrary layer rotation while explicitly
+rejecting unsupported visible annotation layers and invalid or oversized inputs.
+It performs no host I/O and is not wired to AppKit or wgpu UI; macOS, Windows,
+X11 and Wayland native editor acceptance therefore remains `not implemented`.
+
 New Capture connects its persisted shortcut, tray action and workspace entry to
 fixed-glass screenshot controls on both hosts. Region, Window and Full screen
 share one prepared Rust session and desktop snapshot, retaining selections across

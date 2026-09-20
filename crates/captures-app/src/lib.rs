@@ -3,6 +3,7 @@
 
 pub mod capture_flow;
 pub mod editor;
+pub mod editor_render;
 pub mod preview;
 pub mod region;
 pub mod selection;
