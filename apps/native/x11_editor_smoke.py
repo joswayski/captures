@@ -88,6 +88,8 @@ def main():
         raise AssertionError(f"Timed out: {description}")
 
     def click(window, x, y):
+        wait(lambda: "Working…" not in run("xdotool", "getwindowname", window).decode(),
+             "window ready for input")
         run("xdotool", "windowactivate", "--sync", window, "windowfocus", "--sync", window,
             "sleep", ".2",
             "mousemove", "--sync", "--window", window, str(x - 1), str(y),
@@ -323,6 +325,50 @@ def main():
         pixel("output-retry", 900, 400, (46, 158, 113))
         assert draft.read_bytes() == saved_draft, "preview must not write a draft"
         assert not (output / "exports").exists(), "preview must not publish files"
+
+        exported = output / "exports" / "edited.webp"
+        field(602, exported)
+        click(editor, 65, 641)
+        wait(exported.exists, "new edited copy published")
+        metadata = wait(lambda: [path for path in history.glob("*/metadata.json")
+                               if path.parent != artifact], "new export in History")
+        assert len(metadata) == 1
+        entry = json.loads(metadata[0].read_text())
+        assert (entry["width"], entry["height"], entry["mode"]) == (480, 300, "region")
+        assert entry["saved_path"] == str(exported) and entry["mime_type"] == "image/webp"
+        exported_bytes = exported.read_bytes()
+        assert entry["size_bytes"] == len(exported_bytes)
+        for path in (exported, metadata[0].parent / "capture.png"):
+            assert run("identify", "-format", "%wx%h", str(path)) == b"480x300"
+            assert run("convert", str(path), "-crop", "1x1+450+250", "-depth", "8", "rgb:-") == bytes((46, 158, 113))
+        assert draft.read_bytes() == saved_draft, "export must not save the draft"
+        shot(root, "export-history-refreshed")
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "12", "5")
+        shot(editor, "export-saved-scrolled")
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "4")
+        click(editor, 65, 641)  # Same filename must fail rather than replace.
+        shot(editor, "export-collision")
+        assert exported.read_bytes() == exported_bytes
+        assert len(list(history.glob("*/metadata.json"))) == 2
+
+        # Retry after a real History failure must report the successfully saved file.
+        history.rename(output / "previous-history")
+        history.write_text("blocks History creation")
+        recovered = output / "exports" / "recovered.webp"
+        field(629, recovered)  # The collision error adds 27px above the panel.
+        click(editor, 65, 668)
+        wait(recovered.exists, "file saved despite unavailable History")
+        assert recovered.read_bytes() == exported_bytes
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "5")
+        shot(editor, "export-history-warning-scrolled")
+        run("xdotool", "windowsize", "--sync", editor, "760", "540")
+        run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "20", "5")
+        shot(editor, "export-history-warning-minimum")
+        run("xdotool", "windowsize", "--sync", editor, "1000", "700")
+        history.unlink()
+        (output / "previous-history").rename(history)
+        assert draft.read_bytes() == saved_draft
+        assert (artifact / "capture.png").read_bytes() == original
         click(editor, 398, 62)  # Geometry restores its own scroll position.
 
         close(editor)
@@ -374,7 +420,8 @@ def main():
                        "layer-lock-order-delete", "layer-draft-reopen", "layer-undo-redo",
                        "layer-empty-undo", "output-png-jpeg-webp", "output-comparison",
                        "output-budget-error-retry", "output-no-draft-or-file-write",
-                       "output-png-palette-minimum-scroll"],
+                       "output-png-palette-minimum-scroll", "export-new-copy-history",
+                       "export-collision-original-protection", "export-history-warning-recovery"],
             "originalSha256": hashlib.sha256(original).hexdigest(),
         }, indent=2) + "\n")
         print("PASS native editor: layers, crop, canvas, undo/redo, draft reopen, close/discard, save/quit recovery, original unchanged")

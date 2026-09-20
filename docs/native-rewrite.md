@@ -36,8 +36,8 @@ with those flows; its tests retain both screenshot-child and saved-notice covera
 Superseded parent PRs may be closed rather than separately merged because the
 repository uses squash merges. Their functionality must not be counted as missing.
 
-Next implementation boundary: connect shared image transforms and export policy to
-editor controls in both AppKit and wgpu. Shared commands and encoding are
+Next implementation boundary: connect shared image transforms to both editor hosts
+and edited-image export controls to AppKit. Shared commands and encoding remain
 prerequisites, not native editor/output acceptance.
 Native live capture on Wayland remains explicitly
 gated; no stub or X11 result closes that platform gate. Merging development slices
@@ -400,10 +400,16 @@ WebP quality and hard-byte-budget policy. The C ABI returns independently owned
 encoded bytes, borrowed through an explicit pointer/length view and released
 separately from the session. Options and result metadata use JSON; image bytes
 never do. Encoding success or failure leaves document, undo/redo, draft dirty
-state and original History files unchanged. Hosts still own save dialogs, file
-publication, overwrite and clipboard behavior. This shared prerequisite is
-unit-verified in the Linux orb; it does not connect native export controls or
-complete macOS, Windows, X11 or Wayland output/physical acceptance.
+state and original History files unchanged. Shared Rust can also publish a new
+edited-file copy without clobbering an existing destination, then add a distinct
+lossless History artifact; a post-publication History failure retains the saved
+path for recovery. `captures_editor_save_new_v1` exposes this on the serialized
+session worker with tagged result JSON and no pixel transport; null/invalid
+inputs, collisions and partial success are covered without changing draft state.
+Hosts still own save dialogs, overwrite-original confirmation
+and clipboard behavior. These shared prerequisites are unit-verified in the Linux
+orb; they do not connect native export controls or complete macOS, Windows, X11
+or Wayland output/physical acceptance.
 
 Shared layer commands now cover visibility, locking, opacity, movement, deletion,
 duplication, image renaming, ordering and the four lossless image transforms through
@@ -449,8 +455,13 @@ the edited canvas and decoded output. Edits and option changes invalidate the
 previous comparison; encoding failures retain recoverable edits and allow retry.
 Preview never writes files or saves a draft. The same Windows/X11/Wayland host
 code is implemented; private-X11 and unit checks do not establish physical-host
-acceptance. AppKit output controls and edited-file save/clipboard remain separate
-parity work.
+acceptance. Its **Save new copy** action runs shared publication on the same worker,
+starts in the configured output directory and accepts an editable full path.
+It never replaces existing files; successful exports add a distinct History entry
+without modifying the original or draft. A post-publication History failure shows
+the saved path and warning. Accepted writes drain before application quit.
+Native save dialogs, overwrite-original and clipboard remain separate work, as
+do AppKit export controls and physical-platform acceptance.
 
 The AppKit editor host now enables **Edit screenshot** only for screenshot History
 entries. Its dedicated serialized worker owns the shared Rust session and publishes
@@ -465,8 +476,8 @@ failure/close behavior and rendered light/dark fixtures. Physical AppKit input,
 accessibility and IME acceptance remain unverified.
 
 Across both hosts, physical input/accessibility/IME acceptance remains open.
-Annotation tools, edited-image export and recording editing are not connected;
-the screenshot-editor parity gate stays open.
+Image-transform controls, annotation tools, AppKit edited-image export and recording
+editing are not connected; the screenshot-editor parity gate stays open.
 
 New Capture connects its persisted shortcut, tray action and workspace entry to
 fixed-glass screenshot controls on both hosts. Region, Window and Full screen
