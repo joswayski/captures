@@ -133,6 +133,18 @@ pub struct OpenShapeCreate {
     pub opacity: f64,
 }
 
+/// Inputs for one completed freehand gesture. Hosts own pointer sampling and
+/// cancellation and submit the accepted document-space samples in order.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FreehandPathCreate {
+    pub points: Vec<Point>,
+    #[serde(default)]
+    pub style: ElementStyle,
+    #[serde(default = "default_opacity")]
+    pub opacity: f64,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Document {
@@ -825,6 +837,65 @@ impl Document {
         Ok(id)
     }
 
+    /// Append one completed freehand path using the shipping editor's layer
+    /// defaults and fully-outside painted-bounds expansion policy.
+    pub fn create_freehand_path(&mut self, create: FreehandPathCreate) -> Result<String, String> {
+        let Some(first) = create.points.first().copied() else {
+            return Err("Freehand paths require at least one point.".into());
+        };
+        if !create.points.iter().all(|point| {
+            point.x.is_finite()
+                && point.y.is_finite()
+                && (point.x as f32).is_finite()
+                && (point.y as f32).is_finite()
+        }) {
+            return Err("Freehand path coordinates must be finite renderer values.".into());
+        }
+        if !create.opacity.is_finite() || !(0. ..=100.).contains(&create.opacity) {
+            return Err("Path opacity must be between 0 and 100.".into());
+        }
+        if !create.style.stroke_width.is_finite()
+            || !(create.style.stroke_width as f32).is_finite()
+            || create.style.stroke_width <= 0.
+        {
+            return Err("Path stroke width must be finite and positive.".into());
+        }
+
+        let id = loop {
+            let candidate = uuid::Uuid::new_v4().to_string();
+            if !self
+                .elements
+                .iter()
+                .any(|element| element.base().id == candidate)
+            {
+                break candidate;
+            }
+        };
+        let mut style = create.style;
+        style.fill = None;
+        let element = PathElement {
+            base: ElementBase {
+                id: id.clone(),
+                x: first.x,
+                y: first.y,
+                rotation: None,
+                locked: false,
+                visible: true,
+                opacity: create.opacity,
+                blend_mode: "source-over".into(),
+            },
+            points: create.points,
+            style,
+            extra: Map::new(),
+        };
+        let bounds = freehand_path_bounds(&element);
+        self.elements.push(Element::Path(element));
+        if fully_outside_canvas(bounds, self.width, self.height) {
+            self.expand_canvas_to_bounds(bounds);
+        }
+        Ok(id)
+    }
+
     pub fn crop(&mut self, crop: Rect) {
         let x = clamp(crop.x.round(), 0., (self.width - 1.).max(0.));
         let y = clamp(crop.y.round(), 0., (self.height - 1.).max(0.));
@@ -1039,6 +1110,11 @@ fn open_shape_bounds(shape: &ShapeElement) -> Rect {
     )
 }
 
+fn freehand_path_bounds(path: &PathElement) -> Rect {
+    let padding = path.style.stroke_width.max(4.) + annotation_drop_shadow_pad(&path.style);
+    bounds_from_points(&path.points, padding)
+}
+
 fn bounds_from_points(points: &[Point], padding: f64) -> Rect {
     let first = points[0];
     let (mut left, mut top, mut right, mut bottom) = (first.x, first.y, first.x, first.y);
@@ -1055,6 +1131,26 @@ fn bounds_from_points(points: &[Point], padding: f64) -> Rect {
         width: (right - left).max(1.) + padding * 2.,
         height: (bottom - top).max(1.) + padding * 2.,
     }
+}
+
+/// Sample the exact midpoint-quadratic centerline used to render a freehand
+/// path. Native hosts use this for transient previews from accepted samples.
+#[must_use]
+pub fn smooth_path_centerline(points: &[Point]) -> Vec<Point> {
+    let points = points
+        .iter()
+        .map(|point| captures_image::Point {
+            x: point.x as f32,
+            y: point.y as f32,
+        })
+        .collect::<Vec<_>>();
+    captures_image::smooth_path_samples(&points)
+        .into_iter()
+        .map(|point| Point {
+            x: f64::from(point.x),
+            y: f64::from(point.y),
+        })
+        .collect()
 }
 
 /// Shipping tapered-arrow outline in document coordinates. Native hosts use

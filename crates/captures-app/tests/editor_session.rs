@@ -1040,6 +1040,184 @@ fn open_shape_json_creation_renders_expands_and_restores_draft_history() {
 }
 
 #[test]
+fn freehand_json_creation_renders_expands_and_restores_draft_history() {
+    let (data, id, _) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    let mut document = editor.snapshot().document.clone();
+    document.width = 40.;
+    document.height = 30.;
+    document.background = None;
+    document
+        .extra
+        .insert("futureDocument".into(), json!({"keep": "freehand-create"}));
+    let Element::Image(background) = &mut document.elements[0] else {
+        panic!()
+    };
+    background.base.visible = false;
+    background
+        .extra
+        .insert("futureImage".into(), json!({"keep": [5, 2]}));
+    editor.execute(Request::Commit { document }).unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 1 })
+        .unwrap();
+    let manifest_path = data.path().join("drafts").join(&id).join("manifest.json");
+    let baseline_manifest = fs::read(&manifest_path).unwrap();
+    let baseline = editor.snapshot().document.clone();
+
+    let dot: Request = serde_json::from_value(json!({
+        "operation": "create_freehand_path",
+        "points": [{"x": 5.25, "y": 4.75}]
+    }))
+    .unwrap();
+    editor.execute(dot).unwrap();
+    let dot_document = editor.snapshot().document.clone();
+    let Element::Path(path) = dot_document.elements.last().unwrap() else {
+        panic!()
+    };
+    assert!(!path.base.id.is_empty());
+    assert_eq!((path.base.x, path.base.y), (5.25, 4.75));
+    assert_eq!(path.points, vec![Point { x: 5.25, y: 4.75 }]);
+    assert_eq!(path.style.fill, None);
+    assert!(!path.base.locked && path.base.visible);
+    assert_eq!(path.base.opacity, 100.);
+    assert_eq!(path.base.blend_mode, "source-over");
+    assert_eq!(editor.pixels().get_pixel(5, 5).0, [255, 59, 92, 255]);
+
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.snapshot().document, &baseline);
+    assert!(editor.snapshot().can_redo);
+    let before_failure = serde_json::to_value(editor.snapshot()).unwrap();
+    let retained_frame = editor.pixels();
+    for invalid in [
+        json!({"operation": "create_freehand_path", "points": []}),
+        json!({
+            "operation": "create_freehand_path",
+            "points": [{"x": 2, "y": 2}],
+            "style": {
+                "color": "not-a-color",
+                "fill": null,
+                "strokeWidth": 4,
+                "strokeEnabled": true,
+                "dropShadow": false
+            }
+        }),
+    ] {
+        let request: Request = serde_json::from_value(invalid).unwrap();
+        assert!(editor.execute(request).is_err());
+    }
+    assert_eq!(
+        serde_json::to_value(editor.snapshot()).unwrap(),
+        before_failure
+    );
+    assert!(Arc::ptr_eq(&retained_frame, &editor.pixels()));
+    assert!(editor.snapshot().can_redo);
+    assert_eq!(fs::read(&manifest_path).unwrap(), baseline_manifest);
+
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.snapshot().document, &dot_document);
+    let outside: Request = serde_json::from_value(json!({
+        "operation": "create_freehand_path",
+        "points": [
+            {"x": -58.5, "y": -39.25},
+            {"x": -48.75, "y": -32.5},
+            {"x": -48.75, "y": -32.5},
+            {"x": -42.125, "y": -36.75}
+        ],
+        "style": {
+            "color": "#2277dd",
+            "fill": "#00ff00",
+            "strokeWidth": 3.5,
+            "strokeEnabled": true,
+            "dropShadow": true,
+            "dropShadowStyle": {
+                "color": "#112233",
+                "opacity": 80,
+                "blur": 4,
+                "offsetX": 9,
+                "offsetY": -2
+            },
+            "futureStyle": {"preserve": "freehand"}
+        },
+        "opacity": 62.5
+    }))
+    .unwrap();
+    editor.execute(outside).unwrap();
+    let final_document = editor.snapshot().document.clone();
+    assert_eq!((final_document.width, final_document.height), (120., 91.));
+    assert_eq!(
+        (
+            final_document.elements[0].base().x,
+            final_document.elements[0].base().y
+        ),
+        (80., 61.)
+    );
+    let Element::Path(translated_dot) = &final_document.elements[1] else {
+        panic!()
+    };
+    assert_eq!(
+        (translated_dot.base.x, translated_dot.base.y),
+        (85.25, 65.75)
+    );
+    assert_eq!(translated_dot.points, vec![Point { x: 85.25, y: 65.75 }]);
+    let Element::Path(path) = final_document.elements.last().unwrap() else {
+        panic!()
+    };
+    assert_eq!((path.base.x, path.base.y), (21.5, 21.75));
+    assert_eq!(
+        path.points,
+        vec![
+            Point { x: 21.5, y: 21.75 },
+            Point { x: 31.25, y: 28.5 },
+            Point { x: 31.25, y: 28.5 },
+            Point {
+                x: 37.875,
+                y: 24.25
+            },
+        ]
+    );
+    assert_eq!(path.style.fill, None);
+    assert_eq!(
+        path.style.extra["futureStyle"],
+        json!({"preserve": "freehand"})
+    );
+    assert!(
+        editor
+            .pixels()
+            .pixels()
+            .any(|pixel| { pixel[0] == 34 && pixel[1] == 119 && pixel[2] == 221 && pixel[3] > 0 })
+    );
+    assert!(
+        editor
+            .pixels()
+            .pixels()
+            .any(|pixel| { pixel[0] == 17 && pixel[1] == 34 && pixel[2] == 51 && pixel[3] > 0 })
+    );
+    assert_eq!(
+        final_document.extra["futureDocument"],
+        json!({"keep": "freehand-create"})
+    );
+    let Element::Image(background) = &final_document.elements[0] else {
+        panic!()
+    };
+    assert_eq!(background.extra["futureImage"], json!({"keep": [5, 2]}));
+
+    let final_pixels = editor.pixels();
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.snapshot().document, &dot_document);
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.snapshot().document, &final_document);
+    assert_eq!(editor.pixels(), final_pixels);
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 2 })
+        .unwrap();
+    drop(editor);
+    let restored = open(data.path(), &id).unwrap();
+    assert_eq!(restored.snapshot().document, &final_document);
+    assert_eq!(restored.pixels(), final_pixels);
+}
+
+#[test]
 fn image_import_is_atomic_undoable_and_draft_owned() {
     let (data, id, original) = setup();
     let mut editor = open(data.path(), &id).unwrap();

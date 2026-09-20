@@ -1,6 +1,7 @@
 use captures_app::editor::{
-    ClosedShapeCreate, CropDrag, Document, DocumentHistory, Element, ImageTransform, LayerEdit,
-    OpenShapeCreate, Point, Rect, bounded_crop_rect,
+    ClosedShapeCreate, CropDrag, Document, DocumentHistory, Element, FreehandPathCreate,
+    ImageTransform, LayerEdit, OpenShapeCreate, Point, Rect, bounded_crop_rect,
+    smooth_path_centerline,
 };
 use captures_history::editor_draft::{self, SaveRequest};
 use serde::Deserialize;
@@ -18,6 +19,7 @@ struct Fixture {
     canvas_sizes: Vec<CanvasSizeCase>,
     shape_creations: Vec<ShapeCreationCase>,
     open_shape_creations: Vec<OpenShapeCreationCase>,
+    freehand_creations: Vec<FreehandCreationCase>,
     orientations: Vec<OrientationCase>,
     layers: Value,
     history: HistoryCase,
@@ -119,6 +121,14 @@ struct OpenShapeCreationCase {
     request: OpenShapeCreate,
     path_length: f64,
     expected: Option<Value>,
+}
+
+#[derive(Deserialize)]
+struct FreehandCreationCase {
+    name: String,
+    input: Document,
+    request: FreehandPathCreate,
+    expected: Value,
 }
 
 #[derive(Deserialize)]
@@ -314,6 +324,59 @@ fn straight_line_and_arrow_creation_bounds_match_typescript() {
         created.base.id = "fixture-created-open-shape".into();
         assert_json_equivalent(serde_json::to_value(document).unwrap(), expected);
     }
+}
+
+#[test]
+fn freehand_creation_bounds_and_translation_match_typescript() {
+    for case in fixture().freehand_creations {
+        let mut document = case.input;
+        let id = document.create_freehand_path(case.request).unwrap();
+        let Some(Element::Path(created)) = document.elements.last_mut() else {
+            panic!("{} did not append a freehand path", case.name)
+        };
+        assert_eq!(created.base.id, id);
+        created.base.id = "fixture-created-freehand-path".into();
+        assert_json_equivalent(serde_json::to_value(document).unwrap(), case.expected);
+    }
+}
+
+#[test]
+fn freehand_creation_rejects_empty_and_non_renderer_geometry_without_mutation() {
+    let original = Document::new_capture("asset://original", 7., 3., None);
+    for points in [
+        Vec::new(),
+        vec![Point { x: f64::NAN, y: 1. }],
+        vec![Point {
+            x: f64::from(f32::MAX) * 2.,
+            y: 1.,
+        }],
+    ] {
+        let mut document = original.clone();
+        assert!(
+            document
+                .create_freehand_path(FreehandPathCreate {
+                    points,
+                    style: Default::default(),
+                    opacity: 100.,
+                })
+                .is_err()
+        );
+        assert_eq!(document, original);
+    }
+}
+
+#[test]
+fn freehand_preview_centerline_uses_the_shared_renderer_smoothing() {
+    let points = [
+        Point { x: 2., y: 5. },
+        Point { x: 8., y: -7. },
+        Point { x: 14., y: 5. },
+    ];
+    let samples = smooth_path_centerline(&points);
+    assert_eq!(samples.len(), 26);
+    assert_eq!(samples[0], points[0]);
+    assert_eq!(*samples.last().unwrap(), points[2]);
+    assert_eq!(samples[12], Point { x: 7.25, y: -2.5 });
 }
 
 #[test]

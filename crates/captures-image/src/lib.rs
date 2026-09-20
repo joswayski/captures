@@ -683,6 +683,13 @@ fn quadratic_point(from: Point, control: Point, to: Point, t: f32) -> Point {
     }
 }
 
+/// Sample the centerline painted by [`Shape::SmoothPath`]. Native previews use
+/// this boundary so transient freehand strokes do not duplicate smoothing math.
+#[must_use]
+pub fn smooth_path_samples(points: &[Point]) -> Vec<Point> {
+    path_samples(points, false)
+}
+
 fn path_samples(points: &[Point], controlled_end: bool) -> Vec<Point> {
     const STEPS: usize = 24;
     if points.len() < 2 {

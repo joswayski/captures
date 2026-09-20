@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     editor::{
-        ClosedShapeCreate, Document, DocumentHistory, Element, ElementBase, ImageElement,
-        LayerEdit, OpenShapeCreate, OptionalNullable, Point, Rect, image_bounds,
+        ClosedShapeCreate, Document, DocumentHistory, Element, ElementBase, FreehandPathCreate,
+        ImageElement, LayerEdit, OpenShapeCreate, OptionalNullable, Point, Rect, image_bounds,
     },
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS, render},
 };
@@ -65,6 +65,10 @@ pub enum Request {
     CreateOpenShape {
         #[serde(flatten)]
         create: OpenShapeCreate,
+    },
+    CreateFreehandPath {
+        #[serde(flatten)]
+        create: FreehandPathCreate,
     },
     Layer {
         id: String,
@@ -295,6 +299,11 @@ impl EditorSession {
             Request::CreateOpenShape { create } => {
                 let mut document = next.current().clone();
                 document.create_open_shape(create)?;
+                next.commit(document);
+            }
+            Request::CreateFreehandPath { create } => {
+                let mut document = next.current().clone();
+                document.create_freehand_path(create)?;
                 next.commit(document);
             }
             Request::Layer { id, edit } => {

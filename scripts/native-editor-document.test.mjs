@@ -338,6 +338,7 @@ function shippingCases() {
     ...geometryCases(),
     shapeCreations: shapeCreationCases(),
     openShapeCreations: openShapeCreationCases(),
+    freehandCreations: freehandCreationCases(),
     orientations: orientationCases(),
     layers,
     history: historyCases(),
@@ -601,6 +602,109 @@ function openShapeCreationCases() {
   });
 }
 
+function freehandCreationCases() {
+  const input = {
+    width: 40,
+    height: 30,
+    background: '#ffffff',
+    futureDocument: { preserve: 'freehand-creation' },
+    elements: [{
+      id: 'existing-hidden-locked',
+      kind: 'image',
+      source: 'imported',
+      src: 'draft-asset:existing',
+      originalSrc: null,
+      name: 'existing.png',
+      sourceArtifactId: null,
+      x: 1.25,
+      y: -2.5,
+      width: 3,
+      height: 2,
+      naturalWidth: 3,
+      naturalHeight: 2,
+      locked: true,
+      visible: false,
+      opacity: 63,
+      blendMode: 'screen',
+      futureImage: ['keep'],
+    }],
+  };
+  const defaults = {
+    color: '#ff3b5c',
+    fill: '#ff3b5c',
+    strokeWidth: 8,
+    strokeEnabled: false,
+    dropShadow: false,
+  };
+  const vectors = [
+    {
+      name: 'single fractional sample remains a round dot',
+      points: [{ x: 5.25, y: 4.75 }],
+    },
+    {
+      name: 'repeated samples are preserved in authored order',
+      points: [{ x: 11.25, y: 8.5 }, { x: 11.25, y: 8.5 }, { x: 17.75, y: 13.125 }],
+    },
+    {
+      name: 'curved sample hull rather than smoothed centerline drives bounds',
+      points: [{ x: 8.25, y: 19.5 }, { x: 19.75, y: -4.25 }, { x: 31.125, y: 18.75 }],
+      style: { ...defaults, strokeWidth: 2.5 },
+    },
+    {
+      name: 'negative fractional partial overlap remains clipped',
+      points: [{ x: -7.75, y: 3.25 }, { x: 1.125, y: 7.5 }, { x: -3.5, y: 14.875 }],
+    },
+    {
+      name: 'default shadow-only overlap remains clipped',
+      points: [{ x: -27.5, y: 9.25 }],
+      style: { ...defaults, dropShadow: true },
+    },
+    {
+      name: 'custom shadow fully outside path expands and translates every sample and sibling',
+      points: [{ x: -58.5, y: -39.25 }, { x: -48.75, y: -32.5 }, { x: -42.125, y: -36.75 }],
+      style: {
+        color: '#2277dd',
+        fill: '#00ff00',
+        strokeWidth: 3.5,
+        strokeEnabled: true,
+        dropShadow: true,
+        dropShadowStyle: {
+          color: '#112233',
+          opacity: 80,
+          blur: 4,
+          offsetX: 9,
+          offsetY: -2,
+        },
+        futureStyle: { preserve: 'freehand' },
+      },
+      opacity: 62.5,
+    },
+  ];
+  return vectors.map(({ name, points, style, opacity }) => {
+    const request = { points };
+    if (style) request.style = style;
+    if (opacity !== undefined) request.opacity = opacity;
+    const element = {
+      id: 'fixture-created-freehand-path',
+      kind: 'path',
+      x: points[0].x,
+      y: points[0].y,
+      points,
+      style: { ...(style ?? defaults), fill: null },
+      locked: false,
+      visible: true,
+      opacity: opacity ?? 100,
+      blendMode: 'source-over',
+    };
+    let expected = { ...structuredClone(input), elements: [...structuredClone(input.elements), element] };
+    const bounds = elementBounds(element);
+    if (isFullyOutsideCanvas(bounds, expected)) {
+      expected = expandDocumentToFitBounds(expected, bounds, 0);
+    }
+    return { name, input, request, expected };
+  });
+}
+
 function serializableCases() {
   return JSON.parse(JSON.stringify(shippingCases()));
 }
@@ -622,6 +726,7 @@ function fixtureText(cases) {
     `  "canvasSizes": ${array(cases.canvasSizes, '    ')},`,
     `  "shapeCreations": ${array(cases.shapeCreations, '    ')},`,
     `  "openShapeCreations": ${array(cases.openShapeCreations, '    ')},`,
+    `  "freehandCreations": ${array(cases.freehandCreations, '    ')},`,
     `  "orientations": ${array(cases.orientations, '    ')},`,
     `  "layers": ${JSON.stringify(cases.layers)},`,
     '  "history": {',
@@ -658,6 +763,10 @@ if (process.argv.includes('--write')) {
     assert.ok(vectors.openShapeCreations.some(entry => entry.request.start.y === entry.request.end.y));
     assert.ok(vectors.openShapeCreations.some(entry => entry.expected === null));
     assert.ok(vectors.openShapeCreations.some(entry => entry.expected?.elements[0].x > entry.input.elements[0].x));
+    assert.equal(vectors.freehandCreations.length, 6);
+    assert.ok(vectors.freehandCreations.some(entry => entry.request.points.length === 1));
+    assert.ok(vectors.freehandCreations.some(entry => entry.request.points[0].x < 0));
+    assert.ok(vectors.freehandCreations.some(entry => entry.expected.elements[0].x > entry.input.elements[0].x));
     assert.ok(vectors.history.expected.some(entry => entry.undo === 100));
     assert.ok(vectors.history.expected.some(entry => entry.redo === 100));
     assert.equal(vectors.history.expected[0].changed, false);
