@@ -155,8 +155,14 @@ final class RecordingHUDTests: XCTestCase {
         let labels = notice.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
         XCTAssertTrue(labels.contains("Recording controls hidden"))
         XCTAssertTrue(labels.contains { $0.contains("menu bar") && $0.contains("New Capture") })
-        XCTAssertEqual(notice.layer?.backgroundColor,
-            tokens.color(RecordingHUDColorToken.glassStrong.rawValue).cgColor)
+        let background = try XCTUnwrap(notice.layer?.backgroundColor.flatMap(NSColor.init(cgColor:))?
+            .usingColorSpace(.deviceRGB))
+        let expected = try XCTUnwrap(tokens.color(RecordingHUDColorToken.glassStrong.rawValue)
+            .usingColorSpace(.deviceRGB))
+        XCTAssertEqual(background.redComponent, expected.redComponent, accuracy: 0.001)
+        XCTAssertEqual(background.greenComponent, expected.greenComponent, accuracy: 0.001)
+        XCTAssertEqual(background.blueComponent, expected.blueComponent, accuracy: 0.001)
+        XCTAssertEqual(background.alphaComponent, expected.alphaComponent, accuracy: 0.001)
         let window = NSWindow(contentRect: notice.bounds, styleMask: [.borderless],
             backing: .buffered, defer: false)
         window.contentView = notice
