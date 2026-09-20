@@ -403,7 +403,10 @@ never do. Encoding success or failure leaves document, undo/redo, draft dirty
 state and original History files unchanged. Shared Rust can also publish a new
 edited-file copy without clobbering an existing destination, then add a distinct
 lossless History artifact; a post-publication History failure retains the saved
-path for recovery. Hosts still own save dialogs, overwrite-original confirmation
+path for recovery. `captures_editor_save_new_v1` exposes this on the serialized
+session worker with tagged result JSON and no pixel transport; null/invalid
+inputs, collisions and partial success are covered without changing draft state.
+Hosts still own save dialogs, overwrite-original confirmation
 and clipboard behavior. These shared prerequisites are unit-verified in the Linux
 orb; they do not connect native export controls or complete macOS, Windows, X11
 or Wayland output/physical acceptance.
@@ -448,8 +451,13 @@ the edited canvas and decoded output. Edits and option changes invalidate the
 previous comparison; encoding failures retain recoverable edits and allow retry.
 Preview never writes files or saves a draft. The same Windows/X11/Wayland host
 code is implemented; private-X11 and unit checks do not establish physical-host
-acceptance. AppKit output controls and edited-file save/clipboard remain separate
-parity work.
+acceptance. Its **Save new copy** action runs shared publication on the same worker,
+starts in the configured output directory and accepts an editable full path.
+It never replaces existing files; successful exports add a distinct History entry
+without modifying the original or draft. A post-publication History failure shows
+the saved path and warning. Accepted writes drain before application quit.
+Native save dialogs, overwrite-original and clipboard remain separate work, as
+do AppKit export controls and physical-platform acceptance.
 
 The AppKit editor host now enables **Edit screenshot** only for screenshot History
 entries. Its dedicated serialized worker owns the shared Rust session and publishes

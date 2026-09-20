@@ -266,12 +266,16 @@ canvas-size and draft editor with undo/redo. Its layer panel supports selection,
 visibility, locking, opacity, renaming, position, duplication, deletion and ordering.
 Its Output panel previews PNG/JPEG/WebP quality and size limits, reports encoded
 bytes, and switches between the edited canvas and encoded output without saving.
+**Save new copy** exports to an editable destination path without replacing an
+existing file, adds a distinct History entry, and preserves the current draft.
+If History cannot be updated, the saved file's path remains available for recovery.
 Closing can save or keep the previous draft; explicit Discard edits restores the
-original. Failed saves keep edits open and cancel normal quit. Private-X11 checks
+original. Failed draft saves keep edits open and cancel normal quit. Private-X11 checks
 cover both appearances, persisted drafts, real preview pixels and error recovery.
 AppKit now connects the same crop, canvas-resize and draft operations in its own
 window. Windows, Wayland and physical AppKit presentation remain unverified.
-Text, annotation shadows, annotation tools, edited-image export, and recording editing
+Text, annotation shadows, annotation tools, save dialogs/overwrite, edited-image
+clipboard output, AppKit edited-file export, and recording editing
 remain unconnected. This shared rendering support does not complete native editor
 acceptance. OS shortcut takeover, login items, single-instance relaunch and updates
 are not connected to the native hosts yet. Windows/Linux renderer selection and full
