@@ -87,6 +87,9 @@ privacy against disposable loopback servers. Physical input/AT acceptance remain
 History → Edit screenshot opens a worker-owned crop/canvas/draft editor. Undo/redo,
 Save draft, confirmed Discard edits, and unsaved-close choices preserve the original
 capture and exports. Closing without saving preserves any older saved draft.
+The Layers panel selects front-to-back layers and connects visibility, locking,
+image rename, opacity, X/Y movement, duplicate, delete and adjacent ordering.
+Shared Rust preserves locked boundaries and makes every accepted edit undoable.
 Normal quit drains edits and saves dirty sessions; a save failure cancels quit and
 keeps the editor recoverable. Drafts live in `editor-drafts` beside the selected
 History root, never the installed Tauri data. Annotation tools and edited-image
@@ -97,7 +100,9 @@ Run `python apps/native/x11_editor_smoke.py --binary
 apps/native/wgpu/target/release/captures-wgpu-workbench --output editor-smoke
 --appearance light` (also run dark). It checks asymmetric crop/resize preview
 pixels, undo/redo, saved draft geometry and reopening, unsaved close, discard,
-filesystem save failure and cancelled quit, retry and clean exit. Screenshots
+filesystem save failure and cancelled quit, retry and clean exit. Layer checks
+exercise actual moved/half-opacity/hidden pixels, flags, order, deletion, empty
+document undo and persisted fields after reopening. Screenshots
 include both appearances and minimum-size scroll/error states. This is not
 physical-desktop, accessibility, IME, or full editor parity acceptance.
 

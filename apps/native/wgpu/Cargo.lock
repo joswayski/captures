@@ -889,6 +889,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tray-icon",
+ "uuid",
  "winit",
  "x11rb",
 ]

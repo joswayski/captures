@@ -154,7 +154,11 @@ final class ScreenshotEditorTests: XCTestCase {
         try showLayers(in: controller.root)
 
         XCTAssertEqual(controller.state.snapshot?.layers.map(\.id), ["foreground", "background"])
-        XCTAssertEqual((try field("Layer name", in: controller.root)).stringValue,
+        let nameField = try field("Layer name", in: controller.root)
+        XCTAssertNil(nameField.formatter, "layer names must not use the numeric geometry formatter")
+        XCTAssertTrue(nameField.isEditable); XCTAssertEqual(nameField.alignment, .left)
+        XCTAssertEqual(nameField.placeholderString, "Layer name")
+        XCTAssertEqual(nameField.stringValue,
                        "A very long foreground image layer name")
         XCTAssertEqual((try field("Layer X", in: controller.root)).stringValue, "13.5")
         XCTAssertEqual((try field("Layer Y", in: controller.root)).stringValue, "-7.25")
@@ -263,6 +267,15 @@ final class ScreenshotEditorTests: XCTestCase {
                 tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            let geometry = try XCTUnwrap(descendants(in: controller.root).first {
+                $0.accessibilityLabel() == "Geometry controls"
+            })
+            XCTAssertTrue(geometry.isFlipped)
+            let cropLabel = try XCTUnwrap(geometry.subviews.compactMap { $0 as? NSTextField }
+                .first { $0.stringValue == "X" })
+            let cropField = try field("Crop X", in: geometry)
+            XCTAssertLessThan(cropLabel.frame.minY, cropField.frame.minY,
+                              "top-down geometry places labels above fields")
             (try field("Crop X", in: controller.root)).stringValue = "13"
             (try field("Crop Y", in: controller.root)).stringValue = "7"
             (try field("Crop width", in: controller.root)).stringValue = "321"
@@ -322,6 +335,10 @@ final class ScreenshotEditorTests: XCTestCase {
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
             try showLayers(in: controller.root)
+            let layerPanel = try XCTUnwrap(descendants(in: controller.root).first {
+                $0.accessibilityLabel() == "Layer controls"
+            })
+            XCTAssertTrue(layerPanel.isFlipped)
             try render(controller.root, name: "screenshot-editor-layers-\(appearance)")
 
             worker.failLayerAction = "duplicate"

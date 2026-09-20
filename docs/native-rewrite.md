@@ -391,9 +391,8 @@ and C ABI. Shipping TypeScript fixtures check all four duplicate element kinds
 and reorder placements across locked boundaries. Hidden layers remain editable;
 locked layers block movement/deletion/reordering but permit the other panel
 actions. Duplicates share owned image assets and remain draft-compatible.
-These commands are a shared prerequisite on all four platforms; layer-panel
-controls are now connected in the AppKit editor. Other host controls and physical
-acceptance remain separate parity work.
+These commands are shared across all four platforms; host integration and
+physical acceptance are tracked separately below.
 
 The first wgpu editor window now opens isolated History screenshots on its own
 serialized worker, with fit preview, numeric crop/canvas fields, undo/redo,
@@ -408,6 +407,16 @@ successful quit retry in dark and light. Minimum-size error/scroll states are
 visually inspected. Unit tests cover queued edits and stale replies during close.
 Status: X11 verified on private software GL; Windows and Wayland use the same
 implemented host but remain presentation-unverified.
+
+The wgpu editor's Layers panel now exposes those shared commands with stable-ID
+selection, safe long-name truncation and independent geometry/layer scrolling.
+Undo, deletion and rejected commands restore valid selection and field state.
+Real X11 input checks cover asymmetric movement, half-opacity/hidden preview
+pixels, locks, ordering, deletion, empty-document undo and saved-layer reopening
+in dark and light, including minimum-window scrolling. Windows and Wayland use
+this implementation but remain presentation-unverified; AppKit layer controls
+are described below. Merge/flatten, image import, image transforms and drawing tools
+are not connected by this panel slice.
 
 The AppKit editor host now enables **Edit screenshot** only for screenshot History
 entries. Its dedicated serialized worker owns the shared Rust session and publishes

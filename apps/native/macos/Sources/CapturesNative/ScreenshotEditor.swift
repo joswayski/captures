@@ -47,8 +47,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let canvasHeight = NSTextField()
     private let status = NSTextField(wrappingLabelWithString: "")
     private let dimensions = NSTextField(labelWithString: "")
-    private let geometryPanel = NSView()
-    private let layersPanel = NSView()
+    private let geometryPanel = Surface()
+    private let layersPanel = Surface()
     private let layerName = NSTextField()
     private let layerOpacity = NSTextField()
     private let layerX = NSTextField()
@@ -205,6 +205,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
         geometryPanel.frame = NSRect(x: 688, y: 66, width: 272, height: 390)
         layersPanel.frame = geometryPanel.frame; layersPanel.isHidden = true
+        geometryPanel.setAccessibilityLabel("Geometry controls")
+        layersPanel.setAccessibilityLabel("Layer controls")
         root.addSubview(geometryPanel); root.addSubview(layersPanel)
 
         panelLabel("Crop", frame: NSRect(x: 0, y: 0, width: 272, height: 24),
@@ -276,8 +278,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         layerTable.allowsEmptySelection = false; layerTable.setAccessibilityLabel("Screenshot layers")
         scroll.documentView = layerTable; layersPanel.addSubview(scroll)
 
-        configure(layerName, frame: NSRect(x: 0, y: 114, width: 190, height: 30),
-                  label: "Layer name", parent: layersPanel)
+        layerName.frame = NSRect(x: 0, y: 114, width: 190, height: 30)
+        layerName.setAccessibilityLabel("Layer name")
+        layerName.alignment = .left; layerName.placeholderString = "Layer name"
+        layersPanel.addSubview(layerName)
         renameButton = button("Rename", frame: NSRect(x: 196, y: 114, width: 76, height: 30),
                               parent: layersPanel) { [weak self] in self?.renameLayer() }
         visibilityButton = button("Hide", frame: NSRect(x: 0, y: 152, width: 128, height: 30),

@@ -262,10 +262,12 @@ the shipping TypeScript behavior. A shared renderer now flattens real image laye
 and the five closed annotation shapes, including crop geometry, rotation, opacity
 and blending, without host I/O. Worker-owned editor sessions add draft restore/save/
 discard, transactional crop/resize/undo, and retained pixel frames for native hosts.
-The Windows/Linux candidate first connected screenshots from History to a native crop,
-canvas-size and draft editor with undo/redo. Closing can save or keep the previous
-draft; explicit Discard edits restores the original. Failed saves keep edits open
-and cancel normal quit. Private-X11 checks cover both appearances, persisted drafts,
+The Windows/Linux candidate opens screenshots from History in a native crop,
+canvas-size and draft editor with undo/redo. Its layer panel supports selection,
+visibility, locking, opacity, renaming, position, duplication, deletion and ordering.
+Closing can save or keep the previous draft; explicit Discard edits restores the
+original. Failed saves keep edits open and cancel normal quit. Private-X11 checks
+cover both appearances, persisted drafts,
 real preview pixels and error recovery. AppKit now connects the same crop, canvas-
 resize and draft operations plus native image-layer controls in its own window.
 Windows, Wayland and physical AppKit
