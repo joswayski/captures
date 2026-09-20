@@ -255,7 +255,48 @@ enum RecordingScreenshotPhase {
         rect: SelectionRect,
         after_countdown: bool,
     },
+    RetiringCaptureUi {
+        rect: SelectionRect,
+        after_countdown: bool,
+        omitted_frame: u64,
+    },
+    SettlingCaptureUi {
+        rect: SelectionRect,
+        after_countdown: bool,
+        until: Instant,
+    },
     Capturing,
+}
+
+impl RecordingScreenshotPhase {
+    /// Deferred viewports retire only after the root pass that omits them.
+    /// Start the compositor settling interval after that pass, not at countdown
+    /// expiry, which may still be running alongside a visible countdown window.
+    fn capture_after_hide(&mut self, frame: u64, now: Instant) -> Option<(SelectionRect, bool)> {
+        match *self {
+            Self::RetiringCaptureUi {
+                rect,
+                after_countdown,
+                omitted_frame,
+            } if frame > omitted_frame => {
+                *self = Self::SettlingCaptureUi {
+                    rect,
+                    after_countdown,
+                    until: now + Duration::from_millis(150),
+                };
+                None
+            }
+            Self::SettlingCaptureUi {
+                rect,
+                after_countdown,
+                until,
+            } if now >= until => {
+                *self = Self::Capturing;
+                Some((rect, after_countdown))
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2210,21 +2251,42 @@ impl Live {
                         rect,
                         after_countdown,
                     }) if flow.countdown().remaining(Instant::now()) == 0 => {
-                        let Some(session) = self.recording_screenshot_session.take() else {
-                            self.error = Some("Region preparation was lost before capture.".into());
-                            self.finish_recording_screenshot(ctx, false);
-                            return;
-                        };
                         self.recording_screenshot_texture = None;
-                        self.recording_screenshot_phase = Some(RecordingScreenshotPhase::Capturing);
-                        self.pending += 1;
-                        let _ = self.tx.send(Job::CaptureRegion {
-                            root: self.root.clone(),
-                            generation,
-                            session,
-                            rect,
-                            after_countdown,
+                        self.recording_screenshot_phase =
+                            Some(RecordingScreenshotPhase::RetiringCaptureUi {
+                                rect,
+                                after_countdown,
+                                omitted_frame: ctx.cumulative_frame_nr(),
+                            });
+                        request_hidden_root_paint(ctx);
+                        ctx.request_repaint();
+                    }
+                    Some(
+                        RecordingScreenshotPhase::RetiringCaptureUi { .. }
+                        | RecordingScreenshotPhase::SettlingCaptureUi { .. },
+                    ) => {
+                        let ready = self.recording_screenshot_phase.as_mut().and_then(|phase| {
+                            phase.capture_after_hide(ctx.cumulative_frame_nr(), Instant::now())
                         });
+                        if let Some((rect, after_countdown)) = ready {
+                            let Some(session) = self.recording_screenshot_session.take() else {
+                                self.error =
+                                    Some("Region preparation was lost before capture.".into());
+                                self.finish_recording_screenshot(ctx, false);
+                                return;
+                            };
+                            self.pending += 1;
+                            let _ = self.tx.send(Job::CaptureRegion {
+                                root: self.root.clone(),
+                                generation,
+                                session,
+                                rect,
+                                after_countdown,
+                            });
+                        } else {
+                            request_hidden_root_paint(ctx);
+                            ctx.request_repaint_after(Duration::from_millis(16));
+                        }
                     }
                     Some(RecordingScreenshotPhase::Countdown { .. }) => {
                         ctx.request_repaint_after(Duration::from_millis(100));
@@ -4692,6 +4754,67 @@ fn reveal(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recording_screenshot_retires_ui_before_settling_and_captures_once() {
+        let rect = SelectionRect {
+            x: 140.,
+            y: 180.,
+            width: 310.,
+            height: 170.,
+        };
+        let start = Instant::now();
+        for after_countdown in [false, true] {
+            let mut phase = RecordingScreenshotPhase::RetiringCaptureUi {
+                rect,
+                after_countdown,
+                omitted_frame: 42,
+            };
+            // A slow or repeated layout pass is not evidence of native removal.
+            assert_eq!(
+                phase.capture_after_hide(42, start + Duration::from_secs(1)),
+                None
+            );
+            let retired = start + Duration::from_secs(2);
+            assert_eq!(phase.capture_after_hide(43, retired), None);
+            assert_eq!(
+                phase.capture_after_hide(44, retired + Duration::from_millis(149)),
+                None,
+            );
+            assert_eq!(
+                phase.capture_after_hide(45, retired + Duration::from_millis(150)),
+                Some((rect, after_countdown)),
+            );
+            assert_eq!(phase, RecordingScreenshotPhase::Capturing);
+            assert_eq!(
+                phase.capture_after_hide(46, retired + Duration::from_secs(1)),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn cancelling_screenshot_hide_wait_preserves_paused_recording() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        live.capture_phase = Some(CapturePhase::RecordingPaused);
+        live.recording_screenshot_phase = Some(RecordingScreenshotPhase::SettlingCaptureUi {
+            rect: SelectionRect {
+                x: 140.,
+                y: 180.,
+                width: 310.,
+                height: 170.,
+            },
+            after_countdown: true,
+            until: Instant::now() + Duration::from_millis(150),
+        });
+        live.finish_recording_screenshot(&ctx, false);
+        assert!(live.recording_screenshot_phase.is_none());
+        assert_eq!(live.capture_phase, Some(CapturePhase::RecordingPaused));
+        assert_eq!(live.status, "Recording paused");
+        live.flush();
+    }
 
     #[test]
     fn history_filters_preserve_ids_and_invalidate_hidden_preview_work() {

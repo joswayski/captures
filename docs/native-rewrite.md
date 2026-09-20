@@ -352,7 +352,12 @@ AppKit and wgpu reuse the existing region capture, native History, mini-preview 
 auto-copy paths while preserving running/paused, microphone, guide and hidden-control
 state. AppKit and Windows use their capture-UI exclusion policy. X11 hides the HUD
 and guide from the still image, but its selector remains visible in the ongoing
-recording because X11 cannot exclude overlay windows. Private-X11 acceptance covers
+recording because X11 cannot exclude overlay windows. The wgpu child capture waits
+for a completed root pass to retire its selector/countdown viewport, then settles
+for 150 ms before reading pixels, matching the ordinary capture path's compositor
+allowance. Escape still cancels the child during this wait without ending the take.
+This applies to the Windows/X11/Wayland host; Wayland capture remains gated, and
+AppKit keeps its separate native-window removal path. Private-X11 acceptance covers
 running publication, paused countdown cancellation, selection Escape, asymmetric
 saved pixels, same-session continuity, final decode and recovery cleanup. AppKit CI
 renders/tests the enabled HUD; real macOS/Windows capture and Wayland remain open,
