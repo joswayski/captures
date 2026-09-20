@@ -363,6 +363,36 @@ impl Element {
         }
     }
 
+    fn base_mut(&mut self) -> &mut ElementBase {
+        match self {
+            Self::Image(element) => &mut element.base,
+            Self::Text(element) => &mut element.base,
+            Self::Shape(element) => &mut element.base,
+            Self::Path(element) => &mut element.base,
+        }
+    }
+
+    fn translate_layer(&mut self, delta_x: f64, delta_y: f64) -> Result<(), String> {
+        // Hidden layers also need serializable geometry: the renderer skips them,
+        // but a saved draft must still be readable after any accepted movement.
+        let finite = |x: f64, y: f64| (x + delta_x).is_finite() && (y + delta_y).is_finite();
+        let points_finite = |points: &[Point]| points.iter().all(|point| finite(point.x, point.y));
+        let base = self.base();
+        let valid = finite(base.x, base.y)
+            && match self {
+                Self::Image(_) | Self::Text(_) => true,
+                Self::Shape(element) => {
+                    finite(element.end_x, element.end_y) && points_finite(&element.controls)
+                }
+                Self::Path(element) => points_finite(&element.points),
+            };
+        if !valid {
+            return Err("Layer movement must keep geometry finite.".into());
+        }
+        self.translate(delta_x, delta_y);
+        Ok(())
+    }
+
     pub fn translate(&mut self, delta_x: f64, delta_y: f64) {
         match self {
             Self::Image(element) => element.base.translate(delta_x, delta_y),
@@ -386,6 +416,44 @@ fn translate_points(points: &mut [Point], delta_x: f64, delta_y: f64) {
         point.x += delta_x;
         point.y += delta_y;
     }
+}
+
+/// Layer-panel actions shared by native hosts. Storage is back-to-front;
+/// placement refers to the front-to-back order displayed by the layer panel.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum LayerEdit {
+    Visibility {
+        visible: bool,
+    },
+    Lock {
+        locked: bool,
+    },
+    Opacity {
+        opacity: f64,
+    },
+    Translate {
+        delta_x: f64,
+        delta_y: f64,
+    },
+    Delete,
+    Duplicate {
+        new_id: String,
+    },
+    Reorder {
+        target_id: String,
+        placement: LayerPlacement,
+    },
+    Rename {
+        name: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LayerPlacement {
+    Before,
+    After,
 }
 
 impl Document {
@@ -448,6 +516,102 @@ impl Document {
         self.width = width;
         self.height = height;
         self.translate(-x, -y);
+    }
+
+    /// Match the shipping layer panel: locking prevents deletion, nudging and
+    /// reordering, but not visibility, opacity, rename or duplication. Hidden
+    /// layers remain editable from the panel. Rejected requests do not mutate.
+    pub fn edit_layer(&mut self, id: &str, edit: LayerEdit) -> Result<(), String> {
+        let Some(index) = self
+            .elements
+            .iter()
+            .position(|element| element.base().id == id)
+        else {
+            return Err("The selected layer no longer exists.".into());
+        };
+        let locked = self.elements[index].base().locked;
+        match edit {
+            LayerEdit::Visibility { visible } => self.elements[index].base_mut().visible = visible,
+            LayerEdit::Lock { locked } => self.elements[index].base_mut().locked = locked,
+            LayerEdit::Opacity { opacity } => {
+                if !opacity.is_finite() || !(0. ..=100.).contains(&opacity) {
+                    return Err("Layer opacity must be between 0 and 100.".into());
+                }
+                self.elements[index].base_mut().opacity = opacity;
+            }
+            LayerEdit::Translate { delta_x, delta_y } => {
+                if !delta_x.is_finite() || !delta_y.is_finite() {
+                    return Err("Layer movement must be finite.".into());
+                }
+                if !locked {
+                    self.elements[index].translate_layer(delta_x, delta_y)?;
+                }
+            }
+            LayerEdit::Delete => {
+                if !locked {
+                    self.elements.remove(index);
+                }
+            }
+            LayerEdit::Duplicate { new_id } => {
+                if new_id.is_empty()
+                    || self
+                        .elements
+                        .iter()
+                        .any(|element| element.base().id == new_id)
+                {
+                    return Err("A duplicate layer needs a new nonempty identifier.".into());
+                }
+                let mut duplicate = self.elements[index].clone();
+                let base = duplicate.base_mut();
+                base.id = new_id;
+                base.locked = false;
+                base.visible = true;
+                if let Element::Image(image) = &mut duplicate {
+                    image.source = "imported".into();
+                    image.name.push_str(" copy");
+                }
+                duplicate.translate_layer(24., 24.)?;
+                self.elements.insert(index + 1, duplicate);
+            }
+            LayerEdit::Reorder {
+                target_id,
+                placement,
+            } => {
+                if locked || target_id == id {
+                    return Ok(());
+                }
+                let Some(target) = self
+                    .elements
+                    .iter()
+                    .position(|element| element.base().id == target_id)
+                else {
+                    return Err("The target layer no longer exists.".into());
+                };
+                let minimum = self.elements[..index]
+                    .iter()
+                    .rposition(|element| element.base().locked)
+                    .map_or(0, |position| position + 1);
+                let maximum = self.elements[index + 1..]
+                    .iter()
+                    .position(|element| element.base().locked)
+                    .map_or(self.elements.len() - 1, |position| index + position);
+                let target_after_removal = target - usize::from(target > index);
+                let desired =
+                    target_after_removal + usize::from(matches!(placement, LayerPlacement::Before));
+                let destination = desired.clamp(minimum, maximum);
+                let moved = self.elements.remove(index);
+                self.elements.insert(destination, moved);
+            }
+            LayerEdit::Rename { name } => {
+                if let Element::Image(image) = &mut self.elements[index] {
+                    let name = name.trim();
+                    if !name.is_empty() {
+                        image.name = name.into();
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 

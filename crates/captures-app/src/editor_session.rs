@@ -15,7 +15,7 @@ use image::{ImageFormat, ImageReader, RgbaImage};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    editor::{Document, DocumentHistory, Element, OptionalNullable, Rect},
+    editor::{Document, DocumentHistory, Element, LayerEdit, OptionalNullable, Rect},
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS, render},
 };
 
@@ -39,6 +39,10 @@ pub enum Request {
     ResizeCanvas {
         width: f64,
         height: f64,
+    },
+    Layer {
+        id: String,
+        edit: LayerEdit,
     },
     /// Asset references must already belong to this session. New image import
     /// will have a separate byte/file boundary, never pixels in command JSON.
@@ -166,6 +170,11 @@ impl EditorSession {
                 next.redo();
             }
             Request::Commit { document } => {
+                next.commit(document);
+            }
+            Request::Layer { id, edit } => {
+                let mut document = next.current().clone();
+                document.edit_layer(&id, edit)?;
                 next.commit(document);
             }
             Request::Crop { rect } => {
