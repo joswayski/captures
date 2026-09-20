@@ -253,8 +253,10 @@ captur.es; it never attaches captures, files, or diagnostics. Fixture mode canno
 send feedback, and failed requests preserve the draft for retry.
 Shared Rust now defines the screenshot editor's layered document, crop/translation/
 orientation geometry, canvas sizing and bounded snapshot history, checked against
-the shipping TypeScript behavior. Native editor presentation and rendering remain
-unconnected; this prerequisite does not complete screenshot-editor acceptance.
+the shipping TypeScript behavior. A shared renderer now flattens real image layers,
+including crop geometry, lossless orientation, opacity and blending, without host
+I/O; text, drawing tools and native editor presentation remain unconnected. These
+prerequisites do not complete screenshot-editor acceptance.
 Editing, OS shortcut takeover, login items,
 single-instance relaunch and updates are not connected to the native hosts yet. Windows/Linux
 renderer selection and full feature/design parity remain open. The
