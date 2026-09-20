@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   boundedCropRect,
   createScreenshotDocument,
+  cropDragAspectRatio,
   cropDocument,
   duplicateScreenshotElement,
   reorderScreenshotLayers,
@@ -131,7 +132,92 @@ function geometryCases() {
     { width: 100.49, height: 200.5 },
     { width: -7.25, height: 40_000.75 },
   ].map(size => ({ ...size, expected: resizeDocumentCanvas(document, size.width, size.height) }));
-  return { crops, translations, cropRects, canvasSizes };
+  return { crops, cropDrags: cropDragCases(), translations, cropRects, canvasSizes };
+}
+
+function cropDragCase(origin, bounds, initialPreset, initialShiftKey, updates) {
+  let shiftAspect = null;
+  let liveRect = null;
+  const step = ({ current, preset = 'free', presetAspect = null, shiftKey = false }) => {
+    const next = cropDragAspectRatio({
+      preset,
+      shiftKey,
+      origin,
+      current,
+      bounds,
+      shiftAspect,
+      liveRect,
+    });
+    liveRect = boundedCropRect(origin, current, bounds, next.aspectRatio);
+    shiftAspect = next.shiftAspect;
+    return { current, presetAspect, shiftKey, expected: liveRect };
+  };
+  const initial = step({
+    current: origin,
+    preset: initialPreset.preset,
+    presetAspect: initialPreset.aspect,
+    shiftKey: initialShiftKey,
+  });
+  return {
+    origin,
+    bounds,
+    initial,
+    updates: updates.map(step),
+  };
+}
+
+function cropDragCases() {
+  return [
+    cropDragCase(
+      { x: -31.25, y: 300.5 },
+      { width: 713, height: 257 },
+      { preset: 'free', aspect: null },
+      false,
+      [
+        { current: { x: 801.75, y: 19.5 } },
+        { current: { x: 113.49, y: 99.5 } },
+      ],
+    ),
+    ...[
+      [{ x: 611.125, y: 17.75 }, { x: -55.5, y: 249.875 }],
+      [{ x: 101.375, y: 233.5 }, { x: 699.75, y: -18.25 }],
+      [{ x: 611.125, y: 233.5 }, { x: -55.5, y: -18.25 }],
+      [{ x: 101.375, y: 17.75 }, { x: 799.75, y: 249.875 }],
+    ].map(([origin, current]) => cropDragCase(
+      origin,
+      { width: 713, height: 257 },
+      { preset: '16:9', aspect: 16 / 9 },
+      true,
+      [{ current, preset: '16:9', presetAspect: 16 / 9, shiftKey: true }],
+    )),
+    cropDragCase(
+      { x: 50, y: 50 },
+      { width: 1_000, height: 800 },
+      { preset: 'free', aspect: null },
+      false,
+      [
+        { current: { x: 250, y: 150 } },
+        { current: { x: 400, y: 600 }, shiftKey: true },
+        { current: { x: 120, y: 240 }, shiftKey: true },
+        { current: { x: 170, y: 90 }, shiftKey: false },
+        { current: { x: 400, y: 600 }, shiftKey: true },
+        { current: { x: 900, y: 300 }, preset: '16:9', presetAspect: 16 / 9, shiftKey: true },
+        { current: { x: 300, y: 700 }, shiftKey: true },
+      ],
+    ),
+    cropDragCase(
+      { x: 300.5, y: 120.5 },
+      { width: 713, height: 257 },
+      { preset: 'free', aspect: null },
+      true,
+      [
+        { current: { x: 304.25, y: 123.75 }, shiftKey: true },
+        { current: { x: 290.25, y: 131.75 }, shiftKey: true },
+        { current: { x: 304.25, y: 123.75 }, shiftKey: false },
+        { current: { x: 500.25, y: 220.75 }, shiftKey: true },
+      ],
+    ),
+  ];
 }
 
 function orientationCases() {
@@ -266,6 +352,7 @@ function fixtureText(cases) {
     `  "initialization": ${JSON.stringify(cases.initialization)},`,
     `  "document": ${JSON.stringify(cases.document)},`,
     `  "crops": ${array(cases.crops, '    ')},`,
+    `  "cropDrags": ${array(cases.cropDrags, '    ')},`,
     `  "translations": ${array(cases.translations, '    ')},`,
     `  "cropRects": ${array(cases.cropRects, '    ')},`,
     `  "canvasSizes": ${array(cases.canvasSizes, '    ')},`,
@@ -296,6 +383,7 @@ if (process.argv.includes('--write')) {
     assert.ok(vectors.document.elements.some(element => element.visible === false));
     assert.ok(vectors.document.elements.some(element => element.locked === true));
     assert.ok(vectors.crops.some(entry => entry.start.x < 0));
+    assert.ok(vectors.cropDrags.some(entry => entry.updates.some(step => step.shiftKey)));
     assert.ok(vectors.history.expected.some(entry => entry.undo === 100));
     assert.ok(vectors.history.expected.some(entry => entry.redo === 100));
     assert.equal(vectors.history.expected[0].changed, false);

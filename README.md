@@ -263,9 +263,13 @@ Worker-owned editor sessions add draft restore/save/discard, transactional crop/
 resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
 pixel frames for native hosts.
 Full-canvas photos rotate their canvas; layered overhang stays clipped and fully
-off-canvas transformed images expand the canvas so they are not lost.
+off-canvas transformed images expand the canvas so they are not lost. Shared
+interactive crop geometry also matches shipping bounds, aspect presets and Shift
+locking, but host gesture controls and physical acceptance remain separate work.
 The Windows/Linux candidate opens screenshots from History in a native crop,
-canvas-size and draft editor with undo/redo. Its layer panel supports selection,
+canvas-size and draft editor with undo/redo. **Draw crop** selects directly on the
+preview with free or preset aspect ratios and Shift ratio locking. Apply commits
+the selection; Cancel or Escape leaves the document unchanged. Its layer panel supports selection,
 visibility, locking, opacity, renaming, position, duplication, deletion and ordering.
 Image layers also expose lossless left/right rotations and horizontal/vertical
 flips, including when hidden or locked; each action supports undo and draft restore.
