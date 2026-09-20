@@ -262,7 +262,8 @@ freehand paths with crop geometry, rotation, opacity, blending and enabled shape
 drop shadows, without host I/O.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
 resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
-pixel frames for native hosts.
+pixel frames for native hosts. Typed rectangle/ellipse creation is also available;
+drawing-tool presentation is not connected yet.
 Full-canvas photos rotate their canvas; layered overhang stays clipped and fully
 off-canvas transformed images expand the canvas so they are not lost. Shared
 interactive crop geometry also matches shipping bounds, aspect presets and Shift

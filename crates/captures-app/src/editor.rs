@@ -13,6 +13,10 @@ use serde_json::{Map, Value};
 pub const HISTORY_LIMIT: usize = 100;
 pub const MAX_CANVAS_DIMENSION: f64 = 32_768.;
 
+const fn default_opacity() -> f64 {
+    100.
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Point {
@@ -80,6 +84,27 @@ impl CropDrag {
     pub fn rect(&self) -> Rect {
         self.last_rect
     }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ClosedShapeKind {
+    Rectangle,
+    Ellipse,
+}
+
+/// Inputs for one completed rectangle or ellipse gesture. Hosts keep transient
+/// pointer state outside the document and submit this value on completion.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClosedShapeCreate {
+    pub shape: ClosedShapeKind,
+    pub start: Point,
+    pub end: Point,
+    #[serde(default)]
+    pub style: ElementStyle,
+    #[serde(default = "default_opacity")]
+    pub opacity: f64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -237,6 +262,20 @@ impl ElementStyle {
     #[must_use]
     pub fn has_drop_shadow(&self) -> bool {
         self.drop_shadow.unwrap_or(false)
+    }
+}
+
+impl Default for ElementStyle {
+    fn default() -> Self {
+        Self {
+            color: "#ff3b5c".into(),
+            fill: Some("#ff3b5c".into()),
+            stroke_width: 8.,
+            stroke_enabled: Some(false),
+            drop_shadow: Some(false),
+            drop_shadow_style: None,
+            extra: Map::new(),
+        }
     }
 }
 
@@ -564,6 +603,66 @@ impl Document {
         self.height = clamp(height.round(), 1., MAX_CANVAS_DIMENSION);
     }
 
+    /// Append one completed rectangle or ellipse using the shipping editor's
+    /// layer defaults and fully-outside canvas expansion policy.
+    pub fn create_closed_shape(&mut self, create: ClosedShapeCreate) -> Result<String, String> {
+        if !create.start.x.is_finite()
+            || !create.start.y.is_finite()
+            || !create.end.x.is_finite()
+            || !create.end.y.is_finite()
+        {
+            return Err("Shape coordinates must be finite.".into());
+        }
+        if !create.opacity.is_finite() || !(0. ..=100.).contains(&create.opacity) {
+            return Err("Shape opacity must be between 0 and 100.".into());
+        }
+        if create.start.x == create.end.x || create.start.y == create.end.y {
+            return Err("Closed shapes must have positive width and height.".into());
+        }
+        if !create.style.stroke_width.is_finite() {
+            return Err("Shape stroke width must be finite.".into());
+        }
+
+        let id = loop {
+            let candidate = uuid::Uuid::new_v4().to_string();
+            if !self
+                .elements
+                .iter()
+                .any(|element| element.base().id == candidate)
+            {
+                break candidate;
+            }
+        };
+        let shape = match create.shape {
+            ClosedShapeKind::Rectangle => "rectangle",
+            ClosedShapeKind::Ellipse => "ellipse",
+        };
+        let element = ShapeElement {
+            base: ElementBase {
+                id: id.clone(),
+                x: create.start.x,
+                y: create.start.y,
+                rotation: None,
+                locked: false,
+                visible: true,
+                opacity: create.opacity,
+                blend_mode: "source-over".into(),
+            },
+            shape: shape.into(),
+            end_x: create.end.x,
+            end_y: create.end.y,
+            controls: Vec::new(),
+            style: create.style,
+            extra: Map::new(),
+        };
+        let bounds = closed_shape_bounds(&element);
+        self.elements.push(Element::Shape(element));
+        if fully_outside_canvas(bounds, self.width, self.height) {
+            self.expand_canvas_to_bounds(bounds);
+        }
+        Ok(id)
+    }
+
     pub fn crop(&mut self, crop: Rect) {
         let x = clamp(crop.x.round(), 0., (self.width - 1.).max(0.));
         let y = clamp(crop.y.round(), 0., (self.height - 1.).max(0.));
@@ -725,6 +824,59 @@ impl Document {
         self.height = (self.height + shift_y).max((fitted_y + bounds.height).ceil());
         self.translate(shift_x, shift_y);
     }
+}
+
+fn closed_shape_bounds(shape: &ShapeElement) -> Rect {
+    let left = shape.base.x.min(shape.end_x);
+    let top = shape.base.y.min(shape.end_y);
+    let stroke_extent = ((shape.style.stroke_width / 2.).ceil() + 1.).max(1.)
+        + annotation_drop_shadow_pad(&shape.style);
+    Rect {
+        x: left - stroke_extent,
+        y: top - stroke_extent,
+        width: (shape.base.x - shape.end_x).abs().max(1.) + stroke_extent * 2.,
+        height: (shape.base.y - shape.end_y).abs().max(1.) + stroke_extent * 2.,
+    }
+}
+
+fn annotation_drop_shadow_pad(style: &ElementStyle) -> f64 {
+    if !style.has_drop_shadow() {
+        return 0.;
+    }
+    let width = style.stroke_width.max(1.);
+    let fallback_opacity = 45.;
+    let fallback_blur = 6_f64.max(width * 0.85);
+    let fallback_offset_x = 0.;
+    let fallback_offset_y = 2_f64.max((width * 0.32).round());
+    let resolved = style.drop_shadow_style.as_ref();
+    let resolve = |value: Option<f64>, minimum: f64, maximum: f64, fallback: f64| {
+        value
+            .filter(|value| value.is_finite())
+            .map_or(fallback, |value| value.clamp(minimum, maximum))
+    };
+    let opacity = resolve(
+        resolved.map(|shadow| shadow.opacity),
+        0.,
+        100.,
+        fallback_opacity,
+    );
+    if opacity <= 0. {
+        return 0.;
+    }
+    let blur = resolve(resolved.map(|shadow| shadow.blur), 0., 100., fallback_blur);
+    let offset_x = resolve(
+        resolved.map(|shadow| shadow.offset_x),
+        -500.,
+        500.,
+        fallback_offset_x,
+    );
+    let offset_y = resolve(
+        resolved.map(|shadow| shadow.offset_y),
+        -500.,
+        500.,
+        fallback_offset_y,
+    );
+    (blur * 2. + offset_x.abs().max(offset_y.abs())).ceil()
 }
 
 pub(crate) fn image_bounds(image: &ImageElement) -> Rect {

@@ -446,6 +446,17 @@ Duplicates share owned image assets and remain draft-compatible.
 These commands are shared across all four platforms; host integration and
 physical acceptance are tracked separately below.
 
+Shared editor sessions can also create completed rectangle and ellipse layers from
+typed start/end geometry, existing element styles and opacity. The command assigns
+the stable layer ID and shipping unlocked/visible/source-over defaults, preserves
+partial clipping, and expands/translates the document only when the annotation is
+fully outside, including painted bounds from enabled default or custom shadows.
+Degenerate closed-shape geometry is rejected transactionally instead of becoming a
+synthetic filled pixel. TypeScript-derived reverse/fractional vectors and rendered
+session tests cover rollback, undo/redo and draft reopen. This is a drawing-tool
+prerequisite shared by macOS, Windows, X11 and Wayland; no host creation gesture or
+physical-platform acceptance is included.
+
 The first wgpu editor window now opens isolated History screenshots on its own
 serialized worker, with fit preview, numeric crop/canvas fields, undo/redo,
 save draft and confirmed discard. Closing unsaved edits offers save, keep the last

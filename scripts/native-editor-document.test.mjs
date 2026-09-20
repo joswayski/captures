@@ -7,6 +7,9 @@ import {
   cropDragAspectRatio,
   cropDocument,
   duplicateScreenshotElement,
+  elementBounds,
+  expandDocumentToFitBounds,
+  isFullyOutsideCanvas,
   reorderScreenshotLayers,
   resizeDocumentCanvas,
   transformImageElement,
@@ -331,10 +334,135 @@ function shippingCases() {
     },
     document,
     ...geometryCases(),
+    shapeCreations: shapeCreationCases(),
     orientations: orientationCases(),
     layers,
     history: historyCases(),
   };
+}
+
+function shapeCreationCases() {
+  const input = {
+    width: 40,
+    height: 30,
+    background: '#ffffff',
+    futureDocument: { preserve: 'creation' },
+    elements: [{
+      id: 'existing-hidden-locked',
+      kind: 'image',
+      source: 'imported',
+      src: 'draft-asset:existing',
+      originalSrc: null,
+      name: 'existing.png',
+      sourceArtifactId: null,
+      x: 1.25,
+      y: -2.5,
+      width: 3,
+      height: 2,
+      naturalWidth: 3,
+      naturalHeight: 2,
+      locked: true,
+      visible: false,
+      opacity: 63,
+      blendMode: 'screen',
+      futureImage: ['keep'],
+    }],
+  };
+  const defaults = {
+    color: '#ff3b5c',
+    fill: '#ff3b5c',
+    strokeWidth: 8,
+    strokeEnabled: false,
+    dropShadow: false,
+  };
+  const vectors = [
+    {
+      name: 'reverse fractional rectangle remains clipped when partially overlapping',
+      shape: 'rectangle',
+      start: { x: 2.25, y: 15.5 },
+      end: { x: -3.75, y: 4.125 },
+    },
+    {
+      name: 'negative fully outside ellipse expands and translates every layer',
+      shape: 'ellipse',
+      start: { x: -30.25, y: -20.5 },
+      end: { x: -18.75, y: -12.25 },
+    },
+    {
+      name: 'right bottom fully outside rectangle expands without translation',
+      shape: 'rectangle',
+      start: { x: 46.25, y: 34.5 },
+      end: { x: 54.75, y: 41.25 },
+    },
+    {
+      name: 'custom ellipse retains style opacity and unknown style data',
+      shape: 'ellipse',
+      start: { x: 31.75, y: 3.25 },
+      end: { x: 17.125, y: 22.875 },
+      style: {
+        color: '#00ff00',
+        fill: null,
+        strokeWidth: 2.5,
+        strokeEnabled: true,
+        dropShadow: false,
+        futureStyle: { preserve: 7 },
+      },
+      opacity: 37.5,
+    },
+    {
+      name: 'default shadow padding keeps shadow-only canvas overlap clipped',
+      shape: 'rectangle',
+      start: { x: -25, y: 9.5 },
+      end: { x: -21, y: 14.5 },
+      style: { ...defaults, dropShadow: true },
+    },
+    {
+      name: 'custom shadow padding expands fully outside shape and translates siblings',
+      shape: 'ellipse',
+      start: { x: -50, y: -31.25 },
+      end: { x: -46, y: -26.75 },
+      style: {
+        color: '#5533cc',
+        fill: '#5533cc',
+        strokeWidth: 2,
+        strokeEnabled: false,
+        dropShadow: true,
+        dropShadowStyle: {
+          color: '#112233',
+          opacity: 80,
+          blur: 4,
+          offsetX: 9,
+          offsetY: -2,
+        },
+      },
+    },
+  ];
+  return vectors.map(({ name, shape, start, end, style, opacity }) => {
+    const request = { shape, start, end };
+    if (style) request.style = style;
+    if (opacity !== undefined) request.opacity = opacity;
+    const element = {
+      id: 'fixture-created-shape',
+      kind: 'shape',
+      shape,
+      x: start.x,
+      y: start.y,
+      endX: end.x,
+      endY: end.y,
+      controls: [],
+      style: style ?? defaults,
+      locked: false,
+      visible: true,
+      opacity: opacity ?? 100,
+      blendMode: 'source-over',
+    };
+    let expected = { ...structuredClone(input), elements: [...structuredClone(input.elements), element] };
+    const bounds = elementBounds(element);
+    if (isFullyOutsideCanvas(bounds, expected)) {
+      expected = expandDocumentToFitBounds(expected, bounds, 0);
+    }
+    return { name, input, request, expected };
+  });
 }
 
 function serializableCases() {
@@ -356,6 +484,7 @@ function fixtureText(cases) {
     `  "translations": ${array(cases.translations, '    ')},`,
     `  "cropRects": ${array(cases.cropRects, '    ')},`,
     `  "canvasSizes": ${array(cases.canvasSizes, '    ')},`,
+    `  "shapeCreations": ${array(cases.shapeCreations, '    ')},`,
     `  "orientations": ${array(cases.orientations, '    ')},`,
     `  "layers": ${JSON.stringify(cases.layers)},`,
     '  "history": {',
@@ -384,6 +513,9 @@ if (process.argv.includes('--write')) {
     assert.ok(vectors.document.elements.some(element => element.locked === true));
     assert.ok(vectors.crops.some(entry => entry.start.x < 0));
     assert.ok(vectors.cropDrags.some(entry => entry.updates.some(step => step.shiftKey)));
+    assert.equal(vectors.shapeCreations.length, 6);
+    assert.ok(vectors.shapeCreations.some(entry => entry.expected.width > entry.input.width));
+    assert.ok(vectors.shapeCreations.some(entry => entry.expected.elements[0].x > entry.input.elements[0].x));
     assert.ok(vectors.history.expected.some(entry => entry.undo === 100));
     assert.ok(vectors.history.expected.some(entry => entry.redo === 100));
     assert.equal(vectors.history.expected[0].changed, false);

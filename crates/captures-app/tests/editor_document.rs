@@ -1,10 +1,10 @@
 use captures_app::editor::{
-    CropDrag, Document, DocumentHistory, Element, ImageTransform, LayerEdit, Point, Rect,
-    bounded_crop_rect,
+    ClosedShapeCreate, CropDrag, Document, DocumentHistory, Element, ImageTransform, LayerEdit,
+    Point, Rect, bounded_crop_rect,
 };
 use captures_history::editor_draft::{self, SaveRequest};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +16,7 @@ struct Fixture {
     translations: Vec<TranslationCase>,
     crop_rects: Vec<DocumentCropCase>,
     canvas_sizes: Vec<CanvasSizeCase>,
+    shape_creations: Vec<ShapeCreationCase>,
     orientations: Vec<OrientationCase>,
     layers: Value,
     history: HistoryCase,
@@ -98,6 +99,14 @@ struct DocumentCropCase {
 struct CanvasSizeCase {
     width: f64,
     height: f64,
+    expected: Value,
+}
+
+#[derive(Deserialize)]
+struct ShapeCreationCase {
+    name: String,
+    input: Document,
+    request: ClosedShapeCreate,
     expected: Value,
 }
 
@@ -238,6 +247,40 @@ fn interactive_crop_drag_matches_typescript_state_transitions() {
             );
             assert_eq!(drag.rect(), step.expected);
         }
+    }
+}
+
+#[test]
+fn closed_shape_creation_and_outside_expansion_match_typescript() {
+    for case in fixture().shape_creations {
+        let mut document = case.input;
+        let id = document.create_closed_shape(case.request).unwrap();
+        let Some(Element::Shape(created)) = document.elements.last_mut() else {
+            panic!("{} did not append a shape", case.name)
+        };
+        assert_eq!(created.base.id, id);
+        created.base.id = "fixture-created-shape".into();
+        assert_json_equivalent(serde_json::to_value(document).unwrap(), case.expected);
+    }
+}
+
+#[test]
+fn degenerate_closed_shape_creation_is_rejected_without_inventing_pixels() {
+    let original = Document::new_capture("asset://original", 7., 3., None);
+    for (start, end) in [
+        (json!({"x": 2, "y": 1}), json!({"x": 2, "y": 2})),
+        (json!({"x": 2, "y": 1}), json!({"x": 4, "y": 1})),
+        (json!({"x": 2, "y": 1}), json!({"x": 2, "y": 1})),
+    ] {
+        let create: ClosedShapeCreate = serde_json::from_value(json!({
+            "shape": "rectangle",
+            "start": start,
+            "end": end,
+        }))
+        .unwrap();
+        let mut document = original.clone();
+        assert!(document.create_closed_shape(create).is_err());
+        assert_eq!(document, original);
     }
 }
 

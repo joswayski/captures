@@ -369,6 +369,161 @@ fn image_transform_json_preserves_center_pixels_history_and_draft_data() {
 }
 
 #[test]
+fn closed_shape_json_creation_renders_and_rolls_back_history_before_draft_reopen() {
+    let (data, id, original) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    let mut document = editor.snapshot().document.clone();
+    document.width = 12.;
+    document.height = 8.;
+    document.background = None;
+    document
+        .extra
+        .insert("futureDocument".into(), json!({"keep": "shape-create"}));
+    let Element::Image(image) = &mut document.elements[0] else {
+        panic!()
+    };
+    image
+        .extra
+        .insert("futureImage".into(), json!({"keep": [7, 3]}));
+    editor.execute(Request::Commit { document }).unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 1 })
+        .unwrap();
+    drop(editor);
+
+    // Reopen so creation is one transaction on top of a persisted baseline.
+    let mut editor = open(data.path(), &id).unwrap();
+    let baseline = editor.snapshot().document.clone();
+    let baseline_frame = editor.pixels();
+    let rectangle: Request = serde_json::from_value(json!({
+        "operation": "create_closed_shape",
+        "shape": "rectangle",
+        "start": {"x": 1.25, "y": 1.25},
+        "end": {"x": 5.75, "y": 5.75}
+    }))
+    .unwrap();
+    editor.execute(rectangle).unwrap();
+    let rectangle_document = editor.snapshot().document.clone();
+    let Element::Shape(rectangle) = rectangle_document.elements.last().unwrap() else {
+        panic!()
+    };
+    assert!(!rectangle.base.id.is_empty());
+    assert_ne!(rectangle.base.id, "capture-background");
+    assert_eq!(rectangle.shape, "rectangle");
+    assert_eq!((rectangle.base.x, rectangle.base.y), (1.25, 1.25));
+    assert_eq!((rectangle.end_x, rectangle.end_y), (5.75, 5.75));
+    assert!(!rectangle.base.locked && rectangle.base.visible);
+    assert_eq!(rectangle.base.opacity, 100.);
+    assert_eq!(rectangle.base.blend_mode, "source-over");
+    assert_eq!(rectangle.style.color, "#ff3b5c");
+    assert_eq!(rectangle.style.fill.as_deref(), Some("#ff3b5c"));
+    assert_eq!(rectangle.style.stroke_width, 8.);
+    assert_eq!(rectangle.style.stroke_enabled, Some(false));
+    assert_eq!(rectangle.style.drop_shadow, Some(false));
+    assert_eq!(editor.pixels().get_pixel(3, 3).0, [255, 59, 92, 255]);
+    assert_eq!(editor.pixels().get_pixel(10, 7).0, [0, 0, 0, 0]);
+
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.snapshot().document, &baseline);
+    assert_eq!(editor.pixels(), baseline_frame);
+    assert!(editor.snapshot().can_redo);
+    let before_failure = serde_json::to_value(editor.snapshot()).unwrap();
+    let retained_frame = editor.pixels();
+    let degenerate: Request = serde_json::from_value(json!({
+        "operation": "create_closed_shape",
+        "shape": "rectangle",
+        "start": {"x": 4, "y": 2},
+        "end": {"x": 4, "y": 6}
+    }))
+    .unwrap();
+    assert!(editor.execute(degenerate).is_err());
+    assert_eq!(
+        serde_json::to_value(editor.snapshot()).unwrap(),
+        before_failure
+    );
+    assert!(Arc::ptr_eq(&retained_frame, &editor.pixels()));
+    assert!(editor.snapshot().can_redo);
+    let invalid_fill: Request = serde_json::from_value(json!({
+        "operation": "create_closed_shape",
+        "shape": "ellipse",
+        "start": {"x": 7, "y": 1},
+        "end": {"x": 11, "y": 6},
+        "style": {
+            "color": "#00ff00",
+            "fill": "not-a-color",
+            "strokeWidth": 3,
+            "strokeEnabled": false,
+            "dropShadow": false
+        }
+    }))
+    .unwrap();
+    assert!(editor.execute(invalid_fill).is_err());
+    assert_eq!(
+        serde_json::to_value(editor.snapshot()).unwrap(),
+        before_failure
+    );
+    assert!(Arc::ptr_eq(&retained_frame, &editor.pixels()));
+    assert!(editor.snapshot().can_redo);
+
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.snapshot().document, &rectangle_document);
+    // A custom ellipse fully outside the negative edges grows the canvas and
+    // translates every existing layer before rendering the new pixels.
+    let ellipse: Request = serde_json::from_value(json!({
+        "operation": "create_closed_shape",
+        "shape": "ellipse",
+        "start": {"x": -20, "y": -15},
+        "end": {"x": -16, "y": -11},
+        "style": {
+            "color": "#00ff00",
+            "fill": "#00ff00",
+            "strokeWidth": 3,
+            "strokeEnabled": false,
+            "dropShadow": false,
+            "futureStyle": {"keep": true}
+        },
+        "opacity": 100
+    }))
+    .unwrap();
+    editor.execute(ellipse).unwrap();
+    let final_document = editor.snapshot().document.clone();
+    assert_eq!((final_document.width, final_document.height), (35., 26.));
+    assert_eq!(
+        (
+            final_document.elements[0].base().x,
+            final_document.elements[0].base().y
+        ),
+        (23., 18.)
+    );
+    let Element::Shape(ellipse) = final_document.elements.last().unwrap() else {
+        panic!()
+    };
+    assert_eq!(ellipse.shape, "ellipse");
+    assert_eq!((ellipse.base.x, ellipse.base.y), (3., 3.));
+    assert_eq!((ellipse.end_x, ellipse.end_y), (7., 7.));
+    assert_eq!(ellipse.style.extra["futureStyle"], json!({"keep": true}));
+    assert_eq!(editor.pixels().get_pixel(5, 5).0, [0, 255, 0, 255]);
+    assert_eq!(editor.pixels().get_pixel(23, 18), original.get_pixel(0, 0));
+    assert_eq!(
+        final_document.extra["futureDocument"],
+        json!({"keep": "shape-create"})
+    );
+    let Element::Image(image) = &final_document.elements[0] else {
+        panic!()
+    };
+    assert_eq!(image.extra["futureImage"], json!({"keep": [7, 3]}));
+
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 2 })
+        .unwrap();
+    let final_pixels = editor.pixels();
+    drop(editor);
+    let restored = open(data.path(), &id).unwrap();
+    assert_eq!(restored.snapshot().document, &final_document);
+    assert_eq!(restored.pixels(), final_pixels);
+}
+
+#[test]
 fn image_import_is_atomic_undoable_and_draft_owned() {
     let (data, id, original) = setup();
     let mut editor = open(data.path(), &id).unwrap();
