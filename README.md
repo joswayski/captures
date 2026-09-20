@@ -261,7 +261,9 @@ and editor shapes, including closed annotations, curved lines, tapered arrows an
 freehand paths with crop geometry, rotation, opacity and blending, without host I/O.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
 resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
-pixel frames for native hosts.
+pixel frames for native hosts. The shared C boundary accepts one borrowed decoded
+RGBA buffer into session-owned storage; native file decoding and controls remain
+unconnected.
 Full-canvas photos rotate their canvas; layered overhang stays clipped and fully
 off-canvas transformed images expand the canvas so they are not lost.
 The Windows/Linux candidate opens screenshots from History in a native crop,

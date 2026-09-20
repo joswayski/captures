@@ -403,6 +403,15 @@ atomically. Imported assets survive undo/redo and draft save/reopen. Hosts still
 file decoding, pickers and batch/drag presentation; none is connected by this shared
 prerequisite.
 
+`captures_editor_import_image_v1` exposes that single-image operation on the
+serialized C session boundary. Hosts pass borrowed top-down straight-alpha sRGB
+RGBA8 rows plus JSON name/selection/point metadata; the adapter validates shared
+render limits and all length/stride/pointer arithmetic before reading, copies into
+session-owned storage, and returns the stable layer ID with the current snapshot.
+Failures preserve document, frame, history, assets and files. This is an import
+transport prerequisite only: decoding, file pickers, clipboard, batch import and
+macOS, Windows, X11 or Wayland host acceptance remain open.
+
 Editor sessions can encode the current edited frame through the shared PNG/JPEG/
 WebP quality and hard-byte-budget policy. The C ABI returns independently owned
 encoded bytes, borrowed through an explicit pointer/length view and released
