@@ -27,7 +27,7 @@ final class RecordingSavedNoticeModel {
         case .ready, .error(_, .save): break
         default: return nil
         }
-        state = .saving; changed(); return (generation, artifactID)
+        self.state = .saving; changed(); return (generation, artifactID)
     }
 
     func finishSave(generation: Int, result: Result<String, Error>) {
