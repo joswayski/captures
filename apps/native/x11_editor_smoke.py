@@ -185,7 +185,7 @@ def main():
             "auto_copy_to_clipboard": False, "show_mini_previews": False,
         }))
         app = spawn("app", [str(binary), "--live", "--history-root", str(history),
-                    "--settings-file", str(settings), "--quit-after", "480"])
+                    "--settings-file", str(settings), "--quit-after", "600"])
         root = wait(lambda: windows("Captures"), "History workspace")[0]
         run("xdotool", "windowmove", "--sync", root, "0", "0")
         time.sleep(1)
@@ -244,6 +244,63 @@ def main():
         def save_layers(predicate, description):
             save_until(lambda: predicate(layers()), description)
             return layers()
+
+        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        click(editor, 736, 62)
+        click(editor, 95, 176)  # Pen follows Arrow on the second tool row.
+        run("xdotool", "mousemove", "--window", editor, "318", "329", "mousedown", "1", "sleep", ".2")
+        for x, y in [(378, 209), (438, 329), (518, 249)]:
+            run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y), "sleep", ".2")
+        shot(editor, "freehand-transient")
+        assert not draft.exists()
+        # First quadratic at t=1/2: (132.5,165) document pixels. The control
+        # point (140,120) must remain unpainted, unlike an unsmoothed polyline.
+        pixel("freehand-transient", 371, 254, (255, 59, 92))
+        pixel("freehand-transient", 378, 209, (229, 179, 68))
+        pixel("freehand-transient", 316, 331, (255, 59, 92))  # round start cap
+        pixel("freehand-transient", 520, 247, (255, 59, 92))  # round end cap
+        run("xdotool", "mouseup", "1", "sleep", ".3")
+        curve = save_layers(lambda values: len(values) == 2, "freehand curve")[-1]
+        assert curve["kind"] == "path" and curve["style"]["fill"] is None
+        assert len(curve["points"]) == 4
+        for point, expected in zip(curve["points"], [(80, 240), (140, 120), (200, 240), (280, 160)]):
+            assert abs(point["x"] - expected[0]) < 1e-12 and abs(point["y"] - expected[1]) < 1e-12
+        shot(editor, "freehand-curve")
+        pixel("freehand-curve", 371, 254, (255, 59, 92))
+        pixel("freehand-curve", 378, 209, (229, 179, 68))
+        pixel("freehand-curve", 316, 331, (255, 59, 92))
+        pixel("freehand-curve", 520, 247, (255, 59, 92))
+        drag((700, 420), (701, 420))  # Under 1.5 screen pixels: keep only the press sample.
+        dot = save_layers(lambda values: len(values) == 3, "freehand one-point dot")[-1]
+        assert dot["kind"] == "path" and len(dot["points"]) == 1
+        shot(editor, "freehand-dot")
+        pixel("freehand-dot", 700, 420, (255, 59, 92))
+        click(editor, 35, 62)
+        save_layers(lambda values: len(values) == 2, "freehand dot undo")
+        before_cancel = draft.read_bytes()
+        run("xdotool", "mousemove", "--window", editor, "400", "400", "mousedown", "1",
+            "sleep", ".2", "mousemove", "--sync", "--window", editor, "460", "410", "sleep", ".2",
+            "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
+        assert draft.read_bytes() == before_cancel
+        click(editor, 98, 62)
+        assert save_layers(lambda values: len(values) == 3, "cancel preserves freehand redo")[-1]["id"] == dot["id"]
+        drag((320, 500), (420, 560))
+        save_layers(lambda values: len(values) == 4, "outside freehand stroke")
+        assert saved(640, 479, 0, 0)  # authored sample max y=471 plus shipping 8px padding
+        shot(editor, "freehand-outside")
+        run("xdotool", "windowsize", "--sync", editor, "760", "540")
+        shot(editor, "freehand-minimum")
+        close(editor)
+        wait(lambda: not windows("Screenshot editor"), "freehand editor closes")
+        editor = reopen()
+        run("xdotool", "windowsize", "--sync", editor, "886", "700")
+        shot(editor, "freehand-reopened")
+        pixel("freehand-reopened", 371, 254, (255, 59, 92))
+        assert layers()[1]["id"] == curve["id"] and layers()[1]["points"] == curve["points"]
+        assert (artifact / "capture.png").read_bytes() == original
+        click(editor, 275, 62)
+        click(editor, 55, 128)
+        wait(lambda: not draft.exists(), "discard freehand edits")
 
         run("xdotool", "windowsize", "--sync", editor, "886", "700")
         click(editor, 736, 62)
@@ -910,6 +967,8 @@ def main():
                        "shape-transient-escape-degenerate", "shape-draft-reopen-outside-expansion",
                        "open-shape-horizontal-vertical-zero-lines", "open-shape-reverse-arrow-pixels",
                        "open-shape-transient-escape-short-cancel", "open-shape-undo-redo-minimum-reopen",
+                       "freehand-quadratic-preview-and-render-pixels", "freehand-sampling-dot",
+                       "freehand-cancel-retains-redo", "freehand-outside-expansion-minimum-reopen",
                        "annotation-unapplied-reset-noop", "annotation-locked-fill-stroke-pixels",
                        "annotation-style-undo-redo", "annotation-shadow-toggle-retains-custom",
                        "annotation-color-picker-minimum-reopen-pixels",

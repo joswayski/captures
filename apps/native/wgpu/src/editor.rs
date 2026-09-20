@@ -15,8 +15,9 @@ use captures_app::{
     editor::{
         ARROW_MIN_DRAW_LENGTH, AnnotationStylePatch, ClosedShapeCreate, ClosedShapeKind, CropDrag,
         Document, DropShadowStyle, DropShadowStylePatch, Element, ElementBase, ElementStyle,
-        ImageTransform, LayerEdit, LayerPlacement, OpenShapeCreate, OpenShapeKind,
-        OptionalNullable, Point, Rect, ShapeElement, arrow_fill_polygon,
+        FreehandPathCreate, ImageTransform, LayerEdit, LayerPlacement, OpenShapeCreate,
+        OpenShapeKind, OptionalNullable, Point, Rect, ShapeElement, arrow_fill_polygon,
+        smooth_path_centerline,
     },
     editor_output::{SavedExport, save_new_export},
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
@@ -92,6 +93,7 @@ enum DrawShape {
     Ellipse,
     Line,
     Arrow,
+    Freehand,
 }
 
 impl DrawShape {
@@ -202,6 +204,7 @@ struct View {
     crop_aspect: usize,
     draw_shape: DrawShape,
     shape_drag: Option<(Point, Point)>,
+    freehand_points: Vec<Point>,
     canvas: [f64; 2],
     section: Section,
     export_options: ExportOptions,
@@ -236,6 +239,7 @@ impl Default for View {
             crop_aspect: 0,
             draw_shape: DrawShape::Rectangle,
             shape_drag: None,
+            freehand_points: Vec::new(),
             canvas: [1., 1.],
             section: Section::Geometry,
             export_options: ExportOptions {
@@ -275,6 +279,11 @@ impl View {
         self.crop_drag = None;
     }
 
+    fn cancel_drawing(&mut self) {
+        self.shape_drag = None;
+        self.freehand_points.clear();
+    }
+
     fn title(&self) -> &'static str {
         if self.pending {
             "Screenshot editor — Captures — Working…"
@@ -288,7 +297,7 @@ impl View {
     }
 
     fn request_close(&mut self) {
-        self.shape_drag = None;
+        self.cancel_drawing();
         if self.pending || self.unsaved() {
             self.close_requested = true;
         } else {
@@ -311,7 +320,7 @@ impl View {
                     self.invalidate_output();
                     self.output_notice = None;
                     self.cancel_crop();
-                    self.shape_drag = None;
+                    self.cancel_drawing();
                     let image = &presented.pixels;
                     self.texture = Some(ctx.load_texture(
                         "edited-screenshot",
@@ -730,7 +739,9 @@ impl Editor {
                         .and_then(|session| {
                             let creates_layer = matches!(
                                 request,
-                                Request::CreateClosedShape { .. } | Request::CreateOpenShape { .. }
+                                Request::CreateClosedShape { .. }
+                                    | Request::CreateOpenShape { .. }
+                                    | Request::CreateFreehandPath { .. }
                             );
                             session.execute(request)?;
                             let mut presented = Presented::from_session(session);
@@ -934,7 +945,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         && ui.input(|input| input.key_pressed(egui::Key::Escape))
     {
         view.cancel_crop();
-        view.shape_drag = None;
+        view.cancel_drawing();
     }
     egui::Panel::top("editor-actions").show(ui, |ui| {
         ui.horizontal(|ui| {
@@ -994,7 +1005,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         || view.confirm_discard
         || !ui.input(|input| input.focused)
     {
-        view.shape_drag = None;
+        view.cancel_drawing();
     }
     egui::Panel::left("editor-geometry").resizable(false).exact_size(230.).show(ui, |ui| {
         egui::ScrollArea::vertical().id_salt(view.section).auto_shrink([false, false]).show(ui, |ui| {
@@ -1009,12 +1020,15 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             }
             if view.section == Section::Draw {
                 ui.heading("Draw shapes");
+                let previous_tool = view.draw_shape;
                 ui.horizontal_wrapped(|ui| {
                     ui.selectable_value(&mut view.draw_shape, DrawShape::Rectangle, "Rectangle");
                     ui.selectable_value(&mut view.draw_shape, DrawShape::Ellipse, "Ellipse");
                     ui.selectable_value(&mut view.draw_shape, DrawShape::Line, "Line");
                     ui.selectable_value(&mut view.draw_shape, DrawShape::Arrow, "Arrow");
+                    ui.selectable_value(&mut view.draw_shape, DrawShape::Freehand, "Pen");
                 });
+                if view.draw_shape != previous_tool { view.cancel_drawing(); }
                 ui.label("Drag to draw. Release to add one layer. Escape cancels the current drag.");
                 ui.small("New shapes use the default annotation color. Change fill, stroke, shadow, opacity, position and ordering in Layers.");
                 return;
@@ -1135,14 +1149,49 @@ fn show_shape(
         ui.scope_id().with("shape-canvas"),
         egui::Sense::drag(),
     );
-    if response.drag_started_by(egui::PointerButton::Primary)
+    let first_pass = ui.ctx().current_pass_index() == 0;
+    let started = response.drag_started_by(egui::PointerButton::Primary);
+    if first_pass
+        && started
         && let Some(origin) = ui.input(|input| input.pointer.press_origin())
     {
         let start = image_point(origin, preview, bounds);
         view.shape_drag = Some((start, start));
+        if view.draw_shape == DrawShape::Freehand {
+            view.freehand_points = vec![start];
+        }
     }
-    if (response.dragged_by(egui::PointerButton::Primary)
-        || response.drag_stopped_by(egui::PointerButton::Primary))
+    if first_pass && view.draw_shape == DrawShape::Freehand && view.shape_drag.is_some() {
+        let minimum = 1.5 * bounds.width / f64::from(preview.width());
+        // Keep every accepted movement in this frame, not just its final pointer
+        // position. Ignore hover events preceding the press and moves after release.
+        let mut held = !started;
+        ui.input(|input| {
+            for event in &input.events {
+                match event {
+                    egui::Event::PointerButton {
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        ..
+                    } => held = *pressed,
+                    egui::Event::PointerMoved(position) if held => {
+                        let point = image_point(*position, preview, bounds);
+                        let last = view
+                            .freehand_points
+                            .last()
+                            .expect("freehand starts at press origin");
+                        if (point.x - last.x).hypot(point.y - last.y) >= minimum {
+                            view.freehand_points.push(point);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
+    if first_pass
+        && (response.dragged_by(egui::PointerButton::Primary)
+            || response.drag_stopped_by(egui::PointerButton::Primary))
         && let Some(position) = response.interact_pointer_pos()
         && let Some((_, end)) = &mut view.shape_drag
     {
@@ -1189,6 +1238,21 @@ fn show_shape(
                     ),
                 );
             }
+            DrawShape::Freehand => {
+                let points: Vec<_> = smooth_path_centerline(&view.freehand_points)
+                    .into_iter()
+                    .map(position)
+                    .collect();
+                let width = (style.stroke_width / bounds.width) as f32 * preview.width();
+                if points.len() == 1 {
+                    painter.circle_filled(points[0], width / 2., fill);
+                } else {
+                    // egui's open path has flat caps; shipping Pen strokes are round.
+                    painter.circle_filled(points[0], width / 2., fill);
+                    painter.circle_filled(points[points.len() - 1], width / 2., fill);
+                    painter.add(egui::Shape::line(points, egui::Stroke::new(width, fill)));
+                }
+            }
             DrawShape::Arrow => {
                 let arrow = ShapeElement {
                     base: ElementBase {
@@ -1218,13 +1282,25 @@ fn show_shape(
             }
         }
     }
-    if response.drag_stopped_by(egui::PointerButton::Primary)
+    if first_pass
+        && response.drag_stopped_by(egui::PointerButton::Primary)
         && let Some((start, end)) = view.shape_drag.take()
-        && let Some(request) =
+    {
+        let request = if view.draw_shape == DrawShape::Freehand {
+            Some(Request::CreateFreehandPath {
+                create: FreehandPathCreate {
+                    points: std::mem::take(&mut view.freehand_points),
+                    style,
+                    opacity: 100.,
+                },
+            })
+        } else {
             view.draw_shape
                 .request(start, end, f64::from(preview.width()) / bounds.width)
-    {
-        view.submit(tx, request);
+        };
+        if let Some(request) = request {
+            view.submit(tx, request);
+        }
     }
 }
 
@@ -1939,6 +2015,118 @@ mod tests {
     }
 
     #[test]
+    fn freehand_samples_all_frame_moves_once_and_ignores_hover_and_release_positions() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let mut value = presented(false);
+        value.pixels = Arc::new(RgbaImage::new(1280, 640));
+        view.receive(&ctx, Ok(value));
+        view.draw_shape = DrawShape::Freehand;
+        view.canvas = [9., 7.]; // Unapplied fields must not affect the 0.5× mapping.
+        let pixels = view.presented.as_ref().unwrap().pixels.clone();
+        let (tx, rx) = mpsc::channel();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000., 800.));
+        let preview = egui::Rect::from_min_size(egui::pos2(100., 100.), egui::vec2(640., 320.));
+        let frame = |view: &mut View, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |_| {
+                    let mut ui = egui::Ui::new(
+                        ctx.clone(),
+                        egui::Id::unique("freehand-test"),
+                        egui::UiBuilder::new().max_rect(screen),
+                    );
+                    show_shape(&mut ui, view, &tx, screen, preview);
+                    if ctx.current_pass_index() == 0 {
+                        ctx.request_discard("exercise multipass event replay");
+                    }
+                },
+            );
+            assert!(output.platform_output.num_completed_passes >= 2);
+            output.textures_delta.clear();
+        };
+        let moved = |x, y| egui::Event::PointerMoved(egui::pos2(x, y));
+        let button = |x, y, pressed| egui::Event::PointerButton {
+            pos: egui::pos2(x, y),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        frame(&mut view, vec![]);
+        frame(
+            &mut view,
+            vec![
+                moved(650., 430.),
+                moved(120., 130.),
+                button(120., 130., true),
+            ],
+        );
+        frame(
+            &mut view,
+            vec![
+                moved(121., 130.),
+                moved(121.5, 130.),
+                moved(121.5, 131.),
+                moved(126., 136.),
+            ],
+        );
+        assert_eq!(
+            view.freehand_points,
+            vec![
+                Point { x: 40., y: 60. },
+                Point { x: 43., y: 60. },
+                Point { x: 52., y: 72. }
+            ]
+        );
+        assert!(rx.try_recv().is_err() && !view.unsaved());
+        assert!(Arc::ptr_eq(
+            &pixels,
+            &view.presented.as_ref().unwrap().pixels
+        ));
+        frame(
+            &mut view,
+            vec![
+                moved(96., 144.),
+                button(700., 400., false),
+                moved(800., 500.),
+            ],
+        );
+        let Job::Apply(Request::CreateFreehandPath { create }) = rx.try_recv().unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            create.points,
+            vec![
+                Point { x: 40., y: 60. },
+                Point { x: 43., y: 60. },
+                Point { x: 52., y: 72. },
+                Point { x: -8., y: 88. }
+            ]
+        );
+        assert!(
+            rx.try_recv().is_err() && view.freehand_points.is_empty() && view.shape_drag.is_none()
+        );
+
+        view.pending = false;
+        frame(&mut view, vec![moved(120., 130.), button(120., 130., true)]);
+        frame(&mut view, vec![button(120., 130., false)]);
+        let Job::Apply(Request::CreateFreehandPath { create }) = rx.try_recv().unwrap() else {
+            panic!()
+        };
+        assert_eq!(create.points, vec![Point { x: 40., y: 60. }]);
+        view.pending = false;
+        frame(&mut view, vec![moved(140., 150.), button(140., 150., true)]);
+        view.request_close();
+        assert!(view.freehand_points.is_empty() && view.shape_drag.is_none());
+        frame(&mut view, vec![button(140., 150., false)]);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
     fn open_shape_requests_keep_axis_lines_and_cancel_scale_dependent_arrow_stubs() {
         let start = Point { x: -7.25, y: 13.5 };
         for end in [start, Point { x: 4., y: 13.5 }, Point { x: -7.25, y: -2. }] {
@@ -2160,22 +2348,26 @@ mod tests {
             |_| unreachable!("copy was not requested"),
         );
         receive(&editor, &ctx);
-        for shape in [OpenShapeKind::Line, OpenShapeKind::Arrow] {
+        for request in [
+            DrawShape::Line
+                .request(Point { x: 6., y: 2. }, Point { x: 0., y: 2. }, 1.)
+                .unwrap(),
+            DrawShape::Arrow
+                .request(Point { x: 6., y: 2. }, Point { x: 0., y: 2. }, 1.)
+                .unwrap(),
+            Request::CreateFreehandPath {
+                create: FreehandPathCreate {
+                    points: vec![Point { x: 6., y: 2. }, Point { x: 0., y: 2. }],
+                    style: ElementStyle::default(),
+                    opacity: 100.,
+                },
+            },
+        ] {
+            let thin_arrow = matches!(&request, Request::CreateOpenShape { create } if create.shape == OpenShapeKind::Arrow);
             editor.view.lock().unwrap().preview(&editor.tx);
             receive(&editor, &ctx);
             assert!(editor.view.lock().unwrap().show_output);
-            editor.view.lock().unwrap().submit(
-                &editor.tx,
-                Request::CreateOpenShape {
-                    create: OpenShapeCreate {
-                        shape,
-                        start: Point { x: 6., y: 2. },
-                        end: Point { x: 0., y: 2. },
-                        style: ElementStyle::default(),
-                        opacity: 100.,
-                    },
-                },
-            );
+            editor.view.lock().unwrap().submit(&editor.tx, request);
             receive(&editor, &ctx);
             {
                 let view = editor.view.lock().unwrap();
@@ -2189,7 +2381,7 @@ mod tests {
                     Some(created.base().id.as_str())
                 );
                 assert!(view.annotation.is_some());
-                if shape == OpenShapeKind::Line {
+                if !thin_arrow {
                     assert_eq!(frame.pixels.get_pixel(3, 2).0, [255, 59, 92, 255]);
                 }
             }

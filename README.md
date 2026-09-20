@@ -276,9 +276,10 @@ canvas-size and draft editor with undo/redo. **Draw crop** selects directly on t
 preview with free or preset aspect ratios and Shift ratio locking. Apply commits
 the selection; Cancel or Escape leaves the document unchanged. Its layer panel supports selection,
 visibility, locking, opacity, renaming, position, duplication, deletion and ordering.
-**Draw** adds rectangles, ellipses, straight lines and tapered arrows in the default
+**Draw** adds rectangles, ellipses, straight lines, tapered arrows and freehand Pen strokes in the default
 annotation color, one undoable layer per gesture. Escape cancels unfinished work;
-short arrow gestures are discarded and drafts retain completed shapes.
+short arrow gestures are discarded and drafts retain completed shapes and strokes.
+Pen smooths sampled points and retains click-only dots.
 **Layers → Annotation style** edits fill, stroke and shadow color, width, opacity,
 blur and offsets. Apply style creates one undo step; Reset fields cancels unapplied
 changes. Hidden and locked annotations remain editable.
