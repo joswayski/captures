@@ -732,18 +732,19 @@ final class ScreenshotEditorTests: XCTestCase {
     }
 
     private func renderedAlphaRange(_ image: CGImage) -> ClosedRange<UInt8> {
-        var alpha = [UInt8](repeating: 0, count: image.width * image.height)
-        let rendered = alpha.withUnsafeMutableBytes { storage -> Bool in
+        var grayAlpha = [UInt8](repeating: 0, count: image.width * image.height * 2)
+        let rendered = grayAlpha.withUnsafeMutableBytes { storage -> Bool in
             guard let base = storage.baseAddress,
                   let context = CGContext(data: base, width: image.width, height: image.height,
-                                          bitsPerComponent: 8, bytesPerRow: image.width,
-                                          space: nil,
-                                          bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue)
+                                          bitsPerComponent: 8, bytesPerRow: image.width * 2,
+                                          space: CGColorSpaceCreateDeviceGray(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
             else { return false }
             context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
             return true
         }
         guard rendered else { return 0...0 }
+        let alpha = stride(from: 1, to: grayAlpha.count, by: 2).map { grayAlpha[$0] }
         return (alpha.min() ?? 0)...(alpha.max() ?? 0)
     }
 }
