@@ -1,0 +1,551 @@
+[
+  {
+    "name": "negative-left-edge-natural-size",
+    "document": {
+      "width": 23,
+      "height": 17,
+      "background": null,
+      "elements": [
+        {
+          "id": "negative-locked",
+          "kind": "image",
+          "source": "imported",
+          "src": "fixture:negative-locked",
+          "originalSrc": null,
+          "name": "negative-locked.png",
+          "sourceArtifactId": null,
+          "x": -7.25,
+          "y": 3.5,
+          "width": 9,
+          "height": 5,
+          "naturalWidth": 9,
+          "naturalHeight": 5,
+          "locked": true,
+          "visible": true,
+          "opacity": 100,
+          "blendMode": "source-over"
+        }
+      ]
+    },
+    "selectedId": null,
+    "point": {
+      "x": -8.5,
+      "y": 5.25
+    },
+    "natural": {
+      "width": 6,
+      "height": 3
+    },
+    "expected": {
+      "target": {
+        "x": -7.25,
+        "y": 3.5,
+        "width": 9,
+        "height": 5
+      },
+      "placement": "left",
+      "position": {
+        "x": -13,
+        "y": 5,
+        "width": 6,
+        "height": 3
+      },
+      "fullyOutside": true,
+      "output": {
+        "width": 36,
+        "height": 17,
+        "elements": [
+          {
+            "id": "negative-locked",
+            "x": 5.75,
+            "y": 3.5,
+            "width": 9,
+            "height": 5
+          },
+          {
+            "id": "new-import",
+            "x": 0,
+            "y": 5,
+            "width": 6,
+            "height": 3
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "stack-caps-asymmetric-overlay-on-top-visible-target",
+    "document": {
+      "width": 230,
+      "height": 170,
+      "background": null,
+      "elements": [
+        {
+          "id": "background",
+          "kind": "image",
+          "source": "imported",
+          "src": "fixture:background",
+          "originalSrc": null,
+          "name": "background.png",
+          "sourceArtifactId": null,
+          "x": 0,
+          "y": 0,
+          "width": 230,
+          "height": 170,
+          "naturalWidth": 230,
+          "naturalHeight": 170,
+          "locked": false,
+          "visible": true,
+          "opacity": 100,
+          "blendMode": "source-over"
+        },
+        {
+          "id": "hidden-front",
+          "kind": "image",
+          "source": "imported",
+          "src": "fixture:hidden-front",
+          "originalSrc": null,
+          "name": "hidden-front.png",
+          "sourceArtifactId": null,
+          "x": 67,
+          "y": 41,
+          "width": 101,
+          "height": 83,
+          "naturalWidth": 101,
+          "naturalHeight": 83,
+          "locked": false,
+          "visible": false,
+          "opacity": 100,
+          "blendMode": "source-over"
+        },
+        {
+          "id": "locked-overlay",
+          "kind": "image",
+          "source": "imported",
+          "src": "fixture:locked-overlay",
+          "originalSrc": null,
+          "name": "locked-overlay.png",
+          "sourceArtifactId": null,
+          "x": 44.25,
+          "y": 27.5,
+          "width": 111,
+          "height": 89,
+          "naturalWidth": 111,
+          "naturalHeight": 89,
+          "locked": true,
+          "visible": true,
+          "opacity": 100,
+          "blendMode": "source-over"
+        }
+      ]
+    },
+    "selectedId": "background",
+    "point": {
+      "x": 91.75,
+      "y": 73.25
+    },
+    "natural": {
+      "width": 401,
+      "height": 131
+    },
+    "expected": {
+      "target": {
+        "x": 44.25,
+        "y": 27.5,
+        "width": 111,
+        "height": 89
+      },
+      "placement": "stack",
+      "position": {
+        "x": 12,
+        "y": 47,
+        "width": 160,
+        "height": 52
+      },
+      "fullyOutside": false,
+      "output": {
+        "width": 230,
+        "height": 170,
+        "elements": [
+          {
+            "id": "background",
+            "x": 0,
+            "y": 0,
+            "width": 230,
+            "height": 170
+          },
+          {
+            "id": "hidden-front",
+            "x": 67,
+            "y": 41,
+            "width": 101,
+            "height": 83
+          },
+          {
+            "id": "locked-overlay",
+            "x": 44.25,
+            "y": 27.5,
+            "width": 111,
+            "height": 89
+          },
+          {
+            "id": "new-import",
+            "x": 12,
+            "y": 47,
+            "width": 160,
+            "height": 52
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "outside-pointer-uses-frontmost-equidistant-visible-target",
+    "document": {
+      "width": 80,
+      "height": 40,
+      "background": null,
+      "elements": [
+        {
+          "id": "left",
+          "kind": "image",
+          "source": "imported",
+          "src": "fixture:left",
+          "originalSrc": null,
+          "name": "left.png",
+          "sourceArtifactId": null,
+          "x": -4.5,
+          "y": 8.25,
+          "width": 20,
+          "height": 11,
+          "naturalWidth": 20,
+          "naturalHeight": 11,
+          "locked": false,
+          "visible": true,
+          "opacity": 100,
+          "blendMode": "source-over"
+        },
+        {
+          "id": "right",
+          "kind": "image",
+          "source": "imported",
+          "src": "fixture:right",
+          "originalSrc": null,
+          "name": "right.png",
+          "sourceArtifactId": null,
+          "x": 44.5,
+          "y": 8.25,
+          "width": 20,
+          "height": 11,
+          "naturalWidth": 20,
+          "naturalHeight": 11,
+          "locked": true,
+          "visible": true,
+          "opacity": 100,
+          "blendMode": "source-over"
+        },
+        {
+          "id": "hidden",
+          "kind": "image",
+          "source": "imported",
+          "src": "fixture:hidden",
+          "originalSrc": null,
+          "name": "hidden.png",
+          "sourceArtifactId": null,
+          "x": 21,
+          "y": 4,
+          "width": 18,
+          "height": 19,
+          "naturalWidth": 18,
+          "naturalHeight": 19,
+          "locked": false,
+          "visible": false,
+          "opacity": 100,
+          "blendMode": "source-over"
+        }
+      ]
+    },
+    "selectedId": "hidden",
+    "point": {
+      "x": 30,
+      "y": 13.75
+    },
+    "natural": {
+      "width": 7,
+      "height": 4
+    },
+    "expected": {
+      "target": {
+        "x": 44.5,
+        "y": 8.25,
+        "width": 20,
+        "height": 11
+      },
+      "placement": "top",
+      "position": {
+        "x": 51,
+        "y": 4,
+        "width": 7,
+        "height": 4
+      },
+      "fullyOutside": false,
+      "output": {
+        "width": 80,
+        "height": 40,
+        "elements": [
+          {
+            "id": "left",
+            "x": -4.5,
+            "y": 8.25,
+            "width": 20,
+            "height": 11
+          },
+          {
+            "id": "right",
+            "x": 44.5,
+            "y": 8.25,
+            "width": 20,
+            "height": 11
+          },
+          {
+            "id": "hidden",
+            "x": 21,
+            "y": 4,
+            "width": 18,
+            "height": 19
+          },
+          {
+            "id": "new-import",
+            "x": 51,
+            "y": 4,
+            "width": 7,
+            "height": 4
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "missing-selection-defaults-below-frontmost-visible-image",
+    "document": {
+      "width": 37,
+      "height": 29,
+      "background": null,
+      "elements": [
+        {
+          "id": "visible-back",
+          "kind": "image",
+          "source": "imported",
+          "src": "fixture:visible-back",
+          "originalSrc": null,
+          "name": "visible-back.png",
+          "sourceArtifactId": null,
+          "x": 1.25,
+          "y": 2.5,
+          "width": 13,
+          "height": 9,
+          "naturalWidth": 13,
+          "naturalHeight": 9,
+          "locked": false,
+          "visible": true,
+          "opacity": 100,
+          "blendMode": "source-over"
+        },
+        {
+          "id": "hidden-selected",
+          "kind": "image",
+          "source": "imported",
+          "src": "fixture:hidden-selected",
+          "originalSrc": null,
+          "name": "hidden-selected.png",
+          "sourceArtifactId": null,
+          "x": -19,
+          "y": -17,
+          "width": 5,
+          "height": 3,
+          "naturalWidth": 5,
+          "naturalHeight": 3,
+          "locked": true,
+          "visible": false,
+          "opacity": 100,
+          "blendMode": "source-over"
+        },
+        {
+          "id": "visible-front",
+          "kind": "image",
+          "source": "imported",
+          "src": "fixture:visible-front",
+          "originalSrc": null,
+          "name": "visible-front.png",
+          "sourceArtifactId": null,
+          "x": 18.5,
+          "y": 11.25,
+          "width": 7,
+          "height": 5,
+          "naturalWidth": 7,
+          "naturalHeight": 5,
+          "locked": true,
+          "visible": true,
+          "opacity": 100,
+          "blendMode": "source-over"
+        }
+      ]
+    },
+    "selectedId": "hidden-selected",
+    "point": null,
+    "natural": {
+      "width": 9,
+      "height": 4
+    },
+    "expected": {
+      "target": {
+        "x": 18.5,
+        "y": 11.25,
+        "width": 7,
+        "height": 5
+      },
+      "placement": "bottom",
+      "position": {
+        "x": 18,
+        "y": 16,
+        "width": 9,
+        "height": 4
+      },
+      "fullyOutside": false,
+      "output": {
+        "width": 37,
+        "height": 29,
+        "elements": [
+          {
+            "id": "visible-back",
+            "x": 1.25,
+            "y": 2.5,
+            "width": 13,
+            "height": 9
+          },
+          {
+            "id": "hidden-selected",
+            "x": -19,
+            "y": -17,
+            "width": 5,
+            "height": 3
+          },
+          {
+            "id": "visible-front",
+            "x": 18.5,
+            "y": 11.25,
+            "width": 7,
+            "height": 5
+          },
+          {
+            "id": "new-import",
+            "x": 18,
+            "y": 16,
+            "width": 9,
+            "height": 4
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "fully-outside-stack-expands-with-padding-and-translates-all-layers",
+    "document": {
+      "width": 31,
+      "height": 19,
+      "background": null,
+      "elements": [
+        {
+          "id": "on-canvas-hidden",
+          "kind": "image",
+          "source": "imported",
+          "src": "fixture:on-canvas-hidden",
+          "originalSrc": null,
+          "name": "on-canvas-hidden.png",
+          "sourceArtifactId": null,
+          "x": 2.25,
+          "y": 1.5,
+          "width": 8,
+          "height": 6,
+          "naturalWidth": 8,
+          "naturalHeight": 6,
+          "locked": true,
+          "visible": false,
+          "opacity": 100,
+          "blendMode": "source-over"
+        },
+        {
+          "id": "outside-target",
+          "kind": "image",
+          "source": "imported",
+          "src": "fixture:outside-target",
+          "originalSrc": null,
+          "name": "outside-target.png",
+          "sourceArtifactId": null,
+          "x": -29.5,
+          "y": -14.25,
+          "width": 11,
+          "height": 7,
+          "naturalWidth": 11,
+          "naturalHeight": 7,
+          "locked": true,
+          "visible": true,
+          "opacity": 100,
+          "blendMode": "source-over"
+        }
+      ]
+    },
+    "selectedId": null,
+    "point": {
+      "x": -24,
+      "y": -10.75
+    },
+    "natural": {
+      "width": 5,
+      "height": 3
+    },
+    "expected": {
+      "target": {
+        "x": -29.5,
+        "y": -14.25,
+        "width": 11,
+        "height": 7
+      },
+      "placement": "stack",
+      "position": {
+        "x": -26,
+        "y": -12,
+        "width": 5,
+        "height": 3
+      },
+      "fullyOutside": true,
+      "output": {
+        "width": 57,
+        "height": 31,
+        "elements": [
+          {
+            "id": "on-canvas-hidden",
+            "x": 28.25,
+            "y": 13.5,
+            "width": 8,
+            "height": 6
+          },
+          {
+            "id": "outside-target",
+            "x": -3.5,
+            "y": -2.25,
+            "width": 11,
+            "height": 7
+          },
+          {
+            "id": "new-import",
+            "x": 0,
+            "y": 0,
+            "width": 5,
+            "height": 3
+          }
+        ]
+      }
+    }
+  }
+]

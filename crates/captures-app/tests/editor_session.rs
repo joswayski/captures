@@ -1,8 +1,8 @@
 use std::{fs, path::Path, sync::Arc};
 
 use captures_app::{
-    editor::{Element, ImageOrientation, OptionalNullable, Rect},
-    editor_session::{EditorSession, OpenRequest, Request},
+    editor::{Element, ImageOrientation, OptionalNullable, Point, Rect},
+    editor_session::{EditorSession, ImportImage, OpenRequest, Request},
 };
 use captures_capture::CaptureMode;
 use image::{Rgba, RgbaImage};
@@ -365,6 +365,188 @@ fn image_transform_json_preserves_center_pixels_history_and_draft_data() {
             .pixels()
             .pixels()
             .all(|pixel| pixel.0 == [0, 0, 0, 0])
+    );
+}
+
+#[test]
+fn image_import_is_atomic_undoable_and_draft_owned() {
+    let (data, id, original) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    let mut baseline = editor.snapshot().document.clone();
+    baseline
+        .extra
+        .insert("futureDocument".into(), json!({"keep": [9, 2]}));
+    let Element::Image(background) = &mut baseline.elements[0] else {
+        panic!()
+    };
+    background
+        .extra
+        .insert("futureImage".into(), json!({"keep": true}));
+    editor
+        .execute(Request::Commit {
+            document: baseline.clone(),
+        })
+        .unwrap();
+
+    let imported = RgbaImage::from_fn(3, 2, |x, y| {
+        Rgba([181 + x as u8 * 19, 23 + y as u8 * 61, 97, 255])
+    });
+    let layer_id = editor
+        .import_image(ImportImage {
+            pixels: imported.clone(),
+            name: "asymmetric.png".into(),
+            selected_id: Some("capture-background".into()),
+            point: None,
+        })
+        .unwrap();
+    let imported_document = editor.snapshot().document.clone();
+    assert_eq!(
+        (imported_document.width, imported_document.height),
+        (7., 5.)
+    );
+    assert_eq!(imported_document.extra, baseline.extra);
+    assert_eq!(imported_document.elements.len(), 2);
+    let Element::Image(layer) = &imported_document.elements[1] else {
+        panic!()
+    };
+    assert_eq!(layer.base.id, layer_id);
+    assert_eq!((layer.base.x, layer.base.y), (2., 3.));
+    assert_eq!((layer.width, layer.height), (3., 2.));
+    assert_eq!((layer.natural_width, layer.natural_height), (3., 2.));
+    assert!(!layer.base.locked && layer.base.visible);
+    assert_eq!(layer.base.opacity, 100.);
+    assert_eq!(layer.base.blend_mode, "source-over");
+    assert_eq!(layer.source, "imported");
+    assert!(layer.src.starts_with("draft-asset:"));
+    assert!(matches!(layer.original_src, OptionalNullable::Null));
+    assert_eq!(layer.source_artifact_id, None);
+    assert_eq!(layer.name, "asymmetric.png");
+    assert_eq!(
+        imported_document.elements[0], baseline.elements[0],
+        "positive-edge expansion must not translate existing layers"
+    );
+    for y in 0..2 {
+        for x in 0..3 {
+            assert_eq!(
+                editor.pixels().get_pixel(x + 2, y + 3),
+                imported.get_pixel(x, y)
+            );
+        }
+    }
+    assert_eq!(editor.pixels().get_pixel(6, 4).0, [247, 247, 245, 255]);
+
+    let imported_frame = editor.pixels();
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.snapshot().document, &baseline);
+    assert_eq!(editor.pixels().as_ref(), &original);
+    assert!(editor.snapshot().can_redo);
+
+    // Invalid pixels and coordinates fail before changing history, retained
+    // frames/assets, or the filesystem. The prior imported asset remains owned
+    // so redo can render it without decoding or host access.
+    let before_failure = serde_json::to_value(editor.snapshot()).unwrap();
+    let frame_before_failure = editor.pixels();
+    assert!(
+        editor
+            .import_image(ImportImage {
+                pixels: RgbaImage::new(0, 2),
+                name: "empty.png".into(),
+                selected_id: None,
+                point: None,
+            })
+            .is_err()
+    );
+    assert!(
+        editor
+            .import_image(ImportImage {
+                pixels: RgbaImage::new(1, 1),
+                name: "bad-point.png".into(),
+                selected_id: None,
+                point: Some(Point {
+                    x: f64::NAN,
+                    y: -3.5,
+                }),
+            })
+            .is_err()
+    );
+    assert_eq!(
+        serde_json::to_value(editor.snapshot()).unwrap(),
+        before_failure
+    );
+    assert!(Arc::ptr_eq(&frame_before_failure, &editor.pixels()));
+    assert!(!data.path().join("drafts").exists());
+
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.snapshot().document, &imported_document);
+    assert_eq!(editor.pixels(), imported_frame);
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 44 })
+        .unwrap();
+    let assets = data.path().join("drafts").join(&id).join("assets");
+    assert_eq!(fs::read_dir(&assets).unwrap().count(), 2);
+    drop(editor);
+
+    let restored = open(data.path(), &id).unwrap();
+    assert_eq!(restored.snapshot().document, &imported_document);
+    assert_eq!(restored.pixels(), imported_frame);
+    assert!(!restored.snapshot().can_undo);
+    assert!(!restored.snapshot().can_redo);
+    assert_eq!(
+        restored.snapshot().document.extra["futureDocument"],
+        json!({"keep": [9, 2]})
+    );
+    let Element::Image(restored_background) = &restored.snapshot().document.elements[0] else {
+        panic!()
+    };
+    assert_eq!(
+        restored_background.extra["futureImage"],
+        json!({"keep": true})
+    );
+}
+
+#[test]
+fn failed_import_render_preserves_redo_frame_and_files() {
+    let (data, id, _) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    let mut off_canvas = editor.snapshot().document.clone();
+    let Element::Image(target) = &mut off_canvas.elements[0] else {
+        panic!()
+    };
+    target.base.x = 16_382.;
+    editor
+        .execute(Request::Commit {
+            document: off_canvas.clone(),
+        })
+        .unwrap();
+    let mut branch = off_canvas;
+    branch
+        .extra
+        .insert("futureBranch".into(), json!("redo survives"));
+    editor
+        .execute(Request::Commit { document: branch })
+        .unwrap();
+    editor.execute(Request::Undo).unwrap();
+    assert!(editor.snapshot().can_redo);
+
+    let before = serde_json::to_value(editor.snapshot()).unwrap();
+    let frame = editor.pixels();
+    let error = editor
+        .import_image(ImportImage {
+            pixels: RgbaImage::from_pixel(1, 1, Rgba([17, 91, 203, 255])),
+            name: "would-overflow.png".into(),
+            selected_id: Some("capture-background".into()),
+            point: Some(Point { x: 16_383., y: 1. }),
+        })
+        .unwrap_err();
+    assert!(error.contains("rendering is limited"), "{error}");
+    assert_eq!(serde_json::to_value(editor.snapshot()).unwrap(), before);
+    assert!(editor.snapshot().can_redo);
+    assert!(Arc::ptr_eq(&frame, &editor.pixels()));
+    assert!(!data.path().join("drafts").exists());
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(
+        editor.snapshot().document.extra["futureBranch"],
+        json!("redo survives")
     );
 }
 
