@@ -456,6 +456,19 @@ synthetic filled pixel. TypeScript-derived reverse/fractional vectors and render
 session tests cover rollback, undo/redo and draft reopen. This prerequisite is
 shared by macOS, Windows, X11 and Wayland; host status is tracked separately below.
 
+Shared sessions can likewise create completed straight lines and tapered arrows
+from signed endpoints, existing element styles and opacity. Open shapes force the
+shipping null fill and unlocked/visible/source-over defaults; click-only,
+horizontal and vertical lines remain valid. Arrows below the renderer's 1.5
+document-pixel cutoff are rejected transactionally, while hosts retain the
+screen-scale `max(1.5, 3 / displayScale)` gesture cancellation policy. Creation
+and transient host previews share one public tapered-arrow polygon helper with
+the renderer. TypeScript-derived bounds cover reverse/fractional geometry,
+partial clipping, shadow-only overlap and fully-outside sibling translation;
+session tests cover pixels, rollback, undo/redo and draft reopen. This prepares
+AppKit, Windows, X11 and Wayland without connecting controls or completing
+physical, input or accessibility acceptance on any platform.
+
 The shared layer command also accepts typed partial style patches for existing
 shape and freehand-path annotations. Locked and hidden annotations remain editable;
 closed-shape-only fill/stroke toggles do not mutate open shapes or paths, and shadow
