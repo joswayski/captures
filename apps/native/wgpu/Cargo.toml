@@ -25,7 +25,7 @@ captures-history = { path = "../../../crates/captures-history" }
 captures-media = { path = "../../../crates/captures-media" }
 captures-recording = { path = "../../../crates/captures-recording" }
 captures-recording-platform = { path = "../../../crates/captures-recording-platform" }
-arboard = "3.6"
+arboard = { version = "3.6", features = ["wayland-data-control"] }
 rfd = "0.15"
 tempfile = "3"
 winit = { version = "=0.30.13", default-features = false }

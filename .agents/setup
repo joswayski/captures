@@ -42,7 +42,9 @@ packages=(
   python3-dbus
   python3-gi
   python3-xlib
+  sway
   wget
+  wl-clipboard
   x11-apps
   x11-utils
   xclip

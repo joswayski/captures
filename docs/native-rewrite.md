@@ -407,9 +407,13 @@ path for recovery. `captures_editor_save_new_v1` exposes this on the serialized
 session worker with tagged result JSON and no pixel transport; null/invalid
 inputs, collisions and partial success are covered without changing draft state.
 Hosts still own save dialogs, overwrite-original confirmation
-and clipboard behavior. These shared prerequisites are unit-verified in the Linux
-orb; they do not connect native export controls or complete macOS, Windows, X11
-or Wayland output/physical acceptance.
+and clipboard behavior. The wgpu Linux dependency enables arboard's native Wayland
+data-control transport with X11 fallback; a disposable headless-Sway diagnostic
+verifies repeated exact-RGBA image reads while the owner remains alive. Compositors
+without `ext-data-control-v1` or `wlr-data-control` still return a recoverable error.
+These prerequisites are unit-verified in the Linux orb; they do not connect native
+export/Copy controls, enable Wayland capture or complete physical macOS, Windows,
+X11 or Wayland output/input acceptance.
 
 Shared layer commands now cover visibility, locking, opacity, movement, deletion,
 duplication, image renaming, ordering and the four lossless image transforms through
