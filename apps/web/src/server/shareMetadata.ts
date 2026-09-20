@@ -7,7 +7,7 @@ export async function fetchShareMetadata(
 ): Promise<SharePageData> {
   if (
     typeof id !== "string" ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+    !/^[A-Za-z0-9_-]{12}$/.test(id)
   ) {
     return { kind: "missing" };
   }

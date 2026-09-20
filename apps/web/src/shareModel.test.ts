@@ -1,32 +1,29 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mayIndex, type SharePageData } from "./shareModel.ts";
+import { mayIndex, shareMediaKind, type SharePageData } from "./shareModel.ts";
 
-const publicShare: SharePageData = {
+const share: SharePageData = {
   kind: "ready",
   share: {
-    id: "x",
-    visibility: "public",
+    id: "Ab_cdEF012-3",
+    name: "capture.gif",
+    contentType: "image/gif",
+    byteSize: 10,
     passwordRequired: false,
     expiresAt: null,
-    mediaUrl: "/api/shares/x/media",
+    mediaUrl: "/media",
   },
 };
-test("only accessible public shares may index", () => {
-  assert.equal(mayIndex(publicShare), true);
-  assert.equal(
-    mayIndex({
-      kind: "ready",
-      share: { ...publicShare.share, passwordRequired: true, mediaUrl: null },
-    }),
-    false,
-  );
-  assert.equal(
-    mayIndex({
-      kind: "ready",
-      share: { ...publicShare.share, visibility: "unlisted" },
-    }),
-    false,
-  );
+
+test("all share states remain unlisted from search", () => {
+  assert.equal(mayIndex(share), false);
   assert.equal(mayIndex({ kind: "missing" }), false);
+  assert.equal(mayIndex({ kind: "unavailable" }), false);
+});
+
+test("viewer renders original raster and video but downloads unsafe or unknown media", () => {
+  assert.equal(shareMediaKind("image/gif"), "image");
+  assert.equal(shareMediaKind("video/webm"), "video");
+  assert.equal(shareMediaKind("image/svg+xml"), "download");
+  assert.equal(shareMediaKind("text/html"), "download");
 });

@@ -21,7 +21,7 @@ test("share lookup rejects paths before forwarding viewer cookies", async (t) =>
 });
 
 test("share metadata goes only to configured API, without redirects or caching", async (t) => {
-  const id = "b0f4ddfa-4a6e-4c98-a721-fb3f2854d556";
+  const id = "Ab_cdEF012-3";
   t.mock.method(globalThis, "fetch", async (url: URL, init: RequestInit) => {
     assert.equal(url.href, `http://captures-api/api/shares/${id}`);
     assert.equal(init.redirect, "error");

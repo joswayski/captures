@@ -1,24 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Share2 } from "lucide-react";
-import { FormEvent, useCallback, useEffect, useState } from "react";
-import { formatBytes, validateShare, validateUpload } from "../accountModel";
+import { Link2Off, Share2 } from "lucide-react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import {
+  assetMediaKind,
+  formatBytes,
+  uploadAsset,
+  validateShare,
+  validateUpload,
+  type Asset,
+} from "../accountModel";
 
 type User = { id: string; email: string };
-type Share = {
-  id: string;
-  visibility: "private" | "unlisted" | "public";
-  passwordProtected: boolean;
-  expiresAt: string | null;
-  revokedAt: string | null;
-};
-type Upload = {
-  id: string;
-  contentType: string;
-  byteSize: number;
-  createdAt: string;
-  shares: Share[];
-};
-
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { credentials: "same-origin", ...init });
   if (!response.ok) {
@@ -249,13 +241,15 @@ function Login({ onAuthenticated }: { onAuthenticated: (user: User) => void }) {
 }
 
 function Library({ user }: { user: User }) {
-  const [uploads, setUploads] = useState<Upload[]>([]);
+  const [assets, setAssets] = useState<Asset[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState("");
   const [loading, setLoading] = useState(true);
+  const uploadController = useRef<AbortController | null>(null);
   const refresh = useCallback(async () => {
     try {
-      setUploads((await api<{ uploads: Upload[] }>("/api/uploads")).uploads);
+      setAssets((await api<{ assets: Asset[] }>("/api/assets")).assets);
       setError("");
     } catch (e) {
       setError((e as Error).message);
@@ -272,16 +266,27 @@ function Library({ user }: { user: User }) {
     if (problem) return setError(problem);
     setBusy(true);
     setError("");
+    setProgress("Preparing upload…");
+    const controller = new AbortController();
+    uploadController.current = controller;
     try {
-      await api("/api/uploads", {
-        method: "POST",
-        headers: { "Content-Type": file.type },
-        body: file,
+      const asset = await uploadAsset(file, {
+        signal: controller.signal,
+        onProgress: (complete, total) =>
+          setProgress(`Uploading part ${complete} of ${total}…`),
       });
-      await refresh();
+      setAssets((current) => [
+        asset,
+        ...current.filter((item) => item.id !== asset.id),
+      ]);
+      setProgress("");
     } catch (e) {
-      setError((e as Error).message);
+      setProgress("");
+      setError(
+        controller.signal.aborted ? "Upload cancelled." : (e as Error).message,
+      );
     } finally {
+      uploadController.current = null;
       setBusy(false);
     }
   }
@@ -289,27 +294,36 @@ function Library({ user }: { user: User }) {
     <>
       <section className="library-heading">
         <div>
-          <p className="eyebrow">Signed in as {user.email}</p>
-          <h1>Your images</h1>
+          <p className="account-identity">Signed in as {user.email}</p>
+          <h1>Your captures</h1>
           <p className="lede">
-            Upload a static PNG, JPEG, or WebP up to 20 MiB, then choose exactly
-            how it can be shared. Limit: 100 images or 1 GiB per account.
+            Upload screenshots, GIFs, videos, or other files. Captures stay
+            private until you share them.
           </p>
         </div>
-        <label
-          className={`primary-button upload-button ${busy ? "is-disabled" : ""}`}
-        >
-          {busy ? "Uploading…" : "Upload image"}
-          <input
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            disabled={busy}
-            onChange={(e) => {
-              void upload(e.target.files?.[0]);
-              e.target.value = "";
-            }}
-          />
-        </label>
+        <div className="upload-controls">
+          <label
+            className={`primary-button upload-button ${busy ? "is-disabled" : ""}`}
+          >
+            {busy ? progress || "Uploading…" : "Upload capture"}
+            <input
+              type="file"
+              disabled={busy}
+              onChange={(e) => {
+                void upload(e.target.files?.[0]);
+                e.target.value = "";
+              }}
+            />
+          </label>
+          {busy && (
+            <button
+              className="text-button"
+              onClick={() => uploadController.current?.abort()}
+            >
+              Cancel upload
+            </button>
+          )}
+        </div>
       </section>
       {error && (
         <p role="alert" className="error-box">
@@ -317,21 +331,18 @@ function Library({ user }: { user: User }) {
         </p>
       )}
       {loading ? (
-        <p role="status">Loading images…</p>
-      ) : uploads.length === 0 && !error ? (
+        <p role="status">Loading captures…</p>
+      ) : assets.length === 0 && !error ? (
         <div className="empty-state">
-          <h2>No images yet</h2>
-          <p>
-            Your uploaded images will appear here. Files stay private until you
-            create a share link.
-          </p>
+          <h2>No captures yet</h2>
+          <p>Your uploaded captures will appear here.</p>
         </div>
       ) : (
         <div className="upload-grid">
-          {uploads.map((item) => (
+          {assets.map((item) => (
             <UploadCard
               key={item.id}
-              upload={item}
+              asset={item}
               refresh={refresh}
               setError={setError}
             />
@@ -343,34 +354,43 @@ function Library({ user }: { user: User }) {
 }
 
 function UploadCard({
-  upload,
+  asset,
   refresh,
   setError,
 }: {
-  upload: Upload;
+  asset: Asset;
   refresh: () => Promise<void>;
   setError: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [visibility, setVisibility] = useState<Share["visibility"]>("unlisted");
   const [password, setPassword] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
+  const [removePassword, setRemovePassword] = useState(false);
+  const [clearExpiry, setClearExpiry] = useState(false);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState("");
-  async function createShare(event: FormEvent) {
+  async function saveShare(event: FormEvent) {
     event.preventDefault();
     const problem = validateShare(password, expiresAt);
     if (problem) return setError(problem);
     setBusy(true);
     setError("");
     try {
-      await api(`/api/uploads/${upload.id}/shares`, {
-        method: "POST",
+      await api(`/api/assets/${asset.id}/share`, {
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          visibility,
-          ...(password ? { password } : {}),
-          expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
+          enabled: true,
+          ...(removePassword
+            ? { password: null }
+            : password
+              ? { password }
+              : {}),
+          ...(clearExpiry
+            ? { expiresAt: null }
+            : expiresAt
+              ? { expiresAt: new Date(expiresAt).toISOString() }
+              : {}),
         }),
       });
       setOpen(false);
@@ -384,86 +404,64 @@ function UploadCard({
   }
   return (
     <article className="upload-card">
-      <img
-        src={`/api/uploads/${upload.id}/media`}
-        alt="Uploaded capture"
-        loading="lazy"
-      />
+      <AssetPreview asset={asset} />
       <div className="upload-meta">
-        <span>{formatBytes(upload.byteSize)}</span>
-        <time>{new Date(upload.createdAt).toLocaleDateString()}</time>
+        <div>
+          <strong title={asset.name}>{asset.name}</strong>
+          <span>{formatBytes(asset.byteSize)}</span>
+        </div>
+        <time dateTime={asset.createdAt}>
+          {new Date(asset.createdAt).toLocaleDateString()}
+        </time>
       </div>
-      <div className="share-list">
-        {upload.shares.map((share) => (
-          <div className="share-row" key={share.id}>
+      {asset.share && (
+        <div className="share-list">
+          <div className="share-row">
             <div>
-              <span className="visibility">{share.visibility}</span>
-              {share.passwordProtected && <span> · password</span>}
-              {share.revokedAt && <span> · revoked</span>}
+              <span className="visibility">
+                Shared ·{" "}
+                <time title={new Date(asset.share.sharedAt).toLocaleString()}>
+                  {new Date(asset.share.sharedAt).toLocaleDateString()}
+                </time>
+              </span>
+              {asset.share.passwordProtected && <span> · password</span>}
             </div>
-            {!share.revokedAt && (
-              <div>
-                <button
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(
-                        new URL(`/s/${share.id}`, window.location.origin).href,
-                      );
-                      setCopied(share.id);
-                    } catch {
-                      setError(
-                        "Copy failed. Open the link and copy it from your address bar.",
-                      );
-                    }
-                  }}
-                >
-                  {copied === share.id ? "Copied" : "Copy link"}
-                </button>
-                <a href={`/s/${share.id}`} target="_blank" rel="noreferrer">
-                  Open
-                </a>
-                <button
-                  onClick={async () => {
-                    if (
-                      !confirm(
-                        "Revoke this link? Future requests will stop immediately, but existing downloads cannot be recalled.",
-                      )
-                    )
-                      return;
-                    try {
-                      await api(`/api/shares/${share.id}/revoke`, {
-                        method: "POST",
-                      });
-                      await refresh();
-                    } catch (e) {
-                      setError((e as Error).message);
-                    }
-                  }}
-                >
-                  Revoke
-                </button>
-              </div>
-            )}
+            <div className="share-actions">
+              <button
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(
+                      new URL(`/s/${asset.share!.id}`, window.location.origin)
+                        .href,
+                    );
+                    setCopied(asset.share!.id);
+                  } catch {
+                    setError(
+                      "Copy failed. Open the link and copy it from your address bar.",
+                    );
+                  }
+                }}
+              >
+                {copied === asset.share.id ? "Copied" : "Copy"}
+              </button>
+              <a href={`/s/${asset.share.id}`} target="_blank" rel="noreferrer">
+                Open
+              </a>
+            </div>
           </div>
-        ))}
-      </div>
+        </div>
+      )}
       {open ? (
-        <form className="share-form" onSubmit={createShare}>
+        <form className="share-form" onSubmit={saveShare}>
+          <p>
+            {asset.share
+              ? "Update link options"
+              : "Anyone with the link can view this capture."}
+          </p>
           <label>
-            Access
-            <select
-              value={visibility}
-              onChange={(e) =>
-                setVisibility(e.target.value as Share["visibility"])
-              }
-            >
-              <option value="unlisted">Unlisted — anyone with link</option>
-              <option value="public">Public — may be indexed</option>
-              <option value="private">Private — only you</option>
-            </select>
-          </label>
-          <label>
-            Optional password
+            {asset.share?.passwordProtected
+              ? "New password (leave blank to keep current)"
+              : "Password (optional)"}
             <input
               type="password"
               minLength={8}
@@ -473,17 +471,39 @@ function UploadCard({
               placeholder="At least 8 characters"
             />
           </label>
+          {asset.share?.passwordProtected && (
+            <label className="check-label">
+              <input
+                type="checkbox"
+                checked={removePassword}
+                onChange={(e) => setRemovePassword(e.target.checked)}
+              />{" "}
+              Remove password
+            </label>
+          )}
           <label>
-            Optional expiry
+            {asset.share?.expiresAt
+              ? "New expiry (leave blank to keep current)"
+              : "Expiry (optional)"}
             <input
               type="datetime-local"
               value={expiresAt}
               onChange={(e) => setExpiresAt(e.target.value)}
             />
           </label>
+          {asset.share?.expiresAt && (
+            <label className="check-label">
+              <input
+                type="checkbox"
+                checked={clearExpiry}
+                onChange={(e) => setClearExpiry(e.target.checked)}
+              />{" "}
+              Clear expiry
+            </label>
+          )}
           <div className="button-row">
             <button className="primary-button" disabled={busy}>
-              {busy ? "Creating…" : "Create link"}
+              {busy ? "Saving…" : asset.share ? "Save options" : "Create link"}
             </button>
             <button
               type="button"
@@ -497,25 +517,65 @@ function UploadCard({
         </form>
       ) : (
         <div className="card-actions">
-          <button
-            className="secondary-button"
-            aria-label="Share"
-            title="Share"
-            onClick={() => setOpen(true)}
-          >
-            <Share2 size={18} aria-hidden="true" />
-          </button>
+          <div className="button-row">
+            <button
+              className="secondary-button"
+              aria-label={asset.share ? "Edit sharing" : "Share"}
+              title={asset.share ? "Edit sharing" : "Share"}
+              disabled={busy}
+              onClick={() => {
+                setPassword("");
+                setExpiresAt("");
+                setRemovePassword(false);
+                setClearExpiry(false);
+                setOpen(true);
+              }}
+            >
+              <Share2 size={18} aria-hidden="true" />
+            </button>
+            {asset.share && (
+              <button
+                className="secondary-button"
+                aria-label="Stop sharing"
+                title="Stop sharing"
+                disabled={busy}
+                onClick={async () => {
+                  if (
+                    !confirm(
+                      "Stop sharing? This link will stop working immediately. Sharing again will create a new link.",
+                    )
+                  )
+                    return;
+                  setBusy(true);
+                  try {
+                    await api(`/api/assets/${asset.id}/share`, {
+                      method: "PUT",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ enabled: false }),
+                    });
+                    await refresh();
+                  } catch (e) {
+                    setError((e as Error).message);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                <Link2Off size={18} aria-hidden="true" />
+              </button>
+            )}
+          </div>
           <button
             className="danger-button"
             onClick={async () => {
               if (
                 !confirm(
-                  "Delete this image and all its share links? This cannot be undone.",
+                  "Delete this capture and disable its share link? This cannot be undone.",
                 )
               )
                 return;
               try {
-                await api(`/api/uploads/${upload.id}`, { method: "DELETE" });
+                await api(`/api/assets/${asset.id}`, { method: "DELETE" });
                 await refresh();
               } catch (e) {
                 setError((e as Error).message);
@@ -527,6 +587,22 @@ function UploadCard({
         </div>
       )}
     </article>
+  );
+}
+
+function AssetPreview({ asset }: { asset: Asset }) {
+  const url = `/api/assets/${encodeURIComponent(asset.id)}/media`;
+  const kind = assetMediaKind(asset.contentType);
+  if (kind === "image")
+    return <img src={url} alt={asset.name} loading="lazy" />;
+  if (kind === "video")
+    return (
+      <video src={url} controls preload="metadata" aria-label={asset.name} />
+    );
+  return (
+    <a className="download-preview" href={url} download={asset.name}>
+      Download {asset.name}
+    </a>
   );
 }
 

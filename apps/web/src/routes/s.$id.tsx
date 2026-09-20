@@ -4,8 +4,9 @@ import {
   getRequestHeader,
   setResponseHeader,
 } from "@tanstack/react-start/server";
+import { Eye, EyeOff, LockKeyhole } from "lucide-react";
 import { FormEvent, useState } from "react";
-import { mayIndex, type SharePageData } from "../shareModel";
+import { shareMediaKind, type SharePageData } from "../shareModel";
 
 const loadShare = createServerFn({ method: "GET" })
   .validator((input: { id: string }) => input)
@@ -17,23 +18,18 @@ const loadShare = createServerFn({ method: "GET" })
       data.id,
       getRequestHeader("cookie"),
     );
-    if (!mayIndex(result))
-      setResponseHeader("X-Robots-Tag", "noindex, nofollow");
+    setResponseHeader("X-Robots-Tag", "noindex, nofollow");
     return result;
   });
 
 export const Route = createFileRoute("/s/$id")({
   loader: ({ params }) => loadShare({ data: { id: params.id } }),
-  head: ({ loaderData }) => {
-    const indexable = loaderData ? mayIndex(loaderData) : false;
+  head: () => {
     return {
       meta: [
-        { title: "Shared image — Captures" },
-        { name: "description", content: "An image shared with Captures." },
-        {
-          name: "robots",
-          content: indexable ? "index, follow" : "noindex, nofollow",
-        },
+        { title: "Shared capture — Captures" },
+        { name: "description", content: "A capture shared with Captures." },
+        { name: "robots", content: "noindex, nofollow" },
         { name: "referrer", content: "no-referrer" },
       ],
     };
@@ -49,6 +45,7 @@ function SharePage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   async function unlock(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -79,54 +76,65 @@ function SharePage() {
     }
   }
   return (
-    <main className="viewer-shell">
-      <header className="viewer-header">
-        <a href="/" className="account-brand">
-          Captures
-        </a>
-        <span>Shared image</span>
-      </header>
+    <main
+      className={`viewer-shell ${data.kind === "ready" && data.share.passwordRequired && !data.share.mediaUrl ? "viewer-shell-protected" : ""}`}
+    >
       {data.kind === "missing" ? (
         <ViewerMessage
-          title="This image isn’t available"
+          title="This capture isn’t available"
           copy="The link may be incorrect, expired, private, or revoked."
         />
       ) : data.kind === "unavailable" ? (
         <ViewerMessage
-          title="Unable to load this image"
+          title="Unable to load this capture"
           copy="The sharing service is temporarily unavailable. Try again later."
         />
       ) : data.share.passwordRequired && !data.share.mediaUrl ? (
-        <section className="viewer-message">
-          <p className="eyebrow">Protected share</p>
-          <h1>Password required</h1>
-          <p>Enter the password from the person who shared this image.</p>
-          <form className="form-stack" onSubmit={unlock}>
-            <label>
-              Password
+        <section className="password-card">
+          <div className="password-lock">
+            <LockKeyhole size={22} aria-hidden="true" />
+          </div>
+          <a href="/" className="password-brand">
+            Captures
+          </a>
+          <h1>Enter password</h1>
+          <p>This capture is password protected.</p>
+          <form className="password-form" onSubmit={unlock}>
+            <label className="password-field">
+              <span className="sr-only">Password</span>
               <input
-                type="password"
+                type={showPassword ? "text" : "password"}
+                aria-label="Password"
                 required
                 autoFocus
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
+              <button
+                type="button"
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                onClick={() => setShowPassword((value) => !value)}
+              >
+                {showPassword ? <EyeOff size={19} /> : <Eye size={19} />}
+              </button>
             </label>
-            <button className="primary-button" disabled={busy}>
-              {busy ? "Unlocking…" : "View image"}
+            <button className="password-submit" disabled={busy}>
+              {busy ? "Checking…" : "View capture"}
             </button>
+            {error && (
+              <p role="alert" className="password-error">
+                {error}
+              </p>
+            )}
           </form>
-          {error && (
-            <p role="alert" className="error-box">
-              {error}
-            </p>
-          )}
         </section>
       ) : data.share.mediaUrl ? (
-        <figure className="shared-image">
-          <img
-            src={`/api/shares/${encodeURIComponent(id)}/media`}
-            alt="Shared capture"
+        <figure className="shared-media">
+          <SharedMedia
+            id={id}
+            name={data.share.name}
+            contentType={data.share.contentType}
             onError={() => setData({ kind: "missing" })}
           />
           <figcaption>
@@ -137,11 +145,37 @@ function SharePage() {
         </figure>
       ) : (
         <ViewerMessage
-          title="This image isn’t available"
+          title="This capture isn’t available"
           copy="Access to this share could not be confirmed."
         />
       )}
     </main>
+  );
+}
+
+function SharedMedia({
+  id,
+  name,
+  contentType,
+  onError,
+}: {
+  id: string;
+  name: string;
+  contentType: string;
+  onError: () => void;
+}) {
+  const url = `/api/shares/${encodeURIComponent(id)}/media`;
+  const kind = shareMediaKind(contentType);
+  if (kind === "image") return <img src={url} alt={name} onError={onError} />;
+  if (kind === "video")
+    return <video src={url} controls autoPlay={false} onError={onError} />;
+  return (
+    <div className="shared-download">
+      <p>{name}</p>
+      <a className="primary-button" href={url} download={name}>
+        Download capture
+      </a>
+    </div>
   );
 }
 function ViewerMessage({ title, copy }: { title: string; copy: string }) {

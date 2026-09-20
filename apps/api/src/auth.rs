@@ -23,7 +23,6 @@ use std::{
     sync::Arc,
 };
 use subtle::ConstantTimeEq;
-use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 const COOKIE: &str = "captures_session";
@@ -175,7 +174,7 @@ struct RequestBody {
 #[derive(Deserialize)]
 struct VerifyBody {
     #[serde(rename = "challengeId")]
-    challenge_id: Uuid,
+    challenge_id: String,
     code: String,
     transport: Transport,
 }
@@ -220,13 +219,12 @@ async fn request_code(
         .await
         .map_err(db_error)?;
     let counts: (i64,i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM auth_email_challenges WHERE email=$1 AND created_at>now()-interval '15 minutes'),(SELECT count(*) FROM auth_email_challenges WHERE email=$1 AND created_at>now()-interval '24 hours'),(SELECT count(*) FROM auth_email_challenges WHERE request_ip_hash=$2 AND created_at>now()-interval '1 hour'),(SELECT count(*) FROM auth_email_challenges WHERE created_at>now()-interval '1 hour')").bind(&email).bind(&ip_hash).fetch_one(&mut *tx).await.map_err(db_error)?;
-    let id = Uuid::new_v4();
+    let mut id = nanoid::nanoid!(12);
     if counts.0 >= 3 || counts.1 >= 5 || counts.2 >= 10 || counts.3 >= 500 {
         tx.commit().await.map_err(db_error)?;
         return Ok((StatusCode::ACCEPTED, Json(json!({"challengeId":id}))));
     }
     let code = random_code();
-    let hash = code_hash(&auth.secret, id, &email, &code);
     sqlx::query(
         "UPDATE auth_email_challenges SET consumed_at=now() WHERE email=$1 AND consumed_at IS NULL",
     )
@@ -234,7 +232,26 @@ async fn request_code(
     .execute(&mut *tx)
     .await
     .map_err(db_error)?;
-    sqlx::query("INSERT INTO auth_email_challenges(id,email,code_hash,request_ip_hash,attempts_remaining,expires_at) VALUES($1,$2,$3,$4,3,$5)").bind(id).bind(&email).bind(hash).bind(ip_hash).bind(Utc::now()+Duration::minutes(10)).execute(&mut *tx).await.map_err(db_error)?;
+    let expires = Utc::now() + Duration::minutes(10);
+    let mut inserted = false;
+    for _ in 0..8 {
+        let hash = code_hash(&auth.secret, &id, &email, &code);
+        let result = sqlx::query("INSERT INTO auth_email_challenges(id,email,code_hash,request_ip_hash,attempts_remaining,expires_at) VALUES($1,$2,$3,$4,3,$5) ON CONFLICT(id) DO NOTHING")
+            .bind(&id).bind(&email).bind(hash).bind(&ip_hash).bind(expires)
+            .execute(&mut *tx).await.map_err(db_error)?;
+        if result.rows_affected() == 1 {
+            inserted = true;
+            break;
+        }
+        tracing::warn!(
+            kind = "auth_challenge_id",
+            "public id collision; regenerating"
+        );
+        id = nanoid::nanoid!(12);
+    }
+    if !inserted {
+        return Err(db_error(sqlx::Error::RowNotFound));
+    }
     tx.commit().await.map_err(db_error)?;
     if auth.mailer.send_code(&email, &code).await.is_err() {
         let _ = sqlx::query("UPDATE auth_email_challenges SET consumed_at=now() WHERE id=$1")
@@ -273,7 +290,7 @@ async fn verify_code(
         return Err(invalid(None));
     }
     let mut tx = state.pool.begin().await.map_err(db_error)?;
-    let challenge:Challenge=sqlx::query_as("SELECT email,code_hash,attempts_remaining,expires_at,consumed_at FROM auth_email_challenges WHERE id=$1 FOR UPDATE").bind(body.challenge_id).fetch_optional(&mut *tx).await.map_err(db_error)?.ok_or_else(||invalid(None))?;
+    let challenge:Challenge=sqlx::query_as("SELECT email,code_hash,attempts_remaining,expires_at,consumed_at FROM auth_email_challenges WHERE id=$1 FOR UPDATE").bind(&body.challenge_id).fetch_optional(&mut *tx).await.map_err(db_error)?.ok_or_else(||invalid(None))?;
     if challenge.consumed_at.is_some()
         || challenge.expires_at <= Utc::now()
         || challenge.attempts_remaining <= 0
@@ -282,18 +299,18 @@ async fn verify_code(
     }
     let expected = code_hash(
         &auth.secret,
-        body.challenge_id,
+        &body.challenge_id,
         &challenge.email,
         &body.code,
     );
     if !bool::from(challenge.code_hash.ct_eq(&expected)) {
         let left = challenge.attempts_remaining - 1;
-        sqlx::query("UPDATE auth_email_challenges SET attempts_remaining=$2,consumed_at=CASE WHEN $2=0 THEN now() ELSE NULL END WHERE id=$1").bind(body.challenge_id).bind(left).execute(&mut *tx).await.map_err(db_error)?;
+        sqlx::query("UPDATE auth_email_challenges SET attempts_remaining=$2,consumed_at=CASE WHEN $2=0 THEN now() ELSE NULL END WHERE id=$1").bind(&body.challenge_id).bind(left).execute(&mut *tx).await.map_err(db_error)?;
         tx.commit().await.map_err(db_error)?;
         return Err(invalid(Some(left)));
     }
     sqlx::query("UPDATE auth_email_challenges SET consumed_at=now() WHERE id=$1")
-        .bind(body.challenge_id)
+        .bind(&body.challenge_id)
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;
@@ -421,7 +438,7 @@ fn keyed_hash(secret: &[u8], domain: &[u8], value: &[u8]) -> Vec<u8> {
 fn lock(s: &[u8], d: &[u8], v: &[u8]) -> i64 {
     i64::from_be_bytes(keyed_hash(s, d, v)[..8].try_into().expect("hash"))
 }
-fn code_hash(s: &[u8], id: Uuid, email: &str, code: &str) -> Vec<u8> {
+fn code_hash(s: &[u8], id: &str, email: &str, code: &str) -> Vec<u8> {
     let mut v = id.as_bytes().to_vec();
     v.push(0);
     v.extend(email.as_bytes());
@@ -463,10 +480,10 @@ mod tests {
                     .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
             );
         }
-        let id = Uuid::new_v4();
+        let id = nanoid::nanoid!(12);
         assert_ne!(
-            code_hash(b"secret", id, "a@b.com", "AAAAAA"),
-            code_hash(b"secret", Uuid::new_v4(), "a@b.com", "AAAAAA")
+            code_hash(b"secret", &id, "a@b.com", "AAAAAA"),
+            code_hash(b"secret", &nanoid::nanoid!(12), "a@b.com", "AAAAAA")
         );
     }
 }

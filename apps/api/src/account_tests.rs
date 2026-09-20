@@ -1,23 +1,26 @@
-//! Real PostgreSQL tests; only delivery and object storage are substituted.
-use crate::{auth::AuthState, email::Mailer, sharing::SharingState, storage::ObjectStore};
+//! End-to-end account and sharing contracts against real PostgreSQL.
+use crate::{
+    auth::AuthState,
+    email::Mailer,
+    sharing::SharingState,
+    storage::{ObjectStore, StoredObject},
+};
 use async_trait::async_trait;
 use axum::{
     Router,
     body::{Body, to_bytes},
     extract::ConnectInfo,
-    http::{Request, StatusCode},
+    http::{Request, StatusCode, header},
     response::Response,
 };
-use image::{ImageBuffer, Rgb};
 use serde_json::{Value, json};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::{
     collections::HashMap,
-    io::Cursor,
     net::SocketAddr,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 use tower::ServiceExt;
@@ -38,46 +41,141 @@ impl Mailer for Mail {
         Ok(())
     }
 }
+
 #[derive(Default)]
 struct Objects {
-    data: Mutex<HashMap<String, Vec<u8>>>,
+    complete: Mutex<HashMap<String, Vec<u8>>>,
+    pending: Mutex<HashMap<String, (String, Vec<u8>)>>,
+    created_keys: Mutex<Vec<String>>,
+    complete_calls: AtomicUsize,
+    fail_abort: AtomicBool,
     fail_delete: AtomicBool,
-    during_get: Mutex<Option<(PgPool, Uuid)>>,
+    fail_head_once: AtomicBool,
+    during_get: Mutex<Option<(PgPool, String)>>,
+}
+impl Objects {
+    fn stage(&self, asset: &str, bytes: &[u8]) {
+        let key = format!("assets/{asset}");
+        self.pending
+            .lock()
+            .unwrap()
+            .values_mut()
+            .find(|x| x.0 == key)
+            .unwrap()
+            .1 = bytes.to_vec();
+    }
 }
 #[async_trait]
 impl ObjectStore for Objects {
-    async fn put(&self, key: &str, _: &str, bytes: Vec<u8>) -> Result<(), ()> {
-        self.data.lock().unwrap().insert(key.into(), bytes);
+    async fn create_multipart(&self, key: &str, _: &str) -> Result<String, ()> {
+        self.created_keys.lock().unwrap().push(key.into());
+        let id = format!("upload-{}", self.created_keys.lock().unwrap().len());
+        self.pending
+            .lock()
+            .unwrap()
+            .insert(id.clone(), (key.into(), Vec::new()));
+        Ok(id)
+    }
+    async fn sign_part(
+        &self,
+        key: &str,
+        upload: &str,
+        part: i32,
+    ) -> Result<(String, HashMap<String, String>), ()> {
+        if self
+            .pending
+            .lock()
+            .unwrap()
+            .get(upload)
+            .map(|x| x.0.as_str())
+            != Some(key)
+        {
+            return Err(());
+        }
+        Ok((
+            format!("https://storage.invalid/{upload}/{part}"),
+            HashMap::new(),
+        ))
+    }
+    async fn complete_multipart(
+        &self,
+        key: &str,
+        upload: &str,
+        _: Vec<(i32, String)>,
+    ) -> Result<(), ()> {
+        self.complete_calls.fetch_add(1, Ordering::SeqCst);
+        let (pending_key, bytes) = self.pending.lock().unwrap().remove(upload).ok_or(())?;
+        if pending_key != key {
+            return Err(());
+        }
+        self.complete.lock().unwrap().insert(key.into(), bytes);
         Ok(())
     }
-    async fn get(&self, key: &str) -> Result<Vec<u8>, ()> {
-        let hook = self.during_get.lock().unwrap().take();
+    async fn abort_multipart(&self, key: &str, upload: &str) -> Result<(), ()> {
+        if self.fail_abort.load(Ordering::SeqCst) {
+            return Err(());
+        }
+        let mut pending = self.pending.lock().unwrap();
+        if pending.get(upload).is_some_and(|x| x.0 == key) {
+            pending.remove(upload);
+        }
+        Ok(())
+    }
+    async fn head(&self, key: &str) -> Result<i64, ()> {
+        if self.fail_head_once.swap(false, Ordering::SeqCst) {
+            return Err(());
+        }
+        self.complete
+            .lock()
+            .unwrap()
+            .get(key)
+            .map(|x| x.len() as i64)
+            .ok_or(())
+    }
+    async fn get(&self, key: &str, range: Option<&str>) -> Result<StoredObject, ()> {
+        let hook = { self.during_get.lock().unwrap().take() };
         if let Some((pool, id)) = hook {
-            sqlx::query("UPDATE shares SET revoked_at=now() WHERE id=$1")
+            sqlx::query("UPDATE shares SET active=false WHERE id=$1")
                 .bind(id)
                 .execute(&pool)
                 .await
                 .unwrap();
         }
-        self.data.lock().unwrap().get(key).cloned().ok_or(())
+        let all = self.complete.lock().unwrap().get(key).cloned().ok_or(())?;
+        let (bytes, content_range) = if let Some(range) = range {
+            let bounds = range.strip_prefix("bytes=").ok_or(())?;
+            let (start, end) = bounds.split_once('-').ok_or(())?;
+            let start: usize = start.parse().map_err(|_| ())?;
+            let end: usize = end.parse().map_err(|_| ())?;
+            (
+                all[start..=end].to_vec(),
+                Some(format!("bytes {start}-{end}/{}", all.len())),
+            )
+        } else {
+            (all, None)
+        };
+        Ok(StoredObject {
+            byte_size: bytes.len() as i64,
+            content_range,
+            body: Body::from(bytes),
+        })
     }
     async fn delete(&self, key: &str) -> Result<(), ()> {
         if self.fail_delete.load(Ordering::SeqCst) {
             return Err(());
         }
-        self.data.lock().unwrap().remove(key);
+        self.complete.lock().unwrap().remove(key);
         Ok(())
     }
 }
 
 async fn database() -> (PgPool, PgPool, String) {
-    let url = std::env::var("TEST_DATABASE_URL")
-        .expect("Use a disposable local PostgreSQL TEST_DATABASE_URL");
+    let url = std::env::var("TEST_DATABASE_URL").expect("set disposable local TEST_DATABASE_URL");
     let mut parsed = reqwest::Url::parse(&url).unwrap();
-    assert!(
-        matches!(parsed.host_str(), Some("127.0.0.1" | "localhost" | "[::1]")),
-        "Tests require a local disposable server"
-    );
+    assert!(matches!(
+        parsed.host_str(),
+        Some("127.0.0.1" | "localhost" | "[::1]")
+    ));
     let admin = PgPoolOptions::new()
         .max_connections(1)
         .connect(&url)
@@ -90,7 +188,7 @@ async fn database() -> (PgPool, PgPool, String) {
         .unwrap();
     parsed.set_path(&format!("/{name}"));
     let pool = PgPoolOptions::new()
-        .max_connections(8)
+        .max_connections(12)
         .connect(parsed.as_str())
         .await
         .unwrap();
@@ -122,15 +220,15 @@ async fn call(
         .method(method)
         .uri(path)
         .header("origin", "https://captur.es");
-    if let Some(token) = token {
-        r = r.header("authorization", format!("Bearer {token}"));
+    if let Some(x) = token {
+        r = r.header("authorization", format!("Bearer {x}"));
     }
-    if let Some(cookie) = cookie {
-        r = r.header("cookie", cookie);
+    if let Some(x) = cookie {
+        r = r.header("cookie", x);
     }
-    let body = if let Some(body) = body {
+    let body = if let Some(x) = body {
         r = r.header("content-type", "application/json");
-        Body::from(body.to_string())
+        Body::from(x.to_string())
     } else {
         Body::empty()
     };
@@ -139,7 +237,7 @@ async fn call(
         .insert(ConnectInfo("127.0.0.1:4567".parse::<SocketAddr>().unwrap()));
     app.clone().oneshot(r).await.unwrap()
 }
-async fn json_body(response: Response) -> Value {
+async fn body(response: Response) -> Value {
     serde_json::from_slice(
         &to_bytes(response.into_body(), 2 * 1024 * 1024)
             .await
@@ -148,7 +246,7 @@ async fn json_body(response: Response) -> Value {
     .unwrap()
 }
 async fn request_code(app: &Router, email: &str) -> String {
-    let response = call(
+    let r = call(
         app,
         "POST",
         "/api/auth/email/request",
@@ -157,11 +255,8 @@ async fn request_code(app: &Router, email: &str) -> String {
         Some(json!({"email":email})),
     )
     .await;
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
-    json_body(response).await["challengeId"]
-        .as_str()
-        .unwrap()
-        .into()
+    assert_eq!(r.status(), StatusCode::ACCEPTED);
+    body(r).await["challengeId"].as_str().unwrap().into()
 }
 async fn verify(app: &Router, id: &str, code: &str, transport: &str) -> Response {
     call(
@@ -177,16 +272,73 @@ async fn verify(app: &Router, id: &str, code: &str, transport: &str) -> Response
 async fn login(app: &Router, mail: &Mail, email: &str) -> String {
     let id = request_code(app, email).await;
     let code = mail.sent.lock().unwrap().last().unwrap().1.clone();
-    let response = verify(app, &id, &code, "bearer").await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = json_body(response).await;
-    assert!(body["user"]["id"].is_string());
-    body["token"].as_str().unwrap().into()
+    let r = verify(app, &id, &code, "bearer").await;
+    assert_eq!(r.status(), StatusCode::OK);
+    body(r).await["token"].as_str().unwrap().into()
+}
+async fn create_asset(
+    app: &Router,
+    store: &Objects,
+    token: &str,
+    name: &str,
+    kind: &str,
+    bytes: &[u8],
+) -> String {
+    let r = call(
+        app,
+        "POST",
+        "/api/assets",
+        Some(token),
+        None,
+        Some(json!({"name":name,"contentType":kind,"byteSize":bytes.len()})),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let data = body(r).await;
+    let id = data["id"].as_str().unwrap().to_owned();
+    assert_eq!(data["partCount"], 1);
+    assert_eq!(
+        store.created_keys.lock().unwrap().last().unwrap(),
+        &format!("assets/{id}")
+    );
+    store.stage(&id, bytes);
+    let part = call(
+        app,
+        "POST",
+        &format!("/api/assets/{id}/parts"),
+        Some(token),
+        None,
+        Some(json!({"partNumber":1})),
+    )
+    .await;
+    assert_eq!(part.status(), StatusCode::OK);
+    let done = call(
+        app,
+        "POST",
+        &format!("/api/assets/{id}/complete"),
+        Some(token),
+        None,
+        Some(json!({"parts":[{"partNumber":1,"etag":"etag"}]})),
+    )
+    .await;
+    assert_eq!(done.status(), StatusCode::OK);
+    id
+}
+async fn set_share(app: &Router, token: &str, asset: &str, patch: Value) -> Response {
+    call(
+        app,
+        "PUT",
+        &format!("/api/assets/{asset}/share"),
+        Some(token),
+        None,
+        Some(patch),
+    )
+    .await
 }
 
 #[tokio::test]
 #[ignore = "requires disposable local TEST_DATABASE_URL"]
-async fn postgres_otp_concurrency_limits_and_sessions() {
+async fn postgres_otp_concurrency_expiry_and_sessions() {
     let (admin, pool, name) = database().await;
     let mail = Arc::new(Mail::default());
     let (app, _) = app(&pool, mail.clone(), Arc::new(Objects::default()));
@@ -194,45 +346,38 @@ async fn postgres_otp_concurrency_limits_and_sessions() {
     let code = mail.sent.lock().unwrap()[0].1.clone();
     assert_eq!(mail.sent.lock().unwrap()[0].0, "alice@example.com");
     let wrong = if code == "AAAAAA" { "BBBBBB" } else { "AAAAAA" };
-    let (first, second) = tokio::join!(
+    let (a, b) = tokio::join!(
         verify(&app, &id, wrong, "bearer"),
         verify(&app, &id, wrong, "bearer")
     );
-    assert_eq!(first.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
-    let mut attempts = [
-        json_body(first).await["attemptsRemaining"]
-            .as_i64()
-            .unwrap(),
-        json_body(second).await["attemptsRemaining"]
-            .as_i64()
-            .unwrap(),
+    let mut remaining = [
+        body(a).await["attemptsRemaining"].as_i64().unwrap(),
+        body(b).await["attemptsRemaining"].as_i64().unwrap(),
     ];
-    attempts.sort();
-    assert_eq!(attempts, [1, 2]);
-    let last = verify(&app, &id, wrong, "bearer").await;
-    assert_eq!(json_body(last).await["attemptsRemaining"], 0);
+    remaining.sort();
+    assert_eq!(remaining, [1, 2]);
+    assert_eq!(
+        body(verify(&app, &id, wrong, "bearer").await).await["attemptsRemaining"],
+        0
+    );
     assert_eq!(
         verify(&app, &id, &code, "bearer").await.status(),
         StatusCode::BAD_REQUEST
     );
 
-    let replacement = request_code(&app, "alice@example.com").await;
-    let new_code = mail.sent.lock().unwrap().last().unwrap().1.clone();
+    let id = request_code(&app, "alice@example.com").await;
+    let code = mail.sent.lock().unwrap().last().unwrap().1.clone();
     let (a, b) = tokio::join!(
-        verify(&app, &replacement, &new_code, "bearer"),
-        verify(&app, &replacement, &new_code, "bearer")
+        verify(&app, &id, &code, "bearer"),
+        verify(&app, &id, &code, "bearer")
     );
-    let (success, failure) = if a.status() == StatusCode::OK {
+    let (ok, rejected) = if a.status() == StatusCode::OK {
         (a, b)
     } else {
         (b, a)
     };
-    assert_eq!(failure.status(), StatusCode::BAD_REQUEST);
-    let token = json_body(success).await["token"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+    let token = body(ok).await["token"].as_str().unwrap().to_owned();
     assert_eq!(
         call(&app, "GET", "/api/account/me", Some(&token), None, None)
             .await
@@ -245,481 +390,6 @@ async fn postgres_otp_concurrency_limits_and_sessions() {
         .unwrap();
     assert_eq!(stored.len(), 32);
     assert_ne!(stored, token.as_bytes());
-    assert_eq!(
-        call(&app, "POST", "/api/auth/logout", Some(&token), None, None)
-            .await
-            .status(),
-        StatusCode::NO_CONTENT
-    );
-    assert_eq!(
-        call(&app, "GET", "/api/account/me", Some(&token), None, None)
-            .await
-            .status(),
-        StatusCode::UNAUTHORIZED
-    );
-
-    // One remaining issuance slot, two concurrent requests: exactly one email.
-    let before = mail.sent.lock().unwrap().len();
-    let (_a, _b) = tokio::join!(
-        request_code(&app, "alice@example.com"),
-        request_code(&app, "ALICE@example.com")
-    );
-    assert_eq!(mail.sent.lock().unwrap().len(), before + 1);
-    let count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM auth_email_challenges WHERE email='alice@example.com'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(count, 3);
-
-    let id = request_code(&app, "cookie@example.com").await;
-    let code = mail.sent.lock().unwrap().last().unwrap().1.clone();
-    let response = verify(&app, &id, &code, "cookie").await;
-    let set_cookie = response.headers()["set-cookie"]
-        .to_str()
-        .unwrap()
-        .to_string();
-    assert!(
-        set_cookie.contains("HttpOnly")
-            && set_cookie.contains("Secure")
-            && set_cookie.contains("SameSite=Lax")
-    );
-    assert!(json_body(response).await.get("token").is_none());
-    let cookie = set_cookie.split(';').next().unwrap();
-    assert_eq!(
-        call(&app, "GET", "/api/account/me", None, Some(cookie), None)
-            .await
-            .status(),
-        StatusCode::OK
-    );
-    for origin in [None, Some("https://evil.example")] {
-        let mut r = Request::post("/api/auth/logout").header("cookie", cookie);
-        if let Some(origin) = origin {
-            r = r.header("origin", origin);
-        }
-        assert_eq!(
-            app.clone()
-                .oneshot(r.body(Body::empty()).unwrap())
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::FORBIDDEN
-        );
-    }
-    sqlx::query("UPDATE users SET disabled_at=now() WHERE email='cookie@example.com'")
-        .execute(&pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        call(&app, "GET", "/api/account/me", None, Some(cookie), None)
-            .await
-            .status(),
-        StatusCode::UNAUTHORIZED
-    );
-
-    mail.fail.store(true, Ordering::SeqCst);
-    let failure = call(
-        &app,
-        "POST",
-        "/api/auth/email/request",
-        None,
-        None,
-        Some(json!({"email":"failure@example.com"})),
-    )
-    .await;
-    assert_eq!(failure.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let consumed: bool = sqlx::query_scalar("SELECT consumed_at IS NOT NULL FROM auth_email_challenges WHERE email='failure@example.com'").fetch_one(&pool).await.unwrap();
-    assert!(consumed);
-    finish(admin, pool, &name).await;
-}
-
-fn image_bytes() -> Vec<u8> {
-    let image = ImageBuffer::from_fn(7, 3, |x, y| Rgb([(x * 29) as u8, (y * 80) as u8, 123]));
-    let mut data = Cursor::new(Vec::new());
-    image.write_to(&mut data, image::ImageFormat::Png).unwrap();
-    // Must be stripped rather than copied to the object store.
-    data.get_mut()
-        .extend_from_slice(b"private trailing metadata");
-    data.into_inner()
-}
-async fn upload_image(app: &Router, token: &str) -> String {
-    let r = Request::post("/api/uploads")
-        .header("origin", "https://captur.es")
-        .header("authorization", format!("Bearer {token}"))
-        .header("content-type", "image/png")
-        .body(Body::from(image_bytes()))
-        .unwrap();
-    let response = app.clone().oneshot(r).await.unwrap();
-    assert_eq!(response.status(), StatusCode::CREATED);
-    json_body(response).await["id"].as_str().unwrap().into()
-}
-async fn share(
-    app: &Router,
-    token: &str,
-    upload: &str,
-    visibility: &str,
-    password: Option<&str>,
-) -> String {
-    let response = call(
-        app,
-        "POST",
-        &format!("/api/uploads/{upload}/shares"),
-        Some(token),
-        None,
-        Some(json!({"visibility":visibility,"password":password})),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::CREATED);
-    json_body(response).await["id"].as_str().unwrap().into()
-}
-
-#[tokio::test]
-#[ignore = "requires disposable local TEST_DATABASE_URL"]
-async fn postgres_upload_authorization_and_immediate_revocation() {
-    let (admin, pool, name) = database().await;
-    let mail = Arc::new(Mail::default());
-    let store = Arc::new(Objects::default());
-    let (app, sharing) = app(&pool, mail.clone(), store.clone());
-    let owner = login(&app, &mail, "owner@example.com").await;
-    let other = login(&app, &mail, "other@example.com").await;
-    let upload = upload_image(&app, &owner).await;
-    let data = store.data.lock().unwrap().values().next().unwrap().clone();
-    assert!(!data.windows(8).any(|v| v == b"private "));
-    let decoded = image::load_from_memory(&data).unwrap().into_rgb8();
-    assert_eq!(decoded.dimensions(), (7, 3));
-    assert_eq!(decoded.get_pixel(5, 2).0, [145, 160, 123]);
-    assert_eq!(
-        call(
-            &app,
-            "GET",
-            &format!("/api/uploads/{upload}/media"),
-            Some(&other),
-            None,
-            None
-        )
-        .await
-        .status(),
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        call(
-            &app,
-            "DELETE",
-            &format!("/api/uploads/{upload}"),
-            Some(&other),
-            None,
-            None
-        )
-        .await
-        .status(),
-        StatusCode::NOT_FOUND
-    );
-
-    let private = share(&app, &owner, &upload, "private", None).await;
-    assert_eq!(
-        call(
-            &app,
-            "GET",
-            &format!("/api/shares/{private}"),
-            None,
-            None,
-            None
-        )
-        .await
-        .status(),
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        call(
-            &app,
-            "GET",
-            &format!("/api/shares/{private}/media"),
-            Some(&other),
-            None,
-            None
-        )
-        .await
-        .status(),
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        call(
-            &app,
-            "GET",
-            &format!("/api/shares/{private}/media"),
-            Some(&owner),
-            None,
-            None
-        )
-        .await
-        .status(),
-        StatusCode::OK
-    );
-    let unlisted = share(&app, &owner, &upload, "unlisted", None).await;
-    let public = share(&app, &owner, &upload, "public", None).await;
-    for (id, indexed) in [(&unlisted, false), (&public, true)] {
-        let r = call(
-            &app,
-            "GET",
-            &format!("/api/shares/{id}/media"),
-            None,
-            None,
-            None,
-        )
-        .await;
-        assert_eq!(r.status(), StatusCode::OK);
-        assert_eq!(r.headers()["cache-control"], "private, no-store");
-        assert_eq!(
-            r.headers()["x-robots-tag"]
-                .to_str()
-                .unwrap()
-                .starts_with("index"),
-            indexed
-        );
-        assert!(!r.headers().contains_key("location"));
-    }
-    let protected = share(&app, &owner, &upload, "public", Some("a real password")).await;
-    let path = format!("/api/shares/{protected}");
-    let meta = call(&app, "GET", &path, None, None, None).await;
-    assert!(
-        meta.headers()["x-robots-tag"]
-            .to_str()
-            .unwrap()
-            .contains("noindex")
-    );
-    assert!(json_body(meta).await["mediaUrl"].is_null());
-    assert_eq!(
-        call(&app, "GET", &format!("{path}/media"), None, None, None)
-            .await
-            .status(),
-        StatusCode::UNAUTHORIZED
-    );
-    assert_eq!(
-        call(
-            &app,
-            "POST",
-            &format!("{path}/unlock"),
-            None,
-            None,
-            Some(json!({"password":"wrong"}))
-        )
-        .await
-        .status(),
-        StatusCode::UNAUTHORIZED
-    );
-    let unlock = call(
-        &app,
-        "POST",
-        &format!("{path}/unlock"),
-        None,
-        None,
-        Some(json!({"password":"a real password"})),
-    )
-    .await;
-    assert_eq!(unlock.status(), StatusCode::NO_CONTENT);
-    let cookie = unlock.headers()["set-cookie"]
-        .to_str()
-        .unwrap()
-        .split(';')
-        .next()
-        .unwrap()
-        .to_owned();
-    assert_eq!(
-        call(
-            &app,
-            "GET",
-            &format!("{path}/media"),
-            None,
-            Some(&cookie),
-            None
-        )
-        .await
-        .status(),
-        StatusCode::OK
-    );
-    let other_protected = share(&app, &owner, &upload, "unlisted", Some("a real password")).await;
-    assert_eq!(
-        call(
-            &app,
-            "GET",
-            &format!("/api/shares/{other_protected}/media"),
-            None,
-            Some(&cookie),
-            None
-        )
-        .await
-        .status(),
-        StatusCode::UNAUTHORIZED
-    );
-    assert_eq!(
-        call(
-            &app,
-            "POST",
-            &format!("{path}/revoke"),
-            Some(&other),
-            None,
-            None
-        )
-        .await
-        .status(),
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        call(
-            &app,
-            "POST",
-            &format!("{path}/revoke"),
-            Some(&owner),
-            None,
-            None
-        )
-        .await
-        .status(),
-        StatusCode::NO_CONTENT
-    );
-    assert_eq!(
-        call(
-            &app,
-            "GET",
-            &format!("{path}/media"),
-            None,
-            Some(&cookie),
-            None
-        )
-        .await
-        .status(),
-        StatusCode::NOT_FOUND
-    );
-
-    // A revocation while R2 is reading must not produce a newly authorized body.
-    *store.during_get.lock().unwrap() = Some((pool.clone(), public.parse().unwrap()));
-    assert_eq!(
-        call(
-            &app,
-            "GET",
-            &format!("/api/shares/{public}/media"),
-            None,
-            None,
-            None
-        )
-        .await
-        .status(),
-        StatusCode::NOT_FOUND
-    );
-    sqlx::query("UPDATE shares SET expires_at=now()-interval '1 second' WHERE id=$1")
-        .bind(unlisted.parse::<Uuid>().unwrap())
-        .execute(&pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        call(
-            &app,
-            "GET",
-            &format!("/api/shares/{unlisted}/media"),
-            None,
-            None,
-            None
-        )
-        .await
-        .status(),
-        StatusCode::NOT_FOUND
-    );
-
-    store.fail_delete.store(true, Ordering::SeqCst);
-    assert_eq!(
-        call(
-            &app,
-            "DELETE",
-            &format!("/api/uploads/{upload}"),
-            Some(&owner),
-            None,
-            None
-        )
-        .await
-        .status(),
-        StatusCode::NO_CONTENT
-    );
-    assert_eq!(
-        call(
-            &app,
-            "GET",
-            &format!("/api/shares/{private}/media"),
-            Some(&owner),
-            None,
-            None
-        )
-        .await
-        .status(),
-        StatusCode::NOT_FOUND
-    );
-    assert!(!store.data.lock().unwrap().is_empty());
-    store.fail_delete.store(false, Ordering::SeqCst);
-    sharing.cleanup().await.unwrap();
-    assert!(store.data.lock().unwrap().is_empty());
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM shares")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(count, 0);
-    finish(admin, pool, &name).await;
-}
-
-#[tokio::test]
-#[ignore = "requires disposable local TEST_DATABASE_URL"]
-async fn postgres_upload_limits_and_expired_credentials() {
-    let (admin, pool, name) = database().await;
-    let mail = Arc::new(Mail::default());
-    let store = Arc::new(Objects::default());
-    let (app, _) = app(&pool, mail.clone(), store.clone());
-    let token = login(&app, &mail, "limit@example.com").await;
-    let user: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email='limit@example.com'")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    let request = |data: Vec<u8>, content_type: &str| {
-        Request::post("/api/uploads")
-            .header("authorization", format!("Bearer {token}"))
-            .header("content-type", content_type)
-            .body(Body::from(data))
-            .unwrap()
-    };
-    for (data, content_type, status) in [
-        (image_bytes(), "image/jpeg", StatusCode::BAD_REQUEST),
-        (b"<svg/>".to_vec(), "image/svg+xml", StatusCode::BAD_REQUEST),
-        (
-            vec![0; crate::storage::MAX_BYTES + 1],
-            "image/png",
-            StatusCode::PAYLOAD_TOO_LARGE,
-        ),
-    ] {
-        assert_eq!(
-            app.clone()
-                .oneshot(request(data, content_type))
-                .await
-                .unwrap()
-                .status(),
-            status
-        );
-    }
-    assert!(store.data.lock().unwrap().is_empty());
-    for _ in 0..99 {
-        sqlx::query("INSERT INTO uploads(id,user_id,content_type,byte_size,state) VALUES($1,$2,'image/png',10,'pending')")
-            .bind(Uuid::new_v4()).bind(user).execute(&pool).await.unwrap();
-    }
-    let (a, b) = tokio::join!(
-        app.clone().oneshot(request(image_bytes(), "image/png")),
-        app.clone().oneshot(request(image_bytes(), "image/png"))
-    );
-    let mut statuses = [a.unwrap().status().as_u16(), b.unwrap().status().as_u16()];
-    statuses.sort();
-    assert_eq!(statuses, [201, 409]);
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM uploads WHERE user_id=$1")
-        .bind(user)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(count, 100);
     sqlx::query("UPDATE account_sessions SET expires_at=now()-interval '1 second'")
         .execute(&pool)
         .await
@@ -730,18 +400,560 @@ async fn postgres_upload_limits_and_expired_credentials() {
             .status(),
         StatusCode::UNAUTHORIZED
     );
-    let id = request_code(&app, "expired@example.com").await;
-    let code = mail.sent.lock().unwrap().last().unwrap().1.clone();
+
+    let expired = request_code(&app, "expired@example.com").await;
+    let expired_code = mail.sent.lock().unwrap().last().unwrap().1.clone();
     sqlx::query(
         "UPDATE auth_email_challenges SET expires_at=now()-interval '1 second' WHERE id=$1",
     )
-    .bind(id.parse::<Uuid>().unwrap())
+    .bind(&expired)
     .execute(&pool)
     .await
     .unwrap();
     assert_eq!(
-        verify(&app, &id, &code, "bearer").await.status(),
+        verify(&app, &expired, &expired_code, "bearer")
+            .await
+            .status(),
         StatusCode::BAD_REQUEST
     );
+    finish(admin, pool, &name).await;
+}
+
+#[tokio::test]
+#[ignore = "requires disposable local TEST_DATABASE_URL"]
+async fn postgres_asset_multipart_lifecycle_isolation_ranges_and_cleanup() {
+    let (admin, pool, name) = database().await;
+    let mail = Arc::new(Mail::default());
+    let store = Arc::new(Objects::default());
+    let (app, sharing) = app(&pool, mail.clone(), store.clone());
+    let owner = login(&app, &mail, "owner@example.com").await;
+    let other = login(&app, &mail, "other@example.com").await;
+
+    let pending = call(
+        &app,
+        "POST",
+        "/api/assets",
+        Some(&owner),
+        None,
+        Some(json!({"name":"pending.gif","contentType":"image/gif","byteSize":6})),
+    )
+    .await;
+    let pending = body(pending).await["id"].as_str().unwrap().to_owned();
+    store.stage(&pending, b"GIF89a");
+    for path in [
+        format!("/api/assets/{pending}/media"),
+        format!("/api/assets/{pending}/share"),
+    ] {
+        let method = if path.ends_with("share") {
+            "PUT"
+        } else {
+            "GET"
+        };
+        let payload = (method == "PUT").then(|| json!({"enabled":true}));
+        assert_eq!(
+            call(&app, method, &path, Some(&owner), None, payload)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("/api/assets/{pending}/parts"),
+            Some(&other),
+            None,
+            Some(json!({"partNumber":1}))
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("/api/assets/{pending}/complete"),
+            Some(&other),
+            None,
+            Some(json!({"parts":[{"partNumber":1,"etag":"x"}]}))
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("/api/assets/{pending}/complete"),
+            Some(&owner),
+            None,
+            Some(json!({"parts":[]}))
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("/api/assets/{pending}/complete"),
+            Some(&owner),
+            None,
+            Some(json!({"parts":[{"partNumber":2,"etag":"x"}]}))
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    store.stage(&pending, b"wrong");
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("/api/assets/{pending}/complete"),
+            Some(&owner),
+            None,
+            Some(json!({"parts":[{"partNumber":1,"etag":"x"}]}))
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    let state: String = sqlx::query_scalar("SELECT state FROM assets WHERE id=$1")
+        .bind(&pending)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(state, "pending");
+
+    store.fail_head_once.store(true, Ordering::SeqCst);
+    let gif = create_asset(
+        &app,
+        &store,
+        &owner,
+        "clip.gif",
+        "image/gif",
+        b"GIF89a-exact",
+    )
+    .await;
+    let video = create_asset(
+        &app,
+        &store,
+        &owner,
+        "clip.webm",
+        "video/webm",
+        b"video-exact",
+    )
+    .await;
+    assert_eq!(
+        store.complete.lock().unwrap()[&format!("assets/{gif}")],
+        b"GIF89a-exact"
+    );
+    assert_eq!(
+        store.complete.lock().unwrap()[&format!("assets/{video}")],
+        b"video-exact"
+    );
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &format!("/api/assets/{gif}/media"),
+            Some(&other),
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &app,
+            "DELETE",
+            &format!("/api/assets/{gif}"),
+            Some(&other),
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    let mut range = Request::get(format!("/api/assets/{video}/media"))
+        .header("authorization", format!("Bearer {owner}"))
+        .header(header::RANGE, "bytes=2-6")
+        .body(Body::empty())
+        .unwrap();
+    range
+        .extensions_mut()
+        .insert(ConnectInfo("127.0.0.1:4567".parse::<SocketAddr>().unwrap()));
+    let range = app.clone().oneshot(range).await.unwrap();
+    assert_eq!(range.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(range.headers()[header::CONTENT_RANGE], "bytes 2-6/11");
+    assert_eq!(
+        &to_bytes(range.into_body(), 100).await.unwrap()[..],
+        b"deo-e"
+    );
+
+    // Metadata alone may describe large multipart objects without allocating them.
+    let large = call(&app, "POST", "/api/assets", Some(&owner), None, Some(json!({"name":"large.bin","contentType":"application/octet-stream","byteSize":70_i64*1024*1024}))).await;
+    assert_eq!(large.status(), StatusCode::CREATED);
+    assert_eq!(body(large).await["partCount"], 2);
+
+    let calls = store.complete_calls.load(Ordering::SeqCst);
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("/api/assets/{video}/complete"),
+            Some(&owner),
+            None,
+            Some(json!({"parts":[{"partNumber":1,"etag":"ignored"}]}))
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert_eq!(store.complete_calls.load(Ordering::SeqCst), calls);
+
+    store.fail_abort.store(true, Ordering::SeqCst);
+    assert_eq!(
+        call(
+            &app,
+            "DELETE",
+            &format!("/api/assets/{pending}"),
+            Some(&owner),
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM assets WHERE id=$1")
+            .bind(&pending)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+    store.fail_abort.store(false, Ordering::SeqCst);
+    store.fail_delete.store(true, Ordering::SeqCst);
+    sharing.cleanup().await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM assets WHERE id=$1")
+            .bind(&pending)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+    store.fail_delete.store(false, Ordering::SeqCst);
+    sharing.cleanup().await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM assets WHERE id=$1")
+            .bind(&pending)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+    finish(admin, pool, &name).await;
+}
+
+#[tokio::test]
+#[ignore = "requires disposable local TEST_DATABASE_URL"]
+async fn postgres_share_updates_passwords_expiry_and_revocation() {
+    let (admin, pool, name) = database().await;
+    let mail = Arc::new(Mail::default());
+    let store = Arc::new(Objects::default());
+    let (app, _) = app(&pool, mail.clone(), store.clone());
+    let owner = login(&app, &mail, "share@example.com").await;
+    let asset = create_asset(
+        &app,
+        &store,
+        &owner,
+        "unsafe.svg",
+        "image/svg+xml",
+        b"<svg><script>x</script></svg>",
+    )
+    .await;
+    let expiry = "2099-01-01T00:00:00Z";
+    let enabled = set_share(
+        &app,
+        &owner,
+        &asset,
+        json!({"enabled":true,"password":"password one","expiresAt":expiry}),
+    )
+    .await;
+    assert_eq!(enabled.status(), StatusCode::OK);
+    let sid = body(enabled).await["share"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (unchanged, edited) = tokio::join!(
+        set_share(&app, &owner, &asset, json!({"enabled":true})),
+        set_share(
+            &app,
+            &owner,
+            &asset,
+            json!({"enabled":true,"expiresAt":"2099-02-01T00:00:00Z"})
+        )
+    );
+    assert_eq!(body(unchanged).await["share"]["id"], sid);
+    assert_eq!(body(edited).await["share"]["id"], sid);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM shares WHERE asset_id=$1 AND active")
+            .bind(&asset)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+    let unlock = call(
+        &app,
+        "POST",
+        &format!("/api/shares/{sid}/unlock"),
+        None,
+        None,
+        Some(json!({"password":"password one"})),
+    )
+    .await;
+    assert_eq!(unlock.status(), StatusCode::NO_CONTENT);
+    let set_cookie = unlock.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(!set_cookie.to_ascii_lowercase().contains("max-age"));
+    let cookie = set_cookie.split(';').next().unwrap();
+    let media = call(
+        &app,
+        "GET",
+        &format!("/api/shares/{sid}/media"),
+        None,
+        Some(cookie),
+        None,
+    )
+    .await;
+    assert_eq!(media.status(), StatusCode::OK);
+    assert_eq!(
+        media.headers()[header::CONTENT_TYPE],
+        "application/octet-stream"
+    );
+    assert!(
+        media.headers()[header::CONTENT_DISPOSITION]
+            .to_str()
+            .unwrap()
+            .starts_with("attachment;")
+    );
+    assert_eq!(
+        media.headers()["content-security-policy"],
+        "default-src 'none'; sandbox"
+    );
+
+    assert_eq!(
+        set_share(
+            &app,
+            &owner,
+            &asset,
+            json!({"enabled":true,"password":"password two"})
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &format!("/api/shares/{sid}/media"),
+            None,
+            Some(cookie),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("/api/shares/{sid}/unlock"),
+            None,
+            None,
+            Some(json!({"password":"password one"}))
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let unlock = call(
+        &app,
+        "POST",
+        &format!("/api/shares/{sid}/unlock"),
+        None,
+        None,
+        Some(json!({"password":"password two"})),
+    )
+    .await;
+    let cookie2 = unlock.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        set_share(
+            &app,
+            &owner,
+            &asset,
+            json!({"enabled":true,"password":null,"expiresAt":null})
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &format!("/api/shares/{sid}/media"),
+            None,
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+
+    *store.during_get.lock().unwrap() = Some((pool.clone(), sid.clone()));
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &format!("/api/shares/{sid}/media"),
+            None,
+            Some(&cookie2),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    sqlx::query("UPDATE shares SET active=true WHERE id=$1")
+        .bind(&sid)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        set_share(&app, &owner, &asset, json!({"enabled":false}))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(&app, "GET", &format!("/api/shares/{sid}"), None, None, None)
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let again = set_share(&app, &owner, &asset, json!({"enabled":true})).await;
+    let sid2 = body(again).await["share"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(sid, sid2);
+    sqlx::query("UPDATE shares SET expires_at=now()-interval '1 second' WHERE id=$1")
+        .bind(&sid2)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &format!("/api/shares/{sid2}"),
+            None,
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &format!("/api/shares/{sid2}/media"),
+            None,
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    finish(admin, pool, &name).await;
+}
+
+static COLLISION_CALLS: AtomicUsize = AtomicUsize::new(0);
+fn collision_ids() -> String {
+    match COLLISION_CALLS.fetch_add(1, Ordering::SeqCst) {
+        0 => "collision001".into(),
+        1 => "freshasset01".into(),
+        2 => "sharesame001".into(),
+        _ => "freshshare01".into(),
+    }
+}
+#[tokio::test]
+#[ignore = "requires disposable local TEST_DATABASE_URL"]
+async fn postgres_asset_and_share_id_collisions_preserve_existing_rows() {
+    COLLISION_CALLS.store(0, Ordering::SeqCst);
+    let (admin, pool, name) = database().await;
+    let mail = Arc::new(Mail::default());
+    let store = Arc::new(Objects::default());
+    let (app0, mut sharing) = app(&pool, mail.clone(), store.clone());
+    let token = login(&app0, &mail, "collision@example.com").await;
+    let user: i64 = sqlx::query_scalar("SELECT id FROM users")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO assets(id,user_id,name,content_type,byte_size,state) VALUES('collision001',$1,'existing','image/png',1,'ready')").bind(user).execute(&pool).await.unwrap();
+    store
+        .complete
+        .lock()
+        .unwrap()
+        .insert("assets/collision001".into(), vec![1]);
+    sharing.new_id = collision_ids;
+    let app = crate::app_router(None, sharing.auth.clone(), sharing.clone());
+    let asset = create_asset(&app, &store, &token, "new", "image/png", b"n").await;
+    assert_eq!(asset, "freshasset01");
+    let existing: String = sqlx::query_scalar("SELECT name FROM assets WHERE id='collision001'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(existing, "existing");
+    sqlx::query("INSERT INTO shares(id,asset_id) VALUES('sharesame001','collision001')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let share = set_share(&app, &token, &asset, json!({"enabled":true})).await;
+    assert_eq!(body(share).await["share"]["id"], "freshshare01");
+    let old_asset: String =
+        sqlx::query_scalar("SELECT asset_id FROM shares WHERE id='sharesame001'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(old_asset, "collision001");
+    assert_eq!(COLLISION_CALLS.load(Ordering::SeqCst), 4);
     finish(admin, pool, &name).await;
 }

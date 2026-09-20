@@ -65,7 +65,7 @@ The Node process serves the site:
    request headers.
 3. Hashed `/assets/*` files and other public files are served as static assets
    with long-lived cache headers.
-4. `/account` provides optional sign-in and the image library; `/s/<id>` renders
+4. `/account` provides optional sign-in and the capture library; `/s/<id>` renders
    access-controlled share pages, with fresh server-side metadata.
 5. Unknown paths return the in-app 404 page.
 
@@ -145,10 +145,12 @@ a purge. Purge `/` only if a stale homepage HTML response is stuck at the edge.
 ## Optional accounts
 
 `/account` uses the Rust API's email-code sign-in and secure HttpOnly cookie,
-then lists owner images and their links. Authentication is optional; no tokens
+then lists owner captures and their links. Authentication is optional; no tokens
 are stored in localStorage. When the API disables accounts, the page shows an
-unavailable notice. Static image uploads, deletion, link creation/revocation,
-passwords and expiry are implemented; native app integration follows the rewrite.
+unavailable notice. Multipart direct-to-R2 uploads, deletion, one editable share
+link per capture, passwords and expiry are implemented; native app integration
+follows the rewrite. GIF, video and raster files render in place; unknown or
+unsafe inline formats are offered as downloads.
 
 Browser calls remain same-origin `/api/*`. Set **server-only**
 `CAPTURES_API_ORIGIN` on the Node website to the trusted internal Rust API origin
@@ -158,11 +160,18 @@ Share-page SSR forwards the viewer cookie to that origin only, rejects redirects
 and never caches metadata. Node receives no database, SES or R2 credentials.
 See [`../api`](../api/README.md) for auth and storage configuration.
 
-`/account` and `/s/*` send `no-store` and `Referrer-Policy: no-referrer`.
-Public password-free share pages may index; all other states send noindex.
-Noindex is a crawler instruction, not access control. Media authorization is
+`/account` and `/s/*` send `no-store` and `Referrer-Policy: no-referrer`; every
+share state also sends `noindex`. Noindex is a crawler instruction, not access
+control. Media authorization is
 enforced again by Rust, so stale page HTML cannot bypass revocation. Configure
 the same-origin API routing and dynamic cache bypass before activation. The
 development Vite proxy routes `/api` to the local API; production ingress must
-do this separately. `npm test --workspace @captures/web` covers validation and
-indexing policy. End-to-end account/storage tests live in the Rust API suite.
+do this separately.
+
+Direct uploads require the R2 bucket CORS policy to allow `PUT` from the exact
+website origin and to expose the `ETag` response header. The browser sends only
+the headers returned by the multipart API to R2, without account cookies or
+authorization headers. This documentation does not change the live R2 policy.
+`npm test --workspace @captures/web` covers the upload protocol, media selection,
+validation and indexing policy. End-to-end account/storage tests live in the
+Rust API suite.

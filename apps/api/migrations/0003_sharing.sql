@@ -1,35 +1,35 @@
-CREATE TABLE uploads (
-    id uuid PRIMARY KEY,
+CREATE TABLE assets (
+    id varchar(12) PRIMARY KEY,
     user_id bigint NOT NULL REFERENCES users(id),
-    content_type text NOT NULL CHECK (content_type IN ('image/png', 'image/jpeg', 'image/webp')),
-    byte_size bigint NOT NULL CHECK (byte_size > 0 AND byte_size <= 20971520),
+    name text NOT NULL,
+    content_type text NOT NULL,
+    byte_size bigint NOT NULL CHECK (byte_size >= 0),
     state text NOT NULL CHECK (state IN ('pending', 'ready', 'deleting')),
+    multipart_upload_id text,
     created_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX uploads_owner_idx ON uploads(user_id, created_at DESC);
-CREATE INDEX uploads_cleanup_idx ON uploads(state, created_at);
+CREATE INDEX assets_owner_idx ON assets(user_id, created_at DESC);
+CREATE INDEX assets_cleanup_idx ON assets(state, created_at);
 
 CREATE TABLE shares (
-    id uuid PRIMARY KEY,
-    upload_id uuid NOT NULL REFERENCES uploads(id) ON DELETE CASCADE,
-    visibility text NOT NULL CHECK (visibility IN ('private', 'unlisted', 'public')),
+    id varchar(12) PRIMARY KEY,
+    asset_id varchar(12) NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
     password_hash text,
     expires_at timestamptz,
-    revoked_at timestamptz,
-    created_at timestamptz NOT NULL DEFAULT now()
+    shared_at timestamptz NOT NULL DEFAULT now(),
+    active boolean NOT NULL DEFAULT true
 );
-CREATE INDEX shares_upload_idx ON shares(upload_id);
+CREATE UNIQUE INDEX shares_one_active_asset ON shares(asset_id) WHERE active;
+CREATE INDEX shares_asset_idx ON shares(asset_id);
 
 -- Grants never replace the share check: revocation, expiry, and owner suspension
 -- are checked again on EVERY metadata/media request, including existing grants.
 CREATE TABLE share_viewer_grants (
     token_hash bytea PRIMARY KEY,
-    share_id uuid NOT NULL REFERENCES shares(id) ON DELETE CASCADE,
-    expires_at timestamptz NOT NULL
+    share_id varchar(12) NOT NULL REFERENCES shares(id) ON DELETE CASCADE
 );
-CREATE INDEX share_viewer_grants_expiry_idx ON share_viewer_grants(expires_at);
 CREATE TABLE share_unlock_attempts (
-    share_id uuid NOT NULL REFERENCES shares(id) ON DELETE CASCADE,
+    share_id varchar(12) NOT NULL REFERENCES shares(id) ON DELETE CASCADE,
     ip_hash bytea NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now()
 );

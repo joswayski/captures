@@ -3,7 +3,7 @@ UPDATE users SET email = lower(btrim(email)) WHERE email IS NOT NULL;
 CREATE UNIQUE INDEX users_email_unique ON users (email) WHERE email IS NOT NULL;
 
 CREATE TABLE auth_email_challenges (
-    id uuid PRIMARY KEY,
+    id varchar(12) PRIMARY KEY,
     email text NOT NULL,
     code_hash bytea NOT NULL,
     request_ip_hash bytea NOT NULL,

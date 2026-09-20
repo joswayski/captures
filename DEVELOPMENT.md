@@ -17,17 +17,23 @@ tests. It does not participate in local desktop capture. See
 [`apps/api/README.md`](apps/api/README.md) for configuration, database isolation,
 migrations and tests, and [`apps/web/README.md`](apps/web/README.md#optional-accounts)
 for the account and share pages. Auth/sharing default to disabled; an enabled
-environment must supply SES/auth/R2 configuration explicitly. `npm run check`
-covers frontend validation and the public website. Run
+environment must supply SES/auth/R2 configuration explicitly. Browser uploads go
+directly to presigned R2 multipart part URLs; local captures remain local unless a
+user chooses a file on the website. R2 CORS must allow `PUT` from the exact browser
+origin, allow `Content-Type`, and expose `ETag`. `npm run check` covers frontend
+validation and the public website. Run
 `TEST_DATABASE_URL=postgres://USER@127.0.0.1:PORT/postgres cargo test -p captures-api -- --include-ignored`
 against a disposable local PostgreSQL server for migration, OTP concurrency,
-session, image authorization, and revocation checks. Tests create and drop their
+session, asset authorization, and revocation checks. Tests create and drop their
 own databases; SES and object storage are substituted, never live services.
 For local browser development, run the API on port 3001 and `npm run dev:web`;
 Vite proxies `/api` while share-page SSR uses `CAPTURES_API_ORIGIN` (same local
 default). HTTP-only local testing requires `AUTH_INSECURE_LOOPBACK_COOKIE=true`,
 a loopback API bind, and `AUTH_ALLOWED_ORIGIN=http://localhost:5174` (or the exact
 loopback origin you browse). Production always uses HTTPS and secure cookies.
+The website account flow is complete, but no native auth, credential-vault, upload,
+or Share-button path is connected. Native integration comes after the rewrite;
+the live native hosts and Workbench files retain active ownership of that work.
 The offline deployment-notification tests also require Bash and `jq` on PATH
 (including on Windows); they intercept HTTP calls and send no Discord messages.
 

@@ -176,11 +176,11 @@ async fn postgres_users_and_startup_regressions() {
             vec![
                 ("public".into(), "_sqlx_migrations".into()),
                 ("public".into(), "account_sessions".into()),
+                ("public".into(), "assets".into()),
                 ("public".into(), "auth_email_challenges".into()),
                 ("public".into(), "share_unlock_attempts".into()),
                 ("public".into(), "share_viewer_grants".into()),
                 ("public".into(), "shares".into()),
-                ("public".into(), "uploads".into()),
                 ("public".into(), "users".into()),
             ]
         );
