@@ -256,13 +256,14 @@ captur.es; it never attaches captures, files, or diagnostics. Fixture mode canno
 send feedback, and failed requests preserve the draft for retry.
 Shared Rust now defines the screenshot editor's layered document, crop/translation/
 orientation geometry, canvas sizing and bounded snapshot history, checked against
-the shipping TypeScript behavior. A shared renderer now flattens real image layers,
-including crop geometry, lossless orientation, opacity and blending, without host
-I/O. Worker-owned editor sessions add draft restore/save/discard, transactional
-crop/resize/undo, and retained pixel frames for native hosts. AppKit connects those
-operations to its first screenshot-editor window; the wgpu host, text, drawing tools
-and edited-output export remain unconnected. This first host slice does not
-complete screenshot-editor acceptance.
+the shipping TypeScript behavior. A shared renderer now flattens real image layers
+and the five closed annotation shapes, including crop geometry, rotation, opacity
+and blending, without host I/O. Worker-owned editor sessions add draft restore/save/
+discard, transactional crop/resize/undo, and retained pixel frames for native hosts.
+AppKit connects crop, canvas resize and draft operations to its first screenshot-
+editor window. Text, open/freehand drawing, host annotation controls and edited-
+output export remain unconnected. This first host slice does not complete screenshot-
+editor acceptance.
 Editing, OS shortcut takeover, login items,
 single-instance relaunch and updates are not connected to the native hosts yet. Windows/Linux
 renderer selection and full feature/design parity remain open. The

@@ -366,6 +366,14 @@ rejecting unsupported visible annotation layers and invalid or oversized inputs.
 It performs no host I/O and is not wired to AppKit or wgpu UI; macOS, Windows,
 X11 and Wayland native editor acceptance therefore remains `not implemented`.
 
+The closed-shape renderer follow-up adds rectangle, ellipse, triangle, diamond
+and star layers in shared stack order with shipping drag-box geometry, rounded
+rectangle corners, star proportions, authored rotation origin, fill/stroke
+defaults, opacity and blending. Visible text, line/arrow, freehand and drop-shadow
+content remains an explicit rendering error rather than disappearing. This is
+still shared-core preparation only: no host presentation is connected, and macOS,
+Windows, X11 and Wayland editor acceptance remains `not implemented`.
+
 The shared editor-session boundary now opens isolated History screenshots and
 version-1 drafts, owns decoded image assets and snapshot history, and validates
 and renders edits before replacing the current state. Crop/canvas sizing,

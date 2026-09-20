@@ -99,6 +99,12 @@ pub enum Shape {
         width: f32,
         height: f32,
     },
+    RoundedRectangle {
+        origin: Point,
+        width: f32,
+        height: f32,
+        radius: f32,
+    },
     Ellipse {
         origin: Point,
         width: f32,
@@ -155,6 +161,8 @@ pub struct Layer {
     pub fill: Option<[u8; 4]>,
     /// Clockwise rotation around the unrotated geometry's center.
     pub rotation_degrees: f32,
+    /// Overrides the geometry center when authored bounds exceed the painted path.
+    pub rotation_origin: Option<Point>,
     pub blend_mode: BlendMode,
 }
 
@@ -238,6 +246,12 @@ impl Layer {
                 width,
                 height,
             }
+            | Shape::RoundedRectangle {
+                origin,
+                width,
+                height,
+                ..
+            }
             | Shape::Ellipse {
                 origin,
                 width,
@@ -269,8 +283,10 @@ impl Layer {
         };
         if !valid_shape
             || !self.rotation_degrees.is_finite()
+            || self.rotation_origin.is_some_and(|point| !point_ok(&point))
             || !self.stroke_width.is_finite()
             || self.stroke_width < 0.0
+            || matches!(&self.shape, Shape::RoundedRectangle { radius, .. } if !radius.is_finite() || *radius < 0.0)
         {
             return Err(format!("Layer {} has invalid geometry", self.id));
         }
@@ -292,6 +308,12 @@ impl Layer {
                 origin,
                 width,
                 height,
+            }
+            | Shape::RoundedRectangle {
+                origin,
+                width,
+                height,
+                ..
             }
             | Shape::Ellipse {
                 origin,
@@ -339,7 +361,7 @@ impl Layer {
     /// geometry (including an invalid font) has no bounds.
     pub fn bounds(&self) -> Option<Bounds> {
         let mut bounds = self.geometry_bounds().ok()??;
-        let center = bounds.center();
+        let center = self.rotation_origin.unwrap_or_else(|| bounds.center());
         if !matches!(self.shape, Shape::Text { .. } | Shape::Image { .. }) {
             bounds.x -= self.stroke_width / 2.0;
             bounds.y -= self.stroke_width / 2.0;
@@ -363,9 +385,13 @@ impl Layer {
         let Ok(Some(bounds)) = self.geometry_bounds() else {
             return false;
         };
-        let point = rotate(point, bounds.center(), -self.rotation_degrees);
-        let radius = self.stroke_width / 2.0 + tolerance;
-        let near = |a, b| segment_distance(point, a, b) <= radius;
+        let point = rotate(
+            point,
+            self.rotation_origin.unwrap_or_else(|| bounds.center()),
+            -self.rotation_degrees,
+        );
+        let hit_radius = self.stroke_width / 2.0 + tolerance;
+        let near = |a, b| segment_distance(point, a, b) <= hit_radius;
         match &self.shape {
             Shape::Freehand(points) => {
                 points.windows(2).any(|p| near(p[0], p[1]))
@@ -404,16 +430,41 @@ impl Layer {
                     || near(c, d)
                     || near(d, a)
             }
+            Shape::RoundedRectangle { radius, .. } => {
+                let outer = Bounds {
+                    x: bounds.x - hit_radius,
+                    y: bounds.y - hit_radius,
+                    width: bounds.width + hit_radius * 2.0,
+                    height: bounds.height + hit_radius * 2.0,
+                };
+                let inside_outer = rounded_rectangle_contains(point, outer, *radius + hit_radius);
+                let inner_width = bounds.width - hit_radius * 2.0;
+                let inner_height = bounds.height - hit_radius * 2.0;
+                let inside_inner = inner_width > 0.0
+                    && inner_height > 0.0
+                    && rounded_rectangle_contains(
+                        point,
+                        Bounds {
+                            x: bounds.x + hit_radius,
+                            y: bounds.y + hit_radius,
+                            width: inner_width,
+                            height: inner_height,
+                        },
+                        (*radius - hit_radius).max(0.0),
+                    );
+                inside_outer && (self.fill.is_some() || !inside_inner)
+            }
             Shape::Ellipse { .. } => {
                 let center = bounds.center();
                 let (x, y) = (point.x - center.x, point.y - center.y);
                 let (rx, ry) = (bounds.width / 2.0, bounds.height / 2.0);
-                let outer = (x / (rx + radius)).powi(2) + (y / (ry + radius)).powi(2) <= 1.0;
+                let outer =
+                    (x / (rx + hit_radius)).powi(2) + (y / (ry + hit_radius)).powi(2) <= 1.0;
                 outer
                     && (self.fill.is_some()
-                        || rx <= radius
-                        || ry <= radius
-                        || (x / (rx - radius)).powi(2) + (y / (ry - radius)).powi(2) >= 1.0)
+                        || rx <= hit_radius
+                        || ry <= hit_radius
+                        || (x / (rx - hit_radius)).powi(2) + (y / (ry - hit_radius)).powi(2) >= 1.0)
             }
             Shape::Text { .. } | Shape::Image { .. } => {
                 point.x >= bounds.x - tolerance
@@ -425,6 +476,27 @@ impl Layer {
     }
 }
 
+fn rounded_rectangle_contains(point: Point, bounds: Bounds, radius: f32) -> bool {
+    if point.x < bounds.x
+        || point.x > bounds.x + bounds.width
+        || point.y < bounds.y
+        || point.y > bounds.y + bounds.height
+    {
+        return false;
+    }
+    let radius = radius.min(bounds.width / 2.0).min(bounds.height / 2.0);
+    if radius == 0.0 {
+        return true;
+    }
+    let center_x = point
+        .x
+        .clamp(bounds.x + radius, bounds.x + bounds.width - radius);
+    let center_y = point
+        .y
+        .clamp(bounds.y + radius, bounds.y + bounds.height - radius);
+    (point.x - center_x).hypot(point.y - center_y) <= radius
+}
+
 fn paint(color: [u8; 4], blend_mode: BlendMode) -> Paint<'static> {
     let mut paint = Paint::default();
     paint.set_color_rgba8(color[0], color[1], color[2], color[3]);
@@ -433,11 +505,58 @@ fn paint(color: [u8; 4], blend_mode: BlendMode) -> Paint<'static> {
     paint
 }
 
+fn push_rounded_rectangle(path: &mut PathBuilder, rect: tiny_skia::Rect, radius: f32) {
+    // Cubic quarter-circle approximation; error stays below 0.003 px at the
+    // shipping editor's maximum 12 px corner radius.
+    const KAPPA: f32 = 0.552_284_8;
+    let radius = radius.min(rect.width() / 2.0).min(rect.height() / 2.0);
+    let offset = radius * KAPPA;
+    let (left, top, right, bottom) = (rect.left(), rect.top(), rect.right(), rect.bottom());
+    path.move_to(left + radius, top);
+    path.line_to(right - radius, top);
+    path.cubic_to(
+        right - radius + offset,
+        top,
+        right,
+        top + radius - offset,
+        right,
+        top + radius,
+    );
+    path.line_to(right, bottom - radius);
+    path.cubic_to(
+        right,
+        bottom - radius + offset,
+        right - radius + offset,
+        bottom,
+        right - radius,
+        bottom,
+    );
+    path.line_to(left + radius, bottom);
+    path.cubic_to(
+        left + radius - offset,
+        bottom,
+        left,
+        bottom - radius + offset,
+        left,
+        bottom - radius,
+    );
+    path.line_to(left, top + radius);
+    path.cubic_to(
+        left,
+        top + radius - offset,
+        left + radius - offset,
+        top,
+        left + radius,
+        top,
+    );
+    path.close();
+}
+
 fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
     let Some(bounds) = layer.geometry_bounds()? else {
         return Ok(());
     };
-    let center = bounds.center();
+    let center = layer.rotation_origin.unwrap_or_else(|| bounds.center());
     let transform = Transform::from_rotate_at(layer.rotation_degrees, center.x, center.y);
     if let Shape::Image {
         origin,
@@ -556,6 +675,12 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
             width,
             height,
         }
+        | Shape::RoundedRectangle {
+            origin,
+            width,
+            height,
+            ..
+        }
         | Shape::Ellipse {
             origin,
             width,
@@ -565,6 +690,8 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
                 .ok_or("Invalid shape bounds")?;
             if matches!(layer.shape, Shape::Rectangle { .. }) {
                 path.push_rect(rect);
+            } else if let Shape::RoundedRectangle { radius, .. } = &layer.shape {
+                push_rounded_rectangle(&mut path, rect, *radius);
             } else {
                 path.push_oval(rect);
             }
@@ -738,6 +865,7 @@ mod tests {
                 stroke_width: 5.25,
                 fill: Some([231, 41, 167, 89]),
                 rotation_degrees: index as f32 * 13.7 + 17.25,
+                rotation_origin: None,
                 blend_mode: BlendMode::Normal,
             };
             if index % 5 == 4 {
