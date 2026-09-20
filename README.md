@@ -266,6 +266,8 @@ off-canvas transformed images expand the canvas so they are not lost.
 The Windows/Linux candidate opens screenshots from History in a native crop,
 canvas-size and draft editor with undo/redo. Its layer panel supports selection,
 visibility, locking, opacity, renaming, position, duplication, deletion and ordering.
+Image layers also expose lossless left/right rotations and horizontal/vertical
+flips, including when hidden or locked; each action supports undo and draft restore.
 Its Output panel previews PNG/JPEG/WebP quality and size limits, reports encoded
 bytes, and switches between the edited canvas and encoded output without saving.
 **Save new copy** exports to an editable destination path without replacing an
@@ -276,10 +278,10 @@ original. Failed draft saves keep edits open and cancel normal quit. Private-X11
 cover both appearances, persisted drafts, real preview pixels and error recovery.
 AppKit now connects the same crop, canvas-resize and draft operations in its own
 window. Windows, Wayland and physical AppKit presentation remain unverified.
-Native image-transform controls, text, annotation shadows, annotation tools, save
+AppKit image-transform controls, text, annotation shadows, annotation tools, save
 dialogs/overwrite-original, edited-image clipboard output, AppKit edited-file export,
-and recording editing remain unconnected. The shared image-transform command and
-rendering/export support are prerequisites, not native editor acceptance. OS shortcut
+and recording editing remain unconnected. These connected controls and shared
+rendering/export support do not complete native editor acceptance. OS shortcut
 takeover, login items, single-instance relaunch and updates
 are not connected to the native hosts yet. Windows/Linux renderer selection and full
 feature/design parity remain open. The

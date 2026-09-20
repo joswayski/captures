@@ -36,7 +36,7 @@ with those flows; its tests retain both screenshot-child and saved-notice covera
 Superseded parent PRs may be closed rather than separately merged because the
 repository uses squash merges. Their functionality must not be counted as missing.
 
-Next implementation boundary: connect shared image transforms to both editor hosts
+Next implementation boundary: connect shared image transforms to AppKit
 and edited-image export controls to AppKit. Shared commands and encoding remain
 prerequisites, not native editor/output acceptance.
 Native live capture on Wayland remains explicitly
@@ -445,8 +445,11 @@ Real X11 input checks cover asymmetric movement, half-opacity/hidden preview
 pixels, locks, ordering, deletion, empty-document undo and saved-layer reopening
 in dark and light, including minimum-window scrolling. Windows and Wayland use
 this implementation but remain presentation-unverified; AppKit layer controls
-are in progress. Merge/flatten, image import, image transforms and drawing tools
-are not connected by this panel slice.
+are in progress. Image layers expose a **Transform image** menu for lossless
+left/right rotation and horizontal/vertical flips through the shared worker commands.
+Hidden and locked images can transform, matching shipping policy; full-canvas
+photos rotate their canvas, and undo/draft restore retain the orientation.
+Merge/flatten, image import and drawing tools are not connected by this panel slice.
 
 The wgpu Output panel now previews shared PNG/JPEG/WebP encoding with the shipping
 quality modes, palette controls and hard byte budget. Encoding and decoding run
@@ -476,7 +479,7 @@ failure/close behavior and rendered light/dark fixtures. Physical AppKit input,
 accessibility and IME acceptance remain unverified.
 
 Across both hosts, physical input/accessibility/IME acceptance remains open.
-Image-transform controls, annotation tools, AppKit edited-image export and recording
+AppKit image-transform controls, annotation tools, AppKit edited-image export and recording
 editing are not connected; the screenshot-editor parity gate stays open.
 
 New Capture connects its persisted shortcut, tray action and workspace entry to
