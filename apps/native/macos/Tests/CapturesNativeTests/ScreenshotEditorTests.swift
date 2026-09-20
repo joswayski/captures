@@ -349,14 +349,16 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertLessThan(opacityLabel.frame.minY, opacityField.frame.minY,
                               "top-down layer controls place labels above fields")
             let table = try XCTUnwrap(descendants(in: layerPanel).compactMap { $0 as? NSTableView }.first)
+            controller.root.layoutSubtreeIfNeeded(); table.layoutSubtreeIfNeeded()
             let combinedStateCell = try XCTUnwrap(table.view(atColumn: 0, row: 1,
                 makeIfNecessary: true) as? NSTableCellView)
+            combinedStateCell.layoutSubtreeIfNeeded()
             let combinedState = try XCTUnwrap(combinedStateCell.subviews.compactMap {
                 $0 as? NSTextField
             }.first { $0 !== combinedStateCell.textField })
             XCTAssertEqual(combinedState.stringValue, "Image · Hidden · Locked")
-            XCTAssertLessThanOrEqual(combinedState.frame.maxX, table.tableColumns[0].width,
-                                     "complete layer metadata fits inside the list column")
+            XCTAssertLessThanOrEqual(combinedState.frame.maxX, combinedStateCell.bounds.width - 8,
+                                     "metadata respects the actual laid-out cell trailing inset")
             XCTAssertLessThanOrEqual(combinedState.intrinsicContentSize.width,
                                      combinedState.frame.width,
                                      "combined Hidden and Locked metadata is not truncated")

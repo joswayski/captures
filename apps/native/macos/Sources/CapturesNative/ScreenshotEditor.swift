@@ -29,6 +29,31 @@ struct ScreenshotEditorState: Equatable {
     mutating func close() { generation += 1; artifactID = nil; snapshot = nil; busy = false }
 }
 
+private final class EditorLayerCell: NSTableCellView {
+    let titleLabel: NSTextField
+    let detailLabel: NSTextField
+
+    init(title: NSTextField, detail: NSTextField) {
+        titleLabel = title; detailLabel = detail
+        super.init(frame: .zero)
+        addSubview(title); addSubview(detail); textField = title
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func layout() {
+        super.layout()
+        let inset: CGFloat = 8
+        let gap: CGFloat = 8
+        let detailWidth = min(detailLabel.intrinsicContentSize.width,
+                              max(0, bounds.width - inset * 2))
+        detailLabel.frame = NSRect(x: bounds.width - inset - detailWidth, y: 4,
+                                   width: detailWidth, height: 22)
+        titleLabel.frame = NSRect(x: inset, y: 4,
+                                  width: max(0, detailLabel.frame.minX - inset - gap), height: 22)
+    }
+}
+
 final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewDataSource,
                                         NSTableViewDelegate {
     let window: NSWindow
@@ -565,18 +590,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard let layers = state.snapshot?.layers, layers.indices.contains(row) else { return nil }
         let layer = layers[row]
-        let cell = NSTableCellView()
         let title = NSTextField(labelWithString: layer.name)
-        title.frame = NSRect(x: 8, y: 4, width: 112, height: 22)
         title.lineBreakMode = .byTruncatingTail; title.toolTip = layer.name
         title.textColor = tokens.color("text")
         let detail = NSTextField(labelWithString:
             "\(layer.kind.rawValue.capitalized)\(layer.visible ? "" : " · Hidden")\(layer.locked ? " · Locked" : "")")
-        detail.frame = NSRect(x: 124, y: 4, width: 124, height: 22)
         detail.alignment = .right; detail.font = .systemFont(ofSize: 10)
         detail.textColor = tokens.color("text-muted"); detail.toolTip = detail.stringValue
-        cell.addSubview(title); cell.addSubview(detail); cell.textField = title
-        return cell
+        return EditorLayerCell(title: title, detail: detail)
     }
 
     private func restyle(_ tokens: Tokens) {
