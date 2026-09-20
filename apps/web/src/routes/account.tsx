@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { Share2 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { formatBytes, validateShare, validateUpload } from "../accountModel";
 
@@ -496,8 +497,13 @@ function UploadCard({
         </form>
       ) : (
         <div className="card-actions">
-          <button className="secondary-button" onClick={() => setOpen(true)}>
-            Create share link
+          <button
+            className="secondary-button"
+            aria-label="Share"
+            title="Share"
+            onClick={() => setOpen(true)}
+          >
+            <Share2 size={18} aria-hidden="true" />
           </button>
           <button
             className="danger-button"
