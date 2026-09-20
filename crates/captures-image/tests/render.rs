@@ -219,6 +219,84 @@ fn freehand_dots_segments_and_arrowheads_are_not_bounding_boxes() {
 }
 
 #[test]
+fn shipping_smooth_and_controlled_paths_keep_distinct_quadratic_endings() {
+    let points = vec![point(5.0, 5.0), point(25.0, 35.0), point(45.0, 5.0)];
+    let mut smooth = layer(Shape::SmoothPath(points.clone()));
+    smooth.color = [20, 180, 90, 255];
+    smooth.stroke_width = 4.0;
+    let smooth_render = render(&document(vec![smooth.clone()])).unwrap();
+    assert!(smooth_render.get_pixel(23, 24)[3] > 180);
+    assert!(smooth_render.get_pixel(43, 7)[3] > 180);
+    assert!(smooth_render.get_pixel(35, 20)[3] > 180);
+    assert!(smooth.hit_test(point(23.0, 24.0), 1.0));
+
+    let mut controlled = layer(Shape::ControlledPath(points));
+    controlled.color = [40, 100, 230, 255];
+    controlled.stroke_width = 4.0;
+    let controlled_render = render(&document(vec![controlled.clone()])).unwrap();
+    assert!(controlled_render.get_pixel(25, 20)[3] > 180);
+    assert!(controlled_render.get_pixel(35, 16)[3] > 180);
+    assert_eq!(controlled_render.get_pixel(35, 20)[3], 0);
+    assert!(controlled.hit_test(point(25.0, 20.0), 1.0));
+
+    let mut multi = layer(Shape::ControlledPath(vec![
+        point(5.0, 25.0),
+        point(20.0, 5.0),
+        point(35.0, 35.0),
+        point(50.0, 15.0),
+    ]));
+    multi.stroke_width = 4.0;
+    let multi_render = render(&document(vec![multi])).unwrap();
+    assert!(multi_render.get_pixel(28, 20)[3] > 180);
+    assert!(multi_render.get_pixel(37, 26)[3] > 180);
+
+    let mut dot = layer(Shape::SmoothPath(vec![point(12.0, 14.0)]));
+    dot.stroke_width = 4.0;
+    assert!(dot.hit_test(point(12.0, 14.0), 0.0));
+    assert!(!dot.hit_test(point(15.0, 14.0), 0.0));
+    dot.rotation_origin = Some(point(12.5, 14.5));
+    dot.rotation_degrees = 90.0;
+    assert!(dot.hit_test(point(13.0, 14.0), 0.0));
+    assert!(!dot.hit_test(point(12.0, 16.0), 0.0));
+    let dot_render = render(&document(vec![dot])).unwrap();
+    assert!(dot_render.get_pixel(13, 14)[3] > 200);
+}
+
+#[test]
+fn tapered_arrow_uses_shipping_miter_join_without_changing_generic_polygons() {
+    let points = vec![
+        point(10.0, 30.0),
+        point(40.0, 30.0),
+        point(40.0, 20.0),
+        point(60.0, 35.0),
+        point(40.0, 50.0),
+        point(40.0, 40.0),
+        point(10.0, 40.0),
+    ];
+    let mut arrow = layer(Shape::TaperedArrow(points.clone()));
+    arrow.stroke_width = 8.0;
+    arrow.fill = Some(arrow.color);
+    let arrow_bounds = arrow.bounds().unwrap();
+    assert!((arrow_bounds.x + arrow_bounds.width - 66.666_67).abs() < 0.001);
+    assert!(arrow.hit_test(point(65.0, 35.0), 0.0));
+    let mitered = render(&document(vec![arrow])).unwrap();
+
+    let mut polygon = layer(Shape::Polygon(points));
+    polygon.stroke_width = 8.0;
+    polygon.fill = Some(polygon.color);
+    let polygon_bounds = polygon.bounds().unwrap();
+    assert_eq!(polygon_bounds.x + polygon_bounds.width, 64.0);
+    assert!(!polygon.hit_test(point(65.0, 35.0), 0.0));
+    let rounded = render(&document(vec![polygon])).unwrap();
+
+    // The 73.74° tip has a 1.67× half-stroke miter, below shipping's 2.4
+    // limit. A round generic polygon stops at the half-stroke radius instead.
+    assert!(mitered.get_pixel(65, 35)[3] > 200);
+    assert_eq!(rounded.get_pixel(65, 35)[3], 0);
+    assert_eq!(mitered.get_pixel(30, 35), rounded.get_pixel(30, 35));
+}
+
+#[test]
 fn explicit_font_renders_asymmetric_glyphs_with_alpha_and_rotation() {
     let mut text = layer(Shape::Text {
         origin: point(10.0, 5.0),

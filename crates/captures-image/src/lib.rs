@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle};
 use image::{Pixel, Rgba, RgbaImage};
-use tiny_skia::{FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{
+    FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, PathSegment, Pixmap, Stroke, Transform,
+};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Point {
@@ -84,8 +86,15 @@ impl Bounds {
 #[derive(Clone, Debug)]
 pub enum Shape {
     Freehand(Vec<Point>),
+    /// Shipping freehand smoothing: midpoint quadratics followed by a final line.
+    SmoothPath(Vec<Point>),
+    /// Shipping line controls: straight, one quadratic, or midpoint quadratics
+    /// with a final controlled segment into the endpoint.
+    ControlledPath(Vec<Point>),
     /// A closed contour, including concave shapes such as stars. Uses nonzero winding.
     Polygon(Vec<Point>),
+    /// Shipping tapered arrow polygon with a mitered hairline outline.
+    TaperedArrow(Vec<Point>),
     Line {
         start: Point,
         end: Point,
@@ -192,6 +201,74 @@ fn segment_distance(point: Point, start: Point, end: Point) -> f32 {
     (point.x - start.x - t * dx).hypot(point.y - start.y - t * dy)
 }
 
+fn tapered_arrow_stroke(width: f32) -> Stroke {
+    Stroke {
+        width,
+        line_cap: LineCap::Butt,
+        line_join: LineJoin::Miter,
+        miter_limit: 2.4,
+        ..Stroke::default()
+    }
+}
+
+fn tapered_arrow_outline(points: &[Point], width: f32) -> Option<Path> {
+    if width <= 0.0 {
+        return None;
+    }
+    let first = points.first()?;
+    let mut builder = PathBuilder::new();
+    builder.move_to(first.x, first.y);
+    for point in &points[1..] {
+        builder.line_to(point.x, point.y);
+    }
+    builder.close();
+    builder.finish()?.stroke(&tapered_arrow_stroke(width), 1.0)
+}
+
+fn path_contains(path: &Path, point: Point) -> bool {
+    let mut winding = 0;
+    let mut previous = Point::default();
+    let mut segments = path.segments();
+    segments.set_auto_close(true);
+    for segment in segments {
+        match segment {
+            PathSegment::MoveTo(to) => previous = Point { x: to.x, y: to.y },
+            PathSegment::LineTo(to) => {
+                let to = Point { x: to.x, y: to.y };
+                let side = (to.x - previous.x) * (point.y - previous.y)
+                    - (point.x - previous.x) * (to.y - previous.y);
+                if previous.y <= point.y && to.y > point.y && side > 0.0 {
+                    winding += 1;
+                }
+                if previous.y > point.y && to.y <= point.y && side < 0.0 {
+                    winding -= 1;
+                }
+                previous = to;
+            }
+            PathSegment::Close => {}
+            PathSegment::QuadTo(..) | PathSegment::CubicTo(..) => {
+                debug_assert!(false, "polygon stroke unexpectedly produced a curve");
+                return false;
+            }
+        }
+    }
+    winding != 0
+}
+
+fn polygon_contains(points: &[Point], point: Point) -> bool {
+    let mut winding = 0;
+    for (&a, &b) in points.iter().zip(points.iter().cycle().skip(1)) {
+        let side = (b.x - a.x) * (point.y - a.y) - (point.x - a.x) * (b.y - a.y);
+        if a.y <= point.y && b.y > point.y && side > 0.0 {
+            winding += 1;
+        }
+        if a.y > point.y && b.y <= point.y && side < 0.0 {
+            winding -= 1;
+        }
+    }
+    winding != 0
+}
+
 fn arrow_head(start: Point, end: Point, stroke: f32) -> [Point; 2] {
     let length = (end.x - start.x).hypot(end.y - start.y);
     if length == 0.0 {
@@ -236,8 +313,11 @@ impl Layer {
     fn validate(&self) -> Result<(), String> {
         let point_ok = |p: &Point| p.x.is_finite() && p.y.is_finite();
         let valid_shape = match &self.shape {
-            Shape::Freehand(points) => points.iter().all(point_ok),
-            Shape::Polygon(points) => points.len() >= 3 && points.iter().all(point_ok),
+            Shape::Freehand(points) | Shape::SmoothPath(points) => points.iter().all(point_ok),
+            Shape::ControlledPath(points) => points.len() >= 2 && points.iter().all(point_ok),
+            Shape::Polygon(points) | Shape::TaperedArrow(points) => {
+                points.len() >= 3 && points.iter().all(point_ok)
+            }
             Shape::Line { start, end } | Shape::Arrow { start, end } => {
                 point_ok(start) && point_ok(end)
             }
@@ -296,9 +376,11 @@ impl Layer {
     fn geometry_bounds(&self) -> Result<Option<Bounds>, String> {
         self.validate()?;
         Ok(match &self.shape {
-            Shape::Freehand(points) | Shape::Polygon(points) => {
+            Shape::Freehand(points) | Shape::Polygon(points) | Shape::TaperedArrow(points) => {
                 Bounds::from_points(points.iter().copied())
             }
+            Shape::SmoothPath(points) => Bounds::from_points(path_samples(points, false)),
+            Shape::ControlledPath(points) => Bounds::from_points(path_samples(points, true)),
             Shape::Line { start, end } => Bounds::from_points([*start, *end]),
             Shape::Arrow { start, end } => {
                 let [a, b] = arrow_head(*start, *end, self.stroke_width);
@@ -360,16 +442,29 @@ impl Layer {
     /// Axis-aligned bounds after rotation, including the stroke. Empty or invalid
     /// geometry (including an invalid font) has no bounds.
     pub fn bounds(&self) -> Option<Bounds> {
-        let mut bounds = self.geometry_bounds().ok()??;
-        let center = self.rotation_origin.unwrap_or_else(|| bounds.center());
-        if !matches!(self.shape, Shape::Text { .. } | Shape::Image { .. }) {
-            bounds.x -= self.stroke_width / 2.0;
-            bounds.y -= self.stroke_width / 2.0;
-            bounds.width += self.stroke_width;
-            bounds.height += self.stroke_width;
+        let geometry_bounds = self.geometry_bounds().ok()??;
+        let center = self
+            .rotation_origin
+            .unwrap_or_else(|| geometry_bounds.center());
+        let mut painted_bounds = geometry_bounds;
+        if let Shape::TaperedArrow(points) = &self.shape {
+            if let Some(outline) = tapered_arrow_outline(points, self.stroke_width) {
+                let bounds = outline.bounds();
+                painted_bounds = Bounds {
+                    x: bounds.x(),
+                    y: bounds.y(),
+                    width: bounds.width(),
+                    height: bounds.height(),
+                };
+            }
+        } else if !matches!(self.shape, Shape::Text { .. } | Shape::Image { .. }) {
+            painted_bounds.x -= self.stroke_width / 2.0;
+            painted_bounds.y -= self.stroke_width / 2.0;
+            painted_bounds.width += self.stroke_width;
+            painted_bounds.height += self.stroke_width;
         }
         Bounds::from_points(
-            bounds
+            painted_bounds
                 .corners()
                 .map(|p| rotate(p, center, self.rotation_degrees)),
         )
@@ -397,6 +492,14 @@ impl Layer {
                 points.windows(2).any(|p| near(p[0], p[1]))
                     || (points.len() == 1 && near(points[0], points[0]))
             }
+            Shape::SmoothPath(points) => {
+                let samples = path_samples(points, false);
+                samples.windows(2).any(|points| near(points[0], points[1]))
+                    || (samples.len() == 1 && near(samples[0], samples[0]))
+            }
+            Shape::ControlledPath(points) => path_samples(points, true)
+                .windows(2)
+                .any(|points| near(points[0], points[1])),
             Shape::Polygon(points) => {
                 let mut winding = 0;
                 for (&a, &b) in points.iter().zip(points.iter().cycle().skip(1)) {
@@ -412,6 +515,12 @@ impl Layer {
                     }
                 }
                 self.fill.is_some() && winding != 0
+            }
+            Shape::TaperedArrow(points) => {
+                let outline_hit =
+                    tapered_arrow_outline(points, self.stroke_width + tolerance * 2.0)
+                        .is_some_and(|outline| path_contains(&outline, point));
+                outline_hit || (self.fill.is_some() && polygon_contains(points, point))
             }
             Shape::Line { start, end } => near(*start, *end),
             Shape::Arrow { start, end } => {
@@ -495,6 +604,52 @@ fn rounded_rectangle_contains(point: Point, bounds: Bounds, radius: f32) -> bool
         .y
         .clamp(bounds.y + radius, bounds.y + bounds.height - radius);
     (point.x - center_x).hypot(point.y - center_y) <= radius
+}
+
+fn quadratic_point(from: Point, control: Point, to: Point, t: f32) -> Point {
+    let inverse = 1.0 - t;
+    Point {
+        x: inverse * inverse * from.x + 2.0 * inverse * t * control.x + t * t * to.x,
+        y: inverse * inverse * from.y + 2.0 * inverse * t * control.y + t * t * to.y,
+    }
+}
+
+fn path_samples(points: &[Point], controlled_end: bool) -> Vec<Point> {
+    const STEPS: usize = 24;
+    if points.len() < 2 {
+        return points.to_vec();
+    }
+    if points.len() == 2 {
+        return points.to_vec();
+    }
+    let mut samples = vec![points[0]];
+    let last_control = if controlled_end {
+        points.len() - 2
+    } else {
+        points.len() - 1
+    };
+    for index in 1..last_control {
+        let from = *samples.last().expect("path starts with one sample");
+        let to = Point {
+            x: (points[index].x + points[index + 1].x) / 2.0,
+            y: (points[index].y + points[index + 1].y) / 2.0,
+        };
+        samples.extend(
+            (1..=STEPS)
+                .map(|step| quadratic_point(from, points[index], to, step as f32 / STEPS as f32)),
+        );
+    }
+    if controlled_end {
+        let from = *samples.last().expect("path starts with one sample");
+        let control = points[points.len() - 2];
+        let to = points[points.len() - 1];
+        samples.extend(
+            (1..=STEPS).map(|step| quadratic_point(from, control, to, step as f32 / STEPS as f32)),
+        );
+    } else {
+        samples.push(points[points.len() - 1]);
+    }
+    samples
 }
 
 fn paint(color: [u8; 4], blend_mode: BlendMode) -> Paint<'static> {
@@ -635,7 +790,7 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
     let mut path = PathBuilder::new();
     let mut closed = false;
     match &layer.shape {
-        Shape::Freehand(points) | Shape::Polygon(points) => {
+        Shape::Freehand(points) | Shape::Polygon(points) | Shape::TaperedArrow(points) => {
             if points.len() == 1 {
                 if layer.stroke_width > 0.0 {
                     path.push_circle(points[0].x, points[0].y, layer.stroke_width / 2.0);
@@ -655,9 +810,44 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
             for point in &points[1..] {
                 path.line_to(point.x, point.y);
             }
-            if matches!(layer.shape, Shape::Polygon(_)) {
+            if matches!(layer.shape, Shape::Polygon(_) | Shape::TaperedArrow(_)) {
                 path.close();
                 closed = true;
+            }
+        }
+        Shape::SmoothPath(points) | Shape::ControlledPath(points) => {
+            if points.is_empty() {
+                return Ok(());
+            }
+            path.move_to(points[0].x, points[0].y);
+            if points.len() == 1 {
+                path.line_to(points[0].x + 0.01, points[0].y + 0.01);
+            } else if points.len() == 2 {
+                path.line_to(points[1].x, points[1].y);
+            } else if matches!(layer.shape, Shape::ControlledPath(_)) && points.len() == 3 {
+                path.quad_to(points[1].x, points[1].y, points[2].x, points[2].y);
+            } else {
+                let last_control = if matches!(layer.shape, Shape::ControlledPath(_)) {
+                    points.len() - 2
+                } else {
+                    points.len() - 1
+                };
+                for index in 1..last_control {
+                    path.quad_to(
+                        points[index].x,
+                        points[index].y,
+                        (points[index].x + points[index + 1].x) / 2.0,
+                        (points[index].y + points[index + 1].y) / 2.0,
+                    );
+                }
+                if matches!(layer.shape, Shape::ControlledPath(_)) {
+                    let control = points[points.len() - 2];
+                    let end = points[points.len() - 1];
+                    path.quad_to(control.x, control.y, end.x, end.y);
+                } else {
+                    let end = points[points.len() - 1];
+                    path.line_to(end.x, end.y);
+                }
             }
         }
         Shape::Line { start, end } | Shape::Arrow { start, end } => {
@@ -712,11 +902,15 @@ fn draw_layer(canvas: &mut Pixmap, layer: &Layer) -> Result<(), String> {
         );
     }
     if layer.stroke_width > 0.0 {
-        let stroke = Stroke {
-            width: layer.stroke_width,
-            line_cap: LineCap::Round,
-            line_join: LineJoin::Round,
-            ..Stroke::default()
+        let stroke = if matches!(layer.shape, Shape::TaperedArrow(_)) {
+            tapered_arrow_stroke(layer.stroke_width)
+        } else {
+            Stroke {
+                width: layer.stroke_width,
+                line_cap: LineCap::Round,
+                line_join: LineJoin::Round,
+                ..Stroke::default()
+            }
         };
         canvas.stroke_path(
             &path,

@@ -2,24 +2,26 @@
 //!
 //! Image assets are supplied by exact document `src`, so rendering performs no
 //! filesystem, network, host-font, or UI access. The five closed annotation
-//! shapes are rendered; text, open shapes, and freehand paths remain explicit
-//! unsupported cases.
+//! shapes, curved lines, tapered arrows, and freehand paths are rendered; text
+//! and annotation shadows remain explicit unsupported cases.
 
 use std::{collections::BTreeMap, sync::Arc};
 
 use captures_image::{BlendMode, Layer, Point, Shape};
 use image::{Rgba, RgbaImage};
 
-use crate::editor::{Document, Element, ImageElement, ImageOrientation, ShapeElement};
+use crate::editor::{
+    Document, Element, ImageElement, ImageOrientation, PathElement, Point as EditorPoint,
+    ShapeElement,
+};
 
 pub const MAX_RENDER_DIMENSION: u32 = 16_384;
 pub const MAX_RENDER_PIXELS: u64 = 100_000_000;
 
 /// Render supported visible layers in document order through `captures-image`.
 ///
-/// The input document and shared assets are borrowed and never mutated. Text,
-/// line/arrow, and path rendering will arrive in later slices and is rejected
-/// while visible rather than silently omitted.
+/// The input document and shared assets are borrowed and never mutated. Text
+/// and enabled annotation shadows are rejected rather than silently omitted.
 pub fn render(
     document: &Document,
     assets: &BTreeMap<String, Arc<RgbaImage>>,
@@ -43,7 +45,7 @@ pub fn render(
             Element::Image(image) => validate_image(image, assets)?,
             Element::Text(text) => return Err(unsupported_layer("text", &text.base.id)),
             Element::Shape(shape) => validate_shape(shape)?,
-            Element::Path(path) => return Err(unsupported_layer("path", &path.base.id)),
+            Element::Path(path) => validate_path(path)?,
         }
     }
 
@@ -56,7 +58,8 @@ pub fn render(
         match element {
             Element::Image(image) => layers.push(image_layer(id, image, assets)?),
             Element::Shape(shape) => layers.push(shape_layer(id, shape)?),
-            Element::Text(_) | Element::Path(_) => {}
+            Element::Path(path) => layers.push(path_layer(id, path)?),
+            Element::Text(_) => {}
         }
     }
 
@@ -104,6 +107,9 @@ fn image_layer(
 }
 
 fn shape_layer(id: u64, element: &ShapeElement) -> Result<Layer, String> {
+    if matches!(element.shape.as_str(), "line" | "arrow") {
+        return open_shape_layer(id, element);
+    }
     let left = element.base.x.min(element.end_x);
     let top = element.base.y.min(element.end_y);
     let width = (element.end_x - element.base.x).abs();
@@ -204,6 +210,351 @@ fn shape_layer(id: u64, element: &ShapeElement) -> Result<Layer, String> {
     })
 }
 
+fn open_shape_layer(id: u64, element: &ShapeElement) -> Result<Layer, String> {
+    let vertices = std::iter::once(EditorPoint {
+        x: element.base.x,
+        y: element.base.y,
+    })
+    .chain(element.controls.iter().copied())
+    .chain(std::iter::once(EditorPoint {
+        x: element.end_x,
+        y: element.end_y,
+    }))
+    .collect::<Vec<_>>();
+    let opacity = element.base.opacity.clamp(0., 100.);
+    let color = apply_opacity(
+        parse_color(
+            &element.style.color,
+            &format!("shape layer {} stroke", element.base.id),
+        )?,
+        opacity,
+    );
+    let (shape, stroke_width, fill, rotation_origin) = if element.shape == "line" {
+        let samples = sample_controlled_path(&vertices, 48);
+        (
+            Shape::ControlledPath(capture_points(&vertices, "shape", &element.base.id)?),
+            element.style.stroke_width as f32,
+            None,
+            center_of_points(&samples, element.base.x, element.base.y),
+        )
+    } else {
+        let polygon = arrow_fill_polygon(element);
+        if polygon.len() < 3 {
+            let samples = sample_controlled_path(&vertices, 48);
+            (
+                Shape::SmoothPath(Vec::new()),
+                0.,
+                None,
+                center_of_points(&samples, element.base.x, element.base.y),
+            )
+        } else {
+            let center = center_of_points(&polygon, element.base.x, element.base.y);
+            (
+                Shape::TaperedArrow(capture_points(&polygon, "shape", &element.base.id)?),
+                (element.style.stroke_width * 0.06).max(0.6) as f32,
+                Some(color),
+                center,
+            )
+        }
+    };
+    Ok(Layer {
+        id,
+        shape,
+        color,
+        stroke_width,
+        fill,
+        rotation_degrees: radians_to_degrees(element.base.rotation(), "shape", &element.base.id)?,
+        rotation_origin: Some(editor_point_to_capture(
+            rotation_origin,
+            "shape rotation origin",
+            &element.base.id,
+        )?),
+        blend_mode: blend_mode(&element.base.blend_mode, "shape", &element.base.id)?,
+    })
+}
+
+fn path_layer(id: u64, element: &PathElement) -> Result<Layer, String> {
+    let opacity = element.base.opacity.clamp(0., 100.);
+    let color = apply_opacity(
+        parse_color(
+            &element.style.color,
+            &format!("path layer {} stroke", element.base.id),
+        )?,
+        opacity,
+    );
+    let center = center_of_points(&element.points, element.base.x, element.base.y);
+    Ok(Layer {
+        id,
+        shape: Shape::SmoothPath(capture_points(&element.points, "path", &element.base.id)?),
+        color,
+        stroke_width: element.style.stroke_width as f32,
+        fill: None,
+        rotation_degrees: radians_to_degrees(element.base.rotation(), "path", &element.base.id)?,
+        rotation_origin: Some(editor_point_to_capture(
+            center,
+            "path rotation origin",
+            &element.base.id,
+        )?),
+        blend_mode: blend_mode(&element.base.blend_mode, "path", &element.base.id)?,
+    })
+}
+
+fn editor_point_to_capture(point: EditorPoint, name: &str, id: &str) -> Result<Point, String> {
+    Ok(Point {
+        x: finite_layer_f32(point.x, name, "x", id)?,
+        y: finite_layer_f32(point.y, name, "y", id)?,
+    })
+}
+
+fn capture_points(points: &[EditorPoint], kind: &str, id: &str) -> Result<Vec<Point>, String> {
+    points
+        .iter()
+        .copied()
+        .map(|point| editor_point_to_capture(point, kind, id))
+        .collect()
+}
+
+fn center_of_points(points: &[EditorPoint], fallback_x: f64, fallback_y: f64) -> EditorPoint {
+    let Some(first) = points.first() else {
+        return EditorPoint {
+            x: fallback_x + 0.5,
+            y: fallback_y + 0.5,
+        };
+    };
+    let (mut left, mut top, mut right, mut bottom) = (first.x, first.y, first.x, first.y);
+    for point in &points[1..] {
+        left = left.min(point.x);
+        top = top.min(point.y);
+        right = right.max(point.x);
+        bottom = bottom.max(point.y);
+    }
+    EditorPoint {
+        x: left + (right - left).max(1.) / 2.,
+        y: top + (bottom - top).max(1.) / 2.,
+    }
+}
+
+fn quadratic_point(
+    from: EditorPoint,
+    control: EditorPoint,
+    to: EditorPoint,
+    t: f64,
+) -> EditorPoint {
+    let inverse = 1. - t;
+    EditorPoint {
+        x: inverse * inverse * from.x + 2. * inverse * t * control.x + t * t * to.x,
+        y: inverse * inverse * from.y + 2. * inverse * t * control.y + t * t * to.y,
+    }
+}
+
+fn sample_controlled_path(vertices: &[EditorPoint], steps: usize) -> Vec<EditorPoint> {
+    if vertices.len() < 2 {
+        return vertices.to_vec();
+    }
+    let steps = steps.max(4);
+    if vertices.len() == 2 {
+        let [start, end] = [vertices[0], vertices[1]];
+        return (0..=steps)
+            .map(|index| {
+                let t = index as f64 / steps as f64;
+                EditorPoint {
+                    x: start.x + (end.x - start.x) * t,
+                    y: start.y + (end.y - start.y) * t,
+                }
+            })
+            .collect();
+    }
+    if vertices.len() == 3 {
+        return (0..=steps)
+            .map(|index| {
+                quadratic_point(
+                    vertices[0],
+                    vertices[1],
+                    vertices[2],
+                    index as f64 / steps as f64,
+                )
+            })
+            .collect();
+    }
+    let mut samples = vec![vertices[0]];
+    for index in 1..vertices.len() - 2 {
+        let from = *samples
+            .last()
+            .expect("controlled path starts with one sample");
+        let to = EditorPoint {
+            x: (vertices[index].x + vertices[index + 1].x) / 2.,
+            y: (vertices[index].y + vertices[index + 1].y) / 2.,
+        };
+        samples
+            .extend((1..=steps).map(|step| {
+                quadratic_point(from, vertices[index], to, step as f64 / steps as f64)
+            }));
+    }
+    let from = *samples
+        .last()
+        .expect("controlled path starts with one sample");
+    let control = vertices[vertices.len() - 2];
+    let end = vertices[vertices.len() - 1];
+    samples.extend(
+        (1..=steps).map(|step| quadratic_point(from, control, end, step as f64 / steps as f64)),
+    );
+    samples
+}
+
+fn arrow_fill_polygon(element: &ShapeElement) -> Vec<EditorPoint> {
+    const MIN_LENGTH: f64 = 1.5;
+    const HEAD_LENGTH_RATIO: f64 = 3.5;
+    const HEAD_WIDTH_RATIO: f64 = 3.1;
+    const TAIL_WIDTH_RATIO: f64 = 0.18;
+    const NECK_WIDTH_RATIO: f64 = 1.12;
+    const HEAD_SHAFT_FRACTION: f64 = 0.36;
+    const FULL_STROKE_LENGTH_RATIO: f64 = 7.;
+    const TAIL_CAP_SEGMENTS: usize = 7;
+
+    let vertices = std::iter::once(EditorPoint {
+        x: element.base.x,
+        y: element.base.y,
+    })
+    .chain(element.controls.iter().copied())
+    .chain(std::iter::once(EditorPoint {
+        x: element.end_x,
+        y: element.end_y,
+    }))
+    .collect::<Vec<_>>();
+    let samples = sample_controlled_path(&vertices, 28);
+    let mut cumulative = Vec::with_capacity(samples.len());
+    cumulative.push(0.);
+    for index in 1..samples.len() {
+        cumulative.push(
+            cumulative[index - 1]
+                + (samples[index].x - samples[index - 1].x)
+                    .hypot(samples[index].y - samples[index - 1].y),
+        );
+    }
+    let path_length = cumulative.last().copied().unwrap_or(0.);
+    if path_length < MIN_LENGTH {
+        return Vec::new();
+    }
+    let authored_stroke = element.style.stroke_width;
+    let full_at = 28_f64.max(authored_stroke * FULL_STROKE_LENGTH_RATIO);
+    let stroke = authored_stroke.min(authored_stroke * path_length / full_at);
+    if stroke <= 0. {
+        return Vec::new();
+    }
+    let head_length = (stroke * HEAD_LENGTH_RATIO).min(path_length * HEAD_SHAFT_FRACTION);
+    let head_half = stroke * HEAD_WIDTH_RATIO / 2.;
+    let tail_half = stroke * TAIL_WIDTH_RATIO / 2.;
+    let neck_half = stroke * NECK_WIDTH_RATIO / 2.;
+    let shaft_end = (path_length - head_length).max(0.);
+    let offset_at = |point: EditorPoint, tangent: EditorPoint, half: f64| {
+        (
+            EditorPoint {
+                x: point.x - tangent.y * half,
+                y: point.y + tangent.x * half,
+            },
+            EditorPoint {
+                x: point.x + tangent.y * half,
+                y: point.y - tangent.x * half,
+            },
+        )
+    };
+    let shaft_steps = samples.len().max(8);
+    let mut left = Vec::with_capacity(shaft_steps + 1);
+    let mut right = Vec::with_capacity(shaft_steps + 1);
+    for step in 0..=shaft_steps {
+        let distance = shaft_end * step as f64 / shaft_steps as f64;
+        let (point, tangent) = point_and_tangent_at_length(&samples, &cumulative, distance);
+        let mix = if shaft_end > 0. {
+            distance / shaft_end
+        } else {
+            0.
+        };
+        let half = tail_half + (neck_half - tail_half) * mix;
+        let (left_point, right_point) = offset_at(point, tangent, half);
+        left.push(left_point);
+        right.push(right_point);
+    }
+    let (neck, neck_tangent) = point_and_tangent_at_length(&samples, &cumulative, shaft_end);
+    let (shoulder_left, shoulder_right) = offset_at(neck, neck_tangent, head_half);
+    let tip = *samples
+        .last()
+        .expect("sampled arrow has at least two points");
+    let (tail, tail_tangent) = point_and_tangent_at_length(&samples, &cumulative, 0.);
+    let tail_normal = EditorPoint {
+        x: -tail_tangent.y,
+        y: tail_tangent.x,
+    };
+    let cap = (0..=TAIL_CAP_SEGMENTS)
+        .map(|step| {
+            let angle = std::f64::consts::PI * step as f64 / TAIL_CAP_SEGMENTS as f64;
+            EditorPoint {
+                x: tail.x
+                    - tail_normal.x * tail_half * angle.cos()
+                    - tail_tangent.x * tail_half * angle.sin(),
+                y: tail.y
+                    - tail_normal.y * tail_half * angle.cos()
+                    - tail_tangent.y * tail_half * angle.sin(),
+            }
+        })
+        .collect::<Vec<_>>();
+    left.into_iter()
+        .chain([shoulder_left, tip, shoulder_right])
+        .chain(right.into_iter().rev())
+        .chain(cap[1..cap.len() - 1].iter().copied())
+        .collect()
+}
+
+fn point_and_tangent_at_length(
+    samples: &[EditorPoint],
+    cumulative: &[f64],
+    target: f64,
+) -> (EditorPoint, EditorPoint) {
+    let first = samples[0];
+    let last = samples[samples.len() - 1];
+    let unit = |from: EditorPoint, to: EditorPoint| {
+        let dx = to.x - from.x;
+        let dy = to.y - from.y;
+        let length = dx.hypot(dy);
+        if length < 1e-6 {
+            EditorPoint { x: 1., y: 0. }
+        } else {
+            EditorPoint {
+                x: dx / length,
+                y: dy / length,
+            }
+        }
+    };
+    if target <= 0. {
+        return (first, unit(first, samples[1]));
+    }
+    let total = *cumulative
+        .last()
+        .expect("cumulative arrow lengths are nonempty");
+    if target >= total {
+        return (last, unit(samples[samples.len() - 2], last));
+    }
+    for index in 1..samples.len() {
+        if cumulative[index] >= target {
+            let span = cumulative[index] - cumulative[index - 1];
+            let t = if span > 0. {
+                (target - cumulative[index - 1]) / span
+            } else {
+                1.
+            };
+            let from = samples[index - 1];
+            let to = samples[index];
+            return (
+                EditorPoint {
+                    x: from.x + (to.x - from.x) * t,
+                    y: from.y + (to.y - from.y) * t,
+                },
+                unit(from, to),
+            );
+        }
+    }
+    (last, unit(samples[samples.len() - 2], last))
+}
+
 fn apply_opacity(color: Rgba<u8>, opacity: f64) -> [u8; 4] {
     let [red, green, blue, alpha] = color.0;
     [
@@ -286,16 +637,10 @@ fn validate_shape(element: &ShapeElement) -> Result<(), String> {
     finite_shape_f32(element.base.y, "y", &element.base.id)?;
     finite_shape_f32(element.end_x, "end x", &element.base.id)?;
     finite_shape_f32(element.end_y, "end y", &element.base.id)?;
-    positive_shape_f32(
-        (element.end_x - element.base.x).abs(),
-        "width",
-        &element.base.id,
-    )?;
-    positive_shape_f32(
-        (element.end_y - element.base.y).abs(),
-        "height",
-        &element.base.id,
-    )?;
+    for point in &element.controls {
+        finite_shape_f32(point.x, "control x", &element.base.id)?;
+        finite_shape_f32(point.y, "control y", &element.base.id)?;
+    }
     radians_to_degrees(element.base.rotation(), "shape", &element.base.id)?;
     if !element.base.opacity.is_finite() {
         return Err(format!(
@@ -306,7 +651,7 @@ fn validate_shape(element: &ShapeElement) -> Result<(), String> {
     blend_mode(&element.base.blend_mode, "shape", &element.base.id)?;
     if !matches!(
         element.shape.as_str(),
-        "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
+        "rectangle" | "ellipse" | "triangle" | "diamond" | "star" | "line" | "arrow"
     ) {
         return Err(format!(
             "shape layer {} has unsupported shape kind {}",
@@ -319,11 +664,27 @@ fn validate_shape(element: &ShapeElement) -> Result<(), String> {
             element.base.id
         ));
     }
+    let closed = matches!(
+        element.shape.as_str(),
+        "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
+    );
+    if closed {
+        positive_shape_f32(
+            (element.end_x - element.base.x).abs(),
+            "width",
+            &element.base.id,
+        )?;
+        positive_shape_f32(
+            (element.end_y - element.base.y).abs(),
+            "height",
+            &element.base.id,
+        )?;
+    }
     let stroke_width = element.style.stroke_width as f32;
     if !element.style.stroke_width.is_finite()
         || !stroke_width.is_finite()
         || element.style.stroke_width < 0.
-        || (element.style.has_stroke() && element.style.stroke_width == 0.)
+        || ((!closed || element.style.has_stroke()) && element.style.stroke_width == 0.)
     {
         return Err(format!(
             "shape layer {} stroke width must be finite and positive when enabled",
@@ -337,6 +698,44 @@ fn validate_shape(element: &ShapeElement) -> Result<(), String> {
     if let Some(fill) = element.style.fill.as_deref() {
         parse_color(fill, &format!("shape layer {} fill", element.base.id))?;
     }
+    Ok(())
+}
+
+fn validate_path(element: &PathElement) -> Result<(), String> {
+    finite_layer_f32(element.base.x, "path", "x", &element.base.id)?;
+    finite_layer_f32(element.base.y, "path", "y", &element.base.id)?;
+    for point in &element.points {
+        finite_layer_f32(point.x, "path point", "x", &element.base.id)?;
+        finite_layer_f32(point.y, "path point", "y", &element.base.id)?;
+    }
+    radians_to_degrees(element.base.rotation(), "path", &element.base.id)?;
+    if !element.base.opacity.is_finite() {
+        return Err(format!(
+            "path layer {} opacity must be finite",
+            element.base.id
+        ));
+    }
+    blend_mode(&element.base.blend_mode, "path", &element.base.id)?;
+    if element.style.has_drop_shadow() {
+        return Err(format!(
+            "path layer {} uses unsupported drop shadow",
+            element.base.id
+        ));
+    }
+    let stroke_width = element.style.stroke_width as f32;
+    if !element.style.stroke_width.is_finite()
+        || !stroke_width.is_finite()
+        || element.style.stroke_width <= 0.
+    {
+        return Err(format!(
+            "path layer {} stroke width must be finite and positive",
+            element.base.id
+        ));
+    }
+    parse_color(
+        &element.style.color,
+        &format!("path layer {} stroke", element.base.id),
+    )?;
     Ok(())
 }
 
@@ -377,6 +776,14 @@ fn positive_shape_f32(value: f64, name: &str, id: &str) -> Result<f32, String> {
     let converted = finite_shape_f32(value, name, id)?;
     if converted <= 0. {
         return Err(format!("shape layer {id} {name} must be positive"));
+    }
+    Ok(converted)
+}
+
+fn finite_layer_f32(value: f64, description: &str, axis: &str, id: &str) -> Result<f32, String> {
+    let converted = value as f32;
+    if !value.is_finite() || !converted.is_finite() {
+        return Err(format!("{description} layer {id} {axis} must be finite"));
     }
     Ok(converted)
 }
@@ -487,11 +894,91 @@ mod tests {
         points: Vec<EditorPoint>,
     }
 
+    #[derive(Deserialize)]
+    struct StrokeFixtureCase {
+        element: ShapeElement,
+        expected: ExpectedStrokeGeometry,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ExpectedStrokeGeometry {
+        samples48: PointSummary,
+        polygon: PointSummary,
+        rotation_origin: EditorPoint,
+    }
+
+    #[derive(Deserialize)]
+    struct PointSummary {
+        count: usize,
+        checkpoints: Vec<PointCheckpoint>,
+        bounds: Option<Rect>,
+    }
+
+    #[derive(Deserialize)]
+    struct PointCheckpoint {
+        index: usize,
+        point: EditorPoint,
+    }
+
     fn close(actual: f32, expected: f64) {
         assert!(
             (f64::from(actual) - expected).abs() < 0.000_02,
             "{actual} != {expected}"
         );
+    }
+
+    fn assert_summary(actual: &[EditorPoint], expected: &PointSummary) {
+        assert_eq!(actual.len(), expected.count);
+        for checkpoint in &expected.checkpoints {
+            let actual = actual[checkpoint.index];
+            assert!((actual.x - checkpoint.point.x).abs() < 1e-9);
+            assert!((actual.y - checkpoint.point.y).abs() < 1e-9);
+        }
+        match expected.bounds {
+            Some(expected) => {
+                let first = actual[0];
+                let (mut left, mut top, mut right, mut bottom) =
+                    (first.x, first.y, first.x, first.y);
+                for point in &actual[1..] {
+                    left = left.min(point.x);
+                    top = top.min(point.y);
+                    right = right.max(point.x);
+                    bottom = bottom.max(point.y);
+                }
+                assert!((left - expected.x).abs() < 1e-9);
+                assert!((top - expected.y).abs() < 1e-9);
+                assert!((right - left - expected.width).abs() < 1e-9);
+                assert!((bottom - top - expected.height).abs() < 1e-9);
+            }
+            None => assert!(actual.is_empty()),
+        }
+    }
+
+    fn assert_capture_summary(actual: &[Point], expected: &PointSummary) {
+        assert_eq!(actual.len(), expected.count);
+        for checkpoint in &expected.checkpoints {
+            close(actual[checkpoint.index].x, checkpoint.point.x);
+            close(actual[checkpoint.index].y, checkpoint.point.y);
+        }
+        match expected.bounds {
+            Some(expected) => {
+                let first = actual[0];
+                let (mut left, mut top, mut right, mut bottom) =
+                    (first.x, first.y, first.x, first.y);
+                for point in &actual[1..] {
+                    left = left.min(point.x);
+                    top = top.min(point.y);
+                    right = right.max(point.x);
+                    bottom = bottom.max(point.y);
+                }
+                close(left, expected.x);
+                close(top, expected.y);
+                close(right - left, expected.width);
+                close(bottom - top, expected.height);
+            }
+            None => assert!(actual.is_empty()),
+        }
     }
 
     #[test]
@@ -550,6 +1037,57 @@ mod tests {
                     }
                 }
                 (actual, expected) => panic!("unexpected {actual:?} for {expected}"),
+            }
+        }
+    }
+
+    #[test]
+    fn open_stroke_geometry_matches_typescript_fixture() {
+        let cases: Vec<StrokeFixtureCase> =
+            serde_json::from_str(include_str!("../tests/editor-stroke-golden.json")).unwrap();
+        for (id, case) in cases.iter().enumerate() {
+            let vertices = std::iter::once(EditorPoint {
+                x: case.element.base.x,
+                y: case.element.base.y,
+            })
+            .chain(case.element.controls.iter().copied())
+            .chain(std::iter::once(EditorPoint {
+                x: case.element.end_x,
+                y: case.element.end_y,
+            }))
+            .collect::<Vec<_>>();
+            let samples = sample_controlled_path(&vertices, 48);
+            assert_summary(&samples, &case.expected.samples48);
+
+            let layer = open_shape_layer(id as u64, &case.element).unwrap();
+            assert_eq!(layer.color, [43, 113, 201, 132]);
+            assert_eq!(layer.blend_mode, BlendMode::Overlay);
+            close(
+                layer.rotation_origin.unwrap().x,
+                case.expected.rotation_origin.x,
+            );
+            close(
+                layer.rotation_origin.unwrap().y,
+                case.expected.rotation_origin.y,
+            );
+            match &layer.shape {
+                Shape::ControlledPath(actual) => {
+                    assert_eq!(case.element.shape, "line");
+                    assert_eq!(layer.stroke_width, 7.25);
+                    assert!(layer.fill.is_none());
+                    assert_eq!(actual.len(), vertices.len());
+                    for (actual, expected) in actual.iter().zip(&vertices) {
+                        close(actual.x, expected.x);
+                        close(actual.y, expected.y);
+                    }
+                }
+                Shape::TaperedArrow(actual) => {
+                    assert_eq!(case.element.shape, "arrow");
+                    assert_eq!(layer.stroke_width, 0.6);
+                    assert_eq!(layer.fill, Some(layer.color));
+                    assert_capture_summary(actual, &case.expected.polygon);
+                }
+                actual => panic!("unexpected stroke shape {actual:?}"),
             }
         }
     }

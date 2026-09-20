@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, f64::consts::FRAC_PI_4, sync::Arc};
 use captures_app::{
     editor::{
         Document, Element, ElementBase, ElementStyle, ImageElement, ImageOrientation,
-        OptionalNullable, Rect, ShapeElement,
+        OptionalNullable, PathElement, Point, Rect, ShapeElement,
     },
     editor_render::render,
 };
@@ -53,6 +53,23 @@ fn shape(id: &str, kind: &str, start: (f64, f64), end: (f64, f64)) -> ShapeEleme
         style: ElementStyle {
             color: "#1464dc".into(),
             fill: Some("#e63c28".into()),
+            stroke_width: 4.,
+            stroke_enabled: None,
+            drop_shadow: None,
+            drop_shadow_style: None,
+            extra: Map::new(),
+        },
+        extra: Map::new(),
+    }
+}
+
+fn path(id: &str, points: &[(f64, f64)]) -> PathElement {
+    PathElement {
+        base: base(id),
+        points: points.iter().map(|&(x, y)| Point { x, y }).collect(),
+        style: ElementStyle {
+            color: "#14b45a".into(),
+            fill: None,
             stroke_width: 4.,
             stroke_enabled: None,
             drop_shadow: None,
@@ -374,6 +391,113 @@ fn image_and_shape_layers_keep_document_order() {
     assert_eq!(rendered.get_pixel(9, 9).0, [20, 210, 80, 255]);
 }
 
+#[test]
+fn line_controls_and_freehand_paths_use_distinct_shipping_curves() {
+    let mut line = shape("quadratic-line", "line", (5., 50.), (65., 50.));
+    line.controls = vec![Point { x: 35., y: 10. }];
+    line.style.color = "#286ee6".into();
+    line.style.fill = None;
+    let rendered = render(
+        &document(75., 65., vec![Element::Shape(line)]),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    // Quadratic apex is (35,30), not the off-path control or straight chord.
+    assert!(rendered.get_pixel(35, 30)[3] > 220);
+    assert_eq!(rendered.get_pixel(35, 10)[3], 0);
+    assert_eq!(rendered.get_pixel(35, 50)[3], 0);
+
+    let freehand = path("freehand", &[(5., 5.), (25., 35.), (45., 5.)]);
+    let rendered = render(
+        &document(55., 45., vec![Element::Path(freehand)]),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    // Shipping freehand first curves to midpoint (35,20), then lines to the end.
+    assert!(rendered.get_pixel(23, 24)[3] > 180);
+    assert_eq!(rendered.get_pixel(25, 35)[3], 0);
+    assert!(rendered.get_pixel(43, 7)[3] > 180);
+
+    let dot = path("dot", &[(12., 14.)]);
+    let rendered = render(
+        &document(25., 25., vec![Element::Path(dot)]),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert!(rendered.get_pixel(12, 14)[3] > 200);
+}
+
+#[test]
+fn tapered_arrows_grow_from_a_thin_tail_and_follow_curved_controls() {
+    let mut arrow = shape("arrow", "arrow", (10., 25.), (70., 25.));
+    arrow.style.color = "#dc3c28".into();
+    arrow.style.stroke_width = 8.;
+    arrow.style.fill = None;
+    let rendered = render(
+        &document(80., 50., vec![Element::Shape(arrow.clone())]),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(rendered.get_pixel(20, 25).0, [220, 60, 40, 255]);
+    assert_eq!(rendered.get_pixel(20, 28)[3], 0, "tail stays narrow");
+    assert!(rendered.get_pixel(52, 34)[3] > 200, "head shoulder widens");
+    assert!(rendered.get_pixel(69, 25)[3] > 0, "tip is retained");
+
+    arrow.controls = vec![Point { x: 40., y: 5. }];
+    let curved = render(
+        &document(80., 50., vec![Element::Shape(arrow)]),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert!(curved.get_pixel(40, 15)[3] > 150);
+    assert_eq!(curved.get_pixel(40, 25)[3], 0);
+
+    let tiny = shape("tiny", "arrow", (5., 5.), (5.5, 5.5));
+    assert!(
+        render(
+            &document(10., 10., vec![Element::Shape(tiny)]),
+            &BTreeMap::new()
+        )
+        .unwrap()
+        .pixels()
+        .all(|pixel| pixel[3] == 0)
+    );
+}
+
+#[test]
+fn open_strokes_preserve_rotation_opacity_blend_clipping_lock_and_stack_order() {
+    let bottom = RgbaImage::from_pixel(40, 40, Rgba([120, 180, 220, 255]));
+    let top = RgbaImage::from_pixel(4, 4, Rgba([245, 210, 20, 255]));
+    let mut line = shape("line", "line", (-10., 20.), (35., 20.));
+    line.style.color = "#c85028".into();
+    line.style.fill = None;
+    line.style.stroke_width = 6.;
+    line.base.opacity = 50.;
+    line.base.blend_mode = "multiply".into();
+    line.base.rotation = Some(std::f64::consts::FRAC_PI_2);
+    line.base.locked = true;
+    let mut top_image = image("top", "top", 4., 4.);
+    top_image.base.x = 11.;
+    top_image.base.y = 18.;
+    let rendered = render(
+        &document(
+            40.,
+            40.,
+            vec![
+                Element::Image(image("bottom", "bottom", 40., 40.)),
+                Element::Shape(line),
+                Element::Image(top_image),
+            ],
+        ),
+        &assets(&[("bottom", bottom), ("top", top)]),
+    )
+    .unwrap();
+    // 50% multiply of (200,80,40) over (120,180,220).
+    assert_pixel_near(rendered.get_pixel(12, 10).0, [107, 118, 127, 255], 2);
+    assert_eq!(rendered.get_pixel(12, 19).0, [245, 210, 20, 255]);
+    assert_eq!(rendered.get_pixel(30, 20).0, [120, 180, 220, 255]);
+}
+
 fn unsupported_element(kind: &str, visible: bool) -> Element {
     let base = json!({
         "kind": kind,
@@ -423,14 +547,12 @@ fn unsupported_element(kind: &str, visible: bool) -> Element {
 
 #[test]
 fn unsupported_visible_content_and_values_fail_instead_of_disappearing() {
-    for kind in ["text", "path"] {
-        let error = render(
-            &document(1., 1., vec![unsupported_element(kind, true)]),
-            &BTreeMap::new(),
-        )
-        .unwrap_err();
-        assert!(error.contains(&format!("visible {kind} layer")), "{error}");
-    }
+    let error = render(
+        &document(1., 1., vec![unsupported_element("text", true)]),
+        &BTreeMap::new(),
+    )
+    .unwrap_err();
+    assert!(error.contains("visible text layer"), "{error}");
 
     let hidden = document(
         1.,
@@ -476,18 +598,21 @@ fn unsupported_visible_content_and_values_fail_instead_of_disappearing() {
 
 #[test]
 fn unsupported_shape_kinds_effects_and_invalid_style_values_are_explicit() {
-    for kind in ["line", "arrow", "hexagon"] {
-        let error = render(
-            &document(
-                20.,
-                20.,
-                vec![Element::Shape(shape(kind, kind, (1., 1.), (10., 10.)))],
-            ),
-            &BTreeMap::new(),
-        )
-        .unwrap_err();
-        assert!(error.contains("unsupported shape kind"), "{error}");
-    }
+    let error = render(
+        &document(
+            20.,
+            20.,
+            vec![Element::Shape(shape(
+                "hexagon",
+                "hexagon",
+                (1., 1.),
+                (10., 10.),
+            ))],
+        ),
+        &BTreeMap::new(),
+    )
+    .unwrap_err();
+    assert!(error.contains("unsupported shape kind"), "{error}");
 
     let mut shadow = shape("shadow", "rectangle", (1., 1.), (10., 10.));
     shadow.style.drop_shadow = Some(true);
@@ -529,6 +654,36 @@ fn unsupported_shape_kinds_effects_and_invalid_style_values_are_explicit() {
         )
         .is_ok()
     );
+
+    let mut path_shadow = path("path-shadow", &[(1., 1.), (10., 10.)]);
+    path_shadow.style.drop_shadow = Some(true);
+    assert!(
+        render(
+            &document(20., 20., vec![Element::Path(path_shadow)]),
+            &BTreeMap::new()
+        )
+        .unwrap_err()
+        .contains("unsupported drop shadow")
+    );
+
+    for mutate in [
+        |path: &mut PathElement| path.points[0].x = f64::NAN,
+        |path: &mut PathElement| path.style.stroke_width = 0.,
+        |path: &mut PathElement| path.style.color = "hsl(0 0% 0%)".into(),
+        |path: &mut PathElement| path.base.opacity = f64::INFINITY,
+        |path: &mut PathElement| path.base.blend_mode = "difference".into(),
+        |path: &mut PathElement| path.base.rotation = Some(f64::MAX),
+    ] {
+        let mut invalid = path("invalid-path", &[(1., 1.), (10., 10.)]);
+        mutate(&mut invalid);
+        assert!(
+            render(
+                &document(20., 20., vec![Element::Path(invalid)]),
+                &BTreeMap::new()
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]
