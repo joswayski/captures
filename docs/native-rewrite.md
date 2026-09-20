@@ -400,10 +400,13 @@ WebP quality and hard-byte-budget policy. The C ABI returns independently owned
 encoded bytes, borrowed through an explicit pointer/length view and released
 separately from the session. Options and result metadata use JSON; image bytes
 never do. Encoding success or failure leaves document, undo/redo, draft dirty
-state and original History files unchanged. Hosts still own save dialogs, file
-publication, overwrite and clipboard behavior. This shared prerequisite is
-unit-verified in the Linux orb; it does not connect native export controls or
-complete macOS, Windows, X11 or Wayland output/physical acceptance.
+state and original History files unchanged. Shared Rust can also publish a new
+edited-file copy without clobbering an existing destination, then add a distinct
+lossless History artifact; a post-publication History failure retains the saved
+path for recovery. Hosts still own save dialogs, overwrite-original confirmation
+and clipboard behavior. These shared prerequisites are unit-verified in the Linux
+orb; they do not connect native export controls or complete macOS, Windows, X11
+or Wayland output/physical acceptance.
 
 Shared layer commands now cover visibility, locking, opacity, movement, deletion,
 duplication, image renaming and ordering through the same transactional session
