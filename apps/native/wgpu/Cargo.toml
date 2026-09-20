@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
 publish = false
+default-run = "captures-wgpu-workbench"
 
 # An isolated renderer experiment: do not change the shipping workspace's
 # toolchain, lockfile, dependencies, packaging, or supported platforms.

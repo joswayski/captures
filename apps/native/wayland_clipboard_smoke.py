@@ -18,6 +18,7 @@ import time
 
 WIDTH = 3
 HEIGHT = 2
+PROCESS_TIMEOUT_SECONDS = 5
 PIXELS = bytes([
     1, 2, 3, 4,
     250, 17, 99, 255,
@@ -53,20 +54,58 @@ def read_ready_line(probe: subprocess.Popen) -> dict:
     return json.loads(line)
 
 
-def pasted_rgba(env: dict) -> bytes:
-    png = subprocess.check_output(["wl-paste", "--type", "image/png"], env=env)
-    return subprocess.check_output(
+def pasted_rgba(env: dict) -> tuple[bytes, tuple[int, int]]:
+    png = subprocess.check_output(
+        ["wl-paste", "--type", "image/png"],
+        env=env,
+        timeout=PROCESS_TIMEOUT_SECONDS,
+    )
+    dimension_parts = subprocess.check_output(
+        ["identify", "-format", "%w %h", "png:-"],
+        input=png,
+        timeout=PROCESS_TIMEOUT_SECONDS,
+    ).split()
+    if len(dimension_parts) != 2:
+        raise AssertionError(f"unexpected PNG dimensions: {dimension_parts!r}")
+    dimensions = (int(dimension_parts[0]), int(dimension_parts[1]))
+    rgba = subprocess.check_output(
         ["convert", "png:-", "-alpha", "on", "-depth", "8", "rgba:-"],
         input=png,
         env=env,
+        timeout=PROCESS_TIMEOUT_SECONDS,
     )
+    return rgba, dimensions
+
+
+def release_probe(probe: subprocess.Popen) -> None:
+    if probe.poll() is None:
+        try:
+            probe.stdin.write(b"\n")
+            probe.stdin.flush()
+        except (BrokenPipeError, OSError):
+            pass
+        try:
+            probe.wait(timeout=PROCESS_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            probe.kill()
+    probe.wait(timeout=PROCESS_TIMEOUT_SECONDS)
+
+
+def stop_compositor(compositor: subprocess.Popen) -> None:
+    if compositor.poll() is None:
+        compositor.terminate()
+        try:
+            compositor.wait(timeout=PROCESS_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            compositor.kill()
+    compositor.wait(timeout=PROCESS_TIMEOUT_SECONDS)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", type=Path, required=True)
     args = parser.parse_args()
-    for command in ["sway", "wl-paste", "convert"]:
+    for command in ["sway", "wl-paste", "identify", "convert"]:
         if shutil.which(command) is None:
             raise RuntimeError(f"required command is unavailable: {command}")
     binary = args.binary.resolve()
@@ -119,8 +158,10 @@ def main() -> None:
                 "display_unset": True,
             }, ready
 
-            first = pasted_rgba(env)
-            second = pasted_rgba(env)
+            first, first_dimensions = pasted_rgba(env)
+            second, second_dimensions = pasted_rgba(env)
+            assert first_dimensions == (WIDTH, HEIGHT), first_dimensions
+            assert second_dimensions == (WIDTH, HEIGHT), second_dimensions
             assert first == PIXELS, (first, PIXELS)
             assert second == PIXELS, (second, PIXELS)
             assert probe.poll() is None, "selection owner exited before repeated paste"
@@ -129,21 +170,17 @@ def main() -> None:
                 "display_unset": "DISPLAY" not in env,
                 "protocol": "wlr-data-control",
                 "image": {"width": WIDTH, "height": HEIGHT, "rgba_bytes": len(PIXELS)},
+                "verified_png_dimensions": [first_dimensions, second_dimensions],
                 "exact_rgba_pastes": 2,
                 "owner_alive_during_reads": True,
                 "scope": "Disposable headless Sway transport; not physical Wayland UI, input, capture, or accessibility acceptance.",
             }, indent=2))
         finally:
-            if probe is not None and probe.poll() is None:
-                probe.stdin.write(b"\n")
-                probe.stdin.flush()
-                probe.wait(timeout=5)
-            compositor.terminate()
             try:
-                compositor.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                compositor.kill()
-                compositor.wait(timeout=5)
+                if probe is not None:
+                    release_probe(probe)
+            finally:
+                stop_compositor(compositor)
 
 
 if __name__ == "__main__":
