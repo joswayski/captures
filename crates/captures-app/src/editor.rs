@@ -12,6 +12,10 @@ use serde_json::{Map, Value};
 
 pub const HISTORY_LIMIT: usize = 100;
 pub const MAX_CANVAS_DIMENSION: f64 = 32_768.;
+/// Intrinsic document-space cutoff below which the tapered-arrow renderer paints
+/// no arrow. Hosts additionally own the shipping `3 / displayScale` gesture
+/// threshold and cancel before submitting the completed command.
+pub const ARROW_MIN_DRAW_LENGTH: f64 = 1.5;
 
 const fn default_opacity() -> f64 {
     100.
@@ -99,6 +103,28 @@ pub enum ClosedShapeKind {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClosedShapeCreate {
     pub shape: ClosedShapeKind,
+    pub start: Point,
+    pub end: Point,
+    #[serde(default)]
+    pub style: ElementStyle,
+    #[serde(default = "default_opacity")]
+    pub opacity: f64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OpenShapeKind {
+    Line,
+    Arrow,
+}
+
+/// Inputs for one completed straight line or arrow gesture. Hosts keep pointer
+/// state, cancellation, and screen-scale minimum gesture policy outside the
+/// document and submit only the final signed endpoints.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenShapeCreate {
+    pub shape: OpenShapeKind,
     pub start: Point,
     pub end: Point,
     #[serde(default)]
@@ -734,6 +760,71 @@ impl Document {
         Ok(id)
     }
 
+    /// Append one completed straight line or arrow using the shipping editor's
+    /// layer defaults and fully-outside painted-bounds expansion policy.
+    pub fn create_open_shape(&mut self, create: OpenShapeCreate) -> Result<String, String> {
+        if !create.start.x.is_finite()
+            || !create.start.y.is_finite()
+            || !create.end.x.is_finite()
+            || !create.end.y.is_finite()
+        {
+            return Err("Shape coordinates must be finite.".into());
+        }
+        if !create.opacity.is_finite() || !(0. ..=100.).contains(&create.opacity) {
+            return Err("Shape opacity must be between 0 and 100.".into());
+        }
+        if !create.style.stroke_width.is_finite() {
+            return Err("Shape stroke width must be finite.".into());
+        }
+        let length = (create.end.x - create.start.x).hypot(create.end.y - create.start.y);
+        if create.shape == OpenShapeKind::Arrow && length < ARROW_MIN_DRAW_LENGTH {
+            return Err(format!(
+                "Arrows must be at least {ARROW_MIN_DRAW_LENGTH} document pixels long."
+            ));
+        }
+
+        let id = loop {
+            let candidate = uuid::Uuid::new_v4().to_string();
+            if !self
+                .elements
+                .iter()
+                .any(|element| element.base().id == candidate)
+            {
+                break candidate;
+            }
+        };
+        let mut style = create.style;
+        style.fill = None;
+        let element = ShapeElement {
+            base: ElementBase {
+                id: id.clone(),
+                x: create.start.x,
+                y: create.start.y,
+                rotation: None,
+                locked: false,
+                visible: true,
+                opacity: create.opacity,
+                blend_mode: "source-over".into(),
+            },
+            shape: match create.shape {
+                OpenShapeKind::Line => "line",
+                OpenShapeKind::Arrow => "arrow",
+            }
+            .into(),
+            end_x: create.end.x,
+            end_y: create.end.y,
+            controls: Vec::new(),
+            style,
+            extra: Map::new(),
+        };
+        let bounds = open_shape_bounds(&element);
+        self.elements.push(Element::Shape(element));
+        if fully_outside_canvas(bounds, self.width, self.height) {
+            self.expand_canvas_to_bounds(bounds);
+        }
+        Ok(id)
+    }
+
     pub fn crop(&mut self, crop: Rect) {
         let x = clamp(crop.x.round(), 0., (self.width - 1.).max(0.));
         let y = clamp(crop.y.round(), 0., (self.height - 1.).max(0.));
@@ -922,6 +1013,269 @@ fn closed_shape_bounds(shape: &ShapeElement) -> Rect {
         width: (shape.base.x - shape.end_x).abs().max(1.) + stroke_extent * 2.,
         height: (shape.base.y - shape.end_y).abs().max(1.) + stroke_extent * 2.,
     }
+}
+
+fn open_shape_bounds(shape: &ShapeElement) -> Rect {
+    let shadow_pad = annotation_drop_shadow_pad(&shape.style);
+    if shape.shape == "arrow" {
+        let polygon = arrow_fill_polygon(shape);
+        if polygon.len() >= 3 {
+            return bounds_from_points(&polygon, 1. + shadow_pad);
+        }
+    }
+    let stroke_extent = ((shape.style.stroke_width / 2.).ceil() + 1.).max(1.) + shadow_pad;
+    bounds_from_points(
+        &[
+            Point {
+                x: shape.base.x,
+                y: shape.base.y,
+            },
+            Point {
+                x: shape.end_x,
+                y: shape.end_y,
+            },
+        ],
+        stroke_extent,
+    )
+}
+
+fn bounds_from_points(points: &[Point], padding: f64) -> Rect {
+    let first = points[0];
+    let (mut left, mut top, mut right, mut bottom) = (first.x, first.y, first.x, first.y);
+    for point in &points[1..] {
+        left = left.min(point.x);
+        top = top.min(point.y);
+        right = right.max(point.x);
+        bottom = bottom.max(point.y);
+    }
+    let padding = padding.max(0.);
+    Rect {
+        x: left - padding,
+        y: top - padding,
+        width: (right - left).max(1.) + padding * 2.,
+        height: (bottom - top).max(1.) + padding * 2.,
+    }
+}
+
+/// Shipping tapered-arrow outline in document coordinates. Native hosts use
+/// this for transient previews; committed rendering consumes the same polygon.
+#[must_use]
+pub fn arrow_fill_polygon(shape: &ShapeElement) -> Vec<Point> {
+    const HEAD_LENGTH_RATIO: f64 = 3.5;
+    const HEAD_WIDTH_RATIO: f64 = 3.1;
+    const TAIL_WIDTH_RATIO: f64 = 0.18;
+    const NECK_WIDTH_RATIO: f64 = 1.12;
+    const HEAD_SHAFT_FRACTION: f64 = 0.36;
+    const FULL_STROKE_LENGTH_RATIO: f64 = 7.;
+    const TAIL_CAP_SEGMENTS: usize = 7;
+
+    if shape.shape != "arrow" {
+        return Vec::new();
+    }
+    let vertices = std::iter::once(Point {
+        x: shape.base.x,
+        y: shape.base.y,
+    })
+    .chain(shape.controls.iter().copied())
+    .chain(std::iter::once(Point {
+        x: shape.end_x,
+        y: shape.end_y,
+    }))
+    .collect::<Vec<_>>();
+    let samples = sample_controlled_path(&vertices, 28);
+    let mut cumulative = Vec::with_capacity(samples.len());
+    cumulative.push(0.);
+    for index in 1..samples.len() {
+        cumulative.push(
+            cumulative[index - 1]
+                + (samples[index].x - samples[index - 1].x)
+                    .hypot(samples[index].y - samples[index - 1].y),
+        );
+    }
+    let path_length = cumulative.last().copied().unwrap_or(0.);
+    if path_length < ARROW_MIN_DRAW_LENGTH {
+        return Vec::new();
+    }
+    let authored_stroke = shape.style.stroke_width;
+    let full_at = 28_f64.max(authored_stroke * FULL_STROKE_LENGTH_RATIO);
+    let stroke = authored_stroke.min(authored_stroke * path_length / full_at);
+    if stroke <= 0. {
+        return Vec::new();
+    }
+    let head_length = (stroke * HEAD_LENGTH_RATIO).min(path_length * HEAD_SHAFT_FRACTION);
+    let shaft_end = path_length - head_length;
+    let head_half = stroke * HEAD_WIDTH_RATIO / 2.;
+    let tail_half = stroke * TAIL_WIDTH_RATIO / 2.;
+    let neck_half = stroke * NECK_WIDTH_RATIO / 2.;
+    let offset_at = |point: Point, tangent: Point, half: f64| {
+        (
+            Point {
+                x: point.x - tangent.y * half,
+                y: point.y + tangent.x * half,
+            },
+            Point {
+                x: point.x + tangent.y * half,
+                y: point.y - tangent.x * half,
+            },
+        )
+    };
+    let shaft_steps = samples.len().max(8);
+    let mut left = Vec::with_capacity(shaft_steps + 1);
+    let mut right = Vec::with_capacity(shaft_steps + 1);
+    for step in 0..=shaft_steps {
+        let distance = shaft_end * step as f64 / shaft_steps as f64;
+        let (point, tangent) = point_and_tangent_at_length(&samples, &cumulative, distance);
+        let mix = if shaft_end > 0. {
+            distance / shaft_end
+        } else {
+            0.
+        };
+        let half = tail_half + (neck_half - tail_half) * mix;
+        let (left_point, right_point) = offset_at(point, tangent, half);
+        left.push(left_point);
+        right.push(right_point);
+    }
+    let (neck, neck_tangent) = point_and_tangent_at_length(&samples, &cumulative, shaft_end);
+    let (shoulder_left, shoulder_right) = offset_at(neck, neck_tangent, head_half);
+    let tip = *samples
+        .last()
+        .expect("sampled arrow has at least two points");
+    let (tail, tail_tangent) = point_and_tangent_at_length(&samples, &cumulative, 0.);
+    let tail_normal = Point {
+        x: -tail_tangent.y,
+        y: tail_tangent.x,
+    };
+    let cap = (0..=TAIL_CAP_SEGMENTS)
+        .map(|step| {
+            let angle = std::f64::consts::PI * step as f64 / TAIL_CAP_SEGMENTS as f64;
+            Point {
+                x: tail.x
+                    - tail_normal.x * tail_half * angle.cos()
+                    - tail_tangent.x * tail_half * angle.sin(),
+                y: tail.y
+                    - tail_normal.y * tail_half * angle.cos()
+                    - tail_tangent.y * tail_half * angle.sin(),
+            }
+        })
+        .collect::<Vec<_>>();
+    left.into_iter()
+        .chain([shoulder_left, tip, shoulder_right])
+        .chain(right.into_iter().rev())
+        .chain(cap[1..cap.len() - 1].iter().copied())
+        .collect()
+}
+
+fn quadratic_point(from: Point, control: Point, to: Point, t: f64) -> Point {
+    let inverse = 1. - t;
+    Point {
+        x: inverse * inverse * from.x + 2. * inverse * t * control.x + t * t * to.x,
+        y: inverse * inverse * from.y + 2. * inverse * t * control.y + t * t * to.y,
+    }
+}
+
+pub(crate) fn sample_controlled_path(vertices: &[Point], steps: usize) -> Vec<Point> {
+    if vertices.len() < 2 {
+        return vertices.to_vec();
+    }
+    let steps = steps.max(4);
+    if vertices.len() == 2 {
+        let [start, end] = [vertices[0], vertices[1]];
+        return (0..=steps)
+            .map(|index| {
+                let t = index as f64 / steps as f64;
+                Point {
+                    x: start.x + (end.x - start.x) * t,
+                    y: start.y + (end.y - start.y) * t,
+                }
+            })
+            .collect();
+    }
+    if vertices.len() == 3 {
+        return (0..=steps)
+            .map(|index| {
+                quadratic_point(
+                    vertices[0],
+                    vertices[1],
+                    vertices[2],
+                    index as f64 / steps as f64,
+                )
+            })
+            .collect();
+    }
+    let mut samples = vec![vertices[0]];
+    for index in 1..vertices.len() - 2 {
+        let from = *samples
+            .last()
+            .expect("controlled path starts with one sample");
+        let to = Point {
+            x: (vertices[index].x + vertices[index + 1].x) / 2.,
+            y: (vertices[index].y + vertices[index + 1].y) / 2.,
+        };
+        samples
+            .extend((1..=steps).map(|step| {
+                quadratic_point(from, vertices[index], to, step as f64 / steps as f64)
+            }));
+    }
+    let from = *samples
+        .last()
+        .expect("controlled path starts with one sample");
+    let control = vertices[vertices.len() - 2];
+    let end = vertices[vertices.len() - 1];
+    samples.extend(
+        (1..=steps).map(|step| quadratic_point(from, control, end, step as f64 / steps as f64)),
+    );
+    samples
+}
+
+fn point_and_tangent_at_length(
+    samples: &[Point],
+    cumulative: &[f64],
+    target: f64,
+) -> (Point, Point) {
+    let first = samples[0];
+    let last = samples[samples.len() - 1];
+    let unit = |from: Point, to: Point| {
+        let dx = to.x - from.x;
+        let dy = to.y - from.y;
+        let length = dx.hypot(dy);
+        if length < 1e-6 {
+            Point { x: 1., y: 0. }
+        } else {
+            Point {
+                x: dx / length,
+                y: dy / length,
+            }
+        }
+    };
+    if target <= 0. {
+        return (first, unit(first, samples[1]));
+    }
+    let total = *cumulative
+        .last()
+        .expect("cumulative arrow lengths are nonempty");
+    if target >= total {
+        return (last, unit(samples[samples.len() - 2], last));
+    }
+    for index in 1..samples.len() {
+        if cumulative[index] >= target {
+            let span = cumulative[index] - cumulative[index - 1];
+            let t = if span > 0. {
+                (target - cumulative[index - 1]) / span
+            } else {
+                1.
+            };
+            let from = samples[index - 1];
+            let to = samples[index];
+            return (
+                Point {
+                    x: from.x + (to.x - from.x) * t,
+                    y: from.y + (to.y - from.y) * t,
+                },
+                unit(from, to),
+            );
+        }
+    }
+    (last, unit(samples[samples.len() - 2], last))
 }
 
 fn annotation_drop_shadow_pad(style: &ElementStyle) -> f64 {

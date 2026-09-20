@@ -865,6 +865,181 @@ fn closed_shape_json_creation_renders_and_rolls_back_history_before_draft_reopen
 }
 
 #[test]
+fn open_shape_json_creation_renders_expands_and_restores_draft_history() {
+    let (data, id, _) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    let mut document = editor.snapshot().document.clone();
+    document.width = 40.;
+    document.height = 30.;
+    document.background = None;
+    document
+        .extra
+        .insert("futureDocument".into(), json!({"keep": "open-create"}));
+    let Element::Image(background) = &mut document.elements[0] else {
+        panic!()
+    };
+    background.base.visible = false;
+    background
+        .extra
+        .insert("futureImage".into(), json!({"keep": [4, 9]}));
+    editor.execute(Request::Commit { document }).unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 1 })
+        .unwrap();
+    let manifest_path = data.path().join("drafts").join(&id).join("manifest.json");
+    let baseline_manifest = fs::read(&manifest_path).unwrap();
+    let baseline = editor.snapshot().document.clone();
+
+    // Shipping keeps even a click-only line: round caps render it as a dot.
+    let dot: Request = serde_json::from_value(json!({
+        "operation": "create_open_shape",
+        "shape": "line",
+        "start": {"x": 5.25, "y": 4.75},
+        "end": {"x": 5.25, "y": 4.75}
+    }))
+    .unwrap();
+    editor.execute(dot).unwrap();
+    let line_document = editor.snapshot().document.clone();
+    let Element::Shape(line) = line_document.elements.last().unwrap() else {
+        panic!()
+    };
+    assert!(!line.base.id.is_empty());
+    assert_eq!(line.shape, "line");
+    assert_eq!((line.base.x, line.base.y), (5.25, 4.75));
+    assert_eq!((line.end_x, line.end_y), (5.25, 4.75));
+    assert!(line.controls.is_empty());
+    assert_eq!(line.style.fill, None);
+    assert!(!line.base.locked && line.base.visible);
+    assert_eq!(line.base.opacity, 100.);
+    assert_eq!(line.base.blend_mode, "source-over");
+    assert_eq!(editor.pixels().get_pixel(5, 5).0, [255, 59, 92, 255]);
+
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.snapshot().document, &baseline);
+    assert!(editor.snapshot().can_redo);
+    let before_failure = serde_json::to_value(editor.snapshot()).unwrap();
+    let retained_frame = editor.pixels();
+    let short_arrow: Request = serde_json::from_value(json!({
+        "operation": "create_open_shape",
+        "shape": "arrow",
+        "start": {"x": 7.25, "y": 9.5},
+        "end": {"x": 8.749, "y": 9.5}
+    }))
+    .unwrap();
+    assert!(editor.execute(short_arrow).is_err());
+    let invalid_color: Request = serde_json::from_value(json!({
+        "operation": "create_open_shape",
+        "shape": "line",
+        "start": {"x": 2, "y": 2},
+        "end": {"x": 9, "y": 6},
+        "style": {
+            "color": "not-a-color",
+            "fill": "#00ff00",
+            "strokeWidth": 4,
+            "strokeEnabled": true,
+            "dropShadow": false
+        }
+    }))
+    .unwrap();
+    assert!(editor.execute(invalid_color).is_err());
+    assert_eq!(
+        serde_json::to_value(editor.snapshot()).unwrap(),
+        before_failure
+    );
+    assert!(Arc::ptr_eq(&retained_frame, &editor.pixels()));
+    assert!(editor.snapshot().can_redo);
+    assert_eq!(fs::read(&manifest_path).unwrap(), baseline_manifest);
+
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.snapshot().document, &line_document);
+    let outside_arrow: Request = serde_json::from_value(json!({
+        "operation": "create_open_shape",
+        "shape": "arrow",
+        "start": {"x": -55.5, "y": -38.25},
+        "end": {"x": -39.25, "y": -29.75},
+        "style": {
+            "color": "#2277dd",
+            "fill": "#00ff00",
+            "strokeWidth": 6,
+            "strokeEnabled": true,
+            "dropShadow": true,
+            "dropShadowStyle": {
+                "color": "#112233",
+                "opacity": 80,
+                "blur": 4,
+                "offsetX": 9,
+                "offsetY": -2
+            },
+            "futureStyle": {"preserve": "open"}
+        },
+        "opacity": 62.5
+    }))
+    .unwrap();
+    editor.execute(outside_arrow).unwrap();
+    let final_document = editor.snapshot().document.clone();
+    assert_eq!((final_document.width, final_document.height), (114., 87.));
+    assert_eq!(
+        (
+            final_document.elements[0].base().x,
+            final_document.elements[0].base().y
+        ),
+        (74., 57.)
+    );
+    let Element::Shape(translated_line) = &final_document.elements[1] else {
+        panic!()
+    };
+    assert_eq!(
+        (translated_line.base.x, translated_line.base.y),
+        (79.25, 61.75)
+    );
+    let Element::Shape(arrow) = final_document.elements.last().unwrap() else {
+        panic!()
+    };
+    assert_eq!(arrow.shape, "arrow");
+    assert_eq!((arrow.base.x, arrow.base.y), (18.5, 18.75));
+    assert_eq!((arrow.end_x, arrow.end_y), (34.75, 27.25));
+    assert_eq!(arrow.style.fill, None);
+    assert_eq!(
+        arrow.style.extra["futureStyle"],
+        json!({"preserve": "open"})
+    );
+    assert!(
+        editor
+            .pixels()
+            .pixels()
+            .any(|pixel| pixel.0 == [34, 119, 221, 219])
+    );
+    assert!(
+        editor
+            .pixels()
+            .pixels()
+            .any(|pixel| pixel[3] > 0 && pixel[3] < 159)
+    );
+    assert_eq!(
+        final_document.extra["futureDocument"],
+        json!({"keep": "open-create"})
+    );
+    let Element::Image(background) = &final_document.elements[0] else {
+        panic!()
+    };
+    assert_eq!(background.extra["futureImage"], json!({"keep": [4, 9]}));
+
+    let final_pixels = editor.pixels();
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.snapshot().document, &line_document);
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.snapshot().document, &final_document);
+    assert_eq!(editor.pixels(), final_pixels);
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 2 })
+        .unwrap();
+    drop(editor);
+    let restored = open(data.path(), &id).unwrap();
+    assert_eq!(restored.snapshot().document, &final_document);
+    assert_eq!(restored.pixels(), final_pixels);
+}
+
+#[test]
 fn image_import_is_atomic_undoable_and_draft_owned() {
     let (data, id, original) = setup();
     let mut editor = open(data.path(), &id).unwrap();

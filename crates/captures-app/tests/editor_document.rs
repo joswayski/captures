@@ -1,6 +1,6 @@
 use captures_app::editor::{
     ClosedShapeCreate, CropDrag, Document, DocumentHistory, Element, ImageTransform, LayerEdit,
-    Point, Rect, bounded_crop_rect,
+    OpenShapeCreate, Point, Rect, bounded_crop_rect,
 };
 use captures_history::editor_draft::{self, SaveRequest};
 use serde::Deserialize;
@@ -17,6 +17,7 @@ struct Fixture {
     crop_rects: Vec<DocumentCropCase>,
     canvas_sizes: Vec<CanvasSizeCase>,
     shape_creations: Vec<ShapeCreationCase>,
+    open_shape_creations: Vec<OpenShapeCreationCase>,
     orientations: Vec<OrientationCase>,
     layers: Value,
     history: HistoryCase,
@@ -108,6 +109,16 @@ struct ShapeCreationCase {
     input: Document,
     request: ClosedShapeCreate,
     expected: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenShapeCreationCase {
+    name: String,
+    input: Document,
+    request: OpenShapeCreate,
+    path_length: f64,
+    expected: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -281,6 +292,27 @@ fn degenerate_closed_shape_creation_is_rejected_without_inventing_pixels() {
         let mut document = original.clone();
         assert!(document.create_closed_shape(create).is_err());
         assert_eq!(document, original);
+    }
+}
+
+#[test]
+fn straight_line_and_arrow_creation_bounds_match_typescript() {
+    for case in fixture().open_shape_creations {
+        let original = case.input.clone();
+        let mut document = case.input;
+        let result = document.create_open_shape(case.request);
+        let Some(expected) = case.expected else {
+            assert!(result.is_err(), "{} ({})", case.name, case.path_length);
+            assert_eq!(document, original, "{}", case.name);
+            continue;
+        };
+        let id = result.unwrap();
+        let Some(Element::Shape(created)) = document.elements.last_mut() else {
+            panic!("{} did not append a shape", case.name)
+        };
+        assert_eq!(created.base.id, id);
+        created.base.id = "fixture-created-open-shape".into();
+        assert_json_equivalent(serde_json::to_value(document).unwrap(), expected);
     }
 }
 

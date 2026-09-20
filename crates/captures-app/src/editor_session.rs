@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     editor::{
         ClosedShapeCreate, Document, DocumentHistory, Element, ElementBase, ImageElement,
-        LayerEdit, OptionalNullable, Point, Rect, image_bounds,
+        LayerEdit, OpenShapeCreate, OptionalNullable, Point, Rect, image_bounds,
     },
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS, render},
 };
@@ -61,6 +61,10 @@ pub enum Request {
     CreateClosedShape {
         #[serde(flatten)]
         create: ClosedShapeCreate,
+    },
+    CreateOpenShape {
+        #[serde(flatten)]
+        create: OpenShapeCreate,
     },
     Layer {
         id: String,
@@ -286,6 +290,11 @@ impl EditorSession {
             Request::CreateClosedShape { create } => {
                 let mut document = next.current().clone();
                 document.create_closed_shape(create)?;
+                next.commit(document);
+            }
+            Request::CreateOpenShape { create } => {
+                let mut document = next.current().clone();
+                document.create_open_shape(create)?;
                 next.commit(document);
             }
             Request::Layer { id, edit } => {

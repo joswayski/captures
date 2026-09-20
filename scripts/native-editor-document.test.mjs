@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
+  ARROW_MIN_DRAW_LENGTH,
+  arrowPathLength,
   boundedCropRect,
   createScreenshotDocument,
   cropDragAspectRatio,
@@ -335,6 +337,7 @@ function shippingCases() {
     document,
     ...geometryCases(),
     shapeCreations: shapeCreationCases(),
+    openShapeCreations: openShapeCreationCases(),
     orientations: orientationCases(),
     layers,
     history: historyCases(),
@@ -465,6 +468,139 @@ function shapeCreationCases() {
   });
 }
 
+function openShapeCreationCases() {
+  const input = {
+    width: 40,
+    height: 30,
+    background: '#ffffff',
+    futureDocument: { preserve: 'open-creation' },
+    elements: [{
+      id: 'existing-hidden-locked',
+      kind: 'image',
+      source: 'imported',
+      src: 'draft-asset:existing',
+      originalSrc: null,
+      name: 'existing.png',
+      sourceArtifactId: null,
+      x: 1.25,
+      y: -2.5,
+      width: 3,
+      height: 2,
+      naturalWidth: 3,
+      naturalHeight: 2,
+      locked: true,
+      visible: false,
+      opacity: 63,
+      blendMode: 'screen',
+      futureImage: ['keep'],
+    }],
+  };
+  const defaults = {
+    color: '#ff3b5c',
+    fill: '#ff3b5c',
+    strokeWidth: 8,
+    strokeEnabled: false,
+    dropShadow: false,
+  };
+  const vectors = [
+    {
+      name: 'zero length fractional line remains a valid round dot',
+      shape: 'line',
+      start: { x: 5.25, y: 4.75 },
+      end: { x: 5.25, y: 4.75 },
+    },
+    {
+      name: 'horizontal line keeps signed partially clipped endpoints',
+      shape: 'line',
+      start: { x: 13.75, y: 8.5 },
+      end: { x: -3.25, y: 8.5 },
+    },
+    {
+      name: 'vertical line fully outside expands without losing fractions',
+      shape: 'line',
+      start: { x: 46.25, y: 34.5 },
+      end: { x: 46.25, y: 43.75 },
+    },
+    {
+      name: 'reverse fractional arrow stays clipped when partially overlapping',
+      shape: 'arrow',
+      start: { x: 20.75, y: 15.25 },
+      end: { x: -3.125, y: 4.875 },
+    },
+    {
+      name: 'arrow immediately below the intrinsic paint boundary is rejected',
+      shape: 'arrow',
+      start: { x: 7.25, y: 9.5 },
+      end: { x: 8.749, y: 9.5 },
+    },
+    {
+      name: 'arrow exactly at the intrinsic paint boundary is retained',
+      shape: 'arrow',
+      start: { x: 7.25, y: 9.5 },
+      end: { x: 8.75, y: 9.5 },
+    },
+    {
+      name: 'default shadow-only line overlap remains clipped',
+      shape: 'line',
+      start: { x: -24.25, y: 12.5 },
+      end: { x: -21.25, y: 18.75 },
+      style: { ...defaults, dropShadow: true },
+    },
+    {
+      name: 'custom shadow fully outside arrow expands and translates siblings',
+      shape: 'arrow',
+      start: { x: -55.5, y: -38.25 },
+      end: { x: -39.25, y: -29.75 },
+      style: {
+        color: '#2277dd',
+        fill: '#00ff00',
+        strokeWidth: 6,
+        strokeEnabled: true,
+        dropShadow: true,
+        dropShadowStyle: {
+          color: '#112233',
+          opacity: 80,
+          blur: 4,
+          offsetX: 9,
+          offsetY: -2,
+        },
+        futureStyle: { preserve: 'open' },
+      },
+      opacity: 62.5,
+    },
+  ];
+  return vectors.map(({ name, shape, start, end, style, opacity }) => {
+    const request = { shape, start, end };
+    if (style) request.style = style;
+    if (opacity !== undefined) request.opacity = opacity;
+    const element = {
+      id: 'fixture-created-open-shape',
+      kind: 'shape',
+      shape,
+      x: start.x,
+      y: start.y,
+      endX: end.x,
+      endY: end.y,
+      controls: [],
+      style: { ...(style ?? defaults), fill: null },
+      locked: false,
+      visible: true,
+      opacity: opacity ?? 100,
+      blendMode: 'source-over',
+    };
+    const pathLength = arrowPathLength(element);
+    if (shape === 'arrow' && pathLength < ARROW_MIN_DRAW_LENGTH) {
+      return { name, input, request, pathLength, expected: null };
+    }
+    let expected = { ...structuredClone(input), elements: [...structuredClone(input.elements), element] };
+    const bounds = elementBounds(element);
+    if (isFullyOutsideCanvas(bounds, expected)) {
+      expected = expandDocumentToFitBounds(expected, bounds, 0);
+    }
+    return { name, input, request, pathLength, expected };
+  });
+}
+
 function serializableCases() {
   return JSON.parse(JSON.stringify(shippingCases()));
 }
@@ -485,6 +621,7 @@ function fixtureText(cases) {
     `  "cropRects": ${array(cases.cropRects, '    ')},`,
     `  "canvasSizes": ${array(cases.canvasSizes, '    ')},`,
     `  "shapeCreations": ${array(cases.shapeCreations, '    ')},`,
+    `  "openShapeCreations": ${array(cases.openShapeCreations, '    ')},`,
     `  "orientations": ${array(cases.orientations, '    ')},`,
     `  "layers": ${JSON.stringify(cases.layers)},`,
     '  "history": {',
@@ -516,6 +653,11 @@ if (process.argv.includes('--write')) {
     assert.equal(vectors.shapeCreations.length, 6);
     assert.ok(vectors.shapeCreations.some(entry => entry.expected.width > entry.input.width));
     assert.ok(vectors.shapeCreations.some(entry => entry.expected.elements[0].x > entry.input.elements[0].x));
+    assert.equal(vectors.openShapeCreations.length, 8);
+    assert.ok(vectors.openShapeCreations.some(entry => entry.request.start.x === entry.request.end.x));
+    assert.ok(vectors.openShapeCreations.some(entry => entry.request.start.y === entry.request.end.y));
+    assert.ok(vectors.openShapeCreations.some(entry => entry.expected === null));
+    assert.ok(vectors.openShapeCreations.some(entry => entry.expected?.elements[0].x > entry.input.elements[0].x));
     assert.ok(vectors.history.expected.some(entry => entry.undo === 100));
     assert.ok(vectors.history.expected.some(entry => entry.redo === 100));
     assert.equal(vectors.history.expected[0].changed, false);
