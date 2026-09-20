@@ -233,6 +233,10 @@ Screenshots during recording, recording playback/editing/export and GIF
 conversion remain unconnected; History displays recording posters and metadata only.
 Real macOS and Windows recording, audio devices, multi-display and hardware acceptance remain open;
 Wayland recording is gated with the rest of native capture.
+Native Preferences also includes an optional feedback form. Sending shares only
+the message, optional contact, category, and displayed app/system details with
+captur.es; it never attaches captures, files, or diagnostics. Fixture mode cannot
+send feedback, and failed requests preserve the draft for retry.
 Editing, OS shortcut takeover, login items,
 single-instance relaunch and updates are not connected to the native hosts yet. Windows/Linux
 renderer selection and full feature/design parity remain open. The

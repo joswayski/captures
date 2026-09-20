@@ -136,6 +136,14 @@ visible and cannot justify a renderer selection or performance claim.
 
 ## Windows and Linux evaluation plan
 
+Native AppKit and wgpu Preferences now connect explicit, optional feedback through
+`captures-feedback`. The form displays its app/system context before Send, permits
+an optional contact, blocks duplicate submissions, and retains drafts after errors
+or closing/reopening. Submission runs separately from capture/settings workers;
+fixtures cannot send. No captures, files, or crash diagnostics are attached and
+no startup network request is introduced. This advances the manual feedback slice,
+not automatic crash reporting or full accessibility/physical-platform acceptance.
+
 No renderer is selected for these platforms yet. The same fixture scenes, token
 resources, resource budgets, visual checkpoints and input scripts are mandatory.
 

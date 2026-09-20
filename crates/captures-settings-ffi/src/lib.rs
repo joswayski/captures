@@ -1,3 +1,4 @@
+mod feedback;
 mod preview;
 mod recording;
 mod region;

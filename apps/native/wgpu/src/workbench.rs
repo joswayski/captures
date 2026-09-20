@@ -495,7 +495,7 @@ impl Workbench {
     }
 
     fn preferences(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        if self.preferences_state.ui(ui, t) {
+        if self.preferences_state.ui(ui, t, false) {
             self.change_scene(Scene::History);
         }
     }
@@ -1018,7 +1018,7 @@ impl eframe::App for Workbench {
                         self.preferences_state.sidebar(ui, &t);
                     });
                 egui::CentralPanel::default().show(ui, |ui| {
-                    if self.preferences_state.ui(ui, &t) {
+                    if self.preferences_state.ui(ui, &t, true) {
                         self.live_preferences = false;
                     }
                 });

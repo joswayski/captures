@@ -63,7 +63,12 @@ Windows/X11 use the shipping
 synthetic cursor arrow, not the actual system cursor image. Other capture defaults remain unconnected;
 other scenes remain fixtures. The selector fixture handles window-focused Escape
 only, while live capture uses the shared process-wide Escape cancellation handler.
-Login, feedback and updating remain visibly unavailable.
+Preferences → About → Send feedback uses the shared Rust client on a separate
+worker. Only explicit Send in `--live` can contact captur.es; fixture mode keeps
+submission disabled. The form previews the included app/system context, retains
+drafts on errors and navigation, and prevents duplicate sends while pending.
+Captures, files, and diagnostics are never attached. Login and updating remain
+visibly unavailable.
 
 The candidate tests whether shared custom components are viable. It is not a
 retained widget renderer: egui rebuilds the visible UI on an event-driven repaint,
