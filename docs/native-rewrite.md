@@ -162,6 +162,18 @@ their own history root and presentation URLs. Native capture integration can use
 the same lifecycle without accessing installed history. This extraction alone
 adds no native capture UI and closes no platform gate.
 
+Screenshot editor draft storage now also lives in `captures-history::editor_draft`.
+The shipping Tauri commands delegate save/load/discard and asset reads to this
+shared module, supplying their existing directory and protocol URLs. The v1
+manifest, opaque document JSON, incremental PNG assets, limits and broken-draft
+cleanup policy are unchanged. Callers can use isolated native development roots;
+no installed-data migration occurs. Each file is replaced atomically, but the
+whole draft is not a transaction: the existing prune/assets/manifest write order
+is preserved. Portable filesystem tests cover compatibility, byte preservation,
+error paths and root isolation. This is an editor persistence prerequisite, not
+a native document model or editor UI. Native editor recovery acceptance remains
+open on macOS, Windows, X11 and Wayland; no platform parity gate is closed.
+
 Recording platform dispatch, microphone enumeration and capability/exclusion
 policy now live in `captures-recording-platform`; the shipping host delegates to the
 same macOS ScreenCaptureKit and Windows/Linux xcap engines. Hosts still own

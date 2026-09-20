@@ -1,6 +1,5 @@
 use std::{
     borrow::Cow,
-    collections::HashSet,
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -14,6 +13,10 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
 
 use captures_capture::CaptureMode;
+use captures_history::editor_draft;
+pub use captures_history::editor_draft::{
+    LoadedDraft as LoadedScreenshotEditorDraft, SaveRequest as SaveScreenshotEditorDraftRequest,
+};
 use captures_image::composite_onto_white;
 
 use crate::{
@@ -28,7 +31,7 @@ use crate::{
 };
 
 pub(crate) const SCREENSHOT_EDITOR_WINDOW_PREFIX: &str = "screenshot-editor-";
-pub(crate) const MAX_EDITOR_PNG_BYTES: usize = 256 * 1024 * 1024;
+pub(crate) const MAX_EDITOR_PNG_BYTES: usize = editor_draft::MAX_IMAGE_BYTES;
 pub(crate) const MAX_EDITOR_DIMENSION: u32 = 16_384;
 pub(crate) const MAX_EDITOR_PIXELS: u64 = 100_000_000;
 
@@ -443,119 +446,13 @@ pub async fn save_screenshot_edit(
     })
 }
 
-const EDITOR_DRAFT_SCHEMA_VERSION: u16 = 1;
-const EDITOR_DRAFT_MANIFEST_FILE: &str = "manifest.json";
-const EDITOR_DRAFT_ASSETS_DIR: &str = "assets";
-const MAX_EDITOR_DRAFT_ASSETS: usize = 64;
-const MAX_EDITOR_DRAFT_TOTAL_BYTES: usize = 80 * 1024 * 1024;
-
-/// One image layer in a draft save. `png` is `None` when the frontend already
-/// shipped this asset in an earlier save of the same draft and the file on disk
-/// should be kept as-is.
-#[derive(Debug, Deserialize)]
-pub struct ScreenshotEditorDraftAssetInput {
-    id: String,
-    #[serde(default)]
-    png: Option<Vec<u8>>,
-}
-
-pub const EDITOR_DRAFT_ASSET_MISSING: &str =
-    "a previously saved draft image asset is missing; resend the full draft";
-
-#[derive(Debug, Deserialize)]
-pub struct SaveScreenshotEditorDraftRequest {
-    artifact_id: String,
-    document: serde_json::Value,
-    assets: Vec<ScreenshotEditorDraftAssetInput>,
-    updated_at_ms: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ScreenshotEditorDraftManifest {
-    schema_version: u16,
-    artifact_id: String,
-    updated_at_ms: u64,
-    document: serde_json::Value,
-}
-
-#[derive(Debug, Serialize)]
-pub struct LoadedScreenshotEditorDraft {
-    document: serde_json::Value,
-    updated_at_ms: u64,
-}
-
 /// Persist a layered screenshot editor session so reopening restores unsaved work.
 #[tauri::command]
 pub fn save_screenshot_editor_draft(
     request: SaveScreenshotEditorDraftRequest,
 ) -> CommandResult<()> {
-    validate_draft_component_id(&request.artifact_id).map_err(|error| error.to_string())?;
-    if request.assets.len() > MAX_EDITOR_DRAFT_ASSETS {
-        return Err("this edit has too many image layers to keep as a draft".to_owned());
-    }
-    let root = screenshot_editor_drafts_directory().join(&request.artifact_id);
-    let assets_dir = root.join(EDITOR_DRAFT_ASSETS_DIR);
-    let mut total_bytes = 0usize;
-    for asset in &request.assets {
-        validate_draft_component_id(&asset.id).map_err(|error| error.to_string())?;
-        let len = match &asset.png {
-            Some(png) => {
-                if png.is_empty() || png.len() > MAX_EDITOR_PNG_BYTES {
-                    return Err("a draft image asset is empty or too large".to_owned());
-                }
-                png.len()
-            }
-            None => fs::metadata(draft_asset_path(&assets_dir, &asset.id))
-                .ok()
-                .filter(std::fs::Metadata::is_file)
-                .map(|metadata| usize::try_from(metadata.len()).unwrap_or(usize::MAX))
-                .ok_or_else(|| EDITOR_DRAFT_ASSET_MISSING.to_owned())?,
-        };
-        total_bytes = total_bytes.saturating_add(len);
-        if total_bytes > MAX_EDITOR_DRAFT_TOTAL_BYTES {
-            return Err(
-                "unsaved edits are too large to keep as a draft; save a file first".to_owned(),
-            );
-        }
-    }
-
-    fs::create_dir_all(&assets_dir).map_err(|error| error.to_string())?;
-
-    // Prune assets for removed layers so they do not leave orphan files, while
-    // keeping files for layers that were already persisted (`png: None`).
-    let keep: HashSet<PathBuf> = request
-        .assets
-        .iter()
-        .map(|asset| draft_asset_path(&assets_dir, &asset.id))
-        .collect();
-    for entry in fs::read_dir(&assets_dir).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        let path = entry.path();
-        if path.is_file() && !keep.contains(&path) {
-            let _ = fs::remove_file(path);
-        }
-    }
-    for asset in &request.assets {
-        if let Some(png) = &asset.png {
-            write_export_atomically(&draft_asset_path(&assets_dir, &asset.id), png)
-                .map_err(|error| error.to_string())?;
-        }
-    }
-
-    let manifest = ScreenshotEditorDraftManifest {
-        schema_version: EDITOR_DRAFT_SCHEMA_VERSION,
-        artifact_id: request.artifact_id.clone(),
-        updated_at_ms: request.updated_at_ms,
-        document: request.document,
-    };
-    let bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?;
-    write_export_atomically(&root.join(EDITOR_DRAFT_MANIFEST_FILE), &bytes)
-        .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-fn draft_asset_path(assets_dir: &Path, asset_id: &str) -> PathBuf {
-    assets_dir.join(format!("{asset_id}.png"))
+    editor_draft::save(&screenshot_editor_drafts_directory(), request)
+        .map_err(|error| error.to_string())
 }
 
 /// Load a previously autosaved editor draft, if one exists for this capture.
@@ -563,48 +460,22 @@ fn draft_asset_path(assets_dir: &Path, asset_id: &str) -> PathBuf {
 pub fn load_screenshot_editor_draft(
     artifact_id: String,
 ) -> CommandResult<Option<LoadedScreenshotEditorDraft>> {
-    validate_draft_component_id(&artifact_id).map_err(|error| error.to_string())?;
-    let root = screenshot_editor_drafts_directory().join(&artifact_id);
-    let manifest_path = root.join(EDITOR_DRAFT_MANIFEST_FILE);
-    if !manifest_path.is_file() {
-        return Ok(None);
-    }
-    let bytes = fs::read(&manifest_path).map_err(|error| error.to_string())?;
-    let mut manifest: ScreenshotEditorDraftManifest =
-        serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
-    if manifest.schema_version != EDITOR_DRAFT_SCHEMA_VERSION {
-        let _ = discard_screenshot_editor_draft_files(&artifact_id);
-        return Ok(None);
-    }
-    if manifest.artifact_id != artifact_id {
-        return Err("screenshot editor draft does not match its folder".to_owned());
-    }
-    if !rewrite_draft_document_asset_urls(&mut manifest.document, &artifact_id) {
-        let _ = discard_screenshot_editor_draft_files(&artifact_id);
-        return Ok(None);
-    }
-    Ok(Some(LoadedScreenshotEditorDraft {
-        document: manifest.document,
-        updated_at_ms: manifest.updated_at_ms,
-    }))
+    editor_draft::load(
+        &screenshot_editor_drafts_directory(),
+        &artifact_id,
+        editor_draft_asset_url,
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 pub fn discard_screenshot_editor_draft(artifact_id: String) -> CommandResult<()> {
-    validate_draft_component_id(&artifact_id).map_err(|error| error.to_string())?;
-    discard_screenshot_editor_draft_files(&artifact_id).map_err(|error| error.to_string())?;
-    Ok(())
+    discard_screenshot_editor_draft_files(&artifact_id).map_err(|error| error.to_string())
 }
 
 /// Best-effort cleanup used when history entries are deleted.
 pub fn discard_screenshot_editor_draft_files(artifact_id: &str) -> Result<(), AppError> {
-    validate_draft_component_id(artifact_id)?;
-    let root = screenshot_editor_drafts_directory().join(artifact_id);
-    if !root.exists() {
-        return Ok(());
-    }
-    fs::remove_dir_all(root).map_err(AppError::Io)?;
-    Ok(())
+    editor_draft::discard(&screenshot_editor_drafts_directory(), artifact_id).map_err(Into::into)
 }
 
 pub(crate) fn resolve_editor_draft_asset(path: &str) -> Option<Vec<u8>> {
@@ -617,67 +488,7 @@ pub(crate) fn resolve_editor_draft_asset(path: &str) -> Option<Vec<u8>> {
     if segments.next().is_some() {
         return None;
     }
-    validate_draft_component_id(artifact_id).ok()?;
-    validate_draft_component_id(asset_id).ok()?;
-    let file = screenshot_editor_drafts_directory()
-        .join(artifact_id)
-        .join(EDITOR_DRAFT_ASSETS_DIR)
-        .join(format!("{asset_id}.png"));
-    fs::read(file).ok()
-}
-
-fn validate_draft_component_id(id: &str) -> Result<(), AppError> {
-    if id.is_empty() || id.len() > 80 {
-        return Err(AppError::Task(
-            "invalid screenshot editor draft id".to_owned(),
-        ));
-    }
-    if !id
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
-    {
-        return Err(AppError::Task(
-            "invalid screenshot editor draft id".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-/// Rewrite `draft-asset:{id}` image refs to protocol URLs. Returns false if an
-/// asset file is missing so callers can discard a broken draft.
-fn rewrite_draft_document_asset_urls(document: &mut serde_json::Value, artifact_id: &str) -> bool {
-    let Some(elements) = document
-        .get_mut("elements")
-        .and_then(serde_json::Value::as_array_mut)
-    else {
-        return true;
-    };
-    for element in elements {
-        if element.get("kind").and_then(serde_json::Value::as_str) != Some("image") {
-            continue;
-        }
-        for field in ["src", "originalSrc"] {
-            let Some(value) = element.get(field).and_then(serde_json::Value::as_str) else {
-                continue;
-            };
-            let Some(asset_id) = value.strip_prefix("draft-asset:") else {
-                continue;
-            };
-            if validate_draft_component_id(asset_id).is_err() {
-                return false;
-            }
-            let asset_path = screenshot_editor_drafts_directory()
-                .join(artifact_id)
-                .join(EDITOR_DRAFT_ASSETS_DIR)
-                .join(format!("{asset_id}.png"));
-            if !asset_path.is_file() {
-                return false;
-            }
-            element[field] =
-                serde_json::Value::String(editor_draft_asset_url(artifact_id, asset_id));
-        }
-    }
-    true
+    editor_draft::read_asset(&screenshot_editor_drafts_directory(), artifact_id, asset_id).ok()
 }
 
 fn decode_editor_png(bytes: &[u8]) -> Result<RgbaImage, AppError> {
@@ -1013,7 +824,7 @@ mod tests {
         ScreenshotEditFormat, ScreenshotExportQualityMode, composite_onto_white,
         decode_still_image_file, encode_export, encode_export_with_limit, encode_save_export,
         encoded_len, ensure_editor_image_limits, resolve_editor_draft_asset, unique_export_path,
-        validate_draft_component_id, validated_destination, write_export_atomically,
+        validated_destination, write_export_atomically,
     };
 
     fn sample() -> RgbaImage {
@@ -1828,15 +1639,6 @@ mod tests {
         std::fs::write(&destination, b"old").expect("old destination");
         write_export_atomically(&destination, b"new").expect("atomic export");
         assert_eq!(std::fs::read(destination).unwrap(), b"new");
-    }
-
-    #[test]
-    fn validates_draft_component_ids() {
-        assert!(validate_draft_component_id("capture-1").is_ok());
-        assert!(validate_draft_component_id("a_b-09").is_ok());
-        assert!(validate_draft_component_id("../etc").is_err());
-        assert!(validate_draft_component_id("has/slash").is_err());
-        assert!(validate_draft_component_id("").is_err());
     }
 
     #[test]
