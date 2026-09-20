@@ -1,3 +1,4 @@
+mod editor;
 mod feedback;
 mod preview;
 mod recording;

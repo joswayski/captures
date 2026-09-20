@@ -871,6 +871,7 @@ dependencies = [
  "captures-recording-platform",
  "captures-settings",
  "chrono",
+ "image",
  "serde",
  "serde_json",
  "tempfile",

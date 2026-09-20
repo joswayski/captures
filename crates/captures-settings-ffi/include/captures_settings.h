@@ -164,6 +164,32 @@ char *captures_region_capture_v1(const CapturesRegionSession *session,
  * Separately finish the main-thread flow guard on success, failure and quit. */
 void captures_region_free_v1(CapturesRegionSession *session);
 
+/* Worker-owned screenshot editor. Open JSON: {history_root,drafts_root,artifact_id}.
+ * Use isolated native roots, not installed-app storage. Serialize open/request/
+ * frame/free calls on one worker; decode, render and draft I/O may block.
+ * NULL output refuses open; otherwise output receives owned {ok,result}/{ok,error}
+ * JSON, freed with captures_settings_free_v1. Failed open returns NULL.
+ * Requests: snapshot, crop {rect:{x,y,width,height}}, resize_canvas {width,height},
+ * commit {document}, undo, redo, save_draft {updated_at_ms}, discard_draft.
+ * Snapshots contain artifact_id, document, can_undo, can_redo, unsaved_changes,
+ * has_draft. Only owned image sources may be committed; unsupported visible
+ * annotation layers return an error without changing document/history/frame.
+ * No pixels/base64 in JSON; no implicit draft write when freeing the session.
+ * Input strings remain readable UTF-8/NUL-terminated during each call. */
+typedef struct CapturesEditorSession CapturesEditorSession;
+typedef struct CapturesEditorFrame CapturesEditorFrame;
+CapturesEditorSession *captures_editor_open_v1(const char *request_json, char **output);
+char *captures_editor_request_v1(CapturesEditorSession *session, const char *request_json);
+void captures_editor_free_v1(CapturesEditorSession *session);
+/* Retain on the worker without copying pixels. The frame may move to the UI and
+ * outlive subsequent edits or session free. Release exactly once after all image
+ * providers/draws stop reading. NULL session returns NULL; NULL free is allowed.
+ * pixels returns borrowed straight-alpha sRGB RGBA8 in tight top-down rows; false
+ * leaves output unchanged. Never mutate/free data. Retain frame for every read. */
+CapturesEditorFrame *captures_editor_frame_v1(const CapturesEditorSession *session);
+bool captures_editor_frame_pixels_v1(const CapturesEditorFrame *frame, CapturesRegionPixels *output);
+void captures_editor_frame_free_v1(CapturesEditorFrame *frame);
+
 /* Allocation-free macOS window-radius fallback in points. Pass the current OS
  * major version from ProcessInfo. No OS access or session handle is required. */
 double captures_macos_window_corner_radius_v1(int64_t major_version);
