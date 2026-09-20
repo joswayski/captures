@@ -21,6 +21,7 @@ let package = Package(
                 .linkedLibrary("captures_settings_ffi"),
                 .linkedFramework("AppKit"),
                 .linkedFramework("CoreGraphics"),
+                .linkedFramework("ImageIO"),
                 .linkedFramework("Security"),
                 .linkedFramework("Foundation"),
                 .linkedFramework("CoreFoundation"),

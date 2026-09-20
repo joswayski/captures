@@ -245,7 +245,9 @@ notice offers Save file, then Show in Folder after saving a permanent copy. Dism
 or letting it expire preserves History and exports; failed saves can be retried.
 The AppKit History view enables **Edit screenshot** for screenshots only. Its first
 native editor slice restores and saves isolated drafts, previews shared-Rust crop
-and canvas-resize operations, and supports Undo, Redo and confirmed draft discard;
+and canvas-resize operations, and supports Undo, Redo and confirmed draft discard.
+Its Layers panel connects shared visibility, lock, opacity, movement, image rename,
+duplicate, delete and adjacent ordering commands while preserving locked barriers;
 the original History image and its exports remain unchanged. Recording completion
 still presents its notice immediately because recording editing is unsupported. Real macOS and
 Windows recording, audio devices, multi-display and hardware acceptance remain open;
@@ -268,10 +270,12 @@ sampling, drawing gestures and cancellation.
 Shared annotation-style patches can update existing
 shape/path colors, closed-shape fill/stroke controls, widths and shadow settings
 without replacing documents.
+The shared C boundary accepts one borrowed decoded RGBA
+buffer into session-owned storage; hosts own file decoding and interaction.
 Full-canvas photos rotate their canvas; layered overhang stays clipped and fully
 off-canvas transformed images expand the canvas so they are not lost. Shared
 interactive crop geometry also matches shipping bounds, aspect presets and Shift
-locking; AppKit gesture controls and physical acceptance remain separate work.
+locking; physical input acceptance remains separate work.
 The Windows/Linux candidate opens screenshots from History in a native crop,
 canvas-size and draft editor with undo/redo. **Draw crop** selects directly on the
 preview with free or preset aspect ratios and Shift ratio locking. Apply commits
@@ -295,24 +299,28 @@ Its Output panel previews PNG/JPEG/WebP quality and size limits, reports encoded
 bytes, and switches between the edited canvas and encoded output without saving.
 **Save new copy** exports to an editable destination path without replacing an
 existing file, adds a distinct History entry, and preserves the current draft.
-**Change…** opens a save-folder chooser while retaining the filename. Cancelling
-leaves the destination unchanged; choosing a folder does not save a file or draft.
 If History cannot be updated, the saved file's path remains available for recovery.
-**Copy pixels** copies the lossless edited canvas independently of export quality,
-without saving a file or draft. Linux supports X11/XWayland and native Wayland
-compositors with data-control support; copied pixels remain available after closing
-the editor while the application stays open. Unsupported compositors return a
-recoverable error.
 Closing can save or keep the previous draft; explicit Discard edits restores the
 original. Failed draft saves keep edits open and cancel normal quit. Private-X11 checks
 cover both appearances, persisted drafts, real preview pixels and error recovery.
 AppKit now connects the same crop, canvas-resize and draft operations in its own
-window. Windows, Wayland and physical AppKit presentation remain unverified.
-AppKit image-transform/import/style controls, batch/drag-and-drop import, text,
-other annotation tools, overwrite-original, AppKit edited-image clipboard/file output,
-and recording editing remain unconnected. These connected controls and shared
-rendering/export support do not complete native editor acceptance. OS shortcut
-takeover, login items, single-instance relaunch and updates
+window, along with native image-layer controls, lossless rotate/flip actions, and
+PNG/JPEG/WebP output previews
+that report exact encoded size without saving. Its **Save new copy** controls choose
+a folder and filename, publish without replacing files, and preserve the draft. AppKit
+also imports one still image at a time as a new image layer using its color-managed
+system decoder. It normalizes imported pixels to straight-alpha sRGB RGBA8 and retains
+them in the draft without depending on the source file. ImageIO-supported sources use
+their first image; files without a usable color description are rejected rather than
+silently relabeled. Its **Draw** view maps rectangle and ellipse drags from the fitted
+edited preview into shared document coordinates, including reverse and off-canvas
+gestures. Release creates one undoable layer; Escape, focus loss, close, or leaving Draw
+cancels transient geometry without editing the document.
+Windows, Wayland and physical AppKit presentation remain unverified.
+AppKit annotation styles and other drawing tools, text, overwrite-original, edited-image
+clipboard output, and recording editing remain unconnected. Shared editor support
+is prerequisite work, not native editor acceptance. OS shortcut takeover, login items,
+single-instance relaunch and updates
 are not connected to the native hosts yet. Windows/Linux renderer selection and full
 feature/design parity remain open. The
 [migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;

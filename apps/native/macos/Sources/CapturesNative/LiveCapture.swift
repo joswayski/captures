@@ -1565,12 +1565,24 @@ final class LiveCaptureController: NSObject, NSTableViewDataSource, NSTableViewD
     private func editScreenshot() {
         guard let index = selectedIndex, artifacts.indices.contains(index),
               !artifacts[index].isRecording, !historyRoot.isEmpty else { return }
-        if screenshotEditor == nil {
-            screenshotEditor = ScreenshotEditorController(tokens: tokens) {
-                [weak self] message in self?.reportError(message)
+        let artifact = artifacts[index]
+        run({ [settingsPath] in try CapturePreferences.load(path: settingsPath).directory }) {
+            [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let outputDirectory):
+                if self.screenshotEditor == nil {
+                    self.screenshotEditor = ScreenshotEditorController(
+                        tokens: self.tokens,
+                        reportError: { [weak self] message in self?.reportError(message) },
+                        didSaveCopy: { [weak self] in self?.loadHistory() })
+                }
+                self.screenshotEditor?.present(artifact: artifact, historyRoot: self.historyRoot,
+                                               outputDirectory: outputDirectory)
+            case .failure(let error):
+                self.showError("Couldn’t load the screenshot save location", error)
             }
         }
-        screenshotEditor?.present(artifact: artifacts[index], historyRoot: historyRoot)
     }
     private func save(_ artifact: CaptureArtifact,
                       completion: ((Result<String, Error>) -> Void)? = nil) {

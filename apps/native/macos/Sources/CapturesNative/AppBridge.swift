@@ -368,6 +368,7 @@ struct CaptureArtifact {
     let width: Int
     let height: Int
     let createdAt: String
+    let mode: String
     var savedPath: String?
 
     init?(_ value: [String: Any]) {
@@ -381,6 +382,9 @@ struct CaptureArtifact {
         else { return nil }
         self.id = id; imagePath = image; previewPath = preview
         self.width = width.intValue; self.height = height.intValue; createdAt = created
+        let entryMode = entry["mode"] as? String
+        mode = entryMode.flatMap { ["region", "window", "display"].contains($0) ? $0 : nil }
+            ?? "region"
         savedPath = entry["saved_path"] as? String
     }
 

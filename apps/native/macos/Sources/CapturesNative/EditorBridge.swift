@@ -1,6 +1,42 @@
 import Foundation
 import CoreGraphics
+import ImageIO
 import CCapturesSettings
+
+struct NativeEditorLayer: Equatable {
+    enum Kind: String {
+        case image, text, shape, path
+    }
+
+    let id: String
+    let name: String
+    let kind: Kind
+    let visible: Bool
+    let locked: Bool
+    let opacity: Double
+    let x: Double
+    let y: Double
+
+    init?(_ value: [String: Any]) {
+        guard let id = value["id"] as? String, !id.isEmpty,
+              let rawKind = value["kind"] as? String,
+              let kind = Kind(rawValue: rawKind),
+              let visible = value["visible"] as? Bool,
+              let locked = value["locked"] as? Bool,
+              let opacity = value["opacity"] as? NSNumber,
+              let x = value["x"] as? NSNumber,
+              let y = value["y"] as? NSNumber else { return nil }
+        self.id = id; self.kind = kind
+        self.visible = visible; self.locked = locked
+        self.opacity = opacity.doubleValue; self.x = x.doubleValue; self.y = y.doubleValue
+        switch kind {
+        case .image: name = (value["name"] as? String) ?? "Image"
+        case .text: name = "Text"
+        case .shape: name = "Shape"
+        case .path: name = "Drawing"
+        }
+    }
+}
 
 struct NativeEditorSnapshot: Equatable {
     let artifactID: String
@@ -10,6 +46,8 @@ struct NativeEditorSnapshot: Equatable {
     let canRedo: Bool
     let unsavedChanges: Bool
     let hasDraft: Bool
+    /// Shared documents store back-to-front. Native layer panels display front-to-back.
+    let layers: [NativeEditorLayer]
 
     init?(_ value: [String: Any]) {
         guard let artifactID = value["artifact_id"] as? String,
@@ -21,16 +59,45 @@ struct NativeEditorSnapshot: Equatable {
               let unsavedChanges = value["unsaved_changes"] as? Bool,
               let hasDraft = value["has_draft"] as? Bool,
               width.doubleValue > 0, height.doubleValue > 0 else { return nil }
+        let elements = document["elements"] as? [[String: Any]] ?? []
+        let layers = elements.compactMap(NativeEditorLayer.init)
+        guard layers.count == elements.count else { return nil }
         self.artifactID = artifactID
         self.width = width.doubleValue; self.height = height.doubleValue
         self.canUndo = canUndo; self.canRedo = canRedo
         self.unsavedChanges = unsavedChanges; self.hasDraft = hasDraft
+        self.layers = Array(layers.reversed())
     }
 }
 
 struct EditorPresentation {
     let snapshot: NativeEditorSnapshot
     let image: CGImage
+}
+
+struct EditorOutputPresentation {
+    let data: Data
+    let image: CGImage
+
+    var length: Int { data.count }
+}
+
+struct EditorDecodedImage: Equatable {
+    let data: Data
+    let width: Int
+    let height: Int
+    let bytesPerRow: Int
+    let name: String
+}
+
+struct EditorImportPresentation {
+    let layerID: String
+    let presentation: EditorPresentation
+}
+
+enum EditorSavePresentation: Equatable {
+    case saved(path: String)
+    case savedWithoutHistory(path: String, warning: String)
 }
 
 /// Independently retained immutable Rust pixels. The CGImage provider retains
@@ -113,6 +180,98 @@ private final class NativeEditorSession {
         let frame = NativeEditorFrame(handle: handle)
         return EditorPresentation(snapshot: snapshot, image: try frame.image())
     }
+
+    func encode(_ options: [String: Any]) throws -> EditorOutputPresentation {
+        let data = try JSONSerialization.data(withJSONObject: options, options: [.sortedKeys])
+        var response: UnsafeMutablePointer<CChar>?
+        let exported = String(decoding: data, as: UTF8.self).withCString {
+            captures_editor_encode_v1(handle, $0, &response)
+        }
+        defer { captures_settings_free_v1(response) }
+        guard let response else {
+            captures_editor_export_free_v1(exported)
+            throw AppBridgeError.invalidResponse
+        }
+        let result: [String: Any]
+        do { result = try AppBridge.decode(Data(bytes: response, count: strlen(response))) }
+        catch {
+            captures_editor_export_free_v1(exported)
+            throw error
+        }
+        guard let exported, let expectedLength = (result["length"] as? NSNumber)?.intValue else {
+            captures_editor_export_free_v1(exported)
+            throw AppBridgeError.invalidResponse
+        }
+        defer { captures_editor_export_free_v1(exported) }
+        var bytes = CapturesEditorBytes()
+        guard captures_editor_export_bytes_v1(exported, &bytes),
+              let pointer = bytes.data, bytes.length == expectedLength else {
+            throw AppBridgeError.invalidResponse
+        }
+        let encoded = Data(bytes: pointer, count: bytes.length)
+        guard let source = CGImageSourceCreateWithData(encoded as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            throw AppBridgeError.invalidResponse
+        }
+        return EditorOutputPresentation(data: encoded, image: image)
+    }
+
+    func saveNew(_ request: [String: Any]) throws -> EditorSavePresentation {
+        let data = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
+        let response = String(decoding: data, as: UTF8.self).withCString {
+            captures_editor_save_new_v1(handle, $0)
+        }
+        guard let response else { throw AppBridgeError.invalidResponse }
+        defer { captures_settings_free_v1(response) }
+        let result = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+        guard let status = result["status"] as? String,
+              let path = result["path"] as? String, !path.isEmpty else {
+            throw AppBridgeError.invalidResponse
+        }
+        switch status {
+        case "saved":
+            guard result["artifact"] is [String: Any] else { throw AppBridgeError.invalidResponse }
+            return .saved(path: path)
+        case "saved_without_history":
+            guard let warning = result["warning"] as? String, !warning.isEmpty else {
+                throw AppBridgeError.invalidResponse
+            }
+            return .savedWithoutHistory(path: path, warning: warning)
+        default:
+            throw AppBridgeError.invalidResponse
+        }
+    }
+
+    func importImage(_ image: EditorDecodedImage, selectedID: String?) throws
+        -> EditorImportPresentation {
+        var request: [String: Any] = ["name": image.name]
+        if let selectedID { request["selected_id"] = selectedID }
+        let requestData = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
+        guard let width = UInt32(exactly: image.width), let height = UInt32(exactly: image.height),
+              width > 0, height > 0 else { throw AppBridgeError.invalidResponse }
+        let result: [String: Any] = try image.data.withUnsafeBytes { bytes in
+            guard let data = bytes.bindMemory(to: UInt8.self).baseAddress else {
+                throw AppBridgeError.invalidResponse
+            }
+            var pixels = CapturesRegionPixels(
+                data: data, length: image.data.count,
+                width: width, height: height,
+                bytes_per_row: image.bytesPerRow)
+            let response = String(decoding: requestData, as: UTF8.self).withCString {
+                captures_editor_import_image_v1(handle, &pixels, $0)
+            }
+            guard let response else { throw AppBridgeError.invalidResponse }
+            defer { captures_settings_free_v1(response) }
+            return try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+        }
+        guard let layerID = result["layer_id"] as? String,
+              let snapshotValue = result["snapshot"] as? [String: Any],
+              let snapshot = NativeEditorSnapshot(snapshotValue) else {
+            throw AppBridgeError.invalidResponse
+        }
+        return EditorImportPresentation(layerID: layerID,
+            presentation: try presentation(snapshot))
+    }
 }
 
 protocol EditorWorking: AnyObject {
@@ -120,6 +279,12 @@ protocol EditorWorking: AnyObject {
               completion: @escaping (Result<EditorPresentation, Error>) -> Void)
     func request(_ object: [String: Any],
                  completion: @escaping (Result<EditorPresentation, Error>) -> Void)
+    func encode(_ options: [String: Any],
+                completion: @escaping (Result<EditorOutputPresentation, Error>) -> Void)
+    func saveNew(_ request: [String: Any],
+                 completion: @escaping (Result<EditorSavePresentation, Error>) -> Void)
+    func importImage(_ image: EditorDecodedImage, selectedID: String?,
+                     completion: @escaping (Result<EditorImportPresentation, Error>) -> Void)
     func close()
     func prepareForTermination() -> Result<Void, Error>
 }
@@ -166,6 +331,50 @@ final class EditorWorker: EditorWorking {
                 let snapshot = try session.request(object)
                 storage.snapshot = snapshot
                 return try session.presentation(snapshot)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func encode(_ options: [String: Any],
+                completion: @escaping (Result<EditorOutputPresentation, Error>) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            let result = Result { () throws -> EditorOutputPresentation in
+                guard let session = storage.session else {
+                    throw AppBridgeError.backend("The screenshot editor is closed.")
+                }
+                return try session.encode(options)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func saveNew(_ request: [String: Any],
+                 completion: @escaping (Result<EditorSavePresentation, Error>) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            let result = Result { () throws -> EditorSavePresentation in
+                guard let session = storage.session else {
+                    throw AppBridgeError.backend("The screenshot editor is closed.")
+                }
+                return try session.saveNew(request)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func importImage(_ image: EditorDecodedImage, selectedID: String?,
+                     completion: @escaping (Result<EditorImportPresentation, Error>) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            let result = Result { () throws -> EditorImportPresentation in
+                guard let session = storage.session else {
+                    throw AppBridgeError.backend("The screenshot editor is closed.")
+                }
+                let imported = try session.importImage(image, selectedID: selectedID)
+                storage.snapshot = imported.presentation.snapshot
+                return imported
             }
             DispatchQueue.main.async { completion(result) }
         }
