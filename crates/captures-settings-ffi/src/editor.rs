@@ -1,7 +1,11 @@
 //! Serialized-worker editor handles and independently retained immutable frames.
 
 use super::region::{RegionPixels, response, text};
-use captures_app::editor_session::{EditorSession, ExportOptions, OpenRequest, Request};
+use captures_app::{
+    editor::Point,
+    editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
+    editor_session::{EditorSession, ExportOptions, ImportImage, OpenRequest, Request},
+};
 use image::RgbaImage;
 use serde::Deserialize;
 use serde_json::json;
@@ -52,6 +56,100 @@ struct SaveNewRequest {
     destination: PathBuf,
     options: ExportOptions,
     mode: captures_capture::CaptureMode,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImportImageRequest {
+    name: String,
+    selected_id: Option<String>,
+    point: Option<Point>,
+}
+
+/// Import one host-decoded image and return its stable layer ID plus snapshot.
+/// The pixel descriptor and rows are borrowed only for this call; successful
+/// validation copies them into storage owned by the serialized editor session.
+///
+/// # Safety
+/// Non-null session is live and exclusively owned for the call. Non-null pixels
+/// points to a readable descriptor whose data covers every required top-down
+/// straight-alpha sRGB RGBA8 row through the call. Input JSON is readable,
+/// NUL-terminated UTF-8. Free the owned response with captures_settings_free_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_import_image_v1(
+    session: *mut EditorSession,
+    pixels: *const RegionPixels,
+    request_json: *const c_char,
+) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains readable JSON and pixel metadata for this call.
+        let request = serde_json::from_str::<ImportImageRequest>(unsafe { text(request_json) }?)
+            .map_err(|error| error.to_string())?;
+        let session = unsafe { session.as_mut() }.ok_or("editor handle is null")?;
+        let pixels = unsafe { pixels.as_ref() }.ok_or("editor import pixels are null")?;
+        // SAFETY: validated layout bounds every byte read from caller storage.
+        let pixels = unsafe { copy_import_pixels(pixels) }?;
+        let layer_id = session.import_image(ImportImage {
+            pixels,
+            name: request.name,
+            selected_id: request.selected_id,
+            point: request.point,
+        })?;
+        Ok::<_, String>(json!({"layer_id":layer_id,"snapshot":session.snapshot()}))
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    response(match result {
+        Ok(imported) => json!({"ok":true,"result":imported}),
+        Err(error) => json!({"ok":false,"error":error}),
+    })
+}
+
+unsafe fn copy_import_pixels(pixels: &RegionPixels) -> Result<RgbaImage, String> {
+    let width = pixels.width;
+    let height = pixels.height;
+    let pixel_count = u64::from(width) * u64::from(height);
+    if width == 0
+        || height == 0
+        || width > MAX_RENDER_DIMENSION
+        || height > MAX_RENDER_DIMENSION
+        || pixel_count > MAX_RENDER_PIXELS
+    {
+        return Err("Editor images exceed the dimension or total decoded-pixel limit.".into());
+    }
+    let tight_row = usize::try_from(width)
+        .ok()
+        .and_then(|width| width.checked_mul(4))
+        .ok_or("editor import dimensions overflow")?;
+    if pixels.bytes_per_row < tight_row {
+        return Err("editor import row stride is too small".into());
+    }
+    let last_row = usize::try_from(height - 1)
+        .ok()
+        .and_then(|height| height.checked_mul(pixels.bytes_per_row))
+        .ok_or("editor import layout overflows")?;
+    let required = last_row
+        .checked_add(tight_row)
+        .filter(|required| *required <= isize::MAX as usize)
+        .ok_or("editor import layout overflows")?;
+    if pixels.length < required {
+        return Err("editor import pixel buffer is too short".into());
+    }
+    if pixels.data.is_null() {
+        return Err("editor import pixel data is null".into());
+    }
+    let owned_length = usize::try_from(pixel_count)
+        .ok()
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or("editor import dimensions overflow")?;
+    // SAFETY: caller guarantees readable storage; required was checked against
+    // length, pointer arithmetic bounds and every row's tight RGBA byte range.
+    let source = unsafe { std::slice::from_raw_parts(pixels.data, required) };
+    let mut owned = Vec::with_capacity(owned_length);
+    for row in 0..height as usize {
+        let start = row * pixels.bytes_per_row;
+        owned.extend_from_slice(&source[start..start + tight_row]);
+    }
+    RgbaImage::from_raw(width, height, owned).ok_or_else(|| "invalid editor image layout".into())
 }
 
 /// Publish the edited frame as a new file and distinct History artifact.
@@ -265,6 +363,232 @@ mod tests {
         let json = serde_json::from_slice(unsafe { CStr::from_ptr(value) }.to_bytes()).unwrap();
         unsafe { crate::captures_settings_free_v1(value) };
         json
+    }
+
+    fn editor_fixture() -> (tempfile::TempDir, CString, RgbaImage) {
+        let data = tempfile::tempdir().unwrap();
+        let original = RgbaImage::from_fn(7, 3, |x, y| {
+            image::Rgba([19 + x as u8 * 29, 31 + y as u8 * 67, 83, 255])
+        });
+        let capture = captures_app::persist_screenshot(
+            &data.path().join("history"),
+            &original,
+            captures_capture::CaptureMode::Region,
+        )
+        .unwrap();
+        let request = CString::new(
+            json!({
+                "history_root":data.path().join("history"),
+                "drafts_root":data.path().join("drafts"),
+                "artifact_id":capture.entry.id,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        (data, request, original)
+    }
+
+    unsafe fn open_editor(request: &CString) -> *mut EditorSession {
+        let mut output = ptr::null_mut();
+        // SAFETY: request and output remain readable/writable for the call.
+        let session = unsafe { captures_editor_open_v1(request.as_ptr(), &mut output) };
+        assert!(!session.is_null());
+        assert_eq!(unsafe { take_json(output) }["ok"], true);
+        session
+    }
+
+    unsafe fn import_response(
+        session: *mut EditorSession,
+        pixels: *const RegionPixels,
+        request: *const c_char,
+    ) -> serde_json::Value {
+        // SAFETY: each caller documents live handle/input storage or intentional nulls.
+        unsafe { take_json(captures_editor_import_image_v1(session, pixels, request)) }
+    }
+
+    #[test]
+    fn import_copies_padded_pixels_and_round_trips_undo_redo_and_draft() {
+        let (data, open_request, original) = editor_fixture();
+        let imported = RgbaImage::from_raw(
+            3,
+            2,
+            vec![
+                201, 17, 91, 255, 33, 149, 207, 255, 117, 61, 5, 255, 8, 222, 47, 255, 173, 99,
+                211, 255, 64, 13, 159, 255,
+            ],
+        )
+        .unwrap();
+        let mut caller = [0xEE; 32];
+        caller[..12].copy_from_slice(&imported.as_raw()[..12]);
+        caller[16..28].copy_from_slice(&imported.as_raw()[12..]);
+        let pixels = RegionPixels {
+            data: caller.as_ptr(),
+            length: caller.len(),
+            width: 3,
+            height: 2,
+            bytes_per_row: 16,
+        };
+
+        // SAFETY: all C inputs and handles remain live and serialized; owned JSON is freed.
+        unsafe {
+            let session = open_editor(&open_request);
+            let initial = (&*session).pixels();
+            assert_eq!(initial.as_ref(), &original);
+            let response = import_response(
+                session,
+                &pixels,
+                c"{\"name\":\"asymmetric.png\",\"selected_id\":\"capture-background\"}".as_ptr(),
+            );
+            assert_eq!(response["ok"], true);
+            let layer_id = response["result"]["layer_id"].as_str().unwrap().to_owned();
+            assert!(!layer_id.is_empty());
+            assert_eq!(response["result"]["snapshot"]["document"]["width"], 7.);
+            assert_eq!(response["result"]["snapshot"]["document"]["height"], 5.);
+            assert_eq!(
+                response["result"]["snapshot"]["document"]["elements"][1]["id"],
+                layer_id
+            );
+            let imported_frame = (&*session).pixels();
+            for y in 0..2 {
+                for x in 0..3 {
+                    assert_eq!(
+                        imported_frame.get_pixel(x + 2, y + 3),
+                        imported.get_pixel(x, y)
+                    );
+                }
+            }
+
+            caller.fill(0);
+            assert_eq!((&*session).pixels(), imported_frame);
+            let undo = take_json(captures_editor_request_v1(
+                session,
+                c"{\"operation\":\"undo\"}".as_ptr(),
+            ));
+            assert_eq!(undo["ok"], true);
+            assert_eq!((&*session).pixels().as_ref(), &original);
+            assert_eq!(undo["result"]["can_redo"], true);
+            let redo = take_json(captures_editor_request_v1(
+                session,
+                c"{\"operation\":\"redo\"}".as_ptr(),
+            ));
+            assert_eq!(redo["result"]["document"]["elements"][1]["id"], layer_id);
+            assert_eq!((&*session).pixels(), imported_frame);
+            let saved = take_json(captures_editor_request_v1(
+                session,
+                c"{\"operation\":\"save_draft\",\"updated_at_ms\":91}".as_ptr(),
+            ));
+            assert_eq!(saved["ok"], true);
+            captures_editor_free_v1(session);
+
+            let reopened = open_editor(&open_request);
+            let snapshot = take_json(captures_editor_request_v1(
+                reopened,
+                c"{\"operation\":\"snapshot\"}".as_ptr(),
+            ));
+            assert_eq!(
+                snapshot["result"]["document"]["elements"][1]["id"],
+                layer_id
+            );
+            assert_eq!(snapshot["result"]["has_draft"], true);
+            assert_eq!((&*reopened).pixels(), imported_frame);
+            captures_editor_free_v1(reopened);
+        }
+        assert!(data.path().join("drafts").exists());
+    }
+
+    #[test]
+    fn malformed_imports_preserve_frame_document_redo_assets_and_files() {
+        let (data, open_request, _) = editor_fixture();
+        let bytes = [17, 91, 203, 255];
+        let valid = RegionPixels {
+            data: bytes.as_ptr(),
+            length: bytes.len(),
+            width: 1,
+            height: 1,
+            bytes_per_row: 4,
+        };
+        let request = c"{\"name\":\"one.png\"}";
+
+        // SAFETY: valid buffers remain live; fake pointers are paired only with
+        // metadata that must be rejected before any pixel read.
+        unsafe {
+            let session = open_editor(&open_request);
+            assert_eq!(
+                import_response(session, &valid, request.as_ptr())["ok"],
+                true
+            );
+            assert_eq!(
+                take_json(captures_editor_request_v1(
+                    session,
+                    c"{\"operation\":\"undo\"}".as_ptr()
+                ))["result"]["can_redo"],
+                true
+            );
+            let before = json!((&*session).snapshot());
+            let frame = (&*session).pixels();
+            let dangling = ptr::NonNull::<u8>::dangling().as_ptr();
+            let invalid = [
+                RegionPixels {
+                    data: ptr::null(),
+                    ..valid
+                },
+                RegionPixels { width: 0, ..valid },
+                RegionPixels { length: 3, ..valid },
+                RegionPixels {
+                    bytes_per_row: 3,
+                    ..valid
+                },
+                RegionPixels {
+                    data: dangling,
+                    length: usize::MAX,
+                    width: 1,
+                    height: 2,
+                    bytes_per_row: usize::MAX,
+                },
+                RegionPixels {
+                    data: dangling,
+                    length: usize::MAX,
+                    width: MAX_RENDER_DIMENSION + 1,
+                    height: 1,
+                    bytes_per_row: 0,
+                },
+            ];
+            assert_eq!(
+                import_response(session, ptr::null(), request.as_ptr())["ok"],
+                false
+            );
+            for pixels in &invalid {
+                assert_eq!(
+                    import_response(session, pixels, request.as_ptr())["ok"],
+                    false
+                );
+            }
+            for metadata in [
+                ptr::null(),
+                c"{bad".as_ptr(),
+                c"{\"name\":\"one.png\",\"src\":\"file:///tmp/not-owned\"}".as_ptr(),
+                c"{\"name\":\"one.png\",\"pixels\":[1,2,3,4]}".as_ptr(),
+            ] {
+                assert_eq!(import_response(session, &valid, metadata)["ok"], false);
+            }
+            assert_eq!(
+                import_response(ptr::null_mut(), &valid, request.as_ptr())["ok"],
+                false
+            );
+            assert_eq!(json!((&*session).snapshot()), before);
+            assert!((&*session).snapshot().can_redo);
+            assert!(Arc::ptr_eq(&frame, &(&*session).pixels()));
+            assert!(!data.path().join("drafts").exists());
+            assert_eq!(
+                take_json(captures_editor_request_v1(
+                    session,
+                    c"{\"operation\":\"redo\"}".as_ptr()
+                ))["ok"],
+                true
+            );
+            assert_eq!((&*session).pixels().get_pixel(3, 3).0, bytes);
+            captures_editor_free_v1(session);
+        }
     }
 
     #[test]
