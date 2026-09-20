@@ -450,7 +450,7 @@ final class ScreenshotEditorTests: XCTestCase {
                               "top-down layer controls place labels above fields")
             let table = try XCTUnwrap(descendants(in: layerPanel).compactMap { $0 as? NSTableView }.first)
             let combinedStateCell = try XCTUnwrap(table.view(atColumn: 0, row: 1,
-                                                              makeIfNecessary: true))
+                makeIfNecessary: true) as? NSTableCellView)
             let combinedState = try XCTUnwrap(combinedStateCell.subviews.compactMap {
                 $0 as? NSTextField
             }.first { $0 !== combinedStateCell.textField })
