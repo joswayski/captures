@@ -11,6 +11,7 @@ use std::{
 };
 
 use captures_history::{ArtifactKind, HistoryEntry, editor_draft};
+use captures_image::text::TextRenderer;
 use image::{ImageFormat, ImageReader, RgbaImage};
 use serde::{Deserialize, Serialize};
 
@@ -21,7 +22,7 @@ use crate::{
         Rect, image_bounds,
     },
     editor_image_background::{BrushMode, paint_stroke},
-    editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS, render},
+    editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS, render, render_with_text},
 };
 
 const ASSET_PREFIX: &str = "draft-asset:";
@@ -138,12 +139,44 @@ pub struct EditorSession {
     original_path: PathBuf,
     persisted: Document,
     assets: BTreeMap<String, Arc<RgbaImage>>,
+    fonts: Option<SessionFonts>,
     pixels: Arc<RgbaImage>,
     has_draft: bool,
 }
 
+struct SessionFonts {
+    assets: editor_draft::FontAssets,
+    renderer: TextRenderer,
+}
+
+fn render_frame(
+    document: &Document,
+    assets: &BTreeMap<String, Arc<RgbaImage>>,
+    fonts: Option<&mut SessionFonts>,
+) -> Result<RgbaImage, String> {
+    match fonts {
+        Some(fonts) => render_with_text(
+            document,
+            assets,
+            &mut fonts.renderer,
+            &fonts.assets.families,
+        ),
+        None => render(document, assets),
+    }
+}
+
 impl EditorSession {
     pub fn open(request: OpenRequest) -> Result<Self, String> {
+        Self::open_with_fonts(request, None)
+    }
+
+    /// Hosts supply trusted, appropriately licensed font bytes, not paths or
+    /// system generic families. A draft's persisted fonts take precedence over
+    /// new host defaults, including after an OS/font update. No discovery occurs.
+    pub fn open_with_fonts(
+        request: OpenRequest,
+        mut fonts: Option<editor_draft::FontAssets>,
+    ) -> Result<Self, String> {
         let directory =
             captures_history::entry_directory(&request.history_root, &request.artifact_id)
                 .map_err(|error| error.to_string())?;
@@ -166,6 +199,7 @@ impl EditorSession {
         let has_draft = loaded.is_some();
         let document = match loaded {
             Some(draft) => {
+                fonts = draft.fonts.or(fonts);
                 let document: Document =
                     serde_json::from_value(draft.document).map_err(|error| error.to_string())?;
                 for source in sources(&document) {
@@ -184,7 +218,14 @@ impl EditorSession {
             }
             None => original_document(&original_path, &request.artifact_id, &mut assets)?,
         };
-        let pixels = Arc::new(render(&document, &assets)?);
+        let mut fonts = fonts
+            .map(|assets| {
+                assets.validate().map_err(|error| error.to_string())?;
+                let renderer = TextRenderer::new(assets.files.values().cloned())?;
+                Ok::<_, String>(SessionFonts { assets, renderer })
+            })
+            .transpose()?;
+        let pixels = Arc::new(render_frame(&document, &assets, fonts.as_mut())?);
         Ok(Self {
             artifact_id: request.artifact_id,
             drafts_root: request.drafts_root,
@@ -192,6 +233,7 @@ impl EditorSession {
             original_path,
             persisted: document,
             assets,
+            fonts,
             pixels,
             has_draft,
         })
@@ -340,7 +382,7 @@ impl EditorSession {
         history.commit(document);
         let mut assets = self.assets.clone();
         assets.insert(source, Arc::new(request.pixels));
-        let pixels = render(history.current(), &assets)?;
+        let pixels = render_frame(history.current(), &assets, self.fonts.as_mut())?;
 
         self.history = history;
         self.assets = assets;
@@ -487,7 +529,7 @@ impl EditorSession {
         document.background = None;
         let mut assets = self.assets.clone();
         assets.insert(source, Arc::new(edited));
-        let pixels = render(&document, &assets)?;
+        let pixels = render_frame(&document, &assets, self.fonts.as_mut())?;
         // Assets, rendered frame and history change together. Failed/no-op
         // requests keep redo and the pre-edit source for a later restore brush.
         let mut history = self.history.clone();
@@ -596,7 +638,7 @@ impl EditorSession {
                 return Err(format!("The editor does not own image asset {source}."));
             }
         }
-        let pixels = render(next.current(), &self.assets)?;
+        let pixels = render_frame(next.current(), &self.assets, self.fonts.as_mut())?;
         // Rendering/validation failure leaves both the undo stacks and frame
         // unchanged. Hosts never receive a half-applied edit.
         self.history = next;
@@ -620,7 +662,7 @@ impl EditorSession {
                 png: Some(png),
             });
         }
-        editor_draft::save(
+        editor_draft::save_with_fonts(
             &self.drafts_root,
             editor_draft::SaveRequest {
                 artifact_id: self.artifact_id.clone(),
@@ -628,6 +670,7 @@ impl EditorSession {
                 assets,
                 updated_at_ms,
             },
+            self.fonts.as_ref().map(|fonts| &fonts.assets),
         )
         .map_err(|error| error.to_string())?;
         self.persisted = document.clone();
@@ -641,7 +684,7 @@ impl EditorSession {
         // must not destroy the only surviving draft.
         let mut assets = BTreeMap::new();
         let original = original_document(&self.original_path, &self.artifact_id, &mut assets)?;
-        let pixels = render(&original, &assets)?;
+        let pixels = render_frame(&original, &assets, self.fonts.as_mut())?;
         editor_draft::discard(&self.drafts_root, &self.artifact_id)
             .map_err(|error| error.to_string())?;
         self.history = DocumentHistory::new(original.clone());

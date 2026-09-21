@@ -1,4 +1,4 @@
-use std::{fs, path::Path, sync::Arc};
+use std::{collections::BTreeMap, fs, path::Path, sync::Arc};
 
 use captures_app::{
     editor::{
@@ -2153,4 +2153,174 @@ fn image_header_limits_reject_before_decode_and_invalid_numbers_preserve_history
     )
     .unwrap();
     assert!(open(data.path(), &id).err().unwrap().contains("dimension"));
+}
+
+fn text_fonts() -> captures_history::editor_draft::FontAssets {
+    captures_history::editor_draft::FontAssets {
+        families: BTreeMap::from([("sans".into(), "Captures Shaping Test".into())]),
+        files: BTreeMap::from([(
+            "regular".into(),
+            Arc::from(include_bytes!("../../captures-image/tests/shaping-regular.ttf").as_slice()),
+        )]),
+    }
+}
+
+fn open_text(
+    root: &Path,
+    id: &str,
+    fonts: captures_history::editor_draft::FontAssets,
+) -> Result<EditorSession, String> {
+    EditorSession::open_with_fonts(
+        OpenRequest {
+            history_root: root.join("history"),
+            drafts_root: root.join("drafts"),
+            artifact_id: id.into(),
+        },
+        Some(fonts),
+    )
+}
+
+fn add_text(editor: &mut EditorSession) {
+    let mut document = editor.snapshot().document.clone();
+    document.width = 200.;
+    document.height = 180.;
+    document.elements.push(
+        serde_json::from_value(json!({
+            "kind":"text", "id":"label", "x":20, "y":20, "visible":true, "locked":false,
+            "opacity":100, "blendMode":"source-over", "text":"L", "fontSize":80,
+            "width":100, "fontFamily":"sans", "bold":false, "italic":false,
+            "align":"left", "color":"#ff0000", "background":null,
+            "outlined":false, "roundedBackground":false
+        }))
+        .unwrap(),
+    );
+    editor.execute(Request::Commit { document }).unwrap();
+}
+
+#[test]
+fn text_session_owns_fonts_across_edits_output_and_draft_restore() {
+    fn assert_send<T: Send>() {}
+    assert_send::<EditorSession>();
+    let (data, id, original) = setup();
+    let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();
+    add_text(&mut editor);
+    // Original fixture L: 56 advance, 48×64 ink, baseline/centering put ink at y38.
+    assert_eq!(editor.pixels().get_pixel(22, 45).0, [255, 0, 0, 255]);
+    assert_eq!(editor.pixels().get_pixel(60, 60).0, [247, 247, 245, 255]);
+    let painted = editor.pixels();
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.pixels().as_ref(), &original);
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.pixels(), painted);
+    let options = serde_json::from_value(json!({
+        "format":"png", "quality":"preserve", "quality_value":100, "png":{}
+    }))
+    .unwrap();
+    let encoded = editor.encode_export(options).unwrap();
+    assert_eq!(
+        image::load_from_memory(&encoded).unwrap().to_rgba8(),
+        *painted
+    );
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 53 })
+        .unwrap();
+    assert!(!editor.snapshot().unsaved_changes);
+    drop(editor);
+
+    // No system font discovery or caller bytes needed to reopen this exact frame.
+    let mut restored = open(data.path(), &id).unwrap();
+    assert_eq!(restored.pixels(), painted);
+    let mut changed_defaults = text_fonts();
+    changed_defaults
+        .files
+        .insert("regular".into(), Arc::from(b"new OS font".as_slice()));
+    assert_eq!(
+        open_text(data.path(), &id, changed_defaults)
+            .unwrap()
+            .pixels(),
+        painted
+    );
+    restored
+        .import_image(ImportImage {
+            pixels: RgbaImage::from_pixel(2, 3, Rgba([0, 255, 0, 255])),
+            name: "added".into(),
+            selected_id: None,
+            point: Some(Point { x: 130., y: 120. }),
+        })
+        .unwrap();
+    assert_eq!(restored.pixels().get_pixel(22, 45).0, [255, 0, 0, 255]);
+    restored
+        .execute(Request::Crop {
+            rect: Rect {
+                x: 10.,
+                y: 5.,
+                width: 180.,
+                height: 150.,
+            },
+        })
+        .unwrap();
+    assert_eq!(restored.pixels().get_pixel(12, 40).0, [255, 0, 0, 255]);
+    restored
+        .execute(Request::SaveDraft { updated_at_ms: 54 })
+        .unwrap();
+    assert_eq!(open(data.path(), &id).unwrap().pixels(), restored.pixels());
+    restored.execute(Request::DiscardDraft).unwrap();
+    assert_eq!(restored.pixels().as_ref(), &original);
+    assert!(!data.path().join("drafts").join(&id).exists());
+    // Discard abandons edits, not the current worker's text capability.
+    add_text(&mut restored);
+    assert_eq!(restored.pixels(), painted);
+}
+
+#[test]
+fn text_failures_preserve_frames_redo_and_saved_drafts_without_fallback() {
+    let (data, id, _) = setup();
+    let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();
+    add_text(&mut editor);
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 59 })
+        .unwrap();
+    let draft = data.path().join("drafts").join(&id);
+    let manifest = fs::read(draft.join("manifest.json")).unwrap();
+    let painted = editor.pixels();
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 210.,
+            height: 180.,
+        })
+        .unwrap();
+    editor.execute(Request::Undo).unwrap();
+    let before = serde_json::to_value(editor.snapshot()).unwrap();
+    let frame = editor.pixels();
+    for rotation in [false, true] {
+        let mut document = editor.snapshot().document.clone();
+        let Element::Text(label) = document.elements.last_mut().unwrap() else {
+            panic!()
+        };
+        if rotation {
+            label.base.rotation = Some(30.);
+        } else {
+            label.font_family = "missing".into();
+        }
+        assert!(editor.execute(Request::Commit { document }).is_err());
+        assert_eq!(serde_json::to_value(editor.snapshot()).unwrap(), before);
+        assert!(Arc::ptr_eq(&frame, &editor.pixels()));
+        assert!(editor.snapshot().can_redo);
+        assert_eq!(fs::read(draft.join("manifest.json")).unwrap(), manifest);
+    }
+    let font_path = draft.join("fonts/regular.font");
+    let bytes = fs::read(&font_path).unwrap();
+    fs::remove_file(&font_path).unwrap();
+    assert!(open_text(data.path(), &id, text_fonts()).is_err());
+    assert_eq!(fs::read(draft.join("manifest.json")).unwrap(), manifest);
+    fs::write(&font_path, b"corrupt").unwrap();
+    assert!(
+        open_text(data.path(), &id, text_fonts())
+            .err()
+            .unwrap()
+            .contains("font")
+    );
+    assert_eq!(fs::read(draft.join("manifest.json")).unwrap(), manifest);
+    fs::write(font_path, bytes).unwrap();
+    assert_eq!(open(data.path(), &id).unwrap().pixels(), painted);
 }

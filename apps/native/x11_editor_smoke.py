@@ -80,6 +80,8 @@ def main():
                         help="Exercise canvas trimming, undo/redo, draft and output dimensions")
     parser.add_argument("--zoom-only", action="store_true",
                         help="Exercise viewport gestures, toolbar and keyboard zoom without editing")
+    parser.add_argument("--text-draft-only", action="store_true",
+                        help="Restore explicit-font text, save/reopen and copy pixels (no Text input UI)")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -190,6 +192,30 @@ def main():
             "created_at": datetime.now(timezone.utc).isoformat(), "mode": "region",
             "saved_path": None, "mime_type": "image/png",
         }))
+        if args.text_draft_only:
+            # Original test font, not a system font or a shipping font policy.
+            draft_root = output / "editor-drafts" / artifact_id
+            (draft_root / "assets").mkdir(parents=True)
+            (draft_root / "fonts").mkdir()
+            (draft_root / "assets/original.png").write_bytes(original)
+            font = Path(__file__).resolve().parents[2] / "crates/captures-image/tests/shaping-regular.ttf"
+            font_bytes = font.read_bytes()
+            (draft_root / "fonts/regular.font").write_bytes(font_bytes)
+            base = {"visible": True, "locked": False, "opacity": 100, "blendMode": "source-over"}
+            (draft_root / "manifest.json").write_text(json.dumps({
+                "schema_version": 1, "artifact_id": artifact_id, "updated_at_ms": 1,
+                "fonts": {"families": {"sans": "Captures Shaping Test"}, "assets": ["regular"]},
+                "document": {"width": 640, "height": 360, "background": "#f7f7f5", "elements": [
+                    {**base, "kind": "image", "id": "capture-background", "x": 0, "y": 0,
+                     "locked": True, "source": "background", "src": "draft-asset:original",
+                     "originalSrc": None, "name": "Original screenshot", "width": 640,
+                     "height": 360, "naturalWidth": 640, "naturalHeight": 360},
+                    {**base, "kind": "text", "id": "label", "x": 250, "y": 40,
+                     "text": "L\nfi", "fontSize": 80, "width": 180, "fontFamily": "sans",
+                     "bold": False, "italic": False, "align": "right", "color": "#ff0000",
+                     "background": "#f7f7f5", "outlined": False, "roundedBackground": True},
+                ]},
+            }))
         settings = output / "settings.json"
         settings.write_text(json.dumps({
             "settings_schema_version": 5, "appearance": args.appearance, "theme": "mustard",
@@ -243,7 +269,11 @@ def main():
             save_until(lambda: saved(width, height, x, y), f"saved {width}x{height} at {x},{y}")
 
         def close(window):
-            run("xdotool", "windowactivate", "--sync", window, "key", "alt+F4", "sleep", ".4")
+            run("xdotool", "windowactivate", "--sync", window, "windowfocus", "--sync", window,
+                "sleep", ".2")
+            assert int(run("xdotool", "getwindowfocus")) == int(window), "close target must own focus"
+            run("xdotool", "keydown", "Alt_L", "sleep", ".1", "key", "F4",
+                "sleep", ".1", "keyup", "Alt_L", "sleep", ".4")
 
         def reopen():
             click(root, 810, 191)
@@ -265,6 +295,43 @@ def main():
             if expected is not None:
                 assert actual == bytes(expected), (x, y, actual, expected)
             return actual
+
+        if args.text_draft_only:
+            shot(editor, "text-draft-restored")
+            save_until(lambda: json.loads(draft.read_text())["updated_at_ms"] > 1,
+                       "font-backed draft save")
+            assert (draft.parent / "fonts/regular.font").read_bytes() == font_bytes
+            assert json.loads(draft.read_text())["fonts"] == {
+                "families": {"sans": "Captures Shaping Test"}, "assets": ["regular"]}
+            close(editor)
+            wait(lambda: not windows("Screenshot editor"), "font-backed editor closes")
+            editor = reopen()
+            run("xdotool", "windowsize", "--sync", editor, "760", "540")
+            run("xdotool", "mousemove", "0", "0")
+            shot(editor, "text-draft-minimum-reopened")
+            run("xdotool", "windowsize", "--sync", editor, "1000", "800")
+            click(editor, 535, 62)
+            click(editor, 65, 366)
+            click(editor, 170, 657)
+            png = output / "clipboard-text.png"
+            png.write_bytes(run("xclip", "-selection", "clipboard", "-t", "image/png", "-o"))
+            assert run("identify", "-format", "%wx%h", str(png)) == b"640x360"
+            # Known font metrics: right-aligned L at x374/y58, fi at x394/y162.
+            for x, y, rgba in [(375, 65, (255, 0, 0, 255)), (396, 170, (255, 0, 0, 255)),
+                               (400, 80, (247, 247, 245, 255)), (2, 1, (40, 110, 166, 255))]:
+                actual = run("convert", str(png), "-crop", f"1x1+{x}+{y}", "-depth", "8", "rgba:-")
+                assert actual == bytes(rgba), (x, y, actual, rgba)
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "text draft suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["text-draft-restored", "font-bytes-preserved", "text-minimum-reopen",
+                           "text-clipboard-dimensions-and-ink", "text-plate-and-original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS native text draft: explicit fonts, save/reopen, minimum, clipboard ink and plate")
+            return
 
         if args.brush_only:
             run("xdotool", "windowsize", "--sync", editor, "886", "700")
