@@ -348,6 +348,7 @@ struct NativeEditorSnapshot: Equatable {
     let canRedo: Bool
     let unsavedChanges: Bool
     let hasDraft: Bool
+    let fontFamilies: [String: String]
     /// Shared documents store back-to-front. Native layer panels display front-to-back.
     let layers: [NativeEditorLayer]
     /// Stable, sorted JSON used by pointer-down hit testing without touching the session.
@@ -380,6 +381,7 @@ struct NativeEditorSnapshot: Equatable {
         self.background = document["background"] as? String
         self.canUndo = canUndo; self.canRedo = canRedo
         self.unsavedChanges = unsavedChanges; self.hasDraft = hasDraft
+        self.fontFamilies = value["font_families"] as? [String: String] ?? [:]
         self.layers = Array(layers.reversed())
         self.documentJSON = String(decoding: documentData, as: UTF8.self)
     }

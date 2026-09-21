@@ -2666,10 +2666,10 @@ fn bundled_font_styles_render_offline_and_preserve_bytes_and_license_on_reopen()
     use captures_app::editor_fonts;
     let fonts = editor_fonts::bundled();
     let second = editor_fonts::bundled();
-    assert_eq!(fonts.files.len(), 4);
+    assert_eq!(fonts.files.len(), 12);
     assert_eq!(
         fonts.files.values().map(|b| b.len()).sum::<usize>(),
-        1_649_980
+        4_359_164
     );
     for (id, bytes) in &fonts.files {
         assert!(Arc::ptr_eq(bytes, &second.files[id]));
@@ -2687,7 +2687,7 @@ fn bundled_font_styles_render_offline_and_preserve_bytes_and_license_on_reopen()
         })
         .unwrap()
         .unwrap();
-    // Offering Text must not add 1.65 MB to every image-only draft.
+    // Offering Text must not add bundled font bytes to image-only drafts.
     assert!(image_only.fonts.is_none());
     editor
         .execute(Request::ResizeCanvas {
@@ -2705,17 +2705,24 @@ fn bundled_font_styles_render_offline_and_preserve_bytes_and_license_on_reopen()
         .base()
         .id
         .clone();
-    let mut frames = vec![editor.pixels()];
-    for (bold, italic) in [(true, false), (false, true), (true, true)] {
-        editor
-            .execute(edit_text_request(
-                &text_id,
-                json!({"bold":bold,"italic":italic}),
-            ))
-            .unwrap();
-        let frame = editor.pixels();
-        assert!(frames.iter().all(|previous| **previous != *frame));
-        frames.push(frame);
+    assert_eq!(editor.snapshot().font_families, Some(&fonts.families));
+    let mut frames = Vec::new();
+    for family in ["sans", "serif", "mono"] {
+        for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+            editor
+                .execute(edit_text_request(
+                    &text_id,
+                    json!({"fontFamily":family,"bold":bold,"italic":italic}),
+                ))
+                .unwrap();
+            let frame = editor.pixels();
+            assert!(
+                frames
+                    .iter()
+                    .all(|previous: &Arc<RgbaImage>| **previous != *frame)
+            );
+            frames.push(frame);
+        }
     }
     let accepted = editor.pixels();
     assert!(
@@ -2738,4 +2745,40 @@ fn bundled_font_styles_render_offline_and_preserve_bytes_and_license_on_reopen()
         open_text(data.path(), &id, text_fonts()).unwrap().pixels(),
         accepted
     );
+}
+
+#[test]
+fn older_drafts_offer_only_their_persisted_fonts_without_implicit_font_migration() {
+    let mut legacy = captures_app::editor_fonts::bundled();
+    legacy.families.retain(|key, _| key == "sans");
+    legacy
+        .files
+        .retain(|key, _| key.starts_with("liberation-sans-"));
+    assert_eq!(legacy.files.len(), 4);
+    let (data, id, _) = setup();
+    let mut editor = open_text(data.path(), &id, legacy.clone()).unwrap();
+    editor.execute(create_text_request("Pinned text")).unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 75 })
+        .unwrap();
+    let accepted = editor.pixels();
+    let mut reopened = open_text(data.path(), &id, captures_app::editor_fonts::bundled()).unwrap();
+    assert_eq!(reopened.snapshot().font_families, Some(&legacy.families));
+    assert_eq!(reopened.pixels(), accepted);
+    let text_id = reopened
+        .snapshot()
+        .document
+        .elements
+        .last()
+        .unwrap()
+        .base()
+        .id
+        .clone();
+    assert!(
+        reopened
+            .execute(edit_text_request(&text_id, json!({"fontFamily":"serif"})))
+            .is_err()
+    );
+    assert_eq!(reopened.pixels(), accepted);
+    assert!(!reopened.snapshot().unsaved_changes);
 }

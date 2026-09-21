@@ -1,6 +1,7 @@
 //! First connected screenshot editor: one serialized worker per open artifact.
 //! Only snapshots and retained pixels cross to the UI; disk/render work does not.
 use std::{
+    collections::BTreeMap,
     fs::File,
     io::{Cursor, Read},
     path::{Path, PathBuf},
@@ -54,6 +55,7 @@ enum Job {
 struct Presented {
     document: Arc<Document>,
     pixels: Arc<RgbaImage>,
+    font_families: BTreeMap<String, String>,
     output: Option<(RgbaImage, usize)>,
     saved: Option<SavedExport>,
     copied: bool,
@@ -70,6 +72,7 @@ impl Presented {
         Self {
             document: Arc::new(snapshot.document.clone()),
             pixels: session.pixels(),
+            font_families: snapshot.font_families.cloned().unwrap_or_default(),
             output: None,
             saved: None,
             copied: false,
@@ -216,8 +219,8 @@ impl TextValues {
         TextPatch {
             text: (self.text != accepted.text).then(|| self.text.clone()),
             font_size: (self.font_size != accepted.font_size).then_some(self.font_size),
-            // Preserve unknown/reopened families: this first UI does not offer a family picker.
-            font_family: None,
+            font_family: (self.font_family != accepted.font_family)
+                .then(|| self.font_family.clone()),
             bold: (self.bold != accepted.bold).then_some(self.bold),
             italic: (self.italic != accepted.italic).then_some(self.italic),
             align: (self.align != accepted.align).then(|| self.align.clone()),
@@ -1362,7 +1365,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                     ui.small("Erase makes pixels transparent. Restore uses the image’s retained original pixels.");
                 } else if view.draw_shape == DrawShape::Text {
                     ui.label("Click the canvas to place text, then edit it in Layers.");
-                    ui.small("New text uses bundled Sans. Text changes are applied explicitly as one undo step.");
+                    ui.small("New text uses Sans when available. Apply text changes as one undo step.");
                 } else {
                     ui.label("Drag to draw. Release to add one layer. Escape cancels the current drag.");
                     ui.small("New shapes use the default annotation color. Change fill, stroke, shadow, opacity, position and ordering in Layers.");
@@ -2288,7 +2291,17 @@ fn show_shape(
                         point: image_point(position, preview, bounds),
                         text: String::new(),
                         font_size: 32.,
-                        font_family: "sans".into(),
+                        font_family: view
+                            .presented
+                            .as_ref()
+                            .and_then(|presented| {
+                                presented
+                                    .font_families
+                                    .get_key_value("sans")
+                                    .or_else(|| presented.font_families.first_key_value())
+                                    .map(|(key, _)| key.clone())
+                            })
+                            .unwrap_or_else(|| "sans".into()),
                         color: "#111111".into(),
                     },
                 },
@@ -3171,6 +3184,22 @@ fn show_text(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
     };
     ui.separator();
     ui.heading("Text");
+    if let Some(presented) = &view.presented {
+        ui.label("Font");
+        egui::ComboBox::from_id_salt("text-font-family")
+            .selected_text(
+                presented
+                    .font_families
+                    .get(&fields.staged.font_family)
+                    .unwrap_or(&fields.staged.font_family),
+            )
+            .width(190.)
+            .show_ui(ui, |ui| {
+                for (key, name) in &presented.font_families {
+                    ui.selectable_value(&mut fields.staged.font_family, key.clone(), name);
+                }
+            });
+    }
     let label = ui.label("Content");
     ui.add(
         egui::TextEdit::multiline(&mut fields.staged.text)
@@ -3229,10 +3258,7 @@ fn show_text(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
             request = Some(Request::EditText { id, patch });
         }
     }
-    ui.small(format!(
-        "Font: {}. New text uses bundled Liberation Sans. Apply commits all text fields as one undo step.",
-        fields.staged.font_family
-    ));
+    ui.small("Font choices come from this draft's pinned fonts. Apply commits all text fields as one undo step.");
     if let Some(request) = request {
         view.text_apply_pending = true;
         view.submit(tx, request);
@@ -3840,6 +3866,7 @@ mod tests {
         Presented {
             document: Arc::new(Document::new_capture("fixture", 7., 3., None)),
             pixels: Arc::new(RgbaImage::new(7, 3)),
+            font_families: captures_app::editor_fonts::bundled().families,
             output: None,
             saved: None,
             copied: false,
@@ -3898,6 +3925,12 @@ mod tests {
         );
 
         view.text.as_mut().unwrap().staged.text = "composing".into();
+        view.text.as_mut().unwrap().staged.font_family = "serif".into();
+        let fields = view.text.as_ref().unwrap();
+        assert_eq!(
+            fields.staged.patch(&fields.accepted).font_family.as_deref(),
+            Some("serif")
+        );
         view.request_close();
         assert!(!view.closed && !view.close_requested);
         assert!(view.error.as_deref().unwrap().contains("pending text"));
@@ -3910,10 +3943,18 @@ mod tests {
         view.receive(&ctx, Err("transaction rejected".into()));
         assert_eq!(view.text.as_ref().unwrap().staged.text, "composing");
         assert_eq!(view.text.as_ref().unwrap().accepted.text, "accepted");
+        assert_eq!(view.text.as_ref().unwrap().staged.font_family, "serif");
+        assert_eq!(
+            view.text.as_ref().unwrap().accepted.font_family,
+            "saved-unknown-family"
+        );
 
         let accepted = view.text.as_ref().unwrap().accepted.clone();
         view.text.as_mut().unwrap().staged = accepted;
         assert_eq!(view.text.as_ref().unwrap().staged.text, "accepted");
+        let fields = view.text.as_ref().unwrap();
+        assert_eq!(fields.staged.font_family, "saved-unknown-family");
+        assert!(fields.staged.patch(&fields.accepted).font_family.is_none());
         view.text.as_mut().unwrap().staged.text = "applied".into();
         view.text_apply_pending = true;
         view.output = Some((view.texture.as_ref().unwrap().clone(), 9));

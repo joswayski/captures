@@ -126,7 +126,7 @@ export async function prepare(destination, testDestination) {
   }
   // Existing product asset; do not introduce an independent icon design.
   await copyFile(resolve(root, 'apps/desktop/assets/icon.svg'), resolve(destination, 'icon.svg'));
-  await copyFile(resolve(root, 'crates/captures-app/fonts/liberation-sans/LICENSE'),
+  await copyFile(resolve(root, 'crates/captures-app/fonts/liberation/LICENSE'),
     resolve(destination, 'EDITOR-FONT-LICENSE.txt'));
 }
 

@@ -1148,7 +1148,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                  size: 16, weight: .semibold, parent: content)
         let familyLabel = panelFieldLabel("Font", x: 0, y: 356, parent: content)
         textFamily.frame = NSRect(x: 0, y: 378, width: 252, height: 30)
-        textFamily.addItem(withTitle: "Bundled Sans"); textFamily.lastItem?.representedObject = "sans"
         textFamily.setAccessibilityLabel("Text font")
         content.addSubview(textFamily)
         let contentLabel = panelFieldLabel("Content", x: 0, y: 416, parent: content)
@@ -1850,8 +1849,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         guard shape != .wand, let layers = state.snapshot?.layers else { return }
         let request: [String: Any]
         if shape == .text {
+            let families = state.snapshot?.fontFamilies ?? [:]
+            let family = families["sans"] != nil ? "sans" : families.keys.sorted().first ?? "sans"
             request = ["operation": "create_text", "point": ["x": start.x, "y": start.y],
-                       "text": "", "fontSize": 32, "fontFamily": "sans", "color": "#111111"]
+                       "text": "", "fontSize": 32, "fontFamily": family, "color": "#111111"]
         } else if shape == .pen {
             request = ["operation": "create_freehand_path", "points": points.map { ["x": $0.x, "y": $0.y] }]
         } else {
@@ -1864,6 +1865,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func textFieldsMatch(_ style: NativeTextStyle) -> Bool {
         textEditor.string == style.text && textSize.stringValue == format(style.fontSize)
+            && (textFamily.selectedItem?.representedObject as? String) == style.fontFamily
             && textColor.stringValue == style.color
             && textTraits.isSelected(forSegment: 0) == style.bold
             && textTraits.isSelected(forSegment: 1) == style.italic
@@ -1890,15 +1892,18 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textAlignment.selectedSegment = ["left", "center", "right"].firstIndex(of: style.align) ?? 0
         textPlate.selectItem(at: style.background == nil ? 0 : style.roundedBackground ? 2 : 1)
         textFamily.removeAllItems()
-        textFamily.addItem(withTitle: "Bundled Sans"); textFamily.lastItem?.representedObject = "sans"
-        if style.fontFamily == "sans" {
-            textFamily.selectItem(at: 0)
-        } else {
+        let families = state.snapshot?.fontFamilies ?? [:]
+        for key in families.keys.sorted() {
+            textFamily.addItem(withTitle: families[key]!)
+            textFamily.lastItem?.representedObject = key
+        }
+        if families[style.fontFamily] == nil {
             textFamily.addItem(withTitle: "Saved font: \(style.fontFamily)")
             textFamily.lastItem?.representedObject = style.fontFamily
-            textFamily.selectItem(at: 1)
         }
-        textFamily.isEnabled = false
+        textFamily.selectItem(at: textFamily.itemArray.firstIndex {
+            $0.representedObject as? String == style.fontFamily
+        } ?? 0)
     }
 
     private func applyTextEdits() {
@@ -1911,6 +1916,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         var patch: [String: Any] = [:]
         if textEditor.string != style.text { patch["text"] = textEditor.string }
         if size != style.fontSize { patch["fontSize"] = size }
+        if let family = textFamily.selectedItem?.representedObject as? String, family != style.fontFamily {
+            patch["fontFamily"] = family
+        }
         if textTraits.isSelected(forSegment: 0) != style.bold { patch["bold"] = !style.bold }
         if textTraits.isSelected(forSegment: 1) != style.italic { patch["italic"] = !style.italic }
         let align = ["left", "center", "right"][max(0, textAlignment.selectedSegment)]
@@ -2071,6 +2079,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         brushSize.isEnabled = active; brushSoftness.isEnabled = active
         let textReady = active && selectedLayer?.kind == .text
         textEditor.isEditable = textReady
+        textFamily.isEnabled = textReady && textFamily.numberOfItems > 1
         let textFields: [NSControl] = [textSize, textColor, textTraits,
                                        textAlignment, textPlate, textPlateColor]
         textFields.forEach { $0.isEnabled = textReady }

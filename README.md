@@ -273,8 +273,10 @@ fonts and preserve their exact bytes in local draft sidecars, so text edits, und
 export and reopening use the same fonts. Typed commands create plain text and edit
 content, type, alignment, color and plates transactionally. Both native hosts now
 connect a basic **Draw → Text** tool with staged Apply/Cancel controls. New text uses
-bundled Liberation Sans (OFL 1.1); exact font bytes and license notices stay with the
-draft. This is not Tauri system-font equivalence or universal Unicode coverage:
+bundled Liberation Sans, with Serif and Mono also available (OFL 1.1); exact font
+bytes and license notices stay with the draft. Older drafts offer only their saved
+fonts; adding new fonts to an existing draft is not implemented.
+This is not Tauri system-font equivalence or universal Unicode coverage:
 missing glyphs remain errors, and fonts are never discovered or downloaded automatically.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
 resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
