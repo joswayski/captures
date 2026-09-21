@@ -354,7 +354,11 @@ using a 0–255 tolerance and either a contiguous region or all matching pixels.
 The frontmost visible image is editable even when locked; transparent pixels do
 not let clicks reach images underneath. Each edit clears the canvas fill, keeps
 the original image pixels, and supports undo/redo and draft restore. The original
-History capture remains unchanged. Erase/restore brushes are not connected yet.
+History capture remains unchanged. **Erase** and **Restore** use adjustable brush
+diameter and softness; Restore paints from the retained original image. The brush
+outline shows size and path while dragging; pixels apply on release in one undo
+step. Escape, focus loss or changing tools cancels an unfinished stroke. Live pixel
+painting and the shipping brush cursor design remain parity work.
 Other drawing tools, text, overwrite-original, and recording editing remain
 unconnected. Shared editor support
 is prerequisite work, not native editor acceptance. OS shortcut takeover, login items,

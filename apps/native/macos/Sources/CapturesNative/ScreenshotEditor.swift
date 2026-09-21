@@ -126,7 +126,9 @@ class EditorViewportGestureView: NSView {
 
 final class EditorDrawOverlay: EditorViewportGestureView {
     enum Shape: String, CaseIterable {
-        case rectangle, ellipse, line, arrow, pen, wand
+        case rectangle, ellipse, line, arrow, pen, wand, erase, restore
+
+        var isBackgroundBrush: Bool { self == .erase || self == .restore }
     }
 
     var shape: Shape = .rectangle { didSet { if shape != oldValue { cancelGesture() } } }
@@ -142,12 +144,16 @@ final class EditorDrawOverlay: EditorViewportGestureView {
     }
     var onComplete: ((Shape, NSPoint, NSPoint, [NSPoint]) -> Void)?
     var onWand: ((NSPoint) -> Void)?
+    var onBackgroundBrush: ((Shape, [NSPoint]) -> Void)?
+    var brushDiameter: CGFloat = 28 { didSet { needsDisplay = true } }
+    var brushOutlineColor = NSColor.labelColor
     var fillColor = NSColor.controlAccentColor.withAlphaComponent(0.22)
     var strokeColor = NSColor.controlAccentColor
     var imageRect: (() -> NSRect)?
     private(set) var startPoint: NSPoint?
     private(set) var currentPoint: NSPoint?
     private(set) var penPoints: [NSPoint] = []
+    private(set) var brushPoints: [NSPoint] = []
     private var previousMouseCoalescing: Bool?
 
     deinit {
@@ -181,13 +187,16 @@ final class EditorDrawOverlay: EditorViewportGestureView {
 
     func begin(at point: NSPoint) {
         guard drawingEnabled, presentedImageRect.width > 0 else { return }
-        if shape == .wand && (!bounds.contains(point) || !presentedImageRect.contains(point)) { return }
+        if (shape == .wand || shape.isBackgroundBrush)
+            && (!bounds.contains(point) || !presentedImageRect.contains(point)) { return }
         cancelGesture()
         startPoint = point; currentPoint = point; needsDisplay = true
         if shape == .pen {
             penPoints = [canvasPoint(for: point)]
             previousMouseCoalescing = NSEvent.isMouseCoalescingEnabled
             NSEvent.isMouseCoalescingEnabled = false
+        } else if shape.isBackgroundBrush {
+            brushPoints = [canvasPoint(for: point)]
         }
     }
 
@@ -198,6 +207,8 @@ final class EditorDrawOverlay: EditorViewportGestureView {
             let next = canvasPoint(for: point)
             let minimum = 1.5 * canvasSize.width / presentedImageRect.width
             if hypot(next.x - last.x, next.y - last.y) >= minimum { penPoints.append(next) }
+        } else if shape.isBackgroundBrush {
+            brushPoints.append(canvasPoint(for: point))
         }
     }
 
@@ -207,11 +218,19 @@ final class EditorDrawOverlay: EditorViewportGestureView {
         let start = canvasPoint(for: startPoint)
         let end = canvasPoint(for: point)
         let points = penPoints
+        var backgroundPoints = brushPoints
         let arrowLength = hypot(point.x - startPoint.x, point.y - startPoint.y)
         cancelGesture()
         if shape == .wand {
             guard arrowLength < 3, bounds.contains(point), presentedImageRect.contains(point) else { return }
             onWand?(start)
+            return
+        }
+        if shape.isBackgroundBrush {
+            // Shipping stamps the release even at the last natural pixel: soft
+            // edges accumulate, so deduplicating samples would change alpha.
+            backgroundPoints.append(end)
+            onBackgroundBrush?(shape, backgroundPoints)
             return
         }
         switch shape {
@@ -223,6 +242,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
                   !geometry.points.isEmpty else { return }
         case .line, .pen: break
         case .wand: preconditionFailure("handled above")
+        case .erase, .restore: preconditionFailure("handled above")
         }
         // Like shipping, Pen accepts movement samples, not the release location.
         onComplete?(shape, start, end, points)
@@ -231,6 +251,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
     func cancelGesture() {
         startPoint = nil; currentPoint = nil; needsDisplay = true
         penPoints.removeAll(keepingCapacity: true)
+        brushPoints.removeAll(keepingCapacity: true)
         if let previousMouseCoalescing {
             NSEvent.isMouseCoalescingEnabled = previousMouseCoalescing
             self.previousMouseCoalescing = nil
@@ -275,6 +296,25 @@ final class EditorDrawOverlay: EditorViewportGestureView {
         defer { NSGraphicsContext.restoreGraphicsState() }
         NSBezierPath(rect: bounds).addClip()
         if shape == .wand { return }
+        if shape.isBackgroundBrush {
+            let image = presentedImageRect
+            let scale = image.width / canvasSize.width
+            NSBezierPath(rect: bounds.intersection(image)).addClip()
+            let displayPoints = brushPoints.map {
+                NSPoint(x: image.minX + $0.x * scale, y: image.minY + $0.y * scale)
+            }
+            guard let first = displayPoints.first else { return }
+            let path = NSBezierPath(); path.move(to: first)
+            displayPoints.dropFirst().forEach { path.line(to: $0) }
+            brushOutlineColor.setStroke()
+            path.lineWidth = 1.5; path.lineCapStyle = .round
+            path.lineJoinStyle = .round; path.stroke()
+            let radius = max(2, brushDiameter * scale / 2)
+            let ring = NSBezierPath(ovalIn: NSRect(x: currentPoint.x - radius, y: currentPoint.y - radius,
+                                                  width: radius * 2, height: radius * 2))
+            ring.lineWidth = 1.5; ring.stroke()
+            return
+        }
         if shape == .line || shape == .arrow || shape == .pen {
             let samples = shape == .pen ? penPoints : [canvasPoint(for: startPoint), canvasPoint(for: currentPoint)]
             guard let geometry = NativeEditorDrawGeometry(arrow: shape == .arrow, samples: samples),
@@ -594,6 +634,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let wandTolerance = NSTextField()
     private let wandContiguous = NSButton(checkboxWithTitle: "Contiguous only", target: nil, action: nil)
     private var wandToleranceLabel: NSTextField!
+    private let brushSize = NSTextField()
+    private let brushSoftness = NSTextField()
+    private var brushSizeLabel: NSTextField!
+    private var brushSoftnessLabel: NSTextField!
+    private var drawHelper: NSTextField!
     private var outputFormat: NSPopUpButton!
     private var outputQuality: NSPopUpButton!
     private var outputPreviewMode: NSSegmentedControl!
@@ -819,6 +864,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             self?.createDrawing(shape: shape, start: start, end: end, points: points)
         }
         drawOverlay.onWand = { [weak self] point in self?.removeImageBackground(at: point) }
+        drawOverlay.onBackgroundBrush = { [weak self] mode, points in
+            self?.paintImageBackground(mode: mode, points: points)
+        }
         viewportInput.addSubview(drawOverlay)
         selectionOverlay.frame = preview.frame
         selectionOverlay.autoresizingMask = [.width, .height]
@@ -982,7 +1030,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                    parent: content)
         panelFieldLabel("Tool", x: 0, y: 78, parent: content)
         drawTool = NSPopUpButton()
-        drawTool.addItems(withTitles: ["Rectangle", "Ellipse", "Line", "Arrow", "Pen", "Wand"])
+        drawTool.addItems(withTitles: ["Rectangle", "Ellipse", "Line", "Arrow", "Pen", "Wand",
+                                           "Erase", "Restore"])
         drawTool.target = self; drawTool.action = #selector(changeDrawTool)
         drawTool.frame = NSRect(x: 0, y: 100, width: 252, height: 30)
         drawTool.selectItem(at: 0)
@@ -997,9 +1046,22 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         wandContiguous.frame = NSRect(x: 0, y: 208, width: 252, height: 24)
         wandContiguous.state = .on; wandContiguous.setAccessibilityLabel("Wand contiguous only")
         content.addSubview(wandContiguous)
-        panelLabel("Wand removes matching pixels from the frontmost visible image. Other tools create one annotation layer on release.",
-                   frame: NSRect(x: 0, y: 248, width: 252, height: 72), muted: true,
-                   parent: content)
+        brushSizeLabel = panelFieldLabel("Brush diameter", x: 0, y: 146, parent: content)
+        configure(brushSize, frame: NSRect(x: 0, y: 168, width: 252, height: 30),
+                  label: "Brush diameter", parent: content)
+        let sizeFormatter = NumberFormatter(); sizeFormatter.numberStyle = .decimal
+        sizeFormatter.maximumFractionDigits = 0; sizeFormatter.minimum = 4; sizeFormatter.maximum = 120
+        brushSize.formatter = sizeFormatter; brushSize.stringValue = "28"; brushSize.delegate = self
+        brushSoftnessLabel = panelFieldLabel("Softness", x: 0, y: 208, parent: content)
+        configure(brushSoftness, frame: NSRect(x: 0, y: 230, width: 252, height: 30),
+                  label: "Brush softness", parent: content)
+        let softnessFormatter = NumberFormatter(); softnessFormatter.numberStyle = .decimal
+        softnessFormatter.maximumFractionDigits = 0; softnessFormatter.minimum = 0
+        softnessFormatter.maximum = 100
+        brushSoftness.formatter = softnessFormatter; brushSoftness.stringValue = "18"
+        drawHelper = panelLabel("Other tools create one annotation layer on release.",
+                                frame: NSRect(x: 0, y: 278, width: 252, height: 72), muted: true,
+                                parent: content)
         publishDrawToolControls()
     }
 
@@ -1210,9 +1272,19 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func publishDrawToolControls() {
-        let wand = drawTool?.indexOfSelectedItem == EditorDrawOverlay.Shape.allCases.firstIndex(of: .wand)
+        guard let drawTool, drawTool.indexOfSelectedItem >= 0 else { return }
+        let shape = EditorDrawOverlay.Shape.allCases[drawTool.indexOfSelectedItem]
+        let wand = shape == .wand
+        let brush = shape.isBackgroundBrush
         wandToleranceLabel?.isHidden = !wand
         wandTolerance.isHidden = !wand; wandContiguous.isHidden = !wand
+        brushSizeLabel?.isHidden = !brush; brushSize.isHidden = !brush
+        brushSoftnessLabel?.isHidden = !brush; brushSoftness.isHidden = !brush
+        drawHelper.stringValue = wand
+            ? "Wand removes matching pixels from the frontmost visible image."
+            : brush
+                ? "The outline previews brush size and path only. Pixels apply on release."
+                : "This tool creates one annotation layer on release."
     }
 
     @objc private func outputOptionsChanged() {
@@ -1224,7 +1296,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     func controlTextDidChange(_ notification: Notification) {
-        guard let field = notification.object as? NSTextField,
+        guard let field = notification.object as? NSTextField else { return }
+        if field === brushSize {
+            if let value = Double(field.stringValue), value.isFinite {
+                drawOverlay.brushDiameter = CGFloat(min(120, max(4, value)))
+            }
+            return
+        }
+        guard
               [outputQualityValue, outputPngPalette, outputByteBudget].contains(where: { $0 === field })
         else { return }
         invalidateOutput(optionsChanged: true)
@@ -1519,6 +1598,24 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 message: "Removing image background…")
     }
 
+    private func paintImageBackground(mode: EditorDrawOverlay.Shape, points: [NSPoint]) {
+        guard mode.isBackgroundBrush, !state.busy else { return }
+        guard let size = Double(brushSize.stringValue), size >= 4, size <= 120,
+              size == size.rounded() else {
+            showError("Brush diameter must be a whole number from 4 to 120."); return
+        }
+        guard let softness = Double(brushSoftness.stringValue), softness >= 0, softness <= 100,
+              softness == softness.rounded() else {
+            showError("Brush softness must be a whole number from 0 to 100."); return
+        }
+        brushSize.stringValue = String(Int(size)); brushSoftness.stringValue = String(Int(softness))
+        drawOverlay.brushDiameter = CGFloat(size)
+        command(["operation": "paint_image_background",
+                 "points": points.map { ["x": $0.x, "y": $0.y] },
+                 "size": size, "softness": softness, "mode": mode.rawValue],
+                message: mode == .erase ? "Erasing image background…" : "Restoring image background…")
+    }
+
     private func cancelDrawing() {
         drawOverlay.cancelGesture()
         selectionOverlay.cancelGesture()
@@ -1586,6 +1683,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             && state.snapshot != nil && !state.busy
         drawTool?.isEnabled = state.snapshot != nil && !state.busy
         wandTolerance.isEnabled = active; wandContiguous.isEnabled = active
+        brushSize.isEnabled = active; brushSoftness.isEnabled = active
         drawOverlay.drawingEnabled = active
         selectionOverlay.selectionEnabled = sectionControl?.selectedSegment == Section.layers
             && state.snapshot != nil && !state.busy && !importLoading
@@ -2045,6 +2143,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         outputSize.textColor = tokens.color("text-muted")
         drawOverlay.fillColor = tokens.color("theme-accent").withAlphaComponent(0.22)
         drawOverlay.strokeColor = tokens.color("theme-accent")
+        drawOverlay.brushOutlineColor = tokens.color("text")
         selectionOverlay.strokeColor = tokens.color("theme-accent")
         drawOverlay.needsDisplay = true
         preview.superview?.layer?.backgroundColor = tokens.color("surface-sunken").cgColor

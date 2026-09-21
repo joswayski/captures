@@ -20,6 +20,7 @@ use captures_app::{
         ResizeDrag, ResizeHandle, ShapeElement, arrow_fill_polygon, preview_rotation,
         rotation_angle, rotation_handle, smooth_path_centerline,
     },
+    editor_image_background::BrushMode,
     editor_output::{SavedExport, save_new_export},
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
     editor_session::{
@@ -97,6 +98,8 @@ enum DrawShape {
     Arrow,
     Freehand,
     Wand,
+    Erase,
+    Restore,
 }
 
 impl DrawShape {
@@ -136,7 +139,7 @@ impl DrawShape {
                     },
                 })
             }
-            Self::Wand => None,
+            Self::Wand | Self::Erase | Self::Restore => None,
             _ => None,
         }
     }
@@ -209,6 +212,9 @@ struct View {
     draw_shape: DrawShape,
     wand_tolerance: f64,
     wand_contiguous: bool,
+    brush_size: f64,
+    brush_softness: f64,
+    brush_points: Vec<Point>,
     shape_drag: Option<(Point, Point)>,
     freehand_points: Vec<Point>,
     canvas: [f64; 2],
@@ -256,6 +262,9 @@ impl Default for View {
             draw_shape: DrawShape::Rectangle,
             wand_tolerance: 36.,
             wand_contiguous: true,
+            brush_size: 28.,
+            brush_softness: 18.,
+            brush_points: Vec::new(),
             shape_drag: None,
             freehand_points: Vec::new(),
             canvas: [1., 1.],
@@ -310,6 +319,7 @@ impl View {
     fn cancel_drawing(&mut self) {
         self.shape_drag = None;
         self.freehand_points.clear();
+        self.brush_points.clear();
     }
 
     fn cancel_layer_gesture(&mut self) {
@@ -1172,6 +1182,8 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                     ui.selectable_value(&mut view.draw_shape, DrawShape::Arrow, "Arrow");
                     ui.selectable_value(&mut view.draw_shape, DrawShape::Freehand, "Pen");
                     ui.selectable_value(&mut view.draw_shape, DrawShape::Wand, "Wand");
+                    ui.selectable_value(&mut view.draw_shape, DrawShape::Erase, "Erase");
+                    ui.selectable_value(&mut view.draw_shape, DrawShape::Restore, "Restore");
                 });
                 if view.draw_shape != previous_tool { view.cancel_drawing(); }
                 if view.draw_shape == DrawShape::Wand {
@@ -1187,6 +1199,17 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                     });
                     ui.label("Click an image to remove pixels matching that color. Transparent areas still select the frontmost visible image.");
                     ui.small("Tolerance controls the color range. Contiguous limits removal to the connected area around the click.");
+                } else if matches!(view.draw_shape, DrawShape::Erase | DrawShape::Restore) {
+                    ui.horizontal(|ui| {
+                        ui.label("Diameter");
+                        ui.add(egui::DragValue::new(&mut view.brush_size).range(4. ..=120.).max_decimals(0).suffix(" px").speed(1.));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Softness");
+                        ui.add(egui::DragValue::new(&mut view.brush_softness).range(0. ..=100.).max_decimals(0).suffix("%").speed(1.));
+                    });
+                    ui.label("Drag over an image, then release to apply the pixels as one undo step.");
+                    ui.small("Erase makes pixels transparent. Restore uses the image’s retained original pixels.");
                 } else {
                     ui.label("Drag to draw. Release to add one layer. Escape cancels the current drag.");
                     ui.small("New shapes use the default annotation color. Change fill, stroke, shadow, opacity, position and ordering in Layers.");
@@ -2057,6 +2080,128 @@ fn show_shape(
         }
         return;
     }
+    if matches!(view.draw_shape, DrawShape::Erase | DrawShape::Restore) {
+        let clipped_image = preview.intersect(available).intersect(ui.clip_rect());
+        // egui does not report drag_started when down/up arrive in one frame.
+        // Topmost hover ownership plus the raw press also admits those clicks.
+        let can_start =
+            response.drag_started_by(egui::PointerButton::Primary) || response.contains_pointer();
+        let mut released = None;
+        if first_pass && !view.pending && !viewport_intercepted {
+            let image_at = |point| {
+                presented
+                    .document
+                    .elements
+                    .iter()
+                    .rev()
+                    .find_map(|element| match element {
+                        Element::Image(image)
+                            if image.base.visible && image.natural_pixel_at(point).is_some() =>
+                        {
+                            Some(image)
+                        }
+                        _ => None,
+                    })
+            };
+            let mut target = view.brush_points.first().copied().and_then(image_at);
+            let mut last_move = None;
+            ui.input(|input| {
+                for event in &input.events {
+                    match event {
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            ..
+                        } if can_start && clipped_image.contains(*pos) => {
+                            let point = image_point(*pos, preview, bounds);
+                            view.brush_points = vec![point];
+                            target = image_at(point);
+                            last_move = None;
+                        }
+                        egui::Event::PointerMoved(pos) if !view.brush_points.is_empty() => {
+                            let point = image_point(*pos, preview, bounds);
+                            if target.is_none_or(|image| image.natural_pixel_at(point).is_some()) {
+                                last_move = Some(point);
+                            }
+                        }
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            ..
+                        } if !view.brush_points.is_empty() => {
+                            // Release replaces an unpainted movement in this frame,
+                            // as in shipping. Even a stationary release stamps again.
+                            let point = image_point(*pos, preview, bounds);
+                            if target.is_none_or(|image| image.natural_pixel_at(point).is_some()) {
+                                view.brush_points.push(point);
+                            } else if let Some(point) = last_move {
+                                view.brush_points.push(point);
+                            }
+                            released = Some(());
+                            break;
+                        }
+                        egui::Event::PointerGone if !view.brush_points.is_empty() => {
+                            view.brush_points.clear();
+                            last_move = None;
+                        }
+                        _ => {}
+                    }
+                }
+            });
+            if released.is_none()
+                && let Some(point) = last_move
+            {
+                view.brush_points.push(point);
+            }
+        }
+        if response.hovered() || !view.brush_points.is_empty() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
+        let position = |point: Point| {
+            egui::pos2(
+                preview.left() + (point.x / bounds.width) as f32 * preview.width(),
+                preview.top() + (point.y / bounds.height) as f32 * preview.height(),
+            )
+        };
+        let painter = ui.painter().with_clip_rect(clipped_image);
+        let feedback = egui::Stroke::new(1.5, ui.visuals().text_color());
+        if view.brush_points.len() > 1 {
+            painter.add(egui::Shape::line(
+                view.brush_points.iter().copied().map(position).collect(),
+                feedback,
+            ));
+        }
+        let cursor = view
+            .brush_points
+            .last()
+            .copied()
+            .map(position)
+            .or_else(|| ui.input(|input| input.pointer.hover_pos()));
+        if let Some(cursor) = cursor.filter(|point| clipped_image.contains(*point)) {
+            let radius = (view.brush_size / bounds.width) as f32 * preview.width() / 2.;
+            painter.circle_stroke(cursor, radius.max(2.), feedback);
+        }
+        if first_pass && released.is_some() {
+            let points = std::mem::take(&mut view.brush_points);
+            let mode = if view.draw_shape == DrawShape::Erase {
+                BrushMode::Erase
+            } else {
+                BrushMode::Restore
+            };
+            view.submit(
+                tx,
+                Request::PaintImageBackground {
+                    points,
+                    size: view.brush_size,
+                    softness: view.brush_softness,
+                    mode,
+                },
+            );
+        }
+        return;
+    }
     let started = response.drag_started_by(egui::PointerButton::Primary);
     if first_pass
         && !viewport_intercepted
@@ -2193,7 +2338,9 @@ fn show_shape(
                     fill,
                 )));
             }
-            DrawShape::Wand => unreachable!("wand clicks do not start shape drags"),
+            DrawShape::Wand | DrawShape::Erase | DrawShape::Restore => {
+                unreachable!("pixel tools do not start shape drags")
+            }
         }
     }
     if first_pass
@@ -3938,6 +4085,138 @@ mod tests {
             true,
         );
         assert!(rx.try_recv().is_err() && !view.pending);
+    }
+
+    #[test]
+    fn background_brush_samples_frames_release_and_click_once_and_cancels_invalid_gestures() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let mut value = presented(false);
+        value.pixels = Arc::new(RgbaImage::new(1200, 600));
+        value.document = Arc::new(Document::new_capture("fixture", 1200., 600., None));
+        view.receive(&ctx, Ok(value));
+        view.draw_shape = DrawShape::Erase;
+        view.brush_size = 28.;
+        view.brush_softness = 18.;
+        let (tx, rx) = mpsc::channel();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000., 700.));
+        let preview = egui::Rect::from_min_size(egui::pos2(220., 140.), egui::vec2(600., 300.));
+        let frame = |view: &mut View, events, intercepted| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |_| {
+                    let mut ui = egui::Ui::new(
+                        ctx.clone(),
+                        egui::Id::unique("background-brush-test"),
+                        egui::UiBuilder::new().max_rect(screen),
+                    );
+                    show_shape(&mut ui, view, &tx, screen, preview, intercepted);
+                    if ctx.current_pass_index() == 0 {
+                        ctx.request_discard("exercise brush multipass event replay");
+                    }
+                },
+            );
+            assert!(output.platform_output.num_completed_passes >= 2);
+            output.textures_delta.clear();
+        };
+        let moved = |x, y| egui::Event::PointerMoved(egui::pos2(x, y));
+        let button = |x, y, pressed| egui::Event::PointerButton {
+            pos: egui::pos2(x, y),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+
+        frame(&mut view, vec![], false);
+        frame(
+            &mut view,
+            vec![moved(250., 170.), button(250., 170., true)],
+            false,
+        );
+        frame(&mut view, vec![moved(260., 180.), moved(100., 100.)], false);
+        frame(
+            &mut view,
+            vec![moved(280., 190.), button(290., 200., false)],
+            false,
+        );
+        let Job::Apply(Request::PaintImageBackground {
+            points,
+            size,
+            softness,
+            mode,
+        }) = rx.try_recv().unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            points,
+            vec![
+                Point { x: 60., y: 60. },
+                Point { x: 80., y: 80. },
+                Point { x: 140., y: 120. },
+            ]
+        );
+        assert_eq!((size, softness, mode), (28., 18., BrushMode::Erase));
+        assert!(
+            view.pending && rx.try_recv().is_err(),
+            "multipass submits once"
+        );
+
+        view.pending = false;
+        view.draw_shape = DrawShape::Restore;
+        frame(&mut view, vec![button(250., 170., true)], false);
+        frame(&mut view, vec![button(250., 170., false)], false);
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            Job::Apply(Request::PaintImageBackground {
+                points,
+                mode: BrushMode::Restore,
+                ..
+            }) if points == vec![Point { x: 60., y: 60. }; 2]
+        ));
+
+        view.pending = false;
+        frame(
+            &mut view,
+            vec![button(250., 170., true), button(250., 170., false)],
+            false,
+        );
+        assert!(
+            matches!(rx.try_recv().unwrap(), Job::Apply(Request::PaintImageBackground { points, .. })
+            if points == vec![Point { x: 60., y: 60. }; 2])
+        );
+
+        view.pending = false;
+        for (events, intercepted) in [
+            (
+                vec![button(100., 100., true), button(100., 100., false)],
+                false,
+            ),
+            (
+                vec![button(250., 170., true), button(250., 170., false)],
+                true,
+            ),
+        ] {
+            frame(&mut view, events, intercepted);
+            assert!(rx.try_recv().is_err() && view.brush_points.is_empty());
+        }
+        view.pending = true;
+        frame(
+            &mut view,
+            vec![button(250., 170., true), button(250., 170., false)],
+            false,
+        );
+        assert!(rx.try_recv().is_err() && view.brush_points.is_empty());
+        view.pending = false;
+        frame(&mut view, vec![button(250., 170., true)], false);
+        assert!(!view.brush_points.is_empty());
+        view.cancel_drawing();
+        frame(&mut view, vec![button(250., 170., false)], false);
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

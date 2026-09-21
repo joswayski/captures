@@ -125,8 +125,8 @@ AppKit's Draw panel scrolls at minimum size. X11 coverage exercises exact alpha,
 disconnected-color global removal, locked images, no-match recovery, undo/redo,
 draft reopen and copied PNG pixels; AppKit has bridge and rendered-state tests.
 Windows/Wayland presentation and physical AppKit input remain unverified.
-Erase/restore brushes and physical acceptance remain open; these bindings do not
-complete the editor gate or reproduce the shipping Tauri toolbar layout.
+Physical acceptance remains open; these bindings do not complete the editor gate
+or reproduce the shipping Tauri toolbar layout.
 The shared brush prerequisite now accepts a completed erase/restore stroke with
 document-space samples, brush diameter and softness. It locks the first visible
 image, ignores later off-image samples, uses orientation-aware natural-pixel brush
@@ -134,8 +134,16 @@ scaling, and matches Tauri's pixel-center stamps, feathering, interpolation and 
 rounding. Changed strokes publish one undoable owned asset, retain the first original,
 and clear canvas fill; no-op strokes preserve fill, pixels and redo. Restore reads
 that retained original, including after draft reopen. Shared Rust/TypeScript vectors
-check exact pixels. Native brush controls, sampling, transient previews and cancellation
-are not connected yet; the command alone does not complete brush acceptance.
+check exact pixels. Both native Draw panels now connect Erase/Restore with diameter
+28 (4–120) and softness 18 (0–100). They sample press/movement/release into one
+worker command, including stationary release stamps that affect soft-edge alpha.
+The interim preview is a clipped path and brush-size ring, not live raster pixels;
+release applies the stroke. Escape, focus loss, close, viewport or tool/section changes
+cancel without editing. Pan and clipped/off-image initial presses never paint.
+X11 tests cover cancellation, actual feathered alpha, erase/restore, undo/redo, drafts
+and clipboard; AppKit has input/bridge tests and minimum light/dark/error fixtures.
+Windows/Wayland presentation and physical AppKit input remain unverified; sampling
+cadence, live pixel feedback and the Tauri brush cursor/layout remain parity work.
 Next implementation boundary: text/image-background and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.
 

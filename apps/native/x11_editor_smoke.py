@@ -74,6 +74,8 @@ def main():
                         help="Exercise canvas background controls, alpha and draft reopen only")
     parser.add_argument("--wand-only", action="store_true",
                         help="Exercise image-background removal, undo, draft and clipboard alpha")
+    parser.add_argument("--brush-only", action="store_true",
+                        help="Exercise erase/restore gestures, cancellation, draft and clipboard")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -253,6 +255,84 @@ def main():
             save_until(lambda: predicate(layers()), description)
             return layers()
 
+        def asset_pixel(layer, x, y, expected=None):
+            asset = draft.parent / "assets" / (layer["src"].split(":", 1)[1] + ".png")
+            actual = run("convert", str(asset), "-crop", f"1x1+{x}+{y}", "-depth", "8", "rgba:-")
+            if expected is not None:
+                assert actual == bytes(expected), (x, y, actual, expected)
+            return actual
+
+        if args.brush_only:
+            run("xdotool", "windowsize", "--sync", editor, "886", "700")
+            save(640, 360, 0, 0)
+            source = layers()[0]["src"]
+            click(editor, 736, 62)
+            click(editor, 100, 226)  # Restore before the first edit reports a recoverable error.
+            click(editor, 338, 189)
+            shot(editor, "brush-restore-error")
+            save_layers(lambda values: values[0]["src"] == source, "restore without original is atomic")
+            click(editor, 35, 226)  # Erase; keep shipping diameter/softness defaults.
+            shot(editor, "brush-controls")
+            before = draft.read_bytes()
+            run("xdotool", "mousemove", "--window", editor, "338", "189", "mousedown", "1",
+                "sleep", ".2", "mousemove", "--sync", "--window", editor, "438", "229", "sleep", ".3")
+            shot(editor, "brush-active")
+            assert draft.read_bytes() == before, "brush preview must not persist pixels"
+            run("xdotool", "key", "Escape", "mouseup", "1", "sleep", ".3")
+            save_layers(lambda values: values[0]["src"] == source, "escape cancels brush")
+            drag((338, 189), (438, 229))
+            erased = save_layers(lambda values: values[0]["src"] != source, "erase completed stroke")[0]
+            assert erased["originalSrc"] == source and erased["locked"]
+            asset_pixel(erased, 100, 100, (0, 0, 0, 0))
+            asset_pixel(erased, 150, 120, (0, 0, 0, 0))
+            asset_pixel(erased, 200, 140, (0, 0, 0, 0))
+            edge = asset_pixel(erased, 86, 100)
+            assert edge[:3] == bytes((229, 179, 68)) and 0 < edge[3] < 255, edge
+            asset_pixel(erased, 2, 1, (40, 110, 166, 255))
+            shot(editor, "brush-erased")
+            click(editor, 35, 62)
+            save_layers(lambda values: values[0]["src"] == source, "one-step brush undo")
+            click(editor, 98, 62)
+            save_layers(lambda values: values[0]["src"] == erased["src"], "brush redo")
+            click(editor, 100, 226)
+            drag((338, 189), (438, 229))
+            restored = save_layers(lambda values: values[0]["src"] != erased["src"], "restore stroke")[0]
+            assert restored["originalSrc"] == source
+            asset_pixel(restored, 150, 120, (229, 179, 68, 255))
+            shot(editor, "brush-restored")
+            click(editor, 35, 62)
+            save_layers(lambda values: values[0]["src"] == erased["src"], "undo restore")
+            close(editor)
+            wait(lambda: not windows("Screenshot editor"), "brush draft closes")
+            editor = reopen()
+            asset_pixel(layers()[0], 150, 120, (0, 0, 0, 0))
+            run("xdotool", "windowsize", "--sync", editor, "886", "700")
+            click(editor, 736, 62)
+            click(editor, 35, 226)
+            run("xdotool", "windowsize", "--sync", editor, "760", "540")
+            shot(editor, "brush-minimum-reopened")
+            run("xdotool", "windowsize", "--sync", editor, "1000", "800")
+            click(editor, 535, 62)
+            click(editor, 65, 366)
+            click(editor, 170, 657)
+            shot(editor, "brush-output-copied")
+            png = output / "clipboard-brush.png"
+            png.write_bytes(run("xclip", "-selection", "clipboard", "-t", "image/png", "-o"))
+            assert run("convert", str(png), "-crop", "1x1+150+120", "-depth", "8", "rgba:-") == bytes((0, 0, 0, 0))
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "brush suite quits")
+            assert app.returncode == 0
+            checks = ["restore-missing-original-retry", "brush-preview-no-write-and-cancel",
+                      "erase-locked-image-interpolated-pixels", "brush-feathered-alpha",
+                      "brush-single-undo-redo", "restore-retained-original", "brush-minimum-draft-reopen",
+                      "brush-clipboard-alpha-original-unchanged"]
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance, "checks": checks,
+            }, indent=2) + "\n")
+            print("PASS native brushes: cancel, soft erase, restore, undo/redo, draft, clipboard alpha")
+            return
+
         if args.wand_only:
             run("xdotool", "windowsize", "--sync", editor, "886", "700")
             save(640, 360, 0, 0)
@@ -264,11 +344,6 @@ def main():
             click(editor, 338, 189)
             edited = save_layers(lambda values: values[0]["src"] != source, "wand edit")[0]
             assert edited["locked"] and edited["originalSrc"] == source
-
-            def asset_pixel(layer, x, y, expected):
-                asset = draft.parent / "assets" / (layer["src"].split(":", 1)[1] + ".png")
-                assert run("convert", str(asset), "-crop", f"1x1+{x}+{y}",
-                           "-depth", "8", "rgba:-") == bytes(expected)
 
             asset_pixel(edited, 100, 100, (0, 0, 0, 0))
             asset_pixel(edited, 310, 60, (229, 179, 68, 255))
@@ -283,7 +358,7 @@ def main():
             save_layers(lambda values: values[0]["src"] == edited["src"], "wand redo")
             click(editor, 35, 62)
             save_layers(lambda values: values[0]["src"] == source, "undo before global removal")
-            click(editor, 128, 220)  # Disable Contiguous.
+            click(editor, 128, 264)  # Disable Contiguous below the three tool rows.
             click(editor, 338, 189)
             global_edit = save_layers(lambda values: values[0]["src"] != source, "global wand")[0]
             asset_pixel(global_edit, 100, 100, (0, 0, 0, 0))

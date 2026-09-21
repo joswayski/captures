@@ -2636,6 +2636,64 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(worker.requests.filter { $0["operation"] as? String == "remove_image_background" }.count, 2)
     }
 
+    func testBackgroundBrushMapsEveryEventIncludesReleaseAndCancelsSafely() {
+        _ = NSApplication.shared
+        let overlay = EditorDrawOverlay(frame: NSRect(x: 0, y: 0, width: 200, height: 120))
+        overlay.canvasSize = NSSize(width: 640, height: 360); overlay.drawingEnabled = true
+        overlay.imageRect = { NSRect(x: 20, y: 10, width: 160, height: 90) }
+        overlay.shape = .erase
+        var strokes: [[NSPoint]] = []
+        overlay.onBackgroundBrush = { mode, points in
+            XCTAssertEqual(mode, .erase); strokes.append(points)
+        }
+        overlay.begin(at: NSPoint(x: 60, y: 77.5))
+        overlay.drag(to: NSPoint(x: 190, y: 55)) // outside the image; Rust filters this sample.
+        overlay.drag(to: NSPoint(x: 140, y: 32.5))
+        overlay.end(at: NSPoint(x: 100, y: 55))
+        XCTAssertEqual(strokes.count, 1)
+        XCTAssertEqual(strokes[0], [NSPoint(x: 160, y: 270), NSPoint(x: 680, y: 180),
+                                    NSPoint(x: 480, y: 90), NSPoint(x: 320, y: 180)])
+
+        overlay.begin(at: NSPoint(x: 60, y: 77.5)); overlay.end(at: NSPoint(x: 60, y: 77.5))
+        XCTAssertEqual(strokes.last, [NSPoint(x: 160, y: 270), NSPoint(x: 160, y: 270)],
+                       "shipping stamps both down and release, including stationary soft edges")
+        let count = strokes.count
+        overlay.begin(at: NSPoint(x: 19, y: 55)); overlay.end(at: NSPoint(x: 100, y: 55))
+        overlay.begin(at: NSPoint(x: 60, y: 55)); overlay.cancelGesture()
+        overlay.end(at: NSPoint(x: 100, y: 55))
+        XCTAssertEqual(strokes.count, count, "off-image starts and cancellation never edit")
+    }
+
+    func testBackgroundBrushOptionsIssueOneRetryableSerializedCommand() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let tool = try popup("Drawing tool", in: controller.root)
+        XCTAssertEqual(tool.itemTitles, ["Rectangle", "Ellipse", "Line", "Arrow", "Pen", "Wand",
+                                         "Erase", "Restore"])
+        tool.selectItem(at: 6); _ = tool.sendAction(tool.action, to: tool.target)
+        XCTAssertEqual(try field("Brush diameter", in: controller.root).stringValue, "28")
+        XCTAssertEqual(try field("Brush softness", in: controller.root).stringValue, "18")
+        let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
+        worker.failOperation = "paint_image_background"
+        let accepted = controller.state.snapshot
+        controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+        XCTAssertEqual(controller.state.snapshot, accepted); XCTAssertFalse(controller.state.busy)
+        worker.failOperation = nil
+        controller.drawOverlay.begin(at: point); controller.drawOverlay.drag(to: NSPoint(x: point.x + 9, y: point.y + 7))
+        controller.drawOverlay.end(at: NSPoint(x: point.x + 12, y: point.y + 11))
+        let requests = worker.requests.filter { $0["operation"] as? String == "paint_image_background" }
+        XCTAssertEqual(requests.count, 2, "each completed gesture has exactly one retryable command")
+        XCTAssertEqual(requests.last?["mode"] as? String, "erase")
+        XCTAssertEqual(requests.last?["size"] as? Double, 28)
+        XCTAssertEqual(requests.last?["softness"] as? Double, 18)
+        XCTAssertEqual((requests.last?["points"] as? [[String: CGFloat]])?.count, 3,
+                       "press, last movement, and release are serialized")
+    }
+
     func testOpenDrawingRenderedStates() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
@@ -2645,7 +2703,8 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
             try showDraw(in: controller.root)
             let tool = try popup("Drawing tool", in: controller.root)
-            XCTAssertEqual(tool.itemTitles, ["Rectangle", "Ellipse", "Line", "Arrow", "Pen", "Wand"])
+            XCTAssertEqual(tool.itemTitles, ["Rectangle", "Ellipse", "Line", "Arrow", "Pen", "Wand",
+                                             "Erase", "Restore"])
             for (index, name) in [(2, "line"), (3, "arrow"), (4, "pen")] {
                 tool.selectItem(at: index); _ = tool.sendAction(tool.action, to: tool.target)
                 controller.drawOverlay.begin(at: NSPoint(x: 100, y: 220))
@@ -2671,6 +2730,17 @@ final class ScreenshotEditorTests: XCTestCase {
                                 y: controller.presentedImageRect.midY)
             controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
             try render(controller.root, name: "screenshot-editor-wand-error-minimum-\(appearance)")
+            worker.failOperation = nil
+            tool.selectItem(at: 6); _ = tool.sendAction(tool.action, to: tool.target)
+            controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+            try render(controller.root, name: "screenshot-editor-erase-minimum-\(appearance)")
+            controller.drawOverlay.begin(at: NSPoint(x: point.x - 60, y: point.y - 30))
+            controller.drawOverlay.drag(to: point)
+            try render(controller.root, name: "screenshot-editor-erase-active-\(appearance)")
+            worker.failOperation = "paint_image_background"
+            worker.failureMessage = "The brush stroke could not be applied. The accepted pixels and undo history are unchanged."
+            controller.drawOverlay.end(at: NSPoint(x: point.x + 30, y: point.y + 20))
+            try render(controller.root, name: "screenshot-editor-erase-error-minimum-\(appearance)")
         }
     }
 
@@ -2752,6 +2822,37 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(rgba(undone.image, x: 2, y: 1)[3], 255)
         let redone = try request(["operation": "redo"])
         XCTAssertEqual(rgba(redone.image, x: 2, y: 1)[3], 0)
+    }
+
+    func testRealBridgeBrushEraseRestoreAndUndo() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let worker = EditorWorker(); defer { worker.close(); EditorWorker.flush() }
+        let opened = expectation(description: "open brush fixture")
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path, artifactID: fixture.id) {
+            result in XCTAssertNotNil(try? result.get()); opened.fulfill()
+        }
+        wait(for: [opened], timeout: 5)
+        func request(_ object: [String: Any]) throws -> EditorPresentation {
+            let done = expectation(description: "brush request")
+            var response: Result<EditorPresentation, Error>?
+            worker.request(object) { response = $0; done.fulfill() }
+            wait(for: [done], timeout: 5)
+            return try XCTUnwrap(response).get()
+        }
+        let stroke: [String: Any] = ["operation": "paint_image_background",
+                                     "points": [["x": 2.5, "y": 1.5]],
+                                     "size": 4, "softness": 0]
+        var erase = stroke; erase["mode"] = "erase"
+        let erased = try request(erase)
+        XCTAssertEqual(rgba(erased.image, x: 2, y: 1)[3], 0)
+        var restore = stroke; restore["mode"] = "restore"
+        let restored = try request(restore)
+        XCTAssertEqual(rgba(restored.image, x: 2, y: 1)[3], 255)
+        let undone = try request(["operation": "undo"])
+        XCTAssertEqual(rgba(undone.image, x: 2, y: 1)[3], 0,
+                       "restore publishes one undo step back to erased pixels")
     }
 
     private func annotationStyle() -> [String: Any] {
