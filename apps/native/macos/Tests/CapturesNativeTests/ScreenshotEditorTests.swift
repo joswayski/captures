@@ -310,6 +310,84 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(previewMode.isEnabled, "changed options cannot leave stale output current")
     }
 
+    func testCanvasBackgroundControlsCommitRestoreAndCopyTransparentPixels() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let fixture = try makeHistoryFixture()
+            defer { try? FileManager.default.removeItem(at: fixture.root) }
+            let worker = EditorWorker()
+            var copied: Data?
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!,
+                worker: worker, writeClipboard: { copied = $0; return true })
+            defer { controller.window.orderOut(nil); worker.close(); EditorWorker.flush() }
+            controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+            waitUntil { controller.state.snapshot != nil && !controller.state.busy }
+            (try field("Canvas width", in: controller.root)).stringValue = "10"
+            (try field("Canvas height", in: controller.root)).stringValue = "5"
+            try button("Resize canvas", in: controller.root).performClick(nil)
+            waitUntil { controller.state.snapshot?.width == 10 && !controller.state.busy }
+            let layers = controller.state.snapshot?.layers
+            try showOutput(in: controller.root)
+            try button("Preview output", in: controller.root).performClick(nil)
+            waitUntil { !controller.state.busy }
+            let output = try segmented("Output preview image", in: controller.root)
+            XCTAssertTrue(output.isEnabled)
+            let section = try segmented("Editor section", in: controller.root)
+            section.selectedSegment = 0; _ = section.sendAction(section.action, to: section.target)
+            let mode = try popup("Canvas background mode", in: controller.root)
+            let color = try field("Canvas background color", in: controller.root)
+            let apply = try button("Apply background", in: controller.root)
+            let scroll = try XCTUnwrap(color.enclosingScrollView)
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: 226))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            color.stringValue = "#21436580"
+            XCTAssertEqual(controller.state.snapshot?.background, "#f7f7f5", "fields are not edits")
+            apply.performClick(nil)
+            XCTAssertFalse(apply.isEnabled); XCTAssertFalse(mode.isEnabled)
+            waitUntil { !controller.state.busy }
+            XCTAssertEqual(controller.state.snapshot?.background, "#21436580")
+            XCTAssertFalse(output.isEnabled, "background commits invalidate encoded output")
+            XCTAssertEqual(controller.state.snapshot?.layers, layers)
+            try render(controller.root, name: "screenshot-editor-background-solid-\(appearance)")
+
+            color.stringValue = "invalid"; apply.performClick(nil)
+            waitUntil { !controller.state.busy }
+            XCTAssertEqual(controller.state.snapshot?.background, "#21436580")
+            XCTAssertEqual(color.stringValue, "#21436580")
+            XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Editor action failed") })
+            try render(controller.root, name: "screenshot-editor-background-error-minimum-\(appearance)")
+            mode.selectItem(withTitle: "Transparent"); _ = mode.sendAction(mode.action, to: mode.target)
+            XCTAssertFalse(color.isEnabled)
+            color.stringValue = "invalid-but-disabled"; apply.performClick(nil)
+            waitUntil { !controller.state.busy }
+            XCTAssertNil(controller.state.snapshot?.background)
+            XCTAssertEqual(color.stringValue, "#21436580", "remember the last accepted solid color")
+            try render(controller.root, name: "screenshot-editor-background-transparent-\(appearance)")
+            try button("Undo", in: controller.root).performClick(nil)
+            waitUntil { !controller.state.busy }
+            XCTAssertEqual(mode.titleOfSelectedItem, "Solid")
+            XCTAssertEqual(controller.state.snapshot?.background, "#21436580")
+            try button("Redo", in: controller.root).performClick(nil)
+            waitUntil { !controller.state.busy }
+            XCTAssertEqual(mode.titleOfSelectedItem, "Transparent")
+            try showOutput(in: controller.root)
+            try button("Copy image", in: controller.root).performClick(nil)
+            waitUntil { !controller.state.busy && copied != nil }
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(data: XCTUnwrap(copied)))
+            XCTAssertEqual(bitmap.pixelsWide, 10); XCTAssertEqual(bitmap.pixelsHigh, 5)
+            XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 9, y: 4)).alphaComponent, 0)
+            XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 2, y: 1)).alphaComponent, 1)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.drafts.path))
+            try button("Save draft", in: controller.root).performClick(nil)
+            waitUntil { !controller.state.busy && controller.state.snapshot?.hasDraft == true }
+            _ = controller.windowShouldClose(controller.window)
+            controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+            waitUntil { controller.state.snapshot != nil && !controller.state.busy }
+            XCTAssertNil(controller.state.snapshot?.background)
+            XCTAssertEqual(controller.state.snapshot?.layers, layers)
+        }
+    }
+
     func testCopyUsesEditedPixelsIgnoresExportOptionsAndPreservesOutputAndDraftState() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {

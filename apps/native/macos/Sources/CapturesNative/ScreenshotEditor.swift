@@ -549,9 +549,15 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let cropHeight = NSTextField()
     private let canvasWidth = NSTextField()
     private let canvasHeight = NSTextField()
+    private let backgroundColor = NSTextField()
+    private var backgroundMode: NSPopUpButton!
+    private var backgroundApply: CaptureButton!
+    private var backgroundReset: CaptureButton!
+    private var lastSolidBackground = "#f7f7f5"
     private let status = NSTextField(wrappingLabelWithString: "")
     private let dimensions = NSTextField(labelWithString: "")
     private let geometryPanel = Surface()
+    private let geometryContent = Surface()
     private let layersPanel = Surface()
     private let layerContent = Surface()
     private var annotationControls: EditorAnnotationControls!
@@ -692,6 +698,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         cancelPendingImport()
         let generation = state.beginOpen(artifactID: artifact.id)
+        lastSolidBackground = "#f7f7f5"
         self.historyRoot = historyRoot
         captureMode = artifact.mode
         self.outputDirectory = outputDirectory ?? URL(fileURLWithPath: historyRoot)
@@ -859,41 +866,69 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         root.addSubview(geometryPanel); root.addSubview(layersPanel)
         root.addSubview(drawPanel); root.addSubview(outputPanel)
 
-        panelLabel("Crop", frame: NSRect(x: 0, y: 0, width: 272, height: 24),
-                   size: 16, weight: .semibold, parent: geometryPanel)
-        panelLabel("Shared Rust owns canvas geometry.", frame: NSRect(x: 0, y: 28, width: 272, height: 22),
-                   muted: true, parent: geometryPanel)
-        panelFieldLabel("X", x: 0, y: 66, parent: geometryPanel)
-        panelFieldLabel("Y", x: 144, y: 66, parent: geometryPanel)
-        configure(cropX, frame: NSRect(x: 0, y: 90, width: 128, height: 30), label: "Crop X",
-                  parent: geometryPanel)
-        configure(cropY, frame: NSRect(x: 144, y: 90, width: 128, height: 30), label: "Crop Y",
-                  parent: geometryPanel)
-        panelFieldLabel("Width", x: 0, y: 128, parent: geometryPanel)
-        panelFieldLabel("Height", x: 144, y: 128, parent: geometryPanel)
-        configure(cropWidth, frame: NSRect(x: 0, y: 152, width: 128, height: 30), label: "Crop width",
-                  parent: geometryPanel)
-        configure(cropHeight, frame: NSRect(x: 144, y: 152, width: 128, height: 30), label: "Crop height",
-                  parent: geometryPanel)
-        applyCropButton = button("Apply crop", frame: NSRect(x: 0, y: 194, width: 272, height: 34),
-                                 parent: geometryPanel) {
+        let geometryScroll = NSScrollView(frame: geometryPanel.bounds)
+        geometryScroll.autoresizingMask = [.width, .height]
+        geometryScroll.hasVerticalScroller = true; geometryScroll.drawsBackground = false
+        geometryContent.frame = NSRect(x: 0, y: 0, width: 252, height: 616)
+        geometryScroll.documentView = geometryContent
+        geometryPanel.addSubview(geometryScroll)
+
+        panelLabel("Crop", frame: NSRect(x: 0, y: 0, width: 252, height: 24),
+                   size: 16, weight: .semibold, parent: geometryContent)
+        panelLabel("Shared Rust owns canvas geometry.", frame: NSRect(x: 0, y: 28, width: 252, height: 22),
+                   muted: true, parent: geometryContent)
+        panelFieldLabel("X", x: 0, y: 66, parent: geometryContent)
+        panelFieldLabel("Y", x: 134, y: 66, parent: geometryContent)
+        configure(cropX, frame: NSRect(x: 0, y: 90, width: 118, height: 30), label: "Crop X",
+                  parent: geometryContent)
+        configure(cropY, frame: NSRect(x: 134, y: 90, width: 118, height: 30), label: "Crop Y",
+                  parent: geometryContent)
+        panelFieldLabel("Width", x: 0, y: 128, parent: geometryContent)
+        panelFieldLabel("Height", x: 134, y: 128, parent: geometryContent)
+        configure(cropWidth, frame: NSRect(x: 0, y: 152, width: 118, height: 30), label: "Crop width",
+                  parent: geometryContent)
+        configure(cropHeight, frame: NSRect(x: 134, y: 152, width: 118, height: 30), label: "Crop height",
+                  parent: geometryContent)
+        applyCropButton = button("Apply crop", frame: NSRect(x: 0, y: 194, width: 252, height: 34),
+                                 parent: geometryContent) {
             [weak self] in self?.applyCrop()
         }
 
-        panelLabel("Canvas", frame: NSRect(x: 0, y: 242, width: 272, height: 24),
-                   size: 16, weight: .semibold, parent: geometryPanel)
-        panelLabel("Resize canvas without scaling the image.", frame: NSRect(x: 0, y: 270, width: 272, height: 22),
-                   muted: true, parent: geometryPanel)
-        panelFieldLabel("Width", x: 0, y: 300, parent: geometryPanel)
-        panelFieldLabel("Height", x: 144, y: 300, parent: geometryPanel)
-        configure(canvasWidth, frame: NSRect(x: 0, y: 324, width: 128, height: 30), label: "Canvas width",
-                  parent: geometryPanel)
-        configure(canvasHeight, frame: NSRect(x: 144, y: 324, width: 128, height: 30), label: "Canvas height",
-                  parent: geometryPanel)
-        resizeButton = button("Resize canvas", frame: NSRect(x: 0, y: 356, width: 272, height: 34),
-                              parent: geometryPanel) {
+        panelLabel("Canvas", frame: NSRect(x: 0, y: 242, width: 252, height: 24),
+                   size: 16, weight: .semibold, parent: geometryContent)
+        panelLabel("Resize canvas without scaling the image.", frame: NSRect(x: 0, y: 270, width: 252, height: 22),
+                   muted: true, parent: geometryContent)
+        panelFieldLabel("Width", x: 0, y: 300, parent: geometryContent)
+        panelFieldLabel("Height", x: 134, y: 300, parent: geometryContent)
+        configure(canvasWidth, frame: NSRect(x: 0, y: 324, width: 118, height: 30), label: "Canvas width",
+                  parent: geometryContent)
+        configure(canvasHeight, frame: NSRect(x: 134, y: 324, width: 118, height: 30), label: "Canvas height",
+                  parent: geometryContent)
+        resizeButton = button("Resize canvas", frame: NSRect(x: 0, y: 356, width: 252, height: 34),
+                              parent: geometryContent) {
             [weak self] in self?.resizeCanvas()
         }
+
+        panelFieldLabel("Canvas background", x: 0, y: 414, parent: geometryContent)
+        backgroundMode = NSPopUpButton()
+        backgroundMode.addItems(withTitles: ["Solid", "Transparent"])
+        backgroundMode.frame = NSRect(x: 0, y: 440, width: 252, height: 30)
+        backgroundMode.setAccessibilityLabel("Canvas background mode")
+        backgroundMode.target = self; backgroundMode.action = #selector(changeBackgroundMode)
+        geometryContent.addSubview(backgroundMode)
+        configure(backgroundColor, frame: NSRect(x: 0, y: 482, width: 252, height: 30),
+                  label: "Canvas background color", parent: geometryContent)
+        backgroundColor.placeholderString = "#RRGGBB or #RRGGBBAA"
+        backgroundColor.formatter = nil
+        backgroundApply = button("Apply background", frame: NSRect(x: 0, y: 526, width: 146, height: 34),
+                                 parent: geometryContent) { [weak self] in self?.applyBackground() }
+        backgroundReset = button("Reset fields", frame: NSRect(x: 156, y: 526, width: 96, height: 34),
+                                 parent: geometryContent) { [weak self] in
+            self?.publishBackgroundFields(); self?.updateControls()
+        }
+        panelLabel("Changes canvas fill, not an image layer’s background.",
+                   frame: NSRect(x: 0, y: 574, width: 252, height: 42), muted: true,
+                   parent: geometryContent)
 
         buildLayersPanel()
         buildDrawPanel()
@@ -1724,6 +1759,22 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 message: "Resizing canvas…", resetCrop: true)
     }
 
+    @objc private func changeBackgroundMode() { updateControls() }
+
+    private func publishBackgroundFields() {
+        guard let snapshot = state.snapshot else { return }
+        if let color = snapshot.background { lastSolidBackground = color }
+        backgroundMode.selectItem(at: snapshot.background == nil ? 1 : 0)
+        backgroundColor.stringValue = lastSolidBackground
+    }
+
+    private func applyBackground() {
+        let color: Any = backgroundMode.indexOfSelectedItem == 0
+            ? backgroundColor.stringValue as Any : NSNull()
+        command(["operation": "set_background", "color": color],
+                message: "Changing canvas background…")
+    }
+
     private func saveDraft(closeAfter: Bool = false) {
         closeAfterCommand = closeAfter
         command(["operation": "save_draft", "updated_at_ms": EditorWorker.timestamp()],
@@ -1773,6 +1824,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.closeAfterCommand = false
                 self.showError("Editor action failed: \(error.localizedDescription)")
                 self.publishSelectedLayerFields()
+                self.publishBackgroundFields()
             }
             self.updateControls()
             self.submitPendingImportIfReady()
@@ -1792,6 +1844,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         updateViewportGeometry()
         dimensions.stringValue = "\(format(snapshot.width)) × \(format(snapshot.height)) pixels"
         canvasWidth.stringValue = format(snapshot.width); canvasHeight.stringValue = format(snapshot.height)
+        publishBackgroundFields()
         if resetCrop || cropWidth.stringValue.isEmpty {
             cropX.stringValue = "0"; cropY.stringValue = "0"
             cropWidth.stringValue = format(snapshot.width); cropHeight.stringValue = format(snapshot.height)
@@ -1814,6 +1867,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let ready = state.snapshot != nil && !state.busy
         fields.forEach { $0.isEnabled = ready }
         applyCropButton?.isEnabled = ready; resizeButton?.isEnabled = ready
+        backgroundMode?.isEnabled = ready
+        backgroundColor.isEnabled = ready && backgroundMode?.indexOfSelectedItem == 0
+        backgroundApply?.isEnabled = ready; backgroundReset?.isEnabled = ready
         undoButton?.isEnabled = ready && state.snapshot?.canUndo == true
         redoButton?.isEnabled = ready && state.snapshot?.canRedo == true
         saveButton?.isEnabled = ready && state.snapshot?.unsavedChanges == true

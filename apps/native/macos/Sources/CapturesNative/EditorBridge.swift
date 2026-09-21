@@ -311,6 +311,7 @@ struct NativeEditorSnapshot: Equatable {
     let artifactID: String
     let width: Double
     let height: Double
+    let background: String?
     let canUndo: Bool
     let canRedo: Bool
     let unsavedChanges: Bool
@@ -344,6 +345,7 @@ struct NativeEditorSnapshot: Equatable {
         }
         self.artifactID = artifactID
         self.width = width.doubleValue; self.height = height.doubleValue
+        self.background = document["background"] as? String
         self.canUndo = canUndo; self.canRedo = canRedo
         self.unsavedChanges = unsavedChanges; self.hasDraft = hasDraft
         self.layers = Array(layers.reversed())

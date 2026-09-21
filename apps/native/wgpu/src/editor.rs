@@ -208,6 +208,9 @@ struct View {
     shape_drag: Option<(Point, Point)>,
     freehand_points: Vec<Point>,
     canvas: [f64; 2],
+    background_solid: bool,
+    background_color: String,
+    last_solid_background: String,
     section: Section,
     export_options: ExportOptions,
     output: Option<(egui::TextureHandle, usize)>,
@@ -250,6 +253,9 @@ impl Default for View {
             shape_drag: None,
             freehand_points: Vec::new(),
             canvas: [1., 1.],
+            background_solid: true,
+            background_color: "#f7f7f5".into(),
+            last_solid_background: "#f7f7f5".into(),
             section: Section::Geometry,
             export_options: ExportOptions {
                 format: ExportFormat::Png,
@@ -407,6 +413,7 @@ impl View {
                 });
                 self.presented = Some(presented);
                 self.select_layer(selected);
+                self.reset_background_fields();
                 self.error = None;
                 if self.close_after_save || (self.close_requested && !self.unsaved()) {
                     self.closed = true;
@@ -416,6 +423,7 @@ impl View {
                 self.pending_layer_selection = None;
                 self.error = Some(error);
                 self.select_layer_exact(self.selected_layer.clone());
+                self.reset_background_fields();
             }
         }
         if self.close_requested && !self.unsaved() {
@@ -426,6 +434,16 @@ impl View {
 
     fn submit(&mut self, tx: &Sender<Job>, request: Request) {
         self.submit_job(tx, Job::Apply(request));
+    }
+
+    fn reset_background_fields(&mut self) {
+        if let Some(presented) = &self.presented {
+            self.background_solid = presented.document.background.is_some();
+            if let Some(color) = &presented.document.background {
+                self.last_solid_background.clone_from(color);
+            }
+            self.background_color.clone_from(&self.last_solid_background);
+        }
     }
 
     fn invalidate_output(&mut self) {
@@ -1199,6 +1217,21 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             if ui.button("Resize canvas").clicked() {
                 view.submit(tx, Request::ResizeCanvas { width: view.canvas[0], height: view.canvas[1] });
             }
+            ui.add_space(tokens.number("s-4"));
+            ui.label("Canvas background");
+            ui.checkbox(&mut view.background_solid, "Solid background");
+            ui.add_enabled(view.background_solid,
+                egui::TextEdit::singleline(&mut view.background_color)
+                    .desired_width(ui.available_width()).hint_text("#RRGGBB or #RRGGBBAA"));
+            ui.horizontal(|ui| {
+                if ui.button("Apply background").clicked() {
+                    view.submit(tx, Request::SetBackground {
+                        color: view.background_solid.then(|| view.background_color.clone()),
+                    });
+                }
+                if ui.button("Reset fields").clicked() { view.reset_background_fields(); }
+            });
+            ui.small("Changes the canvas fill, not an image layer's background.");
         });
         ui.add_space(tokens.number("s-6"));
         ui.label(RichText::new("Native editor preview").color(tokens.color("text-muted")));
@@ -2847,6 +2880,38 @@ mod tests {
             view.layer_gesture.is_none(),
             "zoomed pixels behind the sidebar cannot receive layer input"
         );
+    }
+
+    #[test]
+    fn background_fields_remember_only_published_colors_and_restore_after_errors() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let mut solid = presented(false);
+        Arc::make_mut(&mut solid.document).background = Some("#21436580".into());
+        view.receive(&ctx, Ok(solid));
+        assert!(view.background_solid);
+        assert_eq!(view.background_color, "#21436580");
+        let document = view.presented.as_ref().unwrap().document.clone();
+        view.background_color = "invalid".into();
+        view.reset_background_fields();
+        assert_eq!(view.background_color, "#21436580");
+        assert!(Arc::ptr_eq(&document, &view.presented.as_ref().unwrap().document));
+        view.background_color = "invalid".into();
+        view.pending = true;
+        view.receive(&ctx, Err("invalid background".into()));
+        assert!(!view.pending);
+        assert_eq!(view.background_color, "#21436580");
+        assert!(Arc::ptr_eq(&document, &view.presented.as_ref().unwrap().document));
+        let mut transparent = presented(true);
+        Arc::make_mut(&mut transparent.document).background = None;
+        view.receive(&ctx, Ok(transparent));
+        assert!(!view.background_solid);
+        assert_eq!(view.background_color, "#21436580");
+        view.background_color = "unapplied".into();
+        view.receive(&ctx, Err("retry".into()));
+        assert!(!view.background_solid);
+        assert_eq!(view.background_color, "#21436580");
+        assert!(view.presented.as_ref().unwrap().document.background.is_none());
     }
 
     fn presented(unsaved: bool) -> Presented {

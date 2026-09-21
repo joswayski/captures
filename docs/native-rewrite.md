@@ -23,7 +23,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices | Audio meter/device-change parity, physical recording/audio acceptance, recording editor and transcoded exports |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, import, image transforms, annotation styles, Rectangle/Ellipse/Line/Arrow/Pen and save-new-copy | Text/background/erase, remaining viewport/output controls and Tauri design parity; recording playback/timeline/editing/export |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency, import, image transforms, annotation styles, Rectangle/Ellipse/Line/Arrow/Pen, copy and save-new-copy | Text/image-background/erase, remaining viewport/output controls and Tauri design parity; recording playback/timeline/editing/export |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -101,7 +101,16 @@ draft, undo or encoded-output changes. Fit resets pan; Recenter preserves zoom.
 The workbenches retain their existing fit layout, including small-image enlargement;
 Tauri's capped fit, slider/presets, keyboard zoom and full layout remain open.
 Physical trackpad/mouse behavior still requires platform acceptance.
-Next implementation boundary: text/background and remaining output. The shipping Tauri editor remains the design
+Both hosts connect canvas fill/transparency in Geometry. Apply background submits
+one `set_background` worker transaction; the shared renderer validates hex colors
+and composites beneath existing layers. Invalid colors preserve pixels, document
+and undo/redo; hosts restore fields from the accepted state. Reset fields is not an
+edit. A transparent canvas remembers the session's last accepted solid color for
+switching back. Color changes participate in undo/redo and draft reopen; copy/export
+use the newly rendered pixels. These are canvas fills, not image-background removal,
+text backgrounds or the shipping color-picker layout. AppKit Geometry scrolls to keep
+the existing crop/canvas controls and new background controls reachable.
+Next implementation boundary: text/image-background and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams

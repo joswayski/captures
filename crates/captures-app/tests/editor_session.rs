@@ -51,6 +51,56 @@ fn image_transform(id: &str, transform: &str) -> Request {
 }
 
 #[test]
+fn background_commands_preserve_layers_and_are_transactional_undoable_and_persisted() {
+    let (data, id, original) = setup();
+    let path = data.path().join("history").join(&id).join("capture.png");
+    let original_file = fs::read(&path).unwrap();
+    let mut editor = open(data.path(), &id).unwrap();
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 10.,
+            height: 5.,
+        })
+        .unwrap();
+    let layers = editor.snapshot().document.elements.clone();
+    let set = |color: Option<&str>| {
+        serde_json::from_value::<Request>(json!({
+            "operation": "set_background", "color": color,
+        }))
+        .unwrap()
+    };
+    editor.execute(set(Some("#21436580"))).unwrap();
+    assert_eq!(editor.pixels().get_pixel(9, 4), &Rgba([33, 67, 101, 128]));
+    assert_eq!(editor.pixels().get_pixel(2, 1), original.get_pixel(2, 1));
+    assert_eq!(editor.snapshot().document.elements, layers);
+    let before = serde_json::to_value(editor.snapshot()).unwrap();
+    let pixels = editor.pixels();
+    assert!(editor.execute(set(Some("invalid"))).is_err());
+    assert_eq!(serde_json::to_value(editor.snapshot()).unwrap(), before);
+    assert!(Arc::ptr_eq(&pixels, &editor.pixels()));
+    editor.execute(set(None)).unwrap();
+    assert_eq!(editor.pixels().get_pixel(9, 4), &Rgba([0, 0, 0, 0]));
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(
+        editor.snapshot().document.background.as_deref(),
+        Some("#21436580")
+    );
+    let pixels = editor.pixels();
+    editor.execute(set(Some("#21436580"))).unwrap();
+    assert!(editor.snapshot().can_redo, "a no-op must not clear redo");
+    assert!(Arc::ptr_eq(&pixels, &editor.pixels()));
+    editor.execute(Request::Redo).unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 17 })
+        .unwrap();
+    let reopened = open(data.path(), &id).unwrap();
+    assert_eq!(reopened.snapshot().document.background, None);
+    assert_eq!(reopened.snapshot().document.elements, layers);
+    assert_eq!(reopened.pixels(), editor.pixels());
+    assert_eq!(fs::read(path).unwrap(), original_file);
+}
+
+#[test]
 fn exports_encode_current_pixels_without_mutating_session_or_original_files() {
     use captures_app::editor_session::ExportOptions;
 

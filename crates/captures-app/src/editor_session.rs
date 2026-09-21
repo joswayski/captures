@@ -59,6 +59,9 @@ pub enum Request {
         width: f64,
         height: f64,
     },
+    SetBackground {
+        color: Option<String>,
+    },
     CreateClosedShape {
         #[serde(flatten)]
         create: ClosedShapeCreate,
@@ -349,6 +352,11 @@ impl EditorSession {
                 next.redo();
             }
             Request::Commit { document } => {
+                next.commit(document);
+            }
+            Request::SetBackground { color } => {
+                let mut document = next.current().clone();
+                document.background = color;
                 next.commit(document);
             }
             Request::CreateClosedShape { create } => {

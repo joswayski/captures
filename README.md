@@ -347,6 +347,8 @@ Windows, Wayland and physical AppKit presentation remain unverified.
 The native editor still uses a workbench layout, not the shipping Tauri editor design.
 Both hosts can copy the full-resolution edited image without saving a file or draft;
 copy ignores export format and quality settings.
+Canvas background controls support a hex color or transparency, with undo/redo and
+draft restore. They change the canvas fill, not backgrounds within image layers.
 Other drawing tools, text, overwrite-original, and recording editing remain
 unconnected. Shared editor support
 is prerequisite work, not native editor acceptance. OS shortcut takeover, login items,
