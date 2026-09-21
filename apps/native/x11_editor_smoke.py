@@ -407,7 +407,7 @@ def main():
             click(editor, 58, 516)
             save(720, 420, 0, 0)
             shot(editor, "trim-before")
-            click(editor, 60, 751)
+            click(editor, 52, 807)
             save(640, 360, 0, 0)
             shot(editor, "trim-applied")
             click(editor, 35, 62)
