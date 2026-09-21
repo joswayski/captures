@@ -3,6 +3,63 @@ import XCTest
 @testable import CapturesNative
 
 final class ScreenshotEditorTests: XCTestCase {
+    func testLayerShortcutsRespectTypingLocksAcceptedSelectionAndBusyCommands() throws {
+        _ = NSApplication.shared
+        let original = layer(id: "original", name: "Original", x: 8, y: 21,
+                             visible: false, locked: true, opacity: 60)
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [original]))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showLayers(in: controller.root)
+        func event(_ key: String, _ code: UInt16, _ modifiers: NSEvent.ModifierFlags = []) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+                timestamp: 0, windowNumber: controller.window.windowNumber, context: nil,
+                characters: key, charactersIgnoringModifiers: key, isARepeat: true, keyCode: code))
+        }
+        let nameField = try field("Layer name", in: controller.root)
+        XCTAssertTrue(controller.window.makeFirstResponder(nameField))
+        _ = controller.window.performKeyEquivalent(with: try event("d", 2, .command))
+        controller.window.sendEvent(try event("\u{7f}", 51))
+        XCTAssertTrue(worker.requests.isEmpty, "typing/deletion must stay in the field")
+        let duplicate = try button("Duplicate", in: controller.root)
+        XCTAssertTrue(controller.window.makeFirstResponder(duplicate))
+        controller.window.sendEvent(try event("\u{7f}", 51))
+        controller.window.sendEvent(try event("\u{f728}", 117))
+        XCTAssertTrue(worker.requests.isEmpty, "locked layers cannot be deleted with either key")
+        worker.deferRequests = true
+        XCTAssertTrue(controller.window.performKeyEquivalent(with: try event("d", 2, .control)))
+        XCTAssertEqual(worker.requests.count, 1)
+        XCTAssertEqual(worker.requests[0]["id"] as? String, "original")
+        let edit = try XCTUnwrap(worker.requests[0]["edit"] as? [String: Any])
+        XCTAssertEqual(edit["action"] as? String, "duplicate")
+        let newID = try XCTUnwrap(edit["new_id"] as? String)
+        XCTAssertNotNil(UUID(uuidString: newID))
+        XCTAssertNotEqual(newID, "original")
+        _ = controller.window.performKeyEquivalent(with: try event("d", 2, .command))
+        controller.window.sendEvent(try event("\u{7f}", 51))
+        XCTAssertEqual(worker.requests.count, 1, "busy shortcuts cannot queue commands")
+        let copy = layer(id: newID, name: "Copy", x: 32, y: 45, visible: true, locked: false, opacity: 60)
+        worker.completePending(with: snapshot(id: "shot", unsaved: true, layers: [original, copy]))
+        XCTAssertTrue(controller.window.makeFirstResponder(nameField))
+        controller.window.sendEvent(try event("\u{7f}", 51))
+        _ = controller.window.performKeyEquivalent(with: try event("d", 2, .command))
+        XCTAssertEqual(worker.requests.count, 1, "typing must protect an unlocked selection too")
+        XCTAssertTrue(controller.window.makeFirstResponder(duplicate))
+        controller.window.sendEvent(try event("\u{f728}", 117))
+        XCTAssertEqual(worker.requests.count, 2)
+        XCTAssertEqual(worker.requests.last?["id"] as? String, newID, "accepted copy becomes selected")
+        XCTAssertEqual((worker.requests.last?["edit"] as? [String: Any])?["action"] as? String, "delete")
+        worker.completePending(with: snapshot(id: "shot", unsaved: true, layers: [original]))
+        worker.deferRequests = false; worker.failLayerAction = "duplicate"
+        _ = controller.window.performKeyEquivalent(with: try event("d", 2, .command))
+        XCTAssertEqual(worker.requests.count, 3)
+        XCTAssertEqual((try field("Layer name", in: controller.root)).stringValue, "Original",
+                       "failed duplication preserves the original selection")
+        controller.window.sendEvent(try event("\u{7f}", 51))
+        XCTAssertEqual(worker.requests.count, 3, "fallback selection is still locked")
+    }
+
     func testHistoryShortcutsUseAcceptedCommandsAndLeaveFieldUndoAlone() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true))

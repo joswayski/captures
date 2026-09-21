@@ -2444,29 +2444,34 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func handleEditorShortcut(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown else { return false }
         if event.keyCode == 53, cropPrevious != nil { cancelCrop(); return true }
-        guard state.snapshot != nil,
-              event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) else { return false }
+        guard state.snapshot != nil else { return false }
+        let command = event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control)
         let key = event.charactersIgnoringModifiers ?? ""
-        if key == "+" || key == "=" || event.keyCode == 24 || event.keyCode == 69 {
+        if command && (key == "+" || key == "=" || event.keyCode == 24 || event.keyCode == 69) {
             scaleViewport(by: 1.25)
-        } else if key == "-" || key == "_" || event.keyCode == 27 || event.keyCode == 78 {
+        } else if command && (key == "-" || key == "_" || event.keyCode == 27 || event.keyCode == 78) {
             scaleViewport(by: 1 / 1.25)
-        } else if key == "0" || event.keyCode == 82 {
+        } else if command && (key == "0" || event.keyCode == 82) {
             setViewportZoom(100)
-        } else if key.lowercased() == "z" {
-            // Field editors keep native typing undo. Route document shortcuts
-            // here rather than button key equivalents, which bypass this guard.
+        } else {
+            // Field editors retain typing and deletion. Document shortcuts use
+            // the same accepted-command and enabled-state gates as the buttons.
             let responder = window.firstResponder
             guard !(responder is NSTextView), !(responder is NSTextField),
                   !(responder is NSPopUpButton), !(responder is NSComboBox),
                   !(responder is NSSlider), !awaitingReplaceConfirmation else { return false }
-            let button = event.modifierFlags.contains(.shift) ? redoButton : undoButton
+            let button: CaptureButton?
+            if command && key.lowercased() == "z" {
+                button = event.modifierFlags.contains(.shift) ? redoButton : undoButton
+            } else if command && key.lowercased() == "d" {
+                button = duplicateButton
+            } else if event.keyCode == 51 || event.keyCode == 117 {
+                button = deleteButton
+            } else { return false }
             if button?.isEnabled == true {
                 cancelDrawing(); cancelViewportPan()
                 button?.performClick(nil)
             }
-        } else {
-            return false
         }
         return true
     }

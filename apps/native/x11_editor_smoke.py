@@ -82,7 +82,7 @@ def main():
     parser.add_argument("--zoom-only", action="store_true",
                         help="Exercise viewport gestures, toolbar and keyboard zoom without editing")
     parser.add_argument("--history-shortcuts-only", action="store_true",
-                        help="Exercise document Undo/Redo keys without stealing field undo")
+                        help="Exercise Undo/Redo, duplicate and delete keys without stealing text input")
     parser.add_argument("--text-draft-only", action="store_true",
                         help="Restore explicit-font text, save/reopen and copy pixels (no Text input UI)")
     parser.add_argument("--text-only", action="store_true",
@@ -355,6 +355,29 @@ def main():
             save_layers(lambda values: len(values) == 1, "document shortcut restored after dialog")
             run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 2, "redo after dialog")[-1] == shape
+            click(editor, 463, 62)  # Layers; select the restored shape, not the original.
+            click(editor, 100, 158)
+            run("xdotool", "key", "ctrl+d", "sleep", ".3")
+            copied = save_layers(lambda values: len(values) == 3, "keyboard duplicate")[-1]
+            assert copied["id"] != shape["id"]
+            expected = dict(shape, id=copied["id"], x=shape["x"] + 24, y=shape["y"] + 24,
+                            visible=True, locked=False)
+            assert copied == expected
+            click(editor, 396, 62)
+            click(editor, 75, 428)
+            run("xdotool", "key", "ctrl+d", "Delete", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 3, "field protects layer shortcuts")[-1] == copied
+            click(editor, 463, 62)
+            run("xdotool", "key", "Delete", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 2, "Delete removes selected copy")[-1] == shape
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 3, "undo keyboard deletion")[-1] == copied
+            click(editor, 100, 158)  # Select restored copy explicitly after undo.
+            run("xdotool", "key", "BackSpace", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 2, "Backspace removes selected copy")[-1] == shape
+            click(editor, 100, 202)  # Original image is locked.
+            run("xdotool", "key", "Delete", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 2, "locked keyboard deletion")[-1] == shape
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
             wait(lambda: app.poll() is not None, "shortcut suite quits")
@@ -362,9 +385,11 @@ def main():
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
                 "checks": ["keyboard-undo", "keyboard-redo-exact-layer", "field-undo-focus", "field-redo-focus",
-                           "confirmation-focus", "shortcut-restored-after-dialog", "original-unchanged"],
+                           "confirmation-focus", "shortcut-restored-after-dialog", "original-unchanged",
+                           "duplicate-offset-fresh-id", "field-layer-shortcuts", "delete-selected-copy",
+                           "backspace-selected-copy", "locked-delete-guard"],
             }, indent=2) + "\n")
-            print("PASS native history shortcuts: undo, redo, field/dialog focus and original unchanged")
+            print("PASS native editor shortcuts: undo, redo, duplicate, delete, field/dialog focus and original unchanged")
             return
 
         if args.overwrite_only:

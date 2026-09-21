@@ -1325,7 +1325,7 @@ impl Drop for Editor {
 fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     let previous_section = view.section;
     handle_viewport_shortcuts(ui.ctx(), view);
-    handle_history_shortcuts(ui.ctx(), view, tx);
+    handle_document_shortcuts(ui.ctx(), view, tx);
     if !ui.ctx().egui_wants_keyboard_input()
         && !egui::Popup::is_any_open(ui.ctx())
         && ui.input(|input| input.key_pressed(egui::Key::Escape))
@@ -1769,9 +1769,11 @@ fn handle_viewport_shortcuts(ctx: &egui::Context, view: &mut View) {
     }
 }
 
-fn handle_history_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<Job>) {
+fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<Job>) {
     if ctx.current_pass_index() != 0
         || !ctx.input(|input| input.focused)
+        // Widgets have not processed this frame's click/focus change yet.
+        || ctx.input(|input| input.pointer.any_pressed())
         || ctx.text_edit_focused()
         || egui::Popup::is_any_open(ctx)
         || view.closed
@@ -1785,14 +1787,16 @@ fn handle_history_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<Jo
         let mut requests = Vec::new();
         input.events.retain(|event| {
             if let egui::Event::Key {
-                key: egui::Key::Z,
+                key,
                 pressed: true,
                 modifiers,
                 ..
             } = event
-                && (modifiers.command || modifiers.ctrl)
+                && (matches!(key, egui::Key::Delete | egui::Key::Backspace)
+                    || (matches!(key, egui::Key::Z | egui::Key::D)
+                        && (modifiers.command || modifiers.ctrl)))
             {
-                requests.push(modifiers.shift);
+                requests.push((*key, modifiers.shift));
                 false
             } else {
                 true
@@ -1800,16 +1804,46 @@ fn handle_history_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<Jo
         });
         requests
     });
-    for redo in requests {
-        if !view.pending
-            && view
-                .presented
-                .as_ref()
-                .is_some_and(|p| if redo { p.can_redo } else { p.can_undo })
-        {
+    for (key, shift) in requests {
+        if view.pending {
+            continue;
+        }
+        let Some(presented) = &view.presented else {
+            continue;
+        };
+        let layer = presented
+            .document
+            .elements
+            .iter()
+            .find(|element| Some(&element.base().id) == view.selected_layer.as_ref());
+        let request = match key {
+            egui::Key::Z if shift && presented.can_redo => Some(Request::Redo),
+            egui::Key::Z if !shift && presented.can_undo => Some(Request::Undo),
+            egui::Key::D => layer.map(|element| Request::Layer {
+                id: element.base().id.clone(),
+                edit: LayerEdit::Duplicate {
+                    new_id: uuid::Uuid::new_v4().to_string(),
+                },
+            }),
+            egui::Key::Delete | egui::Key::Backspace => layer
+                .filter(|element| !element.base().locked)
+                .map(|element| Request::Layer {
+                    id: element.base().id.clone(),
+                    edit: LayerEdit::Delete,
+                }),
+            _ => None,
+        };
+        if let Some(request) = request {
             view.cancel_edit_gestures();
             view.viewport_pan = None;
-            view.submit(tx, if redo { Request::Redo } else { Request::Undo });
+            if let Request::Layer {
+                edit: LayerEdit::Duplicate { new_id },
+                ..
+            } = &request
+            {
+                view.pending_layer_selection = Some(new_id.clone());
+            }
+            view.submit(tx, request);
         }
     }
 }
@@ -3941,6 +3975,175 @@ mod tests {
     }
 
     #[test]
+    fn layer_shortcuts_preserve_typing_locks_selection_and_one_in_flight_work() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let mut initial = presented(true);
+        let Element::Image(image) = &mut Arc::make_mut(&mut initial.document).elements[0] else {
+            panic!()
+        };
+        image.base.locked = true;
+        image.base.visible = false;
+        let original_id = image.base.id.clone();
+        view.receive(&ctx, Ok(initial));
+        let (tx, rx) = mpsc::channel();
+        let key = |key, ctrl| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: true,
+            modifiers: egui::Modifiers {
+                ctrl,
+                ..Default::default()
+            },
+        };
+        let frame = |view: &mut View, events, text_focus| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    handle_document_shortcuts(&ctx, view, &tx);
+                    if text_focus {
+                        ui.push_id("layer-typing", |ui| {
+                            ui.text_edit_singleline(&mut "typed text".to_owned())
+                                .request_focus();
+                        });
+                    } else {
+                        ui.push_id("layer-action", |ui| {
+                            ui.button("Layer action").request_focus();
+                        });
+                    }
+                    if ctx.current_pass_index() == 0 {
+                        ctx.request_discard("layer shortcut multipass");
+                    }
+                },
+            );
+            output.textures_delta.clear();
+        };
+        frame(&mut view, vec![], true);
+        frame(
+            &mut view,
+            vec![key(egui::Key::D, true), key(egui::Key::Delete, false)],
+            true,
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "typing must not duplicate or delete a layer"
+        );
+        frame(&mut view, vec![], false);
+        frame(
+            &mut view,
+            vec![
+                key(egui::Key::D, false),
+                key(egui::Key::Delete, false),
+                key(egui::Key::Backspace, false),
+            ],
+            false,
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "plain D and locked deletion do nothing"
+        );
+        frame(
+            &mut view,
+            vec![
+                egui::Event::PointerButton {
+                    pos: egui::pos2(5., 5.),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+                key(egui::Key::D, true),
+            ],
+            false,
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "focus-changing clicks must be processed before document keys"
+        );
+        frame(
+            &mut view,
+            vec![egui::Event::PointerButton {
+                pos: egui::pos2(5., 5.),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+            false,
+        );
+        view.confirm_discard = true;
+        frame(&mut view, vec![key(egui::Key::D, true)], false);
+        assert!(rx.try_recv().is_err());
+        view.confirm_discard = false;
+        view.shape_drag = Some((Point { x: 3., y: 7. }, Point { x: 20., y: 30. }));
+        frame(
+            &mut view,
+            vec![key(egui::Key::D, true), key(egui::Key::D, true)],
+            false,
+        );
+        let Job::Apply(Request::Layer {
+            id,
+            edit: LayerEdit::Duplicate { new_id },
+        }) = rx.try_recv().unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(id, original_id);
+        assert_ne!(new_id, original_id);
+        assert!(uuid::Uuid::parse_str(&new_id).is_ok());
+        assert!(view.shape_drag.is_none() && rx.try_recv().is_err());
+        assert_eq!(
+            view.selected_layer.as_deref(),
+            Some(original_id.as_str()),
+            "selection waits for accepted copy"
+        );
+        frame(&mut view, vec![key(egui::Key::Delete, false)], false);
+        assert!(rx.try_recv().is_err(), "busy shortcuts must not queue");
+        view.receive(&ctx, Err("render rejected".into()));
+        assert_eq!(view.selected_layer.as_deref(), Some(original_id.as_str()));
+        assert!(view.pending_layer_selection.is_none());
+        frame(&mut view, vec![key(egui::Key::D, true)], false);
+        let Job::Apply(Request::Layer {
+            edit: LayerEdit::Duplicate {
+                new_id: accepted_id,
+            },
+            ..
+        }) = rx.try_recv().unwrap()
+        else {
+            panic!()
+        };
+        assert_ne!(accepted_id, new_id);
+        let mut accepted = presented(true);
+        let mut copy = accepted.document.elements[0].clone();
+        let Element::Image(image) = &mut copy else {
+            panic!()
+        };
+        image.base.id = accepted_id.clone();
+        image.base.locked = false;
+        image.base.visible = true;
+        Arc::make_mut(&mut accepted.document).elements.push(copy);
+        view.receive(&ctx, Ok(accepted));
+        assert_eq!(view.selected_layer.as_deref(), Some(accepted_id.as_str()));
+        frame(&mut view, vec![key(egui::Key::Backspace, false)], false);
+        assert!(
+            matches!(rx.try_recv(), Ok(Job::Apply(Request::Layer { id, edit: LayerEdit::Delete })) if id == accepted_id)
+        );
+        view.receive(&ctx, Ok(presented(true)));
+        view.select_layer_exact(None);
+        frame(
+            &mut view,
+            vec![key(egui::Key::D, true), key(egui::Key::Delete, false)],
+            false,
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "no selection must not target a fallback layer"
+        );
+    }
+
+    #[test]
     fn history_shortcuts_respect_text_focus_confirmation_and_one_in_flight_command() {
         let ctx = egui::Context::default();
         let mut view = View::default();
@@ -3965,7 +4168,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    handle_history_shortcuts(&ctx, view, &tx);
+                    handle_document_shortcuts(&ctx, view, &tx);
                     if ctx.current_pass_index() == 0 {
                         remaining = ctx.input(|input| input.events.len());
                     }

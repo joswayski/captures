@@ -132,6 +132,12 @@ the native first responder before routing either modifier, replacing uncondition
 button key equivalents. Disabled history actions do nothing. These bindings retain
 normal output invalidation and render-before-publish behavior; they do not save
 drafts or register OS-global shortcuts. Physical input/IME/accessibility remain open.
+Both hosts also route Cmd/Ctrl D to duplicate the selected layer and Delete/Backspace
+to delete it unless locked. Hidden/locked selections can be duplicated through the
+existing shared command. Duplication selects the fresh ID after acceptance; failed
+keyboard duplication retains the original selection. Text fields and dialogs keep
+keyboard ownership, accepted shortcuts cancel transient gestures, and repeats do
+not queue behind the worker. Clipboard-layer paste and arrow-key nudging remain open.
 Both hosts expose a zoom preset menu with Fit, 50%, 100% and 200%. Its selected
 value tracks custom percentages from steps, wheel and magnification; obsolete
 custom rows are removed. Selecting a preset uses the existing shared viewport
