@@ -135,6 +135,182 @@ fn spaces_keep_advance_without_ink_and_empty_text_is_valid() {
 }
 
 #[test]
+fn outlines_stroke_contours_with_hollow_interiors_round_joins_and_stable_metrics() {
+    let mut engine = renderer();
+    let filled = engine.render_line("L", &style()).unwrap();
+    let outlined = engine.render_outline_line("L", &style(), 8.).unwrap();
+    assert_eq!(outlined.advance, 70.);
+    assert_eq!(outlined.baseline, filled.baseline);
+    assert_eq!(outlined.bounds.x, filled.bounds.x - 4.);
+    assert_eq!(outlined.bounds.y, filled.bounds.y - 4.);
+    assert_eq!(outlined.bounds.width, filled.bounds.width + 8.);
+    assert_eq!(outlined.bounds.height, filled.bounds.height + 8.);
+    let pixel = |x: i32, up: i32| {
+        outlined
+            .pixels
+            .get_pixel(
+                (x - outlined.bounds.x as i32) as u32,
+                (outlined.baseline as i32 - up - outlined.bounds.y as i32) as u32,
+            )
+            .0
+    };
+    // The original L has a 15px stem, a 60×15px foot and an 80px ascender.
+    // Stroke spans both sides of each contour, not the filled glyph interior.
+    assert_eq!(pixel(-3, 40), style().color);
+    assert_eq!(pixel(1, 40), style().color);
+    assert_eq!(pixel(7, 40)[3], 0);
+    assert_eq!(pixel(40, 7)[3], 0);
+    assert_eq!(pixel(40, 1), style().color);
+    assert_eq!(
+        pixel(-4, 84)[3],
+        0,
+        "round, not square/mitered, outer corner"
+    );
+    assert_eq!(
+        engine
+            .render_outline_line("L", &style(), 2.)
+            .unwrap()
+            .pixels
+            .width(),
+        filled.pixels.width() + 2
+    );
+    assert_eq!(
+        engine
+            .render_outline_line("L", &style(), 8.)
+            .unwrap()
+            .pixels,
+        outlined.pixels
+    );
+    assert_eq!(
+        engine.render_line("L", &style()).unwrap().pixels,
+        filled.pixels
+    );
+}
+
+#[test]
+fn outlined_shaping_preserves_faces_marks_bidi_and_single_line_opacity() {
+    let mut engine = renderer();
+    for (text, advance) in [("fi", 45.), ("A\u{301}", 70.), ("אב", 140.), ("AA", 80.)] {
+        let line = engine.render_outline_line(text, &style(), 4.).unwrap();
+        assert!((line.advance - advance).abs() < 0.001);
+        assert!(line.pixels.pixels().any(|pixel| pixel.0 == style().color));
+        assert!(line.pixels.pixels().all(|pixel| pixel[3] <= 128));
+    }
+    let bold = engine
+        .render_outline_line(
+            "L",
+            &TextStyle {
+                bold: true,
+                ..style()
+            },
+            4.,
+        )
+        .unwrap();
+    assert_eq!(bold.advance, 80.);
+    let italic = engine
+        .render_outline_line(
+            "L",
+            &TextStyle {
+                italic: true,
+                ..style()
+            },
+            8.,
+        )
+        .unwrap();
+    assert_eq!(italic.advance, 70.);
+    assert!(italic.bounds.x <= -13.);
+    for (text, advance) in [("", 0.), ("   ", 90.)] {
+        let line = engine.render_outline_line(text, &style(), 8.).unwrap();
+        assert!((line.advance - advance).abs() < 0.001);
+        assert_eq!(line.pixels.dimensions(), (0, 0));
+    }
+}
+
+#[test]
+fn outlined_fractional_glyph_positions_move_coverage_not_only_bitmap_bounds() {
+    let line = renderer()
+        .render_outline_line(
+            "ff",
+            &TextStyle {
+                size: 101.25,
+                ..style()
+            },
+            2.,
+        )
+        .unwrap();
+    // Each f advances 400 font units at 101.25/1000, so the second stem starts
+    // at x40.5. Its two-pixel stroke covers x39.5..41.5: half/full/half pixels.
+    let row = (line.baseline as i32 - 30 - line.bounds.y as i32) as u32;
+    for (x, expected) in [(39, 64_u8), (40, 128), (41, 64), (42, 0)] {
+        let actual = line
+            .pixels
+            .get_pixel((x - line.bounds.x as i32) as u32, row)[3];
+        assert!(
+            actual.abs_diff(expected) <= 1,
+            "x{x}: {actual} != {expected}"
+        );
+    }
+}
+
+#[test]
+fn outlined_color_and_bitmap_glyphs_fail_explicitly_without_poisoning_fill() {
+    for bytes in [
+        include_bytes!("shaping-color.ttf").as_slice(),
+        include_bytes!("shaping-bitmap.ttf").as_slice(),
+    ] {
+        let mut engine = TextRenderer::new([Arc::from(bytes)]).unwrap();
+        let before = engine.render_line("A", &style()).unwrap();
+        assert!(
+            engine
+                .render_outline_line("A", &style(), 4.)
+                .err()
+                .unwrap()
+                .contains("monochrome scalable")
+        );
+        assert_eq!(
+            engine.render_line("A", &style()).unwrap().pixels,
+            before.pixels
+        );
+    }
+}
+
+#[test]
+fn outlined_validation_bounds_and_pixel_budgets_leave_the_renderer_reusable() {
+    let mut engine = renderer();
+    for width in [0., -1., f32::NAN, f32::INFINITY, 512.1] {
+        assert!(engine.render_outline_line("L", &style(), width).is_err());
+    }
+    assert!(engine.render_outline_line("☃", &style(), 4.).is_err());
+    assert!(
+        engine
+            .render_outline_line(&"L".repeat(240), &style(), 4.)
+            .is_err()
+    );
+    assert!(
+        engine
+            .render_outline_line(
+                &"L".repeat(80),
+                &TextStyle {
+                    size: 4.,
+                    ..style()
+                },
+                512.
+            )
+            .err()
+            .unwrap()
+            .contains("pixel budget")
+    );
+    assert_eq!(
+        engine
+            .render_outline_line("fi", &style(), 4.)
+            .unwrap()
+            .advance,
+        45.
+    );
+    assert_eq!(engine.render_line("L", &style()).unwrap().advance, 70.);
+}
+
+#[test]
 fn color_glyphs_keep_palette_rgb_and_multiply_requested_opacity() {
     let mut renderer =
         TextRenderer::new([Arc::from(include_bytes!("shaping-color.ttf").as_slice())]).unwrap();

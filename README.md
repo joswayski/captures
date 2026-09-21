@@ -268,7 +268,8 @@ paragraph helpers now provide measured wrapping, alignment, auto-width boxes and
 background-plate geometry. An opt-in document renderer composites filled text and
 square/rounded plates from those fonts, with rotation, opacity and blending. Shared
 text selection, movement and resizing follow the shipping editor's interaction rules;
-text outlines are still unsupported. Text shadows follow the glyphs, or the plate
+native document text outlines are still unsupported. A shared single-line outline
+primitive is available for the next integration slice. Text shadows follow the glyphs, or the plate
 when one is enabled. Editor workers can own explicit
 fonts and preserve their exact bytes in local draft sidecars, so text edits, undo,
 export and reopening use the same fonts. Typed commands create plain text and edit

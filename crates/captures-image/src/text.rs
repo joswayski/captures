@@ -4,13 +4,14 @@
 //! wrapping, plates, shadows, document edits and native input belong to the
 //! editor integration, not this primitive. The legacy `Shape::Text` is unchanged.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use cosmic_text::{
-    Align, Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style, SwashCache, SwashContent,
-    Weight, Wrap, fontdb,
+    Align, Attrs, Buffer, CacheKey, CacheKeyFlags, Family, FontSystem, Metrics, Shaping, Style,
+    SwashCache, SwashContent, SwashImage, Weight, Wrap, fontdb,
 };
 use image::{Pixel, Rgba, RgbaImage};
+use swash::zeno::{Format, Join, Mask, Origin, Stroke, Vector};
 
 use crate::Bounds;
 
@@ -67,8 +68,26 @@ impl TextRenderer {
     }
 
     pub fn render_line(&mut self, text: &str, style: &TextStyle<'_>) -> Result<TextLine, String> {
-        let result = self.render_line_inner(text, style);
+        let result = self.render_line_inner(text, style, None);
         self.raster.image_cache.clear();
+        result
+    }
+
+    /// Stroke actual glyph contours with round joins and no filled interior.
+    /// The centered width is in raster pixels; advances and baseline stay unchanged.
+    /// Color/bitmap glyphs are explicit errors rather than dilated or substituted.
+    pub fn render_outline_line(
+        &mut self,
+        text: &str,
+        style: &TextStyle<'_>,
+        width: f32,
+    ) -> Result<TextLine, String> {
+        if !width.is_finite() || width <= 0. || width > 512. {
+            return Err("Text outline width must be greater than zero and at most 512.".into());
+        }
+        let result = self.render_line_inner(text, style, Some(width));
+        self.raster.image_cache.clear();
+        self.raster.outline_command_cache.clear();
         result
     }
 
@@ -128,18 +147,81 @@ impl TextRenderer {
         Ok(buffer)
     }
 
-    fn render_line_inner(&mut self, text: &str, style: &TextStyle<'_>) -> Result<TextLine, String> {
+    fn outline_image(&mut self, key: CacheKey, width: f32) -> Result<Option<SwashImage>, String> {
+        let Some(fill) = self.raster.get_image(&mut self.fonts, key) else {
+            return Ok(None); // Nonpainting glyph, such as a space.
+        };
+        if fill.content != SwashContent::Mask
+            || !matches!(fill.source, swash::scale::Source::Outline)
+        {
+            return Err("Text outlines require monochrome scalable glyphs.".into());
+        }
+        // cosmic-text retains the shaped face/weight, hinting and synthetic italic
+        // in these paths. Match Swash's baseline-up placement and subpixel offset.
+        let commands = self
+            .raster
+            .get_outline_commands(&mut self.fonts, key)
+            .ok_or("Text glyph has no scalable outline.")?;
+        let mut offset = Vector::new(key.x_bin.as_float(), key.y_bin.as_float());
+        if key.flags.contains(CacheKeyFlags::PIXEL_FONT) {
+            offset = Vector::new(offset.x.round(), offset.y.round());
+        }
+        let mut stroke = Stroke::new(width);
+        stroke.join(Join::Round);
+        let mut mask = Mask::new(commands);
+        mask.format(Format::Alpha)
+            .origin(Origin::BottomLeft)
+            .style(stroke)
+            .offset(offset)
+            .render_offset(offset);
+        let mut within_budget = false;
+        mask.inspect(|_, width, height| {
+            within_budget = width <= MAX_EXTENT as u32
+                && height <= MAX_EXTENT as u32
+                && u64::from(width) * u64::from(height) <= MAX_PIXELS;
+        });
+        if !within_budget {
+            return Err("Text outline exceeds the raster bounds limit.".into());
+        }
+        let (data, placement) = mask.render();
+        Ok(Some(SwashImage {
+            source: swash::scale::Source::Outline,
+            content: SwashContent::Mask,
+            placement,
+            data,
+        }))
+    }
+
+    fn render_line_inner(
+        &mut self,
+        text: &str,
+        style: &TextStyle<'_>,
+        outline_width: Option<f32>,
+    ) -> Result<TextLine, String> {
         let buffer = self.shape_line(text, style)?;
         let run = buffer.layout_runs().next().expect("validated line");
         if run.line_w > MAX_EXTENT {
             return Err("Text line exceeds the raster bounds limit.".into());
         }
+        // Operation-local: different widths and filled/outlined calls cannot reuse
+        // one another's masks. Commands and fill images are cleared by the caller.
+        let mut outlines = HashMap::new();
         let mut placements = Vec::new();
         let mut bounds: Option<(i32, i32, i32, i32)> = None;
         let mut glyph_pixels = 0_u64;
         for glyph in run.glyphs {
             let physical = glyph.physical((0., run.line_y), 1.);
-            let Some(image) = self.raster.get_image(&mut self.fonts, physical.cache_key) else {
+            let image = if let Some(width) = outline_width {
+                if let std::collections::hash_map::Entry::Vacant(entry) =
+                    outlines.entry(physical.cache_key)
+                {
+                    entry.insert(self.outline_image(physical.cache_key, width)?);
+                }
+                &outlines[&physical.cache_key]
+            } else {
+                self.raster.get_image(&mut self.fonts, physical.cache_key)
+            };
+            let Some(image) = image else {
                 continue; // Spaces and other nonpainting glyphs still contribute advance.
             };
             if image.content == SwashContent::SubpixelMask {
@@ -187,9 +269,13 @@ impl TextRenderer {
         }
         let mut pixels = RgbaImage::new(width as u32, height as u32);
         for (key, x, y) in placements {
-            let image = self.raster.image_cache[&key]
-                .as_ref()
-                .expect("rasterized above");
+            let image = if outline_width.is_some() {
+                &outlines[&key]
+            } else {
+                &self.raster.image_cache[&key]
+            }
+            .as_ref()
+            .expect("rasterized above");
             for row in 0..image.placement.height {
                 for column in 0..image.placement.width {
                     let index = (row * image.placement.width + column) as usize;
