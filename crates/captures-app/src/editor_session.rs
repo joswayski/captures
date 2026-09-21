@@ -231,6 +231,9 @@ pub struct AnnotationControls<'a> {
 pub struct Snapshot<'a> {
     pub artifact_id: &'a str,
     pub original_export_path: Option<&'a Path>,
+    /// Shipping's initial placement size, pinned to the capture rather than the
+    /// editable canvas. Hosts adopt it once and retain subsequent user choices.
+    pub initial_text_size: f64,
     pub document: &'a Document,
     /// Only these pinned session fonts are available; host defaults never replace
     /// a reopened draft's exact files or expand its font set implicitly.
@@ -252,6 +255,7 @@ pub struct EditorSession {
     history_root: PathBuf,
     drafts_root: PathBuf,
     original_export_path: Option<PathBuf>,
+    initial_text_size: f64,
     history: DocumentHistory,
     original_path: PathBuf,
     persisted: Document,
@@ -349,6 +353,9 @@ impl EditorSession {
             history_root: request.history_root,
             drafts_root: request.drafts_root,
             original_export_path,
+            initial_text_size: (f64::from(entry.width.min(entry.height)) * 0.055)
+                .round()
+                .clamp(24., 72.),
             history: DocumentHistory::new(document.clone()),
             original_path,
             persisted: document,
@@ -364,6 +371,7 @@ impl EditorSession {
         Snapshot {
             artifact_id: &self.artifact_id,
             original_export_path: self.original_export_path.as_deref(),
+            initial_text_size: self.initial_text_size,
             document: self.history.current(),
             font_families: self.fonts.as_ref().map(|fonts| &fonts.assets.families),
             text_style_presets: crate::editor_text::TEXT_STYLE_PRESETS

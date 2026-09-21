@@ -62,6 +62,7 @@ struct Presented {
     document: Arc<Document>,
     pixels: Arc<RgbaImage>,
     original_export_path: Option<PathBuf>,
+    initial_text_size: f64,
     replaced_original: bool,
     font_families: BTreeMap<String, String>,
     text_style_presets: Vec<TextStylePreset>,
@@ -82,6 +83,7 @@ impl Presented {
             document: Arc::new(snapshot.document.clone()),
             pixels: session.pixels(),
             original_export_path: snapshot.original_export_path.map(Path::to_owned),
+            initial_text_size: snapshot.initial_text_size,
             replaced_original: false,
             font_families: snapshot.font_families.cloned().unwrap_or_default(),
             text_style_presets: snapshot.text_style_presets,
@@ -405,7 +407,7 @@ impl Default for View {
             draw_shape: DrawShape::Rectangle,
             rotation_snap_degrees: DEFAULT_ROTATION_SNAP_DEGREES,
             new_text_preset: None,
-            new_text_size: 32.,
+            new_text_size: 24.,
             new_text_color: "#ff3b5c".into(),
             wand_tolerance: 36.,
             wand_contiguous: true,
@@ -534,6 +536,7 @@ impl View {
         match result {
             Ok(mut presented) => {
                 if self.presented.is_none() {
+                    self.new_text_size = presented.initial_text_size;
                     self.new_text_preset = presented
                         .text_style_presets
                         .iter()
@@ -4314,6 +4317,7 @@ mod tests {
             document: Arc::new(Document::new_capture("fixture", 7., 3., None)),
             pixels: Arc::new(RgbaImage::new(7, 3)),
             original_export_path: None,
+            initial_text_size: 24.,
             replaced_original: false,
             font_families: captures_app::editor_fonts::bundled().families,
             text_style_presets: captures_app::editor_text::TEXT_STYLE_PRESETS.into(),
@@ -4588,9 +4592,11 @@ mod tests {
     fn new_text_defaults_are_per_editor_and_survive_responses_and_errors() {
         let ctx = egui::Context::default();
         let mut view = View::default();
-        view.receive(&ctx, Ok(presented_text("old", "accepted")));
+        let mut initial = presented_text("old", "accepted");
+        initial.initial_text_size = 39.; // Original capture, not this tiny draft canvas.
+        view.receive(&ctx, Ok(initial));
         assert_eq!(view.new_text_preset.as_deref(), Some("standard"));
-        assert_eq!(view.new_text_size, 32.);
+        assert_eq!(view.new_text_size, 39.);
         assert_eq!(view.new_text_color, "#ff3b5c");
         view.new_text_preset = Some("mono-box".into());
         view.new_text_size = 37.5;
@@ -4606,7 +4612,7 @@ mod tests {
         let mut reopened = View::default();
         reopened.receive(&ctx, Ok(plain));
         assert_eq!(reopened.new_text_preset, None);
-        assert_eq!(reopened.new_text_size, 32.);
+        assert_eq!(reopened.new_text_size, 24.);
         assert_eq!(reopened.new_text_color, "#ff3b5c");
     }
 

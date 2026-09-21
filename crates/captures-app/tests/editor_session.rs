@@ -51,6 +51,58 @@ fn image_transform(id: &str, transform: &str) -> Request {
 }
 
 #[test]
+fn initial_text_size_uses_capture_short_axis_rounding_and_clamps_not_draft_canvas() {
+    // Expected values independently taken from Tauri's capture-loading rule.
+    for (width, height, expected) in [
+        (640, 360, 24.),
+        (900, 445, 24.),
+        (900, 446, 25.),
+        (1200, 699, 38.),
+        (1200, 700, 39.),
+        (700, 1200, 39.),
+        (1500, 1299, 71.),
+        (1500, 1300, 72.),
+        (1500, 1400, 72.),
+    ] {
+        let data = tempfile::tempdir().unwrap();
+        let image = RgbaImage::from_pixel(width, height, Rgba([31, 73, 19, 255]));
+        let capture = captures_app::persist_screenshot(
+            &data.path().join("history"),
+            &image,
+            CaptureMode::Region,
+        )
+        .unwrap();
+        let mut editor = open(data.path(), &capture.entry.id).unwrap();
+        assert_eq!(
+            editor.snapshot().initial_text_size,
+            expected,
+            "{width}×{height}"
+        );
+        assert_eq!(
+            serde_json::to_value(editor.snapshot()).unwrap()["initial_text_size"],
+            expected
+        );
+        editor
+            .execute(Request::ResizeCanvas {
+                width: 5.,
+                height: 4.,
+            })
+            .unwrap();
+        assert_eq!(editor.snapshot().initial_text_size, expected);
+        editor
+            .execute(Request::SaveDraft { updated_at_ms: 31 })
+            .unwrap();
+        let reopened = open(data.path(), &capture.entry.id).unwrap();
+        assert_eq!(reopened.snapshot().document.width, 5.);
+        assert_eq!(
+            reopened.snapshot().initial_text_size,
+            expected,
+            "restored draft"
+        );
+    }
+}
+
+#[test]
 fn trim_is_one_undo_step_preserves_pixels_redo_and_original_and_reopens() {
     let (data, id, original) = setup();
     let path = data.path().join("history").join(&id).join("capture.png");

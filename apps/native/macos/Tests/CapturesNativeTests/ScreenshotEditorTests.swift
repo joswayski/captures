@@ -2937,12 +2937,14 @@ final class ScreenshotEditorTests: XCTestCase {
         rotatedElement["rotation"] = Double.pi / 3
         let value: [String: Any] = [
             "artifact_id": "shot", "document": ["height": 100, "elements": [rotatedElement], "width": 200],
+            "initial_text_size": 39,
             "selection_outlines": ["rotated": [
                 ["x": 12, "y": 4], ["x": 26, "y": 18], ["x": 12, "y": 32], ["x": -2, "y": 18],
             ]],
             "can_undo": false, "can_redo": false, "unsaved_changes": false, "has_draft": false,
         ]
         let parsed = try XCTUnwrap(NativeEditorSnapshot(value))
+        XCTAssertEqual(parsed.initialTextSize, 39, "capture size must not be inferred from draft dimensions")
         XCTAssertEqual(parsed.layers[0].selectionOutline,
                        [CGPoint(x: 12, y: 4), CGPoint(x: 26, y: 18),
                         CGPoint(x: 12, y: 32), CGPoint(x: -2, y: 18)])
@@ -3354,7 +3356,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(point["x"]), 160, accuracy: 0.001)
         XCTAssertEqual(try XCTUnwrap(point["y"]), 270, accuracy: 0.001)
         XCTAssertEqual(request["text"] as? String, "")
-        XCTAssertEqual(request["fontSize"] as? Double, 32)
+        XCTAssertEqual(request["fontSize"] as? Double, 24)
         XCTAssertEqual(request["color"] as? String, "#ff3b5c")
         XCTAssertNil(request["stylePreset"], "drafts without named presets keep the plain family request")
         XCTAssertEqual(controller.state.snapshot?.layers.first?.id, "fresh-text")
@@ -3365,7 +3367,8 @@ final class ScreenshotEditorTests: XCTestCase {
     func testNewTextDefaultsUsePinnedPresetAndRetainInputAcrossFailureAndSnapshots() throws {
         _ = NSApplication.shared
         let fonts = ["sans": "Liberation Sans", "mono": "Liberation Mono"]
-        let initial = snapshot(id: "shot", layers: [textLayer(id: "existing", text: "old")], fonts: fonts)
+        let initial = snapshot(id: "shot", initialTextSize: 39,
+                               layers: [textLayer(id: "existing", text: "old")], fonts: fonts)
         let worker = FakeEditorWorker(snapshot: initial)
         let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker,
                                                     numberLocale: Locale(identifier: "fr_FR"))
@@ -3381,6 +3384,7 @@ final class ScreenshotEditorTests: XCTestCase {
         preset.selectItem(withTitle: "Mono box")
         let size = try field("New text size", in: controller.root)
         let color = try field("New text color", in: controller.root)
+        XCTAssertEqual(size.stringValue, "39", "use shared capture size, not the restored canvas")
         size.stringValue = "48,5"; color.stringValue = "#12abef"
         XCTAssertTrue(worker.requests.isEmpty)
         XCTAssertTrue(try segmented("Output preview image", in: controller.root).isEnabled,
@@ -3412,7 +3416,7 @@ final class ScreenshotEditorTests: XCTestCase {
         defer { fresh.window.orderOut(nil) }
         fresh.present(artifact: artifact(id: "fresh"), historyRoot: "/native/History")
         XCTAssertEqual(try popup("New text style", in: fresh.root).titleOfSelectedItem, "Standard")
-        XCTAssertEqual(try field("New text size", in: fresh.root).stringValue, "32")
+        XCTAssertEqual(try field("New text size", in: fresh.root).stringValue, "24")
         XCTAssertEqual(try field("New text color", in: fresh.root).stringValue, "#ff3b5c")
     }
 
@@ -4056,6 +4060,7 @@ final class ScreenshotEditorTests: XCTestCase {
                           unsaved: Bool = false, draft: Bool = false,
                           canRedo: Bool = false,
                           originalExportPath: String? = nil,
+                          initialTextSize: Double = 24,
                           layers: [[String: Any]] = [],
                           annotations: [String: [String: Any]] = [:],
                           textShadows: [String: [String: Any]]? = nil,
@@ -4063,6 +4068,7 @@ final class ScreenshotEditorTests: XCTestCase {
         var value: [String: Any] = [
             "artifact_id": id, "document": ["width": width, "height": height,
                                                   "elements": layers],
+            "initial_text_size": initialTextSize,
             "font_families": fonts,
             "text_style_presets": ([
                 ["id": "standard", "label": "Standard", "fontFamily": "sans", "background": NSNull(), "outlined": false, "roundedBackground": false],

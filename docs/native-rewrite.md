@@ -354,15 +354,18 @@ per slice, not inferred from shared tests. Additional font import and OS acquisi
 inline input and physical input/IME/accessibility remain open.
 Both hosts now offer new-text style, size (8–512) and color before placement.
 Choices are per-editor UI state, not document/draft/undo; accepted responses and
-failed creation retain them. New editors start at Standard when available, size 32
-and annotation red. Plain retains the explicit saved-family path for custom-font
+failed creation retain them. New editors start at Standard when available and
+annotation red. Shared Rust supplies Tauri's initial size: 5.5% of the original
+capture's shorter side, rounded and clamped to 24–72. It uses History dimensions,
+not the resized/cropped canvas of a restored draft; later user choices remain
+unchanged across editing responses. Plain retains the explicit saved-family path for custom-font
 drafts. Presets come only from pinned fonts; Rounded is not substituted. Shared
 Rust validates the chosen preset and creates boxed text centered at the click using
 the eight-em composing width, retaining the anchor when content later refits.
 Placement is one render-before-publish transaction with fresh selection and normal
 output invalidation; invalid/unavailable styles preserve pixels, redo and drafts.
-The shipping image-scaled initial size, Rounded-box default and inline composition
-remain different; these controls do not reproduce the Tauri layout.
+The shipping Rounded-box default and inline composition remain different;
+these controls do not reproduce the Tauri layout.
 No host text parity gate is closed.
 Next implementation boundary: text and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.
