@@ -166,6 +166,14 @@ dimensions. Shipping TypeScript vectors cover fractional/rotated/shadowed geomet
 host tests cover controls, undo/redo, output invalidation, drafts and clipboard.
 Trim hover-margin feedback and the shipping toolbar layout remain unimplemented.
 Windows/Wayland presentation and physical macOS input remain unverified.
+Both hosts connect the shipping Compress presets: Tiny (55), Smaller (70), Balanced
+(85), High (92) and Highest (98). Presets clear explicit PNG palette overrides and
+reuse shared encoding: Tiny–High try 32/64/128/256 colors (retaining lossless pixels
+when that is smaller), Highest keeps exact pixels with lossless packing.
+JPEG/WebP retain their lossy quality mapping. Custom
+numeric values/palettes remain available and labeled Custom when active. Preset
+changes invalidate encoded previews without editing documents, drafts or undo.
+Physical/platform output acceptance, output sizing and overwrite behavior remain open.
 The shared text prerequisite uses `cosmic-text` advanced shaping and CPU Swash
 rasterization for a single line from caller-supplied fonts, with fixed locale and
 no system-font scan. It returns logical advance, baseline, painted bounds and

@@ -154,6 +154,24 @@ const CROP_ASPECTS: [(&str, Option<f64>); 5] = [
     ("16:9", Some(16. / 9.)),
 ];
 
+const OUTPUT_PRESETS: [(&str, u8); 5] = [
+    ("Tiny", 55),
+    ("Smaller", 70),
+    ("Balanced", 85),
+    ("High", 92),
+    ("Highest", 98),
+];
+
+fn output_preset(options: &ExportOptions) -> Option<&'static str> {
+    if options.format == ExportFormat::Png && options.png.max_colors.is_some() {
+        return None;
+    }
+    OUTPUT_PRESETS
+        .iter()
+        .find(|(_, quality)| *quality == options.quality_value)
+        .map(|(label, _)| *label)
+}
+
 struct AnnotationFields {
     style: ElementStyle,
     shadow: DropShadowStyle,
@@ -2743,14 +2761,30 @@ fn show_output(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<
     }
     if options.quality == ExportQuality::Compress {
         ui.horizontal(|ui| {
-            ui.label("Quality value");
+            let selected = output_preset(options);
+            egui::ComboBox::from_id_salt("output-quality-preset")
+                .selected_text(selected.unwrap_or("Custom"))
+                .width(108.)
+                .show_ui(ui, |ui| {
+                    for (label, quality) in OUTPUT_PRESETS {
+                        if ui
+                            .selectable_label(selected == Some(label), label)
+                            .clicked()
+                        {
+                            options.quality_value = quality;
+                            // Shared encoding owns PNG palette selection.
+                            options.png.max_colors = None;
+                        }
+                    }
+                });
             let minimum = if options.format == ExportFormat::Jpeg {
                 40
             } else {
                 1
             };
             options.quality_value = options.quality_value.clamp(minimum, 100);
-            ui.add(egui::DragValue::new(&mut options.quality_value).range(minimum..=100));
+            ui.add(egui::DragValue::new(&mut options.quality_value).range(minimum..=100))
+                .on_hover_text("Compression quality value");
         });
         if options.format == ExportFormat::Png {
             let mut palette = options.png.max_colors.is_some();
@@ -3239,6 +3273,102 @@ fn show_annotation(
 mod tests {
     use super::*;
     use std::{fs, time::Duration};
+
+    #[test]
+    fn output_presets_set_exact_quality_clear_png_override_and_invalidate_preview() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented(false)));
+        view.export_options.quality = ExportQuality::Compress;
+        let original = view.presented.as_ref().unwrap().document.clone();
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let (tx, rx) = mpsc::channel();
+        let frame = |view: &mut View, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(250., 900.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| show_output(ui, &tokens, view, &tx),
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let position = |output: &egui::FullOutput, label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == label => {
+                        Some(text.pos + text.galley.rect.center().to_vec2())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing UI label {label}"))
+        };
+        let click = |view: &mut View, pos| {
+            frame(view, vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(
+                    view,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        pressed,
+                        button: egui::PointerButton::Primary,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+            frame(view, vec![])
+        };
+        for (label, expected) in [("Tiny", 55), ("Highest", 98)] {
+            view.export_options.png.max_colors = Some(17);
+            view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
+            view.show_output = true;
+            let output = frame(&mut view, vec![]);
+            let popup = click(&mut view, position(&output, "Custom"));
+            click(&mut view, position(&popup, label));
+            assert_eq!(view.export_options.quality_value, expected);
+            assert_eq!(view.export_options.png.max_colors, None);
+            assert_eq!(output_preset(&view.export_options), Some(label));
+            assert!(view.output.is_none() && !view.show_output);
+            assert_eq!(view.presented.as_ref().unwrap().document, original);
+            assert!(
+                !view.pending && rx.try_recv().is_err(),
+                "a preset never encodes or edits"
+            );
+        }
+    }
+
+    #[test]
+    fn output_preset_label_keeps_arbitrary_quality_and_custom_png_options_custom() {
+        let mut options = View::default().export_options;
+        options.quality = ExportQuality::Compress;
+        options.quality_value = 83;
+        let unchanged = options;
+        assert_eq!(output_preset(&options), None);
+        assert_eq!(
+            options, unchanged,
+            "deriving a label must not normalize quality"
+        );
+
+        options.quality_value = 85;
+        options.png.max_colors = Some(37);
+        let unchanged = options;
+        assert_eq!(output_preset(&options), None);
+        assert_eq!(
+            options, unchanged,
+            "a custom PNG palette must remain an explicit override"
+        );
+
+        options.format = ExportFormat::Jpeg;
+        assert_eq!(output_preset(&options), Some("Balanced"));
+        assert_eq!(options.png.max_colors, Some(37));
+    }
 
     #[test]
     fn zoom_shortcuts_keep_event_order_cancel_gestures_and_do_not_zoom_ui_or_edit() {
