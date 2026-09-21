@@ -2426,6 +2426,131 @@ fn edit_text_request(id: &str, patch: serde_json::Value) -> Request {
 }
 
 #[test]
+fn text_shadow_projection_and_partial_patches_use_current_font_size() {
+    let (data, id, _) = setup();
+    let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();
+    add_text(&mut editor);
+    let original = editor.snapshot().document.clone();
+    let snapshot = serde_json::to_value(editor.snapshot()).unwrap();
+    let shadow = &snapshot["text_shadow_styles"]["label"];
+    assert_eq!(shadow["color"], "#000000");
+    assert_eq!(shadow["opacity"], 45.);
+    assert!((shadow["blur"].as_f64().unwrap() - 14.96).abs() < 1e-10);
+    assert_eq!(
+        (shadow["offsetX"].as_f64(), shadow["offsetY"].as_f64()),
+        (Some(0.), Some(6.))
+    );
+    assert!(
+        snapshot["document"]["elements"][1]
+            .get("dropShadowStyle")
+            .is_none()
+    );
+    assert_eq!(editor.snapshot().document, &original);
+    editor
+        .execute(edit_text_request(
+            "label",
+            json!({
+                "fontSize":100, "dropShadowStyle":{"color":"#0000ff"}
+            }),
+        ))
+        .unwrap();
+    let Element::Text(label) = editor.snapshot().document.elements.last().unwrap() else {
+        panic!()
+    };
+    assert!(label.has_drop_shadow());
+    let style = label.drop_shadow_style.as_ref().unwrap();
+    assert_eq!(style.color, "#0000ff");
+    assert!(
+        (style.blur - 18.7).abs() < 1e-10,
+        "resolve defaults after the size edit"
+    );
+    assert_eq!(
+        (style.opacity, style.offset_x, style.offset_y),
+        (45., 0., 7.)
+    );
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.snapshot().document, &original);
+}
+
+#[test]
+fn custom_text_shadow_edits_preserve_width_pixels_metadata_and_saved_reopen() {
+    let (data, id, _) = setup();
+    let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();
+    add_text(&mut editor);
+    let mut document = editor.snapshot().document.clone();
+    let Element::Text(label) = document.elements.last_mut().unwrap() else {
+        panic!()
+    };
+    label.width = 110.;
+    label.auto_width = Some(true);
+    label.base.locked = true;
+    label.drop_shadow_style = Some(
+        serde_json::from_value(json!({
+            "color":"#000000", "opacity":45, "blur":6, "offsetX":0, "offsetY":2, "futureShadow":19
+        }))
+        .unwrap(),
+    );
+    editor.execute(Request::Commit { document }).unwrap();
+    let before = editor.pixels();
+    editor
+        .execute(edit_text_request(
+            "label",
+            json!({"dropShadowStyle":{
+                "color":"#0000ff", "opacity":100, "blur":0, "offsetX":80, "offsetY":0
+            }}),
+        ))
+        .unwrap();
+    let accepted = editor.snapshot().document.clone();
+    let Element::Text(label) = accepted.elements.last().unwrap() else {
+        panic!()
+    };
+    assert!(label.has_drop_shadow());
+    assert_eq!((label.base.x, label.base.y, label.width), (20., 20., 110.));
+    assert_eq!(
+        label.drop_shadow_style.as_ref().unwrap().extra["futureShadow"],
+        19
+    );
+    let painted = editor.pixels();
+    assert_eq!(painted.get_pixel(102, 45).0, [0, 0, 255, 255]);
+    assert!(
+        editor
+            .execute(edit_text_request(
+                "label",
+                json!({
+                    "color":"invalid", "dropShadowStyle":{"offsetX":12}
+                })
+            ))
+            .is_err()
+    );
+    assert_eq!(editor.snapshot().document, &accepted);
+    assert!(Arc::ptr_eq(&editor.pixels(), &painted));
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.pixels(), before);
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.pixels(), painted);
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 85 })
+        .unwrap();
+    let reopened = open(data.path(), &id).unwrap();
+    assert_eq!(reopened.snapshot().document, &accepted);
+    assert_eq!(reopened.pixels(), painted);
+    editor
+        .execute(edit_text_request(
+            "label",
+            json!({"dropShadowStyle":{
+                "opacity":-1, "blur":101, "offsetX":-501, "offsetY":501
+            }}),
+        ))
+        .unwrap();
+    let style = &editor.snapshot().text_shadow_styles["label"];
+    assert_eq!(
+        (style.opacity, style.blur, style.offset_x, style.offset_y),
+        (0., 100., -500., 500.)
+    );
+    assert_eq!(style.extra["futureShadow"], 19);
+}
+
+#[test]
 fn outlined_text_is_paint_only_transactional_undoable_and_persisted() {
     let (data, id, _) = setup();
     let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();

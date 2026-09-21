@@ -2549,7 +2549,7 @@ pub(crate) fn annotation_drop_shadow_pad(style: &ElementStyle) -> f64 {
 }
 
 impl AnnotationStylePatch {
-    fn apply(self, style: &mut ElementStyle, closed: bool) -> Result<(), String> {
+    pub(crate) fn apply(self, style: &mut ElementStyle, closed: bool) -> Result<(), String> {
         if self
             .stroke_width
             .is_some_and(|stroke_width| !stroke_width.is_finite())

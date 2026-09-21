@@ -167,7 +167,8 @@ def main():
 
     try:
         env["DISPLAY"] = ":" + spawn("xvfb", ["Xvfb", "-displayfd", "1", "-screen", "0",
-            "1280x1200x24", "-dpi", "96", "-nolisten", "tcp"], True)
+            "1280x1600x24" if args.text_only else "1280x1200x24",
+            "-dpi", "96", "-nolisten", "tcp"], True)
         address = spawn("dbus", ["dbus-daemon", "--session", "--nofork", "--print-address=1"], True)
         env["DBUS_SESSION_BUS_ADDRESS"] = env["DBUS_SYSTEM_BUS_ADDRESS"] = address
         DBusGMainLoop(set_as_default=True)
@@ -431,7 +432,7 @@ def main():
             return
 
         if args.text_only:
-            run("xdotool", "windowsize", "--sync", editor, "1000", "1100")
+            run("xdotool", "windowsize", "--sync", editor, "1000", "1500")
             click(editor, 736, 62)  # Draw.
             click(editor, 34, 128)  # Text is the first tool.
             click(editor, 430, 250)  # Place one empty, selected auto-width text layer.
@@ -457,11 +458,19 @@ def main():
             shot(editor, "text-without-shadow")
             click(editor, 92, 809)   # Stage Drop shadow, leaving the plate off.
             before_shadow = draft.read_bytes()
+            for x, y, value in [(95, 880, "#3b82f6"), (128, 924, "65"),
+                                (60, 968, "3"), (80, 1012, "17.5"), (80, 1056, "-8")]:
+                click(editor, x, y)
+                run("xdotool", "key", "ctrl+a", "type", "--clearmodifiers", "--", value)
+                run("xdotool", "key", "Return")
             shot(editor, "text-shadow-staged")
             assert draft.read_bytes() == before_shadow
-            click(editor, 74, 853)
+            click(editor, 74, 1099)
             save_layers(lambda values: values[-1].get("dropShadow") is True
                         and values[-1]["background"] is None, "glyph shadow applied")
+            custom_shadow = {"color": "#3b82f6", "opacity": 65, "blur": 3,
+                             "offsetX": 17.5, "offsetY": -8}
+            assert layers()[-1]["dropShadowStyle"] == custom_shadow
             shot(editor, "text-glyph-shadow")
             def text_pixels(name):
                 return run("convert", str(output / f"{name}.png"), "-crop", "640x360+238+89",
@@ -475,17 +484,17 @@ def main():
             click(editor, 170, 809)  # Outline shares the shadow row.
             shot(editor, "text-outline-staged")
             assert text_pixels("text-outline-staged") == text_pixels("text-glyph-shadow")
-            click(editor, 74, 853)
+            click(editor, 74, 1099)
             save_layers(lambda values: values[-1]["outlined"], "text outline applied")
             shot(editor, "text-outline")
             assert text_pixels("text-outline") != text_pixels("text-glyph-shadow")
             click(editor, 170, 809)
-            click(editor, 74, 898)
+            click(editor, 74, 1144)
             shot(editor, "text-outline-cancelled")
             assert text_pixels("text-outline-cancelled") == text_pixels("text-outline")
             click(editor, 92, 765)   # Background plate.
             shot(editor, f"text-staged-{args.appearance}")
-            click(editor, 74, 974)   # Apply text; plate owns the shadow now.
+            click(editor, 74, 1220)   # Apply text; plate owns the shadow now.
             edited = save_layers(
                 lambda values: values[-1]["text"] == "Readable native text"
                 and values[-1]["bold"] and values[-1]["italic"]
@@ -499,7 +508,7 @@ def main():
             save_layers(lambda values: values[-1]["fontFamily"] == "serif",
                         "saving accepted pixels preserves staged family")
             shot(editor, f"text-family-pending-{args.appearance}")
-            click(editor, 74, 1019)  # Cancel changes; later close must not be blocked.
+            click(editor, 74, 1265)  # Cancel changes; later close must not be blocked.
             click(editor, 35, 62)
             save_layers(lambda values: values[-1]["background"] is None
                         and values[-1].get("dropShadow") is True, "undo shadowed plate")
@@ -531,6 +540,9 @@ def main():
             run("xdotool", "mousemove", "--window", editor, "120", "440",
                 "click", "--repeat", "7", "--delay", "80", "5", "sleep", ".3")
             shot(editor, f"text-minimum-controls-{args.appearance}")
+            run("xdotool", "mousemove", "--window", editor, "120", "440",
+                "click", "--repeat", "4", "--delay", "80", "5", "sleep", ".3")
+            shot(editor, f"text-minimum-shadow-controls-{args.appearance}")
             assert draft.read_bytes() == before_scroll, "scrolling text controls must not edit"
             reopened = layers()[-1]
             assert reopened["id"] == created["id"] and reopened["text"] == "Readable native text"
@@ -539,6 +551,7 @@ def main():
                 "sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono"}
             assert reopened["bold"] and reopened["italic"] and reopened["background"] is not None
             assert reopened.get("dropShadow") is True
+            assert reopened["dropShadowStyle"] == custom_shadow
             assert reopened["outlined"]
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
@@ -549,6 +562,7 @@ def main():
                 "checks": ["text-click-once-fresh-selection", "text-readable-explicit-apply",
                            "text-font-family", "text-family-cancel", "text-bold-italic-plate",
                            "text-glyph-shadow-pixels", "text-shadow-stage-cancel",
+                           "text-custom-shadow-settings-reopen",
                            "text-plate-shadow", "text-shadow-undo-redo-reopen",
                            "text-outline-pixels", "text-outline-stage-cancel", "text-outline-undo-redo-reopen",
                            "text-undo-redo", "text-draft-reopen",

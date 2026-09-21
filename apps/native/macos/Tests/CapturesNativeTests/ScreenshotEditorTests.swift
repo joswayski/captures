@@ -3169,6 +3169,70 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(controller.prepareForTermination(), "successful Apply clears staging")
     }
 
+    func testTextShadowSettingsPreservePrecisionCancelAndIgnoreDisabledInput() throws {
+        _ = NSApplication.shared
+        var original = textLayer(id: "copy", text: "accepted")
+        original["dropShadow"] = true
+        let resolved: [String: Any] = ["color": "#123456", "opacity": 61.234567,
+                                      "blur": 14.96, "offsetX": -2.25, "offsetY": 6.75]
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [original],
+                                                        textShadows: ["copy": resolved]))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let y = try field("Text shadow y", in: controller.root)
+        let blur = try field("Text shadow blur", in: controller.root)
+        let shadow = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSButton }
+            .first { $0.accessibilityLabel() == "Text drop shadow" })
+        let apply = try button("Apply", in: controller.root)
+        XCTAssertEqual(controller.state.snapshot?.layers.first?.textStyle?.shadowStyle?.opacity, 61.234567)
+        XCTAssertEqual(y.stringValue, "6.75")
+        y.stringValue = "-12.75"
+        XCTAssertFalse(controller.prepareForTermination())
+        worker.failOperation = "edit_text"
+        apply.performClick(nil)
+        XCTAssertEqual(worker.requests.last?["patch"] as? NSDictionary,
+                       ["dropShadowStyle": ["offsetY": -12.75]] as NSDictionary)
+        XCTAssertEqual(y.stringValue, "-12.75", "failure retains pending settings")
+        try button("Cancel", in: controller.root).performClick(nil)
+        XCTAssertEqual(y.stringValue, "6.75")
+        let count = worker.requests.count
+        blur.stringValue = "invalid"
+        apply.performClick(nil)
+        XCTAssertEqual(worker.requests.count, count, "invalid numbers never enter the worker")
+        blur.stringValue = "14.96"
+        try field("Text shadow color", in: controller.root).stringValue = "invalid"
+        apply.performClick(nil)
+        XCTAssertEqual(worker.requests.count, count, "invalid colors never enter the worker")
+        shadow.performClick(nil)
+        XCTAssertTrue(try XCTUnwrap(blur.superview).isHidden)
+        apply.performClick(nil)
+        XCTAssertEqual(worker.requests.last?["patch"] as? [String: Bool], ["dropShadow": false])
+        try button("Cancel", in: controller.root).performClick(nil)
+        XCTAssertEqual(blur.stringValue, "14.96")
+        XCTAssertFalse(try XCTUnwrap(blur.superview).isHidden)
+        XCTAssertTrue(controller.prepareForTermination())
+    }
+
+    func testTextShadowNumbersUseTheDisplayedLocale() throws {
+        _ = NSApplication.shared
+        var original = textLayer(id: "copy", text: "accepted")
+        original["dropShadow"] = true
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [original]))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+            worker: worker, numberLocale: Locale(identifier: "fr_FR"))
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let blur = try field("Text shadow blur", in: controller.root)
+        XCTAssertEqual(blur.stringValue, "5,984")
+        blur.stringValue = "7,25"
+        try button("Apply", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.requests.last?["patch"] as? NSDictionary,
+                       ["dropShadowStyle": ["blur": 7.25]] as NSDictionary)
+    }
+
     func testTextOutlineStagesCancelsAndKeepsFailedInput() throws {
         _ = NSApplication.shared
         let original = textLayer(id: "copy", text: "accepted")
@@ -3584,12 +3648,18 @@ final class ScreenshotEditorTests: XCTestCase {
                           unsaved: Bool = false, draft: Bool = false,
                           layers: [[String: Any]] = [],
                           annotations: [String: [String: Any]] = [:],
+                          textShadows: [String: [String: Any]]? = nil,
                           fonts: [String: String] = [:]) -> NativeEditorSnapshot {
         NativeEditorSnapshot([
             "artifact_id": id, "document": ["width": width, "height": height,
                                                   "elements": layers],
             "font_families": fonts,
             "annotation_controls": annotations,
+            "text_shadow_styles": textShadows ?? Dictionary(uniqueKeysWithValues: layers.compactMap { layer in
+                guard layer["kind"] as? String == "text", let id = layer["id"] as? String else { return nil }
+                return (id, ["color": "#000000", "opacity": 30.0, "blur": 5.984,
+                             "offsetX": 0.0, "offsetY": 2.0] as [String: Any])
+            }),
             "can_undo": unsaved, "can_redo": false,
             "unsaved_changes": unsaved, "has_draft": draft,
         ])!

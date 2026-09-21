@@ -17,9 +17,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     editor::{
-        ClosedShapeCreate, Document, DocumentHistory, DropShadowStyle, Element, ElementBase,
-        FreehandPathCreate, ImageElement, LayerEdit, OpenShapeCreate, OptionalNullable, Point,
-        Rect, TextElement, image_bounds,
+        AnnotationStylePatch, ClosedShapeCreate, Document, DocumentHistory, DropShadowStyle,
+        DropShadowStylePatch, Element, ElementBase, FreehandPathCreate, ImageElement, LayerEdit,
+        OpenShapeCreate, OptionalNullable, Point, Rect, TextElement, image_bounds,
     },
     editor_image_background::{BrushMode, paint_stroke},
     editor_render::{
@@ -66,7 +66,7 @@ pub struct TextCreate {
 
 /// Text property edits. Omitted fields preserve authored/unknown data;
 /// a null background removes the plate. Paint-only changes do not refit text.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TextPatch {
     pub text: Option<String>,
@@ -80,6 +80,7 @@ pub struct TextPatch {
     pub background: OptionalNullable<String>,
     pub rounded_background: Option<bool>,
     pub drop_shadow: Option<bool>,
+    pub drop_shadow_style: Option<DropShadowStylePatch>,
     pub outlined: Option<bool>,
 }
 
@@ -128,8 +129,16 @@ impl TextPatch {
         if let Some(rounded) = self.rounded_background {
             element.rounded_background = rounded;
         }
-        if let Some(enabled) = self.drop_shadow {
-            element.drop_shadow = Some(enabled);
+        if self.drop_shadow.is_some() || self.drop_shadow_style.is_some() {
+            let mut style = crate::editor_text::shadow_style(element, element.font_size);
+            AnnotationStylePatch {
+                drop_shadow: self.drop_shadow,
+                drop_shadow_style: self.drop_shadow_style,
+                ..Default::default()
+            }
+            .apply(&mut style, false)?;
+            element.drop_shadow = style.drop_shadow;
+            element.drop_shadow_style = style.drop_shadow_style;
         }
         if let Some(outlined) = self.outlined {
             element.outlined = outlined;
@@ -223,6 +232,8 @@ pub struct Snapshot<'a> {
     /// a reopened draft's exact files or expand its font set implicitly.
     pub font_families: Option<&'a BTreeMap<String, String>>,
     pub annotation_controls: BTreeMap<&'a str, AnnotationControls<'a>>,
+    /// Resolved display defaults; reading them never authors custom shadow data.
+    pub text_shadow_styles: BTreeMap<&'a str, DropShadowStyle>,
     pub selection_outlines: BTreeMap<&'a str, [Point; 4]>,
     pub can_undo: bool,
     pub can_redo: bool,
@@ -344,6 +355,20 @@ impl EditorSession {
             artifact_id: &self.artifact_id,
             document: self.history.current(),
             font_families: self.fonts.as_ref().map(|fonts| &fonts.assets.families),
+            text_shadow_styles: self
+                .history
+                .current()
+                .elements
+                .iter()
+                .filter_map(|element| match element {
+                    Element::Text(text) => Some((
+                        text.base.id.as_str(),
+                        crate::editor_text::shadow_style(text, text.font_size)
+                            .resolved_drop_shadow_style(),
+                    )),
+                    _ => None,
+                })
+                .collect(),
             selection_outlines: self
                 .history
                 .current()

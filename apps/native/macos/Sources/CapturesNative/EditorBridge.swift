@@ -300,6 +300,7 @@ struct NativeEditorLayer: Equatable {
     let textStyle: NativeTextStyle?
 
     init?(_ value: [String: Any], annotation: [String: Any]? = nil,
+          textShadow: [String: Any]? = nil,
           selectionOutline: [[String: Any]]? = nil) {
         guard let id = value["id"] as? String, !id.isEmpty,
               let rawKind = value["kind"] as? String,
@@ -315,7 +316,7 @@ struct NativeEditorLayer: Equatable {
         rotation = (value["rotation"] as? NSNumber)?.doubleValue ?? 0
         self.annotation = annotation.flatMap(NativeAnnotationStyle.init)
         if annotation != nil && self.annotation == nil { return nil }
-        textStyle = kind == .text ? NativeTextStyle(value) : nil
+        textStyle = kind == .text ? NativeTextStyle(value, shadow: textShadow) : nil
         if kind == .text && textStyle == nil { return nil }
         if let selectionOutline {
             let points = selectionOutline.compactMap { point -> CGPoint? in
@@ -334,8 +335,27 @@ struct NativeEditorLayer: Equatable {
     }
 }
 
-/// Authored text values exposed to AppKit. In particular, `fontFamily` is not
-/// normalized here: a reopened draft may name a family this build cannot offer.
+/// Shared Rust resolves these display values; AppKit never authors defaults.
+struct NativeTextShadowStyle: Equatable {
+    let color: String
+    let opacity: Double
+    let blur: Double
+    let offsetX: Double
+    let offsetY: Double
+
+    init?(_ value: [String: Any]) {
+        guard let color = value["color"] as? String,
+              let opacity = value["opacity"] as? Double,
+              let blur = value["blur"] as? Double,
+              let x = value["offsetX"] as? Double,
+              let y = value["offsetY"] as? Double else { return nil }
+        self.color = color; self.opacity = opacity; self.blur = blur
+        offsetX = x; offsetY = y
+    }
+}
+
+/// Authored text values plus optional resolved shadow controls from Rust.
+/// `fontFamily` is not normalized: old drafts retain their own pinned font map.
 struct NativeTextStyle: Equatable {
     let text: String
     let fontSize: Double
@@ -348,8 +368,9 @@ struct NativeTextStyle: Equatable {
     let roundedBackground: Bool
     let dropShadow: Bool
     let outlined: Bool
+    let shadowStyle: NativeTextShadowStyle?
 
-    init?(_ value: [String: Any]) {
+    init?(_ value: [String: Any], shadow: [String: Any]? = nil) {
         guard let text = value["text"] as? String,
               let size = value["fontSize"] as? NSNumber,
               let family = value["fontFamily"] as? String, !family.isEmpty,
@@ -365,6 +386,8 @@ struct NativeTextStyle: Equatable {
         background = value["background"] as? String; roundedBackground = rounded
         dropShadow = value["dropShadow"] as? Bool ?? false
         self.outlined = outlined
+        shadowStyle = shadow.flatMap(NativeTextShadowStyle.init)
+        if shadow != nil && shadowStyle == nil { return nil }
     }
 }
 
@@ -395,10 +418,12 @@ struct NativeEditorSnapshot: Equatable {
               width.doubleValue > 0, height.doubleValue > 0 else { return nil }
         let elements = document["elements"] as? [[String: Any]] ?? []
         let annotations = value["annotation_controls"] as? [String: [String: Any]] ?? [:]
+        let textShadows = value["text_shadow_styles"] as? [String: [String: Any]] ?? [:]
         let outlines = value["selection_outlines"] as? [String: [[String: Any]]] ?? [:]
         let layers = elements.compactMap { element in
             let id = element["id"] as? String
             return NativeEditorLayer(element, annotation: id.flatMap { annotations[$0] },
+                                     textShadow: id.flatMap { textShadows[$0] },
                                      selectionOutline: id.flatMap { outlines[$0] })
         }
         guard layers.count == elements.count else { return nil }

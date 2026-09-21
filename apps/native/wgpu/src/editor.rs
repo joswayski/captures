@@ -28,6 +28,7 @@ use captures_app::{
         EditorSession, ExportFormat, ExportOptions, ExportQuality, ExportSize, ImportImage,
         OpenRequest, PngOptions, Request, TextCreate, TextPatch,
     },
+    editor_text::shadow_style,
     editor_viewport::{Viewport, wheel_zoom_factor},
 };
 use captures_capture::CaptureMode;
@@ -199,6 +200,7 @@ struct TextValues {
     background: Option<String>,
     rounded_background: bool,
     drop_shadow: bool,
+    shadow: DropShadowStyle,
     outlined: bool,
 }
 
@@ -215,11 +217,22 @@ impl TextValues {
             background: text.background.clone(),
             rounded_background: text.rounded_background,
             drop_shadow: text.has_drop_shadow(),
+            shadow: shadow_style(text, text.font_size).resolved_drop_shadow_style(),
             outlined: text.outlined,
         }
     }
 
     fn patch(&self, accepted: &Self) -> TextPatch {
+        let shadow = DropShadowStylePatch {
+            color: (self.shadow.color != accepted.shadow.color).then(|| self.shadow.color.clone()),
+            opacity: (self.shadow.opacity != accepted.shadow.opacity)
+                .then_some(self.shadow.opacity),
+            blur: (self.shadow.blur != accepted.shadow.blur).then_some(self.shadow.blur),
+            offset_x: (self.shadow.offset_x != accepted.shadow.offset_x)
+                .then_some(self.shadow.offset_x),
+            offset_y: (self.shadow.offset_y != accepted.shadow.offset_y)
+                .then_some(self.shadow.offset_y),
+        };
         TextPatch {
             text: (self.text != accepted.text).then(|| self.text.clone()),
             font_size: (self.font_size != accepted.font_size).then_some(self.font_size),
@@ -239,6 +252,8 @@ impl TextValues {
             rounded_background: (self.rounded_background != accepted.rounded_background)
                 .then_some(self.rounded_background),
             drop_shadow: (self.drop_shadow != accepted.drop_shadow).then_some(self.drop_shadow),
+            drop_shadow_style: (self.drop_shadow && shadow != DropShadowStylePatch::default())
+                .then_some(shadow),
             outlined: (self.outlined != accepted.outlined).then_some(self.outlined),
         }
     }
@@ -452,7 +467,7 @@ impl View {
         if self
             .text
             .as_ref()
-            .is_some_and(|fields| fields.staged != fields.accepted)
+            .is_some_and(|fields| fields.staged.patch(&fields.accepted) != TextPatch::default())
         {
             self.error = Some("Apply or cancel pending text before closing.".into());
             self.section = Section::Layers;
@@ -748,7 +763,7 @@ impl View {
                 let staged = previous_text
                     .filter(|fields| {
                         fields.id == text.base.id
-                            && fields.staged != fields.accepted
+                            && fields.staged.patch(&fields.accepted) != TextPatch::default()
                             && !self.text_apply_pending
                     })
                     .map_or_else(|| accepted.clone(), |fields| fields.staged);
@@ -3246,8 +3261,13 @@ fn show_text(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
         ui.checkbox(&mut fields.staged.drop_shadow, "Drop shadow");
         ui.checkbox(&mut fields.staged.outlined, "Outline");
     });
-    let changed = fields.staged != fields.accepted;
+    if fields.staged.drop_shadow {
+        shadow_fields(ui, &mut fields.staged.shadow);
+    }
+    let changed = fields.staged.patch(&fields.accepted) != TextPatch::default();
     let invalid_color = egui::Color32::from_hex(&fields.staged.color).is_err()
+        || (fields.staged.drop_shadow
+            && egui::Color32::from_hex(&fields.staged.shadow.color).is_err())
         || fields
             .staged
             .background
@@ -3300,6 +3320,26 @@ fn annotation_color(ui: &mut egui::Ui, label: &str, value: &mut String) {
     });
 }
 
+fn shadow_fields(ui: &mut egui::Ui, shadow: &mut DropShadowStyle) {
+    annotation_color(ui, "Shadow color", &mut shadow.color);
+    for (label, value, range) in [
+        ("Shadow opacity", &mut shadow.opacity, 0. ..=100.),
+        ("Blur", &mut shadow.blur, 0. ..=100.),
+        ("X offset", &mut shadow.offset_x, -500. ..=500.),
+        ("Y offset", &mut shadow.offset_y, -500. ..=500.),
+    ] {
+        ui.horizontal(|ui| {
+            ui.label(label);
+            ui.add(
+                egui::DragValue::new(value)
+                    .range(range)
+                    .clamp_existing_to_range(false)
+                    .speed(1.),
+            );
+        });
+    }
+}
+
 fn show_annotation(
     ui: &mut egui::Ui,
     view: &mut View,
@@ -3345,23 +3385,7 @@ fn show_annotation(
         style.drop_shadow = Some(shadow);
     }
     if shadow {
-        annotation_color(ui, "Shadow color", &mut fields.shadow.color);
-        for (label, value, range) in [
-            ("Shadow opacity", &mut fields.shadow.opacity, 0. ..=100.),
-            ("Blur", &mut fields.shadow.blur, 0. ..=100.),
-            ("X offset", &mut fields.shadow.offset_x, -500. ..=500.),
-            ("Y offset", &mut fields.shadow.offset_y, -500. ..=500.),
-        ] {
-            ui.horizontal(|ui| {
-                ui.label(label);
-                ui.add(
-                    egui::DragValue::new(value)
-                        .range(range)
-                        .clamp_existing_to_range(false)
-                        .speed(1.),
-                );
-            });
-        }
+        shadow_fields(ui, &mut fields.shadow);
     }
     let patch = fields.patch(original);
     ui.horizontal(|ui| {
@@ -4009,6 +4033,45 @@ mod tests {
         assert_eq!(fields.staged, fields.accepted);
         assert_eq!(fields.accepted.text, "applied");
         assert!(view.output.is_none() && !view.show_output);
+    }
+
+    #[test]
+    fn text_shadow_settings_patch_only_changed_enabled_fields() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented_text("fresh", "accepted")));
+        let fields = view.text.as_mut().unwrap();
+        fields.staged.drop_shadow = true;
+        assert_eq!(
+            fields.staged.patch(&fields.accepted),
+            TextPatch {
+                drop_shadow: Some(true),
+                ..Default::default()
+            }
+        );
+        fields.staged.shadow.offset_y = -12.75;
+        fields.staged.font_size = 80.;
+        assert_eq!(
+            fields.staged.patch(&fields.accepted),
+            TextPatch {
+                font_size: Some(80.),
+                drop_shadow: Some(true),
+                drop_shadow_style: Some(DropShadowStylePatch {
+                    offset_y: Some(-12.75),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        );
+        fields.staged.drop_shadow = false;
+        fields.staged.font_size = fields.accepted.font_size;
+        fields.staged.shadow.color = "invalid hidden input".into();
+        assert_eq!(fields.staged.patch(&fields.accepted), TextPatch::default());
+        view.request_close();
+        assert!(
+            view.close_requested,
+            "disabled custom fields must not block closing"
+        );
     }
 
     #[test]
