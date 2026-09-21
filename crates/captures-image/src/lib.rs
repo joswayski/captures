@@ -788,9 +788,9 @@ fn push_rounded_rectangle(path: &mut PathBuilder, rect: tiny_skia::Rect, radius:
 }
 
 #[derive(Clone, Copy)]
-enum PathPaint<'a> {
-    Fill,
-    Stroke(&'a Stroke),
+enum ShadowPaint<'a> {
+    Fill(&'a Path),
+    Stroke(&'a Path, &'a Stroke),
 }
 
 fn expanded(bounds: Bounds, amount: f32) -> Bounds {
@@ -815,12 +815,11 @@ fn intersection(a: Bounds, b: Bounds) -> Option<Bounds> {
     })
 }
 
-fn draw_path_shadow(
+fn draw_shadow(
     canvas: &mut Pixmap,
     layer: &Layer,
-    path: &Path,
     transform: Transform,
-    operation: PathPaint<'_>,
+    operation: ShadowPaint<'_>,
     source_alpha: u8,
     shadow: DropShadow,
 ) -> Result<(), String> {
@@ -861,10 +860,10 @@ fn draw_path_shadow(
     let mut mask = Mask::new(width, height).ok_or("Drop shadow raster is too large")?;
     let local_transform = transform.post_translate(-left, -top);
     match operation {
-        PathPaint::Fill => {
+        ShadowPaint::Fill(path) => {
             mask.fill_path(path, FillRule::Winding, true, local_transform);
         }
-        PathPaint::Stroke(stroke) => {
+        ShadowPaint::Stroke(path, stroke) => {
             let outline = path
                 .stroke(stroke, 1.0)
                 .ok_or("Drop shadow stroke is too large")?;
@@ -1126,12 +1125,11 @@ fn draw_layer(
     };
     if point_dot {
         if let Some(shadow) = shadow.copied() {
-            draw_path_shadow(
+            draw_shadow(
                 canvas,
                 layer,
-                &path,
                 transform,
-                PathPaint::Fill,
+                ShadowPaint::Fill(&path),
                 layer.color[3],
                 shadow,
             )?;
@@ -1154,24 +1152,22 @@ fn draw_layer(
     });
     if let Some(shadow) = shadow.copied() {
         if closed && let Some(color) = layer.fill {
-            draw_path_shadow(
+            draw_shadow(
                 canvas,
                 layer,
-                &path,
                 transform,
-                PathPaint::Fill,
+                ShadowPaint::Fill(&path),
                 color[3],
                 shadow,
             )?;
             fill_path(canvas, layer, &path, transform, color);
         }
         if let Some(stroke) = stroke.as_ref() {
-            draw_path_shadow(
+            draw_shadow(
                 canvas,
                 layer,
-                &path,
                 transform,
-                PathPaint::Stroke(stroke),
+                ShadowPaint::Stroke(&path, stroke),
                 layer.color[3],
                 shadow,
             )?;
