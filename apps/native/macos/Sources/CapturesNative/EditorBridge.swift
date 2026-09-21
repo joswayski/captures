@@ -429,6 +429,7 @@ struct NativeTextPreset: Equatable {
 struct NativeEditorSnapshot: Equatable {
     let artifactID: String
     let originalExportPath: String?
+    let initialTextSize: Double
     let width: Double
     let height: Double
     let background: String?
@@ -445,6 +446,7 @@ struct NativeEditorSnapshot: Equatable {
 
     init?(_ value: [String: Any]) {
         guard let artifactID = value["artifact_id"] as? String,
+              let initialTextSize = value["initial_text_size"] as? NSNumber,
               let document = value["document"] as? [String: Any],
               let width = document["width"] as? NSNumber,
               let height = document["height"] as? NSNumber,
@@ -477,6 +479,7 @@ struct NativeEditorSnapshot: Equatable {
         }
         self.artifactID = artifactID
         self.originalExportPath = originalExportPath
+        self.initialTextSize = initialTextSize.doubleValue
         self.width = width.doubleValue; self.height = height.doubleValue
         self.background = document["background"] as? String
         self.canUndo = canUndo; self.canRedo = canRedo

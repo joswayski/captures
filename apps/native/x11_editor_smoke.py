@@ -710,9 +710,9 @@ def main():
             click(editor, 34, 128)
             shot(editor, "text-defaults-reopened")
             assert layers()[-1] == text
-            click(editor, 638, 269)  # New editor resets to Standard,32,red; not saved Mono box.
+            click(editor, 638, 269)  # 640×360 capture starts at 24; not saved Mono box/37.5.
             reset = save_layers(lambda values: len(values) == 3, "fresh editor Text defaults")[-1]
-            assert (reset["fontFamily"], reset["fontSize"], reset["color"]) == ("sans", 32, "#ff3b5c")
+            assert (reset["fontFamily"], reset["fontSize"], reset["color"]) == ("sans", 24, "#ff3b5c")
             assert reset["align"] == "left" and reset["background"] is None
             assert reset["id"] != text["id"]
             assert (artifact / "capture.png").read_bytes() == original

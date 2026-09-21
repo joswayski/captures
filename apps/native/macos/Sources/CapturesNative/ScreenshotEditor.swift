@@ -1004,6 +1004,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             switch result {
             case .success(let presentation):
                 guard self.state.complete(presentation.snapshot, generation: generation) else { return }
+                self.createTextSize.stringValue = self.format(presentation.snapshot.initialTextSize)
                 self.publish(presentation, resetCrop: true)
                 self.status.textColor = self.tokens.color("text-muted")
                 self.status.stringValue = presentation.snapshot.hasDraft
@@ -1354,7 +1355,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         colorLabel.frame.size.width = 118
         configure(createTextSize, frame: NSRect(x: 0, y: 230, width: 118, height: 30),
                   label: "New text size", parent: content)
-        createTextSize.stringValue = format(32)
+        createTextSize.stringValue = format(24)
         configure(createTextColor, frame: NSRect(x: 134, y: 230, width: 118, height: 30),
                   label: "New text color", parent: content)
         createTextColor.formatter = nil; createTextColor.stringValue = "#ff3b5c"

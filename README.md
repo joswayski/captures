@@ -277,7 +277,8 @@ content, type, alignment, color and plates transactionally. Both native hosts no
 connect a basic **Draw → Text** tool with staged Apply/Cancel controls, including
 outlines and shadow color, opacity, blur and offsets. Before placement, choose a
 named style, size and color; boxed styles center on the click. These defaults last
-only for that editor. Standard starts at size 32 in the annotation red, using
+only for that editor. Standard starts in the annotation red, with an initial size
+scaled to the original capture (24–72), using
 bundled Liberation Sans, with Serif and Mono also available (OFL 1.1); exact font
 bytes and license notices stay with the draft. Older drafts offer only their saved
 fonts; adding new fonts to an existing draft is not implemented.
