@@ -126,7 +126,7 @@ class EditorViewportGestureView: NSView {
 
 final class EditorDrawOverlay: EditorViewportGestureView {
     enum Shape: String, CaseIterable {
-        case rectangle, ellipse, line, arrow, pen
+        case rectangle, ellipse, line, arrow, pen, wand
     }
 
     var shape: Shape = .rectangle { didSet { if shape != oldValue { cancelGesture() } } }
@@ -141,6 +141,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
         }
     }
     var onComplete: ((Shape, NSPoint, NSPoint, [NSPoint]) -> Void)?
+    var onWand: ((NSPoint) -> Void)?
     var fillColor = NSColor.controlAccentColor.withAlphaComponent(0.22)
     var strokeColor = NSColor.controlAccentColor
     var imageRect: (() -> NSRect)?
@@ -180,6 +181,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
 
     func begin(at point: NSPoint) {
         guard drawingEnabled, presentedImageRect.width > 0 else { return }
+        if shape == .wand && (!bounds.contains(point) || !presentedImageRect.contains(point)) { return }
         cancelGesture()
         startPoint = point; currentPoint = point; needsDisplay = true
         if shape == .pen {
@@ -207,6 +209,11 @@ final class EditorDrawOverlay: EditorViewportGestureView {
         let points = penPoints
         let arrowLength = hypot(point.x - startPoint.x, point.y - startPoint.y)
         cancelGesture()
+        if shape == .wand {
+            guard arrowLength < 3, bounds.contains(point), presentedImageRect.contains(point) else { return }
+            onWand?(start)
+            return
+        }
         switch shape {
         case .rectangle, .ellipse:
             guard start.x != end.x, start.y != end.y else { return }
@@ -215,6 +222,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
                   let geometry = NativeEditorDrawGeometry(arrow: true, samples: [start, end]),
                   !geometry.points.isEmpty else { return }
         case .line, .pen: break
+        case .wand: preconditionFailure("handled above")
         }
         // Like shipping, Pen accepts movement samples, not the release location.
         onComplete?(shape, start, end, points)
@@ -231,6 +239,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
 
     override func mouseDown(with event: NSEvent) {
         if beginViewportPan(event) { cancelGesture(); return }
+        guard event.buttonNumber == 0, !event.modifierFlags.contains(.command) else { return }
         window?.makeFirstResponder(self)
         begin(at: convert(event.locationInWindow, from: nil))
     }
@@ -265,6 +274,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
         NSBezierPath(rect: bounds).addClip()
+        if shape == .wand { return }
         if shape == .line || shape == .arrow || shape == .pen {
             let samples = shape == .pen ? penPoints : [canvasPoint(for: startPoint), canvasPoint(for: currentPoint)]
             guard let geometry = NativeEditorDrawGeometry(arrow: shape == .arrow, samples: samples),
@@ -581,6 +591,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var outputByteBudgetLabel: NSTextField!
     private var sectionControl: NSSegmentedControl!
     private var drawTool: NSPopUpButton!
+    private let wandTolerance = NSTextField()
+    private let wandContiguous = NSButton(checkboxWithTitle: "Contiguous only", target: nil, action: nil)
+    private var wandToleranceLabel: NSTextField!
     private var outputFormat: NSPopUpButton!
     private var outputQuality: NSPopUpButton!
     private var outputPreviewMode: NSSegmentedControl!
@@ -805,6 +818,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.onComplete = { [weak self] shape, start, end, points in
             self?.createDrawing(shape: shape, start: start, end: end, points: points)
         }
+        drawOverlay.onWand = { [weak self] point in self?.removeImageBackground(at: point) }
         viewportInput.addSubview(drawOverlay)
         selectionOverlay.frame = preview.frame
         selectionOverlay.autoresizingMask = [.width, .height]
@@ -956,22 +970,37 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func buildDrawPanel() {
+        let scroll = NSScrollView(frame: drawPanel.bounds)
+        scroll.autoresizingMask = [.width, .height]
+        scroll.hasVerticalScroller = true; scroll.drawsBackground = false
+        let content = Surface(frame: NSRect(x: 0, y: 0, width: 252, height: 390))
+        scroll.documentView = content; drawPanel.addSubview(scroll)
         panelLabel("Draw", frame: NSRect(x: 0, y: 0, width: 272, height: 24),
-                   size: 16, weight: .semibold, parent: drawPanel)
-        panelLabel("Drag directly on the edited image preview.",
-                   frame: NSRect(x: 0, y: 28, width: 272, height: 38), muted: true,
-                   parent: drawPanel)
-        panelFieldLabel("Tool", x: 0, y: 78, parent: drawPanel)
+                   size: 16, weight: .semibold, parent: content)
+        panelLabel("Draw annotations, or click with Wand to remove pixels from an image.",
+                   frame: NSRect(x: 0, y: 28, width: 252, height: 42), muted: true,
+                   parent: content)
+        panelFieldLabel("Tool", x: 0, y: 78, parent: content)
         drawTool = NSPopUpButton()
-        drawTool.addItems(withTitles: ["Rectangle", "Ellipse", "Line", "Arrow", "Pen"])
+        drawTool.addItems(withTitles: ["Rectangle", "Ellipse", "Line", "Arrow", "Pen", "Wand"])
         drawTool.target = self; drawTool.action = #selector(changeDrawTool)
-        drawTool.frame = NSRect(x: 0, y: 100, width: 272, height: 30)
+        drawTool.frame = NSRect(x: 0, y: 100, width: 252, height: 30)
         drawTool.selectItem(at: 0)
         drawTool.setAccessibilityLabel("Drawing tool")
-        drawPanel.addSubview(drawTool)
-        panelLabel("Release creates one layer using the shared default style. Escape, changing sections, or leaving the window cancels the current drag.",
-                   frame: NSRect(x: 0, y: 148, width: 272, height: 94), muted: true,
-                   parent: drawPanel)
+        content.addSubview(drawTool)
+        wandToleranceLabel = panelFieldLabel("Tolerance", x: 0, y: 146, parent: content)
+        configure(wandTolerance, frame: NSRect(x: 0, y: 168, width: 252, height: 30),
+                  label: "Wand color tolerance", parent: content)
+        let formatter = NumberFormatter(); formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 0; formatter.minimum = 0; formatter.maximum = 255
+        wandTolerance.formatter = formatter; wandTolerance.stringValue = "36"
+        wandContiguous.frame = NSRect(x: 0, y: 208, width: 252, height: 24)
+        wandContiguous.state = .on; wandContiguous.setAccessibilityLabel("Wand contiguous only")
+        content.addSubview(wandContiguous)
+        panelLabel("Wand removes matching pixels from the frontmost visible image. Other tools create one annotation layer on release.",
+                   frame: NSRect(x: 0, y: 248, width: 252, height: 72), muted: true,
+                   parent: content)
+        publishDrawToolControls()
     }
 
     private func buildOutputPanel() {
@@ -1177,6 +1206,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     @objc private func changeDrawTool() {
         cancelDrawing()
         drawOverlay.shape = EditorDrawOverlay.Shape.allCases[drawTool.indexOfSelectedItem]
+        publishDrawToolControls()
+    }
+
+    private func publishDrawToolControls() {
+        let wand = drawTool?.indexOfSelectedItem == EditorDrawOverlay.Shape.allCases.firstIndex(of: .wand)
+        wandToleranceLabel?.isHidden = !wand
+        wandTolerance.isHidden = !wand; wandContiguous.isHidden = !wand
     }
 
     @objc private func outputOptionsChanged() {
@@ -1457,7 +1493,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func createDrawing(shape: EditorDrawOverlay.Shape, start: NSPoint, end: NSPoint, points: [NSPoint]) {
-        guard let layers = state.snapshot?.layers else { return }
+        guard shape != .wand, let layers = state.snapshot?.layers else { return }
         let request: [String: Any]
         if shape == .pen {
             request = ["operation": "create_freehand_path", "points": points.map { ["x": $0.x, "y": $0.y] }]
@@ -1467,6 +1503,20 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                        "start": ["x": start.x, "y": start.y], "end": ["x": end.x, "y": end.y]]
         }
         command(request, message: "Drawing \(shape.rawValue)…", createdLayerExistingIDs: Set(layers.map(\.id)))
+    }
+
+    private func removeImageBackground(at point: NSPoint) {
+        guard !state.busy else { return }
+        guard let value = Double(wandTolerance.stringValue),
+              value >= 0, value <= 255, value == value.rounded() else {
+            showError("Wand tolerance must be a whole number from 0 to 255."); return
+        }
+        let tolerance = value.rounded()
+        wandTolerance.stringValue = String(Int(tolerance))
+        command(["operation": "remove_image_background",
+                 "point": ["x": point.x, "y": point.y],
+                 "tolerance": tolerance, "contiguous": wandContiguous.state == .on],
+                message: "Removing image background…")
     }
 
     private func cancelDrawing() {
@@ -1535,6 +1585,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let active = sectionControl?.selectedSegment == Section.draw
             && state.snapshot != nil && !state.busy
         drawTool?.isEnabled = state.snapshot != nil && !state.busy
+        wandTolerance.isEnabled = active; wandContiguous.isEnabled = active
         drawOverlay.drawingEnabled = active
         selectionOverlay.selectionEnabled = sectionControl?.selectedSegment == Section.layers
             && state.snapshot != nil && !state.busy && !importLoading

@@ -96,6 +96,7 @@ enum DrawShape {
     Line,
     Arrow,
     Freehand,
+    Wand,
 }
 
 impl DrawShape {
@@ -135,6 +136,7 @@ impl DrawShape {
                     },
                 })
             }
+            Self::Wand => None,
             _ => None,
         }
     }
@@ -205,6 +207,8 @@ struct View {
     crop_drag: Option<CropDrag>,
     crop_aspect: usize,
     draw_shape: DrawShape,
+    wand_tolerance: f64,
+    wand_contiguous: bool,
     shape_drag: Option<(Point, Point)>,
     freehand_points: Vec<Point>,
     canvas: [f64; 2],
@@ -250,6 +254,8 @@ impl Default for View {
             crop_drag: None,
             crop_aspect: 0,
             draw_shape: DrawShape::Rectangle,
+            wand_tolerance: 36.,
+            wand_contiguous: true,
             shape_drag: None,
             freehand_points: Vec::new(),
             canvas: [1., 1.],
@@ -442,7 +448,8 @@ impl View {
             if let Some(color) = &presented.document.background {
                 self.last_solid_background.clone_from(color);
             }
-            self.background_color.clone_from(&self.last_solid_background);
+            self.background_color
+                .clone_from(&self.last_solid_background);
         }
     }
 
@@ -1164,10 +1171,26 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                     ui.selectable_value(&mut view.draw_shape, DrawShape::Line, "Line");
                     ui.selectable_value(&mut view.draw_shape, DrawShape::Arrow, "Arrow");
                     ui.selectable_value(&mut view.draw_shape, DrawShape::Freehand, "Pen");
+                    ui.selectable_value(&mut view.draw_shape, DrawShape::Wand, "Wand");
                 });
                 if view.draw_shape != previous_tool { view.cancel_drawing(); }
-                ui.label("Drag to draw. Release to add one layer. Escape cancels the current drag.");
-                ui.small("New shapes use the default annotation color. Change fill, stroke, shadow, opacity, position and ordering in Layers.");
+                if view.draw_shape == DrawShape::Wand {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Tolerance");
+                        ui.add(
+                            egui::DragValue::new(&mut view.wand_tolerance)
+                                .range(0. ..=255.)
+                                .max_decimals(0)
+                                .speed(1.),
+                        );
+                        ui.checkbox(&mut view.wand_contiguous, "Contiguous");
+                    });
+                    ui.label("Click an image to remove pixels matching that color. Transparent areas still select the frontmost visible image.");
+                    ui.small("Tolerance controls the color range. Contiguous limits removal to the connected area around the click.");
+                } else {
+                    ui.label("Drag to draw. Release to add one layer. Escape cancels the current drag.");
+                    ui.small("New shapes use the default annotation color. Change fill, stroke, shadow, opacity, position and ordering in Layers.");
+                }
                 return;
             }
             ui.heading("Crop");
@@ -2005,9 +2028,35 @@ fn show_shape(
     let response = ui.interact(
         available,
         ui.scope_id().with("shape-canvas"),
-        egui::Sense::drag(),
+        if view.draw_shape == DrawShape::Wand {
+            egui::Sense::click()
+        } else {
+            egui::Sense::drag()
+        },
     );
     let first_pass = ui.ctx().current_pass_index() == 0;
+    if view.draw_shape == DrawShape::Wand {
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
+        if first_pass
+            && !view.pending
+            && !viewport_intercepted
+            && response.clicked_by(egui::PointerButton::Primary)
+            && let Some(position) = response.interact_pointer_pos()
+            && preview.contains(position)
+        {
+            view.submit(
+                tx,
+                Request::RemoveImageBackground {
+                    point: image_point(position, preview, bounds),
+                    tolerance: view.wand_tolerance,
+                    contiguous: view.wand_contiguous,
+                },
+            );
+        }
+        return;
+    }
     let started = response.drag_started_by(egui::PointerButton::Primary);
     if first_pass
         && !viewport_intercepted
@@ -2144,6 +2193,7 @@ fn show_shape(
                     fill,
                 )));
             }
+            DrawShape::Wand => unreachable!("wand clicks do not start shape drags"),
         }
     }
     if first_pass
@@ -2895,13 +2945,19 @@ mod tests {
         view.background_color = "invalid".into();
         view.reset_background_fields();
         assert_eq!(view.background_color, "#21436580");
-        assert!(Arc::ptr_eq(&document, &view.presented.as_ref().unwrap().document));
+        assert!(Arc::ptr_eq(
+            &document,
+            &view.presented.as_ref().unwrap().document
+        ));
         view.background_color = "invalid".into();
         view.pending = true;
         view.receive(&ctx, Err("invalid background".into()));
         assert!(!view.pending);
         assert_eq!(view.background_color, "#21436580");
-        assert!(Arc::ptr_eq(&document, &view.presented.as_ref().unwrap().document));
+        assert!(Arc::ptr_eq(
+            &document,
+            &view.presented.as_ref().unwrap().document
+        ));
         let mut transparent = presented(true);
         Arc::make_mut(&mut transparent.document).background = None;
         view.receive(&ctx, Ok(transparent));
@@ -2911,7 +2967,14 @@ mod tests {
         view.receive(&ctx, Err("retry".into()));
         assert!(!view.background_solid);
         assert_eq!(view.background_color, "#21436580");
-        assert!(view.presented.as_ref().unwrap().document.background.is_none());
+        assert!(
+            view.presented
+                .as_ref()
+                .unwrap()
+                .document
+                .background
+                .is_none()
+        );
     }
 
     fn presented(unsaved: bool) -> Presented {
@@ -3787,6 +3850,94 @@ mod tests {
             assert_eq!(create.shape, OpenShapeKind::Arrow);
             assert_eq!((create.start, create.end), (start, at));
         }
+    }
+
+    #[test]
+    fn wand_click_maps_once_and_rejects_busy_intercepted_and_off_image_input() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let mut value = presented(false);
+        value.pixels = Arc::new(RgbaImage::new(1200, 600));
+        view.receive(&ctx, Ok(value));
+        view.draw_shape = DrawShape::Wand;
+        view.wand_tolerance = 47.;
+        view.wand_contiguous = false;
+        let (tx, rx) = mpsc::channel();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000., 700.));
+        // This is the already zoomed and panned viewport result. Mapping must use
+        // it directly rather than duplicating shared viewport or image math.
+        let preview = egui::Rect::from_min_size(egui::pos2(220., 140.), egui::vec2(600., 300.));
+        let frame = |view: &mut View, events, intercepted| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |_| {
+                    let mut ui = egui::Ui::new(
+                        ctx.clone(),
+                        egui::Id::unique("wand-test"),
+                        egui::UiBuilder::new().max_rect(screen),
+                    );
+                    show_shape(&mut ui, view, &tx, screen, preview, intercepted);
+                    if ctx.current_pass_index() == 0 {
+                        ctx.request_discard("exercise wand multipass event replay");
+                    }
+                },
+            );
+            assert!(output.platform_output.num_completed_passes >= 2);
+            output.textures_delta.clear();
+        };
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let click = egui::pos2(370., 215.);
+        frame(&mut view, vec![], false);
+        frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(click), button(click, true)],
+            false,
+        );
+        assert!(rx.try_recv().is_err());
+        frame(&mut view, vec![button(click, false)], false);
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            Job::Apply(Request::RemoveImageBackground {
+                point: Point { x: 300., y: 150. },
+                tolerance: 47.,
+                contiguous: false,
+            })
+        ));
+        assert!(view.pending && rx.try_recv().is_err());
+
+        // A stale extra click while the worker is busy cannot enqueue a second edit.
+        frame(
+            &mut view,
+            vec![button(click, true), button(click, false)],
+            false,
+        );
+        assert!(rx.try_recv().is_err());
+        view.pending = false;
+        let outside = egui::pos2(100., 100.);
+        frame(
+            &mut view,
+            vec![
+                egui::Event::PointerMoved(outside),
+                button(outside, true),
+                button(outside, false),
+            ],
+            false,
+        );
+        frame(
+            &mut view,
+            vec![button(click, true), button(click, false)],
+            true,
+        );
+        assert!(rx.try_recv().is_err() && !view.pending);
     }
 
     #[test]

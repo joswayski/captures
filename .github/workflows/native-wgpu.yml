@@ -91,6 +91,7 @@ jobs:
           for appearance in dark light; do
             /usr/bin/python3 apps/native/x11_editor_smoke.py --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-editor-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --background-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-background-$appearance"
+            /usr/bin/python3 apps/native/x11_editor_smoke.py --wand-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-wand-$appearance"
           done
       - name: Exercise real native mini previews on private X11
         if: runner.os == 'Linux'
@@ -119,6 +120,8 @@ jobs:
             native-x11-editor-light
             native-x11-background-dark
             native-x11-background-light
+            native-x11-wand-dark
+            native-x11-wand-light
             native-x11-preview
             native-x11-lifecycle
           if-no-files-found: ignore

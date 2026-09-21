@@ -72,6 +72,8 @@ def main():
     parser.add_argument("--appearance", choices=("dark", "light"), default="dark")
     parser.add_argument("--background-only", action="store_true",
                         help="Exercise canvas background controls, alpha and draft reopen only")
+    parser.add_argument("--wand-only", action="store_true",
+                        help="Exercise image-background removal, undo, draft and clipboard alpha")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -171,6 +173,9 @@ def main():
         run("convert", "-size", "640x360", "xc:#286ea6", "-fill", "#e5b344",
             "-draw", "rectangle 80,60 220,200", "-fill", "#2e9e71",
             "-draw", "rectangle 400,150 620,340", "PNG32:" + str(artifact / "capture.png"))
+        if args.wand_only:
+            run("convert", str(artifact / "capture.png"), "-fill", "#e5b344",
+                "-draw", "rectangle 300,50 320,70", "PNG32:" + str(artifact / "capture.png"))
         original = (artifact / "capture.png").read_bytes()
         (artifact / "preview.png").write_bytes(original)
         (artifact / "metadata.json").write_text(json.dumps({
@@ -247,6 +252,74 @@ def main():
         def save_layers(predicate, description):
             save_until(lambda: predicate(layers()), description)
             return layers()
+
+        if args.wand_only:
+            run("xdotool", "windowsize", "--sync", editor, "886", "700")
+            save(640, 360, 0, 0)
+            source = layers()[0]["src"]
+            click(editor, 736, 62)
+            click(editor, 150, 182)
+            shot(editor, "wand-controls")
+            # Fitted image origin (238,89), scale 1. Original capture stays locked.
+            click(editor, 338, 189)
+            edited = save_layers(lambda values: values[0]["src"] != source, "wand edit")[0]
+            assert edited["locked"] and edited["originalSrc"] == source
+
+            def asset_pixel(layer, x, y, expected):
+                asset = draft.parent / "assets" / (layer["src"].split(":", 1)[1] + ".png")
+                assert run("convert", str(asset), "-crop", f"1x1+{x}+{y}",
+                           "-depth", "8", "rgba:-") == bytes(expected)
+
+            asset_pixel(edited, 100, 100, (0, 0, 0, 0))
+            asset_pixel(edited, 310, 60, (229, 179, 68, 255))
+            asset_pixel(edited, 2, 1, (40, 110, 166, 255))
+            shot(editor, "wand-contiguous")
+            click(editor, 338, 189)  # Transparent seed fails; must not create a new asset.
+            shot(editor, "wand-no-match")
+            save_layers(lambda values: values[0]["src"] == edited["src"], "no-match preserves pixels")
+            click(editor, 35, 62)
+            save_layers(lambda values: values[0]["src"] == source, "wand undo")
+            click(editor, 98, 62)
+            save_layers(lambda values: values[0]["src"] == edited["src"], "wand redo")
+            click(editor, 35, 62)
+            save_layers(lambda values: values[0]["src"] == source, "undo before global removal")
+            click(editor, 128, 220)  # Disable Contiguous.
+            click(editor, 338, 189)
+            global_edit = save_layers(lambda values: values[0]["src"] != source, "global wand")[0]
+            asset_pixel(global_edit, 100, 100, (0, 0, 0, 0))
+            asset_pixel(global_edit, 310, 60, (0, 0, 0, 0))
+            assert global_edit["originalSrc"] == source
+            shot(editor, "wand-global")
+            close(editor)
+            wait(lambda: not windows("Screenshot editor"), "wand draft closes")
+            editor = reopen()
+            asset_pixel(layers()[0], 310, 60, (0, 0, 0, 0))
+            run("xdotool", "windowsize", "--sync", editor, "886", "700")
+            click(editor, 736, 62)
+            click(editor, 150, 182)
+            run("xdotool", "windowsize", "--sync", editor, "760", "540")
+            shot(editor, "wand-minimum-reopened")
+            run("xdotool", "windowsize", "--sync", editor, "1000", "800")
+            click(editor, 535, 62)
+            click(editor, 170, 657)
+            wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+                 "wand clipboard copy")
+            png = output / "clipboard-wand.png"
+            png.write_bytes(run("xclip", "-selection", "clipboard", "-t", "image/png", "-o"))
+            assert run("identify", "-format", "%wx%h", str(png)) == b"640x360"
+            assert run("convert", str(png), "-crop", "1x1+310+60", "-depth", "8", "rgba:-") == bytes((0, 0, 0, 0))
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "wand suite quits")
+            assert app.returncode == 0
+            checks = ["wand-locked-contiguous-exact-pixels", "wand-no-match-preserves-state",
+                      "wand-undo-redo", "wand-global-disconnected-pixels", "wand-retains-original",
+                      "wand-minimum-draft-reopen", "wand-clipboard-alpha-original-unchanged"]
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance, "checks": checks,
+            }, indent=2) + "\n")
+            print("PASS native Wand: locked image, contiguous/global, rollback, undo/redo, draft, clipboard alpha")
+            return
 
         if args.background_only:
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")

@@ -349,6 +349,12 @@ Both hosts can copy the full-resolution edited image without saving a file or dr
 copy ignores export format and quality settings.
 Canvas background controls support a hex color or transparency, with undo/redo and
 draft restore. They change the canvas fill, not backgrounds within image layers.
+Both hosts also connect **Draw → Wand**: click an image to remove similar colors,
+using a 0–255 tolerance and either a contiguous region or all matching pixels.
+The frontmost visible image is editable even when locked; transparent pixels do
+not let clicks reach images underneath. Each edit clears the canvas fill, keeps
+the original image pixels, and supports undo/redo and draft restore. The original
+History capture remains unchanged. Erase/restore brushes are not connected yet.
 Other drawing tools, text, overwrite-original, and recording editing remain
 unconnected. Shared editor support
 is prerequisite work, not native editor acceptance. OS shortcut takeover, login items,

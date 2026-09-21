@@ -118,8 +118,15 @@ the first pre-edit source for future restore, and clear the solid canvas fill in
 one undoable render-before-publish transaction. Invalid/no-match requests leave
 history and assets unchanged; retained originals survive draft reopen. The existing
 100-million decoded-pixel asset budget also counts retained edits/undo sources.
-Native toolbar bindings, erase/restore brushes and their physical acceptance are
-still unconnected; shared primitives alone do not complete the editor gate.
+Both native Draw panels now bind Wand clicks through the existing viewport mapping
+and serialized worker. Tolerance defaults to 36 with a 0–255 range, matching Tauri;
+contiguous removal defaults on. Pan and off-image clicks do not submit edits.
+AppKit's Draw panel scrolls at minimum size. X11 coverage exercises exact alpha,
+disconnected-color global removal, locked images, no-match recovery, undo/redo,
+draft reopen and copied PNG pixels; AppKit has bridge and rendered-state tests.
+Windows/Wayland presentation and physical AppKit input remain unverified.
+Erase/restore brushes and physical acceptance remain open; these bindings do not
+complete the editor gate or reproduce the shipping Tauri toolbar layout.
 Next implementation boundary: text/image-background and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.
 

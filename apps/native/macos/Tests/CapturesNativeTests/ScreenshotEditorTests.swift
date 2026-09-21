@@ -2581,6 +2581,61 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(NSEvent.isMouseCoalescingEnabled, coalescing)
     }
 
+    func testWandUsesViewportMappingAndRejectsDragAndOffCanvasClicks() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let tool = try popup("Drawing tool", in: controller.root)
+        tool.selectItem(at: 5); _ = tool.sendAction(tool.action, to: tool.target)
+        XCTAssertEqual(try field("Wand color tolerance", in: controller.root).stringValue, "36")
+        let contiguous = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSButton }
+            .first { $0.accessibilityLabel() == "Wand contiguous only" })
+        XCTAssertEqual(contiguous.state, .on)
+
+        let image = controller.presentedImageRect
+        let click = NSPoint(x: image.minX + image.width * 0.25,
+                            y: image.minY + image.height * 0.75)
+        controller.drawOverlay.begin(at: click); controller.drawOverlay.end(at: click)
+        let request = try XCTUnwrap(worker.requests.last)
+        XCTAssertEqual(request["operation"] as? String, "remove_image_background")
+        XCTAssertEqual(request["tolerance"] as? Double, 36)
+        XCTAssertEqual(request["contiguous"] as? Bool, true)
+        let point = try XCTUnwrap(request["point"] as? [String: CGFloat])
+        XCTAssertEqual(try XCTUnwrap(point["x"]), 160, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(point["y"]), 270, accuracy: 0.001)
+
+        let count = worker.requests.count
+        controller.drawOverlay.begin(at: click)
+        controller.drawOverlay.end(at: NSPoint(x: click.x + 12, y: click.y))
+        controller.drawOverlay.begin(at: NSPoint(x: image.minX - 1, y: image.midY))
+        controller.drawOverlay.end(at: NSPoint(x: image.minX - 1, y: image.midY))
+        XCTAssertEqual(worker.requests.count, count)
+    }
+
+    func testWandFailurePreservesAcceptedStateAndAllowsRetry() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let tool = try popup("Drawing tool", in: controller.root)
+        tool.selectItem(at: 5); _ = tool.sendAction(tool.action, to: tool.target)
+        let accepted = controller.state.snapshot
+        worker.failOperation = "remove_image_background"
+        worker.failureMessage = "No matching pixels were found. Try a higher tolerance."
+        let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
+        controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+        XCTAssertEqual(controller.state.snapshot, accepted); XCTAssertFalse(controller.state.busy)
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("No matching pixels") })
+        worker.failOperation = nil
+        controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+        XCTAssertEqual(worker.requests.filter { $0["operation"] as? String == "remove_image_background" }.count, 2)
+    }
+
     func testOpenDrawingRenderedStates() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
@@ -2590,7 +2645,7 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
             try showDraw(in: controller.root)
             let tool = try popup("Drawing tool", in: controller.root)
-            XCTAssertEqual(tool.itemTitles, ["Rectangle", "Ellipse", "Line", "Arrow", "Pen"])
+            XCTAssertEqual(tool.itemTitles, ["Rectangle", "Ellipse", "Line", "Arrow", "Pen", "Wand"])
             for (index, name) in [(2, "line"), (3, "arrow"), (4, "pen")] {
                 tool.selectItem(at: index); _ = tool.sendAction(tool.action, to: tool.target)
                 controller.drawOverlay.begin(at: NSPoint(x: 100, y: 220))
@@ -2605,6 +2660,17 @@ final class ScreenshotEditorTests: XCTestCase {
             worker.failureMessage = "The Pen stroke could not be created. The previous draft, selection, pixels and undo history remain recoverable."
             controller.drawOverlay.end(at: NSPoint(x: 240, y: 210))
             try render(controller.root, name: "screenshot-editor-pen-error-minimum-\(appearance)")
+            worker.failOperation = nil
+            controller.drawOverlay.begin(at: NSPoint(x: 100, y: 220))
+            controller.drawOverlay.end(at: NSPoint(x: 240, y: 210))
+            tool.selectItem(at: 5); _ = tool.sendAction(tool.action, to: tool.target)
+            try render(controller.root, name: "screenshot-editor-wand-minimum-\(appearance)")
+            worker.failOperation = "remove_image_background"
+            worker.failureMessage = "No matching pixels were found. Try a higher tolerance."
+            let point = NSPoint(x: controller.presentedImageRect.midX,
+                                y: controller.presentedImageRect.midY)
+            controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+            try render(controller.root, name: "screenshot-editor-wand-error-minimum-\(appearance)")
         }
     }
 
@@ -2658,6 +2724,34 @@ final class ScreenshotEditorTests: XCTestCase {
             try render(controller.root, name: "screenshot-editor-drawing-committed-\(appearance)")
             controller.window.orderOut(nil); reopened.close(); EditorWorker.flush()
         }
+    }
+
+    func testRealBridgeWandEditsAsymmetricPixelAndUndoRedo() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let worker = EditorWorker(); defer { worker.close(); EditorWorker.flush() }
+        let opened = expectation(description: "open wand fixture")
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path, artifactID: fixture.id) {
+            result in XCTAssertNotNil(try? result.get()); opened.fulfill()
+        }
+        wait(for: [opened], timeout: 5)
+        func request(_ object: [String: Any]) throws -> EditorPresentation {
+            let done = expectation(description: "wand request")
+            var response: Result<EditorPresentation, Error>?
+            worker.request(object) { response = $0; done.fulfill() }
+            wait(for: [done], timeout: 5)
+            return try XCTUnwrap(response).get()
+        }
+        let removed = try request(["operation": "remove_image_background",
+                                   "point": ["x": 2.5, "y": 1.5],
+                                   "tolerance": 0, "contiguous": true])
+        XCTAssertEqual(rgba(removed.image, x: 2, y: 1)[3], 0)
+        XCTAssertEqual(rgba(removed.image, x: 1, y: 1)[3], 255)
+        let undone = try request(["operation": "undo"])
+        XCTAssertEqual(rgba(undone.image, x: 2, y: 1)[3], 255)
+        let redone = try request(["operation": "redo"])
+        XCTAssertEqual(rgba(redone.image, x: 2, y: 1)[3], 0)
     }
 
     private func annotationStyle() -> [String: Any] {
