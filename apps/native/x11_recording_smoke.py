@@ -413,6 +413,9 @@ def main():
                        "paused HUD restored after countdown cancellation")[0]
             assert manifest()["state"] == "paused" and manifest()["session_id"] == session_id
             assert len(history()) == 1
+            # Match selection cancellation above: the X11 hotkey worker must
+            # observe Escape release before the restored HUD receives input.
+            time.sleep(1)
 
             click(hud, 142, 54)
             finished(2)
