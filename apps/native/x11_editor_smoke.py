@@ -547,6 +547,7 @@ def main():
         pixel("layer-resize-reopened", *resized_green, (60, 179, 113))
         # Undo history is session-local. Restore through a fresh east-grip resize
         # at 1:1 scale, where the desired edge lands on an exact pointer pixel.
+        click(editor, 463, 62)  # Reopened editors start in Geometry, not Layers.
         click(editor, 100, 158)
         run("xdotool", "windowsize", "--sync", editor, "886", "700", "sleep", ".3")
         drag((round(238 + 260 + resized_width), 489), (618, 489))
