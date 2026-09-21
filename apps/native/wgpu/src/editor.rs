@@ -15,11 +15,12 @@ use std::{
 use captures_app::{
     editor::{
         ARROW_MIN_DRAW_LENGTH, AlignmentGuide, AnnotationStylePatch, ClosedShapeCreate,
-        ClosedShapeKind, CropDrag, Document, DropShadowStyle, DropShadowStylePatch, Element,
-        ElementBase, ElementStyle, FreehandPathCreate, GuideOrientation, ImageTransform, LayerEdit,
-        LayerPlacement, MoveDrag, OpenShapeCreate, OpenShapeKind, OptionalNullable, Point, Rect,
-        ResizeDrag, ResizeHandle, ShapeElement, TextElement, arrow_fill_polygon, preview_rotation,
-        rotation_angle, rotation_handle, smooth_path_centerline,
+        ClosedShapeKind, CropDrag, DEFAULT_ROTATION_SNAP_DEGREES, Document, DropShadowStyle,
+        DropShadowStylePatch, Element, ElementBase, ElementStyle, FreehandPathCreate,
+        GuideOrientation, ImageTransform, LayerEdit, LayerPlacement, MoveDrag, OpenShapeCreate,
+        OpenShapeKind, OptionalNullable, Point, Rect, ResizeDrag, ResizeHandle, ShapeElement,
+        TextElement, arrow_fill_polygon, preview_rotation, rotation_angle, rotation_handle,
+        smooth_path_centerline,
     },
     editor_image_background::BrushMode,
     editor_output::{SavedExport, save_new_export},
@@ -334,6 +335,7 @@ struct View {
     crop_drag: Option<CropDrag>,
     crop_aspect: usize,
     draw_shape: DrawShape,
+    rotation_snap_degrees: f64,
     wand_tolerance: f64,
     wand_contiguous: bool,
     brush_size: f64,
@@ -388,6 +390,7 @@ impl Default for View {
             crop_drag: None,
             crop_aspect: 0,
             draw_shape: DrawShape::Rectangle,
+            rotation_snap_degrees: DEFAULT_ROTATION_SNAP_DEGREES,
             wand_tolerance: 36.,
             wand_contiguous: true,
             brush_size: 28.,
@@ -1871,7 +1874,7 @@ fn show_layer_canvas(
                             .then_some((
                                 base.id.clone(),
                                 outline,
-                                rotation_angle(base.rotation(), false)?,
+                                rotation_angle(base.rotation(), None)?,
                             ))
                     });
                     if let Some((id, outline, initial_radians)) = rotation {
@@ -2029,7 +2032,7 @@ fn show_layer_canvas(
                                 initial_radians,
                                 gesture.start,
                                 end,
-                                modifiers.shift,
+                                modifiers.shift.then_some(view.rotation_snap_degrees),
                             ) && rotation.radians != initial_radians
                             {
                                 view.pending_layer_selection = Some(id.clone());
@@ -2167,7 +2170,7 @@ fn show_layer_canvas(
                         *initial_radians,
                         gesture.start,
                         gesture.current,
-                        *snap,
+                        snap.then_some(view.rotation_snap_degrees),
                     );
                     (
                         rotation.map(|value| value.outline).or(Some(*outline)),
@@ -3243,6 +3246,23 @@ fn show_layers(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
             ui.small("Hidden and locked images can transform.");
         }
     }
+    ui.separator();
+    ui.label("Shift rotation snap");
+    if ui
+        .add(
+            egui::DragValue::new(&mut view.rotation_snap_degrees)
+                .range(1. ..=180.)
+                .max_decimals(0)
+                .suffix("°"),
+        )
+        .changed()
+    {
+        view.rotation_snap_degrees = view.rotation_snap_degrees.round();
+        view.layer_gesture = None;
+    }
+    ui.small(
+        "Hold Shift while dragging the rotate handle. This setting does not edit the document.",
+    );
 }
 
 fn show_text(ui: &mut egui::Ui, view: &mut View, tx: &Sender<Job>) {
@@ -4580,7 +4600,10 @@ mod tests {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         };
-        let mut view = View::default();
+        let mut view = View {
+            rotation_snap_degrees: 37.,
+            ..Default::default()
+        };
         view.receive(&ctx, Ok(value));
         view.pending = false;
         view.section = Section::Layers;
@@ -4645,7 +4668,7 @@ mod tests {
                             height: 100.,
                         },
                     ),
-                    false,
+                    None,
                 )
                 .unwrap()
             }
@@ -4681,9 +4704,12 @@ mod tests {
                     height: 100.,
                 },
             ),
-            true,
+            Some(view.rotation_snap_degrees),
         )
         .unwrap();
+        // This grip movement is about -74.3°, so custom 37° stops give -74°,
+        // not the old hard-coded -75° stop.
+        assert!((snapped.radians + 74. * std::f64::consts::PI / 180.).abs() < 1e-12);
         assert_ne!(
             free.radians, snapped.radians,
             "stationary Shift changes the preview"

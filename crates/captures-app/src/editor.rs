@@ -124,9 +124,11 @@ pub struct RotationPreview {
     pub outline: [Point; 4],
 }
 
-/// Shipping angle normalization and optional 15-degree Shift stops. JS rounds
+pub const DEFAULT_ROTATION_SNAP_DEGREES: f64 = 15.;
+
+/// Shipping angle normalization and optional configurable Shift stops. JS rounds
 /// negative half-ties toward positive infinity, unlike Rust's f64::round.
-pub fn rotation_angle(radians: f64, snap: bool) -> Option<f64> {
+pub fn rotation_angle(radians: f64, snap_degrees: Option<f64>) -> Option<f64> {
     if !radians.is_finite() {
         return None;
     }
@@ -140,9 +142,14 @@ pub fn rotation_angle(radians: f64, snap: bool) -> Option<f64> {
     if angle.abs() < 1e-10 {
         angle = 0.;
     }
-    if snap {
-        let step = std::f64::consts::PI / 12.;
-        return rotation_angle((angle / step + 0.5).floor() * step, false);
+    if let Some(degrees) = snap_degrees {
+        let degrees = if degrees.is_finite() {
+            degrees.clamp(1., 180.)
+        } else {
+            DEFAULT_ROTATION_SNAP_DEGREES
+        };
+        let step = degrees * std::f64::consts::PI / 180.;
+        return rotation_angle((angle / step + 0.5).floor() * step, None);
     }
     Some(angle)
 }
@@ -227,7 +234,7 @@ pub fn preview_rotation(
     initial: f64,
     start: Point,
     current: Point,
-    snap: bool,
+    snap_degrees: Option<f64>,
 ) -> Option<RotationPreview> {
     if !finite_outline(&outline)
         || ![initial, start.x, start.y, current.x, current.y]
@@ -239,7 +246,7 @@ pub fn preview_rotation(
     let origin = midpoint(outline[0], outline[2]);
     let angle = (current.y - origin.y).atan2(current.x - origin.x)
         - (start.y - origin.y).atan2(start.x - origin.x);
-    let radians = rotation_angle(initial + angle, snap)?;
+    let radians = rotation_angle(initial + angle, snap_degrees)?;
     let outline = outline.map(|point| rotate_point(point, origin, radians - initial));
     finite_outline(&outline).then_some(RotationPreview { radians, outline })
 }
@@ -1793,7 +1800,7 @@ impl Document {
             }
             LayerEdit::Rotate { radians } => {
                 let radians =
-                    rotation_angle(radians, false).ok_or("Layer rotation must be finite.")?;
+                    rotation_angle(radians, None).ok_or("Layer rotation must be finite.")?;
                 if !locked {
                     self.elements[index].selection_bounds()?;
                     self.elements[index].base_mut().rotation = (radians != 0.).then_some(radians);

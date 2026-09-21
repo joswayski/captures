@@ -109,14 +109,15 @@ struct NativeEditorRotationPreview {
     let radians: Double
     let outline: [CGPoint]
 
-    init?(outline: [CGPoint], radians: Double, start: CGPoint, current: CGPoint, snap: Bool) {
+    init?(outline: [CGPoint], radians: Double, start: CGPoint, current: CGPoint, snap: Bool,
+          snapDegrees: Double = 15) {
         guard outline.count == 4 else { return nil }
         let input = outline.map { CapturesSelectionPoint(x: $0.x, y: $0.y) }
         var output = CapturesEditorRotationPreview()
         let succeeded = input.withUnsafeBufferPointer {
-            captures_editor_rotation_preview_v1($0.baseAddress, radians,
+            captures_editor_rotation_preview_v2($0.baseAddress, radians,
                 CapturesSelectionPoint(x: start.x, y: start.y),
-                CapturesSelectionPoint(x: current.x, y: current.y), snap, &output)
+                CapturesSelectionPoint(x: current.x, y: current.y), snap, snapDegrees, &output)
         }
         guard succeeded else { return nil }
         self.radians = output.radians

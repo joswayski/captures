@@ -283,7 +283,10 @@ fn rotation_geometry_and_edits_match_typescript() {
             json!(
                 rotation_angle(
                     case["radians"].as_f64().unwrap(),
-                    case["snap"].as_bool().unwrap()
+                    case["snap"]
+                        .as_bool()
+                        .unwrap()
+                        .then_some(case["snapDegrees"].as_f64().unwrap_or(15.))
                 )
                 .unwrap()
             ),
@@ -306,7 +309,10 @@ fn rotation_geometry_and_edits_match_typescript() {
             case["initial"].as_f64().unwrap(),
             serde_json::from_value(case["start"].clone()).unwrap(),
             serde_json::from_value(case["current"].clone()).unwrap(),
-            case["snap"].as_bool().unwrap(),
+            case["snap"]
+                .as_bool()
+                .unwrap()
+                .then_some(case["snapDegrees"].as_f64().unwrap_or(15.)),
         )
         .unwrap();
         equivalent(serde_json::to_value(preview).unwrap(), &case["expected"]);
@@ -330,7 +336,13 @@ fn rotation_invalid_input_and_locked_noop_preserve_history() {
     let mut document = fixture().hit_tests.remove(0).input;
     let outline = document.elements[0].selection_outline().unwrap();
     let start = Point { x: 10., y: 20. };
-    assert!(rotation_angle(f64::INFINITY, true).is_none());
+    assert!(rotation_angle(f64::INFINITY, Some(15.)).is_none());
+    for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert_eq!(
+            rotation_angle(0.73, Some(invalid)),
+            Some(std::f64::consts::FRAC_PI_4)
+        );
+    }
     assert!(rotation_handle(outline, 0., 0., 100., 100.).is_none());
     assert!(
         preview_rotation(
@@ -341,7 +353,7 @@ fn rotation_invalid_input_and_locked_noop_preserve_history() {
                 x: f64::NAN,
                 y: 20.
             },
-            false
+            None
         )
         .is_none()
     );

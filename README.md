@@ -357,9 +357,11 @@ selection outline; release moves the layer in one undoable edit. Escape, focus l
 preview resizing or leaving Layers cancels the drag. Pixels update on release, not
 continuously during dragging; selection alone does not change the document.
 The selected layer also exposes a **rotation grip** when it fits inside the image.
-Drag it to rotate; hold Shift for 15° stops. Rotation uses the same outline-only
+Drag it to rotate; hold Shift for stops configured under **Layers → Shift rotation snap**
+(1–180°, initially 15°). The increment is per-editor UI state, not a document edit
+or saved preference. Rotation uses the same outline-only
 preview, cancellation, undo and draft behavior. Hidden or locked layers have no
-grip; custom snap increments are not connected yet.
+grip.
 Eight border grips resize images, shapes and drawings. Shift keeps corner drags
 proportional; edge grips remain single-axis. Unrotated resizes snap to canvas and
 visible-layer edges with guide lines; rotated resizes retain the opposite anchor.

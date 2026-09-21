@@ -73,14 +73,23 @@ worker session; wgpu handles raw events once, in order, across egui layout passe
 Both hosts also expose a rotation grip for the selected visible/unlocked layer.
 Shared Rust chooses a grip that fits the bitmap, preferring outside top/bottom then
 inside top/bottom, and owns the rotated outline and angle normalization. Shift snaps
-to the shipping default 15-degree stops, including modifier changes without pointer
-motion; custom increments remain unconnected. The grip wins over overlapping layer
+to the configured stops, including modifier changes without pointer motion.
+Both hosts expose **Layers → Shift rotation snap**, rounded/clamped to 1–180 degrees
+with a 15-degree initial value. This is per-editor UI state: changing it does not
+edit a layer, clear encoded output, create history or write a draft. AppKit parses
+the field using the editor locale. Shared geometry retains Tauri's signed half-tie
+rounding and finite-range/default rules; the original C v1 call keeps 15-degree
+stops and v2 adds the configurable increment. The grip wins over overlapping layer
 bodies. A changed angle submits one `LayerEdit::Rotate` on release, with normal
 render-before-publish, undo and draft ownership; clicks and cancellation do not edit
 the document. Partial overflow remains clipped; fully outside rotated bounds expand
 the canvas. AppKit's C boundary is allocation-free, without per-event JSON or worker
 session access. TypeScript-oracle fixtures check angles, grip placement, gestures and
 document edits. Both hosts retain outline-only feedback until release.
+Custom-increment tests distinguish 37-degree stops from the former hard-coded 15,
+including stationary Shift changes, release, cancellation and draft restore.
+X11 software-rendered checks and AppKit host fixtures are diagnostics, not physical
+macOS/Windows/Wayland input or accessibility acceptance; those gates remain open.
 Both hosts also connect eight resize grips and border hit regions. Shared Rust
 retains original element geometry and snap lines for a gesture; AppKit holds an
 independent immutable C owner, without per-event JSON or worker-session access.

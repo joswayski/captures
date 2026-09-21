@@ -245,6 +245,11 @@ bool captures_editor_rotation_handle_v1(const CapturesSelectionPoint *outline,
 bool captures_editor_rotation_preview_v1(const CapturesSelectionPoint *outline,
     double initial, CapturesSelectionPoint start, CapturesSelectionPoint current,
     bool snap, CapturesEditorRotationPreview *output);
+/* Same ownership as v1. When snap is true, finite snap_degrees clamp to [1,180];
+ * nonfinite values use 15. v1 retains its fixed 15-degree default. */
+bool captures_editor_rotation_preview_v2(const CapturesSelectionPoint *outline,
+    double initial, CapturesSelectionPoint start, CapturesSelectionPoint current,
+    bool snap, double snap_degrees, CapturesEditorRotationPreview *output);
 /* Independent immutable resize gesture. Begin parses the published document
  * once and hit-tests the selected layer at 8 view points of tolerance. Output
  * is set to NULL on miss/error; success transfers a drag with copied geometry

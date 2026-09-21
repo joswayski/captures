@@ -3,9 +3,9 @@
 use super::region::{RegionPixels, response, text};
 use captures_app::{
     editor::{
-        ClosedShapeKind, CropDrag, Document, ElementBase, ElementStyle, GuideOrientation, MoveDrag,
-        Point, ResizeDrag, ShapeElement, arrow_fill_polygon, preview_rotation, rotation_handle,
-        smooth_path_centerline,
+        ClosedShapeKind, CropDrag, DEFAULT_ROTATION_SNAP_DEGREES, Document, ElementBase,
+        ElementStyle, GuideOrientation, MoveDrag, Point, ResizeDrag, ShapeElement,
+        arrow_fill_polygon, preview_rotation, rotation_handle, smooth_path_centerline,
     },
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
     editor_session::{EditorSession, ExportOptions, ImportImage, OpenRequest, Request},
@@ -475,6 +475,34 @@ pub unsafe extern "C" fn captures_editor_rotation_preview_v1(
     snap: bool,
     output: *mut RotationPreview,
 ) -> bool {
+    // SAFETY: v2 has the same pointer ownership and lifetime contract as v1.
+    unsafe {
+        captures_editor_rotation_preview_v2(
+            outline,
+            initial,
+            start,
+            current,
+            snap,
+            DEFAULT_ROTATION_SNAP_DEGREES,
+            output,
+        )
+    }
+}
+
+/// Configurable Shift snapping; finite increments clamp to 1–180 degrees,
+/// nonfinite increments fall back to the shipping 15-degree default.
+/// # Safety
+/// Same borrowed input/output contract as captures_editor_rotation_preview_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_rotation_preview_v2(
+    outline: *const AbiPoint,
+    initial: f64,
+    start: AbiPoint,
+    current: AbiPoint,
+    snap: bool,
+    snap_degrees: f64,
+    output: *mut RotationPreview,
+) -> bool {
     if outline.is_null() || output.is_null() {
         return false;
     }
@@ -494,7 +522,7 @@ pub unsafe extern "C" fn captures_editor_rotation_preview_v1(
             x: current.x,
             y: current.y,
         },
-        snap,
+        snap.then_some(snap_degrees),
     ) else {
         return false;
     };
@@ -1385,6 +1413,65 @@ mod tests {
             ));
             captures_editor_resize_free_v1(drag);
             captures_editor_resize_free_v1(ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn configurable_rotation_abi_preserves_v1_default_and_v2_bounds() {
+        let outline = [
+            AbiPoint { x: 20., y: 30. },
+            AbiPoint { x: 100., y: 30. },
+            AbiPoint { x: 100., y: 70. },
+            AbiPoint { x: 20., y: 70. },
+        ];
+        let start = AbiPoint { x: 60., y: 2. };
+        let current = AbiPoint { x: 84., y: 14. }; // 33.69°, not a default or custom stop.
+        let mut output = MaybeUninit::<RotationPreview>::uninit();
+        // SAFETY: live four-point input and writable output; no pointers retained.
+        unsafe {
+            assert!(captures_editor_rotation_preview_v1(
+                outline.as_ptr(),
+                0.,
+                start,
+                current,
+                true,
+                output.as_mut_ptr()
+            ));
+            let mut output = output.assume_init();
+            assert!((output.radians - std::f64::consts::PI / 6.).abs() < 1e-12);
+            for (degrees, expected) in [(37., 37.), (0., 34.), (181., 0.), (f64::NAN, 30.)] {
+                assert!(captures_editor_rotation_preview_v2(
+                    outline.as_ptr(),
+                    0.,
+                    start,
+                    current,
+                    true,
+                    degrees,
+                    &mut output
+                ));
+                assert!((output.radians - expected * std::f64::consts::PI / 180.).abs() < 1e-12);
+            }
+            assert!(captures_editor_rotation_preview_v2(
+                outline.as_ptr(),
+                0.,
+                start,
+                current,
+                false,
+                37.,
+                &mut output
+            ));
+            assert!((output.radians - 24_f64.atan2(36.)).abs() < 1e-12);
+            let before = output.radians;
+            assert!(!captures_editor_rotation_preview_v2(
+                ptr::null(),
+                0.,
+                start,
+                current,
+                true,
+                37.,
+                &mut output
+            ));
+            assert_eq!(output.radians, before);
         }
     }
 

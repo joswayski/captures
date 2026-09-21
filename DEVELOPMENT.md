@@ -144,6 +144,8 @@ Use `--output-size-only` to exercise percentage/custom dimensions, aspect lockin
 saved-file/History consistency, unchanged drafts and full-resolution clipboard copy.
 Use `--polygon-only` to exercise Triangle/Diamond/Star transient and committed pixels,
 concave star notches, cancelled/degenerate gestures, undo/redo and saved-draft reopening.
+Use `--rotation-snap-only` to exercise the per-editor custom increment, Shift preview
+and cancellation, committed angle/pixels, undo/redo and restored drafts.
 
 Native Record requires executable FFmpeg and FFprobe commands on `PATH`; native
 builds do not bundle their own media tools yet. AppKit also accepts `CAPTURES_FFMPEG`

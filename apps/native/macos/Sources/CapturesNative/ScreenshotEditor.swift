@@ -505,6 +505,9 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     var selectedLayerID: String? { didSet { if selectedLayerID != oldValue { cancelGesture() }; needsDisplay = true } }
     var documentJSON: String? { didSet { if documentJSON != oldValue { cancelGesture() } } }
     var selectedRotation = 0.0 { didSet { needsDisplay = true } }
+    var rotationSnapDegrees = 15.0 {
+        didSet { if rotationSnapDegrees != oldValue { cancelGesture() } }
+    }
     var rotationEnabled = false { didSet { if !rotationEnabled { cancelGesture() }; needsDisplay = true } }
     var resizeEnabled = false { didSet { if !resizeEnabled { cancelGesture() }; needsDisplay = true } }
     var strokeColor = NSColor.controlAccentColor { didSet { needsDisplay = true } }
@@ -580,7 +583,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
                 start: documentPoint, current: documentPoint, snap: false)?.radians ?? selectedRotation
             rotatingLayerID = id; startPoint = point; currentPoint = point; snapRotation = snap
             rotationPreview = NativeEditorRotationPreview(outline: outline, radians: rotationStartRadians,
-                start: documentPoint, current: documentPoint, snap: snap)
+                start: documentPoint, current: documentPoint, snap: snap, snapDegrees: rotationSnapDegrees)
             needsDisplay = true; return
         }
         do {
@@ -611,7 +614,8 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
         if rotatingLayerID != nil, let outline = rotationStartOutline {
             if let snap { snapRotation = snap }
             rotationPreview = NativeEditorRotationPreview(outline: outline, radians: rotationStartRadians,
-                start: canvasPoint(for: startPoint), current: canvasPoint(for: point), snap: snapRotation)
+                start: canvasPoint(for: startPoint), current: canvasPoint(for: point), snap: snapRotation,
+                snapDegrees: rotationSnapDegrees)
         } else if let resizeDrag, let handle = resizeHandle {
             if let snap { lockResizeAspect = snap && handle.isMultiple(of: 2) }
             resizePreview = resizeDrag.preview(current: canvasPoint(for: point), lockAspect: lockResizeAspect)
@@ -775,6 +779,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let layersPanel = Surface()
     private let layerContent = Surface()
     private var annotationControls: EditorAnnotationControls!
+    private let rotationSnap = NSTextField()
+    private var rotationSnapLabel: NSTextField!
     private let drawPanel = Surface()
     private let outputPanel = Surface()
     private let outputContent = Surface()
@@ -1586,6 +1592,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         importImageButton = button("Add image…", frame: NSRect(x: 0, y: 494, width: 272, height: 34),
                                    parent: layerContent) { [weak self] in self?.chooseImage() }
         importImageButton.primary = true
+        rotationSnapLabel = panelFieldLabel("Shift rotation snap (1–180°)", x: 0, y: 550, parent: layerContent)
+        configure(rotationSnap, frame: NSRect(x: 0, y: 574, width: 272, height: 30),
+                  label: "Shift rotation snap", parent: layerContent)
+        rotationSnap.stringValue = "15"
+        rotationSnap.toolTip = "Hold Shift while dragging the rotate handle. Does not edit the document."
+        rotationSnap.delegate = self
+        rotationSnap.target = self; rotationSnap.action = #selector(rotationSnapChanged)
         annotationControls = EditorAnnotationControls(tokens: tokens, formatter: editorNumberFormatter)
         annotationControls.apply = { [weak self] patch in
             guard let self, !self.state.busy, let layer = self.selectedLayer else { return }
@@ -1594,7 +1607,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         annotationControls.reportError = { [weak self] message in self?.showError(message) }
         annotationControls.resized = { [weak self] height in
-            self?.layerContent.frame.size.height = 550 + height
+            self?.rotationSnapLabel.frame.origin.y = 558 + height
+            self?.rotationSnap.frame.origin.y = 582 + height
+            self?.layerContent.frame.size.height = 620 + height
         }
         layerContent.addSubview(annotationControls)
     }
@@ -1677,6 +1692,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     @objc private func outputAspectLockChanged() {
         publishOutputDimensions()
         updateControls()
+    }
+
+    @objc private func rotationSnapChanged() {
+        let value = number(rotationSnap) ?? selectionOverlay.rotationSnapDegrees
+        let degrees = min(180, max(1, value.rounded()))
+        rotationSnap.stringValue = format(degrees)
+        selectionOverlay.rotationSnapDegrees = degrees
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+        if notification.object as? NSTextField === rotationSnap { rotationSnapChanged() }
     }
 
     func controlTextDidChange(_ notification: Notification) {
@@ -2777,6 +2803,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         annotationControls?.setReady(ready)
         let layer = ready ? selectedLayer : nil
         let image = layer?.kind == .image
+        rotationSnap.isEnabled = layer != nil
         layerName.isEnabled = image; renameButton?.isEnabled = image
         rotateLeftButton?.isEnabled = image; rotateRightButton?.isEnabled = image
         flipHorizontalButton?.isEnabled = image; flipVerticalButton?.isEnabled = image
