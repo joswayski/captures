@@ -2750,36 +2750,44 @@ fn show_output(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<
         .unwrap_or((0, 0));
     let options = &mut view.export_options;
     ui.label("Output size");
-    ui.horizontal_wrapped(|ui| {
-        for (size, label) in [
-            (ExportSize::Original, "Original"),
-            (ExportSize::Percent { percent: 75 }, "75%"),
-            (ExportSize::Percent { percent: 50 }, "50%"),
-        ] {
-            ui.selectable_value(&mut options.size, size, label);
-        }
-        let custom = matches!(options.size, ExportSize::Custom { .. });
-        if ui.selectable_label(custom, "Custom").clicked() && !custom {
-            view.custom_export_size = [source_size.0, source_size.1];
-            options.size = ExportSize::Custom {
-                width: source_size.0,
-                height: source_size.1,
-            };
-        }
-    });
+    egui::ComboBox::from_id_salt("output-size")
+        .selected_text(match options.size {
+            ExportSize::Original => "Original",
+            ExportSize::Percent { percent: 75 } => "75%",
+            ExportSize::Percent { .. } => "50%",
+            ExportSize::Custom { .. } => "Custom",
+        })
+        .width(160.)
+        .show_ui(ui, |ui| {
+            for (size, label) in [
+                (ExportSize::Original, "Original"),
+                (ExportSize::Percent { percent: 75 }, "75%"),
+                (ExportSize::Percent { percent: 50 }, "50%"),
+            ] {
+                ui.selectable_value(&mut options.size, size, label);
+            }
+            let custom = matches!(options.size, ExportSize::Custom { .. });
+            if ui.selectable_label(custom, "Custom").clicked() && !custom {
+                view.custom_export_size = [source_size.0, source_size.1];
+                options.size = ExportSize::Custom {
+                    width: source_size.0,
+                    height: source_size.1,
+                };
+            }
+        });
     if matches!(options.size, ExportSize::Custom { .. }) {
         let old = view.custom_export_size;
         ui.horizontal(|ui| {
             ui.add(
                 egui::DragValue::new(&mut view.custom_export_size[0])
-                    .range(0..=u32::MAX)
+                    .range(0..=16_384)
                     .prefix("W "),
             )
             .on_hover_text("Custom output width");
             ui.label("×");
             ui.add(
                 egui::DragValue::new(&mut view.custom_export_size[1])
-                    .range(0..=u32::MAX)
+                    .range(0..=16_384)
                     .prefix("H "),
             )
             .on_hover_text("Custom output height");
@@ -3484,7 +3492,8 @@ mod tests {
         view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
         view.show_output = true;
         let output = frame(&mut view, vec![]);
-        click(&mut view, position(&output, "75%"));
+        let popup = click(&mut view, position(&output, "Original"));
+        click(&mut view, position(&popup, "75%"));
         assert_eq!(
             view.export_options.size,
             ExportSize::Percent { percent: 75 }
@@ -3493,7 +3502,8 @@ mod tests {
         assert!(view.output.is_none() && !view.show_output);
 
         let output = frame(&mut view, vec![]);
-        click(&mut view, position(&output, "Custom"));
+        let popup = click(&mut view, position(&output, "75%"));
+        click(&mut view, position(&popup, "Custom"));
         assert_eq!(view.custom_export_size, [7, 3]);
         assert_eq!(
             view.export_options.size,
