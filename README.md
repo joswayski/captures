@@ -343,10 +343,16 @@ native magnification. Zoom stays anchored under the pointer and shares the image
 coordinate mapping with editing tools. These controls do not change drafts or undo.
 Cmd/Ctrl +/− zoom in 1.25× steps; Cmd/Ctrl 0 shows 100% (not Fit), including while
 an editor field has focus. Zoom shortcuts cancel unfinished canvas gestures.
+The zoom menu offers Fit, 50%, 100% and 200% and displays the current custom zoom.
 Fit retains each workbench's existing layout and can enlarge small images; Tauri's
-fit policy, zoom slider and presets remain parity work.
+fit policy and zoom slider remain parity work.
 Windows, Wayland and physical AppKit presentation remain unverified.
 The native editor still uses a workbench layout, not the shipping Tauri editor design.
+Native cloud sharing is not implemented. Its required flow starts from a mini-preview
+Share icon and opens a native upload/settings popup, including native sign-in and OS
+credential storage. The [sharing integration slice](docs/native-rewrite.md#mini-preview-sharing-integration--required-not-implemented)
+remains required regardless of accounts/backend or rewrite merge order; opening a
+preview never uploads automatically.
 Both hosts can copy the full-resolution edited image without saving a file or draft;
 copy ignores export format and quality settings.
 Canvas background controls support a hex color or transparency, with undo/redo and

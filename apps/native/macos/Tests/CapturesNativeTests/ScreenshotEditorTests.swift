@@ -29,12 +29,12 @@ final class ScreenshotEditorTests: XCTestCase {
         let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        let labels = ["Fit screenshot in viewport", "Show screenshot at 100 percent",
+        let labels = ["Fit screenshot in viewport",
                       "Zoom out", "Zoom in", "Recenter screenshot"]
         let controls = descendants(in: controller.root).compactMap { $0 as? CaptureButton }
             .filter { labels.contains($0.accessibilityLabel() ?? "") }
-        XCTAssertEqual(controls.count, 5)
-        controls.first { $0.accessibilityLabel() == "Show screenshot at 100 percent" }?.performClick(nil)
+        XCTAssertEqual(controls.count, 4)
+        try chooseZoomPreset("100%", in: controller.root)
         XCTAssertEqual(controller.viewport.zoomPercent, 100)
         controls.first { $0.accessibilityLabel() == "Zoom in" }?.performClick(nil)
         XCTAssertEqual(controller.viewport.zoomPercent, 125)
@@ -45,6 +45,45 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(controller.state.snapshot, original)
         XCTAssertTrue(worker.requests.isEmpty)
         XCTAssertTrue(controls.allSatisfy { controller.root.bounds.contains($0.convert($0.bounds, to: controller.root)) })
+    }
+
+    func testZoomPresetsTrackCustomZoomAndFitWithoutDocumentWork() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let original = snapshot(id: "shot", width: 640, height: 360, unsaved: true, draft: true)
+            let worker = FakeEditorWorker(snapshot: original)
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            let preset = try popup("Canvas zoom preset", in: controller.root)
+            XCTAssertEqual(preset.itemTitles, ["Fit", "50%", "100%", "200%"])
+            XCTAssertEqual(preset.titleOfSelectedItem, "Fit")
+            try chooseZoomPreset("50%", in: controller.root)
+            XCTAssertEqual(controller.presentedImageRect.size, NSSize(width: 320, height: 180))
+            try render(controller.root, name: "screenshot-editor-zoom-preset-50-\(appearance)")
+            try chooseZoomPreset("200%", in: controller.root)
+            XCTAssertEqual(controller.presentedImageRect.size, NSSize(width: 1280, height: 720))
+            try chooseZoomPreset("100%", in: controller.root)
+            try button("+", in: controller.root).performClick(nil)
+            try button("+", in: controller.root).performClick(nil)
+            XCTAssertEqual(preset.titleOfSelectedItem, "156.3%")
+            XCTAssertEqual(preset.itemTitles, ["Fit", "156.3%", "50%", "100%", "200%"])
+            try render(controller.root, name: "screenshot-editor-zoom-preset-custom-minimum-\(appearance)")
+            let input = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? EditorViewportGestureView }
+                .first { $0.accessibilityLabel() == "Screenshot viewport" })
+            input.onViewportPan?(NSPoint(x: -71, y: 39))
+            try chooseZoomPreset("Fit", in: controller.root)
+            XCTAssertEqual(controller.viewport, NativeEditorViewport())
+            XCTAssertEqual(preset.itemTitles, ["Fit", "50%", "100%", "200%"])
+            input.onViewportPan?(NSPoint(x: 37, y: -21))
+            XCTAssertNotEqual(controller.viewport.panX, 0)
+            XCTAssertEqual(preset.titleOfSelectedItem, "Fit")
+            try chooseZoomPreset("Fit", in: controller.root)
+            XCTAssertEqual(controller.viewport, NativeEditorViewport())
+            XCTAssertTrue(controller.root.bounds.contains(preset.convert(preset.bounds, to: controller.root)))
+            XCTAssertEqual(controller.state.snapshot, original)
+            XCTAssertTrue(worker.requests.isEmpty); XCTAssertTrue(worker.encodes.isEmpty)
+        }
     }
 
     func testZoomShortcutsUseActualSizeAndWorkInFieldsWithoutEditing() throws {
@@ -120,7 +159,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(controller.viewport.panY, -7, accuracy: 1e-7)
         XCTAssertFalse(overlay.isViewportPanning)
         overlay.begin(at: CGPoint(x: 120, y: 140))
-        try button("100%", in: controller.root).performClick(nil)
+        try chooseZoomPreset("100%", in: controller.root)
         XCTAssertNil(overlay.startPoint, "toolbar zoom cancels the original gesture")
         overlay.end(at: CGPoint(x: 240, y: 200))
         XCTAssertTrue(worker.requests.isEmpty)
@@ -157,8 +196,7 @@ final class ScreenshotEditorTests: XCTestCase {
                 tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-            let controls = descendants(in: controller.root).compactMap { $0 as? CaptureButton }
-            controls.first { $0.accessibilityLabel() == "Show screenshot at 100 percent" }?.performClick(nil)
+            try chooseZoomPreset("100%", in: controller.root)
             let input = try XCTUnwrap(descendants(in: controller.root)
                 .compactMap { $0 as? EditorViewportGestureView }
                 .first { $0.accessibilityLabel() == "Screenshot viewport" })
@@ -3031,6 +3069,13 @@ final class ScreenshotEditorTests: XCTestCase {
         let sections = try segmented("Editor section", in: view)
         sections.selectedSegment = 1
         _ = sections.sendAction(sections.action, to: sections.target)
+    }
+
+    private func chooseZoomPreset(_ title: String, in view: NSView) throws {
+        let control = try popup("Canvas zoom preset", in: view)
+        XCTAssertNotNil(control.item(withTitle: title))
+        control.selectItem(withTitle: title)
+        _ = control.sendAction(control.action, to: control.target)
     }
 
     private func showOutput(in view: NSView) throws {

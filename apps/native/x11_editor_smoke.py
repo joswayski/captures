@@ -531,11 +531,13 @@ def main():
         # Recenter keeps zoom; Fit restores the historical fixture geometry.
         click(editor, 840, 25)
         shot(editor, f"viewport-recenter-{args.appearance}")
-        click(editor, 630, 18)
+        click(editor, 590, 18)
         shot(editor, f"viewport-fit-{args.appearance}")
         pixel(f"viewport-fit-{args.appearance}", 340, 200, (229, 179, 68))
         pixel(f"viewport-fit-{args.appearance}", 310, 200, (40, 110, 166))
-        click(editor, 686, 18)  # 100%
+        click(editor, 668, 18)
+        shot(editor, "viewport-presets-menu")
+        click(editor, 660, 145)  # 100% preset, without a custom row.
         shot(editor, "viewport-actual-button")
         click(editor, 778, 18)  # + (1.25x)
         shot(editor, "viewport-125-button")
@@ -555,9 +557,49 @@ def main():
         shot(editor, "viewport-field-key")
         assert viewport_pixels("viewport-field-key") == viewport_pixels("viewport-actual-button")
         run("xdotool", "key", "Escape")
+        click(editor, 668, 18)
+        click(editor, 660, 101)  # 50% preset.
+        shot(editor, "viewport-preset-50")
+        # 640×360 at 50% is 320×180, centered at (558, 330).
+        pixel("viewport-preset-50", 400, 260, (40, 110, 166))
+        pixel("viewport-preset-50", 455, 290, (229, 179, 68))
+        pixel("viewport-preset-50", 397, 260,
+              (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
+        pixel("viewport-preset-50", 718, 260,
+              (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
+        click(editor, 668, 18)
+        click(editor, 660, 189)  # 200% preset.
+        shot(editor, "viewport-preset-200")
+        run("xdotool", "key", "ctrl+0", "ctrl+equal", "ctrl+equal", "sleep", ".3")
+        shot(editor, "viewport-preset-custom")
+        click(editor, 668, 18)
+        shot(editor, "viewport-presets-custom-menu")
+        click(editor, 660, 233)  # 200% now follows the custom percentage row.
+        shot(editor, "viewport-preset-200-from-custom")
+        assert viewport_pixels("viewport-preset-200") == viewport_pixels("viewport-preset-200-from-custom")
+        assert viewport_pixels("viewport-preset-50") != viewport_pixels("viewport-preset-200")
+        click(editor, 668, 18)
+        click(editor, 660, 57)  # Fit removes the custom row and resets pan.
+        shot(editor, "viewport-preset-fit")
+        assert viewport_pixels("viewport-preset-fit") == viewport_pixels(f"viewport-fit-{args.appearance}")
+        run("xdotool", "mousemove", "--sync", "--window", editor, "520", "250",
+            "mousedown", "2", "mousemove", "--sync", "--window", editor, "585", "290",
+            "mouseup", "2", "sleep", ".3")
+        shot(editor, "viewport-fit-panned")
+        assert viewport_pixels("viewport-fit-panned") != viewport_pixels("viewport-preset-fit")
+        click(editor, 668, 18)
+        click(editor, 660, 57)  # Reselecting Fit must reset pan even when already selected.
+        shot(editor, "viewport-preset-fit-reselected")
+        assert viewport_pixels("viewport-preset-fit-reselected") == viewport_pixels("viewport-preset-fit")
         assert not draft.exists(), "toolbar zoom must remain outside draft state"
-        click(editor, 630, 18)  # Fit also cancels any viewport gesture and restores coordinates.
+        click(editor, 590, 18)  # Fit also cancels any viewport gesture and restores coordinates.
         if args.zoom_only:
+            run("xdotool", "windowsize", "--sync", editor, "760", "540",
+                "key", "ctrl+0", "ctrl+equal", "ctrl+equal", "sleep", ".3")
+            shot(editor, "viewport-preset-custom-minimum")
+            click(editor, 542, 18)
+            shot(editor, "viewport-presets-custom-menu-minimum")
+            run("xdotool", "key", "Escape")
             close(root)
             wait(lambda: app.poll() is not None, "zoom suite quits")
             assert app.returncode == 0
@@ -565,9 +607,12 @@ def main():
                 "passed": True, "appearance": args.appearance,
                 "checks": ["viewport-wheel-anchor", "viewport-toolbar-fit-100-step-recenter",
                            "viewport-pan-active-settled-no-draft", "viewport-fit-pixels",
-                           "viewport-keyboard-actual-and-step-pixels", "viewport-field-key-no-draft"],
+                           "viewport-keyboard-actual-and-step-pixels", "viewport-field-key-no-draft",
+                           "viewport-presets-50-200-pixels", "viewport-custom-preset-menu",
+                           "viewport-preset-fit-no-draft", "viewport-reselect-fit-clears-pan",
+                           "viewport-custom-menu-minimum"],
             }, indent=2) + "\n")
-            print("PASS native zoom: wheel, pan, toolbar, keyboard, focused field, no draft")
+            print("PASS native zoom: wheel, pan, toolbar, keyboard, presets, custom zoom, focused field, no draft")
             return
         click(editor, 736, 62)
         click(editor, 95, 176)  # Pen follows Arrow on the second tool row.

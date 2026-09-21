@@ -1090,8 +1090,27 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 if ui.button("−").on_hover_text("Zoom out 1.25×").clicked() {
                     change_viewport_zoom(view, 1. / 1.25, None);
                 }
-                if ui.button("100%").on_hover_text("Show one image pixel per logical point").clicked() {
-                    set_viewport_zoom(view, 100., None);
+                let current = view.viewport.zoom_percent;
+                let label = if current == 0. { "Fit".into() } else { format!("{current}%") };
+                let mut selected = current;
+                let mut chosen = false;
+                let response = egui::ComboBox::from_id_salt("viewport-zoom-preset")
+                    .width(tokens.number("s-12") + tokens.number("s-9"))
+                    .selected_text(&label)
+                    .show_ui(ui, |ui| {
+                        chosen |= ui.selectable_value(&mut selected, 0., "Fit").clicked();
+                        if current != 0. && ![50., 100., 200.].contains(&current) {
+                            chosen |= ui.selectable_value(&mut selected, current, format!("{current}%")).clicked();
+                        }
+                        for percent in [50., 100., 200.] {
+                            chosen |= ui.selectable_value(&mut selected, percent, format!("{percent}%")).clicked();
+                        }
+                    }).response.on_hover_text("Canvas zoom preset");
+                response.widget_info(|| egui::WidgetInfo::labeled(
+                    egui::WidgetType::ComboBox, ui.is_enabled(), format!("Canvas zoom preset: {label}")));
+                if chosen {
+                    if selected == 0. { view.reset_viewport(); }
+                    else { set_viewport_zoom(view, selected, None); }
                 }
                 if ui.button("Fit").on_hover_text("Fit the image in the editor").clicked() {
                     view.reset_viewport();

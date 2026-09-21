@@ -608,6 +608,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var viewportCanvasSize = NSSize.zero
     private var viewportBounds = NSRect.zero
     private var viewportButtons: [CaptureButton] = []
+    private let zoomPreset = NSPopUpButton()
     private let cropX = NSTextField()
     private let cropY = NSTextField()
     private let cropWidth = NSTextField()
@@ -911,14 +912,21 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         for view in [viewportInput, drawOverlay, selectionOverlay] { configureViewportGestures(view) }
         drawOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
         selectionOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
+        let fit = button("Fit", frame: NSRect(x: 24, y: 650, width: 64, height: 30), parent: root) {
+            [weak self] in self?.fitViewport()
+        }
+        fit.setAccessibilityLabel("Fit screenshot in viewport"); viewportButtons.append(fit)
+        zoomPreset.frame = NSRect(x: 96, y: 650, width: 80, height: 30)
+        zoomPreset.setAccessibilityLabel("Canvas zoom preset")
+        zoomPreset.target = self; zoomPreset.action = #selector(changeZoomPreset)
+        root.addSubview(zoomPreset)
+        publishZoomPreset()
         let controls: [(String, String, () -> Void)] = [
-            ("Fit", "Fit screenshot in viewport", { [weak self] in self?.fitViewport() }),
-            ("100%", "Show screenshot at 100 percent", { [weak self] in self?.setViewportZoom(100) }),
             ("−", "Zoom out", { [weak self] in self?.scaleViewport(by: 1 / 1.25) }),
             ("+", "Zoom in", { [weak self] in self?.scaleViewport(by: 1.25) }),
             ("Recenter", "Recenter screenshot", { [weak self] in self?.recenterViewport() }),
         ]
-        var x: CGFloat = 24
+        var x: CGFloat = 184
         for (title, accessibility, action) in controls {
             let width: CGFloat = title == "Recenter" ? 92 : 64
             let control = button(title, frame: NSRect(x: x, y: 650, width: width, height: 30),
@@ -1683,6 +1691,25 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         return true
     }
 
+    @objc private func changeZoomPreset() {
+        guard let value = zoomPreset.selectedItem?.representedObject as? Double else { return }
+        if value == 0 { fitViewport() } else { setViewportZoom(value) }
+    }
+
+    private func publishZoomPreset() {
+        let current = viewport.zoomPercent
+        var values: [Double] = [0, 50, 100, 200]
+        if !values.contains(current) { values.insert(current, at: 1) }
+        if zoomPreset.itemArray.compactMap({ $0.representedObject as? Double }) != values {
+            zoomPreset.removeAllItems()
+            for value in values {
+                zoomPreset.addItem(withTitle: value == 0 ? "Fit" : "\(format(value))%")
+                zoomPreset.lastItem?.representedObject = value
+            }
+        }
+        zoomPreset.selectItem(at: values.firstIndex(of: current) ?? 0)
+    }
+
     private func fitViewport() { cancelViewportPan(); changeViewport(to: NativeEditorViewport()) }
     private func recenterViewport() {
         cancelViewportPan()
@@ -1716,6 +1743,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
     private func updateViewportGeometry() {
         preview.frame = presentedImageRect
+        publishZoomPreset()
         drawOverlay.needsDisplay = true; selectionOverlay.needsDisplay = true
     }
 
@@ -2074,6 +2102,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         saveNewCopyButton?.isEnabled = ready && !outputDirectory.isEmpty
         outputPreviewMode?.isEnabled = ready && encodedOutput != nil
         viewportButtons.forEach { $0.isEnabled = ready }
+        zoomPreset.isEnabled = ready
         updateOutputOptionControls()
         updateDrawing()
         layerTable?.isEnabled = ready
