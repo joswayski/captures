@@ -1010,9 +1010,10 @@ final class ScreenshotEditorTests: XCTestCase {
                 $0.accessibilityLabel() == "Geometry controls"
             })
             XCTAssertTrue(geometry.isFlipped)
-            let cropLabel = try XCTUnwrap(geometry.subviews.compactMap { $0 as? NSTextField }
+            let cropLabel = try XCTUnwrap(descendants(in: geometry).compactMap { $0 as? NSTextField }
                 .first { $0.stringValue == "X" })
             let cropField = try field("Crop X", in: geometry)
+            XCTAssertNotNil(cropField.enclosingScrollView)
             XCTAssertLessThan(cropLabel.frame.minY, cropField.frame.minY,
                               "top-down geometry places labels above fields")
             (try field("Crop X", in: controller.root)).stringValue = "13"

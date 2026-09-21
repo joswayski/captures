@@ -70,6 +70,8 @@ def main():
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--appearance", choices=("dark", "light"), default="dark")
+    parser.add_argument("--background-only", action="store_true",
+                        help="Exercise canvas background controls, alpha and draft reopen only")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -196,7 +198,7 @@ def main():
         run("xdotool", "windowmove", "--sync", editor, "100", "80")
         time.sleep(1)
         shot(editor, "editor-original")
-        pixel("editor-original", 10, 690,
+        pixel("editor-original", 750, 690,
               (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
 
         def field(y, value, x=78):
@@ -245,6 +247,71 @@ def main():
         def save_layers(predicate, description):
             save_until(lambda: predicate(layers()), description)
             return layers()
+
+        if args.background_only:
+            run("xdotool", "windowsize", "--sync", editor, "1000", "800")
+            field(428, 720)
+            field(472, 420)
+            click(editor, 58, 516)
+            save(720, 420, 0, 0)
+            before = draft.read_bytes()
+            shot(editor, "background-controls")
+            field(633, "#214365", x=95)
+            assert draft.read_bytes() == before, "unapplied fields must not edit the draft"
+            click(editor, 75, 670)
+
+            def background_is(color):
+                return json.loads(draft.read_text())["document"]["background"] == color
+
+            save_until(lambda: background_is("#214365"), "solid canvas background")
+            shot(editor, "background-solid")
+            pixel("background-solid", 960, 500, (33, 67, 101))
+            pixel("background-solid", 270, 120, (40, 110, 166))
+            field(633, "invalid", x=95)
+            click(editor, 75, 670)
+            shot(editor, "background-error")
+            assert background_is("#214365")
+            pixel("background-error", 960, 500, (33, 67, 101))
+            # The error row adds 27px below the toolbar until the next command.
+            click(editor, 20, 595 + 27)
+            click(editor, 75, 670 + 27)
+            save_until(lambda: background_is(None), "transparent canvas background")
+            shot(editor, "background-transparent")
+            click(editor, 35, 62)
+            save_until(lambda: background_is("#214365"), "undo canvas background")
+            click(editor, 98, 62)
+            save_until(lambda: background_is(None), "redo canvas background")
+            close(editor)
+            wait(lambda: not windows("Screenshot editor"), "background draft closes")
+            editor = reopen()
+            assert background_is(None)
+            run("xdotool", "windowsize", "--sync", editor, "760", "540")
+            run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "12", "5")
+            shot(editor, "background-transparent-minimum-reopened")
+            run("xdotool", "windowsize", "--sync", editor, "1000", "800")
+            click(editor, 535, 62)
+            click(editor, 65, 366)  # Preview PNG, then copy the edited frame.
+            click(editor, 170, 657)
+            wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+                 "transparent clipboard copy completes")
+            shot(editor, "background-output-copied")
+            png = output / "clipboard-background.png"
+            png.write_bytes(run("xclip", "-selection", "clipboard", "-t", "image/png", "-o"))
+            assert run("identify", "-format", "%wx%h", str(png)) == b"720x420"
+            for x, y, expected in ((700, 400, (0, 0, 0, 0)), (2, 1, (40, 110, 166, 255))):
+                assert run("convert", str(png), "-crop", f"1x1+{x}+{y}", "-depth", "8", "rgba:-") == bytes(expected)
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "background suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["background-unapplied-no-write", "background-solid-pixels",
+                           "background-invalid-rollback", "background-transparent-undo-redo",
+                           "background-minimum-draft-reopen", "background-clipboard-alpha-original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS native canvas backgrounds: color, rollback, transparency, undo/redo, draft, clipboard alpha")
+            return
 
         run("xdotool", "windowsize", "--sync", editor, "886", "700")
         # Viewport state is host-only. Exercise anchored wheel zoom and an

@@ -1223,7 +1223,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             ui.add_enabled(view.background_solid,
                 egui::TextEdit::singleline(&mut view.background_color)
                     .desired_width(ui.available_width()).hint_text("#RRGGBB or #RRGGBBAA"));
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if ui.button("Apply background").clicked() {
                     view.submit(tx, Request::SetBackground {
                         color: view.background_solid.then(|| view.background_color.clone()),
