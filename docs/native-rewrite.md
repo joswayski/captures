@@ -43,8 +43,16 @@ are combined in this tree. Both hosts connect layers, import, lossless transform
 output previews, save-new-copy and rectangle/ellipse drawing. AppKit now also
 connects annotation styles ([#637](https://github.com/joswayski/captures/pull/637))
 and Line/Arrow/Pen ([#638](https://github.com/joswayski/captures/pull/638)), matching
-the existing wgpu command boundary. The wgpu host additionally connects crop gestures
-and clipboard output. The AppKit drawing slice passed 136 Swift tests in macOS CI;
+the existing wgpu command boundary. Both hosts connect crop gestures and clipboard
+output. AppKit's Draw crop retains shared Rust `CropDrag` geometry through an
+independent UI-thread C owner; no worker session, JSON or file access occurs during
+pointer feedback. Free/preset ratios and Shift latching use the same shared rules
+as wgpu. The preview and numeric fields track one candidate; Apply sends one crop
+transaction, while Cancel/Escape, focus loss, leaving Geometry or closing restores
+the pre-mode fields. Viewport changes cancel an active pointer gesture without
+committing the candidate. Dragging does not dirty drafts or invalidate encoded output.
+Physical AppKit pointer/mixed-DPI acceptance remains open.
+The AppKit drawing slice passed 136 Swift tests in macOS CI;
 its light/dark transient, committed, dot and minimum-size error fixtures were inspected.
 These are development implementations, not completed platform acceptance gates.
 
