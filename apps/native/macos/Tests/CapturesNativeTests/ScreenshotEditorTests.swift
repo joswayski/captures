@@ -3152,9 +3152,66 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(point["x"]), 160, accuracy: 0.001)
         XCTAssertEqual(try XCTUnwrap(point["y"]), 270, accuracy: 0.001)
         XCTAssertEqual(request["text"] as? String, "")
+        XCTAssertEqual(request["fontSize"] as? Double, 32)
+        XCTAssertEqual(request["color"] as? String, "#ff3b5c")
+        XCTAssertNil(request["stylePreset"], "drafts without named presets keep the plain family request")
         XCTAssertEqual(controller.state.snapshot?.layers.first?.id, "fresh-text")
         XCTAssertFalse(try segmented("Output preview image", in: controller.root).isEnabled)
         XCTAssertEqual(try textView("Text content", in: controller.root).string, "")
+    }
+
+    func testNewTextDefaultsUsePinnedPresetAndRetainInputAcrossFailureAndSnapshots() throws {
+        _ = NSApplication.shared
+        let fonts = ["sans": "Liberation Sans", "mono": "Liberation Mono"]
+        let initial = snapshot(id: "shot", layers: [textLayer(id: "existing", text: "old")], fonts: fonts)
+        let worker = FakeEditorWorker(snapshot: initial)
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker,
+                                                    numberLocale: Locale(identifier: "fr_FR"))
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showOutput(in: controller.root); try button("Preview output", in: controller.root).performClick(nil)
+        try showDraw(in: controller.root)
+        let tool = try popup("Drawing tool", in: controller.root)
+        tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+        let preset = try popup("New text style", in: controller.root)
+        XCTAssertEqual(preset.itemTitles, ["Plain", "Standard", "Outlined", "Mono", "Box", "Mono box"])
+        XCTAssertEqual(preset.titleOfSelectedItem, "Standard")
+        preset.selectItem(withTitle: "Mono box")
+        let size = try field("New text size", in: controller.root)
+        let color = try field("New text color", in: controller.root)
+        size.stringValue = "48,5"; color.stringValue = "#12abef"
+        XCTAssertTrue(worker.requests.isEmpty)
+        XCTAssertTrue(try segmented("Output preview image", in: controller.root).isEnabled,
+                      "staging creation defaults must not invalidate encoded output")
+
+        worker.failOperation = "create_text"
+        let click = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
+        controller.drawOverlay.begin(at: click); controller.drawOverlay.end(at: click)
+        XCTAssertEqual(worker.requests.last?["stylePreset"] as? String, "mono-box")
+        XCTAssertEqual(worker.requests.last?["fontSize"] as? Double, 48.5)
+        XCTAssertEqual(worker.requests.last?["color"] as? String, "#12abef")
+        XCTAssertEqual(preset.titleOfSelectedItem, "Mono box")
+        XCTAssertEqual(size.stringValue, "48,5"); XCTAssertEqual(color.stringValue, "#12abef")
+
+        worker.failOperation = nil
+        worker.response = { request in
+            guard request["operation"] as? String == "create_text" else { return nil }
+            return self.snapshot(id: "shot", unsaved: true,
+                layers: [self.textLayer(id: "existing", text: "old"),
+                         self.textLayer(id: "fresh-default-text", text: "")], fonts: fonts)
+        }
+        controller.drawOverlay.begin(at: click); controller.drawOverlay.end(at: click)
+        XCTAssertEqual(controller.state.snapshot?.layers.first?.id, "fresh-default-text")
+        XCTAssertEqual(preset.titleOfSelectedItem, "Mono box", "accepted snapshots must retain creation defaults")
+        XCTAssertEqual(size.stringValue, "48,5"); XCTAssertEqual(color.stringValue, "#12abef")
+
+        let freshWorker = FakeEditorWorker(snapshot: snapshot(id: "fresh", fonts: fonts))
+        let fresh = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: freshWorker)
+        defer { fresh.window.orderOut(nil) }
+        fresh.present(artifact: artifact(id: "fresh"), historyRoot: "/native/History")
+        XCTAssertEqual(try popup("New text style", in: fresh.root).titleOfSelectedItem, "Standard")
+        XCTAssertEqual(try field("New text size", in: fresh.root).stringValue, "32")
+        XCTAssertEqual(try field("New text color", in: fresh.root).stringValue, "#ff3b5c")
     }
 
     func testTextApplyCancelFailureAndUnsupportedFamilyRetention() throws {
@@ -3430,7 +3487,9 @@ final class ScreenshotEditorTests: XCTestCase {
             tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
             let editor = try textView("Text content", in: controller.root)
             let inputScroll = try XCTUnwrap(editor.enclosingScrollView)
-            XCTAssertLessThan(inputScroll.frame.minY, 330, "unused brush fields must not push Text below the fold")
+            let creationColor = try field("New text color", in: controller.root)
+            XCTAssertGreaterThan(inputScroll.frame.minY, creationColor.frame.maxY,
+                                 "the selected-text inspector must not overlap creation defaults")
             let apply = try button("Apply", in: controller.root)
             let cancel = try button("Cancel", in: controller.root)
             let scroll = try XCTUnwrap(apply.enclosingScrollView)
@@ -3802,11 +3861,11 @@ final class ScreenshotEditorTests: XCTestCase {
                                                   "elements": layers],
             "font_families": fonts,
             "text_style_presets": ([
-                ["label": "Standard", "fontFamily": "sans", "background": NSNull(), "outlined": false, "roundedBackground": false],
-                ["label": "Outlined", "fontFamily": "sans", "background": NSNull(), "outlined": true, "roundedBackground": false],
-                ["label": "Mono", "fontFamily": "mono", "background": NSNull(), "outlined": false, "roundedBackground": false],
-                ["label": "Box", "fontFamily": "sans", "background": "#111318", "outlined": false, "roundedBackground": false],
-                ["label": "Mono box", "fontFamily": "mono", "background": "#111318", "outlined": false, "roundedBackground": false],
+                ["id": "standard", "label": "Standard", "fontFamily": "sans", "background": NSNull(), "outlined": false, "roundedBackground": false],
+                ["id": "outlined", "label": "Outlined", "fontFamily": "sans", "background": NSNull(), "outlined": true, "roundedBackground": false],
+                ["id": "mono", "label": "Mono", "fontFamily": "mono", "background": NSNull(), "outlined": false, "roundedBackground": false],
+                ["id": "box", "label": "Box", "fontFamily": "sans", "background": "#111318", "outlined": false, "roundedBackground": false],
+                ["id": "mono-box", "label": "Mono box", "fontFamily": "mono", "background": "#111318", "outlined": false, "roundedBackground": false],
             ] as [[String: Any]]).filter { fonts[$0["fontFamily"] as! String] != nil },
             "annotation_controls": annotations,
             "text_shadow_styles": textShadows ?? Dictionary(uniqueKeysWithValues: layers.compactMap { layer in

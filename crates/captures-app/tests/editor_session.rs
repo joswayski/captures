@@ -2492,6 +2492,15 @@ fn create_text_request(text: &str) -> Request {
     .unwrap()
 }
 
+fn styled_text_request(text: &str, preset: &str, point: Point, font_size: f64) -> Request {
+    serde_json::from_value(json!({
+        "operation":"create_text", "point":point, "text":text,
+        "fontSize":font_size, "fontFamily":"caller-must-not-win",
+        "color":"#2174c5", "stylePreset":preset
+    }))
+    .unwrap()
+}
+
 fn edit_text_request(id: &str, patch: serde_json::Value) -> Request {
     serde_json::from_value(json!({"operation":"edit_text", "id":id, "patch":patch})).unwrap()
 }
@@ -2809,6 +2818,138 @@ fn typed_text_creation_uses_fresh_ids_measured_width_pixels_and_one_undo_step() 
     let reopened = open(data.path(), &id).unwrap();
     assert_eq!(reopened.snapshot().document, editor.snapshot().document);
     assert_eq!(reopened.pixels(), editor.pixels());
+}
+
+#[test]
+fn styled_text_creation_matches_shipping_treatments_and_fractional_placement() {
+    let (data, id, _) = setup();
+    let mut fonts = text_fonts();
+    fonts
+        .families
+        .insert("mono".into(), "Captures Shaping Test".into());
+    fonts
+        .families
+        .insert("rounded".into(), "Captures Shaping Test".into());
+    let mut editor = open_text(data.path(), &id, fonts).unwrap();
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 320.,
+            height: 180.,
+        })
+        .unwrap();
+
+    let point = Point {
+        x: 151.75,
+        y: 22.125,
+    };
+    let size = 31.25;
+    for preset in ["standard", "rounded", "outlined", "mono"] {
+        editor
+            .execute(styled_text_request("", preset, point, size))
+            .unwrap();
+        let Element::Text(text) = editor.snapshot().document.elements.last().unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            (text.base.x, text.base.y, text.width),
+            (151.75, 22.125, 250.)
+        );
+        assert_eq!(text.align, "left");
+        assert_eq!(text.color, "#2174c5");
+        assert_eq!(
+            text.font_family,
+            if preset == "rounded" {
+                "rounded"
+            } else if preset == "mono" {
+                "mono"
+            } else {
+                "sans"
+            }
+        );
+        assert_eq!(text.outlined, preset == "outlined");
+        assert_eq!(text.background, None);
+        assert!(!text.rounded_background);
+    }
+
+    for preset in ["box", "mono-box", "rounded-box"] {
+        editor
+            .execute(styled_text_request("L", preset, point, size))
+            .unwrap();
+        let Element::Text(text) = editor.snapshot().document.elements.last().unwrap() else {
+            panic!()
+        };
+        assert_eq!(text.align, "center");
+        assert_eq!(text.base.x + text.width / 2., point.x);
+        assert_eq!(text.background.as_deref(), Some("#111318"));
+        assert_eq!(text.rounded_background, preset == "rounded-box");
+        assert_eq!(
+            text.font_family,
+            if preset == "mono-box" {
+                "mono"
+            } else if preset == "rounded-box" {
+                "rounded"
+            } else {
+                "sans"
+            }
+        );
+        assert_eq!(text.color, "#2174c5");
+    }
+
+    let accepted = editor.snapshot().document.clone();
+    let accepted_pixels = editor.pixels();
+    editor.execute(Request::Undo).unwrap();
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.snapshot().document, &accepted);
+    assert_eq!(editor.pixels(), accepted_pixels);
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 73 })
+        .unwrap();
+    let reopened = open(data.path(), &id).unwrap();
+    assert_eq!(reopened.snapshot().document, &accepted);
+    assert_eq!(reopened.pixels(), accepted_pixels);
+}
+
+#[test]
+fn invalid_or_unavailable_text_styles_preserve_document_pixels_redo_and_draft() {
+    let (data, id, _) = setup();
+    let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 74 })
+        .unwrap();
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 210.,
+            height: 180.,
+        })
+        .unwrap();
+    editor.execute(Request::Undo).unwrap();
+    let before = serde_json::to_value(editor.snapshot()).unwrap();
+    let pixels = editor.pixels();
+    let manifest = data.path().join("drafts").join(&id).join("manifest.json");
+    let persisted = fs::read(&manifest).unwrap();
+
+    for preset in ["not-a-style", "rounded-box"] {
+        let error = editor
+            .execute(styled_text_request(
+                "L",
+                preset,
+                Point { x: 41.5, y: 17.25 },
+                29.75,
+            ))
+            .unwrap_err();
+        assert!(
+            error.contains(if preset == "not-a-style" {
+                "Unknown"
+            } else {
+                "rounded"
+            }),
+            "{error}"
+        );
+        assert_eq!(serde_json::to_value(editor.snapshot()).unwrap(), before);
+        assert!(editor.snapshot().can_redo);
+        assert!(Arc::ptr_eq(&pixels, &editor.pixels()));
+        assert_eq!(fs::read(&manifest).unwrap(), persisted);
+    }
 }
 
 #[test]

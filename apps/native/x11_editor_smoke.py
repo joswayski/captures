@@ -85,6 +85,8 @@ def main():
                         help="Restore explicit-font text, save/reopen and copy pixels (no Text input UI)")
     parser.add_argument("--text-only", action="store_true",
                         help="Exercise the real Text tool UI, undo/redo and draft reopen")
+    parser.add_argument("--text-defaults-only", action="store_true",
+                        help="Exercise pre-placement Text style/size/color and centered box placement")
     parser.add_argument("--polygon-only", action="store_true",
                         help="Exercise Triangle/Diamond/Star previews, cancellation and saved pixels")
     parser.add_argument("--rotation-snap-only", action="store_true",
@@ -555,6 +557,65 @@ def main():
                            "minimum-controls-and-menu"],
             }, indent=2) + "\n")
             print("PASS native output presets: Tiny palette, Highest exact pixels, no edits, minimum")
+            return
+
+        if args.text_defaults_only:
+            run("xdotool", "windowsize", "--sync", editor, "1000", "1000")
+            save_layers(lambda values: len(values) == 1, "baseline draft before Text defaults")
+            before = draft.read_bytes()
+            click(editor, 736, 62)
+            click(editor, 34, 128)
+            shot(editor, "text-defaults-initial")
+            click(editor, 95, 337)
+            shot(editor, "text-defaults-menu")
+            run("xdotool", "mousemove", "--window", editor, "60", "506",
+                "click", "--repeat", "5", "5", "sleep", ".2")
+            shot(editor, "text-defaults-menu-scrolled")
+            click(editor, 60, 545)  # Last pinned preset: Mono box.
+            field(381, 37.5, x=59)
+            field(452, "#2367ab", x=105)
+            shot(editor, "text-defaults-staged")
+            assert draft.read_bytes() == before, "defaults must not write a draft"
+            click(editor, 438, 169)  # Document (200,80), at actual-size scale.
+            text = save_layers(lambda values: len(values) == 2, "styled Text placed")[-1]
+            assert text["kind"] == "text" and text["fontFamily"] == "mono"
+            assert text["fontSize"] == 37.5 and text["color"] == "#2367ab"
+            assert (text["x"], text["y"], text["width"], text["align"]) == (50, 80, 300, "center")
+            assert text["background"] == "#111318" and text["autoWidth"]
+            shot(editor, "text-defaults-created")
+            pixel("text-defaults-created", 388, 180, (17, 19, 24))
+            click(editor, 35, 62)
+            save_layers(lambda values: len(values) == 1, "styled creation single undo")
+            click(editor, 98, 62)
+            save_layers(lambda values: len(values) == 2 and values[-1]["id"] == text["id"],
+                        "styled creation redo")
+            click(editor, 736, 62)
+            run("xdotool", "windowsize", "--sync", editor, "760", "540")
+            shot(editor, "text-defaults-minimum")
+            close(editor)
+            wait(lambda: not windows("Screenshot editor"), "styled Text editor closes")
+            editor = reopen()
+            run("xdotool", "windowsize", "--sync", editor, "1000", "1000")
+            click(editor, 736, 62)
+            click(editor, 34, 128)
+            shot(editor, "text-defaults-reopened")
+            assert layers()[-1] == text
+            click(editor, 638, 269)  # New editor resets to Standard,32,red; not saved Mono box.
+            reset = save_layers(lambda values: len(values) == 3, "fresh editor Text defaults")[-1]
+            assert (reset["fontFamily"], reset["fontSize"], reset["color"]) == ("sans", 32, "#ff3b5c")
+            assert reset["align"] == "left" and reset["background"] is None
+            assert reset["id"] != text["id"]
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "Text defaults suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["defaults-no-draft-write", "chosen-preset-size-color", "centered-eight-em-placement",
+                           "plate-pixels", "single-undo-redo", "minimum-controls", "draft-style-reopen",
+                           "new-editor-default-reset", "original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS native Text defaults: preset, size, color, centered plate, undo, draft, reset")
             return
 
         if args.text_only:

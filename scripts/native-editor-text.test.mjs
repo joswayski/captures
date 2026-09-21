@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
-  applyTextStylePreset, elementLocalBounds, resizeElement,
+  applyTextStylePreset, createPlacedTextElement, elementLocalBounds, resizeElement,
   fitAutoWidthTextElement, fitEditingAutoWidthTextElement,
   textBackgroundPad, textBackgroundRadius, textHasBackgroundPlate,
   TEXT_LINE_HEIGHT_RATIO, wrapTextLines,
@@ -93,6 +93,26 @@ if (process.argv.includes('--write')) {
   await writeFile(fixture, `${JSON.stringify(cases(), null, 2)}\n`);
   await writeFile(presetFixture, `${JSON.stringify(presets(), null, 2)}\n`);
 } else {
+  test('shipping new text placement centers only box presets at fractional points and sizes', () => {
+    const create = preset => createPlacedTextElement({
+      id: 'new-text', point: { x: 101.75, y: 22.125 }, fontSize: 31.25,
+      color: '#2174c5', preset,
+    });
+    assert.deepEqual(
+      ['standard', 'rounded', 'outlined', 'mono'].map(preset => {
+        const element = create(preset);
+        return [preset, element.x, element.width, element.align];
+      }),
+      [
+        ['standard', 101.75, 250, 'left'], ['rounded', 101.75, 250, 'left'],
+        ['outlined', 101.75, 250, 'left'], ['mono', 101.75, 250, 'left'],
+      ],
+    );
+    for (const preset of ['box', 'mono-box', 'rounded-box']) {
+      const element = create(preset);
+      assert.deepEqual([element.x, element.width, element.align], [-23.25, 250, 'center']);
+    }
+  });
   test('native named style catalog matches shipping text presets', async () => {
     assert.deepEqual(JSON.parse(await readFile(presetFixture, 'utf8')), presets());
   });

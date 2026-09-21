@@ -397,6 +397,7 @@ struct NativeTextStyle: Equatable {
 }
 
 struct NativeTextPreset: Equatable {
+    let id: String
     let label: String
     let fontFamily: String
     let background: String?
@@ -404,11 +405,12 @@ struct NativeTextPreset: Equatable {
     let roundedBackground: Bool
 
     init?(_ value: [String: Any]) {
-        guard let label = value["label"] as? String,
+        guard let id = value["id"] as? String, !id.isEmpty,
+              let label = value["label"] as? String,
               let family = value["fontFamily"] as? String,
               let outlined = value["outlined"] as? Bool,
               let rounded = value["roundedBackground"] as? Bool else { return nil }
-        self.label = label; fontFamily = family
+        self.id = id; self.label = label; fontFamily = family
         background = value["background"] as? String
         self.outlined = outlined; roundedBackground = rounded
     }
@@ -459,10 +461,12 @@ struct NativeEditorSnapshot: Equatable {
         self.background = document["background"] as? String
         self.canUndo = canUndo; self.canRedo = canRedo
         self.unsavedChanges = unsavedChanges; self.hasDraft = hasDraft
-        self.fontFamilies = value["font_families"] as? [String: String] ?? [:]
+        let fontFamilies = value["font_families"] as? [String: String] ?? [:]
+        self.fontFamilies = fontFamilies
         let presets = value["text_style_presets"] as? [[String: Any]] ?? []
-        textStylePresets = presets.compactMap(NativeTextPreset.init)
-        guard presets.count == textStylePresets.count else { return nil }
+        let parsedPresets = presets.compactMap(NativeTextPreset.init)
+        guard presets.count == parsedPresets.count else { return nil }
+        textStylePresets = parsedPresets.filter { fontFamilies[$0.fontFamily] != nil }
         self.layers = Array(layers.reversed())
         self.documentJSON = String(decoding: documentData, as: UTF8.self)
     }
