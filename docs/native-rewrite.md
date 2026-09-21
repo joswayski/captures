@@ -204,6 +204,13 @@ Color-outline and embedded-bitmap glyphs use different alpha representations;
 the primitive normalizes outlines before compositing and retains bitmap RGB.
 Swash's color-outline flattening has integer alpha-rounding loss. Font bytes must
 come from a trusted source; output budgets are not a font-parser sandbox.
+The single-line primitive also offers centered contour strokes with round joins,
+preserving shaped advances, baseline, explicit faces and fractional glyph placement.
+This uses scalable glyph paths, not bitmap dilation; colored and bitmap glyphs return
+explicit outline errors. Filled and outlined masks cannot leak between operations
+or stroke widths, and the existing raster bounds/pixel budgets still apply.
+This is a shared rendering prerequisite only: outlined document text, commands,
+native controls and physical/platform acceptance are not connected by this slice.
 Shared paragraph helpers now use explicit, fallible measurements for shipping word
 wrapping, scalar-based hard breaks, ECMAScript whitespace, alignment, auto-width
 anchor preservation and composing widths, plus square/rounded plate geometry.
