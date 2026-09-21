@@ -85,11 +85,29 @@ Preview builds automatically publish installed-app changes from `main`, and may 
 
 ## Optional cloud accounts — in development
 
-Local screenshots, GIFs, and recordings never require an account. The website
-shows an unavailable notice at `/account`; sign-in and account creation are not
-available. A provider-independent users table is retained in PostgreSQL for
-future development. Hosted uploads, sharing, and browser or desktop sign-in are
-not implemented yet.
+Local screenshots, GIFs, and recordings never require an account and never upload
+automatically. The website and Rust API implement optional email-code sign-in and
+sharing, disabled until the operator explicitly enables and configures the services.
+When enabled, `/dashboard` shows your gallery and accepts screenshots, GIFs,
+videos, and other files, preserving their original bytes. Uploads stay private until you create an
+anyone-with-the-link URL, optionally with a password or expiry; share pages request
+no indexing. Uploads go directly to private R2; a Cloudflare Worker delivers downloads
+after an uncached API authorization check, without sending file bytes through the API.
+Stopping sharing denies subsequent requests, including from previously
+unlocked browsers, but downloads already authorized or completed cannot be recalled. Website account
+and sharing flows are implemented. Moving an uploaded file to Trash disables its
+link but retains the file in private storage indefinitely; Restore returns it to
+your library without reactivating the old link. Password attempts record source
+IP, browser user-agent, time, and outcome for investigation; an activity-view UI
+is not implemented yet. Desktop sign-in, native uploads, and a native
+Share button are not implemented yet. The planned desktop flow starts from a
+mini-preview Share icon and opens a native upload/settings popup, tracked as an
+explicit [rewrite integration slice](docs/native-rewrite.md#mini-preview-sharing-integration--required-not-implemented)
+regardless of which backend or rewrite changes merge first.
+
+For local cloud testing, the [Docker Compose setup](DEVELOPMENT.md#cloud-sharing-with-docker-compose-and-aws-sso)
+runs the website, API, database and Worker using your AWS SSO login and the
+development R2 bucket. No production deployment is required.
 
 ## Wishlist
 
@@ -98,7 +116,7 @@ not implemented yet.
 - Repeat the previous capture area
 - Pinned captures that stay above other windows
 - Editable click highlights and keystroke overlays after recording
-- Hosted sharing with shareable `captur.es/<id>` links
+- Native account sign-in, uploads, and sharing (website links use `captur.es/s/<id>`)
 - Faster recording on Windows and Linux
 
 ## Platform status

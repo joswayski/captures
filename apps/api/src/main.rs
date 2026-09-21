@@ -1,6 +1,12 @@
+pub mod auth;
 mod config;
+mod email;
 mod public_api;
+mod sharing;
+mod storage;
 
+#[cfg(test)]
+mod account_tests;
 #[cfg(test)]
 mod regression_tests;
 
@@ -8,8 +14,6 @@ use std::{str::FromStr, time::Duration};
 
 use axum::{
     Json, Router,
-    http::{HeaderValue, StatusCode, header},
-    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use config::Config;
@@ -66,6 +70,27 @@ async fn main() {
         std::process::exit(2)
     });
     let bind = config.bind;
+    let discord_webhook_url = config.discord_webhook_url.clone();
+    let auth_state = auth::AuthState::new(pool.clone(), config.auth).await;
+    let store = config.storage.map(|config| {
+        std::sync::Arc::new(storage::R2Store::new(config))
+            as std::sync::Arc<dyn storage::ObjectStore>
+    });
+    let mut sharing_state = sharing::SharingState::new(auth_state.clone(), store);
+    sharing_state.media_worker_secret = config.media_worker_secret;
+    let cleanup = sharing_state.clone();
+    let cleanup_task = tokio::spawn(async move {
+        if cleanup.store.is_none() {
+            return;
+        }
+        let mut interval = tokio::time::interval(Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            if cleanup.cleanup().await.is_err() {
+                tracing::warn!("sharing cleanup will retry");
+            }
+        }
+    });
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .unwrap_or_else(|_| {
@@ -73,27 +98,54 @@ async fn main() {
             std::process::exit(2)
         });
     tracing::info!(%bind, "captures API listening");
-    axum::serve(listener, router(config.discord_webhook_url))
-        .with_graceful_shutdown(shutdown())
-        .await
-        .unwrap_or_else(|_| eprintln!("server stopped unexpectedly"));
+    axum::serve(
+        listener,
+        app_router(discord_webhook_url, auth_state, sharing_state)
+            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown())
+    .await
+    .unwrap_or_else(|_| eprintln!("server stopped unexpectedly"));
+    cleanup_task.abort();
     pool.close().await;
 }
 
+#[cfg(test)]
 fn router(discord_webhook_url: Option<String>) -> Router {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://test@127.0.0.1/test")
+        .unwrap();
+    let auth = auth::AuthState::disabled(pool);
+    app_router(
+        discord_webhook_url,
+        auth.clone(),
+        sharing::SharingState::new(auth, None),
+    )
+}
+
+fn public_router(discord_webhook_url: Option<String>) -> Router {
     Router::new()
         .route("/health", get(|| async { Json(json!({"status":"ok"})) }))
         .route(
             "/api/health",
             get(|| async { Json(json!({"status":"ok"})) }),
         )
-        .route("/api/account/me", get(account_unavailable))
         .route("/api/updates/preview", get(public_api::preview))
         .route(
             "/api/feedback",
             post(public_api::feedback).options(public_api::feedback_options),
         )
         .with_state(public_api::ApiState::new(discord_webhook_url))
+}
+
+fn app_router(
+    discord_webhook_url: Option<String>,
+    auth_state: auth::AuthState,
+    sharing_state: sharing::SharingState,
+) -> Router {
+    public_router(discord_webhook_url)
+        .merge(auth::router(auth_state))
+        .merge(sharing::router(sharing_state))
 }
 
 async fn connect(url: &str) -> Result<PgPool, sqlx::Error> {
@@ -122,7 +174,11 @@ async fn migrate(url: &str) -> Result<(), &'static str> {
         .await
         .map_err(|_| "database migration connection timed out")?
         .map_err(|_| "database migration connection failed")?;
-    let result = tokio::time::timeout(Duration::from_secs(300), MIGRATOR.run(&pool)).await;
+    let result = tokio::time::timeout(Duration::from_secs(300), async {
+        MIGRATOR.run(&pool).await.map_err(|_| ())?;
+        backfill_user_external_ids(&pool).await.map_err(|_| ())
+    })
+    .await;
     // Close the DDL connection even on failure; runtime uses its own credentials.
     pool.close().await;
     result
@@ -130,16 +186,45 @@ async fn migrate(url: &str) -> Result<(), &'static str> {
         .map_err(|_| "database migration failed")
 }
 
-async fn account_unavailable() -> Response {
-    let mut response = (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(json!({"error": "Accounts are not available"})),
-    )
-        .into_response();
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
+async fn backfill_user_external_ids(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    // Migration's advisory lock is released before this application-data step.
+    // A separate transaction lock serializes ID generation across API replicas.
+    sqlx::query("SELECT pg_advisory_xact_lock(219398741223::bigint)")
+        .execute(&mut *tx)
+        .await?;
+    let required: bool = sqlx::query_scalar("SELECT NOT attnotnull FROM pg_attribute WHERE attrelid='public.users'::regclass AND attname='external_id'")
+        .fetch_one(&mut *tx).await?;
+    if !required {
+        return tx.commit().await;
+    }
+    let ids: Vec<i64> =
+        sqlx::query_scalar("SELECT id FROM users WHERE external_id IS NULL ORDER BY id FOR UPDATE")
+            .fetch_all(&mut *tx)
+            .await?;
+    for id in ids {
+        let mut assigned = false;
+        for _ in 0..8 {
+            let external_id = nanoid::nanoid!(12);
+            let result = sqlx::query("UPDATE users SET external_id=$2 WHERE id=$1 AND external_id IS NULL AND NOT EXISTS(SELECT 1 FROM users WHERE external_id=$2)")
+                .bind(id).bind(external_id).execute(&mut *tx).await?;
+            if result.rows_affected() == 1 {
+                assigned = true;
+                break;
+            }
+            tracing::warn!(
+                kind = "user_id",
+                "public id collision during backfill; regenerating"
+            );
+        }
+        if !assigned {
+            return Err(sqlx::Error::RowNotFound);
+        }
+    }
+    sqlx::query("ALTER TABLE users ALTER COLUMN external_id SET NOT NULL")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await
 }
 
 async fn shutdown() {

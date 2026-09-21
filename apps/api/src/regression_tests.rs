@@ -175,6 +175,12 @@ async fn postgres_users_and_startup_regressions() {
             tables,
             vec![
                 ("public".into(), "_sqlx_migrations".into()),
+                ("public".into(), "account_sessions".into()),
+                ("public".into(), "assets".into()),
+                ("public".into(), "auth_email_challenges".into()),
+                ("public".into(), "share_unlock_attempts".into()),
+                ("public".into(), "share_viewer_grants".into()),
+                ("public".into(), "shares".into()),
                 ("public".into(), "users".into()),
             ]
         );
@@ -193,11 +199,12 @@ async fn postgres_users_and_startup_regressions() {
                 "created_at",
                 "updated_at",
                 "disabled_at",
-                "deleted_at"
+                "deleted_at",
+                "external_id"
             ]
         );
         let (id, email, verified): (i64, Option<String>, bool) =
-            sqlx::query_as("INSERT INTO users DEFAULT VALUES RETURNING id, email, email_verified")
+            sqlx::query_as("INSERT INTO users(external_id) VALUES('regression01') RETURNING id, email, email_verified")
                 .fetch_one(&pool)
                 .await?;
         assert!(id > 0);
@@ -229,11 +236,13 @@ async fn postgres_users_and_startup_regressions() {
             sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations WHERE success")
                 .fetch_one(&pool)
                 .await?;
-        assert_eq!(migrations, 1);
+        assert_eq!(migrations, 4);
         // An owner can also use the unqualified name for DDL, without changing
         // search_path. Roll back so the test leaves the migrated schema intact.
         let mut tx = pool.begin().await?;
-        sqlx::query("DROP TABLE users").execute(&mut *tx).await?;
+        sqlx::query("DROP TABLE users CASCADE")
+            .execute(&mut *tx)
+            .await?;
         tx.rollback().await?;
         pool.close().await;
         Ok::<_, sqlx::Error>(())

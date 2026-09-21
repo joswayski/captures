@@ -60,7 +60,9 @@ function isDependencyUpdateCommit(entry: GitHubCommit): boolean {
   }
 
   const authorName = entry.commit.author?.name?.toLowerCase() ?? "";
-  return authorName === "dependabot[bot]" || authorName.startsWith("dependabot");
+  return (
+    authorName === "dependabot[bot]" || authorName.startsWith("dependabot")
+  );
 }
 
 function toLatestChange(entry: GitHubCommit): LatestChange {
@@ -116,9 +118,11 @@ async function fetchLatestChanges(): Promise<LatestChange[]> {
   return productChanges;
 }
 
-export default defineConfig(async () => {
+export default defineConfig(async ({ command }) => {
   const latestChanges = await fetchLatestChanges();
-  console.log(`Fetched ${latestChanges.length} latest changes from the GitHub API.`);
+  console.log(
+    `Fetched ${latestChanges.length} latest changes from the GitHub API.`,
+  );
 
   return {
     plugins: [
@@ -136,6 +140,16 @@ export default defineConfig(async () => {
       tailwindcss(),
       nitro({
         routeRules: {
+          ...(command === "serve"
+            ? {
+                "/api/**": {
+                  proxy: `${process.env.CAPTURES_API_ORIGIN || "http://127.0.0.1:3001"}/api/**`,
+                },
+                "/api/files/**": {
+                  proxy: `${process.env.CAPTURES_MEDIA_ORIGIN || "http://127.0.0.1:8787"}/api/files/**`,
+                },
+              }
+            : {}),
           "/assets/**": {
             headers: {
               "cache-control": "public, max-age=31536000, immutable",
@@ -159,6 +173,16 @@ export default defineConfig(async () => {
     },
     server: {
       port: 5174,
+      // Nitro handles fetch/HTML requests; Vite handles image subresources in
+      // development. Both paths must reach the same API, not the static fallback.
+      proxy: {
+        "/api/files": {
+          target: process.env.CAPTURES_MEDIA_ORIGIN || "http://127.0.0.1:8787",
+        },
+        "/api": {
+          target: process.env.CAPTURES_API_ORIGIN || "http://127.0.0.1:3001",
+        },
+      },
       fs: {
         allow: [searchForWorkspaceRoot(import.meta.dirname)],
       },

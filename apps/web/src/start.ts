@@ -1,12 +1,23 @@
-import { createCsrfMiddleware, createMiddleware, createStart } from "@tanstack/react-start";
+import {
+  createCsrfMiddleware,
+  createMiddleware,
+  createStart,
+} from "@tanstack/react-start";
 
-const accountResponses = createMiddleware().server(async ({ request, next }) => {
-  const result = await next();
-  if (new URL(request.url).pathname === "/account") {
-    result.response.headers.set("Cache-Control", "no-store");
-  }
-  return result;
-});
+const accountResponses = createMiddleware().server(
+  async ({ request, next }) => {
+    const result = await next();
+    const pathname = new URL(request.url).pathname;
+    if (pathname === "/dashboard" || pathname.startsWith("/dashboard/") || pathname.startsWith("/s/")) {
+      result.response.headers.set("Cache-Control", "no-store");
+      result.response.headers.set("Referrer-Policy", "no-referrer");
+    }
+    if (pathname === "/dashboard" || pathname.startsWith("/dashboard/")) {
+      result.response.headers.set("X-Robots-Tag", "noindex, nofollow");
+    }
+    return result;
+  },
+);
 
 export const startInstance = createStart(() => ({
   requestMiddleware: [

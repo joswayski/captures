@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "workspaces": [
     "apps/desktop",
-    "apps/web"
+    "apps/web",
+    "apps/media-worker"
   ],
   "scripts": {
     "dev": "npm run tauri:dev --workspace @captures/desktop",
@@ -15,7 +16,7 @@
     "install:preview": "node scripts/install-latest-release.mjs",
     "build:web": "npm run build --workspace @captures/web",
     "start:web": "npm run start --workspace @captures/web",
-    "check": "npm run test:release-version && npm run check --workspace @captures/desktop && npm test --workspace @captures/web && npm run build:web",
+    "check": "npm run test:release-version && npm run check --workspace @captures/desktop && npm test --workspace @captures/web && npm test --workspace @captures/media-worker && npm run typecheck --workspace @captures/media-worker && npm run build:web",
     "test:release-version": "node --test scripts/*.test.mjs",
     "test": "npm run test --workspace @captures/desktop"
   },

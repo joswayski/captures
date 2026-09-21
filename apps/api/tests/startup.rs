@@ -5,6 +5,8 @@ fn api() -> Command {
     command
         .env_remove("DATABASE_URL")
         .env_remove("MIGRATION_DATABASE_URL")
+        .env("AUTH_ENABLED", "false")
+        .env("SHARING_ENABLED", "false")
         .env("CAPTURES_API_BIND", "127.0.0.1:0");
     command
 }
@@ -62,4 +64,57 @@ fn startup_does_not_serve_after_migration_connection_failure() {
             .unwrap(),
         "database migration connection failed",
     );
+}
+
+#[test]
+fn enabled_accounts_fail_startup_on_missing_or_invalid_settings() {
+    failure(
+        api()
+            .env("AUTH_ENABLED", "true")
+            .env_remove("AUTH_SECRET")
+            .output()
+            .unwrap(),
+        "AUTH_SECRET is required",
+    );
+    failure(
+        api()
+            .env("AUTH_ENABLED", "true")
+            .env("AUTH_SECRET", "short")
+            .output()
+            .unwrap(),
+        "AUTH_SECRET must contain at least 32 bytes",
+    );
+    failure(
+        api().env("SHARING_ENABLED", "true").output().unwrap(),
+        "SHARING_ENABLED requires AUTH_ENABLED=true",
+    );
+    for missing in [
+        "AUTH_ALLOWED_ORIGIN",
+        "AWS_REGION",
+        "SES_FROM_ADDRESS",
+        "SES_CONFIGURATION_SET",
+        "R2_ACCOUNT_ID",
+        "R2_BUCKET",
+        "R2_ACCESS_KEY_ID",
+        "R2_SECRET_ACCESS_KEY",
+        "MEDIA_WORKER_SECRET",
+    ] {
+        let mut command = api();
+        command
+            .env("AUTH_ENABLED", "true")
+            .env("SHARING_ENABLED", "true")
+            .env("AUTH_SECRET", "test-fixture-not-a-secret-32-bytes")
+            .env("AUTH_ALLOWED_ORIGIN", "https://captur.es")
+            .env("AUTH_INSECURE_LOOPBACK_COOKIE", "false")
+            .env("AWS_REGION", "us-east-1")
+            .env("SES_FROM_ADDRESS", "Captures <noreply@example.com>")
+            .env("SES_CONFIGURATION_SET", "test-transactional")
+            .env("R2_ACCOUNT_ID", "0123456789abcdef0123456789abcdef")
+            .env("R2_BUCKET", "test-captures")
+            .env("R2_ACCESS_KEY_ID", "test-key")
+            .env("R2_SECRET_ACCESS_KEY", "test-key")
+            .env("MEDIA_WORKER_SECRET", "test-fixture-not-a-secret-32-bytes")
+            .env_remove(missing);
+        failure(command.output().unwrap(), &format!("{missing} is required"));
+    }
 }

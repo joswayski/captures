@@ -16,10 +16,111 @@ The optional Rust account API also needs PostgreSQL for database integration
 tests. It does not participate in local desktop capture. See
 [`apps/api/README.md`](apps/api/README.md) for configuration, database isolation,
 migrations and tests, and [`apps/web/README.md`](apps/web/README.md#optional-accounts)
-for the account placeholder. Sign-in is unavailable. `npm run check` verifies
-that account requests fail closed and the built public website still works.
+for the account and share pages. Auth/sharing default to disabled; an enabled
+environment must supply SES/auth/R2 configuration explicitly. Browser uploads go
+directly to presigned R2 multipart part URLs; local captures remain local unless a
+user chooses a file on the website. R2 CORS must allow `PUT` from the exact browser
+origin, allow `Content-Type`, and expose `ETag`. `npm run check` covers frontend
+validation and the public website. Run
+`TEST_DATABASE_URL=postgres://USER@127.0.0.1:PORT/postgres cargo test -p captures-api -- --include-ignored`
+against a disposable local PostgreSQL server for migration, OTP concurrency,
+session, asset authorization, and revocation checks. Tests create and drop their
+own databases; SES and object storage are substituted, never live services.
+For local browser development, run the API on port 3001 and `npm run dev:web`;
+Vite proxies `/api` while share-page SSR uses `CAPTURES_API_ORIGIN` (same local
+default). HTTP-only local testing requires `AUTH_INSECURE_LOOPBACK_COOKIE=true`,
+a loopback API bind, and `AUTH_ALLOWED_ORIGIN=http://localhost:5174` (or the exact
+loopback origin you browse). Production always uses HTTPS and secure cookies.
+The website account flow is complete, but no native auth, credential-vault, upload,
+or Share-button path is connected. Native integration comes after the rewrite;
+the live native hosts and Workbench files retain active ownership of that work.
 The offline deployment-notification tests also require Bash and `jq` on PATH
 (including on Windows); they intercept HTTP calls and send no Discord messages.
+
+## Cloud sharing with Docker Compose and AWS SSO
+
+This runs the website, Rust API, PostgreSQL and Worker on your machine. It sends
+real SES email and uploads to the **real `staging-captures` R2 bucket**, not
+production. No native app is required. Install Docker Desktop (or Docker Engine
+with Compose v2) and AWS CLI v2; Rust and Node run inside the images.
+
+1. Copy `.env.example` to `.env`, without overwriting an existing file,
+   and restrict it with `chmod 600 .env`. Compose reads it automatically from
+   the repository root. If you previously created `.env.local`, rename it to
+   `.env` only if `.env` does not already exist; otherwise merge the settings.
+   Fill in your AWS SSO profile, SES
+   settings, staging R2 credentials and Cloudflare API token. Set `LOCAL_UID` and
+   `LOCAL_GID` to the outputs of `id -u` and `id -g` on your host. Generate two
+   independent values with `openssl rand -hex 32` for `AUTH_SECRET` and
+   `MEDIA_WORKER_SECRET`; keep them stable between restarts.
+   The Cloudflare token authenticates Wrangler remote bindings; it is not the
+   R2 S3 access key. Use a development token with the account's Workers/R2 access
+   required by Wrangler, not a global API key. It never goes to the website.
+2. Run `aws sso login --profile YOUR_PROFILE` on the host. The API reads that
+   profile and its cached login from a **read-only** `~/.aws` mount. The configured
+   UID/GID preserves host file permissions. This mount makes all profiles
+   in that directory readable to the API container; use only trusted images.
+   A profile relying on a host-only `credential_process` executable is not
+   supported by this mount; use your direct SSO profile.
+3. In the `staging-captures` bucket's CORS settings, add the rule below, preserving
+   existing rules. This is a one-time development-bucket change, not performed
+   by Compose. The bucket remains private.
+
+   ```json
+   [{
+     "AllowedOrigins": ["http://localhost:5174"],
+     "AllowedMethods": ["PUT"],
+     "AllowedHeaders": ["Content-Type"],
+     "ExposeHeaders": ["ETag"],
+     "MaxAgeSeconds": 3600
+   }]
+   ```
+
+4. From the repository root:
+
+   ```sh
+   docker compose up --build -d
+   docker compose logs -f api worker web
+   ```
+
+   Wait for the API's `captures API listening` and Wrangler's ready message, then
+   open **http://localhost:5174/dashboard** on your machine. Use `localhost`, not
+   `127.0.0.1`, because the browser origin is exact. Sign in, upload a disposable
+   file, open its `/s/<id>` link in an incognito window, test password/Stop sharing,
+   and test Trash/Restore. If SES is sandboxed, verify the recipient first.
+
+Compose fixes both upload and download storage to `staging-captures`. Wrangler
+runs locally with a remote R2 binding; do not add `--local` (which substitutes
+empty simulated storage) or `--remote` (which moves execution off your machine).
+Remote binding access incurs normal Cloudflare operations charges. File Trash
+retains uploaded objects; deleting the local database does not remove R2 files.
+
+Only port 5174 is published, bound to host loopback. The containers share the
+website's network namespace so API, Worker and PostgreSQL can use loopback
+without weakening production URL/cookie checks. The API runs migrations against
+the named local database before listening. A named volume preserves that database;
+the shared development database role is deliberately local-only.
+
+```sh
+# Stop containers; retain the database.
+docker compose down
+
+# After changing source code, rebuild/recreate the local stack.
+docker compose up --build -d
+
+# If your SSO session expires, log in on the host again and restart the API.
+aws sso login --profile YOUR_PROFILE
+docker compose restart api
+```
+
+These are built source snapshots, not bind-mounted hot reload. The first Rust
+image build can take several minutes. Use `logs` to diagnose SES/Cloudflare
+permissions; do not paste `docker compose config` output because it expands
+secrets. No deployment, bucket provisioning, automatic CORS changes or production
+database access is performed by this setup. On Windows, use WSL2 with Docker
+integration and AWS CLI/SSO configured inside WSL. No wrapper script is required.
+Physical macOS/Windows Docker/SSO verification remains
+separate from orb checks.
 
 ## Setup
 
