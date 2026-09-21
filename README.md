@@ -285,7 +285,7 @@ This is not Tauri system-font equivalence or universal Unicode coverage:
 missing glyphs remain errors, and fonts are never discovered or downloaded automatically.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
 resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
-pixel frames for native hosts. Typed rectangle/ellipse, straight-line/arrow and
+pixel frames for native hosts. Typed rectangle/ellipse/triangle/diamond/star, straight-line/arrow and
 completed freehand-path creation are also available; native hosts still own pointer
 sampling, drawing gestures and cancellation.
 Shared annotation-style patches can update existing
@@ -302,9 +302,10 @@ canvas-size and draft editor with undo/redo. **Draw crop** selects directly on t
 preview with free or preset aspect ratios and Shift ratio locking. Apply commits
 the selection; Cancel or Escape leaves the document unchanged. Its layer panel supports selection,
 visibility, locking, opacity, renaming, position, duplication, deletion and ordering.
-**Draw** adds rectangles, ellipses, straight lines, tapered arrows and freehand Pen strokes in the default
+**Draw** adds rectangles, ellipses, triangles, diamonds, stars, straight lines, tapered arrows and freehand Pen strokes in the default
 annotation color, one undoable layer per gesture. Escape cancels unfinished work;
 short arrow gestures are discarded and drafts retain completed shapes and strokes.
+Both hosts use shared polygon geometry for transient previews and committed layers.
 Pen smooths sampled points and retains click-only dots.
 **Layers → Annotation style** edits fill, stroke and shadow color, width, opacity,
 blur and offsets. Apply style creates one undo step; Reset fields cancels unapplied

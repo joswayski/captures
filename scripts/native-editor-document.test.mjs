@@ -860,6 +860,16 @@ function shapeCreationCases() {
     dropShadow: false,
   };
   const vectors = [
+    ...['triangle', 'diamond', 'star'].flatMap(shape => [
+      {
+        name: `reverse fractional ${shape} remains clipped when partially overlapping`,
+        shape, start: { x: 12.25, y: 19.5 }, end: { x: -3.75, y: 4.125 },
+      },
+      {
+        name: `negative fully outside ${shape} expands and translates every layer`,
+        shape, start: { x: -18.75, y: -12.25 }, end: { x: -30.25, y: -20.5 },
+      },
+    ]),
     {
       name: 'reverse fractional rectangle remains clipped when partially overlapping',
       shape: 'rectangle',
@@ -1275,7 +1285,7 @@ if (process.argv.includes('--write')) {
     assert.ok(vectors.document.elements.some(element => element.locked === true));
     assert.ok(vectors.crops.some(entry => entry.start.x < 0));
     assert.ok(vectors.cropDrags.some(entry => entry.updates.some(step => step.shiftKey)));
-    assert.equal(vectors.shapeCreations.length, 6);
+    assert.equal(vectors.shapeCreations.length, 12);
     assert.ok(vectors.shapeCreations.some(entry => entry.expected.width > entry.input.width));
     assert.ok(vectors.shapeCreations.some(entry => entry.expected.elements[0].x > entry.input.elements[0].x));
     assert.equal(vectors.openShapeCreations.length, 8);

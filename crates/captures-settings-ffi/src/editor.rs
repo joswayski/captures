@@ -3,8 +3,8 @@
 use super::region::{RegionPixels, response, text};
 use captures_app::{
     editor::{
-        CropDrag, Document, ElementBase, ElementStyle, GuideOrientation, MoveDrag, Point,
-        ResizeDrag, ShapeElement, arrow_fill_polygon, preview_rotation, rotation_handle,
+        ClosedShapeKind, CropDrag, Document, ElementBase, ElementStyle, GuideOrientation, MoveDrag,
+        Point, ResizeDrag, ShapeElement, arrow_fill_polygon, preview_rotation, rotation_handle,
         smooth_path_centerline,
     },
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
@@ -549,6 +549,7 @@ pub struct DrawPoints {
 /// Shared transient geometry, independent of editor sessions. Kind 0 returns
 /// an arrow outline from exactly two endpoints; kind 1 smooths accepted Pen
 /// samples (one point is a dot, two points are also a straight Line preview).
+/// Kinds 2/3/4 return Triangle/Diamond/Star vertices from exactly two endpoints.
 /// A too-short arrow succeeds with an empty outline. No JSON or pixel rendering.
 ///
 /// # Safety
@@ -567,8 +568,8 @@ pub unsafe extern "C" fn captures_editor_draw_geometry_v1(
         || output.is_null()
         || length == 0
         || length > isize::MAX as usize / (24 * size_of::<AbiPoint>())
-        || kind > 1
-        || (kind == 0 && length != 2)
+        || kind > 4
+        || (kind != 1 && length != 2)
     {
         return ptr::null_mut();
     }
@@ -602,7 +603,7 @@ pub unsafe extern "C" fn captures_editor_draw_geometry_v1(
                 style,
                 extra: Default::default(),
             })
-        } else {
+        } else if kind == 1 {
             smooth_path_centerline(
                 &input
                     .iter()
@@ -612,6 +613,31 @@ pub unsafe extern "C" fn captures_editor_draw_geometry_v1(
                     })
                     .collect::<Vec<_>>(),
             )
+        } else {
+            let shape = match kind {
+                2 => ClosedShapeKind::Triangle,
+                3 => ClosedShapeKind::Diamond,
+                _ => ClosedShapeKind::Star,
+            };
+            let points = shape
+                .polygon(
+                    Point {
+                        x: input[0].x,
+                        y: input[0].y,
+                    },
+                    Point {
+                        x: input[1].x,
+                        y: input[1].y,
+                    },
+                )
+                .expect("polygon kind");
+            if !points
+                .iter()
+                .all(|point| point.x.is_finite() && point.y.is_finite())
+            {
+                return None;
+            }
+            points
         };
         let geometry = Box::new(DrawGeometry(
             points
@@ -1591,6 +1617,39 @@ mod tests {
     }
 
     #[test]
+    fn polygon_geometry_normalizes_reverse_endpoints_and_keeps_star_concavity() {
+        let input = [AbiPoint { x: 90., y: 70. }, AbiPoint { x: 10., y: 20. }];
+        // SAFETY: initialized input and writable output live through each call;
+        // each immutable borrow ends before its owner is freed.
+        unsafe {
+            for (kind, count) in [(2, 3), (3, 4), (4, 10)] {
+                let mut output = MaybeUninit::uninit();
+                let handle =
+                    captures_editor_draw_geometry_v1(kind, input.as_ptr(), 2, output.as_mut_ptr());
+                assert!(!handle.is_null());
+                let output = output.assume_init();
+                let points = std::slice::from_raw_parts(output.data, output.length);
+                assert_eq!(points.len(), count);
+                assert!((points[0].x - 50.).abs() < 0.00001);
+                assert_eq!(points[0].y, 20.);
+                if kind == 2 {
+                    assert_eq!((points[1].x, points[1].y), (90., 70.));
+                    assert_eq!((points[2].x, points[2].y), (10., 70.));
+                } else if kind == 3 {
+                    assert_eq!((points[1].x, points[1].y), (90., 45.));
+                    assert_eq!((points[3].x, points[3].y), (10., 45.));
+                } else {
+                    for (index, point) in points.iter().enumerate() {
+                        let radius = ((point.x - 50.) / 40.).hypot((point.y - 45.) / 25.);
+                        assert!((radius - if index % 2 == 0 { 1. } else { 0.39 }).abs() < 0.00001);
+                    }
+                }
+                captures_editor_draw_geometry_free_v1(handle);
+            }
+        }
+    }
+
+    #[test]
     fn drawing_geometry_rejects_invalid_inputs_and_retains_dots_and_minimum_arrows() {
         let input = [AbiPoint { x: 7., y: 11. }, AbiPoint { x: 8.49, y: 11. }];
         let mut output = DrawPoints {
@@ -1601,7 +1660,10 @@ mod tests {
         // SAFETY: invalid metadata is rejected before dereference; all other buffers are live.
         unsafe {
             for (kind, points, count) in [
-                (2, input.as_ptr(), 2),
+                (5, input.as_ptr(), 2),
+                (2, input.as_ptr(), 1),
+                (3, input.as_ptr(), 1),
+                (4, input.as_ptr(), 1),
                 (0, input.as_ptr(), 1),
                 (1, ptr::null(), 1),
                 (1, input.as_ptr(), 0),

@@ -14,8 +14,9 @@ use captures_image::{
 use image::{Rgba, RgbaImage};
 
 use crate::editor::{
-    Document, DropShadowStyle, Element, ElementStyle, ImageElement, ImageOrientation, PathElement,
-    Point as EditorPoint, ShapeElement, TextElement, arrow_fill_polygon, sample_controlled_path,
+    ClosedShapeKind, Document, DropShadowStyle, Element, ElementStyle, ImageElement,
+    ImageOrientation, PathElement, Point as EditorPoint, ShapeElement, TextElement,
+    arrow_fill_polygon, sample_controlled_path,
 };
 
 pub const MAX_RENDER_DIMENSION: u32 = 16_384;
@@ -456,51 +457,29 @@ fn shape_layer(id: u64, element: &ShapeElement) -> Result<Layer, String> {
             width,
             height,
         },
-        "triangle" => Shape::Polygon(vec![
-            Point {
-                x: center.x,
-                y: origin.y,
-            },
-            Point {
-                x: origin.x + width,
-                y: origin.y + height,
-            },
-            Point {
-                x: origin.x,
-                y: origin.y + height,
-            },
-        ]),
-        "diamond" => Shape::Polygon(vec![
-            Point {
-                x: center.x,
-                y: origin.y,
-            },
-            Point {
-                x: origin.x + width,
-                y: center.y,
-            },
-            Point {
-                x: center.x,
-                y: origin.y + height,
-            },
-            Point {
-                x: origin.x,
-                y: center.y,
-            },
-        ]),
-        "star" => Shape::Polygon(
-            (0..10)
-                .map(|index| {
-                    let angle =
-                        -std::f32::consts::FRAC_PI_2 + index as f32 * std::f32::consts::PI / 5.;
-                    let radius = if index % 2 == 0 { 1. } else { 0.39 };
-                    Point {
-                        x: center.x + angle.cos() * width / 2. * radius,
-                        y: center.y + angle.sin() * height / 2. * radius,
-                    }
-                })
-                .collect(),
-        ),
+        "triangle" | "diamond" | "star" => {
+            let kind = match element.shape.as_str() {
+                "triangle" => ClosedShapeKind::Triangle,
+                "diamond" => ClosedShapeKind::Diamond,
+                _ => ClosedShapeKind::Star,
+            };
+            Shape::Polygon(capture_points(
+                &kind
+                    .polygon(
+                        EditorPoint {
+                            x: element.base.x,
+                            y: element.base.y,
+                        },
+                        EditorPoint {
+                            x: element.end_x,
+                            y: element.end_y,
+                        },
+                    )
+                    .expect("polygon kind"),
+                "shape",
+                &element.base.id,
+            )?)
+        }
         _ => unreachable!("visible shape kinds were validated"),
     };
     let opacity = element.base.opacity.clamp(0., 100.);

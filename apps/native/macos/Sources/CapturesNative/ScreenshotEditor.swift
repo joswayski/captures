@@ -255,8 +255,18 @@ final class EditorCropOverlay: EditorViewportGestureView {
 final class EditorDrawOverlay: EditorViewportGestureView {
     enum Shape: String, CaseIterable {
         case rectangle, ellipse, line, arrow, pen, wand, erase, restore, text
+        case triangle, diamond, star
 
         var isBackgroundBrush: Bool { self == .erase || self == .restore }
+
+        var polygonGeometryKind: UInt32? {
+            switch self {
+            case .triangle: return 2
+            case .diamond: return 3
+            case .star: return 4
+            default: return nil
+            }
+        }
     }
 
     var shape: Shape = .rectangle { didSet { if shape != oldValue { cancelGesture() } } }
@@ -367,7 +377,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
             return
         }
         switch shape {
-        case .rectangle, .ellipse:
+        case .rectangle, .ellipse, .triangle, .diamond, .star:
             guard start.x != end.x, start.y != end.y else { return }
         case .arrow:
             guard arrowLength >= 3,
@@ -449,9 +459,10 @@ final class EditorDrawOverlay: EditorViewportGestureView {
             ring.lineWidth = 1.5; ring.stroke()
             return
         }
-        if shape == .line || shape == .arrow || shape == .pen {
+        if shape == .line || shape == .arrow || shape == .pen || shape.polygonGeometryKind != nil {
             let samples = shape == .pen ? penPoints : [canvasPoint(for: startPoint), canvasPoint(for: currentPoint)]
-            guard let geometry = NativeEditorDrawGeometry(arrow: shape == .arrow, samples: samples),
+            let kind = shape.polygonGeometryKind ?? (shape == .arrow ? 0 : 1)
+            guard let geometry = NativeEditorDrawGeometry(kind: kind, samples: samples),
                   let first = geometry.points.first else { return }
             let image = presentedImageRect
             let scale = image.width / canvasSize.width
@@ -461,7 +472,10 @@ final class EditorDrawOverlay: EditorViewportGestureView {
             let path = NSBezierPath(); path.move(to: position(first))
             geometry.points.dropFirst().forEach { path.line(to: position($0)) }
             strokeColor.setFill(); strokeColor.setStroke()
-            if shape == .arrow { path.close(); path.fill() }
+            if shape.polygonGeometryKind != nil {
+                path.close(); fillColor.setFill(); path.fill()
+                path.lineWidth = 2; path.stroke()
+            } else if shape == .arrow { path.close(); path.fill() }
             else if geometry.points.allSatisfy({ $0 == first }) {
                 let radius = geometry.strokeWidth * scale / 2
                 let center = position(first)
@@ -1269,7 +1283,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         panelFieldLabel("Tool", x: 0, y: 78, parent: content)
         drawTool = NSPopUpButton()
         drawTool.addItems(withTitles: ["Rectangle", "Ellipse", "Line", "Arrow", "Pen", "Wand",
-                                           "Erase", "Restore", "Text"])
+                                           "Erase", "Restore", "Text", "Triangle", "Diamond", "Star"])
         drawTool.target = self; drawTool.action = #selector(changeDrawTool)
         drawTool.frame = NSRect(x: 0, y: 100, width: 252, height: 30)
         drawTool.selectItem(at: 0)

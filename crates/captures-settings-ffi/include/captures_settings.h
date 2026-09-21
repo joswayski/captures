@@ -288,6 +288,8 @@ void captures_editor_move_free_v1(CapturesEditorMoveDrag *drag);
  * kind 0: arrow outline, exactly two signed document-space endpoints.
  * kind 1: smoothed Pen centerline, one or more accepted samples; one is a dot,
  * two also represent a straight Line. Hosts paint round caps/joins.
+ * kinds 2/3/4: Triangle/Diamond/Star, exactly two signed document-space endpoints;
+ * returns normalized vertices (close the path to fill), including degenerate previews.
  * Input is aligned/readable for length initialized points during the call.
  * Non-null output points to writable aligned descriptor storage. Success owns
  * an independent immutable buffer and returns the default shared stroke width.

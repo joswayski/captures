@@ -289,9 +289,70 @@ impl CropDrag {
 pub enum ClosedShapeKind {
     Rectangle,
     Ellipse,
+    Triangle,
+    Diamond,
+    Star,
 }
 
-/// Inputs for one completed rectangle or ellipse gesture. Hosts keep transient
+impl ClosedShapeKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Rectangle => "rectangle",
+            Self::Ellipse => "ellipse",
+            Self::Triangle => "triangle",
+            Self::Diamond => "diamond",
+            Self::Star => "star",
+        }
+    }
+
+    /// Shared polygon vertices for rendering and transient host previews.
+    /// Curved shapes have no polygon. Keep the renderer's f32 arithmetic so a
+    /// preview and its committed shape use exactly the same normalized geometry.
+    pub fn polygon(self, start: Point, end: Point) -> Option<Vec<Point>> {
+        let left = start.x.min(end.x) as f32;
+        let top = start.y.min(end.y) as f32;
+        let width = (end.x - start.x).abs() as f32;
+        let height = (end.y - start.y).abs() as f32;
+        let cx = left + width / 2.;
+        let cy = top + height / 2.;
+        let points = match self {
+            Self::Rectangle | Self::Ellipse => return None,
+            Self::Triangle => vec![
+                (cx, top),
+                (left + width, top + height),
+                (left, top + height),
+            ],
+            Self::Diamond => vec![
+                (cx, top),
+                (left + width, cy),
+                (cx, top + height),
+                (left, cy),
+            ],
+            Self::Star => (0..10)
+                .map(|index| {
+                    let angle =
+                        -std::f32::consts::FRAC_PI_2 + index as f32 * std::f32::consts::PI / 5.;
+                    let radius = if index % 2 == 0 { 1. } else { 0.39 };
+                    (
+                        cx + angle.cos() * width / 2. * radius,
+                        cy + angle.sin() * height / 2. * radius,
+                    )
+                })
+                .collect(),
+        };
+        Some(
+            points
+                .into_iter()
+                .map(|(x, y)| Point {
+                    x: x as f64,
+                    y: y as f64,
+                })
+                .collect(),
+        )
+    }
+}
+
+/// Inputs for one completed closed-shape gesture. Hosts keep transient
 /// pointer state outside the document and submit this value on completion.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -821,7 +882,9 @@ impl Element {
             }),
             Self::Text(text) => crate::editor_text::selection_bounds(text),
             Self::Shape(shape) => match shape.shape.as_str() {
-                "rectangle" | "ellipse" => Ok(closed_shape_bounds(shape)),
+                "rectangle" | "ellipse" | "triangle" | "diamond" | "star" => {
+                    Ok(closed_shape_bounds(shape))
+                }
                 "line" | "arrow" => {
                     let shadow_pad = annotation_drop_shadow_pad(&shape.style);
                     if shape.shape == "arrow" {
@@ -1435,7 +1498,7 @@ impl Document {
         Ok(())
     }
 
-    /// Append one completed rectangle or ellipse using the shipping editor's
+    /// Append one completed closed shape using the shipping editor's
     /// layer defaults and fully-outside canvas expansion policy.
     pub fn create_closed_shape(&mut self, create: ClosedShapeCreate) -> Result<String, String> {
         if !create.start.x.is_finite()
@@ -1465,10 +1528,7 @@ impl Document {
                 break candidate;
             }
         };
-        let shape = match create.shape {
-            ClosedShapeKind::Rectangle => "rectangle",
-            ClosedShapeKind::Ellipse => "ellipse",
-        };
+        let shape = create.shape.as_str();
         let element = ShapeElement {
             base: ElementBase {
                 id: id.clone(),

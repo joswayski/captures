@@ -1358,6 +1358,44 @@ final class ScreenshotEditorTests: XCTestCase {
         }
     }
 
+    func testPolygonToolsUseSharedVerticesAndCommitOnlyOnRelease() throws {
+        _ = NSApplication.shared
+        for (title, count) in [("Triangle", 3), ("Diamond", 4), ("Star", 10)] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", width: 1280, height: 640))
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showDraw(in: controller.root)
+            let tool = try popup("Drawing tool", in: controller.root)
+            tool.selectItem(withTitle: title); _ = tool.sendAction(tool.action, to: tool.target)
+            let overlay = controller.drawOverlay
+            let geometry = try XCTUnwrap(NativeEditorDrawGeometry(
+                kind: try XCTUnwrap(overlay.shape.polygonGeometryKind),
+                samples: [CGPoint(x: 90, y: 70), CGPoint(x: 10, y: 20)]))
+            XCTAssertEqual(geometry.points.count, count)
+            XCTAssertEqual(geometry.points[0].x, 50, accuracy: 0.00001)
+            XCTAssertEqual(geometry.points[0].y, 20, accuracy: 0.00001)
+            overlay.begin(at: NSPoint(x: 500, y: 350)); overlay.drag(to: NSPoint(x: 60, y: 80))
+            XCTAssertTrue(worker.requests.isEmpty)
+            overlay.end(at: NSPoint(x: 60, y: 80))
+            XCTAssertEqual(worker.requests.count, 1)
+            let request = try XCTUnwrap(worker.requests.last)
+            XCTAssertEqual(request["operation"] as? String, "create_closed_shape")
+            XCTAssertEqual(request["shape"] as? String, title.lowercased())
+            let end = try XCTUnwrap(request["end"] as? [String: CGFloat])
+            XCTAssertEqual(try XCTUnwrap(end["y"]), -55.099, accuracy: 0.001)
+            overlay.begin(at: NSPoint(x: 300, y: 200)); overlay.end(at: NSPoint(x: 300, y: 350))
+            overlay.begin(at: NSPoint(x: 300, y: 200)); overlay.end(at: NSPoint(x: 400, y: 200))
+            overlay.begin(at: NSPoint(x: 200, y: 200)); overlay.drag(to: NSPoint(x: 260, y: 260))
+            overlay.keyDown(with: try keyEvent(window: controller.window, keyCode: 53, characters: "\u{1b}"))
+            overlay.end(at: NSPoint(x: 260, y: 260))
+            overlay.begin(at: NSPoint(x: 200, y: 200))
+            tool.selectItem(withTitle: "Rectangle"); _ = tool.sendAction(tool.action, to: tool.target)
+            overlay.end(at: NSPoint(x: 260, y: 260))
+            XCTAssertEqual(worker.requests.count, 1, "degenerate and cancelled gestures do not commit")
+        }
+    }
+
     func testRejectedDuplicateAndDeletionKeepRecoverableStableSelection() throws {
         _ = NSApplication.shared
         let back = layer(id: "back", name: "Back", x: 0, y: 0, visible: true,
@@ -1710,6 +1748,30 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.drawOverlay.end(at: NSPoint(x: 90, y: 125))
             try render(controller.root,
                        name: "screenshot-editor-draw-error-minimum-\(appearance)")
+        }
+    }
+
+    func testPolygonRenderedStates() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", width: 960, height: 540))
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showDraw(in: controller.root)
+            let tool = try popup("Drawing tool", in: controller.root)
+            for title in ["Triangle", "Diamond", "Star"] {
+                tool.selectItem(withTitle: title); _ = tool.sendAction(tool.action, to: tool.target)
+                controller.drawOverlay.begin(at: NSPoint(x: 500, y: 390))
+                controller.drawOverlay.drag(to: NSPoint(x: 90, y: 125))
+                try render(controller.root, name: "screenshot-editor-polygon-\(title.lowercased())-\(appearance)")
+                controller.drawOverlay.cancelGesture()
+            }
+            worker.failOperation = "create_closed_shape"
+            worker.failureMessage = "The star could not be created. The previous draft, selection and undo history remain recoverable."
+            controller.drawOverlay.begin(at: NSPoint(x: 500, y: 390))
+            controller.drawOverlay.end(at: NSPoint(x: 90, y: 125))
+            try render(controller.root, name: "screenshot-editor-polygon-error-minimum-\(appearance)")
         }
     }
 

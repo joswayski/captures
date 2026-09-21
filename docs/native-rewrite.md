@@ -770,7 +770,7 @@ Duplicates share owned image assets and remain draft-compatible.
 These commands are shared across all four platforms; host integration and
 physical acceptance are tracked separately below.
 
-Shared editor sessions can also create completed rectangle and ellipse layers from
+Shared editor sessions can also create completed rectangle, ellipse, triangle, diamond and star layers from
 typed start/end geometry, existing element styles and opacity. The command assigns
 the stable layer ID and shipping unlocked/visible/source-over defaults, preserves
 partial clipping, and expands/translates the document only when the annotation is
@@ -844,7 +844,7 @@ Hidden and locked images can transform, matching shipping policy; full-canvas
 photos rotate their canvas, and undo/draft restore retain the orientation.
 Merge/flatten remains unconnected.
 
-The wgpu Draw panel connects rectangle, ellipse, straight line, tapered arrow and freehand Pen
+The wgpu Draw panel connects rectangle, ellipse, triangle, diamond, star, straight line, tapered arrow and freehand Pen
 gestures. Preview points remain host-local until release sends one shared creation
 command to the worker.
 The new stable layer ID is selected and stale encoded output is cleared. Reverse
@@ -959,6 +959,16 @@ including off-canvas samples, without appending the release location. Mouse even
 coalescing is disabled only during a Pen stroke; every completion/cancellation restores
 the previous setting. Physical mouse/tablet sample delivery and mixed-DPI remain
 unverified. Windows/X11/Wayland retain their existing drawing implementation.
+Both hosts also expose **Triangle**, **Diamond** and **Star**. Preview vertices and
+committed pixels share the renderer's normalized Rust polygon geometry, including
+the star's 0.39 inner radius; Swift does not duplicate the geometry. Creation uses
+the existing worker transaction, fresh-ID selection and output invalidation.
+Zero-area and cancelled drags do not create a layer. All five closed kinds support
+selection bounds and existing annotation controls. TypeScript creation/expansion
+vectors and rendered geometry, C ABI, host gesture, undo/redo and draft tests cover
+these paths. Linux X11 is exercised with software rendering; AppKit has automated
+host tests/fixtures. Physical macOS input/accessibility, Windows and Wayland
+presentation remain unverified, and this does not close a migration acceptance gate.
 The AppKit **Layers** view connects fill/stroke toggles for closed shapes, annotation
 color/width, and shadow color/opacity/blur/offset controls. Apply style submits one
 minimal shared patch through the existing serialized worker and invalidates encoded
