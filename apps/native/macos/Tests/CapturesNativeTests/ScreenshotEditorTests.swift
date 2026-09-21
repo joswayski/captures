@@ -3197,7 +3197,6 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(y.stringValue, "-12.75", "failure retains pending settings")
         try button("Cancel", in: controller.root).performClick(nil)
         XCTAssertEqual(y.stringValue, "6.75")
-        XCTAssertTrue(controller.prepareForTermination())
         let count = worker.requests.count
         blur.stringValue = "invalid"
         apply.performClick(nil)
@@ -3213,6 +3212,7 @@ final class ScreenshotEditorTests: XCTestCase {
         try button("Cancel", in: controller.root).performClick(nil)
         XCTAssertEqual(blur.stringValue, "14.96")
         XCTAssertFalse(try XCTUnwrap(blur.superview).isHidden)
+        XCTAssertTrue(controller.prepareForTermination())
     }
 
     func testTextShadowNumbersUseTheDisplayedLocale() throws {
