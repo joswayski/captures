@@ -508,12 +508,49 @@ def main():
         click(editor, 98, 62)
         save(640, 440, 0, 0)
         assert layers()[-1]["id"] == imported_id
+
+        click(editor, 100, 158)  # Redo retained the original's selection; pick the imported row.
+        # At 1.178125 scale the 120x80 image's grip is near (615,485), around
+        # pivot (615,560). Start five points above the grip, within its hit radius.
+        # Exercise a free-angle transient first; Escape must leave draft/pixels intact.
+        rotation_before = draft.read_bytes()
+        run("xdotool", "mousemove", "--sync", "--window", editor, "615", "480",
+            "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
+            "650", "460", "sleep", ".3")
+        shot(editor, "layer-rotation-free-transient")
+        run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
+        assert draft.read_bytes() == rotation_before
+        # Vector (0,-80) to (45,-95) is 25.35 degrees, snapping to 30 degrees.
+        drag((615, 480), (660, 465), shift=True)
+        rotated = save_layers(
+            lambda values: math.isclose(values[-1].get("rotation", 0), math.pi / 6,
+                                        abs_tol=1e-12),
+            "Shift-snapped imported image rotation")[-1]
+        assert rotated["id"] == imported_id
+        shot(editor, "layer-rotation-shift-result")
+        # Independently rotate the green fixture center (25,19) about (60,40).
+        angle = math.pi / 6
+        expected_x = 260 + 60 + (-35 * math.cos(angle) - -21 * math.sin(angle))
+        expected_y = 360 + 40 + (-35 * math.sin(angle) + -21 * math.cos(angle))
+        expected_screen = (round(238 + expected_x * 754 / 640),
+                           round(89 + expected_y * 754 / 640))
+        assert expected_screen == (592, 518)
+        pixel("layer-rotation-shift-result", *expected_screen, (60, 179, 113))
+        click(editor, 35, 62)
+        save_layers(lambda values: "rotation" not in values[-1], "undo imported image rotation")
+        shot(editor, "layer-rotation-undone")
+        pixel("layer-rotation-undone", 568, 537, (60, 179, 113))
+        click(editor, 98, 62)
+        save_layers(lambda values: math.isclose(values[-1].get("rotation", 0), math.pi / 6,
+                                                abs_tol=1e-12),
+                    "redo imported image rotation")
         close(editor)
         wait(lambda: not windows("Screenshot editor"), "imported draft closes")
         editor = reopen()
-        shot(editor, "imported-reopened")
-        pixel("imported-reopened", 568, 537, (60, 179, 113))
+        shot(editor, "layer-rotation-reopened")
+        pixel("layer-rotation-reopened", *expected_screen, (60, 179, 113))
         assert layers()[-1]["id"] == imported_id
+        assert math.isclose(layers()[-1]["rotation"], math.pi / 6, abs_tol=1e-12)
         assert saved(640, 440, 0, 0)
         # Discard returns to the original capture, without deleting exports or source data.
         click(editor, 275, 62)
@@ -1001,6 +1038,7 @@ def main():
                        "canvas", "undo-redo", "draft-reopen", "close-preserves-draft",
                        "image-picker-pending-cancel-retry", "image-import-exact-pixels",
                        "image-import-owned-draft-reopen", "image-picker-stale-close-result",
+                       "layer-rotation-free-cancel-shift-snap", "layer-rotation-undo-draft-reopen-pixels",
                        "explicit-discard", "save-error", "quit-error-retry", "original-unchanged",
                        "layer-duplicate-rename-move", "layer-canvas-click-drag-escape",
                        "layer-opacity-visibility-pixels",

@@ -325,9 +325,13 @@ unlocked visible layer, or empty space to clear selection. Drag shows a translat
 selection outline; release moves the layer in one undoable edit. Escape, focus loss,
 preview resizing or leaving Layers cancels the drag. Pixels update on release, not
 continuously during dragging; selection alone does not change the document.
+The selected layer also exposes a **rotation grip** when it fits inside the image.
+Drag it to rotate; hold Shift for 15° stops. Rotation uses the same outline-only
+preview, cancellation, undo and draft behavior. Hidden or locked layers have no
+grip; custom snap increments are not connected yet.
 Windows, Wayland and physical AppKit presentation remain unverified.
 The native editor still uses a workbench layout, not the shipping Tauri editor design.
-Canvas resize/rotate handles, snapping, pan/zoom, other drawing tools, text, overwrite-original, AppKit edited-image
+Canvas resize handles, alignment snapping, pan/zoom, other drawing tools, text, overwrite-original, AppKit edited-image
 clipboard output, and recording editing remain unconnected. Shared editor support
 is prerequisite work, not native editor acceptance. OS shortcut takeover, login items,
 single-instance relaunch and updates

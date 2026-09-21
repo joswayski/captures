@@ -17,7 +17,7 @@ use captures_app::{
         Document, DropShadowStyle, DropShadowStylePatch, Element, ElementBase, ElementStyle,
         FreehandPathCreate, ImageTransform, LayerEdit, LayerPlacement, OpenShapeCreate,
         OpenShapeKind, OptionalNullable, Point, Rect, ShapeElement, arrow_fill_polygon,
-        smooth_path_centerline,
+        preview_rotation, rotation_angle, rotation_handle, smooth_path_centerline,
     },
     editor_output::{SavedExport, save_new_export},
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
@@ -457,6 +457,7 @@ impl View {
         if self.import_picker.is_some() {
             return;
         }
+        self.cancel_layer_gesture();
         let (tx, rx) = mpsc::channel();
         self.import_picker = Some(rx);
         let ctx = ctx.clone();
@@ -593,9 +594,22 @@ impl View {
 }
 
 #[derive(Clone)]
+enum LayerGestureKind {
+    Move {
+        id: Option<String>,
+        outline: Option<[Point; 4]>,
+    },
+    Rotate {
+        id: String,
+        outline: [Point; 4],
+        initial_radians: f64,
+        snap: bool,
+    },
+}
+
+#[derive(Clone)]
 struct LayerGesture {
-    id: Option<String>,
-    outline: Option<[Point; 4]>,
+    kind: LayerGestureKind,
     start: Point,
     current: Point,
     preview: egui::Rect,
@@ -1198,6 +1212,7 @@ fn show_layer_canvas(
         width: f64::from(presented.pixels.width()),
         height: f64::from(presented.pixels.height()),
     };
+    let display_scale = f64::from(preview.width()) / bounds.width;
     if view
         .layer_gesture
         .as_ref()
@@ -1218,6 +1233,13 @@ fn show_layer_canvas(
         view.cancel_layer_gesture();
     }
     if first_pass && input_enabled {
+        if let Some(LayerGesture {
+            kind: LayerGestureKind::Rotate { snap, .. },
+            ..
+        }) = &mut view.layer_gesture
+        {
+            *snap = ui.input(|input| input.modifiers.shift);
+        }
         // Process in order: hover after release must not change the committed
         // delta, and a press/release in one frame must still be a plain click.
         for event in ui.input(|input| input.events.clone()) {
@@ -1226,6 +1248,7 @@ fn show_layer_canvas(
                     pos,
                     button: egui::PointerButton::Primary,
                     pressed: true,
+                    modifiers,
                     ..
                 } if !view.pending => {
                     view.cancel_layer_gesture();
@@ -1233,11 +1256,56 @@ fn show_layer_canvas(
                         continue;
                     }
                     let point = image_point(pos, preview, bounds);
+                    let selected = view.selected_layer.as_ref().and_then(|id| {
+                        document
+                            .elements
+                            .iter()
+                            .find(|element| &element.base().id == id)
+                    });
+                    let rotation = selected.and_then(|element| {
+                        let base = element.base();
+                        if !base.visible || base.locked {
+                            return None;
+                        }
+                        let outline = element.selection_outline().ok()?;
+                        let handle = rotation_handle(
+                            outline,
+                            base.rotation(),
+                            display_scale,
+                            bounds.width,
+                            bounds.height,
+                        )?;
+                        ((point.x - handle.handle.x).hypot(point.y - handle.handle.y)
+                            <= handle.hit_radius)
+                            .then_some((
+                                base.id.clone(),
+                                outline,
+                                rotation_angle(base.rotation(), false)?,
+                            ))
+                    });
+                    if let Some((id, outline, initial_radians)) = rotation {
+                        view.layer_gesture = Some(LayerGesture {
+                            kind: LayerGestureKind::Rotate {
+                                id,
+                                outline,
+                                initial_radians,
+                                snap: modifiers.shift,
+                            },
+                            start: point,
+                            current: point,
+                            preview,
+                        });
+                        view.error = None;
+                        continue;
+                    }
                     match document.hit_test(point, 8. * bounds.width / f64::from(preview.width())) {
                         Ok(hit) => {
                             view.layer_gesture = Some(LayerGesture {
-                                id: hit.map(|element| element.base().id.clone()),
-                                outline: hit.and_then(|element| element.selection_outline().ok()),
+                                kind: LayerGestureKind::Move {
+                                    id: hit.map(|element| element.base().id.clone()),
+                                    outline: hit
+                                        .and_then(|element| element.selection_outline().ok()),
+                                },
                                 start: point,
                                 current: point,
                                 preview,
@@ -1261,30 +1329,62 @@ fn show_layer_canvas(
                     pos,
                     button: egui::PointerButton::Primary,
                     pressed: false,
+                    modifiers,
                     ..
                 } => {
                     let Some(gesture) = view.layer_gesture.take() else {
                         continue;
                     };
                     let end = image_point(pos, preview, bounds);
-                    let delta_x = end.x - gesture.start.x;
-                    let delta_y = end.y - gesture.start.y;
-                    let distance = (delta_x * f64::from(preview.width()) / bounds.width)
-                        .hypot(delta_y * f64::from(preview.height()) / bounds.height);
-                    if distance >= 3.
-                        && let Some(id) = gesture.id
-                    {
-                        view.pending_layer_selection = Some(id.clone());
-                        view.invalidate_output();
-                        view.submit(
-                            tx,
-                            Request::Layer {
-                                id,
-                                edit: LayerEdit::Translate { delta_x, delta_y },
-                            },
-                        );
-                    } else {
-                        view.select_layer_exact(gesture.id);
+                    match gesture.kind {
+                        LayerGestureKind::Move { id, .. } => {
+                            let delta_x = end.x - gesture.start.x;
+                            let delta_y = end.y - gesture.start.y;
+                            let distance = (delta_x * f64::from(preview.width()) / bounds.width)
+                                .hypot(delta_y * f64::from(preview.height()) / bounds.height);
+                            if distance >= 3.
+                                && let Some(id) = id
+                            {
+                                view.pending_layer_selection = Some(id.clone());
+                                view.invalidate_output();
+                                view.submit(
+                                    tx,
+                                    Request::Layer {
+                                        id,
+                                        edit: LayerEdit::Translate { delta_x, delta_y },
+                                    },
+                                );
+                            } else {
+                                view.select_layer_exact(id);
+                            }
+                        }
+                        LayerGestureKind::Rotate {
+                            id,
+                            outline,
+                            initial_radians,
+                            ..
+                        } => {
+                            if let Some(rotation) = preview_rotation(
+                                outline,
+                                initial_radians,
+                                gesture.start,
+                                end,
+                                modifiers.shift,
+                            ) && rotation.radians != initial_radians
+                            {
+                                view.pending_layer_selection = Some(id.clone());
+                                view.invalidate_output();
+                                view.submit(
+                                    tx,
+                                    Request::Layer {
+                                        id,
+                                        edit: LayerEdit::Rotate {
+                                            radians: rotation.radians,
+                                        },
+                                    },
+                                );
+                            }
+                        }
                     }
                 }
                 _ => {}
@@ -1294,31 +1394,59 @@ fn show_layer_canvas(
     if response.hovered() || view.layer_gesture.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
-    let (outline, delta) = if let Some(gesture) = &view.layer_gesture {
-        let dx = gesture.current.x - gesture.start.x;
-        let dy = gesture.current.y - gesture.start.y;
-        let moving = (dx * f64::from(preview.width()) / bounds.width)
-            .hypot(dy * f64::from(preview.height()) / bounds.height)
-            >= 3.;
-        (
-            gesture.outline,
-            Point {
-                x: if moving { dx } else { 0. },
-                y: if moving { dy } else { 0. },
-            },
-        )
+    let (outline, delta, active_rotation) = if let Some(gesture) = &view.layer_gesture {
+        match &gesture.kind {
+            LayerGestureKind::Move { outline, .. } => {
+                let dx = gesture.current.x - gesture.start.x;
+                let dy = gesture.current.y - gesture.start.y;
+                let moving = (dx * f64::from(preview.width()) / bounds.width)
+                    .hypot(dy * f64::from(preview.height()) / bounds.height)
+                    >= 3.;
+                (
+                    *outline,
+                    Point {
+                        x: if moving { dx } else { 0. },
+                        y: if moving { dy } else { 0. },
+                    },
+                    None,
+                )
+            }
+            LayerGestureKind::Rotate {
+                outline,
+                initial_radians,
+                snap,
+                ..
+            } => {
+                let rotation = preview_rotation(
+                    *outline,
+                    *initial_radians,
+                    gesture.start,
+                    gesture.current,
+                    *snap,
+                );
+                (
+                    rotation.map(|value| value.outline).or(Some(*outline)),
+                    Point { x: 0., y: 0. },
+                    rotation
+                        .map(|value| value.radians)
+                        .or(Some(*initial_radians)),
+                )
+            }
+        }
     } else {
-        let outline = view
-            .selected_layer
-            .as_ref()
-            .and_then(|id| {
-                document
-                    .elements
-                    .iter()
-                    .find(|element| &element.base().id == id)
-            })
-            .and_then(|element| element.selection_outline().ok());
-        (outline, Point { x: 0., y: 0. })
+        let selected = view.selected_layer.as_ref().and_then(|id| {
+            document
+                .elements
+                .iter()
+                .find(|element| &element.base().id == id)
+        });
+        (
+            selected.and_then(|element| element.selection_outline().ok()),
+            Point { x: 0., y: 0. },
+            selected
+                .filter(|element| element.base().visible && !element.base().locked)
+                .map(|element| element.base().rotation()),
+        )
     };
     if let Some(outline) = outline {
         let project = |point: Point| {
@@ -1329,12 +1457,23 @@ fn show_layer_canvas(
         };
         let mut points: Vec<_> = outline.into_iter().map(project).collect();
         points.push(points[0]);
-        ui.painter()
-            .with_clip_rect(available.intersect(ui.clip_rect()))
-            .add(egui::Shape::line(
-                points,
-                egui::Stroke::new(2., tokens.color("theme-accent")),
-            ));
+        let painter = ui
+            .painter()
+            .with_clip_rect(available.intersect(ui.clip_rect()));
+        painter.add(egui::Shape::line(
+            points,
+            egui::Stroke::new(2., tokens.color("theme-accent")),
+        ));
+        if let Some(radians) = active_rotation
+            && let Some(handle) =
+                rotation_handle(outline, radians, display_scale, bounds.width, bounds.height)
+        {
+            let anchor = project(handle.anchor);
+            let grip = project(handle.handle);
+            let stroke = egui::Stroke::new(2., tokens.color("theme-accent"));
+            painter.line_segment([anchor, grip], stroke);
+            painter.circle(grip, 4.5, tokens.color("surface-raised"), stroke);
+        }
     }
 }
 
@@ -2105,6 +2244,41 @@ mod tests {
         }
     }
 
+    fn layer_frame(
+        ctx: &egui::Context,
+        view: &mut View,
+        tx: &Sender<Job>,
+        preview: egui::Rect,
+        focused: bool,
+        modifiers: egui::Modifiers,
+        mut events: Vec<egui::Event>,
+    ) {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400., 300.));
+        events.insert(0, egui::Event::ModifiersChanged(modifiers));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                focused,
+                ..Default::default()
+            },
+            |_| {
+                let mut ui = egui::Ui::new(
+                    ctx.clone(),
+                    egui::Id::unique("rotation-layer-canvas-test"),
+                    egui::UiBuilder::new().max_rect(screen),
+                );
+                let tokens = crate::tokens::load().into_values().next().unwrap();
+                show_layer_canvas(&mut ui, &tokens, view, tx, screen, preview);
+                if ctx.current_pass_index() == 0 {
+                    ctx.request_discard("multipass");
+                }
+            },
+        );
+        assert!(output.platform_output.num_completed_passes >= 2);
+        output.textures_delta.clear();
+    }
+
     #[test]
     fn displaying_annotation_controls_does_not_clamp_legacy_values_into_a_patch() {
         let ctx = egui::Context::default();
@@ -2338,6 +2512,271 @@ mod tests {
         assert!(rx.try_recv().is_err(), "multipass must not submit twice");
         view.receive(&ctx, Err("move failed".into()));
         assert!(view.selected_layer.is_none() && view.pending_layer_selection.is_none());
+    }
+
+    #[test]
+    fn layer_canvas_rotation_handle_previews_cancels_and_commits_transactionally() {
+        let ctx = egui::Context::default();
+        let mut value = presented(false);
+        value.pixels = Arc::new(RgbaImage::new(200, 100));
+        let document = Arc::make_mut(&mut value.document);
+        document.width = 200.;
+        document.height = 100.;
+        let id = document
+            .create_closed_shape(ClosedShapeCreate {
+                shape: ClosedShapeKind::Rectangle,
+                start: Point { x: 20., y: 20. },
+                end: Point { x: 80., y: 60. },
+                style: ElementStyle::default(),
+                opacity: 100.,
+            })
+            .unwrap();
+        document
+            .edit_layer(&id, LayerEdit::Rotate { radians: 0.2 })
+            .unwrap();
+        let original_outline = document
+            .elements
+            .last()
+            .unwrap()
+            .selection_outline()
+            .unwrap();
+        let handle = rotation_handle(original_outline, 0.2, 0.5, 200., 100.).unwrap();
+        let project =
+            |point: Point| egui::pos2(100. + point.x as f32 / 2., 100. + point.y as f32 / 2.);
+        let grip = project(handle.handle);
+        let target = egui::pos2(grip.x + 18., grip.y - 11.);
+        let preview = egui::Rect::from_min_size(egui::pos2(100., 100.), egui::vec2(100., 50.));
+        let button = |pos, pressed, modifiers| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers,
+        };
+        let escape = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut view = View::default();
+        view.receive(&ctx, Ok(value));
+        view.pending = false;
+        view.section = Section::Layers;
+        view.select_layer(Some(id.clone()));
+        let (tx, rx) = mpsc::channel();
+
+        // The fitted grip is inside this small image and overlaps its body, but
+        // must begin rotation rather than picking/moving the layer.
+        layer_frame(
+            &ctx,
+            &mut view,
+            &tx,
+            preview,
+            true,
+            egui::Modifiers::NONE,
+            vec![button(grip, true, egui::Modifiers::NONE)],
+        );
+        assert!(matches!(
+            view.layer_gesture.as_ref().map(|gesture| &gesture.kind),
+            Some(LayerGestureKind::Rotate { .. })
+        ));
+        layer_frame(
+            &ctx,
+            &mut view,
+            &tx,
+            preview,
+            true,
+            egui::Modifiers::NONE,
+            vec![button(grip, false, egui::Modifiers::NONE)],
+        );
+        assert!(
+            rx.try_recv().is_err() && !view.pending,
+            "a grip click is a no-op"
+        );
+
+        layer_frame(
+            &ctx,
+            &mut view,
+            &tx,
+            preview,
+            true,
+            egui::Modifiers::NONE,
+            vec![
+                button(grip, true, egui::Modifiers::NONE),
+                egui::Event::PointerMoved(target),
+            ],
+        );
+        let free = match &view.layer_gesture.as_ref().unwrap().kind {
+            LayerGestureKind::Rotate { snap, .. } => {
+                assert!(!snap);
+                preview_rotation(
+                    original_outline,
+                    0.2,
+                    handle.handle,
+                    image_point(
+                        target,
+                        preview,
+                        Rect {
+                            x: 0.,
+                            y: 0.,
+                            width: 200.,
+                            height: 100.,
+                        },
+                    ),
+                    false,
+                )
+                .unwrap()
+            }
+            _ => panic!("grip must beat body picking"),
+        };
+        layer_frame(
+            &ctx,
+            &mut view,
+            &tx,
+            preview,
+            true,
+            egui::Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+            vec![],
+        );
+        match &view.layer_gesture.as_ref().unwrap().kind {
+            LayerGestureKind::Rotate { snap, .. } => assert!(*snap),
+            _ => unreachable!(),
+        }
+        let snapped = preview_rotation(
+            original_outline,
+            0.2,
+            handle.handle,
+            image_point(
+                target,
+                preview,
+                Rect {
+                    x: 0.,
+                    y: 0.,
+                    width: 200.,
+                    height: 100.,
+                },
+            ),
+            true,
+        )
+        .unwrap();
+        assert_ne!(
+            free.radians, snapped.radians,
+            "stationary Shift changes the preview"
+        );
+        layer_frame(
+            &ctx,
+            &mut view,
+            &tx,
+            preview,
+            true,
+            egui::Modifiers::NONE,
+            vec![escape.clone(), button(target, false, egui::Modifiers::NONE)],
+        );
+        assert!(rx.try_recv().is_err() && view.layer_gesture.is_none());
+
+        // Same-frame Escape and host cancellation paths cannot leak a command.
+        layer_frame(
+            &ctx,
+            &mut view,
+            &tx,
+            preview,
+            true,
+            egui::Modifiers::NONE,
+            vec![
+                button(grip, true, egui::Modifiers::NONE),
+                escape.clone(),
+                button(target, false, egui::Modifiers::NONE),
+            ],
+        );
+        layer_frame(
+            &ctx,
+            &mut view,
+            &tx,
+            preview,
+            true,
+            egui::Modifiers::NONE,
+            vec![button(grip, true, egui::Modifiers::NONE)],
+        );
+        layer_frame(
+            &ctx,
+            &mut view,
+            &tx,
+            egui::Rect::from_min_size(preview.min, egui::vec2(99., 50.)),
+            true,
+            egui::Modifiers::NONE,
+            vec![],
+        );
+        assert!(view.layer_gesture.is_none() && rx.try_recv().is_err());
+        layer_frame(
+            &ctx,
+            &mut view,
+            &tx,
+            preview,
+            true,
+            egui::Modifiers::NONE,
+            vec![button(grip, true, egui::Modifiers::NONE)],
+        );
+        layer_frame(
+            &ctx,
+            &mut view,
+            &tx,
+            preview,
+            false,
+            egui::Modifiers::NONE,
+            vec![],
+        );
+        assert!(view.layer_gesture.is_none() && rx.try_recv().is_err());
+
+        layer_frame(
+            &ctx,
+            &mut view,
+            &tx,
+            preview,
+            true,
+            egui::Modifiers::NONE,
+            vec![
+                button(grip, true, egui::Modifiers::NONE),
+                egui::Event::PointerMoved(target),
+            ],
+        );
+        layer_frame(
+            &ctx,
+            &mut view,
+            &tx,
+            preview,
+            true,
+            egui::Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+            vec![
+                button(
+                    target,
+                    false,
+                    egui::Modifiers {
+                        shift: true,
+                        ..Default::default()
+                    },
+                ),
+                egui::Event::PointerMoved(grip),
+            ],
+        );
+        assert!(view.pending && view.layer_gesture.is_none());
+        assert!(
+            matches!(rx.recv().unwrap(), Job::Apply(Request::Layer { id: target_id, edit: LayerEdit::Rotate { radians } })
+            if target_id == id && radians == snapped.radians)
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "multipass submits exactly one rotation"
+        );
+        view.receive(&ctx, Err("rotation failed".into()));
+        assert_eq!(view.selected_layer.as_deref(), Some(id.as_str()));
+        assert!(view.pending_layer_selection.is_none());
     }
 
     #[test]

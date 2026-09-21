@@ -23,7 +23,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices | Audio meter/device-change parity, physical recording/audio acceptance, recording editor and transcoded exports |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move, import, image transforms, annotation styles, Rectangle/Ellipse/Line/Arrow/Pen and save-new-copy | Canvas resize/rotate/snap/pan/zoom, text/background/erase, remaining output controls and Tauri design parity; recording playback/timeline/editing/export |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation, import, image transforms, annotation styles, Rectangle/Ellipse/Line/Arrow/Pen and save-new-copy | Canvas resize/alignment-snap/pan/zoom, text/background/erase, remaining output controls and Tauri design parity; recording playback/timeline/editing/export |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -62,9 +62,20 @@ pixels update only after the worker succeeds. Failed moves preserve prior select
 Escape, focus loss, close, leaving Layers, a pending command or preview resizing cancels
 transient input. AppKit picks from cached immutable document JSON, never a borrowed
 worker session; wgpu handles raw events once, in order, across egui layout passes.
-Next implementation boundary: resize/rotate/snap and pan/zoom, then text/background
-and remaining output. This select/move slice does not deliver live pixel dragging
-or the shipping editor layout.
+Both hosts also expose a rotation grip for the selected visible/unlocked layer.
+Shared Rust chooses a grip that fits the bitmap, preferring outside top/bottom then
+inside top/bottom, and owns the rotated outline and angle normalization. Shift snaps
+to the shipping default 15-degree stops, including modifier changes without pointer
+motion; custom increments remain unconnected. The grip wins over overlapping layer
+bodies. A changed angle submits one `LayerEdit::Rotate` on release, with normal
+render-before-publish, undo and draft ownership; clicks and cancellation do not edit
+the document. Partial overflow remains clipped; fully outside rotated bounds expand
+the canvas. AppKit's C boundary is allocation-free, without per-event JSON or worker
+session access. TypeScript-oracle fixtures check angles, grip placement, gestures and
+document edits. Both hosts retain outline-only feedback until release.
+Next implementation boundary: resize/alignment snapping and pan/zoom, then
+text/background and remaining output. The shipping Tauri editor remains the design
+reference; this slice does not reproduce its layout or live pixel dragging.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
 are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow
@@ -681,7 +692,7 @@ Across both hosts, physical input/accessibility/IME acceptance remains open.
 The current native screenshot editor is a functional workbench, not a visual match
 for the shipping Tauri editor. Functional controls and inspected fixtures do not
 complete the editor layout/interaction/design parity gate.
-Canvas resize/rotate handles, snapping, pan/zoom, other drawing tools and AppKit
+Canvas resize handles, alignment snapping, pan/zoom, other drawing tools and AppKit
 edited-image clipboard output are not connected. Recording editing remains open on both hosts; the
 screenshot-editor parity gate stays open.
 

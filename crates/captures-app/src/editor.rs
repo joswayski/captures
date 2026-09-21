@@ -50,6 +50,139 @@ pub struct CropDrag {
     latched_shift_aspect: Option<f64>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct RotationHandle {
+    pub anchor: Point,
+    pub handle: Point,
+    pub hit_radius: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct RotationPreview {
+    pub radians: f64,
+    pub outline: [Point; 4],
+}
+
+/// Shipping angle normalization and optional 15-degree Shift stops. JS rounds
+/// negative half-ties toward positive infinity, unlike Rust's f64::round.
+pub fn rotation_angle(radians: f64, snap: bool) -> Option<f64> {
+    if !radians.is_finite() {
+        return None;
+    }
+    let mut angle = radians % std::f64::consts::TAU;
+    if angle <= -std::f64::consts::PI {
+        angle += std::f64::consts::TAU;
+    }
+    if angle > std::f64::consts::PI {
+        angle -= std::f64::consts::TAU;
+    }
+    if angle.abs() < 1e-10 {
+        angle = 0.;
+    }
+    if snap {
+        let step = std::f64::consts::PI / 12.;
+        return rotation_angle((angle / step + 0.5).floor() * step, false);
+    }
+    Some(angle)
+}
+
+fn rotate_point(point: Point, origin: Point, radians: f64) -> Point {
+    if radians == 0. {
+        return point;
+    }
+    let (sin, cos) = radians.sin_cos();
+    let dx = point.x - origin.x;
+    let dy = point.y - origin.y;
+    Point {
+        x: origin.x + dx * cos - dy * sin,
+        y: origin.y + dx * sin + dy * cos,
+    }
+}
+
+fn midpoint(first: Point, second: Point) -> Point {
+    Point {
+        x: first.x / 2. + second.x / 2.,
+        y: first.y / 2. + second.y / 2.,
+    }
+}
+
+fn finite_outline(outline: &[Point; 4]) -> bool {
+    outline
+        .iter()
+        .all(|point| point.x.is_finite() && point.y.is_finite())
+}
+
+/// Prefer the outside top, outside bottom, inside top, then inside bottom grip.
+/// Hide it when none fits the bitmap, matching shipping selection chrome.
+pub fn rotation_handle(
+    outline: [Point; 4],
+    radians: f64,
+    display_scale: f64,
+    width: f64,
+    height: f64,
+) -> Option<RotationHandle> {
+    if !finite_outline(&outline)
+        || !radians.is_finite()
+        || !display_scale.is_finite()
+        || display_scale <= 0.
+        || !width.is_finite()
+        || !height.is_finite()
+        || width <= 0.
+        || height <= 0.
+    {
+        return None;
+    }
+    let scale = display_scale.max(0.01);
+    let offset = 28. / scale;
+    let pad = 8. / scale;
+    let (sin, cos) = radians.sin_cos();
+    let top = midpoint(outline[0], outline[1]);
+    let bottom = midpoint(outline[2], outline[3]);
+    [
+        (top, -offset),
+        (bottom, offset),
+        (top, offset),
+        (bottom, -offset),
+    ]
+    .into_iter()
+    .find_map(|(anchor, offset)| {
+        let handle = Point {
+            x: anchor.x - sin * offset,
+            y: anchor.y + cos * offset,
+        };
+        (handle.x >= pad && handle.y >= pad && handle.x <= width - pad && handle.y <= height - pad)
+            .then_some(RotationHandle {
+                anchor,
+                handle,
+                hit_radius: 12.5 / scale,
+            })
+    })
+}
+
+/// Stateless gesture preview from the original world outline and press point.
+/// Hosts retain those inputs, including when Shift changes without pointer motion.
+pub fn preview_rotation(
+    outline: [Point; 4],
+    initial: f64,
+    start: Point,
+    current: Point,
+    snap: bool,
+) -> Option<RotationPreview> {
+    if !finite_outline(&outline)
+        || ![initial, start.x, start.y, current.x, current.y]
+            .into_iter()
+            .all(f64::is_finite)
+    {
+        return None;
+    }
+    let origin = midpoint(outline[0], outline[2]);
+    let angle = (current.y - origin.y).atan2(current.x - origin.x)
+        - (start.y - origin.y).atan2(start.x - origin.x);
+    let radians = rotation_angle(initial + angle, snap)?;
+    let outline = outline.map(|point| rotate_point(point, origin, radians - initial));
+    finite_outline(&outline).then_some(RotationPreview { radians, outline })
+}
+
 impl CropDrag {
     #[must_use]
     pub fn new(origin: Point, bounds: Rect, preset_aspect: Option<f64>, shift_held: bool) -> Self {
@@ -732,6 +865,9 @@ pub enum LayerEdit {
         delta_x: f64,
         delta_y: f64,
     },
+    Rotate {
+        radians: f64,
+    },
     Delete,
     Duplicate {
         new_id: String,
@@ -1119,6 +1255,38 @@ impl Document {
                 }
                 if !locked {
                     self.elements[index].translate_layer(delta_x, delta_y)?;
+                }
+            }
+            LayerEdit::Rotate { radians } => {
+                let radians =
+                    rotation_angle(radians, false).ok_or("Layer rotation must be finite.")?;
+                if !locked {
+                    self.elements[index].selection_bounds()?;
+                    self.elements[index].base_mut().rotation = (radians != 0.).then_some(radians);
+                    let element = &self.elements[index];
+                    let outline = element.selection_outline()?;
+                    let bounds = if let Element::Path(path) = element
+                        && !path.points.is_empty()
+                        && radians != 0.
+                    {
+                        let origin = midpoint(outline[0], outline[2]);
+                        bounds_from_points(
+                            &path
+                                .points
+                                .iter()
+                                .map(|point| rotate_point(*point, origin, radians))
+                                .collect::<Vec<_>>(),
+                            path.style.stroke_width.max(4.)
+                                + annotation_drop_shadow_pad(&path.style),
+                        )
+                    } else if radians == 0. {
+                        element.selection_bounds()?
+                    } else {
+                        bounds_from_points(&outline, 0.)
+                    };
+                    if fully_outside_canvas(bounds, self.width, self.height) {
+                        self.expand_canvas_to_bounds(bounds);
+                    }
                 }
             }
             LayerEdit::Delete => {

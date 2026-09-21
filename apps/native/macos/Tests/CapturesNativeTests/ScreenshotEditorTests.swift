@@ -1688,10 +1688,70 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(moves, 0); XCTAssertEqual(selections.count, 1)
     }
 
+    func testCanvasRotationGripHasPriorityUsesReleaseAndNoOpDoesNotCommit() throws {
+        let overlay = EditorSelectionOverlay(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+        overlay.canvasSize = NSSize(width: 300, height: 200); overlay.selectionEnabled = true
+        let outline = [CGPoint(x: 100, y: 70), CGPoint(x: 160, y: 70),
+                       CGPoint(x: 160, y: 120), CGPoint(x: 100, y: 120)]
+        overlay.selectedOutline = outline; overlay.selectedLayerID = "selected"
+        overlay.rotationEnabled = true
+        let grip = try XCTUnwrap(NativeEditorRotationHandle(outline: outline, radians: 0,
+            displayScale: 1, canvas: overlay.canvasSize))
+        var bodyHits = 0; var rotations: [(String, Double)] = []
+        overlay.hitTestLayer = { _, _ in bodyHits += 1; return "overlapping-front" }
+        overlay.onRotate = { rotations.append(($0, $1)) }
+
+        overlay.begin(at: grip.handle); overlay.end(at: grip.handle)
+        XCTAssertEqual(bodyHits, 0, "the shared grip wins over an overlapping layer body")
+        XCTAssertTrue(rotations.isEmpty, "a plain grip click does not create history")
+        overlay.begin(at: grip.handle)
+        overlay.drag(to: CGPoint(x: grip.handle.x + 24, y: grip.handle.y + 31), snap: true)
+        overlay.end(at: CGPoint(x: grip.handle.x + 31, y: grip.handle.y + 24), snap: false)
+        XCTAssertEqual(rotations.count, 1)
+        XCTAssertEqual(rotations[0].0, "selected")
+        XCTAssertEqual(rotations[0].1, atan2(31.0, 29.0), accuracy: 1e-12)
+        overlay.begin(at: grip.handle)
+        let angle = 40.0 * Double.pi / 180
+        let current = CGPoint(x: 130 + 53 * sin(angle), y: 95 - 53 * cos(angle))
+        overlay.drag(to: current)
+        func flags(_ modifiers: NSEvent.ModifierFlags) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(with: .flagsChanged, location: .zero,
+                modifierFlags: modifiers, timestamp: 0, windowNumber: 0, context: nil,
+                characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 56))
+        }
+        overlay.flagsChanged(with: try flags(.shift))
+        XCTAssertEqual(try XCTUnwrap(overlay.rotationPreview?.radians), Double.pi / 4, accuracy: 1e-12)
+        overlay.flagsChanged(with: try flags([]))
+        XCTAssertEqual(try XCTUnwrap(overlay.rotationPreview?.radians), angle, accuracy: 1e-12)
+        overlay.end(at: current)
+        XCTAssertEqual(rotations[1].1, angle, accuracy: 1e-12)
+    }
+
+    func testCanvasRotationCancellationNeverCommits() throws {
+        let overlay = EditorSelectionOverlay(frame: NSRect(x: 0, y: 0, width: 200, height: 200))
+        overlay.canvasSize = NSSize(width: 200, height: 200); overlay.selectionEnabled = true
+        let outline = [CGPoint(x: 70, y: 70), CGPoint(x: 130, y: 70),
+                       CGPoint(x: 130, y: 120), CGPoint(x: 70, y: 120)]
+        overlay.selectedOutline = outline; overlay.selectedLayerID = "layer"; overlay.rotationEnabled = true
+        let grip = try XCTUnwrap(NativeEditorRotationHandle(outline: outline, radians: 0,
+            displayScale: 1, canvas: overlay.canvasSize))
+        var commits = 0; overlay.onRotate = { _, _ in commits += 1 }
+        for cancel in [{ overlay.cancelGesture() },
+                       { overlay.selectionEnabled = false },
+                       { overlay.setFrameSize(NSSize(width: 201, height: 200)) }] {
+            overlay.selectionEnabled = true; overlay.begin(at: grip.handle)
+            overlay.drag(to: CGPoint(x: grip.handle.x + 20, y: grip.handle.y + 20)); cancel()
+            overlay.end(at: CGPoint(x: grip.handle.x + 30, y: grip.handle.y + 20))
+        }
+        XCTAssertEqual(commits, 0)
+    }
+
     func testSnapshotParsesRotatedSelectionOutlineAndCachesSortedDocument() throws {
         let element = shapeLayer(id: "rotated", x: 10, y: 20)
+        var rotatedElement = element
+        rotatedElement["rotation"] = Double.pi / 3
         let value: [String: Any] = [
-            "artifact_id": "shot", "document": ["height": 100, "elements": [element], "width": 200],
+            "artifact_id": "shot", "document": ["height": 100, "elements": [rotatedElement], "width": 200],
             "selection_outlines": ["rotated": [
                 ["x": 12, "y": 4], ["x": 26, "y": 18], ["x": 12, "y": 32], ["x": -2, "y": 18],
             ]],
@@ -1701,6 +1761,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(parsed.layers[0].selectionOutline,
                        [CGPoint(x: 12, y: 4), CGPoint(x: 26, y: 18),
                         CGPoint(x: 12, y: 32), CGPoint(x: -2, y: 18)])
+        XCTAssertEqual(parsed.layers[0].rotation, Double.pi / 3)
         XCTAssertTrue(parsed.documentJSON.hasPrefix("{\"elements\""), "document JSON uses sorted keys")
         XCTAssertNil(snapshot(id: "old", layers: [element]).layers[0].selectionOutline)
     }
@@ -1832,6 +1893,112 @@ final class ScreenshotEditorTests: XCTestCase {
                 done.fulfill()
             }
             wait(for: [done], timeout: 5); reopened.close(); EditorWorker.flush()
+        }
+    }
+
+    func testRealCanvasRotationPixelsUndoDraftAndFailureFixtures() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let fixture = try makeHistoryFixture()
+            defer { try? FileManager.default.removeItem(at: fixture.root) }
+            let worker = EditorWorker()
+            let opened = expectation(description: "rotation fixture")
+            worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path, artifactID: fixture.id) {
+                result in XCTAssertNotNil(try? result.get()); opened.fulfill()
+            }
+            wait(for: [opened], timeout: 5)
+            func request(_ object: [String: Any], using worker: EditorWorker) throws -> EditorPresentation {
+                let done = expectation(description: "rotation request")
+                var response: Result<EditorPresentation, Error>?
+                worker.request(object) { result in response = result; done.fulfill() }
+                wait(for: [done], timeout: 5)
+                return try XCTUnwrap(response).get()
+            }
+            _ = try request(["operation": "resize_canvas", "width": 640, "height": 360], using: worker)
+            let created = try request(["operation": "create_closed_shape", "shape": "rectangle",
+                "start": ["x": 100, "y": 80], "end": ["x": 220, "y": 140]], using: worker)
+            let id = try XCTUnwrap(created.snapshot.layers.first?.id)
+            _ = try request(["operation": "save_draft", "updated_at_ms": 5000], using: worker)
+            worker.close(); EditorWorker.flush()
+            let live = EditorWorker()
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: live)
+            defer { controller.window.orderOut(nil); live.close(); EditorWorker.flush() }
+            controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+            waitUntil { controller.state.snapshot != nil && !controller.state.busy }
+            try showLayers(in: controller.root); controller.root.layoutSubtreeIfNeeded()
+            let overlay = controller.selectionOverlay
+            let rect = overlay.presentedImageRect, scale = rect.width / 640
+            // Authored 120x60 rectangle, 5px selection padding, 28-view-point grip offset.
+            let pivot = CGPoint(x: rect.minX + 160 * scale, y: rect.minY + 110 * scale)
+            let start = CGPoint(x: pivot.x, y: rect.minY + 75 * scale - 28)
+            let end = CGPoint(x: pivot.x + pivot.y - start.y, y: pivot.y)
+            overlay.begin(at: start); overlay.drag(to: end, snap: true)
+            XCTAssertEqual(try XCTUnwrap(overlay.rotationPreview?.radians), Double.pi / 2, accuracy: 1e-12)
+            XCTAssertFalse(controller.state.snapshot!.unsavedChanges)
+            try render(controller.root, name: "screenshot-editor-rotation-active-\(appearance)")
+            overlay.end(at: end, snap: true)
+            waitUntil { !controller.state.busy && controller.state.snapshot!.unsavedChanges }
+            let rotated = try request(["operation": "snapshot"], using: live)
+            XCTAssertEqual(rotated.snapshot.layers.first?.id, id)
+            XCTAssertEqual(try XCTUnwrap(rotated.snapshot.layers.first?.rotation), Double.pi / 2, accuracy: 1e-12)
+            // A quarter-turn about (160,110) leaves bounds x130..190, y50..170.
+            XCTAssertEqual(rgba(rotated.image, x: 110, y: 110), [247, 247, 245, 255])
+            XCTAssertEqual(rgba(rotated.image, x: 160, y: 60), [255, 59, 92, 255])
+            try render(controller.root, name: "screenshot-editor-rotation-committed-\(appearance)")
+            try button("Undo", in: controller.root).performClick(nil)
+            waitUntil { !controller.state.busy && controller.state.snapshot?.canRedo == true }
+            let undone = try request(["operation": "snapshot"], using: live)
+            XCTAssertEqual(rgba(undone.image, x: 110, y: 110), [255, 59, 92, 255])
+            XCTAssertEqual(rgba(undone.image, x: 160, y: 60), [247, 247, 245, 255])
+            try button("Redo", in: controller.root).performClick(nil)
+            waitUntil { !controller.state.busy && controller.state.snapshot?.canRedo == false }
+            try button("Save draft", in: controller.root).performClick(nil)
+            waitUntil { !controller.state.busy && controller.state.snapshot?.unsavedChanges == false }
+            live.close(); EditorWorker.flush()
+            let reopened = EditorWorker()
+            let restored = expectation(description: "reopen rotated draft")
+            reopened.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path, artifactID: fixture.id) { result in
+                if let value = try? result.get() {
+                    XCTAssertEqual(value.snapshot.layers.first?.id, id)
+                    XCTAssertEqual(self.rgba(value.image, x: 160, y: 60), [255, 59, 92, 255])
+                } else { XCTFail("rotated draft reopen failed") }
+                restored.fulfill()
+            }
+            wait(for: [restored], timeout: 5); reopened.close(); EditorWorker.flush()
+
+            let failureWorker = FakeEditorWorker(snapshot: rotated.snapshot)
+            let failure = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: failureWorker)
+            defer { failure.window.orderOut(nil) }
+            failure.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+            try showOutput(in: failure.root)
+            try button("Preview output", in: failure.root).performClick(nil)
+            let output = try segmented("Output preview image", in: failure.root)
+            try showLayers(in: failure.root); failure.root.layoutSubtreeIfNeeded()
+            let surface = failure.selectionOverlay
+            let image = surface.presentedImageRect, displayScale = image.width / 640
+            let grip = try XCTUnwrap(NativeEditorRotationHandle(outline: try XCTUnwrap(surface.selectedOutline),
+                radians: surface.selectedRotation, displayScale: displayScale, canvas: surface.canvasSize))
+            let press = CGPoint(x: image.minX + grip.handle.x * displayScale, y: image.minY + grip.handle.y * displayScale)
+            let release = CGPoint(x: press.x + 20, y: press.y + 30)
+            surface.begin(at: press); surface.end(at: press)
+            XCTAssertTrue(failureWorker.requests.isEmpty); XCTAssertTrue(output.isEnabled)
+            surface.begin(at: press); surface.drag(to: release)
+            failure.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+            surface.end(at: release); XCTAssertTrue(failureWorker.requests.isEmpty)
+            failureWorker.deferRequests = true
+            surface.begin(at: press); surface.end(at: release)
+            XCTAssertEqual(failureWorker.requests.count, 1); XCTAssertTrue(failure.state.busy)
+            XCTAssertFalse(output.isEnabled); XCTAssertFalse(surface.selectionEnabled)
+            XCTAssertEqual(failureWorker.requests[0]["id"] as? String, id)
+            XCTAssertEqual((failureWorker.requests[0]["edit"] as? [String: Any])?["action"] as? String, "rotate")
+            failureWorker.completePending(with: rotated.snapshot)
+            XCTAssertEqual(surface.selectedLayerID, id)
+            failureWorker.deferRequests = false; failureWorker.failLayerAction = "rotate"
+            failureWorker.failureMessage = "Rotation failed. The previous pixels, selection, undo history and saved draft remain recoverable."
+            surface.begin(at: press); surface.end(at: release)
+            XCTAssertEqual(failure.state.snapshot, rotated.snapshot)
+            XCTAssertFalse(failure.state.busy); XCTAssertEqual(surface.selectedLayerID, id)
+            try render(failure.root, name: "screenshot-editor-rotation-error-minimum-\(appearance)")
         }
     }
 

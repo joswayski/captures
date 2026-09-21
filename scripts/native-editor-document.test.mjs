@@ -11,14 +11,20 @@ import {
   duplicateScreenshotElement,
   elementBounds,
   elementLocalBounds,
+  elementRotation,
+  elementRotationHandleAnchorPoint,
+  elementRotationHandleFitsCanvas,
+  elementRotationHandlePoint,
   elementWorldPoint,
   expandDocumentToFitBounds,
   hitTestElement,
   isFullyOutsideCanvas,
   reorderScreenshotLayers,
   resizeDocumentCanvas,
+  snapShapeRotation,
   transformImageElement,
   translateElement,
+  withElementRotation,
 } from '../apps/desktop/ui/src/lib/screenshotEditor.ts';
 
 const directory = new URL('../crates/captures-app/tests/', import.meta.url);
@@ -343,10 +349,54 @@ function shippingCases() {
     openShapeCreations: openShapeCreationCases(),
     freehandCreations: freehandCreationCases(),
     hitTests: hitTestCases(),
+    rotations: rotationCases(),
     orientations: orientationCases(),
     layers,
     history: historyCases(),
   };
+}
+
+function rotationCases() {
+  const image = { ...document.elements[0], x: 0, y: 0, width: 713, height: 257, visible: true };
+  const elements = [image, ...hitTestCases().filter(value => value.outline).map(value => value.input.elements[0])];
+  const outlines = element => {
+    const bounds = elementLocalBounds(element);
+    return [
+      { x: bounds.x, y: bounds.y }, { x: bounds.x + bounds.width, y: bounds.y },
+      { x: bounds.x + bounds.width, y: bounds.y + bounds.height }, { x: bounds.x, y: bounds.y + bounds.height },
+    ].map(point => elementWorldPoint(element, point));
+  };
+  const angles = [-Math.PI * 7, -Math.PI, Math.PI, Math.PI * 9, -1e-11, 1e-11,
+    -Math.PI / 24, Math.PI / 24, -0.131, -0.1308, 0.1308, 0.131, 0.73]
+    .flatMap(radians => [false, true].map(snap => ({ radians, snap, expected: snapShapeRotation(radians, snap) })));
+  const handles = elements.flatMap(element => [0.5, 1, 2].flatMap(scale => [
+    { width: 713, height: 257 }, { width: 1, height: 1 },
+  ].map(canvas => ({
+    outline: outlines(element), radians: elementRotation(element), scale, canvas,
+    expected: elementRotationHandleFitsCanvas(element, scale, canvas) ? {
+      anchor: elementRotationHandleAnchorPoint(element, scale, canvas),
+      handle: elementRotationHandlePoint(element, scale, canvas), hit_radius: 12.5 / scale,
+    } : null,
+  }))));
+  const gestures = elements.flatMap(element => [false, true].map(snap => {
+    const local = elementLocalBounds(element);
+    const origin = { x: local.x + local.width / 2, y: local.y + local.height / 2 };
+    const start = { x: origin.x - 31, y: origin.y - 77 };
+    const current = { x: origin.x + 53, y: origin.y - 19 };
+    const radians = snapShapeRotation(elementRotation(element)
+      + Math.atan2(current.y - origin.y, current.x - origin.x)
+      - Math.atan2(start.y - origin.y, start.x - origin.x), snap);
+    return { outline: outlines(element), initial: elementRotation(element), start, current, snap,
+      expected: { radians, outline: outlines(withElementRotation(element, radians)) } };
+  }));
+  const edits = elements.flatMap(element => [0, Math.PI / 2, -0.71].map(radians => {
+    const input = { ...document, elements: [element] };
+    let expected = { ...input, elements: [withElementRotation(element, radians)] };
+    const bounds = elementBounds(expected.elements[0]);
+    if (isFullyOutsideCanvas(bounds, expected)) expected = expandDocumentToFitBounds(expected, bounds, 0);
+    return { input, id: element.id, radians, expected };
+  }));
+  return { angles, handles, gestures, edits };
 }
 
 function hitTestCases() {
@@ -797,6 +847,12 @@ function fixtureText(cases) {
     `  "openShapeCreations": ${array(cases.openShapeCreations, '    ')},`,
     `  "freehandCreations": ${array(cases.freehandCreations, '    ')},`,
     `  "hitTests": ${array(cases.hitTests, '    ')},`,
+    '  "rotations": {',
+    `    "angles": ${array(cases.rotations.angles, '      ')},`,
+    `    "handles": ${array(cases.rotations.handles, '      ')},`,
+    `    "gestures": ${array(cases.rotations.gestures, '      ')},`,
+    `    "edits": ${array(cases.rotations.edits, '      ')}`,
+    '  },',
     `  "orientations": ${array(cases.orientations, '    ')},`,
     `  "layers": ${JSON.stringify(cases.layers)},`,
     '  "history": {',

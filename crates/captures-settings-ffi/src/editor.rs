@@ -4,7 +4,7 @@ use super::region::{RegionPixels, response, text};
 use captures_app::{
     editor::{
         Document, ElementBase, ElementStyle, Point, ShapeElement, arrow_fill_polygon,
-        smooth_path_centerline,
+        preview_rotation, rotation_handle, smooth_path_centerline,
     },
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
     editor_session::{EditorSession, ExportOptions, ImportImage, OpenRequest, Request},
@@ -22,6 +22,109 @@ use std::{
 };
 
 pub struct DrawGeometry(Vec<AbiPoint>);
+
+#[repr(C)]
+pub struct RotationHandle {
+    pub anchor: AbiPoint,
+    pub handle: AbiPoint,
+    pub hit_radius: f64,
+}
+
+#[repr(C)]
+pub struct RotationPreview {
+    pub radians: f64,
+    pub outline: [AbiPoint; 4],
+}
+
+/// Shared rotation grip. False leaves output untouched, including when no grip fits.
+/// # Safety
+/// Non-null outline is aligned/readable for four points; output is aligned/writable
+/// for one descriptor. Both are borrowed only for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_rotation_handle_v1(
+    outline: *const AbiPoint,
+    radians: f64,
+    display_scale: f64,
+    canvas: captures_app::selection::Bounds,
+    output: *mut RotationHandle,
+) -> bool {
+    if outline.is_null() || output.is_null() {
+        return false;
+    }
+    // SAFETY: caller provides four readable points for this call.
+    let outline = unsafe { *outline.cast::<[AbiPoint; 4]>() }.map(|point| Point {
+        x: point.x,
+        y: point.y,
+    });
+    let Some(value) = rotation_handle(outline, radians, display_scale, canvas.width, canvas.height)
+    else {
+        return false;
+    };
+    // SAFETY: caller provides writable output, with no retained pointer.
+    unsafe {
+        output.write(RotationHandle {
+            anchor: AbiPoint {
+                x: value.anchor.x,
+                y: value.anchor.y,
+            },
+            handle: AbiPoint {
+                x: value.handle.x,
+                y: value.handle.y,
+            },
+            hit_radius: value.hit_radius,
+        })
+    };
+    true
+}
+
+/// Shared rotation gesture from the original press state, with optional Shift snap.
+/// # Safety
+/// Non-null outline is aligned/readable for four points; output is aligned/writable
+/// for one descriptor. False leaves output untouched; no pointers are retained.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_rotation_preview_v1(
+    outline: *const AbiPoint,
+    initial: f64,
+    start: AbiPoint,
+    current: AbiPoint,
+    snap: bool,
+    output: *mut RotationPreview,
+) -> bool {
+    if outline.is_null() || output.is_null() {
+        return false;
+    }
+    // SAFETY: caller provides four readable points for this call.
+    let outline = unsafe { *outline.cast::<[AbiPoint; 4]>() }.map(|point| Point {
+        x: point.x,
+        y: point.y,
+    });
+    let Some(value) = preview_rotation(
+        outline,
+        initial,
+        Point {
+            x: start.x,
+            y: start.y,
+        },
+        Point {
+            x: current.x,
+            y: current.y,
+        },
+        snap,
+    ) else {
+        return false;
+    };
+    // SAFETY: caller provides writable output, with no retained pointer.
+    unsafe {
+        output.write(RotationPreview {
+            radians: value.radians,
+            outline: value.outline.map(|point| AbiPoint {
+                x: point.x,
+                y: point.y,
+            }),
+        })
+    };
+    true
+}
 
 /// Pick from an immutable published document, without borrowing a worker-owned
 /// editor session. Call once on pointer press, not per frame/movement. Geometry
@@ -507,6 +610,105 @@ mod tests {
         ffi::{CStr, CString},
         mem::MaybeUninit,
     };
+
+    #[test]
+    fn rotation_abi_copies_geometry_and_leaves_failed_outputs_untouched() {
+        let mut outline = [
+            AbiPoint { x: 20., y: 30. },
+            AbiPoint { x: 100., y: 30. },
+            AbiPoint { x: 100., y: 70. },
+            AbiPoint { x: 20., y: 70. },
+        ];
+        let canvas = captures_app::selection::Bounds {
+            width: 200.,
+            height: 150.,
+        };
+        let mut handle = MaybeUninit::<RotationHandle>::uninit();
+        let mut preview = MaybeUninit::<RotationPreview>::uninit();
+        // SAFETY: initialized four-point input, aligned descriptor outputs; only
+        // assume initialized after successful calls. No pointers are retained.
+        unsafe {
+            assert!(captures_editor_rotation_handle_v1(
+                outline.as_ptr(),
+                0.,
+                1.,
+                canvas,
+                handle.as_mut_ptr()
+            ));
+            let mut handle = handle.assume_init();
+            assert_eq!(
+                (
+                    handle.anchor.x,
+                    handle.anchor.y,
+                    handle.handle.x,
+                    handle.handle.y
+                ),
+                (60., 70., 60., 98.)
+            );
+            assert!(captures_editor_rotation_handle_v1(
+                outline.as_ptr(),
+                0.,
+                2.,
+                canvas,
+                &mut handle
+            ));
+            assert_eq!(
+                (handle.handle.x, handle.handle.y, handle.hit_radius),
+                (60., 16., 6.25)
+            );
+            assert!(captures_editor_rotation_preview_v1(
+                outline.as_ptr(),
+                0.,
+                AbiPoint { x: 60., y: 2. },
+                AbiPoint { x: 108., y: 50. },
+                true,
+                preview.as_mut_ptr()
+            ));
+            let mut preview = preview.assume_init();
+            assert!((preview.radians - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+            for (actual, (x, y)) in
+                preview
+                    .outline
+                    .iter()
+                    .zip([(80., 10.), (80., 90.), (40., 90.), (40., 10.)])
+            {
+                assert!((actual.x - x).abs() < 1e-12 && (actual.y - y).abs() < 1e-12);
+            }
+            outline[0].x = f64::NAN;
+            assert!(!captures_editor_rotation_handle_v1(
+                outline.as_ptr(),
+                0.,
+                1.,
+                canvas,
+                &mut handle
+            ));
+            assert_eq!(handle.hit_radius, 6.25);
+            assert!(!captures_editor_rotation_preview_v1(
+                outline.as_ptr(),
+                0.,
+                AbiPoint { x: 0., y: 0. },
+                AbiPoint { x: 0., y: 0. },
+                false,
+                &mut preview
+            ));
+            assert!((preview.outline[0].x - 80.).abs() < 1e-12);
+            assert!(!captures_editor_rotation_handle_v1(
+                ptr::null(),
+                0.,
+                1.,
+                canvas,
+                &mut handle
+            ));
+            assert!(!captures_editor_rotation_preview_v1(
+                outline.as_ptr(),
+                0.,
+                AbiPoint { x: 0., y: 0. },
+                AbiPoint { x: 0., y: 0. },
+                false,
+                ptr::null_mut()
+            ));
+        }
+    }
 
     #[test]
     fn published_document_picking_is_independent_and_reports_errors() {

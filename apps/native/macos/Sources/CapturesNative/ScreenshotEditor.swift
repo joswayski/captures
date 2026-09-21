@@ -233,16 +233,25 @@ final class EditorSelectionOverlay: NSView {
     var canvasSize = NSSize.zero { didSet { cancelGesture(); needsDisplay = true } }
     var selectionEnabled = false { didSet { if !selectionEnabled { cancelGesture() }; isHidden = !selectionEnabled } }
     var selectedOutline: [CGPoint]? { didSet { needsDisplay = true } }
+    var selectedLayerID: String? { didSet { needsDisplay = true } }
+    var selectedRotation = 0.0 { didSet { needsDisplay = true } }
+    var rotationEnabled = false { didSet { if !rotationEnabled { cancelGesture() }; needsDisplay = true } }
     var strokeColor = NSColor.controlAccentColor { didSet { needsDisplay = true } }
     var hitTestLayer: ((CGPoint, Double) throws -> String?)?
     var outlineForLayer: ((String) -> [CGPoint]?)?
     var onSelect: ((String?) -> Void)?
     var onMove: ((String, CGFloat, CGFloat) -> Void)?
+    var onRotate: ((String, Double) -> Void)?
     var onError: ((Error) -> Void)?
     private(set) var startPoint: CGPoint?
     private(set) var currentPoint: CGPoint?
     private var hitLayerID: String?
     private var transientOutline: [CGPoint]?
+    private var rotationStartOutline: [CGPoint]?
+    private var rotationStartRadians = 0.0
+    private(set) var rotationPreview: NativeEditorRotationPreview?
+    private var rotatingLayerID: String?
+    private var snapRotation = false
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -262,19 +271,50 @@ final class EditorSelectionOverlay: NSView {
         return CGPoint(x: (point.x - image.minX) * canvasSize.width / image.width,
                        y: (point.y - image.minY) * canvasSize.height / image.height)
     }
-    func begin(at point: CGPoint) {
+    private func rotationHandle() -> NativeEditorRotationHandle? {
+        guard rotationEnabled, let outline = selectedOutline else { return nil }
+        return NativeEditorRotationHandle(outline: outline, radians: selectedRotation,
+            displayScale: presentedImageRect.width / canvasSize.width, canvas: canvasSize)
+    }
+    func begin(at point: CGPoint, snap: Bool = false) {
         cancelGesture()
         guard selectionEnabled, presentedImageRect.contains(point) else { return }
+        let documentPoint = canvasPoint(for: point)
+        if let geometry = rotationHandle(), let id = selectedLayerID, let outline = selectedOutline,
+           hypot(documentPoint.x - geometry.handle.x, documentPoint.y - geometry.handle.y) <= geometry.hitRadius {
+            rotationStartOutline = outline
+            rotationStartRadians = NativeEditorRotationPreview(outline: outline, radians: selectedRotation,
+                start: documentPoint, current: documentPoint, snap: false)?.radians ?? selectedRotation
+            rotatingLayerID = id; startPoint = point; currentPoint = point; snapRotation = snap
+            rotationPreview = NativeEditorRotationPreview(outline: outline, radians: rotationStartRadians,
+                start: documentPoint, current: documentPoint, snap: snap)
+            needsDisplay = true; return
+        }
         do {
             let scale = presentedImageRect.width / canvasSize.width
-            hitLayerID = try hitTestLayer?(canvasPoint(for: point), 8 / scale)
+            hitLayerID = try hitTestLayer?(documentPoint, 8 / scale)
             transientOutline = hitLayerID.flatMap { outlineForLayer?($0) }
             startPoint = point; currentPoint = point; needsDisplay = true
         } catch { cancelGesture(); onError?(error) }
     }
-    func drag(to point: CGPoint) { guard startPoint != nil else { return }; currentPoint = point; needsDisplay = true }
-    func end(at point: CGPoint) {
+    func drag(to point: CGPoint, snap: Bool? = nil) {
+        guard let startPoint else { return }; currentPoint = point
+        if rotatingLayerID != nil, let outline = rotationStartOutline {
+            if let snap { snapRotation = snap }
+            rotationPreview = NativeEditorRotationPreview(outline: outline, radians: rotationStartRadians,
+                start: canvasPoint(for: startPoint), current: canvasPoint(for: point), snap: snapRotation)
+        }
+        needsDisplay = true
+    }
+    func end(at point: CGPoint, snap: Bool? = nil) {
         guard let start = startPoint else { return }
+        if let id = rotatingLayerID {
+            drag(to: point, snap: snap)
+            let angle = rotationPreview?.radians
+            cancelGesture()
+            if let angle, angle != rotationStartRadians { onRotate?(id, angle) }
+            return
+        }
         let hit = hitLayerID
         let distance = hypot(point.x - start.x, point.y - start.y)
         let scale = presentedImageRect.width / canvasSize.width
@@ -283,24 +323,29 @@ final class EditorSelectionOverlay: NSView {
         else { onSelect?(hit) }
     }
     func cancelGesture() {
-        startPoint = nil; currentPoint = nil; hitLayerID = nil; transientOutline = nil; needsDisplay = true
+        startPoint = nil; currentPoint = nil; hitLayerID = nil; transientOutline = nil
+        rotationStartOutline = nil; rotatingLayerID = nil; rotationPreview = nil; needsDisplay = true
     }
-    override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(self); begin(at: convert(event.locationInWindow, from: nil)) }
-    override func mouseDragged(with event: NSEvent) { drag(to: convert(event.locationInWindow, from: nil)) }
-    override func mouseUp(with event: NSEvent) { end(at: convert(event.locationInWindow, from: nil)) }
+    override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(self); begin(at: convert(event.locationInWindow, from: nil), snap: event.modifierFlags.contains(.shift)) }
+    override func mouseDragged(with event: NSEvent) { drag(to: convert(event.locationInWindow, from: nil), snap: event.modifierFlags.contains(.shift)) }
+    override func mouseUp(with event: NSEvent) { end(at: convert(event.locationInWindow, from: nil), snap: event.modifierFlags.contains(.shift)) }
     override func keyDown(with event: NSEvent) { event.keyCode == 53 ? cancelGesture() : super.keyDown(with: event) }
+    override func flagsChanged(with event: NSEvent) {
+        if rotatingLayerID != nil, let currentPoint { drag(to: currentPoint, snap: event.modifierFlags.contains(.shift)) }
+        else { super.flagsChanged(with: event) }
+    }
     override func resignFirstResponder() -> Bool { cancelGesture(); return super.resignFirstResponder() }
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard canvasSize.width > 0, canvasSize.height > 0,
-              let outline = startPoint == nil ? selectedOutline : transientOutline,
+              let outline = rotationPreview?.outline ?? (startPoint == nil ? selectedOutline : transientOutline),
               outline.count == 4 else { return }
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
         NSBezierPath(rect: bounds).addClip()
         let image = presentedImageRect, scale = image.width / canvasSize.width
         let delta: CGPoint
-        if let startPoint, let currentPoint, hypot(currentPoint.x-startPoint.x, currentPoint.y-startPoint.y) >= 3 {
+        if rotatingLayerID == nil, let startPoint, let currentPoint, hypot(currentPoint.x-startPoint.x, currentPoint.y-startPoint.y) >= 3 {
             delta = CGPoint(x: currentPoint.x-startPoint.x, y: currentPoint.y-startPoint.y)
         } else { delta = .zero }
         let path = NSBezierPath()
@@ -310,6 +355,16 @@ final class EditorSelectionOverlay: NSView {
             index == 0 ? path.move(to: mapped) : path.line(to: mapped)
         }
         path.close(); strokeColor.setStroke(); path.lineWidth = 2; path.stroke()
+        if rotationEnabled, startPoint == nil || rotatingLayerID != nil,
+           let geometry = NativeEditorRotationHandle(outline: outline,
+               radians: rotationPreview?.radians ?? selectedRotation, displayScale: scale, canvas: canvasSize) {
+            let map: (CGPoint) -> CGPoint = { CGPoint(x: image.minX + $0.x * scale, y: image.minY + $0.y * scale) }
+            let connector = NSBezierPath(); connector.move(to: map(geometry.anchor)); connector.line(to: map(geometry.handle))
+            connector.lineWidth = 2; connector.stroke()
+            let center = map(geometry.handle), radius: CGFloat = 5
+            strokeColor.setFill(); NSBezierPath(ovalIn: NSRect(x: center.x-radius, y: center.y-radius,
+                                                               width: radius*2, height: radius*2)).fill()
+        }
     }
 }
 
@@ -576,6 +631,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         selectionOverlay.onSelect = { [weak self] id in self?.selectCanvasLayer(id) }
         selectionOverlay.onMove = { [weak self] id, dx, dy in self?.moveCanvasLayer(id, dx: dx, dy: dy) }
+        selectionOverlay.onRotate = { [weak self] id, radians in self?.rotateCanvasLayer(id, radians: radians) }
         selectionOverlay.onError = { [weak self] error in self?.showError("Layer hit testing failed: \(error.localizedDescription)") }
         previewPanel.addSubview(selectionOverlay)
         dimensions.frame = NSRect(x: 24, y: 654, width: 640, height: 20)
@@ -1165,6 +1221,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 message: "Moving layer…", preferredSelection: id)
     }
 
+    private func rotateCanvasLayer(_ id: String, radians: Double) {
+        guard !state.busy, let layer = state.snapshot?.layers.first(where: { $0.id == id }),
+              layer.visible, !layer.locked else { return }
+        command(["operation": "layer", "id": id,
+                 "edit": ["action": "rotate", "radians": radians]],
+                message: "Rotating layer…", preferredSelection: id)
+    }
+
     private func toggleVisibility() {
         guard let layer = selectedLayer else { return }
         layerCommand(layer, edit: ["action": "visibility", "visible": !layer.visible],
@@ -1503,6 +1567,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func publishSelectedLayerFields() {
         annotationControls?.setStyle(selectedLayer?.annotation)
         selectionOverlay.selectedOutline = selectedLayer?.selectionOutline
+        selectionOverlay.selectedLayerID = selectedLayer?.id
+        selectionOverlay.selectedRotation = selectedLayer?.rotation ?? 0
+        selectionOverlay.rotationEnabled = selectedLayer?.visible == true && selectedLayer?.locked == false
         guard let layer = selectedLayer else {
             [layerName, layerOpacity, layerX, layerY].forEach { $0.stringValue = "" }
             updateControls(); return

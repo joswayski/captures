@@ -192,6 +192,28 @@ char *captures_editor_request_v1(CapturesEditorSession *session, const char *req
  * document-space corners; unsupported layers omit their outline. */
 char *captures_editor_hit_test_document_v1(const char *document_json,
     double x, double y, double tolerance);
+/* Allocation-free rotation chrome/preview. Outline is four original published
+ * world-space corners in local TL,TR,BR,BL order; angles are radians. All pointer
+ * inputs are aligned/readable for four points, outputs writable for one struct.
+ * No pointers retained, JSON, sessions, rendering or I/O. False leaves output
+ * unchanged for null/nonfinite/invalid input or a grip that cannot fit the canvas.
+ * Hosts hide handles on hidden/locked layers. Hit radius is in document pixels.
+ * Keep original outline, angle and press point when modifiers change. Shift
+ * snaps to the shipping default 15-degree stops, including negative half-ties. */
+typedef struct {
+    CapturesSelectionPoint anchor, handle;
+    double hit_radius;
+} CapturesEditorRotationHandle;
+typedef struct {
+    double radians;
+    CapturesSelectionPoint outline[4];
+} CapturesEditorRotationPreview;
+bool captures_editor_rotation_handle_v1(const CapturesSelectionPoint *outline,
+    double radians, double display_scale, CapturesSelectionBounds canvas,
+    CapturesEditorRotationHandle *output);
+bool captures_editor_rotation_preview_v1(const CapturesSelectionPoint *outline,
+    double initial, CapturesSelectionPoint start, CapturesSelectionPoint current,
+    bool snap, CapturesEditorRotationPreview *output);
 /* Stateless shared preview geometry; no session access or per-event JSON.
  * kind 0: arrow outline, exactly two signed document-space endpoints.
  * kind 1: smoothed Pen centerline, one or more accepted samples; one is a dot,

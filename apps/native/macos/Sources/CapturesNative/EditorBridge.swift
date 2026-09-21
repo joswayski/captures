@@ -23,6 +23,49 @@ struct NativeEditorDrawGeometry {
     }
 }
 
+struct NativeEditorRotationHandle {
+    let anchor: CGPoint
+    let handle: CGPoint
+    let hitRadius: Double
+
+    init?(outline: [CGPoint], radians: Double, displayScale: Double, canvas: CGSize) {
+        guard outline.count == 4 else { return nil }
+        let input = outline.map { CapturesSelectionPoint(x: $0.x, y: $0.y) }
+        var output = CapturesEditorRotationHandle()
+        let succeeded = input.withUnsafeBufferPointer {
+            captures_editor_rotation_handle_v1($0.baseAddress, radians, displayScale,
+                CapturesSelectionBounds(width: canvas.width, height: canvas.height), &output)
+        }
+        guard succeeded else { return nil }
+        anchor = CGPoint(x: output.anchor.x, y: output.anchor.y)
+        handle = CGPoint(x: output.handle.x, y: output.handle.y)
+        hitRadius = output.hit_radius
+    }
+}
+
+struct NativeEditorRotationPreview {
+    let radians: Double
+    let outline: [CGPoint]
+
+    init?(outline: [CGPoint], radians: Double, start: CGPoint, current: CGPoint, snap: Bool) {
+        guard outline.count == 4 else { return nil }
+        let input = outline.map { CapturesSelectionPoint(x: $0.x, y: $0.y) }
+        var output = CapturesEditorRotationPreview()
+        let succeeded = input.withUnsafeBufferPointer {
+            captures_editor_rotation_preview_v1($0.baseAddress, radians,
+                CapturesSelectionPoint(x: start.x, y: start.y),
+                CapturesSelectionPoint(x: current.x, y: current.y), snap, &output)
+        }
+        guard succeeded else { return nil }
+        self.radians = output.radians
+        self.outline = withUnsafePointer(to: &output.outline) {
+            $0.withMemoryRebound(to: CapturesSelectionPoint.self, capacity: 4) {
+                Array(UnsafeBufferPointer(start: $0, count: 4)).map { CGPoint(x: $0.x, y: $0.y) }
+            }
+        }
+    }
+}
+
 /// Display values resolved by Rust, never a replacement for authored document data.
 struct NativeAnnotationStyle: Equatable {
     let closed: Bool
@@ -90,6 +133,7 @@ struct NativeEditorLayer: Equatable {
     let opacity: Double
     let x: Double
     let y: Double
+    let rotation: Double
     let selectionOutline: [CGPoint]?
     let annotation: NativeAnnotationStyle?
 
@@ -106,6 +150,7 @@ struct NativeEditorLayer: Equatable {
         self.id = id; self.kind = kind
         self.visible = visible; self.locked = locked
         self.opacity = opacity.doubleValue; self.x = x.doubleValue; self.y = y.doubleValue
+        rotation = (value["rotation"] as? NSNumber)?.doubleValue ?? 0
         self.annotation = annotation.flatMap(NativeAnnotationStyle.init)
         if annotation != nil && self.annotation == nil { return nil }
         if let selectionOutline {

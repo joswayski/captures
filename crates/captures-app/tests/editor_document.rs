@@ -1,7 +1,7 @@
 use captures_app::editor::{
     ClosedShapeCreate, CropDrag, Document, DocumentHistory, Element, FreehandPathCreate,
-    ImageTransform, LayerEdit, OpenShapeCreate, Point, Rect, bounded_crop_rect,
-    smooth_path_centerline,
+    ImageTransform, LayerEdit, OpenShapeCreate, Point, Rect, bounded_crop_rect, preview_rotation,
+    rotation_angle, rotation_handle, smooth_path_centerline,
 };
 use captures_history::editor_draft::{self, SaveRequest};
 use serde::Deserialize;
@@ -21,6 +21,7 @@ struct Fixture {
     open_shape_creations: Vec<OpenShapeCreationCase>,
     freehand_creations: Vec<FreehandCreationCase>,
     hit_tests: Vec<HitTestCase>,
+    rotations: Value,
     orientations: Vec<OrientationCase>,
     layers: Value,
     history: HistoryCase,
@@ -192,6 +193,118 @@ struct HistoryCurrent {
 
 fn fixture() -> Fixture {
     serde_json::from_str(include_str!("editor-document-golden.json")).unwrap()
+}
+
+#[test]
+fn rotation_geometry_and_edits_match_typescript() {
+    fn equivalent(actual: Value, expected: &Value) {
+        match (actual, expected) {
+            (Value::Number(actual), Value::Number(expected)) => {
+                assert!(
+                    (actual.as_f64().unwrap() - expected.as_f64().unwrap()).abs() < 1e-9,
+                    "{actual} != {expected}"
+                );
+            }
+            (Value::Array(actual), Value::Array(expected)) => {
+                assert_eq!(actual.len(), expected.len());
+                for (actual, expected) in actual.into_iter().zip(expected) {
+                    equivalent(actual, expected);
+                }
+            }
+            (Value::Object(actual), Value::Object(expected)) => {
+                assert_eq!(actual.len(), expected.len(), "{actual:?} != {expected:?}");
+                for (key, expected) in expected {
+                    equivalent(actual[key].clone(), expected);
+                }
+            }
+            (actual, expected) => assert_eq!(&actual, expected),
+        }
+    }
+    let cases = fixture().rotations;
+    for case in cases["angles"].as_array().unwrap() {
+        equivalent(
+            json!(
+                rotation_angle(
+                    case["radians"].as_f64().unwrap(),
+                    case["snap"].as_bool().unwrap()
+                )
+                .unwrap()
+            ),
+            &case["expected"],
+        );
+    }
+    for case in cases["handles"].as_array().unwrap() {
+        let handle = rotation_handle(
+            serde_json::from_value(case["outline"].clone()).unwrap(),
+            case["radians"].as_f64().unwrap(),
+            case["scale"].as_f64().unwrap(),
+            case["canvas"]["width"].as_f64().unwrap(),
+            case["canvas"]["height"].as_f64().unwrap(),
+        );
+        equivalent(serde_json::to_value(handle).unwrap(), &case["expected"]);
+    }
+    for case in cases["gestures"].as_array().unwrap() {
+        let preview = preview_rotation(
+            serde_json::from_value(case["outline"].clone()).unwrap(),
+            case["initial"].as_f64().unwrap(),
+            serde_json::from_value(case["start"].clone()).unwrap(),
+            serde_json::from_value(case["current"].clone()).unwrap(),
+            case["snap"].as_bool().unwrap(),
+        )
+        .unwrap();
+        equivalent(serde_json::to_value(preview).unwrap(), &case["expected"]);
+    }
+    for case in cases["edits"].as_array().unwrap() {
+        let mut document: Document = serde_json::from_value(case["input"].clone()).unwrap();
+        document
+            .edit_layer(
+                case["id"].as_str().unwrap(),
+                LayerEdit::Rotate {
+                    radians: case["radians"].as_f64().unwrap(),
+                },
+            )
+            .unwrap();
+        equivalent(serde_json::to_value(document).unwrap(), &case["expected"]);
+    }
+}
+
+#[test]
+fn rotation_invalid_input_and_locked_noop_preserve_history() {
+    let mut document = fixture().hit_tests.remove(0).input;
+    let outline = document.elements[0].selection_outline().unwrap();
+    let start = Point { x: 10., y: 20. };
+    assert!(rotation_angle(f64::INFINITY, true).is_none());
+    assert!(rotation_handle(outline, 0., 0., 100., 100.).is_none());
+    assert!(
+        preview_rotation(
+            outline,
+            0.,
+            start,
+            Point {
+                x: f64::NAN,
+                y: 20.
+            },
+            false
+        )
+        .is_none()
+    );
+    let before = document.clone();
+    let id = document.elements[0].base().id.clone();
+    assert!(
+        document
+            .edit_layer(&id, LayerEdit::Rotate { radians: f64::NAN })
+            .is_err()
+    );
+    assert_eq!(document, before);
+    document
+        .edit_layer(&id, LayerEdit::Lock { locked: true })
+        .unwrap();
+    let mut history = DocumentHistory::new(document.clone());
+    document
+        .edit_layer(&id, LayerEdit::Rotate { radians: 0.7 })
+        .unwrap();
+    assert!(!history.commit(document));
+    assert_eq!(history.undo_len(), 0);
 }
 
 fn assert_json_equivalent(actual: Value, expected: Value) {
