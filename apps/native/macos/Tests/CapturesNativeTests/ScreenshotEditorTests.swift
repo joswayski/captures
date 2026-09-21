@@ -3502,7 +3502,7 @@ final class ScreenshotEditorTests: XCTestCase {
         try showDraw(in: controller.root)
         let tool = try popup("Drawing tool", in: controller.root)
         XCTAssertEqual(tool.itemTitles, ["Rectangle", "Ellipse", "Line", "Arrow", "Pen", "Wand",
-                                         "Erase", "Restore", "Text"])
+                                         "Erase", "Restore", "Text", "Triangle", "Diamond", "Star"])
         tool.selectItem(at: 6); _ = tool.sendAction(tool.action, to: tool.target)
         XCTAssertEqual(try field("Brush diameter", in: controller.root).stringValue, "28")
         XCTAssertEqual(try field("Brush softness", in: controller.root).stringValue, "18")
@@ -3533,7 +3533,7 @@ final class ScreenshotEditorTests: XCTestCase {
             try showDraw(in: controller.root)
             let tool = try popup("Drawing tool", in: controller.root)
             XCTAssertEqual(tool.itemTitles, ["Rectangle", "Ellipse", "Line", "Arrow", "Pen", "Wand",
-                                             "Erase", "Restore", "Text"])
+                                             "Erase", "Restore", "Text", "Triangle", "Diamond", "Star"])
             for (index, name) in [(2, "line"), (3, "arrow"), (4, "pen")] {
                 tool.selectItem(at: index); _ = tool.sendAction(tool.action, to: tool.target)
                 controller.drawOverlay.begin(at: NSPoint(x: 100, y: 220))
