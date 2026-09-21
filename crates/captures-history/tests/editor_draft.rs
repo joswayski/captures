@@ -359,6 +359,7 @@ fn fonts(id: &str, bytes: &[u8]) -> FontAssets {
     FontAssets {
         families: BTreeMap::from([("sans".into(), "Embedded Family".into())]),
         files: BTreeMap::from([(id.into(), Arc::from(bytes))]),
+        notices: String::new(),
     }
 }
 
@@ -453,6 +454,28 @@ fn failed_manifest_publication_retains_previous_fonts_then_success_prunes() {
 }
 
 #[test]
+fn font_notices_round_trip_and_reject_oversize_before_mutation() {
+    let root = tempdir().unwrap();
+    let mut input = fonts("licensed", b"font");
+    input.notices = "Copyright\nLicense: é\n".into();
+    editor_draft::save_with_fonts(root.path(), request(vec![]), Some(&input)).unwrap();
+    assert_eq!(
+        editor_draft::load(root.path(), "capture-1", url)
+            .unwrap()
+            .unwrap()
+            .fonts,
+        Some(input.clone())
+    );
+    input.notices = "x".repeat(64 * 1024);
+    editor_draft::save_with_fonts(root.path(), request(vec![]), Some(&input)).unwrap();
+    let manifest = root.path().join("capture-1/manifest.json");
+    let before = fs::read(&manifest).unwrap();
+    input.notices.push('x');
+    assert!(editor_draft::save_with_fonts(root.path(), request(vec![]), Some(&input)).is_err());
+    assert_eq!(fs::read(&manifest).unwrap(), before);
+}
+
+#[test]
 fn font_validation_precedes_mutation_and_shares_the_image_byte_budget() {
     let root = tempdir().unwrap();
     editor_draft::save(root.path(), request(vec![asset("keep", Some(b"old"))])).unwrap();
@@ -490,6 +513,17 @@ fn font_validation_precedes_mutation_and_shares_the_image_byte_budget() {
     editor_draft::save_with_fonts(root.path(), request(vec![asset("keep", None)]), Some(&font))
         .unwrap();
     let before = fs::read(&manifest).unwrap();
+    let mut licensed = font.clone();
+    licensed.notices = "x".into();
+    assert!(
+        editor_draft::save_with_fonts(
+            root.path(),
+            request(vec![asset("keep", None)]),
+            Some(&licensed)
+        )
+        .is_err()
+    );
+    assert_eq!(fs::read(&manifest).unwrap(), before);
     retained.set_len(80 * 1024 * 1024 - 2).unwrap();
     assert!(
         editor_draft::save_with_fonts(root.path(), request(vec![asset("keep", None)]), Some(&font))

@@ -271,9 +271,11 @@ text selection, movement and resizing follow the shipping editor's interaction r
 text outlines and shadows are still unsupported. Editor workers can own explicit
 fonts and preserve their exact bytes in local draft sidecars, so text edits, undo,
 export and reopening use the same fonts. Typed commands create plain text and edit
-content, type, alignment, color and plates transactionally; native Text controls,
-style presets and platform font acquisition are not connected yet. No fonts are
-discovered or downloaded automatically.
+content, type, alignment, color and plates transactionally. Both native hosts now
+connect a basic **Draw → Text** tool with staged Apply/Cancel controls. New text uses
+bundled Liberation Sans (OFL 1.1); exact font bytes and license notices stay with the
+draft. This is not Tauri system-font equivalence or universal Unicode coverage:
+missing glyphs remain errors, and fonts are never discovered or downloaded automatically.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
 resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
 pixel frames for native hosts. Typed rectangle/ellipse, straight-line/arrow and
@@ -382,7 +384,11 @@ diameter and softness; Restore paints from the retained original image. The brus
 outline shows size and path while dragging; pixels apply on release in one undo
 step. Escape, focus loss or changing tools cancels an unfinished stroke. Live pixel
 painting and the shipping brush cursor design remain parity work.
-Other drawing tools, text, overwrite-original, and recording editing remain
+Text controls support multiline content, size, bold/italic, alignment, color and
+square/rounded background plates. Apply changes the document in one undo step;
+Cancel restores accepted values. Font-family selection, text presets/outlines/shadows,
+inline canvas typing and physical input/IME/accessibility acceptance remain open.
+Other drawing tools, overwrite-original, and recording editing remain
 unconnected. Shared editor support
 is prerequisite work, not native editor acceptance. OS shortcut takeover, login items,
 single-instance relaunch and updates

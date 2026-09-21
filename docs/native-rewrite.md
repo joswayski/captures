@@ -218,13 +218,23 @@ edits match shipping's hidden/locked-layer behavior and validate those layers to
 Missing families/glyphs and invalid requests preserve frames, redo and saved drafts;
 successful changes use the existing render-before-publish transaction. Font-face
 matching retains the existing shaper's closest supplied face behavior; it does not
-acquire missing faces. These commands do not implement native typing/composition,
-presets, host font acquisition or host selection/output integration for Text.
+acquire missing faces. Both hosts now connect click-to-place Text, fresh-ID selection,
+and staged multiline content, size, bold/italic, alignment, color and plate controls.
+Apply uses one worker transaction; Cancel restores accepted values. Failed Apply and
+unrelated responses preserve staged input; pending text must be applied/cancelled
+before closing. Property-only changes do not resend unchanged typography.
+This is sidebar typing, not shipping inline canvas composition or IME acceptance.
 Editor sessions now accept explicit trusted fonts and own the shaper on their
 serialized worker. Commit/crop/import/undo/redo and output use the same font-backed
 frame; failed text renders preserve accepted pixels and history. Drafts store family
 mappings plus immutable font sidecars, not raw bytes in JSON, within the existing
-80 MiB image-plus-font save budget. Reopening prefers the saved font set over host
+80 MiB image-plus-font save budget (including bounded full license notices in the
+manifest). New native sessions use four unmodified Liberation Sans 2.1.5 static
+faces (1,649,980 bytes, shared across workers), with complete OFL 1.1 notices in
+native resources, `--font-license` output and saved drafts. No OS fonts are copied
+and no network fallback occurs. This Latin/Greek/Cyrillic-oriented default is not
+universal Unicode or Tauri system-font equivalence; missing glyphs are errors.
+Reopening prefers the saved font set over host
 defaults; missing/corrupt fonts return errors without silently substituting or
 deleting the draft. Font cleanup follows successful manifest publication; the
 existing image save order is still per-file atomic, not a whole-draft transaction.
@@ -236,9 +246,9 @@ save/reopen it and verify clipboard ink/plate pixels (eight checks per appearanc
 transformed and minimum-size captures were inspected. These synthetic-font
 fixtures do not provide Text input controls or establish macOS, Windows, Wayland
 or physical Text-tool presentation/input acceptance.
-Hosts still supply no fonts for new drafts and have no native Text tool. Trusted
-platform acquisition/fallback/licensing policy, outlines/shadows, presets, both host
-Text controls and physical input/IME/accessibility remain open.
+The basic Text tool is implemented in AppKit and wgpu; host verification is recorded
+per slice, not inferred from shared tests. Broader font families and OS acquisition,
+outlines/shadows, presets, inline input and physical input/IME/accessibility remain open.
 No host text parity gate is closed.
 Next implementation boundary: text and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.

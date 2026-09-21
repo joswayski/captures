@@ -52,12 +52,14 @@ pub struct SaveRequest {
 pub struct FontAssets {
     pub families: BTreeMap<String, String>,
     pub files: BTreeMap<String, Arc<[u8]>>,
+    /// Full copyright/license notices retained with redistributed font bytes.
+    pub notices: String,
 }
 
 impl FontAssets {
     pub fn validate(&self) -> Result<(), Error> {
         font_manifest(self).validate()?;
-        let mut total = 0usize;
+        let mut total = self.notices.len();
         for bytes in self.files.values() {
             total = total.saturating_add(bytes.len());
             if bytes.is_empty() || total > MAX_TOTAL_BYTES {
@@ -72,11 +74,14 @@ impl FontAssets {
 struct FontManifest {
     families: BTreeMap<String, String>,
     assets: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    notices: String,
 }
 
 impl FontManifest {
     fn validate(&self) -> Result<(), Error> {
         if self.assets.is_empty()
+            || self.notices.len() > 64 * 1024
             || self.assets.len() > MAX_ASSETS
             || self.families.is_empty()
             || self.families.len() > MAX_ASSETS
@@ -101,6 +106,7 @@ fn font_manifest(fonts: &FontAssets) -> FontManifest {
     FontManifest {
         families: fonts.families.clone(),
         assets: fonts.files.keys().cloned().collect(),
+        notices: fonts.notices.clone(),
     }
 }
 
@@ -148,6 +154,7 @@ pub fn save_with_fonts(
     let mut total_bytes = 0usize;
     if let Some(fonts) = fonts {
         fonts.validate()?;
+        total_bytes += fonts.notices.len();
         for (id, bytes) in &fonts.files {
             total_bytes += bytes.len();
             let path = fonts_dir.join(format!("{id}.font"));
@@ -270,7 +277,7 @@ pub fn load(
         .fonts
         .map(|fonts| {
             fonts.validate()?;
-            let mut remaining = MAX_TOTAL_BYTES;
+            let mut remaining = MAX_TOTAL_BYTES - fonts.notices.len();
             let mut files = BTreeMap::new();
             for id in fonts.assets {
                 let bytes = read_font(&root.join(FONTS_DIR).join(format!("{id}.font")), remaining)?;
@@ -280,6 +287,7 @@ pub fn load(
             Ok::<_, Error>(FontAssets {
                 families: fonts.families,
                 files,
+                notices: fonts.notices,
             })
         })
         .transpose()?;

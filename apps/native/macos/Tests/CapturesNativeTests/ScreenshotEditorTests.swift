@@ -2738,6 +2738,95 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(NSEvent.isMouseCoalescingEnabled, coalescing)
     }
 
+    func testTextClickCreatesAtCanvasPointAndSelectsFreshID() throws {
+        _ = NSApplication.shared
+        let old = textLayer(id: "existing", text: "old")
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [old]))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        worker.response = { request in
+            guard request["operation"] as? String == "create_text" else { return nil }
+            return self.snapshot(id: "shot", unsaved: true,
+                                 layers: [old, self.textLayer(id: "fresh-text", text: "")])
+        }
+        try showOutput(in: controller.root); try button("Preview output", in: controller.root).performClick(nil)
+        try showDraw(in: controller.root)
+        let tool = try popup("Drawing tool", in: controller.root)
+        tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+        let image = controller.presentedImageRect
+        let click = NSPoint(x: image.minX + image.width * 0.25, y: image.minY + image.height * 0.75)
+        controller.drawOverlay.begin(at: click); controller.drawOverlay.end(at: click)
+        let request = try XCTUnwrap(worker.requests.last)
+        XCTAssertEqual(request["operation"] as? String, "create_text")
+        let point = try XCTUnwrap(request["point"] as? [String: CGFloat])
+        XCTAssertEqual(try XCTUnwrap(point["x"]), 160, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(point["y"]), 270, accuracy: 0.001)
+        XCTAssertEqual(request["text"] as? String, "")
+        XCTAssertEqual(controller.state.snapshot?.layers.first?.id, "fresh-text")
+        XCTAssertFalse(try segmented("Output preview image", in: controller.root).isEnabled)
+        XCTAssertEqual(try textView("Text content", in: controller.root).string, "")
+    }
+
+    func testTextApplyCancelFailureAndUnsupportedFamilyRetention() throws {
+        _ = NSApplication.shared
+        var original = textLayer(id: "copy", text: "accepted", family: "draft-custom")
+        original["locked"] = true
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [original]))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let family = try popup("Text font", in: controller.root)
+        XCTAssertEqual(family.titleOfSelectedItem, "Saved font: draft-custom")
+        XCTAssertFalse(family.isEnabled)
+        let editor = try textView("Text content", in: controller.root)
+        XCTAssertTrue(editor.isEditable, "locking prevents movement, not property edits")
+        editor.string = "pending\nsecond line"
+        XCTAssertFalse(controller.windowShouldClose(controller.window))
+        XCTAssertFalse(controller.prepareForTermination())
+        XCTAssertTrue(worker.requests.isEmpty)
+        worker.failOperation = "edit_text"; worker.failureMessage = "missing glyph"
+        try button("Apply", in: controller.root).performClick(nil)
+        XCTAssertEqual(editor.string, "pending\nsecond line", "failed Apply retains staged multiline input")
+        XCTAssertEqual(controller.state.snapshot?.layers.first?.textStyle?.text, "accepted")
+        let patch = try XCTUnwrap(worker.requests.last?["patch"] as? [String: Any])
+        XCTAssertEqual(Set(patch.keys), ["text"], "unchanged typography must not refit or replace the saved font")
+        try button("Cancel", in: controller.root).performClick(nil)
+        XCTAssertEqual(editor.string, "accepted"); XCTAssertEqual(worker.requests.count, 1)
+
+        editor.string = "applied"
+        worker.failOperation = nil
+        try button("Save draft", in: controller.root).performClick(nil)
+        XCTAssertEqual(editor.string, "applied", "saving accepted pixels must not erase pending typing")
+        worker.response = { request in
+            guard request["operation"] as? String == "edit_text" else { return nil }
+            return self.snapshot(id: "shot", unsaved: true,
+                                 layers: [self.textLayer(id: "copy", text: "applied", family: "draft-custom")])
+        }
+        try button("Apply", in: controller.root).performClick(nil)
+        XCTAssertEqual(controller.state.snapshot?.layers.first?.id, "copy")
+        XCTAssertEqual(controller.state.snapshot?.layers.first?.textStyle?.text, "applied")
+    }
+
+    func testTextControlsRenderedAtNormalAndMinimumSizes() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true,
+                layers: [textLayer(id: "copy", text: "First line\nSecond line", family: "sans")]))
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showDraw(in: controller.root)
+            controller.window.setContentSize(NSSize(width: 1200, height: 820))
+            try render(controller.root, name: "screenshot-editor-text-normal-\(appearance)")
+            controller.window.setContentSize(NSSize(width: 1000, height: 700))
+            let editor = try textView("Text content", in: controller.root)
+            editor.enclosingScrollView?.superview?.scrollToVisible(editor.enclosingScrollView!.frame)
+            try render(controller.root, name: "screenshot-editor-text-minimum-\(appearance)")
+        }
+    }
+
     func testWandUsesViewportMappingAndRejectsDragAndOffCanvasClicks() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
@@ -2830,7 +2919,7 @@ final class ScreenshotEditorTests: XCTestCase {
         try showDraw(in: controller.root)
         let tool = try popup("Drawing tool", in: controller.root)
         XCTAssertEqual(tool.itemTitles, ["Rectangle", "Ellipse", "Line", "Arrow", "Pen", "Wand",
-                                         "Erase", "Restore"])
+                                         "Erase", "Restore", "Text"])
         tool.selectItem(at: 6); _ = tool.sendAction(tool.action, to: tool.target)
         XCTAssertEqual(try field("Brush diameter", in: controller.root).stringValue, "28")
         XCTAssertEqual(try field("Brush softness", in: controller.root).stringValue, "18")
@@ -2861,7 +2950,7 @@ final class ScreenshotEditorTests: XCTestCase {
             try showDraw(in: controller.root)
             let tool = try popup("Drawing tool", in: controller.root)
             XCTAssertEqual(tool.itemTitles, ["Rectangle", "Ellipse", "Line", "Arrow", "Pen", "Wand",
-                                             "Erase", "Restore"])
+                                             "Erase", "Restore", "Text"])
             for (index, name) in [(2, "line"), (3, "arrow"), (4, "pen")] {
                 tool.selectItem(at: index); _ = tool.sendAction(tool.action, to: tool.target)
                 controller.drawOverlay.begin(at: NSPoint(x: 100, y: 220))
@@ -3048,6 +3137,14 @@ final class ScreenshotEditorTests: XCTestCase {
          "visible": true, "locked": false, "opacity": 100.0]
     }
 
+    private func textLayer(id: String, text: String, family: String = "sans") -> [String: Any] {
+        ["kind": "text", "id": id, "x": 20.0, "y": 24.0,
+         "visible": true, "locked": false, "opacity": 100.0,
+         "text": text, "fontSize": 32.0, "width": 256.0, "fontFamily": family,
+         "bold": false, "italic": false, "align": "left", "color": "#111111",
+         "background": NSNull(), "outlined": false, "roundedBackground": false]
+    }
+
     private func artifact(id: String, mode: String = "region") -> CaptureArtifact {
         CaptureArtifact(["entry": [
             "id": id, "kind": "screenshot", "width": 640, "height": 360,
@@ -3062,6 +3159,11 @@ final class ScreenshotEditorTests: XCTestCase {
 
     private func field(_ label: String, in view: NSView) throws -> NSTextField {
         try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSTextField }
+            .first { $0.accessibilityLabel() == label })
+    }
+
+    private func textView(_ label: String, in view: NSView) throws -> NSTextView {
+        try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSTextView }
             .first { $0.accessibilityLabel() == label })
     }
 

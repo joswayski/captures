@@ -581,7 +581,7 @@ pub unsafe extern "C" fn captures_editor_open_v1(
         // SAFETY: caller retains readable input throughout this call.
         let request = serde_json::from_str::<OpenRequest>(unsafe { text(request_json) }?)
             .map_err(|error| error.to_string())?;
-        EditorSession::open(request)
+        EditorSession::open_with_fonts(request, Some(captures_app::editor_fonts::bundled()))
     }))
     .unwrap_or_else(|_| Err("internal panic".into()));
     let (handle, value) = match result {

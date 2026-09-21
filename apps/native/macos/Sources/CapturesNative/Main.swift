@@ -55,6 +55,12 @@ struct Options {
 @main enum Main {
     static func main() {
         do {
+            if CommandLine.arguments.dropFirst().elementsEqual(["--font-license"]) {
+                guard let url = Bundle.module.url(forResource: "EDITOR-FONT-LICENSE", withExtension: "txt")
+                else { throw Options.Usage.invalid }
+                print(try String(contentsOf: url, encoding: .utf8), terminator: "")
+                return
+            }
             let options = try Options(Array(CommandLine.arguments.dropFirst()))
             let application = NSApplication.shared
             application.setActivationPolicy(options.scene == "idle" ? .accessory : .regular)

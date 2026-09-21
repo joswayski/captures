@@ -273,6 +273,7 @@ struct NativeEditorLayer: Equatable {
     let rotation: Double
     let selectionOutline: [CGPoint]?
     let annotation: NativeAnnotationStyle?
+    let textStyle: NativeTextStyle?
 
     init?(_ value: [String: Any], annotation: [String: Any]? = nil,
           selectionOutline: [[String: Any]]? = nil) {
@@ -290,6 +291,8 @@ struct NativeEditorLayer: Equatable {
         rotation = (value["rotation"] as? NSNumber)?.doubleValue ?? 0
         self.annotation = annotation.flatMap(NativeAnnotationStyle.init)
         if annotation != nil && self.annotation == nil { return nil }
+        textStyle = kind == .text ? NativeTextStyle(value) : nil
+        if kind == .text && textStyle == nil { return nil }
         if let selectionOutline {
             let points = selectionOutline.compactMap { point -> CGPoint? in
                 guard let x = point["x"] as? NSNumber, let y = point["y"] as? NSNumber else { return nil }
@@ -304,6 +307,35 @@ struct NativeEditorLayer: Equatable {
         case .shape: name = "Shape"
         case .path: name = "Drawing"
         }
+    }
+}
+
+/// Authored text values exposed to AppKit. In particular, `fontFamily` is not
+/// normalized here: a reopened draft may name a family this build cannot offer.
+struct NativeTextStyle: Equatable {
+    let text: String
+    let fontSize: Double
+    let fontFamily: String
+    let bold: Bool
+    let italic: Bool
+    let align: String
+    let color: String
+    let background: String?
+    let roundedBackground: Bool
+
+    init?(_ value: [String: Any]) {
+        guard let text = value["text"] as? String,
+              let size = value["fontSize"] as? NSNumber,
+              let family = value["fontFamily"] as? String, !family.isEmpty,
+              let bold = value["bold"] as? Bool,
+              let italic = value["italic"] as? Bool,
+              let align = value["align"] as? String,
+              ["left", "center", "right"].contains(align),
+              let color = value["color"] as? String,
+              let rounded = value["roundedBackground"] as? Bool else { return nil }
+        self.text = text; fontSize = size.doubleValue; fontFamily = family
+        self.bold = bold; self.italic = italic; self.align = align; self.color = color
+        background = value["background"] as? String; roundedBackground = rounded
     }
 }
 

@@ -82,6 +82,8 @@ def main():
                         help="Exercise viewport gestures, toolbar and keyboard zoom without editing")
     parser.add_argument("--text-draft-only", action="store_true",
                         help="Restore explicit-font text, save/reopen and copy pixels (no Text input UI)")
+    parser.add_argument("--text-only", action="store_true",
+                        help="Exercise the real Text tool UI, undo/redo and draft reopen")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -295,6 +297,63 @@ def main():
             if expected is not None:
                 assert actual == bytes(expected), (x, y, actual, expected)
             return actual
+
+        if args.text_only:
+            run("xdotool", "windowsize", "--sync", editor, "1000", "800")
+            click(editor, 736, 62)  # Draw.
+            click(editor, 34, 128)  # Text is the first tool.
+            click(editor, 430, 250)  # Place one empty, selected auto-width text layer.
+            save_layers(lambda values: len(values) == 2 and values[-1]["kind"] == "text",
+                        "empty text placed once")
+            created = layers()[-1]
+            assert created["text"] == "" and created["fontFamily"] == "sans"
+            assert created["align"] == "left" and created.get("autoWidth") is True
+            shot(editor, f"text-empty-{args.appearance}")
+            # Text properties precede generic layer geometry in the sidebar.
+            click(editor, 105, 410)
+            run("xdotool", "key", "ctrl+a", "type", "--clearmodifiers", "--delay", "35",
+                "--", "Readable native text")
+            time.sleep(.2)
+            click(editor, 95, 478)   # Bold.
+            click(editor, 146, 478)  # Italic.
+            click(editor, 92, 681)   # Background plate.
+            shot(editor, f"text-staged-{args.appearance}")
+            run("xdotool", "mousemove", "--window", editor, "120", "680",
+                "click", "5", "click", "5", "click", "5", "click", "5", "sleep", ".3")
+            shot(editor, f"text-scrolled-{args.appearance}")
+            click(editor, 74, 540)   # Apply text.
+            edited = save_layers(
+                lambda values: values[-1]["text"] == "Readable native text"
+                and values[-1]["bold"] and values[-1]["italic"]
+                and values[-1]["background"] is not None,
+                "readable styled text applied")[-1]
+            assert edited["id"] == created["id"] and edited["fontFamily"] == "sans"
+            shot(editor, f"text-edited-{args.appearance}")
+            click(editor, 35, 62)
+            save_layers(lambda values: values[-1]["text"] == "", "text edit undo")
+            click(editor, 98, 62)
+            save_layers(lambda values: values[-1]["text"] == "Readable native text",
+                        "text edit redo")
+            close(editor)
+            wait(lambda: not windows("Screenshot editor"), "text editor closes")
+            editor = reopen()
+            run("xdotool", "windowsize", "--sync", editor, "760", "540")
+            shot(editor, f"text-minimum-reopened-{args.appearance}")
+            reopened = layers()[-1]
+            assert reopened["id"] == created["id"] and reopened["text"] == "Readable native text"
+            assert reopened["bold"] and reopened["italic"] and reopened["background"] is not None
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "text suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["text-click-once-fresh-selection", "text-readable-explicit-apply",
+                           "text-bold-italic-plate", "text-undo-redo", "text-draft-reopen",
+                           "text-minimum-appearance", "original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS native Text UI: create, style, undo/redo, save/reopen, minimum")
+            return
 
         if args.text_draft_only:
             shot(editor, "text-draft-restored")

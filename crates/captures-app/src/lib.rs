@@ -3,6 +3,7 @@
 
 pub mod capture_flow;
 pub mod editor;
+pub mod editor_fonts;
 pub mod editor_image_background;
 pub mod editor_output;
 pub mod editor_render;

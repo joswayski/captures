@@ -127,6 +127,10 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
 }
 
 fn main() -> eframe::Result {
+    if std::env::args().nth(1).as_deref() == Some("--font-license") {
+        print!("{}", captures_app::editor_fonts::NOTICE);
+        return Ok(());
+    }
     let options = Options::parse(std::env::args().skip(1)).unwrap_or_else(|error| {
         eprintln!("{error}\n{}", options::USAGE);
         std::process::exit(2);

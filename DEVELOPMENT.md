@@ -133,6 +133,12 @@ handoff and resource collection. Root `cargo test --workspace` does not include
 this experiment; run its manifest-specific checks too. It connects capture and
 recording engines for development but does not select a production renderer.
 
+Both native executables accept `--font-license` to print the bundled editor-font
+copyright and full OFL notice without opening a window. Native resources and
+font-bearing draft manifests also retain it. Run `apps/native/x11_editor_smoke.py
+--text-only` with its usual `--binary`, `--output` and `--appearance` arguments to
+exercise real Text controls; `--text-draft-only` retains the synthetic-font regression.
+
 Native Record requires executable FFmpeg and FFprobe commands on `PATH`; native
 builds do not bundle their own media tools yet. AppKit also accepts `CAPTURES_FFMPEG`
 and `CAPTURES_FFPROBE` executable paths. Recording uses separate development
