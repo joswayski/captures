@@ -3136,11 +3136,46 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(oldFamily.isEnabled, "host defaults must not expand a saved font set")
     }
 
+    func testTextShadowIsStagedAndOnlyPatchesTheEnabledFlag() throws {
+        _ = NSApplication.shared
+        let original = textLayer(id: "copy", text: "accepted")
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [original]))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let shadow = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSButton }
+            .first { $0.accessibilityLabel() == "Text drop shadow" })
+        XCTAssertEqual(shadow.state, .off, "older drafts omit the enabled flag")
+        shadow.performClick(nil)
+        XCTAssertTrue(worker.requests.isEmpty)
+        XCTAssertFalse(controller.windowShouldClose(controller.window))
+        worker.failOperation = "edit_text"
+        try button("Apply", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.requests.last?["patch"] as? [String: Bool], ["dropShadow": true])
+        XCTAssertEqual(shadow.state, .on, "failed Apply preserves staged state")
+        XCTAssertFalse(controller.state.snapshot?.layers.first?.textStyle?.dropShadow ?? true)
+        try button("Cancel", in: controller.root).performClick(nil)
+        XCTAssertEqual(shadow.state, .off)
+        shadow.performClick(nil)
+        worker.failOperation = nil
+        worker.response = { _ in
+            var accepted = original; accepted["dropShadow"] = true
+            return self.snapshot(id: "shot", unsaved: true, layers: [accepted])
+        }
+        try button("Apply", in: controller.root).performClick(nil)
+        XCTAssertTrue(controller.state.snapshot?.layers.first?.textStyle?.dropShadow == true)
+        XCTAssertEqual(shadow.state, .on)
+        XCTAssertTrue(controller.prepareForTermination(), "successful Apply clears staging")
+    }
+
     func testTextControlsRenderedAtNormalAndMinimumSizes() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
+            var label = textLayer(id: "copy", text: "First line\nSecond line", family: "serif")
+            label["dropShadow"] = true
             let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true,
-                layers: [textLayer(id: "copy", text: "First line\nSecond line", family: "serif")],
+                layers: [label],
                 fonts: ["sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono"]))
             let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
             defer { controller.window.orderOut(nil) }
