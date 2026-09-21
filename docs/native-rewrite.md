@@ -79,6 +79,44 @@ targeting/cursor/click highlights and pointer polling; Linux cannot exclude the
 recording HUD from captures. Test X11 and Wayland separately. Unsupported actions
 must be explicit, not silently successful.
 
+## Mini-preview sharing integration — required, not implemented
+
+The primary desktop cloud flow is capture → mini-preview Share icon → native
+upload/share-settings popup. Track this as a separate cross-platform slice even
+if the accounts/API PR or rewrite merges first; neither merge completes this
+feature. API/web implementation: [#613](https://github.com/joswayski/captures/pull/613).
+Do not ship a decorative Share action or substitute a website handoff for the
+native flow. Local capture remains signed-out and never uploads automatically.
+
+- [ ] Launch from the selected mini-preview artifact with the Lucide Share icon
+  and an accessible name. Preserve its identity: an editor's Save new copy is a
+  different local artifact, not an implicit replacement for the original upload.
+- [ ] Signed-out users enter email and OTP in native controls; retain the selected
+  artifact/settings through sign-in. Shared Rust owns account/session state and
+  uses explicit bearer transport; OS credential vaults persist tokens, never
+  plaintext preferences. Canceling sign-in leaves the local capture untouched.
+- [ ] The popup previews the selected file and offers link access, optional
+  password and expiry before explicit Upload and share. No upload merely from
+  opening the popup. Existing API semantics are anyone-with-link plus optional
+  password, not an authenticated recipient ACL. Fully public discovery/indexing
+  is a separate unresolved product option, not an implemented visibility mode.
+- [ ] Shared Rust uploads original bytes directly through the API's presigned
+  multipart R2 contract, with progress, cancellation, expiry-aware part retry and
+  failure recovery. Never show a usable share link before upload completion and
+  successful share configuration; configuration failure must not re-upload bytes.
+- [ ] Reopening manages the existing remote asset/share rather than duplicating
+  the upload. Persist the local-artifact/remote-asset association. Show shared date,
+  Copy/Open link, editable/removable password and expiry, and adjacent Share/Stop
+  sharing actions. Stopping denies subsequent access; enabling again rotates the
+  link. Cloud Trash retains bytes and restore does not revive old links.
+- [ ] Integrate both AppKit and wgpu through thin host launch/presentation seams;
+  coordinate MiniPreview/Workbench and mini_preview/live changes with the rewrite
+  integration owner. Do not fork the auth/upload rules into platform hosts.
+- [ ] Verify signed-out, expired-session, offline, missing-file, upload failure,
+  cancel/retry, password edit, stop/re-enable and reopening states. Record macOS,
+  Windows, X11 and Wayland implementation/verification separately; no stub or
+  software-only host test closes the parity gate.
+
 ## Architecture and ownership
 
 - **Rust owns domain state:** capture/recording sessions, settings migrations,

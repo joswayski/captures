@@ -100,7 +100,10 @@ link but retains the file in private storage indefinitely; Restore returns it to
 your library without reactivating the old link. Password attempts record source
 IP, browser user-agent, time, and outcome for investigation; an activity-view UI
 is not implemented yet. Desktop sign-in, native uploads, and a native
-Share button are not: native integration follows the rewrite.
+Share button are not implemented yet. The planned desktop flow starts from a
+mini-preview Share icon and opens a native upload/settings popup, tracked as an
+explicit [rewrite integration slice](docs/native-rewrite.md#mini-preview-sharing-integration--required-not-implemented)
+regardless of which backend or rewrite changes merge first.
 
 ## Wishlist
 
