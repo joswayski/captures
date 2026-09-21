@@ -30,7 +30,9 @@ jobs:
       matrix:
         os: [windows-2025, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 35
+    # Linux builds plus both appearances of the growing X11 suites exceed 35m.
+    # Keep individual smoke deadlines intact; allow the complete job to finish.
+    timeout-minutes: ${{ matrix.os == 'ubuntu-24.04' && 75 || 35 }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
