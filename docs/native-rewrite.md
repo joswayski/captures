@@ -208,7 +208,18 @@ use shipping's UTF-16 width estimate and rounded minimum, not measured paint or
 glyph bounds; plate and default/custom shadow padding are included. Shipping-generated
 vectors exercise Unicode wrapping, fractional widths, side/corner classification,
 8–512 resize clamps and metadata preservation. Session tests cover accepted pixels,
-undo/redo and reopening after text transforms. This does not add text creation/input.
+undo/redo and reopening after text transforms. Shared `create_text`/`edit_text`
+commands now create plain, left-aligned auto-width labels with fresh IDs and edit
+content, font family/size, bold/italic, alignment, color and square/rounded plates.
+Content/type edits refit from owned-font measurements while preserving alignment
+anchors; paint/alignment-only edits do not refit. Blank text keeps the shipping
+eight-em composing field; fixed-width and legacy fields remain intact. Property
+edits match shipping's hidden/locked-layer behavior and validate those layers too.
+Missing families/glyphs and invalid requests preserve frames, redo and saved drafts;
+successful changes use the existing render-before-publish transaction. Font-face
+matching retains the existing shaper's closest supplied face behavior; it does not
+acquire missing faces. These commands do not implement native typing/composition,
+presets, host font acquisition or host selection/output integration for Text.
 Editor sessions now accept explicit trusted fonts and own the shaper on their
 serialized worker. Commit/crop/import/undo/redo and output use the same font-backed
 frame; failed text renders preserve accepted pixels and history. Drafts store family
@@ -226,8 +237,8 @@ transformed and minimum-size captures were inspected. These synthetic-font
 fixtures do not provide Text input controls or establish macOS, Windows, Wayland
 or physical Text-tool presentation/input acceptance.
 Hosts still supply no fonts for new drafts and have no native Text tool. Trusted
-platform acquisition/fallback/licensing policy, outlines/shadows, typed creation/style
-commands, both host Text controls and physical input/IME/accessibility remain open.
+platform acquisition/fallback/licensing policy, outlines/shadows, presets, both host
+Text controls and physical input/IME/accessibility remain open.
 No host text parity gate is closed.
 Next implementation boundary: text and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.

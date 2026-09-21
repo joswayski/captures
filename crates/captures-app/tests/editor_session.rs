@@ -2394,3 +2394,251 @@ fn text_selection_move_resize_rotation_and_saved_pixels_share_one_session() {
         .unwrap();
     assert_eq!(open(data.path(), &id).unwrap().pixels(), resized);
 }
+
+fn create_text_request(text: &str) -> Request {
+    serde_json::from_value(json!({
+        "operation":"create_text", "point":{"x":20,"y":20}, "text":text,
+        "fontSize":80, "fontFamily":"sans", "color":"#ff0000"
+    }))
+    .unwrap()
+}
+
+fn edit_text_request(id: &str, patch: serde_json::Value) -> Request {
+    serde_json::from_value(json!({"operation":"edit_text", "id":id, "patch":patch})).unwrap()
+}
+
+#[test]
+fn typed_text_creation_uses_fresh_ids_measured_width_pixels_and_one_undo_step() {
+    let (data, id, _) = setup();
+    let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 200.,
+            height: 180.,
+        })
+        .unwrap();
+    let before = editor.snapshot().document.clone();
+    let frame = editor.pixels();
+    editor.execute(create_text_request("L")).unwrap();
+    let created = editor.snapshot().document.clone();
+    let Element::Text(label) = created.elements.last().unwrap() else {
+        panic!()
+    };
+    assert_eq!((label.base.x, label.base.y, label.width), (20., 20., 84.)); // 56 advance + 28 inset
+    assert_eq!(label.auto_width, Some(true));
+    assert!(!label.base.locked && label.base.visible);
+    assert_eq!(created.elements[0], before.elements[0]);
+    assert_eq!(editor.pixels().get_pixel(22, 45).0, [255, 0, 0, 255]);
+    assert!(!Arc::ptr_eq(&frame, &editor.pixels()));
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.snapshot().document, &before);
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.snapshot().document, &created);
+    editor.execute(create_text_request("")).unwrap();
+    let Element::Text(blank) = editor.snapshot().document.elements.last().unwrap() else {
+        panic!()
+    };
+    assert_ne!(blank.base.id, label.base.id);
+    assert_eq!(blank.width, 640.); // Shipping eight-em composing field.
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 71 })
+        .unwrap();
+    let reopened = open(data.path(), &id).unwrap();
+    assert_eq!(reopened.snapshot().document, editor.snapshot().document);
+    assert_eq!(reopened.pixels(), editor.pixels());
+}
+
+#[test]
+fn typed_text_patches_fit_only_layout_changes_and_preserve_metadata_and_fixed_width() {
+    let (data, id, _) = setup();
+    let mut fonts = text_fonts();
+    fonts.files.insert(
+        "bold".into(),
+        Arc::from(include_bytes!("../../captures-image/tests/shaping-bold.ttf").as_slice()),
+    );
+    fonts.files.insert(
+        "italic".into(),
+        Arc::from(include_bytes!("../../captures-image/tests/shaping-italic.ttf").as_slice()),
+    );
+    fonts
+        .families
+        .insert("rounded".into(), "Captures Shaping Test".into());
+    let mut editor = open_text(data.path(), &id, fonts).unwrap();
+    add_text(&mut editor);
+    let mut document = editor.snapshot().document.clone();
+    let Element::Text(label) = document.elements.last_mut().unwrap() else {
+        panic!()
+    };
+    label.auto_width = Some(true);
+    label.width = 110.;
+    label.align = "right".into();
+    label.base.locked = true;
+    label.extra.insert("future".into(), json!({"preserve":17}));
+    editor.execute(Request::Commit { document }).unwrap();
+    editor
+        .execute(edit_text_request(
+            "label",
+            json!({"background":"#eeeeee", "roundedBackground":true}),
+        ))
+        .unwrap();
+    let Element::Text(label) = editor.snapshot().document.elements.last().unwrap() else {
+        panic!()
+    };
+    assert_eq!((label.base.x, label.width), (20., 110.)); // Paint-only edit must not refit.
+    editor
+        .execute(edit_text_request("label", json!({"text":"fi"})))
+        .unwrap();
+    let Element::Text(label) = editor.snapshot().document.elements.last().unwrap() else {
+        panic!()
+    };
+    assert_eq!((label.base.x, label.width), (66., 64.)); // Ligature advance36 + inset28, right edge130.
+    assert!(label.base.locked && label.rounded_background);
+    assert_eq!(label.extra["future"], json!({"preserve":17}));
+    assert_eq!(label.background.as_deref(), Some("#eeeeee"));
+    editor
+        .execute(edit_text_request(
+            "label",
+            json!({"text":"L", "bold":true, "color":"#0000ff"}),
+        ))
+        .unwrap();
+    let Element::Text(label) = editor.snapshot().document.elements.last().unwrap() else {
+        panic!()
+    };
+    assert_eq!((label.base.x, label.width), (38., 92.)); // Bold L advances64.
+    let bold = editor.pixels();
+    assert_eq!(bold.get_pixel(68, 45).0, [0, 0, 255, 255]);
+    editor.execute(Request::Undo).unwrap();
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(bold, editor.pixels());
+    editor
+        .execute(edit_text_request(
+            "label",
+            json!({"fontFamily":"sans", "background":null, "bold":false, "italic":true}),
+        ))
+        .unwrap();
+    let Element::Text(label) = editor.snapshot().document.elements.last().unwrap() else {
+        panic!()
+    };
+    assert!(label.background.is_none() && !label.rounded_background && label.italic);
+    let mut document = editor.snapshot().document.clone();
+    let Element::Text(label) = document.elements.last_mut().unwrap() else {
+        panic!()
+    };
+    label.auto_width = None;
+    label.width = 127.;
+    label.base.visible = false;
+    editor.execute(Request::Commit { document }).unwrap();
+    editor
+        .execute(edit_text_request(
+            "label",
+            json!({"text":"L L", "fontSize":40, "align":"center"}),
+        ))
+        .unwrap();
+    let Element::Text(label) = editor.snapshot().document.elements.last().unwrap() else {
+        panic!()
+    };
+    assert_eq!(label.width, 127.);
+    assert_eq!(label.auto_width, None);
+    assert_eq!(label.font_size, 40.);
+    assert_eq!(label.align, "center");
+    assert!(!label.base.visible && label.base.locked);
+    assert_eq!(label.extra["future"], json!({"preserve":17}));
+    for size in [8., 512.] {
+        editor
+            .execute(edit_text_request("label", json!({"fontSize":size})))
+            .unwrap();
+        let Element::Text(label) = editor.snapshot().document.elements.last().unwrap() else {
+            panic!()
+        };
+        assert_eq!(label.font_size, size);
+    }
+    let mut document = editor.snapshot().document.clone();
+    let Element::Text(label) = document.elements.last_mut().unwrap() else {
+        panic!()
+    };
+    label.font_size = 7.5; // Legacy values remain editable without rewriting their size.
+    editor.execute(Request::Commit { document }).unwrap();
+    editor
+        .execute(edit_text_request("label", json!({"color":"#00ff00"})))
+        .unwrap();
+    let Element::Text(label) = editor.snapshot().document.elements.last().unwrap() else {
+        panic!()
+    };
+    assert_eq!(label.font_size, 7.5);
+}
+
+#[test]
+fn rejected_text_commands_preserve_redo_frame_and_saved_draft_including_hidden_layers() {
+    let (data, id, _) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    assert!(
+        editor
+            .execute(create_text_request("L"))
+            .unwrap_err()
+            .contains("explicit font")
+    );
+    assert!(!editor.snapshot().can_undo);
+    let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();
+    add_text(&mut editor);
+    editor
+        .execute(Request::Layer {
+            id: "label".into(),
+            edit: LayerEdit::Visibility { visible: false },
+        })
+        .unwrap();
+    editor
+        .execute(edit_text_request("label", json!({"color":"#0000ff"})))
+        .unwrap();
+    editor.execute(Request::Undo).unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 72 })
+        .unwrap();
+    let before = serde_json::to_value(editor.snapshot()).unwrap();
+    let frame = editor.pixels();
+    let manifest = data.path().join("drafts").join(&id).join("manifest.json");
+    let saved = fs::read(&manifest).unwrap();
+    for patch in [
+        json!({"fontFamily":"missing"}),
+        json!({"text":"☃"}),
+        json!({"text":"L".repeat(4097)}),
+        json!({"fontSize":7.99}),
+        json!({"fontSize":513}),
+        json!({"align":"justify"}),
+        json!({"color":"invalid"}),
+        json!({"background":"invalid"}),
+    ] {
+        assert!(
+            editor
+                .execute(edit_text_request("label", patch.clone()))
+                .is_err(),
+            "{patch}"
+        );
+        assert_eq!(serde_json::to_value(editor.snapshot()).unwrap(), before);
+        assert!(Arc::ptr_eq(&frame, &editor.pixels()));
+        assert_eq!(fs::read(&manifest).unwrap(), saved);
+    }
+    for target in ["missing", "capture-background"] {
+        assert!(
+            editor
+                .execute(edit_text_request(target, json!({"text":"L"})))
+                .is_err()
+        );
+        assert_eq!(serde_json::to_value(editor.snapshot()).unwrap(), before);
+    }
+    editor
+        .execute(edit_text_request("label", json!({})))
+        .unwrap();
+    assert!(Arc::ptr_eq(&frame, &editor.pixels()));
+    assert!(editor.snapshot().can_redo);
+    assert!(
+        serde_json::from_value::<Request>(
+            json!({"operation":"edit_text", "id":"label", "patch":{"unknown":true}})
+        )
+        .is_err()
+    );
+    editor.execute(Request::Redo).unwrap();
+    let Element::Text(label) = editor.snapshot().document.elements.last().unwrap() else {
+        panic!()
+    };
+    assert_eq!(label.color, "#0000ff");
+}

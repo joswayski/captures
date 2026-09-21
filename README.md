@@ -270,8 +270,10 @@ square/rounded plates from those fonts, with rotation, opacity and blending. Sha
 text selection, movement and resizing follow the shipping editor's interaction rules;
 text outlines and shadows are still unsupported. Editor workers can own explicit
 fonts and preserve their exact bytes in local draft sidecars, so text edits, undo,
-export and reopening use the same fonts. Native Text tools and platform font
-acquisition are not connected yet; no fonts are discovered or downloaded automatically.
+export and reopening use the same fonts. Typed commands create plain text and edit
+content, type, alignment, color and plates transactionally; native Text controls,
+style presets and platform font acquisition are not connected yet. No fonts are
+discovered or downloaded automatically.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
 resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
 pixel frames for native hosts. Typed rectangle/ellipse, straight-line/arrow and
