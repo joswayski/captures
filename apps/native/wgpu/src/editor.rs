@@ -1503,7 +1503,11 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
 }
 
 fn fitted_image_rect(available: egui::Rect, image: egui::Vec2) -> egui::Rect {
-    let scale = (available.width() / image.x).min(available.height() / image.y);
+    // Match Tauri's 2–100% Fit range; manual zoom has its own 5–800% range.
+    let scale = (available.width() / image.x)
+        .max(0.02)
+        .min((available.height() / image.y).max(0.02))
+        .min(1.);
     // Match the previous Image widget's top-left alignment so Fit preserves
     // established workbench coordinates and leaves spare space below/right.
     egui::Rect::from_min_size(available.min, image * scale)
@@ -3573,6 +3577,23 @@ mod tests {
     }
 
     #[test]
+    fn fit_caps_small_images_and_uses_the_limiting_axis_with_tauri_floor() {
+        let area = egui::Rect::from_min_size(egui::pos2(31., 47.), egui::vec2(400., 300.));
+        for (image, expected) in [
+            (egui::vec2(160., 90.), egui::vec2(160., 90.)),
+            (egui::vec2(400., 300.), egui::vec2(400., 300.)),
+            (egui::vec2(800., 200.), egui::vec2(400., 100.)),
+            (egui::vec2(200., 1200.), egui::vec2(50., 300.)),
+            (egui::vec2(40000., 20000.), egui::vec2(800., 400.)),
+        ] {
+            let fit = fitted_image_rect(area, image);
+            assert_eq!(fit.min, area.min);
+            assert_eq!(fit.size(), expected);
+            assert_eq!(viewport_rect(Viewport::default(), fit, image), Some(fit));
+        }
+    }
+
+    #[test]
     fn zoom_shortcuts_keep_event_order_cancel_gestures_and_do_not_zoom_ui_or_edit() {
         let ctx = egui::Context::default();
         ctx.options_mut(|options| options.zoom_with_keyboard = true);
@@ -3584,7 +3605,7 @@ mod tests {
             egui::pos2(31., 47.),
             egui::vec2(400., 200.),
         ));
-        view.viewport_image_size = Some(egui::vec2(200., 100.));
+        view.viewport_image_size = Some(egui::vec2(800., 400.));
         view.shape_drag = Some((Point { x: 3., y: 7. }, Point { x: 20., y: 30. }));
         let key = |key, command| egui::Event::Key {
             key,
@@ -3643,7 +3664,7 @@ mod tests {
         frame(&mut view, vec![key(egui::Key::Num0, true)], true);
         assert_eq!(
             view.viewport.zoom_percent, 100.,
-            "zero is actual size, not Fit (200%)"
+            "zero is actual size, not Fit (50%)"
         );
         frame(&mut view, vec![key(egui::Key::Plus, false)], true);
         assert_eq!(view.viewport.zoom_percent, 100.);
@@ -3695,6 +3716,7 @@ mod tests {
         view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
         let area = egui::Rect::from_min_size(egui::pos2(100., 80.), egui::vec2(400., 200.));
         let size = egui::vec2(200., 100.);
+        let fit = fitted_image_rect(area, size);
         view.viewport_area = Some(area);
         view.viewport_image_size = Some(size);
         let (tx, rx) = mpsc::channel();
@@ -3712,7 +3734,7 @@ mod tests {
                 |root| {
                     let mut ui = root.new_child(egui::UiBuilder::new().max_rect(area));
                     let intercepted = handle_viewport_input(&ui, view, area);
-                    let preview = viewport_rect(view.viewport, area, size).unwrap();
+                    let preview = viewport_rect(view.viewport, fit, size).unwrap();
                     if view.section == Section::Layers {
                         let tokens = crate::tokens::load().into_values().next().unwrap();
                         show_layer_canvas(&mut ui, &tokens, view, &tx, area, preview, intercepted);
@@ -3747,10 +3769,10 @@ mod tests {
             true,
         );
         assert_eq!(
-            view.viewport.zoom_percent, 234.7,
+            view.viewport.zoom_percent, 117.4,
             "positive egui scroll zooms in once"
         );
-        let preview = viewport_rect(view.viewport, area, size).unwrap();
+        let preview = viewport_rect(view.viewport, fit, size).unwrap();
         let point = image_point(
             anchor,
             preview,
@@ -3761,7 +3783,7 @@ mod tests {
                 height: 100.,
             },
         );
-        assert!((point.x - 60.).abs() < 1e-5 && (point.y - 30.).abs() < 1e-5);
+        assert!((point.x - 120.).abs() < 1e-5 && (point.y - 60.).abs() < 1e-5);
         assert!(
             view.shape_drag.is_none(),
             "zoom cancels an uncommitted drawing"
@@ -3797,7 +3819,7 @@ mod tests {
         assert_eq!(view.viewport.zoom_percent, 100.);
         assert_eq!(view.viewport.pan_x, 0.);
         view.reset_viewport();
-        assert_eq!(viewport_rect(view.viewport, area, size), Some(area));
+        assert_eq!(viewport_rect(view.viewport, fit, size), Some(fit));
         assert!(rx.try_recv().is_err() && view.output.is_some());
         view.section = Section::Layers;
         set_viewport_zoom(&mut view, 500., None);

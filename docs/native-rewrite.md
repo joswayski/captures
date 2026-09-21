@@ -110,8 +110,10 @@ Both hosts expose a zoom preset menu with Fit, 50%, 100% and 200%. Its selected
 value tracks custom percentages from steps, wheel and magnification; obsolete
 custom rows are removed. Selecting a preset uses the existing shared viewport
 math, cancels transient editing and does not enqueue document or output work.
-The workbenches retain their existing fit layout, including small-image enlargement;
-Tauri's capped fit, slider and full layout remain open.
+Fit now uses Tauri's 2–100% scale range: small screenshots stay at actual size,
+larger images use the limiting viewport axis, and manual zoom can still enlarge them.
+AppKit retains centered placement and wgpu retains top-left placement inside their
+existing viewport insets. Tauri's slider and full layout remain open.
 Physical trackpad/mouse behavior still requires platform acceptance.
 Both hosts connect canvas fill/transparency in Geometry. Apply background submits
 one `set_background` worker transaction; the shared renderer validates hex colors

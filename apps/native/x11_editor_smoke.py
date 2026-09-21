@@ -898,6 +898,16 @@ def main():
         assert not draft.exists(), "toolbar zoom must remain outside draft state"
         click(editor, 590, 18)  # Fit also cancels any viewport gesture and restores coordinates.
         if args.zoom_only:
+            # With spare width AND height, Fit keeps the 640×360 source at 1×.
+            # An uncapped fit would paint beyond both independently checked edges.
+            run("xdotool", "windowsize", "--sync", editor, "1180", "900", "sleep", ".3")
+            shot(editor, "viewport-fit-no-upscale")
+            surface = (245, 245, 247) if args.appearance == "light" else (16, 16, 20)
+            pixel("viewport-fit-no-upscale", 877, 100, (40, 110, 166))
+            pixel("viewport-fit-no-upscale", 878, 100, surface)
+            pixel("viewport-fit-no-upscale", 250, 448, (40, 110, 166))
+            pixel("viewport-fit-no-upscale", 250, 449, surface)
+            assert not draft.exists(), "Fit resizing must not create a draft"
             run("xdotool", "windowsize", "--sync", editor, "760", "540",
                 "key", "ctrl+0", "ctrl+equal", "ctrl+equal", "sleep", ".3")
             shot(editor, "viewport-preset-custom-minimum")
@@ -914,7 +924,7 @@ def main():
                            "viewport-keyboard-actual-and-step-pixels", "viewport-field-key-no-draft",
                            "viewport-presets-50-200-pixels", "viewport-custom-preset-menu",
                            "viewport-preset-fit-no-draft", "viewport-reselect-fit-clears-pan",
-                           "viewport-custom-menu-minimum"],
+                           "viewport-fit-no-upscale", "viewport-custom-menu-minimum"],
             }, indent=2) + "\n")
             print("PASS native zoom: wheel, pan, toolbar, keyboard, presets, custom zoom, focused field, no draft")
             return

@@ -22,6 +22,34 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertNil(NativeEditorViewport().rect(fit: fit, canvas: .zero))
     }
 
+    func testFitCapsSmallImagesAndPreservesManualZoomWithoutDocumentWork() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let original = snapshot(id: "shot", width: 160, height: 90, unsaved: true, draft: true)
+            let worker = FakeEditorWorker(snapshot: original)
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            let input = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? EditorViewportGestureView }
+                .first { $0.accessibilityLabel() == "Screenshot viewport" })
+            XCTAssertEqual(controller.presentedImageRect.size, NSSize(width: 160, height: 90))
+            XCTAssertEqual(controller.presentedImageRect.midX, input.bounds.midX, accuracy: 0.001)
+            XCTAssertEqual(controller.presentedImageRect.midY, input.bounds.midY, accuracy: 0.001)
+            try render(controller.root, name: "screenshot-editor-fit-small-\(appearance)")
+            try button("+", in: controller.root).performClick(nil)
+            XCTAssertEqual(controller.viewport.zoomPercent, 125, "step starts from capped Fit")
+            XCTAssertEqual(controller.presentedImageRect.size, NSSize(width: 200, height: 112.5))
+            try chooseZoomPreset("200%", in: controller.root)
+            XCTAssertEqual(controller.presentedImageRect.size, NSSize(width: 320, height: 180))
+            input.onViewportPan?(NSPoint(x: 37, y: -21))
+            try chooseZoomPreset("Fit", in: controller.root)
+            XCTAssertEqual(controller.viewport, NativeEditorViewport())
+            XCTAssertEqual(controller.presentedImageRect.size, NSSize(width: 160, height: 90))
+            XCTAssertEqual(controller.state.snapshot, original)
+            XCTAssertTrue(worker.requests.isEmpty); XCTAssertTrue(worker.encodes.isEmpty)
+        }
+    }
+
     func testViewportControlsAreAccessibleAndDoNotMutateEditorState() throws {
         _ = NSApplication.shared
         let original = snapshot(id: "shot", unsaved: true, draft: true)
