@@ -201,7 +201,23 @@ with the browser's unspecified high-quality canvas filter. Original/equal-size o
 borrows exact pixels. Save-new uses the same once-resized frame for export, History
 dimensions, History PNG and thumbnail. Document/draft/undo and full-resolution copy
 remain unchanged; option changes invalidate encoded previews. Windows/Wayland
-presentation, physical macOS input, output acceptance and overwrite behavior remain open.
+presentation, physical macOS input and output acceptance remain open.
+Both hosts now expose confirmed **Replace original…** for the opened screenshot's
+existing saved path and matching output format. The session pins that path; shared
+Rust rechecks current History identity/path/type and file availability before encoding.
+Sibling-temp publication replaces only that destination. Once-resized export, private
+History PNG, thumbnail and dimensions update the same artifact ID/date, rather than
+adding a copy. A post-publication History failure reports the saved path and warning.
+Hosts dismiss that artifact's stale mini preview and reload History with fresh decode
+generations after file publication, including partial success. Cancel/Escape and stale
+confirmations submit no write; accepted writes drain on quit. Document, pixels, draft,
+undo/redo and encoded preview are retained. Undo does not revert the saved file;
+discard reloads the current History image. Unlike Tauri's full post-save flow, a new
+copy is not adopted as this editor's source and drafts are not flattened/deleted.
+Validation at write start is not a cross-process compare-and-swap or a two-store
+transaction: an external change during encoding is not locked out. The file and
+History publication are separate, and a History failure cannot roll back a saved file.
+Physical macOS/Windows/Wayland and full output acceptance remain open.
 The shared text prerequisite uses `cosmic-text` advanced shaping and CPU Swash
 rasterization for a single line from caller-supplied fonts, with fixed locale and
 no system-font scan. It returns logical advance, baseline, painted bounds and
@@ -772,7 +788,7 @@ lossless History artifact; a post-publication History failure retains the saved
 path for recovery. `captures_editor_save_new_v1` exposes this on the serialized
 session worker with tagged result JSON and no pixel transport; null/invalid
 inputs, collisions and partial success are covered without changing draft state.
-Hosts still own save dialogs, overwrite-original confirmation
+Hosts still own save dialogs, overwrite-original confirmation (now connected above)
 and clipboard behavior. These shared prerequisites are unit-verified in the Linux
 orb; they do not connect native export controls or complete macOS, Windows, X11
 or Wayland output/physical acceptance.
@@ -927,7 +943,7 @@ without modifying the original or draft. A post-publication History failure show
 the saved path and warning. Accepted writes drain before application quit.
 The wgpu host also connects an output-folder picker and edited-image clipboard
 output. AppKit export and clipboard controls are described below;
-overwrite-original and physical-platform acceptance remain open.
+post-save source adoption and physical-platform acceptance remain open.
 
 The AppKit editor host now enables **Edit screenshot** only for screenshot History
 entries. Its dedicated serialized worker owns the shared Rust session and publishes

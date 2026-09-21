@@ -418,6 +418,7 @@ struct NativeTextPreset: Equatable {
 
 struct NativeEditorSnapshot: Equatable {
     let artifactID: String
+    let originalExportPath: String?
     let width: Double
     let height: Double
     let background: String?
@@ -456,7 +457,16 @@ struct NativeEditorSnapshot: Equatable {
         guard let documentData = try? JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]) else {
             return nil
         }
+        let originalExportPath: String?
+        if let path = value["original_export_path"] as? String, !path.isEmpty {
+            originalExportPath = path
+        } else if value["original_export_path"] == nil || value["original_export_path"] is NSNull {
+            originalExportPath = nil
+        } else {
+            return nil
+        }
         self.artifactID = artifactID
+        self.originalExportPath = originalExportPath
         self.width = width.doubleValue; self.height = height.doubleValue
         self.background = document["background"] as? String
         self.canUndo = canUndo; self.canRedo = canRedo
@@ -633,9 +643,19 @@ private final class NativeEditorSession {
     }
 
     func saveNew(_ request: [String: Any]) throws -> EditorSavePresentation {
+        try save(request) { handle, json in captures_editor_save_new_v1(handle, json) }
+    }
+
+    func saveOriginal(_ request: [String: Any]) throws -> EditorSavePresentation {
+        try save(request) { handle, json in captures_editor_save_original_v1(handle, json) }
+    }
+
+    private func save(_ request: [String: Any],
+                      operation: (OpaquePointer, UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?) throws
+        -> EditorSavePresentation {
         let data = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
         let response = String(decoding: data, as: UTF8.self).withCString {
-            captures_editor_save_new_v1(handle, $0)
+            operation(handle, $0)
         }
         guard let response else { throw AppBridgeError.invalidResponse }
         defer { captures_settings_free_v1(response) }
@@ -699,6 +719,8 @@ protocol EditorWorking: AnyObject {
                 completion: @escaping (Result<EditorOutputPresentation, Error>) -> Void)
     func saveNew(_ request: [String: Any],
                  completion: @escaping (Result<EditorSavePresentation, Error>) -> Void)
+    func saveOriginal(_ request: [String: Any],
+                      completion: @escaping (Result<EditorSavePresentation, Error>) -> Void)
     func importImage(_ image: EditorDecodedImage, selectedID: String?,
                      completion: @escaping (Result<EditorImportPresentation, Error>) -> Void)
     func close()
@@ -775,6 +797,20 @@ final class EditorWorker: EditorWorking {
                     throw AppBridgeError.backend("The screenshot editor is closed.")
                 }
                 return try session.saveNew(request)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func saveOriginal(_ request: [String: Any],
+                      completion: @escaping (Result<EditorSavePresentation, Error>) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            let result = Result { () throws -> EditorSavePresentation in
+                guard let session = storage.session else {
+                    throw AppBridgeError.backend("The screenshot editor is closed.")
+                }
+                return try session.saveOriginal(request)
             }
             DispatchQueue.main.async { completion(result) }
         }

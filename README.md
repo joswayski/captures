@@ -248,7 +248,7 @@ native editor slice restores and saves isolated drafts, previews shared-Rust cro
 and canvas-resize operations, and supports Undo, Redo and confirmed draft discard.
 Its Layers panel connects shared visibility, lock, opacity, movement, image rename,
 duplicate, delete and adjacent ordering commands while preserving locked barriers;
-the original History image and its exports remain unchanged. Recording completion
+the original History image and its exports remain unchanged until explicit replacement. Recording completion
 still presents its notice immediately because recording editing is unsupported. Real macOS and
 Windows recording, audio devices, multi-display and hardware acceptance remain open;
 Wayland recording is gated with the rest of native capture.
@@ -324,8 +324,14 @@ bytes, and switches between the edited canvas and encoded output without saving.
 **Save new copy** exports to an editable destination path without replacing an
 existing file, adds a distinct History entry, and preserves the current draft.
 If History cannot be updated, the saved file's path remains available for recovery.
+Both hosts also offer **Replace original…** for an already-saved screenshot, with
+confirmation of its exact path. It atomically replaces that file and updates the
+same History item, retaining its date. Missing files, changed History targets and mismatched formats
+are rejected. The editable document, draft, undo and output preview are retained;
+Undo affects the editor, not the saved file. A copied export does not become this
+editor's replacement target; reopen that copy from History to edit it separately.
 Closing can save or keep the previous draft; explicit Discard edits restores the
-original. Failed draft saves keep edits open and cancel normal quit. Private-X11 checks
+current History image. Failed draft saves keep edits open and cancel normal quit. Private-X11 checks
 cover both appearances, persisted drafts, real preview pixels and error recovery.
 AppKit now connects the same crop, canvas-resize and draft operations in its own
 window. **Draw crop** also uses the shared aspect presets and Shift ratio locking;
@@ -338,7 +344,7 @@ that report exact encoded size without saving. Both native Output panels offer
 values. Highest PNG preserves pixels with lossless packing; JPEG/WebP presets are lossy.
 Both hosts also offer **Original, 75%, 50% and Custom** output dimensions, with an
 aspect lock for custom sizes. Preview/save resize only the exported pixels and the
-new History copy; the editable document, draft and full-resolution clipboard are unchanged.
+published History image; the editable document, draft and full-resolution clipboard are unchanged.
 Its **Save new copy** controls choose
 a folder and filename, publish without replacing files, and preserve the draft. AppKit
 also imports one still image at a time as a new image layer using its color-managed
@@ -411,7 +417,7 @@ Apply changes the document in one undo step; Cancel restores accepted values.
 Custom shadows and pinned-font named styles are connected, including style/size/color
 choices for new text. Font import, inline canvas typing and physical
 input/IME/accessibility acceptance remain open.
-Other drawing tools, overwrite-original, and recording editing remain
+Other drawing tools, post-save source adoption, and recording editing remain
 unconnected. Shared editor support
 is prerequisite work, not native editor acceptance. OS shortcut takeover, login items,
 single-instance relaunch and updates

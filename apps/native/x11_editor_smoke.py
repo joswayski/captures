@@ -95,6 +95,8 @@ def main():
                         help="Exercise compression presets and real saved PNG pixels")
     parser.add_argument("--output-size-only", action="store_true",
                         help="Exercise percentage/custom export dimensions without changing the document")
+    parser.add_argument("--overwrite-only", action="store_true",
+                        help="Exercise confirmed original replacement, History identity and retained drafts")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -213,6 +215,13 @@ def main():
             "created_at": datetime.now(timezone.utc).isoformat(), "mode": "region",
             "saved_path": None, "mime_type": "image/png",
         }))
+        if args.overwrite_only:
+            source_export = output / "original.png"
+            source_export.write_bytes(original)
+            metadata_path = artifact / "metadata.json"
+            original_metadata = json.loads(metadata_path.read_text())
+            original_metadata["saved_path"] = str(source_export)
+            metadata_path.write_text(json.dumps(original_metadata))
         if args.text_draft_only:
             # Original test font, not a system font or a shipping font policy.
             draft_root = output / "editor-drafts" / artifact_id
@@ -316,6 +325,66 @@ def main():
             if expected is not None:
                 assert actual == bytes(expected), (x, y, actual, expected)
             return actual
+
+        if args.overwrite_only:
+            run("xdotool", "windowsize", "--sync", editor, "1000", "1100")
+            click(editor, 736, 62)
+            click(editor, 105, 133)
+            drag((320, 250), (480, 370))
+            save_layers(lambda values: len(values) == 2, "edited original fixture")
+            saved_draft = draft.read_bytes()
+            click(editor, 550, 62)
+            shot(editor, "overwrite-controls")
+            click(editor, 85, 809)
+            shot(editor, "overwrite-confirmation")
+            assert source_export.read_bytes() == original
+            assert json.loads(metadata_path.read_text()) == original_metadata
+            assert draft.read_bytes() == saved_draft
+            click(editor, 231, 190)  # Cancel replacement.
+            shot(editor, "overwrite-cancelled")
+            assert source_export.read_bytes() == original
+            click(editor, 85, 809)
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            assert source_export.read_bytes() == original
+            click(editor, 85, 809)
+            click(editor, 75, 190)  # Explicit Replace, not the copy-path field.
+            wait(lambda: source_export.read_bytes() != original, "original file replaced")
+            wait(lambda: (artifact / "capture.png").read_bytes() != original, "same History image replaced")
+            shot(editor, "overwrite-saved")
+            for path in [source_export, artifact / "capture.png"]:
+                assert run("identify", "-format", "%wx%h", str(path)) == b"640x360"
+                assert run("convert", str(path), "-crop", "1x1+162+221", "-depth", "8", "rgb:-") == bytes((255, 59, 92))
+            updated = json.loads(metadata_path.read_text())
+            assert (updated["id"], updated["created_at"], updated["saved_path"]) == (
+                artifact_id, original_metadata["created_at"], str(source_export))
+            assert len(list(history.glob("*/metadata.json"))) == 1
+            assert draft.read_bytes() == saved_draft
+            replaced = source_export.read_bytes()
+            click(editor, 35, 62)
+            save_layers(lambda values: len(values) == 1, "undo preserved after output")
+            assert source_export.read_bytes() == replaced
+            click(editor, 98, 62)
+            save_layers(lambda values: len(values) == 2, "redo preserved after output")
+            run("xdotool", "windowsize", "--sync", editor, "760", "540")
+            run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "25", "5")
+            shot(editor, "overwrite-minimum")
+            close(editor)
+            wait(lambda: not windows("Screenshot editor"), "overwritten editor closes")
+            editor = reopen()
+            assert len(layers()) == 2
+            shot(editor, "overwrite-draft-reopened")
+            assert source_export.read_bytes() == replaced
+            close(root)
+            wait(lambda: app.poll() is not None, "overwrite suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["confirmation-before-write", "cancel-and-escape", "exact-file-pixels",
+                           "same-history-id-date", "draft-preserved", "undo-redo-preserved",
+                           "minimum-controls", "editable-draft-reopen"],
+            }, indent=2) + "\n")
+            print("PASS native overwrite: confirmation, cancel, pixels, same History, draft and undo")
+            return
 
         if args.rotation_snap_only:
             run("xdotool", "windowsize", "--sync", editor, "1000", "1000")

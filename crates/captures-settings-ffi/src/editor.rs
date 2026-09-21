@@ -745,6 +745,13 @@ struct SaveNewRequest {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct SaveOriginalRequest {
+    destination: PathBuf,
+    options: ExportOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ImportImageRequest {
     name: String,
     selected_id: Option<String>,
@@ -865,6 +872,30 @@ pub unsafe extern "C" fn captures_editor_save_new_v1(
             request.mode,
         )
         .map_err(|error| error.to_string())
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    response(match result {
+        Ok(saved) => json!({"ok":true,"result":saved}),
+        Err(error) => json!({"ok":false,"error":error}),
+    })
+}
+
+/// Replace the original saved screenshot and its existing History item without
+/// mutating editor or draft state. Run on the serialized session worker.
+///
+/// # Safety
+/// Non-null session is live and not accessed/freed concurrently. Input is
+/// readable NUL-terminated UTF-8. Free owned JSON with captures_settings_free_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_save_original_v1(
+    session: *const EditorSession,
+    request_json: *const c_char,
+) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let request = serde_json::from_str::<SaveOriginalRequest>(unsafe { text(request_json) }?)
+            .map_err(|error| error.to_string())?;
+        let session = unsafe { session.as_ref() }.ok_or("editor handle is null")?;
+        session.save_original_export(&request.destination, request.options)
     }))
     .unwrap_or_else(|_| Err("internal panic".into()));
     response(match result {
@@ -2037,7 +2068,7 @@ mod tests {
     fn save_new_reports_publication_collision_and_partial_success_without_changing_session() {
         let data = tempfile::tempdir().unwrap();
         let root = data.path().join("history");
-        let capture = captures_app::persist_screenshot(
+        let mut capture = captures_app::persist_screenshot(
             &root,
             &RgbaImage::from_fn(7, 3, |x, y| {
                 image::Rgba([x as u8 * 31, y as u8 * 71, 9, 255])
@@ -2045,6 +2076,10 @@ mod tests {
             captures_capture::CaptureMode::Window,
         )
         .unwrap();
+        let original_export = data.path().join("original.png");
+        std::fs::copy(&capture.image_path, &original_export).unwrap();
+        capture.entry.saved_path = Some(original_export.to_string_lossy().into_owned());
+        captures_history::update_metadata(&root, &capture.entry).unwrap();
         let mut session = EditorSession::open(OpenRequest {
             history_root: root.clone(),
             drafts_root: data.path().join("drafts"),
@@ -2109,6 +2144,48 @@ mod tests {
                 std::fs::read(data.path().join("recovered.png")).unwrap(),
                 bytes
             );
+        }
+        assert_eq!(json!(session.snapshot()), before);
+        assert!(Arc::ptr_eq(&pixels, &session.pixels()));
+        assert!(!data.path().join("drafts").exists());
+
+        let overwrite = json!({
+            "destination": original_export,
+            "options":{"format":"png","quality":"preserve","quality_value":80,"png":{}}
+        });
+        let input = CString::new(overwrite.to_string()).unwrap();
+        let wrong = CString::new(
+            json!({
+                "destination": data.path().join("wrong.png"),
+                "options":{"format":"png","quality":"preserve","quality_value":80,"png":{}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        // SAFETY: session and strings remain live and calls are serialized.
+        unsafe {
+            assert_eq!(
+                take_json(captures_editor_save_original_v1(
+                    ptr::null(),
+                    input.as_ptr()
+                ))["ok"],
+                false
+            );
+            assert_eq!(
+                take_json(captures_editor_save_original_v1(&session, ptr::null()))["ok"],
+                false
+            );
+            assert_eq!(
+                take_json(captures_editor_save_original_v1(&session, c"{}".as_ptr()))["ok"],
+                false
+            );
+            assert_eq!(
+                take_json(captures_editor_save_original_v1(&session, wrong.as_ptr()))["ok"],
+                false
+            );
+            let saved = take_json(captures_editor_save_original_v1(&session, input.as_ptr()));
+            assert_eq!(saved["ok"], true);
+            assert_eq!(saved["result"]["status"], "saved");
         }
         assert_eq!(json!(session.snapshot()), before);
         assert!(Arc::ptr_eq(&pixels, &session.pixels()));

@@ -148,6 +148,8 @@ Use `--polygon-only` to exercise Triangle/Diamond/Star transient and committed p
 concave star notches, cancelled/degenerate gestures, undo/redo and saved-draft reopening.
 Use `--rotation-snap-only` to exercise the per-editor custom increment, Shift preview
 and cancellation, committed angle/pixels, undo/redo and restored drafts.
+Use `--overwrite-only` for explicit confirmation/Cancel/Escape, exact replaced pixels,
+stable History identity/date, retained draft and undo/redo, and minimum-size controls.
 
 Native Record requires executable FFmpeg and FFprobe commands on `PATH`; native
 builds do not bundle their own media tools yet. AppKit also accepts `CAPTURES_FFMPEG`

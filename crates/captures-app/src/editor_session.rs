@@ -230,6 +230,7 @@ pub struct AnnotationControls<'a> {
 #[derive(Debug, Serialize)]
 pub struct Snapshot<'a> {
     pub artifact_id: &'a str,
+    pub original_export_path: Option<&'a Path>,
     pub document: &'a Document,
     /// Only these pinned session fonts are available; host defaults never replace
     /// a reopened draft's exact files or expand its font set implicitly.
@@ -248,7 +249,9 @@ pub struct Snapshot<'a> {
 
 pub struct EditorSession {
     artifact_id: String,
+    history_root: PathBuf,
     drafts_root: PathBuf,
+    original_export_path: Option<PathBuf>,
     history: DocumentHistory,
     original_path: PathBuf,
     persisted: Document,
@@ -303,6 +306,7 @@ impl EditorSession {
         if entry.id != request.artifact_id || entry.kind != ArtifactKind::Screenshot {
             return Err("Select a screenshot from History to edit.".into());
         }
+        let original_export_path = entry.saved_path.as_deref().map(PathBuf::from);
         let mut remaining_pixels = MAX_RENDER_PIXELS;
         let original_path = directory.join(captures_history::HISTORY_IMAGE_FILE);
         let mut assets = BTreeMap::new();
@@ -342,7 +346,9 @@ impl EditorSession {
         let pixels = Arc::new(render_frame(&document, &assets, fonts.as_mut())?);
         Ok(Self {
             artifact_id: request.artifact_id,
+            history_root: request.history_root,
             drafts_root: request.drafts_root,
+            original_export_path,
             history: DocumentHistory::new(document.clone()),
             original_path,
             persisted: document,
@@ -357,6 +363,7 @@ impl EditorSession {
     pub fn snapshot(&self) -> Snapshot<'_> {
         Snapshot {
             artifact_id: &self.artifact_id,
+            original_export_path: self.original_export_path.as_deref(),
             document: self.history.current(),
             font_families: self.fonts.as_ref().map(|fonts| &fonts.assets.families),
             text_style_presets: crate::editor_text::TEXT_STYLE_PRESETS
@@ -430,6 +437,32 @@ impl EditorSession {
             unsaved_changes: self.history.current() != &self.persisted,
             has_draft: self.has_draft,
         }
+    }
+
+    /// Replace the file that was explicitly associated with this screenshot
+    /// when the session opened, and update that same History artifact.
+    pub fn save_original_export(
+        &self,
+        destination: &Path,
+        options: ExportOptions,
+    ) -> Result<crate::editor_output::SavedExport, String> {
+        let expected = self.original_export_path.as_deref().ok_or_else(|| {
+            "This screenshot did not have an original saved file to replace.".to_owned()
+        })?;
+        if destination != expected {
+            return Err(
+                "The overwrite destination is not this screenshot's original saved file."
+                    .to_owned(),
+            );
+        }
+        crate::editor_output::save_original_export(
+            &self.history_root,
+            &self.artifact_id,
+            expected,
+            &self.pixels,
+            options,
+        )
+        .map_err(|error| error.to_string())
     }
 
     /// Cloning this Arc does not copy pixels; an old UI frame may safely outlive
