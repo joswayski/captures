@@ -343,7 +343,7 @@ def main():
             shot(editor, f"text-minimum-reopened-{args.appearance}")
             before_scroll = draft.read_bytes()
             run("xdotool", "mousemove", "--window", editor, "120", "440",
-                "click", "--repeat", "8", "--delay", "80", "5", "sleep", ".3")
+                "click", "--repeat", "4", "--delay", "80", "5", "sleep", ".3")
             shot(editor, f"text-minimum-controls-{args.appearance}")
             assert draft.read_bytes() == before_scroll, "scrolling text controls must not edit"
             reopened = layers()[-1]
@@ -401,8 +401,13 @@ def main():
             click(editor, 535, 62)
             click(editor, 65, 366)
             click(editor, 170, 657)
+            shot(editor, "text-draft-output-copy")
             png = output / "clipboard-text.png"
-            png.write_bytes(run("xclip", "-selection", "clipboard", "-t", "image/png", "-o"))
+            # Encoding and clipboard publication complete asynchronously. Wait
+            # for bytes, without resubmitting the accepted Copy action.
+            png.write_bytes(wait(lambda: subprocess.run(
+                ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
+                env=env, capture_output=True, timeout=5).stdout or None, "text clipboard PNG"))
             assert run("identify", "-format", "%wx%h", str(png)) == b"640x360"
             # Known font metrics: right-aligned L at x374/y58, fi at x394/y162.
             for x, y, rgba in [(375, 65, (255, 0, 0, 255)), (396, 170, (255, 0, 0, 255)),
