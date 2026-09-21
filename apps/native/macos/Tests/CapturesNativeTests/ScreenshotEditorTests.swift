@@ -149,7 +149,19 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertTrue(buttons.contains { $0.title == "Replace" })
             XCTAssertTrue(buttons.contains { $0.title == "Cancel" })
             XCTAssertTrue(worker.originalSaves.isEmpty)
-            try render(content, name: "screenshot-editor-replace-confirm-\(appearance)")
+            if let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
+                // NSAlert uses WindowServer-composited material and controls;
+                // cacheDisplay produces blank/incomplete images for its content view.
+                let url = URL(fileURLWithPath: directory)
+                    .appendingPathComponent("screenshot-editor-replace-confirm-\(appearance).png")
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                        withIntermediateDirectories: true)
+                let capture = Process()
+                capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                capture.arguments = ["-x", "-o", "-l", String(sheet.windowNumber), url.path]
+                try capture.run(); capture.waitUntilExit()
+                XCTAssertEqual(capture.terminationStatus, 0, "Native sheet capture must be composited")
+            }
             controller.window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
             sheet.orderOut(nil)
             XCTAssertTrue(worker.originalSaves.isEmpty)
