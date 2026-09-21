@@ -320,7 +320,10 @@ cover both appearances, persisted drafts, real preview pixels and error recovery
 AppKit now connects the same crop, canvas-resize and draft operations in its own
 window, along with native image-layer controls, lossless rotate/flip actions, and
 PNG/JPEG/WebP output previews
-that report exact encoded size without saving. Its **Save new copy** controls choose
+that report exact encoded size without saving. Both native Output panels offer
+**Tiny, Smaller, Balanced, High and Highest** compression presets alongside custom
+values. Highest PNG preserves pixels with lossless packing; JPEG/WebP presets are lossy.
+Its **Save new copy** controls choose
 a folder and filename, publish without replacing files, and preserve the draft. AppKit
 also imports one still image at a time as a new image layer using its color-managed
 system decoder. It normalizes imported pixels to straight-alpha sRGB RGBA8 and retains

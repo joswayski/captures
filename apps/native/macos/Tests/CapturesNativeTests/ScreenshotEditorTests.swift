@@ -397,6 +397,59 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(previewMode.isEnabled, "changed options cannot leave stale output current")
     }
 
+    func testOutputCompressionPresetsMapExactValuesClearPngOverrideAndTrackCustomEdits() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, draft: true))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showOutput(in: controller.root)
+        let mode = try popup("Output quality mode", in: controller.root)
+        let preset = try popup("Output compression preset", in: controller.root)
+        let quality = try field("Output quality value", in: controller.root)
+        let palette = try field("PNG maximum colors", in: controller.root)
+        XCTAssertTrue(preset.isHidden)
+        mode.selectItem(withTitle: "Compress"); _ = mode.sendAction(mode.action, to: mode.target)
+        XCTAssertEqual(preset.itemTitles, ["Tiny", "Smaller", "Balanced", "High", "Highest"])
+        XCTAssertEqual(preset.titleOfSelectedItem, "Highest")
+
+        preset.selectItem(withTitle: "Tiny"); _ = preset.sendAction(preset.action, to: preset.target)
+        XCTAssertEqual(quality.stringValue, "55")
+        try button("Preview output", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.encodes.last?["quality_value"] as? UInt64, 55)
+
+        palette.stringValue = "64"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification,
+                                                      object: palette))
+        XCTAssertEqual(preset.titleOfSelectedItem, "Custom")
+        XCTAssertFalse((try segmented("Output preview image", in: controller.root)).isEnabled,
+                       "manual palette edits invalidate a stale encoded preview")
+        let format = try popup("Output format", in: controller.root)
+        format.selectItem(withTitle: "JPEG"); _ = format.sendAction(format.action, to: format.target)
+        XCTAssertEqual(preset.titleOfSelectedItem, "Tiny", "inactive PNG overrides do not change JPEG quality")
+        XCTAssertEqual(palette.stringValue, "64")
+        format.selectItem(withTitle: "PNG"); _ = format.sendAction(format.action, to: format.target)
+        XCTAssertEqual(preset.titleOfSelectedItem, "Custom")
+        preset.selectItem(withTitle: "Highest"); _ = preset.sendAction(preset.action, to: preset.target)
+        XCTAssertEqual(quality.stringValue, "98")
+        XCTAssertEqual(palette.stringValue, "", "a preset must clear explicit PNG quantization")
+        try button("Preview output", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.encodes.last?["quality_value"] as? UInt64, 98)
+        XCTAssertTrue((worker.encodes.last?["png"] as? [String: Any])?.isEmpty == true)
+
+        quality.stringValue = "73"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification,
+                                                      object: quality))
+        XCTAssertEqual(preset.titleOfSelectedItem, "Custom")
+        mode.selectItem(withTitle: "Preserve"); _ = mode.sendAction(mode.action, to: mode.target)
+        XCTAssertTrue(preset.isHidden)
+        mode.selectItem(withTitle: "Compress"); _ = mode.sendAction(mode.action, to: mode.target)
+        XCTAssertEqual(quality.stringValue, "73", "mode changes preserve a custom numeric value")
+        XCTAssertEqual(preset.titleOfSelectedItem, "Custom")
+        XCTAssertEqual(controller.state.snapshot?.hasDraft, true)
+        XCTAssertTrue(controller.state.snapshot?.unsavedChanges == true)
+    }
+
     func testTrimControlsUseSharedGeometryAndInvalidateOutput() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
@@ -1285,16 +1338,21 @@ final class ScreenshotEditorTests: XCTestCase {
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
             try showOutput(in: controller.root)
+            let preset = try popup("Output compression preset", in: controller.root)
+            XCTAssertTrue(preset.isHidden)
             try render(controller.root, name: "screenshot-editor-output-normal-\(appearance)")
 
             let quality = try popup("Output quality mode", in: controller.root)
             quality.selectItem(withTitle: "Compress")
             _ = quality.sendAction(quality.action, to: quality.target)
+            XCTAssertFalse(preset.isHidden)
+            XCTAssertTrue(controller.root.bounds.contains(preset.convert(preset.bounds, to: controller.root)))
             try button("Preview output", in: controller.root).performClick(nil)
             try render(controller.root, name: "screenshot-editor-output-preview-\(appearance)")
 
             quality.selectItem(withTitle: "Maximum file size")
             _ = quality.sendAction(quality.action, to: quality.target)
+            XCTAssertTrue(preset.isHidden)
             (try field("Output byte budget", in: controller.root)).stringValue = "99"
             try button("Preview output", in: controller.root).performClick(nil)
             try render(controller.root, name: "screenshot-editor-output-error-\(appearance)")

@@ -138,6 +138,8 @@ copyright and full OFL notice without opening a window. Native resources and
 font-bearing draft manifests also retain it. Run `apps/native/x11_editor_smoke.py
 --text-only` with its usual `--binary`, `--output` and `--appearance` arguments to
 exercise real Text controls; `--text-draft-only` retains the synthetic-font regression.
+Use `--output-presets-only` to exercise native compression presets, PNG palette
+selection, exact Highest pixels, unchanged drafts/originals and minimum-size controls.
 
 Native Record requires executable FFmpeg and FFprobe commands on `PATH`; native
 builds do not bundle their own media tools yet. AppKit also accepts `CAPTURES_FFMPEG`

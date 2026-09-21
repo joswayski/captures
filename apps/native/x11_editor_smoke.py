@@ -11,6 +11,7 @@ import json
 import math
 import os
 from pathlib import Path
+import random
 import re
 import select
 import subprocess
@@ -84,6 +85,8 @@ def main():
                         help="Restore explicit-font text, save/reopen and copy pixels (no Text input UI)")
     parser.add_argument("--text-only", action="store_true",
                         help="Exercise the real Text tool UI, undo/redo and draft reopen")
+    parser.add_argument("--output-presets-only", action="store_true",
+                        help="Exercise compression presets and real saved PNG pixels")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -183,6 +186,13 @@ def main():
         run("convert", "-size", "640x360", "xc:#286ea6", "-fill", "#e5b344",
             "-draw", "rectangle 80,60 220,200", "-fill", "#2e9e71",
             "-draw", "rectangle 400,150 620,340", "PNG32:" + str(artifact / "capture.png"))
+        if args.output_presets_only:
+            # A flat gradient can be smaller losslessly, correctly bypassing
+            # quantization. Seeded RGB noise makes the palette path decisive.
+            fixture = output / "preset-source.rgb"
+            fixture.write_bytes(random.Random(739).randbytes(640 * 360 * 3))
+            run("convert", "-size", "640x360", "-depth", "8", "rgb:" + str(fixture),
+                "PNG32:" + str(artifact / "capture.png"))
         if args.wand_only:
             run("convert", str(artifact / "capture.png"), "-fill", "#e5b344",
                 "-draw", "rectangle 300,50 320,70", "PNG32:" + str(artifact / "capture.png"))
@@ -297,6 +307,66 @@ def main():
             if expected is not None:
                 assert actual == bytes(expected), (x, y, actual, expected)
             return actual
+
+        if args.output_presets_only:
+            run("xdotool", "windowsize", "--sync", editor, "1000", "1000")
+            click(editor, 535, 62)
+            click(editor, 20, 274)  # Compress.
+            click(editor, 65, 362)
+            shot(editor, "output-preset-menu")
+            click(editor, 45, 406)  # Tiny.
+            click(editor, 65, 454)  # Preview PNG with automatic palette selection.
+            wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+                 "Tiny preview encoded")
+            shot(editor, "output-preset-tiny-preview")
+            exports = output / "exports"
+            exports.mkdir()
+            tiny = exports / "tiny.png"
+            field(706, tiny)
+            click(editor, 78, 706)
+            run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
+            assert run("xclip", "-selection", "clipboard", "-o").decode() == str(tiny)
+            click(editor, 65, 745)
+            wait(tiny.exists, "Tiny PNG saved")
+            shot(editor, "output-preset-tiny")
+            assert int(run("identify", "-format", "%k", str(artifact / "capture.png"))) > 256
+            assert int(run("identify", "-format", "%k", str(tiny))) <= 32
+            click(editor, 20, 406)  # Explicit override; Highest must clear it.
+            field(450, 2)
+            click(editor, 65, 362)
+            click(editor, 45, 582)  # Highest, not an arbitrary high numeric value.
+            click(editor, 65, 454)
+            wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+                 "Highest preview encoded")
+            shot(editor, "output-preset-highest-preview")
+            highest = exports / "highest.png"
+            field(706, highest)
+            click(editor, 78, 706)
+            run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
+            assert run("xclip", "-selection", "clipboard", "-o").decode() == str(highest)
+            click(editor, 65, 745)
+            wait(highest.exists, "Highest PNG saved")
+            shot(editor, "output-preset-highest")
+            assert run("convert", str(highest), "-depth", "8", "rgba:-") == run(
+                "convert", str(artifact / "capture.png"), "-depth", "8", "rgba:-")
+            assert not draft.exists(), "output controls and exports never save a draft"
+            assert (artifact / "capture.png").read_bytes() == original
+            run("xdotool", "windowsize", "--sync", editor, "760", "540")
+            shot(editor, "output-preset-minimum")
+            click(editor, 65, 406)
+            shot(editor, "output-preset-minimum-menu")
+            run("xdotool", "key", "Escape")
+            close(root)
+            wait(lambda: app.poll() is not None, "output preset suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["preset-menu", "tiny-saved-png-32-colors", "highest-clears-custom-palette",
+                           "highest-saved-png-exact-pixels", "no-draft-or-original-write",
+                           "minimum-controls-and-menu"],
+            }, indent=2) + "\n")
+            print("PASS native output presets: Tiny palette, Highest exact pixels, no edits, minimum")
+            return
 
         if args.text_only:
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")

@@ -645,12 +645,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let outputQualityValue = NSTextField()
     private let outputPngPalette = NSTextField()
     private let outputByteBudget = NSTextField()
+    private let outputCompressionPreset = NSPopUpButton()
     private let outputFilename = NSTextField()
     private let outputLocation = NSTextField(labelWithString: "")
     private let outputSize = NSTextField(wrappingLabelWithString: "No encoded preview yet.")
     private var outputQualityValueLabel: NSTextField!
     private var outputPngPaletteLabel: NSTextField!
     private var outputByteBudgetLabel: NSTextField!
+    private var outputCompressionPresetLabel: NSTextField!
     private var sectionControl: NSSegmentedControl!
     private var drawTool: NSPopUpButton!
     private let wandTolerance = NSTextField()
@@ -1219,6 +1221,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                   label: "Output byte budget", parent: outputContent)
         outputByteBudget.placeholderString = "Required for Maximum"
         outputByteBudget.stringValue = "10000000"
+        outputCompressionPresetLabel = panelFieldLabel("Compression preset", x: 0, y: 178,
+                                                       parent: outputContent)
+        outputCompressionPreset.frame = NSRect(x: 0, y: 198, width: 252, height: 30)
+        outputCompressionPreset.addItems(withTitles: Self.outputCompressionPresets.map { $0.name })
+        outputCompressionPreset.setAccessibilityLabel("Output compression preset")
+        outputCompressionPreset.target = self
+        outputCompressionPreset.action = #selector(outputCompressionPresetChanged)
+        outputContent.addSubview(outputCompressionPreset)
         [outputQualityValue, outputPngPalette, outputByteBudget].forEach {
             $0.formatter = outputIntegerFormatter; $0.delegate = self
         }
@@ -1412,6 +1422,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     @objc private func outputOptionsChanged() {
         normalizeOutputQuality()
+        synchronizeOutputCompressionPreset()
         updateOutputFilenameExtension()
         invalidateOutput(optionsChanged: true)
         updateOutputOptionControls()
@@ -1429,8 +1440,20 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         guard
               [outputQualityValue, outputPngPalette, outputByteBudget].contains(where: { $0 === field })
         else { return }
+        synchronizeOutputCompressionPreset()
         invalidateOutput(optionsChanged: true)
         updateControls()
+    }
+
+    @objc private func outputCompressionPresetChanged() {
+        guard outputQuality.indexOfSelectedItem == 1,
+              let selected = outputCompressionPreset.titleOfSelectedItem,
+              let preset = Self.outputCompressionPresets.first(where: { $0.name == selected }) else {
+            synchronizeOutputCompressionPreset(); return
+        }
+        outputQualityValue.stringValue = String(preset.value)
+        outputPngPalette.stringValue = ""
+        outputOptionsChanged()
     }
 
     @objc private func changeOutputPreview() {
@@ -1671,9 +1694,33 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         outputQualityValueLabel.isHidden = !compress; outputQualityValue.isHidden = !compress
         outputPngPaletteLabel.isHidden = !pngPalette; outputPngPalette.isHidden = !pngPalette
         outputByteBudgetLabel.isHidden = !maximum; outputByteBudget.isHidden = !maximum
+        outputCompressionPresetLabel.isHidden = !compress; outputCompressionPreset.isHidden = !compress
         outputQualityValue.isEnabled = ready && compress
         outputPngPalette.isEnabled = ready && pngPalette
         outputByteBudget.isEnabled = ready && maximum
+        outputCompressionPreset.isEnabled = ready && compress
+    }
+
+    private static let outputCompressionPresets: [(name: String, value: UInt64)] = [
+        ("Tiny", 55), ("Smaller", 70), ("Balanced", 85), ("High", 92), ("Highest", 98),
+    ]
+
+    private func synchronizeOutputCompressionPreset() {
+        guard outputCompressionPreset.superview != nil else { return }
+        let value = outputInteger(outputQualityValue)
+        let preset = (outputFormat.indexOfSelectedItem != 0 || outputPngPalette.stringValue.isEmpty)
+            ? Self.outputCompressionPresets.first(where: { $0.value == value }) : nil
+        if let preset {
+            if outputCompressionPreset.item(withTitle: "Custom") != nil {
+                outputCompressionPreset.removeItem(withTitle: "Custom")
+            }
+            outputCompressionPreset.selectItem(withTitle: preset.name)
+        } else {
+            if outputCompressionPreset.item(withTitle: "Custom") == nil {
+                outputCompressionPreset.insertItem(withTitle: "Custom", at: 0)
+            }
+            outputCompressionPreset.selectItem(withTitle: "Custom")
+        }
     }
 
     private func normalizeOutputQuality() {
