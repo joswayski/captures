@@ -451,13 +451,35 @@ def main():
             time.sleep(.2)
             click(editor, 95, 562)   # Bold.
             click(editor, 146, 562)  # Italic.
+            click(editor, 74, 853)   # Apply without plate or shadow first.
+            save_layers(lambda values: values[-1]["text"] == "Readable native text"
+                        and values[-1]["fontFamily"] == "serif", "plain text applied")
+            shot(editor, "text-without-shadow")
+            click(editor, 92, 809)   # Stage Drop shadow, leaving the plate off.
+            before_shadow = draft.read_bytes()
+            shot(editor, "text-shadow-staged")
+            assert draft.read_bytes() == before_shadow
+            click(editor, 74, 853)
+            save_layers(lambda values: values[-1].get("dropShadow") is True
+                        and values[-1]["background"] is None, "glyph shadow applied")
+            shot(editor, "text-glyph-shadow")
+            def text_pixels(name):
+                return run("convert", str(output / f"{name}.png"), "-crop", "640x360+238+89",
+                           "-depth", "8", "rgba:-")
+            assert text_pixels("text-shadow-staged") == text_pixels("text-without-shadow")
+            assert text_pixels("text-glyph-shadow") != text_pixels("text-without-shadow")
+            click(editor, 92, 809)   # Cancellation must preserve the accepted shadow.
+            click(editor, 74, 898)
+            shot(editor, "text-shadow-cancelled")
+            assert text_pixels("text-shadow-cancelled") == text_pixels("text-glyph-shadow")
             click(editor, 92, 765)   # Background plate.
             shot(editor, f"text-staged-{args.appearance}")
-            click(editor, 74, 930)   # Apply text.
+            click(editor, 74, 974)   # Apply text; plate owns the shadow now.
             edited = save_layers(
                 lambda values: values[-1]["text"] == "Readable native text"
                 and values[-1]["bold"] and values[-1]["italic"]
-                and values[-1]["background"] is not None and values[-1]["fontFamily"] == "serif",
+                and values[-1]["background"] is not None and values[-1]["fontFamily"] == "serif"
+                and values[-1].get("dropShadow") is True,
                 "readable styled text applied")[-1]
             assert edited["id"] == created["id"]
             shot(editor, f"text-edited-{args.appearance}")
@@ -466,13 +488,22 @@ def main():
             save_layers(lambda values: values[-1]["fontFamily"] == "serif",
                         "saving accepted pixels preserves staged family")
             shot(editor, f"text-family-pending-{args.appearance}")
-            click(editor, 74, 975)  # Cancel changes; later close must not be blocked.
+            click(editor, 74, 1019)  # Cancel changes; later close must not be blocked.
+            click(editor, 35, 62)
+            save_layers(lambda values: values[-1]["background"] is None
+                        and values[-1].get("dropShadow") is True, "undo shadowed plate")
+            click(editor, 35, 62)
+            save_layers(lambda values: not values[-1].get("dropShadow", False), "undo glyph shadow")
             click(editor, 35, 62)
             save_layers(lambda values: values[-1]["text"] == "" and values[-1]["fontFamily"] == "sans",
                         "text edit undo")
             click(editor, 98, 62)
             save_layers(lambda values: values[-1]["text"] == "Readable native text",
                         "text edit redo")
+            click(editor, 98, 62)
+            save_layers(lambda values: values[-1].get("dropShadow") is True, "redo glyph shadow")
+            click(editor, 98, 62)
+            save_layers(lambda values: values[-1]["background"] is not None, "redo shadowed plate")
             close(editor)
             wait(lambda: not windows("Screenshot editor"), "text editor closes")
             editor = reopen()
@@ -491,6 +522,7 @@ def main():
             assert json.loads(draft.read_text())["fonts"]["families"] == {
                 "sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono"}
             assert reopened["bold"] and reopened["italic"] and reopened["background"] is not None
+            assert reopened.get("dropShadow") is True
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
             wait(lambda: app.poll() is not None, "text suite quits")
@@ -499,6 +531,8 @@ def main():
                 "passed": True, "appearance": args.appearance,
                 "checks": ["text-click-once-fresh-selection", "text-readable-explicit-apply",
                            "text-font-family", "text-family-cancel", "text-bold-italic-plate",
+                           "text-glyph-shadow-pixels", "text-shadow-stage-cancel",
+                           "text-plate-shadow", "text-shadow-undo-redo-reopen",
                            "text-undo-redo", "text-draft-reopen",
                            "text-minimum-appearance", "original-unchanged"],
             }, indent=2) + "\n")

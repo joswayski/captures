@@ -808,6 +808,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                                    target: nil, action: nil)
     private let textPlate = NSPopUpButton()
     private let textPlateColor = NSTextField()
+    private let textShadow = NSButton(checkboxWithTitle: "Drop shadow", target: nil, action: nil)
     private var textApplyButton: CaptureButton!
     private var textCancelButton: CaptureButton!
     private var textControls: [NSView] = []
@@ -1328,13 +1329,15 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         configure(textPlateColor, frame: NSRect(x: 0, y: 686, width: 118, height: 30),
                   label: "Text plate color", parent: content)
         textPlateColor.formatter = nil; textPlateColor.stringValue = "#ffffff"
-        textApplyButton = button("Apply", frame: NSRect(x: 126, y: 686, width: 60, height: 30),
+        textShadow.frame = NSRect(x: 126, y: 686, width: 126, height: 30)
+        textShadow.setAccessibilityLabel("Text drop shadow"); content.addSubview(textShadow)
+        textApplyButton = button("Apply", frame: NSRect(x: 0, y: 724, width: 118, height: 30),
                                  parent: content) { [weak self] in self?.applyTextEdits() }
-        textCancelButton = button("Cancel", frame: NSRect(x: 192, y: 686, width: 60, height: 30),
+        textCancelButton = button("Cancel", frame: NSRect(x: 134, y: 724, width: 118, height: 30),
                                   parent: content) { [weak self] in self?.publishTextFields() }
         textControls = [heading, familyLabel, textFamily, contentLabel, textScroll, sizeLabel, textSize,
                         textTraits, textAlignment, colorLabel, textColor, textPlate, textPlateColor,
-                        textApplyButton, textCancelButton]
+                        textShadow, textApplyButton, textCancelButton]
     }
 
     private func buildOutputPanel() {
@@ -2030,6 +2033,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             && textAlignment.selectedSegment == ["left", "center", "right"].firstIndex(of: style.align)
             && textPlate.indexOfSelectedItem == (style.background == nil ? 0 : style.roundedBackground ? 2 : 1)
             && (style.background == nil || textPlateColor.stringValue == style.background)
+            && (textShadow.state == .on) == style.dropShadow
     }
 
     private func publishTextFields(preserveStaged: Bool = false) {
@@ -2049,6 +2053,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textTraits.setSelected(style.italic, forSegment: 1)
         textAlignment.selectedSegment = ["left", "center", "right"].firstIndex(of: style.align) ?? 0
         textPlate.selectItem(at: style.background == nil ? 0 : style.roundedBackground ? 2 : 1)
+        textShadow.state = style.dropShadow ? .on : .off
         textFamily.removeAllItems()
         let families = state.snapshot?.fontFamilies ?? [:]
         for key in families.keys.sorted() {
@@ -2092,6 +2097,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         let rounded = background == nil ? style.roundedBackground : textPlate.indexOfSelectedItem == 2
         if rounded != style.roundedBackground { patch["roundedBackground"] = rounded }
+        if (textShadow.state == .on) != style.dropShadow { patch["dropShadow"] = textShadow.state == .on }
         guard !patch.isEmpty else { return }
         textApplyPending = true
         command(["operation": "edit_text", "id": layer.id, "patch": patch],
@@ -2250,7 +2256,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textEditor.isEditable = textReady
         textFamily.isEnabled = textReady && textFamily.numberOfItems > 1
         let textFields: [NSControl] = [textSize, textColor, textTraits,
-                                       textAlignment, textPlate, textPlateColor]
+                                       textAlignment, textPlate, textPlateColor, textShadow]
         textFields.forEach { $0.isEnabled = textReady }
         textApplyButton?.isEnabled = textReady; textCancelButton?.isEnabled = textReady
         drawOverlay.drawingEnabled = active

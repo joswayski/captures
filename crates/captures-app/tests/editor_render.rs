@@ -944,11 +944,87 @@ fn text_paints_do_not_collide_with_following_shape_shadow_ids() {
 }
 
 #[test]
+fn multiline_text_shadows_finish_all_shadow_passes_before_crisp_ink() {
+    let (mut renderer, families) = fonts();
+    let mut label = text();
+    label.text = "L\nL".into();
+    label.base.opacity = 50.;
+    label.drop_shadow = Some(true);
+    label.drop_shadow_style = Some(DropShadowStyle {
+        color: "#0000ff".into(),
+        opacity: 100.,
+        blur: 0.,
+        offset_x: 0.,
+        offset_y: -100.,
+        extra: Default::default(),
+    });
+    let rendered = render_with_text(
+        &document(200., 240., vec![Element::Text(label)]),
+        &BTreeMap::new(),
+        &mut renderer,
+        &families,
+    )
+    .unwrap();
+    // L rows are 100px apart. At the upper stem: half-red, then the lower
+    // row's half-blue shadow, then half-red crisp ink => premultiplied 160/0/64
+    // at alpha224. Per-line shadow+two-source grouping gives the wrong 109/0/146.
+    for (actual, expected) in rendered
+        .get_pixel(22, 45)
+        .0
+        .into_iter()
+        .zip([182, 0, 73, 224])
+    {
+        assert!(actual.abs_diff(expected) <= 1, "{actual} != {expected}");
+    }
+    assert_eq!(rendered.get_pixel(22, 145).0, [255, 0, 0, 192]);
+    assert_eq!(
+        rendered.get_pixel(60, 60)[3],
+        0,
+        "shadow follows ink, not the text box"
+    );
+}
+
+#[test]
+fn text_plate_casts_one_shadow_without_a_second_glyph_pool() {
+    let (mut renderer, families) = fonts();
+    let mut label = text();
+    label.base.opacity = 50.;
+    label.background = Some("#00ff00".into());
+    label.drop_shadow = Some(true);
+    label.drop_shadow_style = Some(DropShadowStyle {
+        color: "#0000ff".into(),
+        opacity: 100.,
+        blur: 0.,
+        offset_x: 60.,
+        offset_y: -10.,
+        extra: Default::default(),
+    });
+    let rendered = render_with_text(
+        &document(240., 180., vec![Element::Text(label)]),
+        &BTreeMap::new(),
+        &mut renderer,
+        &families,
+    )
+    .unwrap();
+    // Plate shadow, plate source, crisp plate: half-blue then two half-greens.
+    // Shadowing the L as well would add blue here from its stem at (22,55).
+    for (actual, expected) in rendered
+        .get_pixel(82, 45)
+        .0
+        .into_iter()
+        .zip([0, 219, 36, 224])
+    {
+        assert!(actual.abs_diff(expected) <= 1, "{actual} != {expected}");
+    }
+    assert_eq!(rendered.get_pixel(190, 100).0, [0, 0, 255, 128]);
+    assert_eq!(rendered.get_pixel(220, 100)[3], 0);
+}
+
+#[test]
 fn text_errors_are_explicit_hidden_layers_are_skipped_and_failed_render_is_retryable() {
     let (mut renderer, families) = fonts();
     for mutate in [
         |t: &mut TextElement| t.outlined = true,
-        |t: &mut TextElement| t.drop_shadow = Some(true),
         |t: &mut TextElement| t.base.rotation = Some(f64::INFINITY),
         |t: &mut TextElement| t.text = "☃".into(),
         |t: &mut TextElement| t.text = "L\u{0085}L".into(),

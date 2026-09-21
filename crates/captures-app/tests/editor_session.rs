@@ -2426,6 +2426,71 @@ fn edit_text_request(id: &str, patch: serde_json::Value) -> Request {
 }
 
 #[test]
+fn text_shadow_toggle_preserves_custom_style_width_undo_and_saved_pixels() {
+    let (data, id, _) = setup();
+    let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();
+    add_text(&mut editor);
+    let mut document = editor.snapshot().document.clone();
+    let Element::Text(label) = document.elements.last_mut().unwrap() else {
+        panic!()
+    };
+    label.auto_width = Some(true);
+    label.width = 110.; // Deliberately differs from measured auto-width.
+    label.base.locked = true; // Property edits are allowed, movement is not.
+    label.drop_shadow_style = Some(
+        serde_json::from_value(json!({
+            "color":"#0000ff", "opacity":100, "blur":0, "offsetX":80, "offsetY":0,
+            "futureShadowMetadata":17
+        }))
+        .unwrap(),
+    );
+    let style = label.drop_shadow_style.clone();
+    editor.execute(Request::Commit { document }).unwrap();
+    let before = editor.pixels();
+    editor
+        .execute(edit_text_request("label", json!({"dropShadow":true})))
+        .unwrap();
+    let enabled = editor.snapshot().document.clone();
+    let Element::Text(label) = enabled.elements.last().unwrap() else {
+        panic!()
+    };
+    assert!(label.has_drop_shadow());
+    assert_eq!((label.base.x, label.base.y, label.width), (20., 20., 110.));
+    assert_eq!(label.drop_shadow_style, style);
+    let pixels = editor.pixels();
+    assert_eq!(pixels.get_pixel(102, 45).0, [0, 0, 255, 255]);
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.pixels(), before);
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.pixels(), pixels);
+    let accepted_pixels = editor.pixels();
+    assert!(
+        editor
+            .execute(edit_text_request(
+                "label",
+                json!({"dropShadow":false,"color":"invalid"})
+            ))
+            .is_err()
+    );
+    assert_eq!(editor.snapshot().document, &enabled);
+    assert!(Arc::ptr_eq(&editor.pixels(), &accepted_pixels));
+    editor
+        .execute(edit_text_request("label", json!({"dropShadow":false})))
+        .unwrap();
+    assert_eq!(editor.pixels(), before);
+    editor
+        .execute(edit_text_request("label", json!({"dropShadow":true})))
+        .unwrap();
+    assert_eq!(editor.snapshot().document, &enabled);
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 81 })
+        .unwrap();
+    let reopened = open(data.path(), &id).unwrap();
+    assert_eq!(reopened.snapshot().document, &enabled);
+    assert_eq!(reopened.pixels(), pixels);
+}
+
+#[test]
 fn typed_text_creation_uses_fresh_ids_measured_width_pixels_and_one_undo_step() {
     let (data, id, _) = setup();
     let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();

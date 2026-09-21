@@ -34,8 +34,10 @@ pub fn render(
 
 /// Opt in to filled paragraph text using caller-owned fonts. `families` maps
 /// document family keys (such as `sans`) to names embedded in supplied font bytes.
-/// No installed fonts are scanned. Outlines and text shadows remain explicit
-/// errors. Text and plates rotate together around the shipping selection pivot.
+/// No installed fonts are scanned. Outlines remain explicit errors. Text and
+/// plates rotate together around the shipping selection pivot; shadow offsets
+/// stay in canvas space. Plates shadow once, otherwise glyph lines shadow first
+/// and all crisp glyph passes follow, matching shipping paint order.
 /// Retained text bitmaps are limited to 16M pixels across the visible document.
 pub fn render_with_text(
     document: &Document,
@@ -104,19 +106,38 @@ fn render_inner(
             }
             Element::Text(element) => {
                 let (renderer, families) = text.as_mut().expect("validated text context");
-                for (index, mut layer) in
-                    text_layers(id, element, renderer, families, &mut text_pixels_remaining)?
-                        .into_iter()
-                        .enumerate()
-                {
+                let paints =
+                    text_layers(id, element, renderer, families, &mut text_pixels_remaining)?;
+                let plate = matches!(
+                    paints.first().map(|layer| &layer.shape),
+                    Some(Shape::RoundedRectangle { .. })
+                );
+                let shadow = element.has_drop_shadow().then(|| {
+                    drop_shadow(&crate::editor_text::shadow_style(
+                        element,
+                        element.font_size,
+                    ))
+                });
+                let mut crisp = Vec::new();
+                for (index, mut layer) in paints.into_iter().enumerate() {
                     // Preserve document-index IDs and keep the extra text paints
                     // disjoint from every shape/path shadow key.
                     if index > 0 {
                         layer.id = next_text_id;
                         next_text_id += 1;
                     }
+                    if let Some(shadow) = shadow.filter(|_| !plate || index == 0) {
+                        shadows.insert(layer.id, shadow);
+                        if !plate {
+                            let mut copy = layer.clone(); // Shared immutable bitmap, no second raster allocation.
+                            copy.id = next_text_id;
+                            next_text_id += 1;
+                            crisp.push(copy);
+                        }
+                    }
                     layers.push(layer);
                 }
+                layers.extend(crisp);
             }
         }
     }
@@ -133,10 +154,8 @@ fn render_inner(
 
 fn validate_text(element: &TextElement, families: &BTreeMap<String, String>) -> Result<(), String> {
     let id = &element.base.id;
-    if element.outlined || element.has_drop_shadow() {
-        return Err(format!(
-            "text layer {id} outlines and shadows are not supported yet"
-        ));
+    if element.outlined {
+        return Err(format!("text layer {id} outlines are not supported yet"));
     }
     for (axis, value) in [
         ("x", element.base.x),

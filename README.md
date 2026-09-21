@@ -268,7 +268,8 @@ paragraph helpers now provide measured wrapping, alignment, auto-width boxes and
 background-plate geometry. An opt-in document renderer composites filled text and
 square/rounded plates from those fonts, with rotation, opacity and blending. Shared
 text selection, movement and resizing follow the shipping editor's interaction rules;
-text outlines and shadows are still unsupported. Editor workers can own explicit
+text outlines are still unsupported. Text shadows follow the glyphs, or the plate
+when one is enabled. Editor workers can own explicit
 fonts and preserve their exact bytes in local draft sidecars, so text edits, undo,
 export and reopening use the same fonts. Typed commands create plain text and edit
 content, type, alignment, color and plates transactionally. Both native hosts now
@@ -395,9 +396,10 @@ diameter and softness; Restore paints from the retained original image. The brus
 outline shows size and path while dragging; pixels apply on release in one undo
 step. Escape, focus loss or changing tools cancels an unfinished stroke. Live pixel
 painting and the shipping brush cursor design remain parity work.
-Text controls support multiline content, size, bold/italic, alignment, color and
-square/rounded background plates. Apply changes the document in one undo step;
-Cancel restores accepted values. Font-family selection, text presets/outlines/shadows,
+Text controls support multiline content, pinned font families, size, bold/italic,
+alignment, color, square/rounded background plates and a Drop shadow toggle.
+Apply changes the document in one undo step; Cancel restores accepted values.
+Custom shadow controls, font import, text presets/outlines,
 inline canvas typing and physical input/IME/accessibility acceptance remain open.
 Other drawing tools, overwrite-original, and recording editing remain
 unconnected. Shared editor support

@@ -65,7 +65,7 @@ pub struct TextCreate {
 }
 
 /// Filled-text property edits. Omitted fields preserve authored/unknown data;
-/// a null background removes the plate. Outlines/shadows remain unsupported.
+/// a null background removes the plate. Outlines remain unsupported.
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TextPatch {
@@ -79,6 +79,7 @@ pub struct TextPatch {
     #[serde(default)]
     pub background: OptionalNullable<String>,
     pub rounded_background: Option<bool>,
+    pub drop_shadow: Option<bool>,
 }
 
 impl TextPatch {
@@ -125,6 +126,9 @@ impl TextPatch {
         }
         if let Some(rounded) = self.rounded_background {
             element.rounded_background = rounded;
+        }
+        if let Some(enabled) = self.drop_shadow {
+            element.drop_shadow = Some(enabled);
         }
         Ok(refit)
     }
