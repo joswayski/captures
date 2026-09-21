@@ -2216,7 +2216,7 @@ fn show_crop(
     );
     let painter = ui
         .painter()
-        .with_clip_rect(preview.intersect(ui.clip_rect()));
+        .with_clip_rect(preview.intersect(available).intersect(ui.clip_rect()));
     for (min, max) in [
         (preview.min, egui::pos2(preview.right(), selection.top())),
         (egui::pos2(preview.left(), selection.bottom()), preview.max),
