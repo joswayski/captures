@@ -98,6 +98,7 @@ jobs:
             /usr/bin/python3 apps/native/x11_editor_smoke.py --trim-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-trim-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --text-draft-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-text-draft-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --text-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-text-$appearance"
+            /usr/bin/python3 apps/native/x11_editor_smoke.py --text-defaults-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-text-defaults-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --polygon-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-polygons-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --rotation-snap-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-rotation-snap-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --output-presets-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-output-presets-$appearance"

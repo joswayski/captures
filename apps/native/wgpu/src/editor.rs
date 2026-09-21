@@ -336,6 +336,9 @@ struct View {
     crop_aspect: usize,
     draw_shape: DrawShape,
     rotation_snap_degrees: f64,
+    new_text_preset: Option<String>,
+    new_text_size: f64,
+    new_text_color: String,
     wand_tolerance: f64,
     wand_contiguous: bool,
     brush_size: f64,
@@ -391,6 +394,9 @@ impl Default for View {
             crop_aspect: 0,
             draw_shape: DrawShape::Rectangle,
             rotation_snap_degrees: DEFAULT_ROTATION_SNAP_DEGREES,
+            new_text_preset: None,
+            new_text_size: 32.,
+            new_text_color: "#ff3b5c".into(),
             wand_tolerance: 36.,
             wand_contiguous: true,
             brush_size: 28.,
@@ -513,6 +519,13 @@ impl View {
         self.pending = false;
         match result {
             Ok(mut presented) => {
+                if self.presented.is_none() {
+                    self.new_text_preset = presented
+                        .text_style_presets
+                        .iter()
+                        .find(|preset| preset.id == "standard")
+                        .map(|preset| preset.id.to_owned());
+                }
                 let text_apply_pending = self.text_apply_pending;
                 let changed = self
                     .presented
@@ -1414,8 +1427,27 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                     ui.label("Drag over an image, then release to apply the pixels as one undo step.");
                     ui.small("Erase makes pixels transparent. Restore uses the image’s retained original pixels.");
                 } else if view.draw_shape == DrawShape::Text {
+                    ui.label("New text style");
+                    if let Some(presented) = &view.presented {
+                        egui::ComboBox::from_id_salt("new-text-style")
+                            .selected_text(presented.text_style_presets.iter()
+                                .find(|preset| Some(preset.id) == view.new_text_preset.as_deref())
+                                .map_or("Plain", |preset| preset.label))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut view.new_text_preset, None, "Plain");
+                                for preset in &presented.text_style_presets {
+                                    ui.selectable_value(&mut view.new_text_preset,
+                                        Some(preset.id.into()), preset.label);
+                                }
+                            });
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label("Size");
+                        ui.add(egui::DragValue::new(&mut view.new_text_size).range(8. ..=512.).speed(1.));
+                    });
+                    annotation_color(ui, "Color", &mut view.new_text_color);
                     ui.label("Click the canvas to place text, then edit it in Layers.");
-                    ui.small("New text uses Sans when available. Apply text changes as one undo step.");
+                    ui.small("These defaults apply only to new text in this editor. Box styles center on the click.");
                 } else {
                     ui.label("Drag to draw. Release to add one layer. Escape cancels the current drag.");
                     ui.small("New shapes use the default annotation color. Change fill, stroke, shadow, opacity, position and ordering in Layers.");
@@ -2344,7 +2376,7 @@ fn show_shape(
                     create: TextCreate {
                         point: image_point(position, preview, bounds),
                         text: String::new(),
-                        font_size: 32.,
+                        font_size: view.new_text_size,
                         font_family: view
                             .presented
                             .as_ref()
@@ -2356,7 +2388,8 @@ fn show_shape(
                                     .map(|(key, _)| key.clone())
                             })
                             .unwrap_or_else(|| "sans".into()),
-                        color: "#111111".into(),
+                        color: view.new_text_color.clone(),
+                        style_preset: view.new_text_preset.clone(),
                     },
                 },
             );
@@ -4209,6 +4242,9 @@ mod tests {
         let mut view = View::default();
         view.receive(&ctx, Ok(presented(false)));
         view.draw_shape = DrawShape::Text;
+        view.new_text_preset = Some("mono-box".into());
+        view.new_text_size = 37.5;
+        view.new_text_color = "#2367ab".into();
         let (tx, rx) = mpsc::channel();
         let area = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(140., 60.));
         let click = egui::pos2(70., 30.);
@@ -4257,7 +4293,36 @@ mod tests {
         assert_eq!(create.point, Point { x: 3.5, y: 1.5 });
         assert!(create.text.is_empty());
         assert_eq!(create.font_family, "sans");
+        assert_eq!(create.style_preset.as_deref(), Some("mono-box"));
+        assert_eq!(create.font_size, 37.5);
+        assert_eq!(create.color, "#2367ab");
         assert!(rx.try_recv().is_err(), "multipass click creates one layer");
+    }
+
+    #[test]
+    fn new_text_defaults_are_per_editor_and_survive_responses_and_errors() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented_text("old", "accepted")));
+        assert_eq!(view.new_text_preset.as_deref(), Some("standard"));
+        assert_eq!(view.new_text_size, 32.);
+        assert_eq!(view.new_text_color, "#ff3b5c");
+        view.new_text_preset = Some("mono-box".into());
+        view.new_text_size = 37.5;
+        view.new_text_color = "invalid input".into();
+        view.receive(&ctx, Err("Invalid color".into()));
+        view.receive(&ctx, Ok(presented_text("old", "accepted")));
+        assert_eq!(view.new_text_preset.as_deref(), Some("mono-box"));
+        assert_eq!(view.new_text_size, 37.5);
+        assert_eq!(view.new_text_color, "invalid input");
+        assert_eq!(view.text.as_ref().unwrap().accepted.text, "accepted");
+        let mut plain = presented_text("old", "accepted");
+        plain.text_style_presets.clear();
+        let mut reopened = View::default();
+        reopened.receive(&ctx, Ok(plain));
+        assert_eq!(reopened.new_text_preset, None);
+        assert_eq!(reopened.new_text_size, 32.);
+        assert_eq!(reopened.new_text_color, "#ff3b5c");
     }
 
     fn layer_frame(

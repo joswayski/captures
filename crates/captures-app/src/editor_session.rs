@@ -52,8 +52,9 @@ pub struct ImportImage {
     pub point: Option<Point>,
 }
 
-/// Plain, left-aligned text. Native hosts own composition/cancellation and submit
-/// accepted content, never font bytes or an entire replacement document.
+/// Text placed with either the caller's explicit family or a shared named style.
+/// Native hosts own composition/cancellation and submit accepted content, never
+/// font bytes or an entire replacement document.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TextCreate {
@@ -62,6 +63,8 @@ pub struct TextCreate {
     pub font_size: f64,
     pub font_family: String,
     pub color: String,
+    #[serde(default)]
+    pub style_preset: Option<String>,
 }
 
 /// Text property edits. Omitted fields preserve authored/unknown data;
@@ -735,12 +738,38 @@ impl EditorSession {
                 if !(8. ..=512.).contains(&create.font_size) {
                     return Err("Text property size must be between 8 and 512.".into());
                 }
+                let preset = create
+                    .style_preset
+                    .as_deref()
+                    .map(|id| {
+                        crate::editor_text::TEXT_STYLE_PRESETS
+                            .iter()
+                            .find(|preset| preset.id == id)
+                            .copied()
+                            .ok_or_else(|| format!("Unknown text style preset: {id}"))
+                    })
+                    .transpose()?;
+                let font_family = preset
+                    .map(|preset| preset.font_family)
+                    .unwrap_or(&create.font_family);
+                let fonts = self
+                    .fonts
+                    .as_mut()
+                    .ok_or("Text requires explicit font bytes.")?;
+                if preset.is_some() && !fonts.assets.families.contains_key(font_family) {
+                    return Err(format!(
+                        "Text style requires unavailable font family: {font_family}"
+                    ));
+                }
                 let mut document = next.current().clone();
                 let id = fresh_id(|id| document.elements.iter().any(|e| e.base().id == id));
+                let width = (create.font_size * 8.).round();
+                let centered = preset
+                    .is_some_and(|preset| matches!(preset.id, "box" | "mono-box" | "rounded-box"));
                 let element = TextElement {
                     base: ElementBase {
                         id,
-                        x: create.point.x,
+                        x: create.point.x - if centered { width / 2. } else { 0. },
                         y: create.point.y,
                         rotation: None,
                         locked: false,
@@ -750,24 +779,20 @@ impl EditorSession {
                     },
                     text: create.text,
                     font_size: create.font_size,
-                    width: (create.font_size * 8.).round(),
+                    width,
                     auto_width: Some(true),
-                    font_family: create.font_family,
+                    font_family: font_family.into(),
                     bold: false,
                     italic: false,
-                    align: "left".into(),
+                    align: if centered { "center" } else { "left" }.into(),
                     color: create.color,
-                    background: None,
-                    outlined: false,
-                    rounded_background: false,
+                    background: preset.and_then(|preset| preset.background.map(str::to_owned)),
+                    outlined: preset.is_some_and(|preset| preset.outlined),
+                    rounded_background: preset.is_some_and(|preset| preset.rounded_background),
                     drop_shadow: None,
                     drop_shadow_style: None,
                     extra: Default::default(),
                 };
-                let fonts = self
-                    .fonts
-                    .as_mut()
-                    .ok_or("Text requires explicit font bytes.")?;
                 let element =
                     prepare_text_edit(&element, true, &mut fonts.renderer, &fonts.assets.families)?;
                 document.elements.push(Element::Text(element));

@@ -272,10 +272,12 @@ Outlines use scalable monochrome glyph contours; color/bitmap glyphs return an e
 in outline mode. Text shadows follow the glyphs, or the plate
 when one is enabled. Editor workers can own explicit
 fonts and preserve their exact bytes in local draft sidecars, so text edits, undo,
-export and reopening use the same fonts. Typed commands create plain text and edit
+export and reopening use the same fonts. Typed commands create plain or preset text and edit
 content, type, alignment, color and plates transactionally. Both native hosts now
 connect a basic **Draw → Text** tool with staged Apply/Cancel controls, including
-outlines and shadow color, opacity, blur and offsets. New text uses
+outlines and shadow color, opacity, blur and offsets. Before placement, choose a
+named style, size and color; boxed styles center on the click. These defaults last
+only for that editor. Standard starts at size 32 in the annotation red, using
 bundled Liberation Sans, with Serif and Mono also available (OFL 1.1); exact font
 bytes and license notices stay with the draft. Older drafts offer only their saved
 fonts; adding new fonts to an existing draft is not implemented.
@@ -406,8 +408,9 @@ painting and the shipping brush cursor design remain parity work.
 Text controls support multiline content, pinned font families, size, bold/italic,
 alignment, color, square/rounded background plates, outlines and a Drop shadow toggle.
 Apply changes the document in one undo step; Cancel restores accepted values.
-Custom shadow controls, font import, text presets,
-inline canvas typing and physical input/IME/accessibility acceptance remain open.
+Custom shadows and pinned-font named styles are connected, including style/size/color
+choices for new text. Font import, inline canvas typing and physical
+input/IME/accessibility acceptance remain open.
 Other drawing tools, overwrite-original, and recording editing remain
 unconnected. Shared editor support
 is prerequisite work, not native editor acceptance. OS shortcut takeover, login items,

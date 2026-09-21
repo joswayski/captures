@@ -818,6 +818,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var brushSizeLabel: NSTextField!
     private var brushSoftnessLabel: NSTextField!
     private var drawHelper: NSTextField!
+    private let createTextPreset = NSPopUpButton()
+    private let createTextSize = NSTextField()
+    private let createTextColor = NSTextField()
+    private var createTextControls: [NSView] = []
+    private var createTextDefaultsPublished = false
     private let textEditor = NSTextView()
     private let textSize = NSTextField()
     private let textColor = NSTextField()
@@ -1320,8 +1325,48 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawHelper = panelLabel("Other tools create one annotation layer on release.",
                                 frame: NSRect(x: 0, y: 278, width: 252, height: 42), muted: true,
                                 parent: content)
+        buildCreateTextControls(in: content)
         buildTextControls(in: content)
         publishDrawToolControls()
+    }
+
+    private func buildCreateTextControls(in content: NSView) {
+        let styleLabel = panelFieldLabel("Style", x: 0, y: 146, parent: content)
+        createTextPreset.frame = NSRect(x: 0, y: 168, width: 252, height: 30)
+        createTextPreset.setAccessibilityLabel("New text style")
+        content.addSubview(createTextPreset)
+        let sizeLabel = panelFieldLabel("Size (8–512)", x: 0, y: 208, parent: content)
+        sizeLabel.frame.size.width = 118
+        let colorLabel = panelFieldLabel("Color", x: 134, y: 208, parent: content)
+        colorLabel.frame.size.width = 118
+        configure(createTextSize, frame: NSRect(x: 0, y: 230, width: 118, height: 30),
+                  label: "New text size", parent: content)
+        createTextSize.stringValue = format(32)
+        configure(createTextColor, frame: NSRect(x: 134, y: 230, width: 118, height: 30),
+                  label: "New text color", parent: content)
+        createTextColor.formatter = nil; createTextColor.stringValue = "#ff3b5c"
+        createTextControls = [styleLabel, createTextPreset, sizeLabel, colorLabel,
+                              createTextSize, createTextColor]
+    }
+
+    private func publishCreateTextDefaults() {
+        let selectedID = createTextPreset.selectedItem?.representedObject as? String
+        createTextPreset.removeAllItems()
+        createTextPreset.addItem(withTitle: "Plain")
+        for preset in state.snapshot?.textStylePresets ?? [] {
+            createTextPreset.addItem(withTitle: preset.label)
+            createTextPreset.lastItem?.representedObject = preset.id
+        }
+        let desiredID = createTextDefaultsPublished ? selectedID
+            : state.snapshot?.textStylePresets.first(where: { $0.id == "standard" })?.id
+        if let desiredID, let index = createTextPreset.itemArray.firstIndex(where: {
+            $0.representedObject as? String == desiredID
+        }) {
+            createTextPreset.selectItem(at: index)
+        } else {
+            createTextPreset.selectItem(at: 0)
+        }
+        createTextDefaultsPublished = true
     }
 
     private func buildTextControls(in content: NSView) {
@@ -1643,10 +1688,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let shape = EditorDrawOverlay.Shape.allCases[drawTool.indexOfSelectedItem]
         let wand = shape == .wand
         let brush = shape.isBackgroundBrush
+        let creatingText = shape == .text
         wandToleranceLabel?.isHidden = !wand
         wandTolerance.isHidden = !wand; wandContiguous.isHidden = !wand
         brushSizeLabel?.isHidden = !brush; brushSize.isHidden = !brush
         brushSoftnessLabel?.isHidden = !brush; brushSoftness.isHidden = !brush
+        createTextControls.forEach { $0.isHidden = !creatingText }
         drawHelper.stringValue = wand
             ? "Wand removes matching pixels from the frontmost visible image."
             : brush
@@ -1656,9 +1703,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                     : "This tool creates one annotation layer on release."
         let textSelected = selectedLayer?.kind == .text
         textControls.forEach { $0.isHidden = !textSelected }
-        // Text needs no Wand/brush fields. Collapse their reserved space instead
-        // of opening its inspector below an empty block.
-        let compact = textSelected && !wand && !brush
+        // Other tools need no Wand/brush/text-default fields. Collapse their
+        // reserved space without overlapping Text's creation controls.
+        let compact = textSelected && !wand && !brush && !creatingText
         drawHelper.frame.origin.y = compact ? 148 : 278
         if let heading = textControls.first, let content = heading.superview {
             let offset = (compact ? 196.0 : 326.0) - heading.frame.minY
@@ -2081,10 +2128,23 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         guard shape != .wand, let layers = state.snapshot?.layers else { return }
         let request: [String: Any]
         if shape == .text {
+            guard let size = number(createTextSize), (8...512).contains(size) else {
+                showError("Text size must be from 8 to 512."); return
+            }
+            guard !createTextColor.stringValue.isEmpty else {
+                showError("Enter a text color."); return
+            }
             let families = state.snapshot?.fontFamilies ?? [:]
             let family = families["sans"] != nil ? "sans" : families.keys.sorted().first ?? "sans"
-            request = ["operation": "create_text", "point": ["x": start.x, "y": start.y],
-                       "text": "", "fontSize": 32, "fontFamily": family, "color": "#111111"]
+            var textRequest: [String: Any] = [
+                "operation": "create_text", "point": ["x": start.x, "y": start.y],
+                "text": "", "fontSize": size, "fontFamily": family,
+                "color": createTextColor.stringValue,
+            ]
+            if let preset = createTextPreset.selectedItem?.representedObject as? String {
+                textRequest["stylePreset"] = preset
+            }
+            request = textRequest
         } else if shape == .pen {
             request = ["operation": "create_freehand_path", "points": points.map { ["x": $0.x, "y": $0.y] }]
         } else {
@@ -2393,6 +2453,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawTool?.isEnabled = state.snapshot != nil && !state.busy
         wandTolerance.isEnabled = active; wandContiguous.isEnabled = active
         brushSize.isEnabled = active; brushSoftness.isEnabled = active
+        createTextPreset.isEnabled = active && createTextPreset.numberOfItems > 1
+        createTextSize.isEnabled = active; createTextColor.isEnabled = active
         let textReady = active && selectedLayer?.kind == .text
         textEditor.isEditable = textReady
         textFamily.isEnabled = textReady && textFamily.numberOfItems > 1
@@ -2759,6 +2821,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             cropWidth.stringValue = format(snapshot.width); cropHeight.stringValue = format(snapshot.height)
         }
         publishCropSelection()
+        publishCreateTextDefaults()
         reconcileLayerSelection(snapshot.layers)
         window.title = snapshot.unsavedChanges ? "Edit screenshot — Unsaved" : "Edit screenshot"
     }
