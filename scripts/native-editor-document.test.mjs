@@ -396,6 +396,26 @@ function rotationCases() {
     if (isFullyOutsideCanvas(bounds, expected)) expected = expandDocumentToFitBounds(expected, bounds, 0);
     return { input, id: element.id, radians, expected };
   }));
+  // Rotation can move a partially overlapping layer fully outside. Path stroke
+  // padding also extends above zero, so expansion must translate every sibling.
+  const overflowing = [
+    { ...image, x: 80, y: 45, width: 100, height: 10 },
+    { ...document.elements[2], shape: 'rectangle', x: 80, y: 45, endX: 180, endY: 55, controls: [] },
+    { ...document.elements[3], x: 80, y: 45, points: [{ x: 80, y: 45 }, { x: 180, y: 55 }], style },
+  ];
+  edits.push(...overflowing.map(element => {
+    const sibling = { ...image, id: 'sibling', x: 0, y: 0, width: 4, height: 3, locked: true };
+    const input = { ...document, width: 100, height: 100, elements: [sibling, element] };
+    const radians = Math.PI / 2;
+    const rotated = { ...input, elements: [sibling, withElementRotation(element, radians)] };
+    const bounds = elementBounds(rotated.elements[1]);
+    assert.equal(isFullyOutsideCanvas(elementBounds(element), input), false);
+    assert.equal(isFullyOutsideCanvas(bounds, rotated), true);
+    const expected = expandDocumentToFitBounds(rotated, bounds, 0);
+    assert.ok(expected.width > input.width);
+    if (element.kind === 'path') assert.ok(expected.elements[0].y > sibling.y);
+    return { input, id: element.id, radians, expected };
+  }));
   return { angles, handles, gestures, edits };
 }
 
