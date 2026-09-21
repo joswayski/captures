@@ -3008,6 +3008,7 @@ mod tests {
     #[test]
     fn zoom_shortcuts_keep_event_order_cancel_gestures_and_do_not_zoom_ui_or_edit() {
         let ctx = egui::Context::default();
+        ctx.options_mut(|options| options.zoom_with_keyboard = true);
         let mut view = View::default();
         view.receive(&ctx, Ok(presented(false)));
         let document = view.presented.as_ref().unwrap().document.clone();
@@ -3039,8 +3040,10 @@ mod tests {
                 },
                 |ui| {
                     handle_viewport_shortcuts(&ctx, view);
-                    ui.add(egui::TextEdit::singleline(&mut text).id(egui::Id::new("zoom-field")))
-                        .request_focus();
+                    ui.add(
+                        egui::TextEdit::singleline(&mut text).id(egui::Id::unique("zoom-field")),
+                    )
+                    .request_focus();
                     if ctx.current_pass_index() == 0 {
                         ctx.request_discard("shortcut multipass");
                     }
