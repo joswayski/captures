@@ -1277,11 +1277,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         undoButton = button("Undo", frame: NSRect(x: 688, y: 470, width: 128, height: 34)) {
             [weak self] in self?.command(["operation": "undo"], message: "Undoing…")
         }
-        undoButton.keyEquivalent = "z"; undoButton.keyEquivalentModifierMask = .command
         redoButton = button("Redo", frame: NSRect(x: 832, y: 470, width: 128, height: 34)) {
             [weak self] in self?.command(["operation": "redo"], message: "Redoing…")
         }
-        redoButton.keyEquivalent = "Z"; redoButton.keyEquivalentModifierMask = [.command, .shift]
         saveButton = button("Save draft", frame: NSRect(x: 688, y: 524, width: 128, height: 34)) {
             [weak self] in self?.saveDraft()
         }
@@ -2454,6 +2452,18 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             scaleViewport(by: 1 / 1.25)
         } else if key == "0" || event.keyCode == 82 {
             setViewportZoom(100)
+        } else if key.lowercased() == "z" {
+            // Field editors keep native typing undo. Route document shortcuts
+            // here rather than button key equivalents, which bypass this guard.
+            let responder = window.firstResponder
+            guard !(responder is NSTextView), !(responder is NSTextField),
+                  !(responder is NSPopUpButton), !(responder is NSComboBox),
+                  !(responder is NSSlider), !awaitingReplaceConfirmation else { return false }
+            let button = event.modifierFlags.contains(.shift) ? redoButton : undoButton
+            if button?.isEnabled == true {
+                cancelDrawing(); cancelViewportPan()
+                button?.performClick(nil)
+            }
         } else {
             return false
         }

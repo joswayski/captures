@@ -1322,6 +1322,7 @@ impl Drop for Editor {
 fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     let previous_section = view.section;
     handle_viewport_shortcuts(ui.ctx(), view);
+    handle_history_shortcuts(ui.ctx(), view, tx);
     if !ui.ctx().egui_wants_keyboard_input()
         && !egui::Popup::is_any_open(ui.ctx())
         && ui.input(|input| input.key_pressed(egui::Key::Escape))
@@ -1761,6 +1762,51 @@ fn handle_viewport_shortcuts(ctx: &egui::Context, view: &mut View) {
             egui::Key::Num0 => set_viewport_zoom(view, 100., None),
             egui::Key::Minus => change_viewport_zoom(view, 1. / 1.25, None),
             _ => change_viewport_zoom(view, 1.25, None),
+        }
+    }
+}
+
+fn handle_history_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<Job>) {
+    if ctx.current_pass_index() != 0
+        || !ctx.input(|input| input.focused)
+        || ctx.text_edit_focused()
+        || egui::Popup::is_any_open(ctx)
+        || view.closed
+        || view.close_requested
+        || view.confirm_discard
+        || view.confirm_replace.is_some()
+    {
+        return;
+    }
+    let requests = ctx.input_mut(|input| {
+        let mut requests = Vec::new();
+        input.events.retain(|event| {
+            if let egui::Event::Key {
+                key: egui::Key::Z,
+                pressed: true,
+                modifiers,
+                ..
+            } = event
+                && (modifiers.command || modifiers.ctrl)
+            {
+                requests.push(modifiers.shift);
+                false
+            } else {
+                true
+            }
+        });
+        requests
+    });
+    for redo in requests {
+        if !view.pending
+            && view
+                .presented
+                .as_ref()
+                .is_some_and(|p| if redo { p.can_redo } else { p.can_undo })
+        {
+            view.cancel_edit_gestures();
+            view.viewport_pan = None;
+            view.submit(tx, if redo { Request::Redo } else { Request::Undo });
         }
     }
 }
@@ -3889,6 +3935,87 @@ mod tests {
         ));
         view.reset_viewport();
         assert_eq!(displayed_zoom(&view), Some(50.));
+    }
+
+    #[test]
+    fn history_shortcuts_respect_text_focus_confirmation_and_one_in_flight_command() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented(true)));
+        let (tx, rx) = mpsc::channel();
+        let key = |shift| egui::Event::Key {
+            key: egui::Key::Z,
+            physical_key: None,
+            pressed: true,
+            repeat: true,
+            modifiers: egui::Modifiers {
+                ctrl: true,
+                shift,
+                ..Default::default()
+            },
+        };
+        let frame = |view: &mut View, events, text_focus| {
+            let mut remaining = 0;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    handle_history_shortcuts(&ctx, view, &tx);
+                    if ctx.current_pass_index() == 0 {
+                        remaining = ctx.input(|input| input.events.len());
+                    }
+                    if text_focus {
+                        ui.push_id("typing-field", |ui| {
+                            ui.text_edit_singleline(&mut "typing".to_owned())
+                                .request_focus();
+                        });
+                    } else {
+                        ui.push_id("document-action", |ui| {
+                            ui.button("Focused action").request_focus();
+                        });
+                    }
+                    if ctx.current_pass_index() == 0 {
+                        ctx.request_discard("history multipass");
+                    }
+                },
+            );
+            output.textures_delta.clear();
+            remaining
+        };
+        frame(&mut view, vec![], true);
+        assert_eq!(
+            frame(&mut view, vec![key(false)], true),
+            1,
+            "TextEdit must receive its own undo event"
+        );
+        assert!(rx.try_recv().is_err() && !view.pending);
+        frame(&mut view, vec![], false);
+        view.confirm_discard = true;
+        assert_eq!(frame(&mut view, vec![key(false)], false), 1);
+        view.confirm_discard = false;
+        view.shape_drag = Some((Point { x: 3., y: 7. }, Point { x: 20., y: 30. }));
+        assert_eq!(frame(&mut view, vec![key(false), key(true)], false), 0);
+        assert!(view.shape_drag.is_none());
+        assert!(matches!(rx.try_recv(), Ok(Job::Apply(Request::Undo))));
+        assert!(
+            rx.try_recv().is_err(),
+            "repeated keys and layout passes cannot queue extra work"
+        );
+        frame(&mut view, vec![key(false)], false);
+        assert!(rx.try_recv().is_err());
+        let mut undone = presented(false);
+        undone.can_redo = true;
+        view.receive(&ctx, Ok(undone));
+        frame(&mut view, vec![key(true)], false);
+        assert!(matches!(rx.try_recv(), Ok(Job::Apply(Request::Redo))));
+        view.receive(&ctx, Ok(presented(false)));
+        frame(&mut view, vec![key(false), key(true)], false);
+        assert!(
+            rx.try_recv().is_err(),
+            "disabled history actions must stay disabled"
+        );
     }
 
     #[test]

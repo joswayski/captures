@@ -3,6 +3,43 @@ import XCTest
 @testable import CapturesNative
 
 final class ScreenshotEditorTests: XCTestCase {
+    func testHistoryShortcutsUseAcceptedCommandsAndLeaveFieldUndoAlone() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        func event(_ modifiers: NSEvent.ModifierFlags) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+                timestamp: 0, windowNumber: controller.window.windowNumber, context: nil,
+                characters: "z", charactersIgnoringModifiers: "z", isARepeat: true, keyCode: 6))
+        }
+        let undo = try button("Undo", in: controller.root)
+        let redo = try button("Redo", in: controller.root)
+        XCTAssertTrue(undo.keyEquivalent.isEmpty && redo.keyEquivalent.isEmpty)
+        let field = try field("Crop X", in: controller.root)
+        XCTAssertTrue(controller.window.makeFirstResponder(field))
+        _ = controller.window.performKeyEquivalent(with: try event(.command))
+        _ = controller.window.performKeyEquivalent(with: try event([.control, .shift]))
+        XCTAssertTrue(worker.requests.isEmpty, "field editors must not dispatch document history")
+
+        controller.window.makeFirstResponder(undo)
+        worker.deferRequests = true
+        XCTAssertTrue(controller.window.performKeyEquivalent(with: try event(.control)))
+        XCTAssertEqual(worker.requests.map { $0["operation"] as? String }, ["undo"])
+        XCTAssertTrue(controller.state.busy)
+        _ = controller.window.performKeyEquivalent(with: try event(.command))
+        _ = controller.window.performKeyEquivalent(with: try event([.command, .shift]))
+        XCTAssertEqual(worker.requests.count, 1, "repeats do not queue behind accepted work")
+        worker.completePending(with: snapshot(id: "shot", canRedo: true))
+        XCTAssertTrue(controller.window.performKeyEquivalent(with: try event([.command, .shift])))
+        XCTAssertEqual(worker.requests.map { $0["operation"] as? String }, ["undo", "redo"])
+        worker.completePending(with: snapshot(id: "shot"))
+        _ = controller.window.performKeyEquivalent(with: try event(.command))
+        _ = controller.window.performKeyEquivalent(with: try event([.control, .shift]))
+        XCTAssertEqual(worker.requests.count, 2, "disabled history actions stay disabled")
+    }
+
     func testZoomSliderUsesSharedLogScaleAndRetainsDocumentAndOutput() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
@@ -4017,6 +4054,7 @@ final class ScreenshotEditorTests: XCTestCase {
 
     private func snapshot(id: String, width: Double = 640, height: Double = 360,
                           unsaved: Bool = false, draft: Bool = false,
+                          canRedo: Bool = false,
                           originalExportPath: String? = nil,
                           layers: [[String: Any]] = [],
                           annotations: [String: [String: Any]] = [:],
@@ -4039,7 +4077,7 @@ final class ScreenshotEditorTests: XCTestCase {
                 return (id, ["color": "#000000", "opacity": 30.0, "blur": 5.984,
                              "offsetX": 0.0, "offsetY": 2.0] as [String: Any])
             }),
-            "can_undo": unsaved, "can_redo": false,
+            "can_undo": unsaved, "can_redo": canRedo,
             "unsaved_changes": unsaved, "has_draft": draft,
         ]
         if let originalExportPath { value["original_export_path"] = originalExportPath }

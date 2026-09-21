@@ -385,6 +385,9 @@ coordinate mapping with editing tools. These controls do not change drafts or un
 Fit does not enlarge small screenshots; manual zoom still can.
 Cmd/Ctrl +/− zoom in 1.25× steps; Cmd/Ctrl 0 shows 100% (not Fit), including while
 an editor field has focus. Zoom shortcuts cancel unfinished canvas gestures.
+Cmd/Ctrl Z undoes and Cmd/Ctrl Shift Z redoes document edits outside text entry
+and open dialogs. Typing retains its own Undo; commands do not queue while the
+editor is busy. These are editor-local shortcuts, not global capture shortcuts.
 The zoom menu offers Fit, 50%, 100% and 200% and displays the current custom zoom.
 Both hosts also provide a logarithmic 5–800% zoom slider. It tracks the actual Fit
 scale and preserves the viewport-center image point when dragged.
