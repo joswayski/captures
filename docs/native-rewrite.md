@@ -23,7 +23,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices | Audio meter/device-change parity, physical recording/audio acceptance, recording editor and transcoded exports |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Line/Arrow/Pen/Wand/Erase/Restore, copy and save-new-copy | Text, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; recording playback/timeline/editing/export |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Line/Arrow/Pen/Wand/Erase/Restore, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; recording playback/timeline/editing/export |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -231,7 +231,8 @@ mappings plus immutable font sidecars, not raw bytes in JSON, within the existin
 80 MiB image-plus-font save budget (including bounded full license notices in the
 manifest). New native sessions use four unmodified Liberation Sans 2.1.5 static
 faces (1,649,980 bytes, shared across workers), with complete OFL 1.1 notices in
-native resources, `--font-license` output and saved drafts. No OS fonts are copied
+native resources, `--font-license` output and text-bearing saved drafts. Image-only
+drafts do not persist the worker's unused font set. No OS fonts are copied
 and no network fallback occurs. This Latin/Greek/Cyrillic-oriented default is not
 universal Unicode or Tauri system-font equivalence; missing glyphs are errors.
 Reopening prefers the saved font set over host

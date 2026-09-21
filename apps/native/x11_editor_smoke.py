@@ -337,8 +337,15 @@ def main():
             close(editor)
             wait(lambda: not windows("Screenshot editor"), "text editor closes")
             editor = reopen()
+            click(editor, 464, 62)  # Layers, with the restored text selected explicitly.
+            click(editor, 100, 153)
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, f"text-minimum-reopened-{args.appearance}")
+            before_scroll = draft.read_bytes()
+            run("xdotool", "mousemove", "--window", editor, "120", "440",
+                "click", "--repeat", "8", "--delay", "80", "5", "sleep", ".3")
+            shot(editor, f"text-minimum-controls-{args.appearance}")
+            assert draft.read_bytes() == before_scroll, "scrolling text controls must not edit"
             reopened = layers()[-1]
             assert reopened["id"] == created["id"] and reopened["text"] == "Readable native text"
             assert reopened["bold"] and reopened["italic"] and reopened["background"] is not None
@@ -420,11 +427,11 @@ def main():
             save(640, 360, 0, 0)
             source = layers()[0]["src"]
             click(editor, 736, 62)
-            click(editor, 100, 226)  # Restore before the first edit reports a recoverable error.
+            click(editor, 170, 221)  # Restore before the first edit reports a recoverable error.
             click(editor, 338, 189)
             shot(editor, "brush-restore-error")
             save_layers(lambda values: values[0]["src"] == source, "restore without original is atomic")
-            click(editor, 35, 226)  # Erase; keep shipping diameter/softness defaults.
+            click(editor, 101, 221)  # Erase; keep shipping diameter/softness defaults.
             shot(editor, "brush-controls")
             before = draft.read_bytes()
             run("xdotool", "mousemove", "--window", editor, "338", "189", "mousedown", "1",
@@ -447,7 +454,7 @@ def main():
             save_layers(lambda values: values[0]["src"] == source, "one-step brush undo")
             click(editor, 98, 62)
             save_layers(lambda values: values[0]["src"] == erased["src"], "brush redo")
-            click(editor, 100, 226)
+            click(editor, 170, 221)
             drag((338, 189), (438, 229))
             restored = save_layers(lambda values: values[0]["src"] != erased["src"], "restore stroke")[0]
             assert restored["originalSrc"] == source
@@ -461,7 +468,7 @@ def main():
             asset_pixel(layers()[0], 150, 120, (0, 0, 0, 0))
             run("xdotool", "windowsize", "--sync", editor, "886", "700")
             click(editor, 736, 62)
-            click(editor, 35, 226)
+            click(editor, 101, 221)
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "brush-minimum-reopened")
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")
@@ -491,7 +498,7 @@ def main():
             save(640, 360, 0, 0)
             source = layers()[0]["src"]
             click(editor, 736, 62)
-            click(editor, 150, 182)
+            click(editor, 36, 221)
             shot(editor, "wand-controls")
             # Fitted image origin (238,89), scale 1. Original capture stays locked.
             click(editor, 338, 189)
@@ -524,7 +531,7 @@ def main():
             asset_pixel(layers()[0], 310, 60, (0, 0, 0, 0))
             run("xdotool", "windowsize", "--sync", editor, "886", "700")
             click(editor, 736, 62)
-            click(editor, 150, 182)
+            click(editor, 36, 221)
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "wand-minimum-reopened")
             run("xdotool", "windowsize", "--sync", editor, "1000", "800")
@@ -764,7 +771,7 @@ def main():
             print("PASS native zoom: wheel, pan, toolbar, keyboard, presets, custom zoom, focused field, no draft")
             return
         click(editor, 736, 62)
-        click(editor, 95, 176)  # Pen follows Arrow on the second tool row.
+        click(editor, 154, 177)  # Pen follows Arrow on the second tool row.
         run("xdotool", "mousemove", "--window", editor, "318", "329", "mousedown", "1", "sleep", ".2")
         for x, y in [(378, 209), (438, 329), (518, 249)]:
             run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y), "sleep", ".2")
@@ -822,7 +829,7 @@ def main():
         run("xdotool", "windowsize", "--sync", editor, "886", "700")
         click(editor, 736, 62)
         shot(editor, "open-shape-tools")
-        click(editor, 190, 132)  # Line follows Rectangle and Ellipse.
+        click(editor, 32, 177)  # Line starts the second tool row.
         drag((320, 310), (500, 310))
         horizontal = save_layers(lambda values: len(values) == 2, "horizontal line")[-1]
         assert horizontal["shape"] == "line" and horizontal["style"]["fill"] is None
@@ -836,7 +843,7 @@ def main():
         click(editor, 700, 420)
         point_line = save_layers(lambda values: len(values) == 4, "zero-length line click")[-1]
         assert (point_line["x"], point_line["y"]) == (point_line["endX"], point_line["endY"])
-        click(editor, 40, 176)  # Arrow wraps onto the next row.
+        click(editor, 94, 176)  # Arrow follows Line.
         before_arrow = draft.read_bytes()
         run("xdotool", "mousemove", "--window", editor, "750", "320", "mousedown", "1",
             "sleep", ".2", "mousemove", "--sync", "--window", editor, "580", "190", "sleep", ".3")
@@ -876,7 +883,7 @@ def main():
 
         run("xdotool", "windowsize", "--sync", editor, "886", "700")
         click(editor, 736, 62)
-        click(editor, 50, 132)
+        click(editor, 105, 133)  # Rectangle follows Text.
         drag((320, 250), (480, 370))
         annotation = save_layers(lambda values: len(values) == 2, "annotation fixture")[-1]
         click(editor, 463, 62)
@@ -1340,7 +1347,7 @@ def main():
         pixel("shape-undone", 600, 230, (40, 110, 166))
         click(editor, 98, 62)
         save_layers(lambda values: len(values) == 2 and values[-1]["id"] == rectangle["id"], "shape redo keeps id")
-        click(editor, 138, 138)  # Ellipse.
+        click(editor, 185, 133)  # Ellipse.
         drag((608, 349), (778, 399))
         ellipse = save_layers(lambda values: len(values) == 3, "ellipse layer")[-1]
         assert ellipse["shape"] == "ellipse" and ellipse["id"] != rectangle["id"]

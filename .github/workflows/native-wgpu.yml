@@ -130,6 +130,10 @@ jobs:
             native-x11-wand-light
             native-x11-brush-dark
             native-x11-brush-light
+            native-x11-text-dark
+            native-x11-text-light
+            native-x11-text-draft-dark
+            native-x11-text-draft-light
             native-x11-preview
             native-x11-lifecycle
           if-no-files-found: ignore

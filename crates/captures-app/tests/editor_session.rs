@@ -2662,6 +2662,17 @@ fn bundled_font_styles_render_offline_and_preserve_bytes_and_license_on_reopen()
     let (data, id, _) = setup();
     let mut editor = open_text(data.path(), &id, fonts.clone()).unwrap();
     editor
+        .execute(Request::SaveDraft { updated_at_ms: 70 })
+        .unwrap();
+    let image_only =
+        captures_history::editor_draft::load(&data.path().join("drafts"), &id, |_, id| {
+            format!("draft-asset:{id}")
+        })
+        .unwrap()
+        .unwrap();
+    // Offering Text must not add 1.65 MB to every image-only draft.
+    assert!(image_only.fonts.is_none());
+    editor
         .execute(Request::ResizeCanvas {
             width: 640.,
             height: 360.,

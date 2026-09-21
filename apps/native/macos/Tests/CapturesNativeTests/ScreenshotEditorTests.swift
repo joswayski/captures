@@ -2818,12 +2818,32 @@ final class ScreenshotEditorTests: XCTestCase {
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
             try showDraw(in: controller.root)
+            let tool = try popup("Drawing tool", in: controller.root)
+            tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+            let editor = try textView("Text content", in: controller.root)
+            let inputScroll = try XCTUnwrap(editor.enclosingScrollView)
+            XCTAssertLessThan(inputScroll.frame.minY, 330, "unused brush fields must not push Text below the fold")
+            let apply = try button("Apply", in: controller.root)
+            let cancel = try button("Cancel", in: controller.root)
+            let scroll = try XCTUnwrap(apply.enclosingScrollView)
+            let document = try XCTUnwrap(scroll.documentView)
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
             try render(controller.root, name: "screenshot-editor-text-normal-\(appearance)")
             controller.window.setContentSize(NSSize(width: 1000, height: 700))
-            let editor = try textView("Text content", in: controller.root)
-            editor.enclosingScrollView?.superview?.scrollToVisible(editor.enclosingScrollView!.frame)
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: document.bounds.height - scroll.contentView.bounds.height))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            controller.root.layoutSubtreeIfNeeded()
+            for control in [apply, cancel] {
+                XCTAssertTrue(scroll.contentView.bounds.contains(control.convert(control.bounds, to: scroll.contentView)),
+                              "Text actions must be reachable at minimum size")
+            }
             try render(controller.root, name: "screenshot-editor-text-minimum-\(appearance)")
+            worker.failOperation = "edit_text"
+            worker.failureMessage = "The supplied fonts cannot shape every glyph. Your accepted pixels and pending text are unchanged."
+            editor.string = "Unaccepted text"
+            apply.performClick(nil)
+            XCTAssertEqual(editor.string, "Unaccepted text")
+            try render(controller.root, name: "screenshot-editor-text-error-minimum-\(appearance)")
         }
     }
 

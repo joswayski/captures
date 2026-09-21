@@ -1398,6 +1398,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                     : "This tool creates one annotation layer on release."
         let textSelected = selectedLayer?.kind == .text
         textControls.forEach { $0.isHidden = !textSelected }
+        // Text needs no Wand/brush fields. Collapse their reserved space instead
+        // of opening its inspector below an empty block.
+        let compact = textSelected && !wand && !brush
+        drawHelper.frame.origin.y = compact ? 148 : 278
+        if let heading = textControls.first, let content = heading.superview {
+            let offset = (compact ? 196.0 : 326.0) - heading.frame.minY
+            for control in textControls { control.frame.origin.y += offset }
+            content.frame.size.height = textSelected
+                ? textCancelButton.frame.maxY + 8 : drawHelper.frame.maxY + 8
+        }
     }
 
     @objc private func outputOptionsChanged() {
