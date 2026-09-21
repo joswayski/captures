@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -10,30 +10,6 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const binary = process.env.COMPOSE_TEST_BINARY || 'docker';
 const prefix = process.env.COMPOSE_TEST_BINARY ? [] : ['compose'];
 const available = spawnSync(binary, [...prefix, 'version'], { encoding: 'utf8' }).status === 0;
-
-test('local init creates private independent secrets and never overwrites settings', () => {
-  const scratch = mkdtempSync(path.join(tmpdir(), 'captures-cloud-init-'));
-  try {
-    mkdirSync(path.join(scratch, 'scripts'));
-    const helper = path.join(scratch, 'scripts/cloud-dev.sh');
-    copyFileSync(path.join(root, 'scripts/cloud-dev.sh'), helper);
-    copyFileSync(path.join(root, '.env.example'), path.join(scratch, '.env.example'));
-    const initialized = spawnSync('bash', [helper, 'init'], { encoding: 'utf8' });
-    assert.equal(initialized.status, 0, initialized.stderr);
-    const file = path.join(scratch, '.env.local');
-    const content = readFileSync(file, 'utf8');
-    const auth = content.match(/^AUTH_SECRET=([a-f0-9]{64})$/m)?.[1];
-    const media = content.match(/^MEDIA_WORKER_SECRET=([a-f0-9]{64})$/m)?.[1];
-    assert.ok(auth && media);
-    assert.notEqual(auth, media);
-    assert.ok(!initialized.stdout.includes(auth) && !initialized.stdout.includes(media));
-    if (process.platform !== 'win32') assert.equal(statSync(file).mode & 0o777, 0o600);
-    assert.notEqual(spawnSync('bash', [helper, 'init']).status, 0);
-    assert.equal(readFileSync(file, 'utf8'), content);
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
-  }
-});
 
 test('Compose keeps local services isolated and routes both storage paths to staging', { skip: !available && 'Docker Compose is not installed' }, () => {
   const scratch = mkdtempSync(path.join(tmpdir(), 'captures-compose-'));

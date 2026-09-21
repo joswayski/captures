@@ -44,18 +44,18 @@ real SES email and uploads to the **real `staging-captures` R2 bucket**, not
 production. No native app is required. Install Docker Desktop (or Docker Engine
 with Compose v2) and AWS CLI v2; Rust and Node run inside the images.
 
-1. Run `bash scripts/cloud-dev.sh init` to create a private `.env.local` with two
-   independent local secrets. It requires OpenSSL and never overwrites an existing
-   file. Fill in your AWS SSO profile, SES region/sender/configuration set, staging
-   R2 credentials and Cloudflare API token. Keep `AUTH_SECRET` and
-   `MEDIA_WORKER_SECRET` stable between restarts. If you already have `.env.local`,
-   compare it with `.env.example` and add missing fields without replacing secrets.
+1. Copy `.env.example` to `.env.local`, without overwriting an existing file,
+   and restrict it with `chmod 600 .env.local`. Fill in your AWS SSO profile, SES
+   settings, staging R2 credentials and Cloudflare API token. Set `LOCAL_UID` and
+   `LOCAL_GID` to the outputs of `id -u` and `id -g` on your host. Generate two
+   independent values with `openssl rand -hex 32` for `AUTH_SECRET` and
+   `MEDIA_WORKER_SECRET`; keep them stable between restarts.
    The Cloudflare token authenticates Wrangler remote bindings; it is not the
    R2 S3 access key. Use a development token with the account's Workers/R2 access
    required by Wrangler, not a global API key. It never goes to the website.
 2. Run `aws sso login --profile YOUR_PROFILE` on the host. The API reads that
-   profile and its cached login from a **read-only** `~/.aws` mount. The helper
-   matches your UID/GID for Linux file permissions. This mount makes all profiles
+   profile and its cached login from a **read-only** `~/.aws` mount. The configured
+   UID/GID preserves host file permissions. This mount makes all profiles
    in that directory readable to the API container; use only trusted images.
    A profile relying on a host-only `credential_process` executable is not
    supported by this mount; use your direct SSO profile.
@@ -76,8 +76,8 @@ with Compose v2) and AWS CLI v2; Rust and Node run inside the images.
 4. From the repository root:
 
    ```sh
-   bash scripts/cloud-dev.sh up --build -d
-   bash scripts/cloud-dev.sh logs -f api worker web
+   docker compose --env-file .env.local up --build -d
+   docker compose --env-file .env.local logs -f api worker web
    ```
 
    Wait for the API's `captures API listening` and Wrangler's ready message, then
@@ -100,14 +100,14 @@ the shared development database role is deliberately local-only.
 
 ```sh
 # Stop containers; retain the database.
-bash scripts/cloud-dev.sh down
+docker compose --env-file .env.local down
 
 # After changing source code, rebuild/recreate the local stack.
-bash scripts/cloud-dev.sh up --build -d
+docker compose --env-file .env.local up --build -d
 
 # If your SSO session expires, log in on the host again and restart the API.
 aws sso login --profile YOUR_PROFILE
-bash scripts/cloud-dev.sh restart api
+docker compose --env-file .env.local restart api
 ```
 
 These are built source snapshots, not bind-mounted hot reload. The first Rust
@@ -115,8 +115,8 @@ image build can take several minutes. Use `logs` to diagnose SES/Cloudflare
 permissions; do not paste `docker compose config` output because it expands
 secrets. No deployment, bucket provisioning, automatic CORS changes or production
 database access is performed by this setup. On Windows, use WSL2 with Docker
-integration and AWS CLI/SSO configured inside WSL; native PowerShell is not
-covered by the Bash helper. Physical macOS/Windows Docker/SSO verification remains
+integration and AWS CLI/SSO configured inside WSL. No wrapper script is required.
+Physical macOS/Windows Docker/SSO verification remains
 separate from orb checks.
 
 ## Setup
