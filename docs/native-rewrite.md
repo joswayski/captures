@@ -1,6 +1,6 @@
 # Browser-free desktop migration
 
-Status: **native capture/recording workflows implemented; editor work beginning;
+Status: **native capture/recording workflows implemented; screenshot editor slices underway;
 cross-platform acceptance and renderer selection still open**.
 This rewrite covers macOS, Windows, and Linux, feature by feature rather than one
 complete OS at a time. AppKit and the experimental Rust/wgpu host both connect
@@ -11,7 +11,7 @@ unaffected.
 
 ## Progress dashboard
 
-We are delivering stage 4 workflow slices and starting stage 5 editor slices.
+We are delivering stage 4 workflow slices and stage 5 editor slices.
 **Implemented is not accepted:** native CI and private-X11/software-rendered tests
 do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
@@ -23,7 +23,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices | Audio meter/device-change parity, physical recording/audio acceptance, recording editor and transcoded exports |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared v1 draft storage ([#594](https://github.com/joswayski/captures/pull/594)); document geometry/undo with shipping-TypeScript fixtures ([#595](https://github.com/joswayski/captures/pull/595)); real image/annotation rendering and worker-owned draft/edit sessions with retained C-ABI pixel frames; lossless image-transform command; shipping screenshot export encoding policy shared in Rust | Remaining native screenshot host controls/input, annotations/export UI and comparison acceptance, then recording playback/timeline/editing/export |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Line/Arrow/Pen/Wand/Erase/Restore, copy and save-new-copy | Text, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; recording playback/timeline/editing/export |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -36,9 +36,184 @@ with those flows; its tests retain both screenshot-child and saved-notice covera
 Superseded parent PRs may be closed rather than separately merged because the
 repository uses squash merges. Their functionality must not be counted as missing.
 
-Next implementation boundary: connect shared image transforms to both editor hosts
-and edited-image export controls to AppKit. Shared commands and encoding remain
-prerequisites, not native editor/output acceptance.
+The screenshot-editor stacks from
+[#633](https://github.com/joswayski/captures/pull/633) (AppKit) and
+[#634](https://github.com/joswayski/captures/pull/634) (wgpu and shared prerequisites)
+are combined in this tree. Both hosts connect layers, import, lossless transforms,
+output previews, save-new-copy and rectangle/ellipse drawing. AppKit now also
+connects annotation styles ([#637](https://github.com/joswayski/captures/pull/637))
+and Line/Arrow/Pen ([#638](https://github.com/joswayski/captures/pull/638)), matching
+the existing wgpu command boundary. The wgpu host additionally connects crop gestures
+and clipboard output. The AppKit drawing slice passed 136 Swift tests in macOS CI;
+its light/dark transient, committed, dot and minimum-size error fixtures were inspected.
+These are development implementations, not completed platform acceptance gates.
+
+Both hosts now connect canvas click-selection and transactional drag-move in Layers.
+Shared `Element::selection_bounds`, `selection_outline` and `Document::hit_test` match
+the shipping rotated local-box picking rules, including stroke/shadow padding,
+curved lines/arrows, empty/dot paths, hidden/locked layers and zero-opacity content.
+Shipping-TypeScript fixtures exercise both sides of boundaries and exact fractional
+edges. Unsupported text layout returns an explicit error; no approximate font
+metrics or silent selection through unsupported content. A press inside the fitted
+edited image picks once at eight view points of tolerance. A click selects or clears
+without changing the document or encoded output. A drag of at least three view points
+shows a translated shared outline and submits one `LayerEdit::Translate` on release;
+pixels update only after the worker succeeds. Failed moves preserve prior selection.
+Escape, focus loss, close, leaving Layers, a pending command or preview resizing cancels
+transient input. AppKit picks from cached immutable document JSON, never a borrowed
+worker session; wgpu handles raw events once, in order, across egui layout passes.
+Both hosts also expose a rotation grip for the selected visible/unlocked layer.
+Shared Rust chooses a grip that fits the bitmap, preferring outside top/bottom then
+inside top/bottom, and owns the rotated outline and angle normalization. Shift snaps
+to the shipping default 15-degree stops, including modifier changes without pointer
+motion; custom increments remain unconnected. The grip wins over overlapping layer
+bodies. A changed angle submits one `LayerEdit::Rotate` on release, with normal
+render-before-publish, undo and draft ownership; clicks and cancellation do not edit
+the document. Partial overflow remains clipped; fully outside rotated bounds expand
+the canvas. AppKit's C boundary is allocation-free, without per-event JSON or worker
+session access. TypeScript-oracle fixtures check angles, grip placement, gestures and
+document edits. Both hosts retain outline-only feedback until release.
+Both hosts also connect eight resize grips and border hit regions. Shared Rust
+retains original element geometry and snap lines for a gesture; AppKit holds an
+independent immutable C owner, without per-event JSON or worker-session access.
+Shift locks corner aspect ratio while edge grips stay single-axis. Unrotated
+resizes snap to canvas and other visible-layer edges (including locked layers);
+rotated resizes skip axis snapping and preserve the opposite world anchor.
+Images retain D4 orientation; arrows scale controls and stroke, while paths retain
+their stroke width. Preview outlines and guides do not modify pixels or drafts.
+A release after three view points submits one worker transaction; cancellation,
+clicks and failures preserve the document, and fully outside content expands the
+canvas. Text resize still requires native font layout and is unsupported.
+Canvas movement also retains immutable original geometry and snaps painted world
+bounds to canvas and visible-layer edges, including locked and zero-opacity layers
+but excluding hidden layers. Shared Rust matches Tauri's strict ten-view-point
+threshold, line/edge tie rules and up to four coincident-edge guides. Hosts keep
+clicks and movement below three view points unsnapped. A `drag_move` release
+commits once; numeric `translate` remains exact. Preview is outline-only, and
+fully outside moves expand the canvas. TypeScript oracle fixtures cover rotated
+geometry, threshold boundaries, ties, hidden/locked siblings and overflow.
+Both hosts now connect ephemeral viewport state through shared Rust geometry:
+Fit, 100%, 1.25× zoom steps, Recenter, anchored Cmd/Ctrl-wheel/native magnification
+and Cmd/Ctrl-primary or middle-button pan. Manual zoom uses Tauri's 5–800% bounds
+and tenth-percent rounding. Pixels and edit overlays share the transformed rect
+and viewport clip. Viewport changes cancel active edit gestures without document,
+draft, undo or encoded-output changes. Fit resets pan; Recenter preserves zoom.
+Both hosts accept Cmd/Ctrl +/− (1.25× steps) and 0 (100%, not Fit), also with a
+text/numeric field focused. They cancel pending canvas gestures and use the viewport
+center as zoom anchor. wgpu consumes ordered/repeated key events before egui global
+UI zoom and acts once across layout passes; AppKit routes key equivalents and field
+editor events in the editor window. Sheets/confirmation popups retain keyboard
+ownership. This does not register new OS-global shortcuts. Automated host tests
+cover bounds, event ordering, field focus, cancellation and no document/output writes;
+physical keyboard layouts and accessibility acceptance remain open.
+Both hosts expose a zoom preset menu with Fit, 50%, 100% and 200%. Its selected
+value tracks custom percentages from steps, wheel and magnification; obsolete
+custom rows are removed. Selecting a preset uses the existing shared viewport
+math, cancels transient editing and does not enqueue document or output work.
+The workbenches retain their existing fit layout, including small-image enlargement;
+Tauri's capped fit, slider and full layout remain open.
+Physical trackpad/mouse behavior still requires platform acceptance.
+Both hosts connect canvas fill/transparency in Geometry. Apply background submits
+one `set_background` worker transaction; the shared renderer validates hex colors
+and composites beneath existing layers. Invalid colors preserve pixels, document
+and undo/redo; hosts restore fields from the accepted state. Reset fields is not an
+edit. A transparent canvas remembers the session's last accepted solid color for
+switching back. Color changes participate in undo/redo and draft reopen; copy/export
+use the newly rendered pixels. These are canvas fills, not image-background removal,
+text backgrounds or the shipping color-picker layout. AppKit Geometry scrolls to keep
+the existing crop/canvas controls and new background controls reachable.
+The shared image-background prerequisite now maps document clicks through image
+rotation/orientation and supports contiguous/global magic-wand removal. It picks
+the frontmost visible image even when locked; transparent pixels do not let the
+wand reach an underlying image. Edited pixels become a fresh owned asset, retain
+the first pre-edit source for future restore, and clear the solid canvas fill in
+one undoable render-before-publish transaction. Invalid/no-match requests leave
+history and assets unchanged; retained originals survive draft reopen. The existing
+100-million decoded-pixel asset budget also counts retained edits/undo sources.
+Both native Draw panels now bind Wand clicks through the existing viewport mapping
+and serialized worker. Tolerance defaults to 36, matching Tauri, and accepts the
+engine's full 0–255 range; contiguous removal defaults on. Pan and off-image clicks do not submit edits.
+AppKit's Draw panel scrolls at minimum size. X11 coverage exercises exact alpha,
+disconnected-color global removal, locked images, no-match recovery, undo/redo,
+draft reopen and copied PNG pixels; AppKit has bridge and rendered-state tests.
+Windows/Wayland presentation and physical AppKit input remain unverified.
+Physical acceptance remains open; these bindings do not complete the editor gate
+or reproduce the shipping Tauri toolbar layout.
+The shared brush prerequisite now accepts a completed erase/restore stroke with
+document-space samples, brush diameter and softness. It locks the first visible
+image, ignores later off-image samples, uses orientation-aware natural-pixel brush
+scaling, and matches Tauri's pixel-center stamps, feathering, interpolation and RGBA
+rounding. Changed strokes publish one undoable owned asset, retain the first original,
+and clear canvas fill; no-op strokes preserve fill, pixels and redo. Restore reads
+that retained original, including after draft reopen. Shared Rust/TypeScript vectors
+check exact pixels. Both native Draw panels now connect Erase/Restore with diameter
+28 (4–120) and softness 18 (0–100). They sample press/movement/release into one
+worker command, including stationary release stamps that affect soft-edge alpha.
+The interim preview is a clipped path and brush-size ring, not live raster pixels;
+release applies the stroke. Escape, focus loss, close, viewport or tool/section changes
+cancel without editing. Pan and clipped/off-image initial presses never paint.
+X11 tests cover cancellation, actual feathered alpha, erase/restore, undo/redo, drafts
+and clipboard; AppKit has input/bridge tests and minimum light/dark/error fixtures.
+Windows/Wayland presentation and physical AppKit input remain unverified; sampling
+cadence, live pixel feedback and the Tauri brush cursor/layout remain parity work.
+Both hosts connect Geometry → Trim edges through a shared `trim_canvas` command.
+It fits visible layer geometry, including locked/zero-opacity and off-canvas layers,
+rounds bounds outward, and translates every layer including hidden siblings. Empty,
+hidden-only and already-tight documents are no-ops that preserve redo and pixels.
+It includes rotated image/shape/path bounds and annotation shadows, not an alpha scan.
+Changed trims are one render-before-publish undo step; draft and output use the new
+dimensions. Shipping TypeScript vectors cover fractional/rotated/shadowed geometry;
+host tests cover controls, undo/redo, output invalidation, drafts and clipboard.
+Trim hover-margin feedback and the shipping toolbar layout remain unimplemented.
+Windows/Wayland presentation and physical macOS input remain unverified.
+The shared text prerequisite uses `cosmic-text` advanced shaping and CPU Swash
+rasterization for a single line from caller-supplied fonts, with fixed locale and
+no system-font scan. It returns logical advance, baseline, painted bounds and
+straight-alpha pixels, including ligatures, combining marks, bidi ordering and
+negative bearings. Glyph images are scoped to one operation, with line/size/pixel
+limits and explicit missing-font/glyph errors. Original generated fonts give
+independent metrics for tests rather than depending on installed fonts.
+Color-outline and embedded-bitmap glyphs use different alpha representations;
+the primitive normalizes outlines before compositing and retains bitmap RGB.
+Swash's color-outline flattening has integer alpha-rounding loss. Font bytes must
+come from a trusted source; output budgets are not a font-parser sandbox.
+Shared paragraph helpers now use explicit, fallible measurements for shipping word
+wrapping, scalar-based hard breaks, ECMAScript whitespace, alignment, auto-width
+anchor preservation and composing widths, plus square/rounded plate geometry.
+The paint minimum and wrap minimum remain distinct for narrow/fractional boxes.
+TypeScript-generated vectors and original-font tests exercise threshold boundaries,
+non-additive shaping, Unicode, metadata preservation and measurement failures.
+Measurement avoids glyph bitmaps and permits advances beyond the raster extent
+so long tokens can wrap; rasterization retains its extent/pixel budgets. Paragraph
+inputs are limited to 4096 UTF-8 bytes and type sizes greater than zero through 512.
+These helpers describe measured paint layout, not Tauri's estimated selection bounds;
+font-specific control-character support remains the supplied measurer's contract.
+An opt-in document renderer now accepts caller-owned fonts and explicit mappings
+from document family keys to supplied font names. It composites filled paragraphs
+and square/rounded plates in layer order, including alignment, italic bearings,
+per-paint opacity, blend modes and canvas clipping. It centers raster ink vertically;
+pixel-aligned ink boxes can differ subpixel-wise from Canvas outline metrics.
+ASCII tabs, carriage returns and form feeds become spaces for both measurement and
+painting, following Canvas text preparation; remaining interior line-control
+characters are rejected by the single-line shaper, not silently omitted.
+Text bitmaps have a shared 16,777,216-pixel budget across the visible document,
+in addition to individual line budgets. Missing fonts/glyphs, invalid styles and
+budget failures return errors without changing the document or assets. Rotation,
+outlines and text shadows remain explicit unsupported cases.
+Existing editor sessions still use the no-font renderer and reject visible text;
+this does not replace legacy `Shape::Text` or provide a native Text tool.
+Font acquisition/persistence, rotation/outlines/shadows, interactive text geometry
+and transactional commands, both host controls and
+physical input/IME/accessibility remain open. No host text parity gate is closed.
+Next implementation boundary: text and remaining output. The shipping Tauri editor remains the design
+reference; this slice does not reproduce its layout or live pixel dragging.
+
+All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
+are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow
+integration, physical cross-platform acceptance, and renderer/distribution/cutover.
+This is not a near-release checklist or a percentage-complete claim: implemented
+features still need acceptance, and the native editor still has a workbench layout.
+Shared commands and encoding remain prerequisites, not native editor/output acceptance.
 Native live capture on Wayland remains explicitly
 gated; no stub or X11 result closes that platform gate. Merging development slices
 does not authorize a native release, renderer cutover or removal of Tauri.
@@ -78,6 +253,46 @@ Existing platform limitations are not new regressions: Wayland lacks window
 targeting/cursor/click highlights and pointer polling; Linux cannot exclude the
 recording HUD from captures. Test X11 and Wayland separately. Unsupported actions
 must be explicit, not silently successful.
+
+## Mini-preview sharing integration — required, not implemented
+
+The primary desktop cloud flow is capture → mini-preview Share icon → native
+upload/share-settings popup. Track this as a separate cross-platform slice even
+if the accounts/API PR or rewrite merges first; neither merge completes this
+feature. API/web implementation: [#613](https://github.com/joswayski/captures/pull/613).
+Do not ship a decorative Share action or substitute a website handoff for the
+native flow. Local capture remains signed-out and never uploads automatically.
+
+- [ ] Launch from the selected mini-preview artifact with the Lucide Share icon
+  and an accessible name. Preserve its identity: an editor's Save new copy is a
+  different local artifact, not an implicit replacement for the original upload.
+- [ ] Signed-out users enter email and OTP in native controls; retain the selected
+  artifact/settings through sign-in. Shared Rust owns account/session state and
+  uses explicit bearer transport; OS credential vaults persist tokens, never
+  plaintext preferences. Canceling sign-in leaves the local capture untouched.
+- [ ] The popup previews the selected file and offers link access, optional
+  password and expiry before explicit Upload and share. No upload merely from
+  opening the popup. Existing API semantics are anyone-with-link plus optional
+  password, not an authenticated recipient ACL. Fully public discovery/indexing
+  is a separate unresolved product option, not an implemented visibility mode.
+- [ ] Shared Rust uploads original bytes directly through the API's presigned
+  multipart R2 contract, with progress, cancellation, expiry-aware part retry and
+  failure recovery. Never show a usable share link before upload completion and
+  successful share configuration; configuration failure must not re-upload bytes.
+- [ ] Reopening manages the existing remote asset/share rather than duplicating
+  the upload. Persist the local-artifact/remote-asset association. Show shared date,
+  Copy/Open link, editable/removable password and expiry, and adjacent Share/Stop
+  sharing actions. Stopping denies subsequent access; enabling again rotates the
+  link. Cloud Trash retains bytes and restore does not revive old links.
+- [ ] Integrate both AppKit and wgpu through thin host launch/presentation seams;
+  coordinate MiniPreview/Workbench and mini_preview/live changes with the rewrite
+  integration owner. Do not fork the auth/upload rules into platform hosts.
+  Resolve the stable artifact and reject stale preview actions; an accepted upload
+  outlives preview dismissal under the sharing coordinator's own lifecycle.
+- [ ] Verify signed-out, expired-session, offline, missing-file, upload failure,
+  cancel/retry, password edit, stop/re-enable and reopening states. Record macOS,
+  Windows, X11 and Wayland implementation/verification separately; no stub or
+  software-only host test closes the parity gate.
 
 ## Architecture and ownership
 
@@ -344,7 +559,12 @@ AppKit and wgpu reuse the existing region capture, native History, mini-preview 
 auto-copy paths while preserving running/paused, microphone, guide and hidden-control
 state. AppKit and Windows use their capture-UI exclusion policy. X11 hides the HUD
 and guide from the still image, but its selector remains visible in the ongoing
-recording because X11 cannot exclude overlay windows. Private-X11 acceptance covers
+recording because X11 cannot exclude overlay windows. The wgpu child capture waits
+for a completed root pass to retire its selector/countdown viewport, then settles
+for 150 ms before reading pixels, matching the ordinary capture path's compositor
+allowance. Escape still cancels the child during this wait without ending the take.
+This applies to the Windows/X11/Wayland host; Wayland capture remains gated, and
+AppKit keeps its separate native-window removal path. Private-X11 acceptance covers
 running publication, paused countdown cancellation, selection Escape, asymmetric
 saved pixels, same-session continuity, final decode and recovery cleanup. AppKit CI
 renders/tests the enabled HUD; real macOS/Windows capture and Wayland remain open,
@@ -395,6 +615,23 @@ drafts cannot load arbitrary filesystem/network image sources. Visible unsupport
 annotations remain errors rather than silently missing output. This is the same
 host-independent implementation for macOS, Windows, X11 and Wayland.
 
+The session also accepts one host-decoded in-memory RGBA image at a time without
+putting pixels or asset URLs in JSON. It matches shipping visible-layer target
+resolution, natural edge placement, capped stack sizing and fully-outside canvas
+expansion, then validates retained asset limits, renders and commits one undo step
+atomically. Imported assets survive undo/redo and draft save/reopen. Hosts still own
+file decoding, pickers and batch/drag presentation; none is connected by this shared
+prerequisite.
+
+`captures_editor_import_image_v1` exposes that single-image operation on the
+serialized C session boundary. Hosts pass borrowed top-down straight-alpha sRGB
+RGBA8 rows plus JSON name/selection/point metadata; the adapter validates shared
+render limits and all length/stride/pointer arithmetic before reading, copies into
+session-owned storage, and returns the stable layer ID with the current snapshot.
+Failures preserve document, frame, history, assets and files. This is an import
+transport prerequisite only: decoding, file pickers, clipboard, batch import and
+macOS, Windows, X11 or Wayland host acceptance remain open.
+
 Editor sessions can encode the current edited frame through the shared PNG/JPEG/
 WebP quality and hard-byte-budget policy. The C ABI returns independently owned
 encoded bytes, borrowed through an explicit pointer/length view and released
@@ -424,6 +661,53 @@ Duplicates share owned image assets and remain draft-compatible.
 These commands are shared across all four platforms; host integration and
 physical acceptance are tracked separately below.
 
+Shared editor sessions can also create completed rectangle and ellipse layers from
+typed start/end geometry, existing element styles and opacity. The command assigns
+the stable layer ID and shipping unlocked/visible/source-over defaults, preserves
+partial clipping, and expands/translates the document only when the annotation is
+fully outside, including painted bounds from enabled default or custom shadows.
+Degenerate closed-shape geometry is rejected transactionally instead of becoming a
+synthetic filled pixel. TypeScript-derived reverse/fractional vectors and rendered
+session tests cover rollback, undo/redo and draft reopen. This prerequisite is
+shared by macOS, Windows, X11 and Wayland; host status is tracked separately below.
+
+Shared sessions can likewise create completed straight lines and tapered arrows
+from signed endpoints, existing element styles and opacity. Open shapes force the
+shipping null fill and unlocked/visible/source-over defaults; click-only,
+horizontal and vertical lines remain valid. Arrows below the renderer's 1.5
+document-pixel cutoff are rejected transactionally, while hosts retain the
+screen-scale `max(1.5, 3 / displayScale)` gesture cancellation policy. Creation
+and transient host previews share one public tapered-arrow polygon helper with
+the renderer. TypeScript-derived bounds cover reverse/fractional geometry,
+partial clipping, shadow-only overlap and fully-outside sibling translation;
+session tests cover pixels, rollback, undo/redo and draft reopen. This is shared
+preparation for AppKit, Windows, X11 and Wayland. Connected host controls are tracked
+below; physical, input and accessibility acceptance remain open on every platform.
+
+Shared sessions can create one completed freehand path from ordered document-space
+samples, existing element styles and opacity. Creation assigns the stable layer ID
+and shipping null-fill, unlocked, visible and source-over defaults; one-point and
+repeated-point paths remain valid. Authored sample bounds plus stroke and resolved
+shadow padding preserve partial clipping and drive fully-outside canvas expansion,
+including translation of every existing sibling and every path sample. Hosts retain
+the shipping `1.5 / displayScale` pointer-sampling threshold, transient gesture state
+and cancellation. A public centerline helper uses the compositor's midpoint-quadratic
+sampling so native previews do not duplicate smoothing math. TypeScript-derived
+vectors cover fractional/negative geometry, sample hulls that differ from the smooth
+centerline, shadow-only overlap and outside translation; session tests cover pixels,
+rollback, undo/redo and v1 draft reopen. This is shared preparation for AppKit,
+Windows, X11 and Wayland. Connected freehand host controls are tracked below;
+physical/input/accessibility acceptance remains open on all four platforms.
+
+The shared layer command also accepts typed partial style patches for existing
+shape and freehand-path annotations. Locked and hidden annotations remain editable;
+closed-shape-only fill/stroke toggles do not mutate open shapes or paths, and shadow
+customization uses the renderer's bounded defaults while preserving stored custom
+and unknown fields when toggled off. Unsupported image/text targets and exact
+no-ops retain history, redo and frame identity; failed rendering rolls back the
+whole patch. This is a common prerequisite for AppKit, Windows, X11 and Wayland.
+Host property controls are tracked below; physical-platform acceptance remains open.
+
 The first wgpu editor window now opens isolated History screenshots on its own
 serialized worker, with fit preview, numeric crop/canvas fields, undo/redo,
 save draft and confirmed discard. Closing unsaved edits offers save, keep the last
@@ -445,8 +729,60 @@ Real X11 input checks cover asymmetric movement, half-opacity/hidden preview
 pixels, locks, ordering, deletion, empty-document undo and saved-layer reopening
 in dark and light, including minimum-window scrolling. Windows and Wayland use
 this implementation but remain presentation-unverified; AppKit layer controls
-are in progress. Merge/flatten, image import, image transforms and drawing tools
-are not connected by this panel slice.
+are described below. Image layers expose a **Transform image** menu for lossless
+left/right rotation and horizontal/vertical flips through the shared worker commands.
+Hidden and locked images can transform, matching shipping policy; full-canvas
+photos rotate their canvas, and undo/draft restore retain the orientation.
+Merge/flatten remains unconnected.
+
+The wgpu Draw panel connects rectangle, ellipse, straight line, tapered arrow and freehand Pen
+gestures. Preview points remain host-local until release sends one shared creation
+command to the worker.
+The new stable layer ID is selected and stale encoded output is cleared. Reverse
+and off-canvas drags, zero-area closed-shape no-ops, cancellation, undo/redo,
+persisted pixels and draft reopening have automated coverage. Shipping default fill and rounded
+rectangle geometry are used. Open shapes keep signed endpoints and no fill;
+horizontal, vertical and zero-length lines are retained. Arrow release requires
+max(1.5, 3/displayScale) document pixels. The transient preview triangulates the
+same concave tapered polygon used for shared rendering and painted bounds.
+Pen keeps authored samples at least 1.5/displayScale document pixels apart,
+including every accepted movement in a frame, and previews the shared smoothed
+centerline. Input events are consumed once even during extra layout passes.
+Click-only dots, cancellation preserving redo, exact quadratic versus polyline
+pixels, off-canvas expansion and draft reopening have automated coverage.
+Resize/curve grips and other tools remain separate work.
+Windows/X11/Wayland share this host code; private X11 is the exercised UI, not
+physical input/accessibility acceptance.
+AppKit connects the same five drawing tools below.
+
+The wgpu Layers panel connects annotation-style fields with one explicit Apply
+style transaction. Local fields and color pickers emit only changed patch values;
+displaying resolved defaults does not materialize legacy fields or overwrite unknown
+data. A disabled shadow does not submit hidden custom controls. Reset and selection
+changes discard unapplied fields; worker errors restore published values. Styled
+pixels, undo/redo, draft restore and light/dark/minimum layouts are exercised on
+private X11. Windows/Wayland presentation remains unverified; AppKit style controls
+are described below. Physical input/accessibility acceptance stays open.
+
+The wgpu Import image action now picks one PNG/JPEG/WebP/TIFF file independently
+of the session worker. The worker bounds encoded input and decoded dimensions,
+normalizes EXIF orientation and supplies owned RGBA to the shared import command.
+RGB/grayscale ICC profiles convert to sRGB before publication, preserving straight
+alpha; untagged files assume sRGB. Unsupported or malformed ICC profiles, CMYK
+profiles, and PNG gamma/chromaticity-only or CICP descriptions fail recoverably
+instead of silently relabeling samples. Those color formats and HDR/wide-gamut
+editing remain open; imports normalize to RGBA8. Analytic linear-to-sRGB fixtures
+exercise profile transport through PNG, JPEG, WebP and TIFF plus grayscale alpha.
+The returned stable ID selects the new layer. Cancellation, decode failures and
+late results after close preserve the editor; a completed selection waits for
+already accepted edits before importing. Imports do not write a draft or History
+until explicitly saved, and saved assets survive deleting the external source.
+Private-X11 checks exercise the actual rfd D-Bus transport with a disposable file
+chooser fixture, asymmetric rendered pixels, cancellation/retry, undo/redo,
+reopen and stale-close handling in both appearances. That fixture does not verify
+physical file dialogs, input, accessibility or IME. Windows and Wayland share the
+implementation but remain presentation-unverified; AppKit import is described below.
+Batch import and drag-and-drop remain separate slices. Shipping Tauri import is unchanged.
 
 The wgpu Output panel now previews shared PNG/JPEG/WebP encoding with the shipping
 quality modes, palette controls and hard byte budget. Encoding and decoding run
@@ -460,24 +796,86 @@ starts in the configured output directory and accepts an editable full path.
 It never replaces existing files; successful exports add a distinct History entry
 without modifying the original or draft. A post-publication History failure shows
 the saved path and warning. Accepted writes drain before application quit.
-Native save dialogs, overwrite-original and clipboard remain separate work, as
-do AppKit export controls and physical-platform acceptance.
+The wgpu host also connects an output-folder picker and edited-image clipboard
+output. AppKit export and clipboard controls are described below;
+overwrite-original and physical-platform acceptance remain open.
 
 The AppKit editor host now enables **Edit screenshot** only for screenshot History
 entries. Its dedicated serialized worker owns the shared Rust session and publishes
 independently retained RGBA frames to a fit preview. The window exposes crop geometry,
 canvas sizing, Undo/Redo, explicit draft save and confirmed draft discard; shared Rust
-remains the only geometry/render authority. Drafts use the same isolated sibling root
-and reopen with the screenshot. Closing an unsaved session offers save-and-close,
+remains the only geometry/render authority. Geometry and Layers views retain the fit
+preview; the front-to-back layer panel exposes visibility, lock, opacity, absolute
+X/Y movement through shared deltas, image rename, duplicate, delete and adjacent
+ordering. Stable IDs preserve selection across replies, and shared Rust remains the
+authority for locked barriers and duplicate behavior. An Output view runs shared
+PNG/JPEG/WebP encoding on that worker, reports exact bytes and switches the fit preview
+between the edited canvas and decoded output. Option or document changes invalidate
+stale output; previewing has no draft, undo, clipboard or file side effects. **Save new
+copy** chooses a directory independently of the worker, then serializes publication on
+that worker. It never replaces a file or mutates the draft; successful publication adds
+a distinct History entry, and partial History failure preserves the saved path.
+**Copy image** encodes the full-resolution edited frame as lossless PNG on that same
+worker, then publishes retained bytes to the AppKit pasteboard only if the session's
+generation and artifact still match. Export options (including invalid byte budgets)
+do not affect copy. Copy preserves encoded-preview selection, document, undo and draft
+state without writing files or History. Encoding/clipboard failures leave a retryable
+editor; stale completions after termination cannot write to the clipboard. Automated
+tests cover cropped PNG pixels on a named pasteboard and byte ownership after worker
+close; physical cross-application paste and accessibility acceptance remain open.
+Windows/X11/Wayland retain the existing wgpu clipboard path unchanged.
+Drafts use
+the same isolated sibling root and reopen with the screenshot. The Layers view also
+imports one still image at a time through AppKit's color-managed ImageIO decoder,
+normalizing EXIF orientation and straight-alpha sRGB RGBA8 pixels before the worker
+copies them into the shared session. Imported layers reopen without their source file;
+ImageIO-supported sources use their first image, and files without a usable color
+description are rejected instead of silently relabeled.
+Image layers expose shared rotate-left, rotate-right, flip-horizontal and flip-vertical
+commands, including hidden or locked layers; shared Rust owns orientation, canvas fit,
+clipping and expansion policy while AppKit retains the stable selected layer.
+The AppKit **Draw** view connects Rectangle, Ellipse, Line, Arrow and Pen gestures to the fitted
+edited preview. Pointer state stays host-local; release submits one shared
+creation command, selects the returned fresh layer ID and invalidates stale encoded
+output. Preview mapping preserves reverse and off-canvas coordinates without reading
+unapplied numeric fields. Escape, focus loss, close, or changing sections cancels a
+drag without editing the document. Shared Rust remains the authority for default
+style, clipping, fully-outside expansion, rendering and undo/draft transactionality.
+The C ABI supplies the shared arrow polygon and smoothed Pen centerline without
+per-event JSON or session-worker access. AppKit paints round caps/joins and click
+dots. Axis-aligned/zero-length lines remain valid; arrows enforce both the three-view-
+point threshold and the shared minimum document length. Pen accepts each delivered
+movement at least 1.5/displayScale document pixels from its last accepted sample,
+including off-canvas samples, without appending the release location. Mouse event
+coalescing is disabled only during a Pen stroke; every completion/cancellation restores
+the previous setting. Physical mouse/tablet sample delivery and mixed-DPI remain
+unverified. Windows/X11/Wayland retain their existing drawing implementation.
+The AppKit **Layers** view connects fill/stroke toggles for closed shapes, annotation
+color/width, and shadow color/opacity/blur/offset controls. Apply style submits one
+minimal shared patch through the existing serialized worker and invalidates encoded
+output; Reset fields, selection changes and worker failures restore published values.
+Rust projects resolved defaults separately from the authored document. Merely opening
+controls does not materialize legacy fields or truncate full-precision numbers to the
+three-decimal display. Disabled shadow fields cannot accidentally re-enable a shadow.
+Styles remain editable on hidden/locked annotations. The scrolling panel has light,
+dark, disabled and minimum-height error fixtures; automated macOS validation is not
+physical input/accessibility/IME acceptance. Windows/X11/Wayland retain the existing
+wgpu controls unchanged; this slice does not close their presentation gates.
+Closing an unsaved session offers save-and-close,
 close without saving the current session (retaining any older persisted draft), or
 cancel. Quit drains accepted work and cancels termination if its draft save fails.
-AppKit CI covers bridge lifetime, pending-edit ownership, locale-aware geometry,
-failure/close behavior and rendered light/dark fixtures. Physical AppKit input,
-accessibility and IME acceptance remain unverified.
+AppKit CI covers bridge/export/import lifetime, pending-edit ownership, locale-aware
+geometry, drawing gesture cancellation and mapping, failure/close/output/import
+behavior, real shape pixels/history/draft reopen, and rendered light/dark fixtures.
+Physical AppKit input, accessibility and IME acceptance remain unverified.
 
 Across both hosts, physical input/accessibility/IME acceptance remains open.
-Image-transform controls, annotation tools, AppKit edited-image export and recording
-editing are not connected; the screenshot-editor parity gate stays open.
+The current native screenshot editor is a functional workbench, not a visual match
+for the shipping Tauri editor. Functional controls and inspected fixtures do not
+complete the editor layout/interaction/design parity gate.
+Remaining viewport controls and other drawing tools are not connected.
+Recording editing remains open on both hosts; the
+screenshot-editor parity gate stays open.
 
 New Capture connects its persisted shortcut, tray action and workspace entry to
 fixed-glass screenshot controls on both hosts. Region, Window and Full screen

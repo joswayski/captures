@@ -15,7 +15,12 @@ use image::{ImageFormat, ImageReader, RgbaImage};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    editor::{Document, DocumentHistory, Element, LayerEdit, OptionalNullable, Rect},
+    editor::{
+        ClosedShapeCreate, Document, DocumentHistory, DropShadowStyle, Element, ElementBase,
+        FreehandPathCreate, ImageElement, LayerEdit, OpenShapeCreate, OptionalNullable, Point,
+        Rect, image_bounds,
+    },
+    editor_image_background::{BrushMode, paint_stroke},
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS, render},
 };
 
@@ -31,6 +36,19 @@ pub struct OpenRequest {
     pub artifact_id: String,
 }
 
+/// One decoded image supplied by a native host. Hosts own file picking and
+/// decoding; pixels never cross the JSON command boundary.
+pub struct ImportImage {
+    pub pixels: RgbaImage,
+    pub name: String,
+    /// Shipping falls back to the front-most visible image when this layer is
+    /// missing, hidden, or not an image.
+    pub selected_id: Option<String>,
+    /// A document-space drag sample. Without one, shipping places the image
+    /// below the selected/front-most visible image (or the canvas).
+    pub point: Option<Point>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Request {
@@ -41,6 +59,33 @@ pub enum Request {
     ResizeCanvas {
         width: f64,
         height: f64,
+    },
+    TrimCanvas,
+    SetBackground {
+        color: Option<String>,
+    },
+    RemoveImageBackground {
+        point: Point,
+        tolerance: f64,
+        contiguous: bool,
+    },
+    PaintImageBackground {
+        points: Vec<Point>,
+        size: f64,
+        softness: f64,
+        mode: BrushMode,
+    },
+    CreateClosedShape {
+        #[serde(flatten)]
+        create: ClosedShapeCreate,
+    },
+    CreateOpenShape {
+        #[serde(flatten)]
+        create: OpenShapeCreate,
+    },
+    CreateFreehandPath {
+        #[serde(flatten)]
+        create: FreehandPathCreate,
     },
     Layer {
         id: String,
@@ -59,10 +104,26 @@ pub enum Request {
     DiscardDraft,
 }
 
+/// Resolved UI values, separate from the authored document. Reading legacy
+/// defaults must not materialize fields in drafts or change undo/redo state.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnotationControls<'a> {
+    pub closed: bool,
+    pub color: &'a str,
+    pub fill: Option<&'a str>,
+    pub stroke_width: f64,
+    pub stroke_enabled: bool,
+    pub drop_shadow: bool,
+    pub drop_shadow_style: DropShadowStyle,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Snapshot<'a> {
     pub artifact_id: &'a str,
     pub document: &'a Document,
+    pub annotation_controls: BTreeMap<&'a str, AnnotationControls<'a>>,
+    pub selection_outlines: BTreeMap<&'a str, [Point; 4]>,
     pub can_undo: bool,
     pub can_redo: bool,
     /// Changes since the last successful draft save (or open), not since capture.
@@ -141,6 +202,49 @@ impl EditorSession {
         Snapshot {
             artifact_id: &self.artifact_id,
             document: self.history.current(),
+            selection_outlines: self
+                .history
+                .current()
+                .elements
+                .iter()
+                .filter_map(|element| {
+                    element
+                        .selection_outline()
+                        .ok()
+                        .map(|outline| (element.base().id.as_str(), outline))
+                })
+                .collect(),
+            annotation_controls: self
+                .history
+                .current()
+                .elements
+                .iter()
+                .filter_map(|element| {
+                    let (style, closed) = match element {
+                        Element::Shape(shape) => (
+                            &shape.style,
+                            matches!(
+                                shape.shape.as_str(),
+                                "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
+                            ),
+                        ),
+                        Element::Path(path) => (&path.style, false),
+                        _ => return None,
+                    };
+                    Some((
+                        element.base().id.as_str(),
+                        AnnotationControls {
+                            closed,
+                            color: &style.color,
+                            fill: style.fill.as_deref(),
+                            stroke_width: style.stroke_width,
+                            stroke_enabled: style.has_stroke(),
+                            drop_shadow: style.has_drop_shadow(),
+                            drop_shadow_style: style.resolved_drop_shadow_style(),
+                        },
+                    ))
+                })
+                .collect(),
             can_undo: self.history.undo_len() > 0,
             can_redo: self.history.redo_len() > 0,
             unsaved_changes: self.history.current() != &self.persisted,
@@ -162,16 +266,265 @@ impl EditorSession {
         captures_image::encode_export(&self.pixels, options)
     }
 
+    /// Import one decoded image as a single undoable edit. Asset ownership,
+    /// document history, and rendered pixels are published atomically.
+    pub fn import_image(&mut self, request: ImportImage) -> Result<String, String> {
+        let (width, height) = request.pixels.dimensions();
+        validate_import_dimensions(width, height, retained_asset_pixels(&self.assets)?)?;
+        if request
+            .point
+            .is_some_and(|point| !point.x.is_finite() || !point.y.is_finite())
+        {
+            return Err("Image drop coordinates must be finite.".into());
+        }
+
+        let layer_id = fresh_id(|id| {
+            self.history
+                .current()
+                .elements
+                .iter()
+                .any(|element| element.base().id == id)
+        });
+        let asset_id = fresh_id(|id| self.assets.contains_key(&format!("{ASSET_PREFIX}{id}")));
+        let source = format!("{ASSET_PREFIX}{asset_id}");
+        let mut document = self.history.current().clone();
+        let (target, placement, point) =
+            import_placement(&document, request.selected_id.as_deref(), request.point);
+        let bounds = position_imported_image(
+            width,
+            height,
+            document.width,
+            document.height,
+            target,
+            placement,
+            point,
+        );
+        let element = Element::Image(ImageElement {
+            base: ElementBase {
+                id: layer_id.clone(),
+                x: bounds.x,
+                y: bounds.y,
+                rotation: None,
+                locked: false,
+                visible: true,
+                opacity: 100.,
+                blend_mode: "source-over".into(),
+            },
+            source: "imported".into(),
+            src: source.clone(),
+            original_src: OptionalNullable::Null,
+            name: request.name,
+            source_artifact_id: None,
+            width: bounds.width,
+            height: bounds.height,
+            natural_width: f64::from(width),
+            natural_height: f64::from(height),
+            orientation: None,
+            extra: Default::default(),
+        });
+        if fully_outside_canvas(bounds, document.width, document.height) {
+            expand_document_for_element(
+                &mut document,
+                element,
+                if placement == ImportPlacement::Stack {
+                    24.
+                } else {
+                    0.
+                },
+            );
+        } else {
+            document.elements.push(element);
+        }
+
+        let mut history = self.history.clone();
+        history.commit(document);
+        let mut assets = self.assets.clone();
+        assets.insert(source, Arc::new(request.pixels));
+        let pixels = render(history.current(), &assets)?;
+
+        self.history = history;
+        self.assets = assets;
+        self.pixels = Arc::new(pixels);
+        Ok(layer_id)
+    }
+
+    fn remove_image_background(
+        &mut self,
+        point: Point,
+        tolerance: f64,
+        contiguous: bool,
+    ) -> Result<(), String> {
+        if !point.x.is_finite() || !point.y.is_finite() || !tolerance.is_finite() {
+            return Err("Background removal requires finite coordinates and tolerance.".into());
+        }
+        let (index, image, pixel) = self
+            .history
+            .current()
+            .elements
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, element)| match element {
+                Element::Image(image) if image.base.visible => image
+                    .natural_pixel_at(point)
+                    .map(|pixel| (index, image, pixel)),
+                _ => None,
+            })
+            .ok_or("Click inside a visible image layer to sample a color.")?;
+        // Locked image layers remain editable, as in the shipping wand. Other
+        // layer kinds and hidden images do not block image-background picking.
+        let source = self
+            .assets
+            .get(&image.src)
+            .ok_or("The editor image asset is unavailable.")?;
+        let mut edited = (**source).clone();
+        let changed = crate::editor_image_background::remove_color(
+            &mut edited,
+            pixel,
+            tolerance.round().clamp(0., 255.) as u8,
+            contiguous,
+        );
+        if changed == 0 {
+            return Err("No matching pixels were found. Try a higher tolerance.".into());
+        }
+        self.publish_image_background_edit(index, edited)
+    }
+
+    fn paint_image_background(
+        &mut self,
+        points: Vec<Point>,
+        size: f64,
+        softness: f64,
+        mode: BrushMode,
+    ) -> Result<(), String> {
+        if points.is_empty()
+            || points
+                .iter()
+                .any(|point| !point.x.is_finite() || !point.y.is_finite())
+            || !size.is_finite()
+            || size <= 0.
+            || !softness.is_finite()
+        {
+            return Err(
+                "Background brush requires finite sample coordinates, positive size, and finite softness."
+                    .into(),
+            );
+        }
+        let first = points[0];
+        let (index, image) = self
+            .history
+            .current()
+            .elements
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, element)| match element {
+                Element::Image(image)
+                    if image.base.visible && image.natural_pixel_at(first).is_some() =>
+                {
+                    Some((index, image))
+                }
+                _ => None,
+            })
+            .ok_or("Start the background brush inside a visible image layer.")?;
+        let samples: Vec<_> = points
+            .into_iter()
+            .filter_map(|point| image.natural_pixel_at(point))
+            .collect();
+        let current = self
+            .assets
+            .get(&image.src)
+            .ok_or("The editor image asset is unavailable.")?;
+        let original = match mode {
+            BrushMode::Erase => None,
+            BrushMode::Restore => {
+                let OptionalNullable::Value(source) = &image.original_src else {
+                    return Err("Restore requires a retained original image asset.".into());
+                };
+                Some(
+                    self.assets
+                        .get(source)
+                        .ok_or("The retained original image asset is unavailable.")?
+                        .as_ref(),
+                )
+            }
+        };
+        let displayed_natural_width = if image.resolved_orientation().matrix().a == 0 {
+            image.natural_height
+        } else {
+            image.natural_width
+        };
+        let radius = (size * displayed_natural_width / image.width.max(1.) * 0.5).max(1.);
+        let hardness = 1. - softness.clamp(0., 100.) / 100.;
+        let mut edited = (**current).clone();
+        let changed = paint_stroke(&mut edited, original, &samples, radius, hardness, mode)?;
+        if changed == 0 {
+            return Ok(());
+        }
+        self.publish_image_background_edit(index, edited)
+    }
+
+    fn publish_image_background_edit(
+        &mut self,
+        index: usize,
+        edited: RgbaImage,
+    ) -> Result<(), String> {
+        validate_import_dimensions(
+            edited.width(),
+            edited.height(),
+            retained_asset_pixels(&self.assets)?,
+        )?;
+        let asset_id = fresh_id(|id| self.assets.contains_key(&format!("{ASSET_PREFIX}{id}")));
+        let source = format!("{ASSET_PREFIX}{asset_id}");
+        let mut document = self.history.current().clone();
+        let Element::Image(image) = &mut document.elements[index] else {
+            unreachable!()
+        };
+        if !matches!(image.original_src, OptionalNullable::Value(_)) {
+            image.original_src = OptionalNullable::Value(image.src.clone());
+        }
+        image.src = source.clone();
+        document.background = None;
+        let mut assets = self.assets.clone();
+        assets.insert(source, Arc::new(edited));
+        let pixels = render(&document, &assets)?;
+        // Assets, rendered frame and history change together. Failed/no-op
+        // requests keep redo and the pre-edit source for a later restore brush.
+        let mut history = self.history.clone();
+        history.commit(document);
+        self.assets = assets;
+        self.history = history;
+        self.pixels = Arc::new(pixels);
+        Ok(())
+    }
+
     pub fn execute(&mut self, request: Request) -> Result<(), String> {
         let request = match request {
             Request::Snapshot => return Ok(()),
             Request::SaveDraft { updated_at_ms } => return self.save_draft(updated_at_ms),
             Request::DiscardDraft => return self.discard_draft(),
+            Request::RemoveImageBackground {
+                point,
+                tolerance,
+                contiguous,
+            } => {
+                return self.remove_image_background(point, tolerance, contiguous);
+            }
+            Request::PaintImageBackground {
+                points,
+                size,
+                softness,
+                mode,
+            } => return self.paint_image_background(points, size, softness, mode),
             edit => edit,
         };
         let mut next = self.history.clone();
         match request {
-            Request::Snapshot | Request::SaveDraft { .. } | Request::DiscardDraft => unreachable!(),
+            Request::Snapshot
+            | Request::SaveDraft { .. }
+            | Request::DiscardDraft
+            | Request::RemoveImageBackground { .. }
+            | Request::PaintImageBackground { .. } => unreachable!(),
             Request::Undo => {
                 next.undo();
             }
@@ -179,6 +532,26 @@ impl EditorSession {
                 next.redo();
             }
             Request::Commit { document } => {
+                next.commit(document);
+            }
+            Request::SetBackground { color } => {
+                let mut document = next.current().clone();
+                document.background = color;
+                next.commit(document);
+            }
+            Request::CreateClosedShape { create } => {
+                let mut document = next.current().clone();
+                document.create_closed_shape(create)?;
+                next.commit(document);
+            }
+            Request::CreateOpenShape { create } => {
+                let mut document = next.current().clone();
+                document.create_open_shape(create)?;
+                next.commit(document);
+            }
+            Request::CreateFreehandPath { create } => {
+                let mut document = next.current().clone();
+                document.create_freehand_path(create)?;
                 next.commit(document);
             }
             Request::Layer { id, edit } => {
@@ -205,6 +578,11 @@ impl EditorSession {
                 }
                 let mut document = next.current().clone();
                 document.resize_canvas(width, height);
+                next.commit(document);
+            }
+            Request::TrimCanvas => {
+                let mut document = next.current().clone();
+                document.trim_to_content()?;
                 next.commit(document);
             }
         }
@@ -273,6 +651,260 @@ impl EditorSession {
         self.has_draft = false;
         Ok(())
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ImportPlacement {
+    Top,
+    Right,
+    Bottom,
+    Left,
+    Stack,
+}
+
+fn fresh_id(mut exists: impl FnMut(&str) -> bool) -> String {
+    loop {
+        let id = uuid::Uuid::new_v4().to_string();
+        if !exists(&id) {
+            return id;
+        }
+    }
+}
+
+fn retained_asset_pixels(assets: &BTreeMap<String, Arc<RgbaImage>>) -> Result<u64, String> {
+    assets.values().try_fold(0_u64, |total, image| {
+        total
+            .checked_add(u64::from(image.width()) * u64::from(image.height()))
+            .ok_or_else(|| "Editor images exceed the total decoded-pixel limit.".into())
+    })
+}
+
+fn validate_import_dimensions(width: u32, height: u32, retained: u64) -> Result<(), String> {
+    let pixels = u64::from(width) * u64::from(height);
+    if width == 0
+        || height == 0
+        || width > MAX_RENDER_DIMENSION
+        || height > MAX_RENDER_DIMENSION
+        || pixels > MAX_RENDER_PIXELS.saturating_sub(retained)
+    {
+        return Err("Editor images exceed the dimension or total decoded-pixel limit.".into());
+    }
+    Ok(())
+}
+
+fn import_placement(
+    document: &Document,
+    selected_id: Option<&str>,
+    point: Option<Point>,
+) -> (Rect, ImportPlacement, Option<Point>) {
+    let target = resolve_import_target(document, selected_id, point);
+    match point {
+        Some(point) => (target, placement_at_point(point, target), Some(point)),
+        None => (
+            target,
+            ImportPlacement::Bottom,
+            Some(Point {
+                x: target.x + target.width / 2.,
+                y: target.y + target.height,
+            }),
+        ),
+    }
+}
+
+fn resolve_import_target(
+    document: &Document,
+    selected_id: Option<&str>,
+    point: Option<Point>,
+) -> Rect {
+    let canvas = Rect {
+        x: 0.,
+        y: 0.,
+        width: document.width,
+        height: document.height,
+    };
+    let visible_images = || {
+        document.elements.iter().filter_map(|element| {
+            let Element::Image(image) = element else {
+                return None;
+            };
+            image.base.visible.then_some(image)
+        })
+    };
+    if let Some(point) = point {
+        if let Some(bounds) = visible_images().rev().find_map(|image| {
+            let bounds = image_bounds(image);
+            (point.x >= bounds.x
+                && point.x <= bounds.x + bounds.width
+                && point.y >= bounds.y
+                && point.y <= bounds.y + bounds.height)
+                .then_some(bounds)
+        }) {
+            return bounds;
+        }
+        return visible_images()
+            .rev()
+            .map(image_bounds)
+            .min_by(|left, right| {
+                distance_to_rect(point, *left).total_cmp(&distance_to_rect(point, *right))
+            })
+            .unwrap_or(canvas);
+    }
+    if let Some(selected_id) = selected_id
+        && let Some(bounds) = visible_images()
+            .find(|image| image.base.id == selected_id)
+            .map(image_bounds)
+    {
+        return bounds;
+    }
+    visible_images().next_back().map_or(canvas, image_bounds)
+}
+
+fn distance_to_rect(point: Point, rect: Rect) -> f64 {
+    let delta_x = if point.x < rect.x {
+        rect.x - point.x
+    } else if point.x > rect.x + rect.width {
+        point.x - (rect.x + rect.width)
+    } else {
+        0.
+    };
+    let delta_y = if point.y < rect.y {
+        rect.y - point.y
+    } else if point.y > rect.y + rect.height {
+        point.y - (rect.y + rect.height)
+    } else {
+        0.
+    };
+    delta_x.hypot(delta_y)
+}
+
+fn placement_at_point(point: Point, target: Rect) -> ImportPlacement {
+    let relative_x = point.x - target.x;
+    let relative_y = point.y - target.y;
+    let inside = relative_x >= 0.
+        && relative_y >= 0.
+        && relative_x <= target.width
+        && relative_y <= target.height;
+    if inside && target.width > 0. && target.height > 0. {
+        let edge_band_x = target.width * 0.22;
+        let edge_band_y = target.height * 0.22;
+        if edge_band_x * 2. < target.width
+            && edge_band_y * 2. < target.height
+            && relative_x >= edge_band_x
+            && relative_x <= target.width - edge_band_x
+            && relative_y >= edge_band_y
+            && relative_y <= target.height - edge_band_y
+        {
+            return ImportPlacement::Stack;
+        }
+    }
+    [
+        (ImportPlacement::Top, (point.y - target.y).abs()),
+        (
+            ImportPlacement::Right,
+            (point.x - (target.x + target.width)).abs(),
+        ),
+        (
+            ImportPlacement::Bottom,
+            (point.y - (target.y + target.height)).abs(),
+        ),
+        (ImportPlacement::Left, (point.x - target.x).abs()),
+    ]
+    .into_iter()
+    .min_by(|left, right| left.1.total_cmp(&right.1))
+    .expect("four image edges")
+    .0
+}
+
+fn position_imported_image(
+    natural_width: u32,
+    natural_height: u32,
+    document_width: f64,
+    document_height: f64,
+    target: Rect,
+    placement: ImportPlacement,
+    point: Option<Point>,
+) -> Rect {
+    let natural_width = f64::from(natural_width).max(1.);
+    let natural_height = f64::from(natural_height).max(1.);
+    let scale = if placement == ImportPlacement::Stack {
+        ((document_width * 0.65).max(160.) / natural_width)
+            .min((document_height * 0.65).max(120.) / natural_height)
+            .min(1.)
+    } else {
+        1.
+    };
+    let width = js_round(natural_width * scale).max(1.);
+    let height = js_round(natural_height * scale).max(1.);
+    let center = point.unwrap_or(Point {
+        x: target.x + target.width / 2.,
+        y: target.y + target.height / 2.,
+    });
+    let mut rect = Rect {
+        x: js_round(center.x - width / 2.).max(0.),
+        y: js_round(center.y - height / 2.).max(0.),
+        width,
+        height,
+    };
+    match placement {
+        ImportPlacement::Stack => {
+            rect.x = js_round(center.x - width / 2.);
+            rect.y = js_round(center.y - height / 2.);
+        }
+        ImportPlacement::Top => {
+            rect.x = js_round(target.x + (target.width - width) / 2.);
+            rect.y = js_round(target.y - height);
+        }
+        ImportPlacement::Right => {
+            rect.x = js_round(target.x + target.width);
+            rect.y = js_round(target.y + (target.height - height) / 2.);
+        }
+        ImportPlacement::Left => {
+            rect.x = js_round(target.x - width);
+            rect.y = js_round(target.y + (target.height - height) / 2.);
+        }
+        ImportPlacement::Bottom => {
+            rect.x = js_round(target.x + (target.width - width) / 2.);
+            rect.y = js_round(target.y + target.height);
+        }
+    }
+    rect
+}
+
+fn js_round(value: f64) -> f64 {
+    let lower = value.floor();
+    if value - lower < 0.5 {
+        lower
+    } else {
+        lower + 1.
+    }
+}
+
+fn fully_outside_canvas(bounds: Rect, width: f64, height: f64) -> bool {
+    const EPSILON: f64 = 0.5;
+    !(bounds.x + bounds.width > EPSILON
+        && width > bounds.x + EPSILON
+        && bounds.y + bounds.height > EPSILON
+        && height > bounds.y + EPSILON)
+}
+
+fn expand_document_for_element(document: &mut Document, mut element: Element, padding: f64) {
+    let Element::Image(image) = &element else {
+        unreachable!("image import creates an image element")
+    };
+    let bounds = image_bounds(image);
+    let shift_x = (-bounds.x).ceil().max(0.);
+    let shift_y = (-bounds.y).ceil().max(0.);
+    element.translate(shift_x, shift_y);
+    let Element::Image(shifted) = &element else {
+        unreachable!("translated import remains an image")
+    };
+    let shifted_bounds = image_bounds(shifted);
+    document.width =
+        (document.width + shift_x).max((shifted_bounds.x + shifted_bounds.width + padding).ceil());
+    document.height = (document.height + shift_y)
+        .max((shifted_bounds.y + shifted_bounds.height + padding).ceil());
+    document.translate(shift_x, shift_y);
+    document.elements.push(element);
 }
 
 fn original_document(
@@ -360,6 +992,185 @@ fn decode_png(path: &Path, remaining_pixels: &mut u64) -> Result<RgbaImage, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ImportFixture {
+        name: String,
+        document: Document,
+        selected_id: Option<String>,
+        point: Option<Point>,
+        natural: FixtureSize,
+        expected: FixtureExpected,
+    }
+
+    #[derive(Deserialize)]
+    struct FixtureSize {
+        width: u32,
+        height: u32,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FixtureExpected {
+        target: Rect,
+        placement: String,
+        position: Rect,
+        fully_outside: bool,
+        output: FixtureOutput,
+    }
+
+    #[derive(Deserialize)]
+    struct FixtureOutput {
+        width: f64,
+        height: f64,
+        elements: Vec<FixtureElement>,
+    }
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct FixtureElement {
+        id: String,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    }
+
+    fn fixture_element(element: &Element) -> FixtureElement {
+        let Element::Image(image) = element else {
+            panic!("import fixture contains only image layers")
+        };
+        FixtureElement {
+            id: image.base.id.clone(),
+            x: image.base.x,
+            y: image.base.y,
+            width: image.width,
+            height: image.height,
+        }
+    }
+
+    fn assert_rect_close(actual: Rect, expected: Rect, context: &str) {
+        for (actual, expected) in [
+            (actual.x, expected.x),
+            (actual.y, expected.y),
+            (actual.width, expected.width),
+            (actual.height, expected.height),
+        ] {
+            assert!(
+                (actual - expected).abs() <= 1e-12,
+                "{context}: expected {expected}, got {actual}"
+            );
+        }
+    }
+
+    #[test]
+    fn placement_and_expansion_match_shipping_typescript_fixture() {
+        let fixture: Vec<ImportFixture> =
+            serde_json::from_str(include_str!("../tests/editor-import-golden.json")).unwrap();
+        for case in fixture {
+            let (target, placement, point) =
+                import_placement(&case.document, case.selected_id.as_deref(), case.point);
+            assert_rect_close(
+                target,
+                case.expected.target,
+                &format!("{} target", case.name),
+            );
+            assert_eq!(
+                placement,
+                match case.expected.placement.as_str() {
+                    "top" => ImportPlacement::Top,
+                    "right" => ImportPlacement::Right,
+                    "bottom" => ImportPlacement::Bottom,
+                    "left" => ImportPlacement::Left,
+                    "stack" => ImportPlacement::Stack,
+                    other => panic!("unknown fixture placement {other}"),
+                },
+                "{} placement",
+                case.name
+            );
+            let bounds = position_imported_image(
+                case.natural.width,
+                case.natural.height,
+                case.document.width,
+                case.document.height,
+                target,
+                placement,
+                point,
+            );
+            assert_eq!(bounds, case.expected.position, "{} position", case.name);
+            assert_eq!(
+                fully_outside_canvas(bounds, case.document.width, case.document.height),
+                case.expected.fully_outside,
+                "{} outside",
+                case.name
+            );
+            let mut output = case.document;
+            let imported = Element::Image(ImageElement {
+                base: ElementBase {
+                    id: "new-import".into(),
+                    x: bounds.x,
+                    y: bounds.y,
+                    rotation: None,
+                    locked: false,
+                    visible: true,
+                    opacity: 100.,
+                    blend_mode: "source-over".into(),
+                },
+                source: "imported".into(),
+                src: "fixture:new-import".into(),
+                original_src: OptionalNullable::Null,
+                name: "new-import.png".into(),
+                source_artifact_id: None,
+                width: bounds.width,
+                height: bounds.height,
+                natural_width: f64::from(case.natural.width),
+                natural_height: f64::from(case.natural.height),
+                orientation: None,
+                extra: Default::default(),
+            });
+            if case.expected.fully_outside {
+                expand_document_for_element(
+                    &mut output,
+                    imported,
+                    if placement == ImportPlacement::Stack {
+                        24.
+                    } else {
+                        0.
+                    },
+                );
+            } else {
+                output.elements.push(imported);
+            }
+            assert_eq!(
+                output.width, case.expected.output.width,
+                "{} width",
+                case.name
+            );
+            assert_eq!(
+                output.height, case.expected.output.height,
+                "{} height",
+                case.name
+            );
+            assert_eq!(
+                output
+                    .elements
+                    .iter()
+                    .map(fixture_element)
+                    .collect::<Vec<_>>(),
+                case.expected.output.elements,
+                "{} elements",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn retained_asset_budget_checks_the_boundary_without_allocating() {
+        assert!(validate_import_dimensions(7, 3, MAX_RENDER_PIXELS - 21).is_ok());
+        assert!(validate_import_dimensions(7, 3, MAX_RENDER_PIXELS - 20).is_err());
+        assert!(validate_import_dimensions(0, 3, 0).is_err());
+        assert!(validate_import_dimensions(MAX_RENDER_DIMENSION + 1, 1, 0).is_err());
+    }
 
     #[test]
     fn decode_budget_counts_distinct_assets_and_only_debits_successful_reads() {

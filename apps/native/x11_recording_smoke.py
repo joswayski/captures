@@ -152,7 +152,10 @@ def main():
         before = run("import", "-window", selector, "-crop", "310x170+140+180",
                      "-depth", "8", "rgb:-")
         # egui must observe a held pointer, not press/release in one input batch.
-        run("xdotool", "mousemove", "--sync", "--window", selector, "140", "180",
+        # Like the capture smoke, focus the mapped selector before injecting
+        # input so the window manager does not consume the press for activation.
+        run("xdotool", "windowfocus", "--sync", selector,
+            "mousemove", "--sync", "--window", selector, "140", "180",
             "sleep", ".1", "mousedown", "1", "sleep", ".2",
             "mousemove", "--sync", "--window", selector, "450", "350",
             "sleep", ".2", "mouseup", "1")
@@ -798,11 +801,17 @@ def main():
         probe = "%[pixel:p{250,770}]|%[pixel:p{100,770}]"
         before = run("import", "-window", selector, "-format", probe, "info:").split(b"|")
         assert before[0] != before[1], "Record shortcut did not present recording controls"
-        run("xdotool", "key", "ctrl+shift+F7", "sleep", ".2")
+        run("xdotool", "key", "ctrl+shift+F7")
         assert windows("Captures Capture Controls") == [selector]
+
+        def screenshot_toolbar_painted():
+            after = run("import", "-window", selector, "-format", probe, "info:").split(b"|")
+            return after[0] == after[1]
+
+        # Observe asynchronous shortcut delivery and deferred-child painting,
+        # without a second key or pointer event that could hide a missed repaint.
+        wait(screenshot_toolbar_painted, "screenshot shortcut repaints child without pointer input")
         shot(selector, "record-to-screenshot-shortcut")
-        after = run("import", "-window", selector, "-format", probe, "info:").split(b"|")
-        assert after[0] == after[1], "shortcut mode change did not repaint the child"
         run("xdotool", "mousemove", "--sync", "--window", selector, "140", "180",
             "sleep", ".1", "mousedown", "1", "sleep", ".2",
             "mousemove", "--sync", "--window", selector, "450", "350",

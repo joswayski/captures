@@ -16,6 +16,8 @@ quantette = { version = "0.6", default-features = false, features = ["image", "s
 webp = { version = "0.3", default-features = false }
 tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
 fontdue = "0.9"
+cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash"] }
+swash = { version = "0.2", default-features = false, features = ["std", "render"] }
 
 [lints]
 workspace = true

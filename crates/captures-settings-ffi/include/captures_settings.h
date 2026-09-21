@@ -54,6 +54,22 @@ bool captures_selection_drag_v1(uint32_t mode, CapturesSelectionPoint origin,
 bool captures_selection_constrain_v1(CapturesSelectionRect rect,
     CapturesSelectionBounds bounds, double aspect, CapturesSelectionRect *output);
 
+/* Ephemeral screenshot viewport, never persisted in a document or draft.
+ * All coordinates are top-left logical points. fit is the host layout's fitted
+ * image rect; canvas is image-pixel size. zoom_percent=0 means Fit; pan remains
+ * applicable in Fit. Set all fields to zero for Fit+recenter, or just pan_x/y for
+ * recenter at the current zoom. Zoom anchors a document point, clamps to 5–800%
+ * and rounds to 0.1%. Inputs are copied; false leaves output untouched. Output
+ * must be null or writable aligned storage. No allocation, I/O or worker access. */
+typedef struct { double zoom_percent, pan_x, pan_y; } CapturesEditorViewport;
+bool captures_editor_viewport_rect_v1(CapturesEditorViewport viewport,
+    CapturesSelectionRect fit, CapturesSelectionBounds canvas, CapturesSelectionRect *output);
+bool captures_editor_viewport_zoom_v1(CapturesEditorViewport viewport,
+    CapturesSelectionRect fit, CapturesSelectionBounds canvas, double percent,
+    CapturesSelectionPoint anchor, CapturesEditorViewport *output);
+/* Native hosts normalize wheel delta to pixels; zero result means invalid input. */
+double captures_editor_viewport_wheel_factor_v1(double delta_pixels);
+
 /* Shared preview placement. Monitor bounds are PHYSICAL pixels in desktop
  * top-left coordinates (negative origins allowed), including the actual usable
  * work area. Output/origin are LOGICAL coordinates in that same orientation.
@@ -170,6 +186,8 @@ void captures_region_free_v1(CapturesRegionSession *session);
  * NULL output refuses open; otherwise output receives owned {ok,result}/{ok,error}
  * JSON, freed with captures_settings_free_v1. Failed open returns NULL.
  * Requests: snapshot, crop {rect:{x,y,width,height}}, resize_canvas {width,height},
+ * create_closed_shape/create_open_shape {shape,start:{x,y},end:{x,y}},
+ * create_freehand_path {points:[{x,y},...]}, layer {id,edit},
  * commit {document}, undo, redo, save_draft {updated_at_ms}, discard_draft.
  * Snapshots contain artifact_id, document, can_undo, can_redo, unsaved_changes,
  * has_draft. Only owned image sources may be committed; unsupported visible
@@ -180,6 +198,109 @@ typedef struct CapturesEditorSession CapturesEditorSession;
 typedef struct CapturesEditorFrame CapturesEditorFrame;
 CapturesEditorSession *captures_editor_open_v1(const char *request_json, char **output);
 char *captures_editor_request_v1(CapturesEditorSession *session, const char *request_json);
+/* Stateless picking from a published document JSON copy, not a session handle.
+ * Call once on pointer press, never per movement/frame. No render/decode/I/O.
+ * Coordinates and nonnegative tolerance are finite document pixels.
+ * Returns owned {ok:true,result:{hit:string|null}} or {ok:false,error:string};
+ * free with captures_settings_free_v1. Null/malformed input is an error.
+ * Visible/unlocked unsupported geometry is an error, not silent fall-through.
+ * Snapshots also provide selection_outlines: {layerId:[{x,y},...]} with four
+ * document-space corners; unsupported layers omit their outline. */
+char *captures_editor_hit_test_document_v1(const char *document_json,
+    double x, double y, double tolerance);
+/* Allocation-free rotation chrome/preview. Outline is four original published
+ * world-space corners in local TL,TR,BR,BL order; angles are radians. All pointer
+ * inputs are aligned/readable for four points, outputs writable for one struct.
+ * No pointers retained, JSON, sessions, rendering or I/O. False leaves output
+ * unchanged for null/nonfinite/invalid input or a grip that cannot fit the canvas.
+ * Hosts hide handles on hidden/locked layers. Hit radius is in document pixels.
+ * Keep original outline, angle and press point when modifiers change. Shift
+ * snaps to the shipping default 15-degree stops, including negative half-ties. */
+typedef struct {
+    CapturesSelectionPoint anchor, handle;
+    double hit_radius;
+} CapturesEditorRotationHandle;
+typedef struct {
+    double radians;
+    CapturesSelectionPoint outline[4];
+} CapturesEditorRotationPreview;
+bool captures_editor_rotation_handle_v1(const CapturesSelectionPoint *outline,
+    double radians, double display_scale, CapturesSelectionBounds canvas,
+    CapturesEditorRotationHandle *output);
+bool captures_editor_rotation_preview_v1(const CapturesSelectionPoint *outline,
+    double initial, CapturesSelectionPoint start, CapturesSelectionPoint current,
+    bool snap, CapturesEditorRotationPreview *output);
+/* Independent immutable resize gesture. Begin parses the published document
+ * once and hit-tests the selected layer at 8 view points of tolerance. Output
+ * is set to NULL on miss/error; success transfers a drag with copied geometry
+ * and snap lines. Returns owned JSON {ok:true,result:{handle:0..7|null}} or
+ * {ok:false,error:string}, freed with captures_settings_free_v1. Handle order:
+ * NW,N,NE,E,SE,S,SW,W. Strings and output pointer storage are borrowed for begin.
+ * Preview has no JSON/session/render/I/O; false leaves output untouched. Guides
+ * are at most four, orientation 0 vertical / 1 horizontal, in document pixels.
+ * Keep original drag through Shift changes; release/free it on cancellation,
+ * window resize, snapshot replacement or completion, after all calls finish. */
+typedef struct CapturesEditorResizeDrag CapturesEditorResizeDrag;
+typedef struct {
+    uint32_t orientation;
+    double position;
+} CapturesEditorAlignmentGuide;
+typedef struct {
+    CapturesSelectionPoint outline[4];
+    CapturesEditorAlignmentGuide guides[4];
+    size_t guide_count;
+} CapturesEditorResizePreview;
+char *captures_editor_resize_begin_v1(const char *document_json, const char *layer_id,
+    CapturesSelectionPoint point, double display_scale, CapturesEditorResizeDrag **output);
+bool captures_editor_resize_preview_v1(const CapturesEditorResizeDrag *drag,
+    CapturesSelectionPoint current, bool lock_aspect, CapturesEditorResizePreview *output);
+void captures_editor_resize_free_v1(CapturesEditorResizeDrag *drag);
+/* Independent immutable drag-move, after body picking. Begin copies geometry
+ * and snap lines; rejects hidden/locked/unsupported layers. Returns owned usual
+ * {ok:true,result:{}} or {ok:false,error:string} JSON; output is NULL on error.
+ * Preview reuses the resize outline/guide descriptor. Delta is document-space
+ * displacement from the original press, not from the previous preview. There is
+ * no per-event JSON/session/render/I/O. False leaves output untouched. Strings
+ * are borrowed for begin; outputs are writable. Free response with settings_free,
+ * and drag exactly once after all preview calls/cancellation/completion. */
+typedef struct CapturesEditorMoveDrag CapturesEditorMoveDrag;
+char *captures_editor_move_begin_v1(const char *document_json, const char *layer_id,
+    double display_scale, CapturesEditorMoveDrag **output);
+bool captures_editor_move_preview_v1(const CapturesEditorMoveDrag *drag,
+    CapturesSelectionPoint delta, CapturesEditorResizePreview *output);
+void captures_editor_move_free_v1(CapturesEditorMoveDrag *drag);
+/* Stateless shared preview geometry; no session access or per-event JSON.
+ * kind 0: arrow outline, exactly two signed document-space endpoints.
+ * kind 1: smoothed Pen centerline, one or more accepted samples; one is a dot,
+ * two also represent a straight Line. Hosts paint round caps/joins.
+ * Input is aligned/readable for length initialized points during the call.
+ * Non-null output points to writable aligned descriptor storage. Success owns
+ * an independent immutable buffer and returns the default shared stroke width.
+ * Too-short arrows succeed with zero points. Invalid inputs/panic return NULL
+ * and leave output unchanged. Borrow output.data only while the handle lives;
+ * release exactly once after all borrows. NULL free is allowed. */
+typedef struct CapturesEditorDrawGeometry CapturesEditorDrawGeometry;
+typedef struct {
+    const CapturesSelectionPoint *data;
+    size_t length;
+    double stroke_width;
+} CapturesEditorDrawPoints;
+CapturesEditorDrawGeometry *captures_editor_draw_geometry_v1(uint32_t kind,
+    const CapturesSelectionPoint *input, size_t length, CapturesEditorDrawPoints *output);
+void captures_editor_draw_geometry_free_v1(CapturesEditorDrawGeometry *handle);
+/* Import one host-decoded image on the serialized session worker. request_json is
+ * {name,selected_id?,point?:{x,y}} and never contains pixels or asset URLs.
+ * pixels describes borrowed top-down straight-alpha sRGB RGBA8; padded rows are
+ * accepted. The descriptor, JSON and actual RGBA bytes in each row must remain
+ * readable, initialized and live for the call; padding need not be initialized and
+ * is never read. The function validates dimensions, stride, length and pointer
+ * arithmetic before reading/copying, then owns an independent image.
+ * Success returns owned {ok:true,result:{layer_id,snapshot}}; failure returns
+ * {ok:false,error} without changing document/frame/history/assets or writing files.
+ * Free the response with captures_settings_free_v1. Never access/free the session
+ * concurrently. Hosts retain decoding, picker, clipboard and batch policy. */
+char *captures_editor_import_image_v1(CapturesEditorSession *session,
+    const CapturesRegionPixels *pixels, const char *request_json);
 void captures_editor_free_v1(CapturesEditorSession *session);
 /* Retain on the worker without copying pixels. The frame may move to the UI and
  * outlive subsequent edits or session free. Release exactly once after all image

@@ -1,9 +1,11 @@
 use captures_app::editor::{
-    Document, DocumentHistory, Element, ImageTransform, LayerEdit, Point, Rect, bounded_crop_rect,
+    ClosedShapeCreate, CropDrag, Document, DocumentHistory, Element, FreehandPathCreate,
+    ImageTransform, LayerEdit, MoveDrag, OpenShapeCreate, Point, Rect, ResizeDrag, ResizeHandle,
+    bounded_crop_rect, preview_rotation, rotation_angle, rotation_handle, smooth_path_centerline,
 };
 use captures_history::editor_draft::{self, SaveRequest};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -11,12 +13,84 @@ struct Fixture {
     initialization: InitializationCase,
     document: Value,
     crops: Vec<CropCase>,
+    crop_drags: Vec<CropDragCase>,
     translations: Vec<TranslationCase>,
     crop_rects: Vec<DocumentCropCase>,
     canvas_sizes: Vec<CanvasSizeCase>,
+    trims: Vec<TrimCase>,
+    shape_creations: Vec<ShapeCreationCase>,
+    open_shape_creations: Vec<OpenShapeCreationCase>,
+    freehand_creations: Vec<FreehandCreationCase>,
+    hit_tests: Vec<HitTestCase>,
+    moves: Vec<MoveDragCase>,
+    resize: ResizeFixture,
+    rotations: Value,
     orientations: Vec<OrientationCase>,
     layers: Value,
     history: HistoryCase,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResizeFixture {
+    hit_tests: Vec<ResizeHitTestCase>,
+    drags: Vec<ResizeDragCase>,
+}
+
+#[derive(Deserialize)]
+struct ResizeHitTestCase {
+    name: String,
+    element: Element,
+    radius: f64,
+    queries: Vec<ResizeHitTestQuery>,
+}
+
+#[derive(Deserialize)]
+struct ResizeHitTestQuery {
+    point: Point,
+    expected: Option<ResizeHandle>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResizeDragCase {
+    name: String,
+    input: Document,
+    id: String,
+    handle: ResizeHandle,
+    display_scale: f64,
+    current: Point,
+    lock_aspect: bool,
+    expected: Value,
+    committed: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MoveDragCase {
+    name: String,
+    input: Document,
+    id: String,
+    display_scale: f64,
+    delta: Point,
+    expected: Value,
+    committed: Value,
+}
+
+#[derive(Deserialize)]
+struct HitTestCase {
+    name: String,
+    input: Document,
+    bounds: Option<Rect>,
+    outline: Option<[Point; 4]>,
+    queries: Vec<HitTestQuery>,
+}
+
+#[derive(Deserialize)]
+struct HitTestQuery {
+    point: Point,
+    tolerance: f64,
+    expected: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -50,6 +124,23 @@ struct Bounds {
     height: f64,
 }
 
+#[derive(Deserialize)]
+struct CropDragCase {
+    origin: Point,
+    bounds: Bounds,
+    initial: CropDragStep,
+    updates: Vec<CropDragStep>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CropDragStep {
+    current: Point,
+    preset_aspect: Option<f64>,
+    shift_key: bool,
+    expected: Rect,
+}
+
 impl Bounds {
     fn as_rect(&self) -> Rect {
         Rect {
@@ -79,6 +170,39 @@ struct DocumentCropCase {
 struct CanvasSizeCase {
     width: f64,
     height: f64,
+    expected: Value,
+}
+
+#[derive(Deserialize)]
+struct TrimCase {
+    name: String,
+    input: Document,
+    expected: Value,
+}
+
+#[derive(Deserialize)]
+struct ShapeCreationCase {
+    name: String,
+    input: Document,
+    request: ClosedShapeCreate,
+    expected: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenShapeCreationCase {
+    name: String,
+    input: Document,
+    request: OpenShapeCreate,
+    path_length: f64,
+    expected: Option<Value>,
+}
+
+#[derive(Deserialize)]
+struct FreehandCreationCase {
+    name: String,
+    input: Document,
+    request: FreehandPathCreate,
     expected: Value,
 }
 
@@ -128,6 +252,118 @@ fn fixture() -> Fixture {
     serde_json::from_str(include_str!("editor-document-golden.json")).unwrap()
 }
 
+#[test]
+fn rotation_geometry_and_edits_match_typescript() {
+    fn equivalent(actual: Value, expected: &Value) {
+        match (actual, expected) {
+            (Value::Number(actual), Value::Number(expected)) => {
+                assert!(
+                    (actual.as_f64().unwrap() - expected.as_f64().unwrap()).abs() < 1e-9,
+                    "{actual} != {expected}"
+                );
+            }
+            (Value::Array(actual), Value::Array(expected)) => {
+                assert_eq!(actual.len(), expected.len());
+                for (actual, expected) in actual.into_iter().zip(expected) {
+                    equivalent(actual, expected);
+                }
+            }
+            (Value::Object(actual), Value::Object(expected)) => {
+                assert_eq!(actual.len(), expected.len(), "{actual:?} != {expected:?}");
+                for (key, expected) in expected {
+                    equivalent(actual[key].clone(), expected);
+                }
+            }
+            (actual, expected) => assert_eq!(&actual, expected),
+        }
+    }
+    let cases = fixture().rotations;
+    for case in cases["angles"].as_array().unwrap() {
+        equivalent(
+            json!(
+                rotation_angle(
+                    case["radians"].as_f64().unwrap(),
+                    case["snap"].as_bool().unwrap()
+                )
+                .unwrap()
+            ),
+            &case["expected"],
+        );
+    }
+    for case in cases["handles"].as_array().unwrap() {
+        let handle = rotation_handle(
+            serde_json::from_value(case["outline"].clone()).unwrap(),
+            case["radians"].as_f64().unwrap(),
+            case["scale"].as_f64().unwrap(),
+            case["canvas"]["width"].as_f64().unwrap(),
+            case["canvas"]["height"].as_f64().unwrap(),
+        );
+        equivalent(serde_json::to_value(handle).unwrap(), &case["expected"]);
+    }
+    for case in cases["gestures"].as_array().unwrap() {
+        let preview = preview_rotation(
+            serde_json::from_value(case["outline"].clone()).unwrap(),
+            case["initial"].as_f64().unwrap(),
+            serde_json::from_value(case["start"].clone()).unwrap(),
+            serde_json::from_value(case["current"].clone()).unwrap(),
+            case["snap"].as_bool().unwrap(),
+        )
+        .unwrap();
+        equivalent(serde_json::to_value(preview).unwrap(), &case["expected"]);
+    }
+    for case in cases["edits"].as_array().unwrap() {
+        let mut document: Document = serde_json::from_value(case["input"].clone()).unwrap();
+        document
+            .edit_layer(
+                case["id"].as_str().unwrap(),
+                LayerEdit::Rotate {
+                    radians: case["radians"].as_f64().unwrap(),
+                },
+            )
+            .unwrap();
+        equivalent(serde_json::to_value(document).unwrap(), &case["expected"]);
+    }
+}
+
+#[test]
+fn rotation_invalid_input_and_locked_noop_preserve_history() {
+    let mut document = fixture().hit_tests.remove(0).input;
+    let outline = document.elements[0].selection_outline().unwrap();
+    let start = Point { x: 10., y: 20. };
+    assert!(rotation_angle(f64::INFINITY, true).is_none());
+    assert!(rotation_handle(outline, 0., 0., 100., 100.).is_none());
+    assert!(
+        preview_rotation(
+            outline,
+            0.,
+            start,
+            Point {
+                x: f64::NAN,
+                y: 20.
+            },
+            false
+        )
+        .is_none()
+    );
+    let before = document.clone();
+    let id = document.elements[0].base().id.clone();
+    assert!(
+        document
+            .edit_layer(&id, LayerEdit::Rotate { radians: f64::NAN })
+            .is_err()
+    );
+    assert_eq!(document, before);
+    document
+        .edit_layer(&id, LayerEdit::Lock { locked: true })
+        .unwrap();
+    let mut history = DocumentHistory::new(document.clone());
+    document
+        .edit_layer(&id, LayerEdit::Rotate { radians: 0.7 })
+        .unwrap();
+    assert!(!history.commit(document));
+    assert_eq!(history.undo_len(), 0);
+}
+
 fn assert_json_equivalent(actual: Value, expected: Value) {
     match (actual, expected) {
         (Value::Number(actual), Value::Number(expected)) => assert_eq!(
@@ -152,6 +388,442 @@ fn assert_json_equivalent(actual: Value, expected: Value) {
         }
         (actual, expected) => assert_eq!(actual, expected),
     }
+}
+
+fn assert_json_close(actual: Value, expected: Value, context: &str) {
+    match (actual, expected) {
+        (Value::Number(actual), Value::Number(expected)) => assert!(
+            (actual.as_f64().unwrap() - expected.as_f64().unwrap()).abs() < 1e-8,
+            "{context}: {actual} != {expected}"
+        ),
+        (Value::Array(actual), Value::Array(expected)) => {
+            assert_eq!(actual.len(), expected.len(), "{context}");
+            for (actual, expected) in actual.into_iter().zip(expected) {
+                assert_json_close(actual, expected, context);
+            }
+        }
+        (Value::Object(actual), Value::Object(expected)) => {
+            assert_eq!(
+                actual.len(),
+                expected.len(),
+                "{context}: {actual:?} != {expected:?}"
+            );
+            for (key, expected) in expected {
+                assert_json_close(actual[&key].clone(), expected, context);
+            }
+        }
+        (actual, expected) => assert_eq!(actual, expected, "{context}"),
+    }
+}
+
+#[test]
+fn move_drag_previews_and_commits_match_shipping_typescript() {
+    for case in fixture().moves {
+        let original = case.input.clone();
+        let drag = MoveDrag::new(&case.input, &case.id, case.display_scale)
+            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+        let actual = drag
+            .preview(case.delta)
+            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+        let actual_json = json!({
+            "element": actual.element,
+            "outline": actual.outline,
+            "guides": actual.guides,
+        });
+        assert_json_close(actual_json.clone(), case.expected, &case.name);
+
+        // Gesture previews are always derived from the captured document, not
+        // accumulated from an earlier preview, and never mutate that document.
+        let _ = drag.preview(Point { x: -3.25, y: 7.75 }).unwrap();
+        let repeated = drag.preview(case.delta).unwrap();
+        assert_json_close(
+            serde_json::to_value(repeated).unwrap(),
+            actual_json,
+            &format!("{} repeated preview", case.name),
+        );
+        assert_eq!(case.input, original, "{} mutated preview input", case.name);
+
+        let mut committed = case.input;
+        committed
+            .edit_layer(
+                &case.id,
+                LayerEdit::DragMove {
+                    delta_x: case.delta.x,
+                    delta_y: case.delta.y,
+                    display_scale: case.display_scale,
+                },
+            )
+            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+        assert_json_close(
+            serde_json::to_value(committed).unwrap(),
+            case.committed,
+            &case.name,
+        );
+    }
+}
+
+#[test]
+fn move_drag_rejects_invalid_and_unsupported_edits_and_honors_locking() {
+    let case = fixture().moves.remove(0);
+    assert!(MoveDrag::new(&case.input, "missing", 1.).is_err());
+    assert!(MoveDrag::new(&case.input, &case.id, f64::NAN).is_err());
+    assert!(MoveDrag::new(&case.input, &case.id, f64::INFINITY).is_err());
+    let drag = MoveDrag::new(&case.input, &case.id, 1.).unwrap();
+    assert!(drag.preview(Point { x: f64::NAN, y: 0. }).is_err());
+    assert!(
+        drag.preview(Point {
+            x: 0.,
+            y: f64::INFINITY
+        })
+        .is_err()
+    );
+
+    let mut invalid = case.input.clone();
+    let before = invalid.clone();
+    assert!(
+        invalid
+            .edit_layer(
+                &case.id,
+                LayerEdit::DragMove {
+                    delta_x: f64::NAN,
+                    delta_y: 1.,
+                    display_scale: 1.,
+                },
+            )
+            .is_err()
+    );
+    assert_eq!(invalid, before);
+
+    let mut missing = case.input.clone();
+    let before = missing.clone();
+    assert!(
+        missing
+            .edit_layer(
+                "missing",
+                LayerEdit::DragMove {
+                    delta_x: 1.,
+                    delta_y: 1.,
+                    display_scale: 1.,
+                },
+            )
+            .is_err()
+    );
+    assert_eq!(missing, before);
+
+    let mut locked = case.input;
+    locked
+        .edit_layer(&case.id, LayerEdit::Lock { locked: true })
+        .unwrap();
+    assert!(
+        MoveDrag::new(&locked, &case.id, 1.)
+            .unwrap()
+            .preview(Point { x: 10., y: 12. })
+            .is_ok()
+    );
+    let before = locked.clone();
+    locked
+        .edit_layer(
+            &case.id,
+            LayerEdit::DragMove {
+                delta_x: 10.,
+                delta_y: 12.,
+                display_scale: 1.,
+            },
+        )
+        .unwrap();
+    assert_eq!(locked, before);
+
+    let mut unsupported = fixture().moves.remove(0).input;
+    let mut text = fixture().document["elements"][1].clone();
+    text["locked"] = json!(false);
+    unsupported
+        .elements
+        .push(serde_json::from_value(text).unwrap());
+    assert!(MoveDrag::new(&unsupported, "locked-text", 1.).is_err());
+    let before = unsupported.clone();
+    assert!(
+        unsupported
+            .edit_layer(
+                "locked-text",
+                LayerEdit::DragMove {
+                    delta_x: 1.,
+                    delta_y: 2.,
+                    display_scale: 1.,
+                },
+            )
+            .is_err()
+    );
+    assert_eq!(unsupported, before);
+}
+
+#[test]
+fn resize_handles_previews_and_commits_match_typescript() {
+    let resize = fixture().resize;
+    assert_eq!(
+        serde_json::to_value([
+            ResizeHandle::Nw,
+            ResizeHandle::N,
+            ResizeHandle::Ne,
+            ResizeHandle::E,
+            ResizeHandle::Se,
+            ResizeHandle::S,
+            ResizeHandle::Sw,
+            ResizeHandle::W,
+        ])
+        .unwrap(),
+        json!(["nw", "n", "ne", "e", "se", "s", "sw", "w"])
+    );
+    for case in resize.hit_tests {
+        for query in case.queries {
+            assert_eq!(
+                case.element
+                    .resize_handle_at(query.point, case.radius)
+                    .unwrap(),
+                query.expected,
+                "{} at {:?}",
+                case.name,
+                query.point
+            );
+        }
+    }
+    for case in resize.drags {
+        let drag = ResizeDrag::new(&case.input, &case.id, case.handle, case.display_scale)
+            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+        let actual = drag.preview(case.current, case.lock_aspect).unwrap();
+        assert_json_close(
+            json!({
+                "element": actual.element,
+                "outline": actual.outline,
+                "guides": actual.guides,
+            }),
+            case.expected,
+            &case.name,
+        );
+
+        let mut committed = case.input;
+        committed
+            .edit_layer(
+                &case.id,
+                LayerEdit::Resize {
+                    handle: case.handle,
+                    current: case.current,
+                    display_scale: case.display_scale,
+                    lock_aspect: case.lock_aspect,
+                },
+            )
+            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+        assert_json_close(
+            serde_json::to_value(committed).unwrap(),
+            case.committed,
+            &case.name,
+        );
+    }
+}
+
+#[test]
+fn resize_rejects_invalid_locked_and_unsupported_edits_transactionally() {
+    let case = fixture().resize.drags.remove(0);
+    let element = &case.input.elements[0];
+    assert!(
+        element
+            .resize_handle_at(Point { x: f64::NAN, y: 1. }, 5.)
+            .is_err()
+    );
+    assert!(
+        element
+            .resize_handle_at(Point { x: 1., y: 1. }, f64::INFINITY)
+            .is_err()
+    );
+    assert!(ResizeDrag::new(&case.input, "missing", case.handle, 1.).is_err());
+    assert!(ResizeDrag::new(&case.input, &case.id, case.handle, f64::NAN).is_err());
+    let drag = ResizeDrag::new(&case.input, &case.id, case.handle, 1.).unwrap();
+    assert!(
+        drag.preview(
+            Point {
+                x: f64::INFINITY,
+                y: 1.
+            },
+            false
+        )
+        .is_err()
+    );
+
+    let mut invalid = case.input.clone();
+    let before = invalid.clone();
+    assert!(
+        invalid
+            .edit_layer(
+                &case.id,
+                LayerEdit::Resize {
+                    handle: case.handle,
+                    current: Point { x: f64::NAN, y: 1. },
+                    display_scale: 1.,
+                    lock_aspect: false,
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(invalid, before);
+
+    let mut locked = case.input.clone();
+    locked
+        .edit_layer(&case.id, LayerEdit::Lock { locked: true })
+        .unwrap();
+    let before = locked.clone();
+    locked
+        .edit_layer(
+            &case.id,
+            LayerEdit::Resize {
+                handle: case.handle,
+                current: case.current,
+                display_scale: 1.,
+                lock_aspect: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(locked, before);
+
+    let mut unsupported = case.input;
+    let mut text = fixture().document["elements"][1].clone();
+    text["locked"] = json!(false);
+    unsupported
+        .elements
+        .push(serde_json::from_value(text).unwrap());
+    let before = unsupported.clone();
+    assert!(ResizeDrag::new(&unsupported, "locked-text", ResizeHandle::Se, 1.).is_err());
+    assert!(
+        unsupported
+            .edit_layer(
+                "locked-text",
+                LayerEdit::Resize {
+                    handle: ResizeHandle::Se,
+                    current: Point { x: 700., y: 100. },
+                    display_scale: 1.,
+                    lock_aspect: true,
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(unsupported, before);
+}
+
+#[test]
+fn canvas_selection_bounds_and_hits_match_typescript() {
+    for case in fixture().hit_tests {
+        if let Some(expected) = case.outline {
+            for (actual, expected) in case.input.elements[0]
+                .selection_outline()
+                .unwrap()
+                .into_iter()
+                .zip(expected)
+            {
+                assert!(
+                    (actual.x - expected.x).abs() < 1e-9 && (actual.y - expected.y).abs() < 1e-9,
+                    "{}: {actual:?} != {expected:?}",
+                    case.name
+                );
+            }
+        }
+        if let Some(expected) = case.bounds {
+            let actual = case.input.elements[0].selection_bounds().unwrap();
+            for (actual, expected) in [
+                (actual.x, expected.x),
+                (actual.y, expected.y),
+                (actual.width, expected.width),
+                (actual.height, expected.height),
+            ] {
+                assert!(
+                    (actual - expected).abs() < 1e-9,
+                    "{}: {actual} != {expected}",
+                    case.name
+                );
+            }
+        }
+        for query in case.queries {
+            let hit = case.input.hit_test(query.point, query.tolerance).unwrap();
+            assert_eq!(
+                hit.map(|element| element.base().id.as_str()),
+                query.expected.as_deref(),
+                "{} at {:?}, tolerance {}",
+                case.name,
+                query.point,
+                query.tolerance,
+            );
+        }
+    }
+}
+
+#[test]
+fn canvas_selection_reports_unsupported_layout_and_invalid_pointer_inputs() {
+    let mut input = fixture().hit_tests.remove(0).input;
+    let point = Point { x: 0., y: 20. };
+    let mut text = fixture().document["elements"][1].clone();
+    text["locked"] = json!(false);
+    input.elements.push(serde_json::from_value(text).unwrap());
+    assert!(
+        input
+            .hit_test(point, 0.)
+            .unwrap_err()
+            .contains("text layout")
+    );
+    assert!(input.elements[1].selection_bounds().is_err());
+    let Element::Text(text) = &mut input.elements[1] else {
+        panic!()
+    };
+    text.base.visible = false;
+    assert_eq!(
+        input.hit_test(point, 0.).unwrap().unwrap().base().id,
+        "image"
+    );
+    let Element::Text(text) = &mut input.elements[1] else {
+        panic!()
+    };
+    text.base.visible = true;
+    text.base.locked = true;
+    assert_eq!(
+        input.hit_test(point, 0.).unwrap().unwrap().base().id,
+        "image"
+    );
+    let front = input.elements[0].clone();
+    let Element::Text(text) = &mut input.elements[1] else {
+        panic!()
+    };
+    text.base.locked = false;
+    input.elements.push(front);
+    assert_eq!(
+        input.hit_test(point, 0.).unwrap().unwrap().base().id,
+        "image"
+    );
+    for (point, tolerance) in [
+        (
+            Point {
+                x: f64::NAN,
+                y: 20.,
+            },
+            0.,
+        ),
+        (
+            Point {
+                x: 0.,
+                y: f64::INFINITY,
+            },
+            0.,
+        ),
+        (point, f64::NAN),
+        (point, f64::INFINITY),
+        (point, -1.),
+    ] {
+        assert!(input.hit_test(point, tolerance).is_err());
+    }
+    let mut shape = fixture().document["elements"][2].clone();
+    shape["shape"] = json!("future-shape");
+    input.elements.push(serde_json::from_value(shape).unwrap());
+    assert!(
+        input
+            .hit_test(point, 0.)
+            .unwrap_err()
+            .contains("Unsupported shape")
+    );
 }
 
 #[test]
@@ -198,6 +870,154 @@ fn initialization_crop_translation_and_canvas_size_match_typescript() {
         document.resize_canvas(case.width, case.height);
         assert_json_equivalent(serde_json::to_value(document).unwrap(), case.expected);
     }
+}
+
+#[test]
+fn canvas_trim_matches_shipping_bounds_and_is_idempotent() {
+    for case in fixture().trims {
+        let mut document = case.input;
+        document.trim_to_content().expect(&case.name);
+        assert_eq!(document.width, case.expected["width"].as_f64().unwrap());
+        assert_eq!(document.height, case.expected["height"].as_f64().unwrap());
+        assert_json_close(
+            serde_json::to_value(&document).unwrap(),
+            case.expected,
+            &case.name,
+        );
+        let trimmed = document.clone();
+        document.trim_to_content().expect(&case.name);
+        assert_eq!(document, trimmed, "{}", case.name);
+    }
+}
+
+#[test]
+fn interactive_crop_drag_matches_typescript_state_transitions() {
+    for case in fixture().crop_drags {
+        let bounds = case.bounds.as_rect();
+        let mut drag = CropDrag::new(
+            case.origin,
+            bounds,
+            case.initial.preset_aspect,
+            case.initial.shift_key,
+        );
+        assert_eq!(drag.rect(), case.initial.expected);
+
+        for step in case.updates {
+            assert_eq!(
+                drag.update(step.current, step.preset_aspect, step.shift_key),
+                step.expected
+            );
+            assert_eq!(drag.rect(), step.expected);
+        }
+    }
+}
+
+#[test]
+fn closed_shape_creation_and_outside_expansion_match_typescript() {
+    for case in fixture().shape_creations {
+        let mut document = case.input;
+        let id = document.create_closed_shape(case.request).unwrap();
+        let Some(Element::Shape(created)) = document.elements.last_mut() else {
+            panic!("{} did not append a shape", case.name)
+        };
+        assert_eq!(created.base.id, id);
+        created.base.id = "fixture-created-shape".into();
+        assert_json_equivalent(serde_json::to_value(document).unwrap(), case.expected);
+    }
+}
+
+#[test]
+fn degenerate_closed_shape_creation_is_rejected_without_inventing_pixels() {
+    let original = Document::new_capture("asset://original", 7., 3., None);
+    for (start, end) in [
+        (json!({"x": 2, "y": 1}), json!({"x": 2, "y": 2})),
+        (json!({"x": 2, "y": 1}), json!({"x": 4, "y": 1})),
+        (json!({"x": 2, "y": 1}), json!({"x": 2, "y": 1})),
+    ] {
+        let create: ClosedShapeCreate = serde_json::from_value(json!({
+            "shape": "rectangle",
+            "start": start,
+            "end": end,
+        }))
+        .unwrap();
+        let mut document = original.clone();
+        assert!(document.create_closed_shape(create).is_err());
+        assert_eq!(document, original);
+    }
+}
+
+#[test]
+fn straight_line_and_arrow_creation_bounds_match_typescript() {
+    for case in fixture().open_shape_creations {
+        let original = case.input.clone();
+        let mut document = case.input;
+        let result = document.create_open_shape(case.request);
+        let Some(expected) = case.expected else {
+            assert!(result.is_err(), "{} ({})", case.name, case.path_length);
+            assert_eq!(document, original, "{}", case.name);
+            continue;
+        };
+        let id = result.unwrap();
+        let Some(Element::Shape(created)) = document.elements.last_mut() else {
+            panic!("{} did not append a shape", case.name)
+        };
+        assert_eq!(created.base.id, id);
+        created.base.id = "fixture-created-open-shape".into();
+        assert_json_equivalent(serde_json::to_value(document).unwrap(), expected);
+    }
+}
+
+#[test]
+fn freehand_creation_bounds_and_translation_match_typescript() {
+    for case in fixture().freehand_creations {
+        let mut document = case.input;
+        let id = document.create_freehand_path(case.request).unwrap();
+        let Some(Element::Path(created)) = document.elements.last_mut() else {
+            panic!("{} did not append a freehand path", case.name)
+        };
+        assert_eq!(created.base.id, id);
+        created.base.id = "fixture-created-freehand-path".into();
+        assert_json_equivalent(serde_json::to_value(document).unwrap(), case.expected);
+    }
+}
+
+#[test]
+fn freehand_creation_rejects_empty_and_non_renderer_geometry_without_mutation() {
+    let original = Document::new_capture("asset://original", 7., 3., None);
+    for points in [
+        Vec::new(),
+        vec![Point { x: f64::NAN, y: 1. }],
+        vec![Point {
+            x: f64::from(f32::MAX) * 2.,
+            y: 1.,
+        }],
+    ] {
+        let mut document = original.clone();
+        assert!(
+            document
+                .create_freehand_path(FreehandPathCreate {
+                    points,
+                    style: Default::default(),
+                    opacity: 100.,
+                })
+                .is_err()
+        );
+        assert_eq!(document, original);
+    }
+}
+
+#[test]
+fn freehand_preview_centerline_uses_the_shared_renderer_smoothing() {
+    let points = [
+        Point { x: 2., y: 5. },
+        Point { x: 8., y: -7. },
+        Point { x: 14., y: 5. },
+    ];
+    let samples = smooth_path_centerline(&points);
+    assert_eq!(samples.len(), 26);
+    assert_eq!(samples[0], points[0]);
+    assert_eq!(*samples.last().unwrap(), points[2]);
+    assert_eq!(samples[12], Point { x: 7.25, y: -2.5 });
 }
 
 #[test]

@@ -98,8 +98,7 @@ impl Tray {
                 _ => None,
             };
             if let Some(action) = action {
-                let _ = menu_actions.send(action);
-                menu_ctx.request_repaint();
+                send_action(&menu_actions, &menu_ctx, action);
             }
         }));
 
@@ -114,8 +113,7 @@ impl Tray {
                     ..
                 }
             ) {
-                let _ = tray_actions.send(Action::Preferences);
-                ctx.request_repaint();
+                send_action(&tray_actions, &ctx, Action::Preferences);
             }
             #[cfg(not(target_os = "windows"))]
             let _ = (&tray_actions, &ctx, event);
@@ -129,6 +127,14 @@ impl Tray {
     pub fn try_recv(&self) -> Option<Action> {
         self.actions.try_recv().ok()
     }
+}
+
+fn send_action(actions: &mpsc::Sender<Action>, ctx: &egui::Context, action: Action) {
+    let _ = actions.send(action);
+    // Context clones share the active viewport. A tray callback can run during
+    // a preview pass, but only root logic drains this queue (including while
+    // hidden). Wake root explicitly instead of repainting/coalescing the child.
+    ctx.request_repaint_of(egui::ViewportId::ROOT);
 }
 
 #[cfg(target_os = "linux")]
@@ -189,8 +195,7 @@ fn monitor_backend(actions: mpsc::Sender<Action>, ctx: egui::Context) -> Result<
                     && !old_owner.is_empty()
                     && old_owner != new_owner
                 {
-                    let _ = owner_actions.send(Action::Unavailable);
-                    owner_ctx.request_repaint();
+                    send_action(&owner_actions, &owner_ctx, Action::Unavailable);
                 }
                 true
             },
@@ -238,13 +243,11 @@ fn monitor_backend(actions: mpsc::Sender<Action>, ctx: egui::Context) -> Result<
     thread::spawn(move || {
         loop {
             if connection.process(Duration::from_secs(86_400)).is_err() {
-                let _ = actions.send(Action::Unavailable);
-                ctx.request_repaint();
+                send_action(&actions, &ctx, Action::Unavailable);
                 return;
             }
             if rechecks.try_iter().next().is_some() && backend_available(&connection).is_err() {
-                let _ = actions.send(Action::Unavailable);
-                ctx.request_repaint();
+                send_action(&actions, &ctx, Action::Unavailable);
                 return;
             }
         }
@@ -269,4 +272,60 @@ pub fn open_directory(path: &Path) -> Result<(), String> {
         .success()
         .then_some(())
         .ok_or_else(|| format!("Could not open {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn tray_actions_wake_root_even_during_a_preview_pass() {
+        for action in [
+            Action::History,
+            Action::Preferences,
+            Action::Quit,
+            #[cfg(target_os = "linux")]
+            Action::Unavailable,
+        ] {
+            for preview_active in [false, true] {
+                let ctx = egui::Context::default();
+                let child = egui::ViewportId::from_hash_of("preview");
+                let wakes = Arc::new(Mutex::new(Vec::new()));
+                let recorded = wakes.clone();
+                ctx.set_request_repaint_callback(move |info| {
+                    recorded.lock().unwrap().push(info.viewport_id);
+                });
+                if preview_active {
+                    let mut input = egui::RawInput {
+                        viewport_id: child,
+                        ..Default::default()
+                    };
+                    input.viewports.insert(
+                        child,
+                        egui::ViewportInfo {
+                            parent: Some(egui::ViewportId::ROOT),
+                            ..Default::default()
+                        },
+                    );
+                    ctx.begin_pass(input);
+                }
+                wakes.lock().unwrap().clear();
+                let (actions, receiver) = mpsc::channel();
+                let callback_ctx = ctx.clone();
+                std::thread::spawn(move || send_action(&actions, &callback_ctx, action))
+                    .join()
+                    .unwrap();
+                assert_eq!(receiver.try_recv().unwrap(), action);
+                assert_eq!(
+                    *wakes.lock().unwrap(),
+                    [egui::ViewportId::ROOT],
+                    "{action:?}, preview active: {preview_active}"
+                );
+                if preview_active {
+                    ctx.end_pass().textures_delta.clear();
+                }
+            }
+        }
+    }
 }

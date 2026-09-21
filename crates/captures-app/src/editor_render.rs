@@ -2,17 +2,20 @@
 //!
 //! Image assets are supplied by exact document `src`, so rendering performs no
 //! filesystem, network, host-font, or UI access. The five closed annotation
-//! shapes, curved lines, tapered arrows, and freehand paths are rendered; text
-//! and annotation shadows remain explicit unsupported cases.
+//! shapes, curved lines, tapered arrows, and freehand paths are rendered. Filled,
+//! unrotated text and plates additionally require explicit fonts and family mapping.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
 
-use captures_image::{BlendMode, Layer, Point, Shape};
+use captures_image::{
+    BlendMode, DROP_SHADOW_BLUR_MAX, DROP_SHADOW_OFFSET_MAX, DropShadow, Layer, Point, Shape,
+    text::{TextRenderer, TextStyle},
+};
 use image::{Rgba, RgbaImage};
 
 use crate::editor::{
-    Document, Element, ImageElement, ImageOrientation, PathElement, Point as EditorPoint,
-    ShapeElement,
+    Document, DropShadowStyle, Element, ElementStyle, ImageElement, ImageOrientation, PathElement,
+    Point as EditorPoint, ShapeElement, TextElement, arrow_fill_polygon, sample_controlled_path,
 };
 
 pub const MAX_RENDER_DIMENSION: u32 = 16_384;
@@ -21,10 +24,32 @@ pub const MAX_RENDER_PIXELS: u64 = 100_000_000;
 /// Render supported visible layers in document order through `captures-image`.
 ///
 /// The input document and shared assets are borrowed and never mutated. Text
-/// and enabled annotation shadows are rejected rather than silently omitted.
+/// is rejected rather than silently omitted.
 pub fn render(
     document: &Document,
     assets: &BTreeMap<String, Arc<RgbaImage>>,
+) -> Result<RgbaImage, String> {
+    render_inner(document, assets, None)
+}
+
+/// Opt in to filled paragraph text using caller-owned fonts. `families` maps
+/// document family keys (such as `sans`) to names embedded in supplied font bytes.
+/// No installed fonts are scanned. Rotation, outlines and text shadows remain
+/// explicit errors. Existing editor sessions still use the no-font entry point.
+/// Retained text bitmaps are limited to 16M pixels across the visible document.
+pub fn render_with_text(
+    document: &Document,
+    assets: &BTreeMap<String, Arc<RgbaImage>>,
+    renderer: &mut TextRenderer,
+    families: &BTreeMap<String, String>,
+) -> Result<RgbaImage, String> {
+    render_inner(document, assets, Some((renderer, families)))
+}
+
+fn render_inner(
+    document: &Document,
+    assets: &BTreeMap<String, Arc<RgbaImage>>,
+    mut text: Option<(&mut TextRenderer, &BTreeMap<String, String>)>,
 ) -> Result<RgbaImage, String> {
     let (width, height) = validate_canvas(document)?;
     let background = document
@@ -34,8 +59,8 @@ pub fn render(
         .transpose()?
         .unwrap_or(Rgba([0, 0, 0, 0]));
 
-    // Validate the complete visible stack before any orientation or canvas
-    // allocation. A later unsupported layer must not leave earlier work done.
+    // Reject unsupported visible styles/assets before orientation or canvas
+    // allocation. Shaping/rasterization can still fail on missing glyphs/budgets.
     for element in document
         .elements
         .iter()
@@ -43,13 +68,21 @@ pub fn render(
     {
         match element {
             Element::Image(image) => validate_image(image, assets)?,
-            Element::Text(text) => return Err(unsupported_layer("text", &text.base.id)),
+            Element::Text(element) => {
+                let Some((_, families)) = text.as_ref() else {
+                    return Err(unsupported_layer("text", &element.base.id));
+                };
+                validate_text(element, families)?;
+            }
             Element::Shape(shape) => validate_shape(shape)?,
             Element::Path(path) => validate_path(path)?,
         }
     }
 
     let mut layers = Vec::new();
+    let mut shadows = BTreeMap::new();
+    let mut text_pixels_remaining = 16_777_216;
+    let mut next_text_id = document.elements.len() as u64;
     for (index, element) in document.elements.iter().enumerate() {
         if !element.base().visible {
             continue;
@@ -57,17 +90,238 @@ pub fn render(
         let id = u64::try_from(index).map_err(|_| "too many editor layers to render".to_owned())?;
         match element {
             Element::Image(image) => layers.push(image_layer(id, image, assets)?),
-            Element::Shape(shape) => layers.push(shape_layer(id, shape)?),
-            Element::Path(path) => layers.push(path_layer(id, path)?),
-            Element::Text(_) => {}
+            Element::Shape(shape) => {
+                layers.push(shape_layer(id, shape)?);
+                if shape.style.has_drop_shadow() {
+                    shadows.insert(id, drop_shadow(&shape.style));
+                }
+            }
+            Element::Path(path) => {
+                layers.push(path_layer(id, path)?);
+                if path.style.has_drop_shadow() {
+                    shadows.insert(id, drop_shadow(&path.style));
+                }
+            }
+            Element::Text(element) => {
+                let (renderer, families) = text.as_mut().expect("validated text context");
+                for (index, mut layer) in
+                    text_layers(id, element, renderer, families, &mut text_pixels_remaining)?
+                        .into_iter()
+                        .enumerate()
+                {
+                    // Preserve document-index IDs and keep the extra text paints
+                    // disjoint from every shape/path shadow key.
+                    if index > 0 {
+                        layer.id = next_text_id;
+                        next_text_id += 1;
+                    }
+                    layers.push(layer);
+                }
+            }
         }
     }
 
-    captures_image::render(&captures_image::Document {
-        source: Arc::new(RgbaImage::from_pixel(width, height, background)),
-        crop: None,
-        layers,
-    })
+    captures_image::render_with_shadows(
+        &captures_image::Document {
+            source: Arc::new(RgbaImage::from_pixel(width, height, background)),
+            crop: None,
+            layers,
+        },
+        &shadows,
+    )
+}
+
+fn validate_text(element: &TextElement, families: &BTreeMap<String, String>) -> Result<(), String> {
+    let id = &element.base.id;
+    if element.outlined || element.has_drop_shadow() || element.base.rotation() != 0. {
+        return Err(format!(
+            "text layer {id} rotation, outlines and shadows are not supported yet"
+        ));
+    }
+    for (axis, value) in [
+        ("x", element.base.x),
+        ("y", element.base.y),
+        ("width", element.width),
+    ] {
+        finite_layer_f32(value, "text", axis, id)?;
+    }
+    if !element.base.opacity.is_finite() {
+        return Err(format!("text layer {id} opacity must be finite"));
+    }
+    blend_mode(&element.base.blend_mode, "text", id)?;
+    parse_color(&element.color, "text")?;
+    if let Some(background) = element.background.as_deref().filter(|s| !s.is_empty()) {
+        parse_color(background, "text background")?;
+    }
+    if !families.contains_key(&element.font_family) {
+        return Err(format!(
+            "text layer {id} has no explicit font family mapping"
+        ));
+    }
+    Ok(())
+}
+
+// Canvas's text preparation replaces ASCII whitespace with spaces. Paragraph
+// breaks are handled before this; normalize both measurement and rasterization.
+// Other line-control characters remain explicit errors from the single-line shaper.
+fn canvas_text_line(line: &str) -> Cow<'_, str> {
+    if line.is_empty() {
+        Cow::Borrowed(" ")
+    } else if line.contains(['\t', '\n', '\r', '\u{000c}']) {
+        Cow::Owned(line.replace(['\t', '\n', '\r', '\u{000c}'], " "))
+    } else {
+        Cow::Borrowed(line)
+    }
+}
+
+fn text_layers(
+    id: u64,
+    element: &TextElement,
+    renderer: &mut TextRenderer,
+    families: &BTreeMap<String, String>,
+    pixels_remaining: &mut u64,
+) -> Result<Vec<Layer>, String> {
+    let color = |value: &str| -> Result<[u8; 4], String> {
+        let mut rgba = parse_color(value, "text")?.0;
+        rgba[3] = (f64::from(rgba[3]) * element.base.opacity.clamp(0., 100.) / 100.).round() as u8;
+        Ok(rgba)
+    };
+    let style = TextStyle {
+        family: &families[&element.font_family],
+        size: element.font_size as f32,
+        bold: element.bold,
+        italic: element.italic,
+        color: color(&element.color)?,
+    };
+    let layout = crate::editor_text::layout(element, |line| {
+        renderer
+            .measure_line(&canvas_text_line(line), &style)
+            .map(f64::from)
+    })?;
+    let mode = blend_mode(&element.base.blend_mode, "text", &element.base.id)?;
+    let number = |value, axis| finite_layer_f32(value, "text", axis, &element.base.id);
+    let layer = |shape, color, fill| Layer {
+        id,
+        shape,
+        color,
+        fill,
+        stroke_width: 0.,
+        rotation_degrees: 0.,
+        rotation_origin: None,
+        blend_mode: mode,
+    };
+    let mut layers = Vec::new();
+    if let Some(plate) = layout.plate {
+        let fill = color(element.background.as_deref().expect("layout plate color"))?;
+        layers.push(layer(
+            Shape::RoundedRectangle {
+                origin: Point {
+                    x: number(plate.bounds.x, "plate x")?,
+                    y: number(plate.bounds.y, "plate y")?,
+                },
+                width: number(plate.bounds.width, "plate width")?,
+                height: number(plate.bounds.height, "plate height")?,
+                radius: number(plate.radius, "plate radius")?,
+            },
+            fill,
+            Some(fill),
+        ));
+    }
+    for row in layout.rows {
+        let line = renderer.render_line(&canvas_text_line(&row.text), &style)?;
+        if line.pixels.width() == 0 || line.pixels.height() == 0 {
+            continue;
+        }
+        *pixels_remaining = pixels_remaining
+            .checked_sub(u64::from(line.pixels.width()) * u64::from(line.pixels.height()))
+            .ok_or("Text exceeds the document's 16M raster pixel budget.")?;
+        // Center actual raster ink vertically, preserving horizontal bearings.
+        // The integer ink box can differ subpixel-wise from Canvas outline metrics.
+        let x = row.x + f64::from(line.bounds.x);
+        let y = row.y + (element.font_size * 1.25 - f64::from(line.bounds.height)) / 2.;
+        layers.push(layer(
+            Shape::Image {
+                origin: Point {
+                    x: number(x, "ink x")?,
+                    y: number(y, "ink y")?,
+                },
+                width: line.pixels.width() as f32,
+                height: line.pixels.height() as f32,
+                pixels: Arc::new(line.pixels),
+            },
+            [255; 4],
+            None,
+        ));
+    }
+    Ok(layers)
+}
+
+fn drop_shadow(style: &ElementStyle) -> DropShadow {
+    const DEFAULT_OPACITY: f64 = 45.0;
+
+    let width = style.stroke_width.max(1.0);
+    let fallback = DropShadowStyle {
+        color: "#000000".into(),
+        opacity: DEFAULT_OPACITY,
+        blur: (width * 0.85).max(6.0),
+        offset_x: 0.0,
+        offset_y: (width * 0.32).round().max(2.0),
+        extra: Default::default(),
+    };
+    let custom = style.drop_shadow_style.as_ref().unwrap_or(&fallback);
+    let number = |value: f64, min: f64, max: f64, fallback: f64| {
+        if value.is_finite() {
+            value.clamp(min, max)
+        } else {
+            fallback
+        }
+    };
+    let [red, green, blue] = parse_shadow_color(&custom.color).unwrap_or([0, 0, 0]);
+    DropShadow {
+        color: [
+            red,
+            green,
+            blue,
+            (number(custom.opacity, 0.0, 100.0, fallback.opacity) * 2.55).round() as u8,
+        ],
+        blur: number(
+            custom.blur,
+            0.0,
+            f64::from(DROP_SHADOW_BLUR_MAX),
+            fallback.blur,
+        ) as f32,
+        offset_x: number(
+            custom.offset_x,
+            -f64::from(DROP_SHADOW_OFFSET_MAX),
+            f64::from(DROP_SHADOW_OFFSET_MAX),
+            fallback.offset_x,
+        ) as f32,
+        offset_y: number(
+            custom.offset_y,
+            -f64::from(DROP_SHADOW_OFFSET_MAX),
+            f64::from(DROP_SHADOW_OFFSET_MAX),
+            fallback.offset_y,
+        ) as f32,
+    }
+}
+
+fn parse_shadow_color(value: &str) -> Option<[u8; 3]> {
+    let raw = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    if !raw.is_ascii() {
+        return None;
+    }
+    let expanded;
+    let hex = if raw.len() == 3 {
+        expanded = raw
+            .chars()
+            .flat_map(|character| [character, character])
+            .collect::<String>();
+        expanded.as_str()
+    } else {
+        raw.get(..6)?
+    };
+    let channel = |start| u8::from_str_radix(&hex[start..start + 2], 16).ok();
+    Some([channel(0)?, channel(2)?, channel(4)?])
 }
 
 fn image_layer(
@@ -334,227 +588,6 @@ fn center_of_points(points: &[EditorPoint], fallback_x: f64, fallback_y: f64) ->
     }
 }
 
-fn quadratic_point(
-    from: EditorPoint,
-    control: EditorPoint,
-    to: EditorPoint,
-    t: f64,
-) -> EditorPoint {
-    let inverse = 1. - t;
-    EditorPoint {
-        x: inverse * inverse * from.x + 2. * inverse * t * control.x + t * t * to.x,
-        y: inverse * inverse * from.y + 2. * inverse * t * control.y + t * t * to.y,
-    }
-}
-
-fn sample_controlled_path(vertices: &[EditorPoint], steps: usize) -> Vec<EditorPoint> {
-    if vertices.len() < 2 {
-        return vertices.to_vec();
-    }
-    let steps = steps.max(4);
-    if vertices.len() == 2 {
-        let [start, end] = [vertices[0], vertices[1]];
-        return (0..=steps)
-            .map(|index| {
-                let t = index as f64 / steps as f64;
-                EditorPoint {
-                    x: start.x + (end.x - start.x) * t,
-                    y: start.y + (end.y - start.y) * t,
-                }
-            })
-            .collect();
-    }
-    if vertices.len() == 3 {
-        return (0..=steps)
-            .map(|index| {
-                quadratic_point(
-                    vertices[0],
-                    vertices[1],
-                    vertices[2],
-                    index as f64 / steps as f64,
-                )
-            })
-            .collect();
-    }
-    let mut samples = vec![vertices[0]];
-    for index in 1..vertices.len() - 2 {
-        let from = *samples
-            .last()
-            .expect("controlled path starts with one sample");
-        let to = EditorPoint {
-            x: (vertices[index].x + vertices[index + 1].x) / 2.,
-            y: (vertices[index].y + vertices[index + 1].y) / 2.,
-        };
-        samples
-            .extend((1..=steps).map(|step| {
-                quadratic_point(from, vertices[index], to, step as f64 / steps as f64)
-            }));
-    }
-    let from = *samples
-        .last()
-        .expect("controlled path starts with one sample");
-    let control = vertices[vertices.len() - 2];
-    let end = vertices[vertices.len() - 1];
-    samples.extend(
-        (1..=steps).map(|step| quadratic_point(from, control, end, step as f64 / steps as f64)),
-    );
-    samples
-}
-
-fn arrow_fill_polygon(element: &ShapeElement) -> Vec<EditorPoint> {
-    const MIN_LENGTH: f64 = 1.5;
-    const HEAD_LENGTH_RATIO: f64 = 3.5;
-    const HEAD_WIDTH_RATIO: f64 = 3.1;
-    const TAIL_WIDTH_RATIO: f64 = 0.18;
-    const NECK_WIDTH_RATIO: f64 = 1.12;
-    const HEAD_SHAFT_FRACTION: f64 = 0.36;
-    const FULL_STROKE_LENGTH_RATIO: f64 = 7.;
-    const TAIL_CAP_SEGMENTS: usize = 7;
-
-    let vertices = std::iter::once(EditorPoint {
-        x: element.base.x,
-        y: element.base.y,
-    })
-    .chain(element.controls.iter().copied())
-    .chain(std::iter::once(EditorPoint {
-        x: element.end_x,
-        y: element.end_y,
-    }))
-    .collect::<Vec<_>>();
-    let samples = sample_controlled_path(&vertices, 28);
-    let mut cumulative = Vec::with_capacity(samples.len());
-    cumulative.push(0.);
-    for index in 1..samples.len() {
-        cumulative.push(
-            cumulative[index - 1]
-                + (samples[index].x - samples[index - 1].x)
-                    .hypot(samples[index].y - samples[index - 1].y),
-        );
-    }
-    let path_length = cumulative.last().copied().unwrap_or(0.);
-    if path_length < MIN_LENGTH {
-        return Vec::new();
-    }
-    let authored_stroke = element.style.stroke_width;
-    let full_at = 28_f64.max(authored_stroke * FULL_STROKE_LENGTH_RATIO);
-    let stroke = authored_stroke.min(authored_stroke * path_length / full_at);
-    if stroke <= 0. {
-        return Vec::new();
-    }
-    let head_length = (stroke * HEAD_LENGTH_RATIO).min(path_length * HEAD_SHAFT_FRACTION);
-    let head_half = stroke * HEAD_WIDTH_RATIO / 2.;
-    let tail_half = stroke * TAIL_WIDTH_RATIO / 2.;
-    let neck_half = stroke * NECK_WIDTH_RATIO / 2.;
-    let shaft_end = (path_length - head_length).max(0.);
-    let offset_at = |point: EditorPoint, tangent: EditorPoint, half: f64| {
-        (
-            EditorPoint {
-                x: point.x - tangent.y * half,
-                y: point.y + tangent.x * half,
-            },
-            EditorPoint {
-                x: point.x + tangent.y * half,
-                y: point.y - tangent.x * half,
-            },
-        )
-    };
-    let shaft_steps = samples.len().max(8);
-    let mut left = Vec::with_capacity(shaft_steps + 1);
-    let mut right = Vec::with_capacity(shaft_steps + 1);
-    for step in 0..=shaft_steps {
-        let distance = shaft_end * step as f64 / shaft_steps as f64;
-        let (point, tangent) = point_and_tangent_at_length(&samples, &cumulative, distance);
-        let mix = if shaft_end > 0. {
-            distance / shaft_end
-        } else {
-            0.
-        };
-        let half = tail_half + (neck_half - tail_half) * mix;
-        let (left_point, right_point) = offset_at(point, tangent, half);
-        left.push(left_point);
-        right.push(right_point);
-    }
-    let (neck, neck_tangent) = point_and_tangent_at_length(&samples, &cumulative, shaft_end);
-    let (shoulder_left, shoulder_right) = offset_at(neck, neck_tangent, head_half);
-    let tip = *samples
-        .last()
-        .expect("sampled arrow has at least two points");
-    let (tail, tail_tangent) = point_and_tangent_at_length(&samples, &cumulative, 0.);
-    let tail_normal = EditorPoint {
-        x: -tail_tangent.y,
-        y: tail_tangent.x,
-    };
-    let cap = (0..=TAIL_CAP_SEGMENTS)
-        .map(|step| {
-            let angle = std::f64::consts::PI * step as f64 / TAIL_CAP_SEGMENTS as f64;
-            EditorPoint {
-                x: tail.x
-                    - tail_normal.x * tail_half * angle.cos()
-                    - tail_tangent.x * tail_half * angle.sin(),
-                y: tail.y
-                    - tail_normal.y * tail_half * angle.cos()
-                    - tail_tangent.y * tail_half * angle.sin(),
-            }
-        })
-        .collect::<Vec<_>>();
-    left.into_iter()
-        .chain([shoulder_left, tip, shoulder_right])
-        .chain(right.into_iter().rev())
-        .chain(cap[1..cap.len() - 1].iter().copied())
-        .collect()
-}
-
-fn point_and_tangent_at_length(
-    samples: &[EditorPoint],
-    cumulative: &[f64],
-    target: f64,
-) -> (EditorPoint, EditorPoint) {
-    let first = samples[0];
-    let last = samples[samples.len() - 1];
-    let unit = |from: EditorPoint, to: EditorPoint| {
-        let dx = to.x - from.x;
-        let dy = to.y - from.y;
-        let length = dx.hypot(dy);
-        if length < 1e-6 {
-            EditorPoint { x: 1., y: 0. }
-        } else {
-            EditorPoint {
-                x: dx / length,
-                y: dy / length,
-            }
-        }
-    };
-    if target <= 0. {
-        return (first, unit(first, samples[1]));
-    }
-    let total = *cumulative
-        .last()
-        .expect("cumulative arrow lengths are nonempty");
-    if target >= total {
-        return (last, unit(samples[samples.len() - 2], last));
-    }
-    for index in 1..samples.len() {
-        if cumulative[index] >= target {
-            let span = cumulative[index] - cumulative[index - 1];
-            let t = if span > 0. {
-                (target - cumulative[index - 1]) / span
-            } else {
-                1.
-            };
-            let from = samples[index - 1];
-            let to = samples[index];
-            return (
-                EditorPoint {
-                    x: from.x + (to.x - from.x) * t,
-                    y: from.y + (to.y - from.y) * t,
-                },
-                unit(from, to),
-            );
-        }
-    }
-    (last, unit(samples[samples.len() - 2], last))
-}
-
 fn apply_opacity(color: Rgba<u8>, opacity: f64) -> [u8; 4] {
     let [red, green, blue, alpha] = color.0;
     [
@@ -658,12 +691,6 @@ fn validate_shape(element: &ShapeElement) -> Result<(), String> {
             element.base.id, element.shape
         ));
     }
-    if element.style.has_drop_shadow() {
-        return Err(format!(
-            "shape layer {} uses unsupported drop shadow",
-            element.base.id
-        ));
-    }
     let closed = matches!(
         element.shape.as_str(),
         "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
@@ -716,12 +743,6 @@ fn validate_path(element: &PathElement) -> Result<(), String> {
         ));
     }
     blend_mode(&element.base.blend_mode, "path", &element.base.id)?;
-    if element.style.has_drop_shadow() {
-        return Err(format!(
-            "path layer {} uses unsupported drop shadow",
-            element.base.id
-        ));
-    }
     let stroke_width = element.style.stroke_width as f32;
     if !element.style.stroke_width.is_finite()
         || !stroke_width.is_finite()
@@ -979,6 +1000,51 @@ mod tests {
             }
             None => assert!(actual.is_empty()),
         }
+    }
+
+    #[test]
+    fn drop_shadow_metrics_match_shipping_defaults_and_custom_clamping() {
+        let mut style = ElementStyle {
+            color: "#fff".into(),
+            fill: None,
+            stroke_width: 8.0,
+            stroke_enabled: None,
+            drop_shadow: Some(true),
+            drop_shadow_style: None,
+            extra: Default::default(),
+        };
+        assert_eq!(
+            drop_shadow(&style),
+            DropShadow {
+                color: [0, 0, 0, 115],
+                blur: 6.8,
+                offset_x: 0.0,
+                offset_y: 3.0,
+            }
+        );
+
+        style.drop_shadow_style = Some(DropShadowStyle {
+            color: "#1aB2c3ff".into(),
+            opacity: 120.0,
+            blur: f64::NAN,
+            offset_x: -700.0,
+            offset_y: f64::INFINITY,
+            extra: Default::default(),
+        });
+        assert_eq!(
+            drop_shadow(&style),
+            DropShadow {
+                color: [0x1a, 0xb2, 0xc3, 255],
+                blur: 6.8,
+                offset_x: -500.0,
+                offset_y: 3.0,
+            }
+        );
+
+        style.drop_shadow_style.as_mut().unwrap().color = "invalid".into();
+        assert_eq!(drop_shadow(&style).color[..3], [0, 0, 0]);
+        style.drop_shadow_style.as_mut().unwrap().color = "#AéBCD".into();
+        assert_eq!(drop_shadow(&style).color[..3], [0, 0, 0]);
     }
 
     #[test]

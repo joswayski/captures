@@ -30,7 +30,9 @@ jobs:
       matrix:
         os: [windows-2025, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 35
+    # Linux builds plus both appearances of the growing X11 suites exceed 35m.
+    # Keep individual smoke deadlines intact; allow the complete job to finish.
+    timeout-minutes: ${{ matrix.os == 'ubuntu-24.04' && 75 || 35 }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -46,7 +48,7 @@ jobs:
           cache-workspaces: apps/native/wgpu
       - name: Install Linux windowing and software-rendering test dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxi-dev libxrandr-dev libdbus-1-dev libxcb1-dev libpipewire-0.3-dev libasound2-dev libegl-dev libgbm-dev libclang-dev mesa-vulkan-drivers libgl1-mesa-dri xvfb dbus python3-dbus python3-gi python3-xlib openbox picom hsetroot xclip xdotool x11-utils x11-apps imagemagick xfce4-panel xdg-utils ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxi-dev libxrandr-dev libdbus-1-dev libxcb1-dev libpipewire-0.3-dev libasound2-dev libegl-dev libgbm-dev libclang-dev mesa-vulkan-drivers libgl1-mesa-dri xvfb dbus python3-dbus python3-gi python3-xlib openbox picom hsetroot sway wl-clipboard xclip xdotool x11-utils x11-apps imagemagick xfce4-panel xdg-utils ffmpeg
       - run: node apps/native/prepare.mjs --output apps/native/wgpu/resources
       - run: node --test scripts/native-tokens.test.mjs
       - run: python -m unittest discover -s apps/native -p 'test_*.py'
@@ -54,6 +56,9 @@ jobs:
       - run: cargo +1.95.0 test --manifest-path apps/native/wgpu/Cargo.toml --locked
       - run: cargo +1.95.0 clippy --manifest-path apps/native/wgpu/Cargo.toml --locked --all-targets -- -D warnings
       - run: cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --release
+      - name: Exercise native Wayland image clipboard transport
+        if: runner.os == 'Linux'
+        run: python apps/native/wayland_clipboard_smoke.py --binary apps/native/wgpu/target/release/wayland_clipboard_probe
       - name: Exercise native Linux windows (X11, software Vulkan)
         if: runner.os == 'Linux'
         run: xvfb-run -a python apps/native/wgpu/smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-smoke
@@ -87,6 +92,10 @@ jobs:
         run: |
           for appearance in dark light; do
             /usr/bin/python3 apps/native/x11_editor_smoke.py --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-editor-$appearance"
+            /usr/bin/python3 apps/native/x11_editor_smoke.py --background-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-background-$appearance"
+            /usr/bin/python3 apps/native/x11_editor_smoke.py --wand-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-wand-$appearance"
+            /usr/bin/python3 apps/native/x11_editor_smoke.py --brush-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-brush-$appearance"
+            /usr/bin/python3 apps/native/x11_editor_smoke.py --trim-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-trim-$appearance"
           done
       - name: Exercise real native mini previews on private X11
         if: runner.os == 'Linux'
@@ -113,6 +122,12 @@ jobs:
             native-x11-history
             native-x11-editor-dark
             native-x11-editor-light
+            native-x11-background-dark
+            native-x11-background-light
+            native-x11-wand-dark
+            native-x11-wand-light
+            native-x11-brush-dark
+            native-x11-brush-light
             native-x11-preview
             native-x11-lifecycle
           if-no-files-found: ignore

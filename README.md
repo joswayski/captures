@@ -245,7 +245,9 @@ notice offers Save file, then Show in Folder after saving a permanent copy. Dism
 or letting it expire preserves History and exports; failed saves can be retried.
 The AppKit History view enables **Edit screenshot** for screenshots only. Its first
 native editor slice restores and saves isolated drafts, previews shared-Rust crop
-and canvas-resize operations, and supports Undo, Redo and confirmed draft discard;
+and canvas-resize operations, and supports Undo, Redo and confirmed draft discard.
+Its Layers panel connects shared visibility, lock, opacity, movement, image rename,
+duplicate, delete and adjacent ordering commands while preserving locked barriers;
 the original History image and its exports remain unchanged. Recording completion
 still presents its notice immediately because recording editing is unsupported. Real macOS and
 Windows recording, audio devices, multi-display and hardware acceptance remain open;
@@ -258,14 +260,48 @@ Shared Rust now defines the screenshot editor's layered document, crop/translati
 orientation geometry, canvas sizing and bounded snapshot history, checked against
 the shipping TypeScript behavior. A shared renderer now flattens real image layers
 and editor shapes, including closed annotations, curved lines, tapered arrows and
-freehand paths with crop geometry, rotation, opacity and blending, without host I/O.
+freehand paths with crop geometry, rotation, opacity, blending and enabled shape/path
+drop shadows, without host I/O.
+A separate shared text prerequisite shapes and rasterizes single lines from explicit
+font bytes, including ligatures, combining marks and right-to-left text. Shared
+paragraph helpers now provide measured wrapping, alignment, auto-width boxes and
+background-plate geometry. An opt-in document renderer composites filled, unrotated
+text and square/rounded plates from those fonts, with opacity and blending. Text
+rotation, outlines and shadows are still unsupported; native Text tools, font
+persistence and editor-session integration are not connected yet.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
-resize/lossless image transforms/undo, and retained pixel frames for native hosts.
+resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
+pixel frames for native hosts. Typed rectangle/ellipse, straight-line/arrow and
+completed freehand-path creation are also available; native hosts still own pointer
+sampling, drawing gestures and cancellation.
+Shared annotation-style patches can update existing
+shape/path colors, closed-shape fill/stroke controls, widths and shadow settings
+without replacing documents.
+The shared C boundary accepts one borrowed decoded RGBA
+buffer into session-owned storage; hosts own file decoding and interaction.
 Full-canvas photos rotate their canvas; layered overhang stays clipped and fully
-off-canvas transformed images expand the canvas so they are not lost.
+off-canvas transformed images expand the canvas so they are not lost. Shared
+interactive crop geometry also matches shipping bounds, aspect presets and Shift
+locking; physical input acceptance remains separate work.
 The Windows/Linux candidate opens screenshots from History in a native crop,
-canvas-size and draft editor with undo/redo. Its layer panel supports selection,
+canvas-size and draft editor with undo/redo. **Draw crop** selects directly on the
+preview with free or preset aspect ratios and Shift ratio locking. Apply commits
+the selection; Cancel or Escape leaves the document unchanged. Its layer panel supports selection,
 visibility, locking, opacity, renaming, position, duplication, deletion and ordering.
+**Draw** adds rectangles, ellipses, straight lines, tapered arrows and freehand Pen strokes in the default
+annotation color, one undoable layer per gesture. Escape cancels unfinished work;
+short arrow gestures are discarded and drafts retain completed shapes and strokes.
+Pen smooths sampled points and retains click-only dots.
+**Layers → Annotation style** edits fill, stroke and shadow color, width, opacity,
+blur and offsets. Apply style creates one undo step; Reset fields cancels unapplied
+changes. Hidden and locked annotations remain editable.
+Image layers also expose lossless left/right rotations and horizontal/vertical
+flips, including when hidden or locked; each action supports undo and draft restore.
+**Import image** adds one PNG, JPEG, WebP or TIFF below the selected visible image,
+expanding the canvas when needed. Imports respect EXIF orientation, are undoable,
+and keep their own draft pixels so reopening does not require the source file.
+Supported RGB/grayscale ICC profiles convert to sRGB; unsupported profiles and
+PNG gamma/chromaticity-only or CICP metadata require conversion to sRGB first.
 Its Output panel previews PNG/JPEG/WebP quality and size limits, reports encoded
 bytes, and switches between the edited canvas and encoded output without saving.
 **Save new copy** exports to an editable destination path without replacing an
@@ -275,12 +311,76 @@ Closing can save or keep the previous draft; explicit Discard edits restores the
 original. Failed draft saves keep edits open and cancel normal quit. Private-X11 checks
 cover both appearances, persisted drafts, real preview pixels and error recovery.
 AppKit now connects the same crop, canvas-resize and draft operations in its own
-window. Windows, Wayland and physical AppKit presentation remain unverified.
-Native image-transform controls, text, annotation shadows, annotation tools, save
-dialogs/overwrite-original, edited-image clipboard output, AppKit edited-file export,
-and recording editing remain unconnected. The shared image-transform command and
-rendering/export support are prerequisites, not native editor acceptance. OS shortcut
-takeover, login items, single-instance relaunch and updates
+window, along with native image-layer controls, lossless rotate/flip actions, and
+PNG/JPEG/WebP output previews
+that report exact encoded size without saving. Its **Save new copy** controls choose
+a folder and filename, publish without replacing files, and preserve the draft. AppKit
+also imports one still image at a time as a new image layer using its color-managed
+system decoder. It normalizes imported pixels to straight-alpha sRGB RGBA8 and retains
+them in the draft without depending on the source file. ImageIO-supported sources use
+their first image; files without a usable color description are rejected rather than
+silently relabeled. Its **Draw** view maps Rectangle, Ellipse, Line, Arrow and Pen gestures from the fitted
+edited preview into shared document coordinates, including reverse and off-canvas
+gestures. Release creates one undoable layer; Escape, focus loss, close, or leaving Draw
+cancels transient geometry without editing the document. Arrow outlines and Pen
+smoothing come from shared Rust; Pen supports click-only dots and round caps.
+Its Layers panel also edits annotation fill, stroke and shadow settings with an explicit
+Apply style action. Unapplied fields can be reset; shared Rust owns style defaults,
+rendering, undo and draft persistence.
+In both native hosts, **Layers** supports clicking the edited preview to select an
+unlocked visible layer, or empty space to clear selection. Drag shows a translated
+selection outline; release moves the layer in one undoable edit. Escape, focus loss,
+preview resizing or leaving Layers cancels the drag. Pixels update on release, not
+continuously during dragging; selection alone does not change the document.
+The selected layer also exposes a **rotation grip** when it fits inside the image.
+Drag it to rotate; hold Shift for 15° stops. Rotation uses the same outline-only
+preview, cancellation, undo and draft behavior. Hidden or locked layers have no
+grip; custom snap increments are not connected yet.
+Eight border grips resize images, shapes and drawings. Shift keeps corner drags
+proportional; edge grips remain single-axis. Unrotated resizes snap to canvas and
+visible-layer edges with guide lines; rotated resizes retain the opposite anchor.
+Resizing uses an outline-only preview and commits on release.
+Canvas moves now snap painted bounds to canvas and visible-layer edges, including
+locked layers, with alignment guides. The snap range stays constant on screen;
+numeric X/Y edits remain exact and do not snap. Clicks and small pointer movements
+do not trigger snapping or change the document.
+Both hosts connect view-only zoom and pan: Fit, 100%, zoom steps, Recenter,
+Cmd/Ctrl-wheel zoom and Cmd/Ctrl-drag or middle-button pan. AppKit also connects
+native magnification. Zoom stays anchored under the pointer and shares the image's
+coordinate mapping with editing tools. These controls do not change drafts or undo.
+Cmd/Ctrl +/− zoom in 1.25× steps; Cmd/Ctrl 0 shows 100% (not Fit), including while
+an editor field has focus. Zoom shortcuts cancel unfinished canvas gestures.
+The zoom menu offers Fit, 50%, 100% and 200% and displays the current custom zoom.
+Fit retains each workbench's existing layout and can enlarge small images; Tauri's
+fit policy and zoom slider remain parity work.
+Windows, Wayland and physical AppKit presentation remain unverified.
+The native editor still uses a workbench layout, not the shipping Tauri editor design.
+Native cloud sharing is not implemented. Its required flow starts from a mini-preview
+Share icon and opens a native upload/settings popup, including native sign-in and OS
+credential storage. The [sharing integration slice](docs/native-rewrite.md#mini-preview-sharing-integration--required-not-implemented)
+remains required regardless of accounts/backend or rewrite merge order; opening a
+preview never uploads automatically.
+Both hosts can copy the full-resolution edited image without saving a file or draft;
+copy ignores export format and quality settings.
+Canvas background controls support a hex color or transparency, with undo/redo and
+draft restore. They change the canvas fill, not backgrounds within image layers.
+**Trim edges** fits the canvas to visible layer geometry, preserving off-canvas
+content and moving hidden layers with the document. It does not scan image alpha
+to remove transparent borders. Trimming supports undo/redo and draft restore.
+Both hosts also connect **Draw → Wand**: click an image to remove similar colors,
+using a 0–255 tolerance and either a contiguous region or all matching pixels.
+The frontmost visible image is editable even when locked; transparent pixels do
+not let clicks reach images underneath. Each edit clears the canvas fill, keeps
+the original image pixels, and supports undo/redo and draft restore. The original
+History capture remains unchanged. **Erase** and **Restore** use adjustable brush
+diameter and softness; Restore paints from the retained original image. The brush
+outline shows size and path while dragging; pixels apply on release in one undo
+step. Escape, focus loss or changing tools cancels an unfinished stroke. Live pixel
+painting and the shipping brush cursor design remain parity work.
+Other drawing tools, text, overwrite-original, and recording editing remain
+unconnected. Shared editor support
+is prerequisite work, not native editor acceptance. OS shortcut takeover, login items,
+single-instance relaunch and updates
 are not connected to the native hosts yet. Windows/Linux renderer selection and full
 feature/design parity remain open. The
 [migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;
