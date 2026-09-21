@@ -5,6 +5,7 @@
 mod encoding;
 mod export;
 mod png;
+pub mod text;
 pub use encoding::{composite_onto_white, encode_jpeg, encode_webp};
 pub use export::{ExportFormat, ExportOptions, ExportQuality, PngOptions, encode_export};
 pub use png::{

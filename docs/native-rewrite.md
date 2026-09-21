@@ -166,6 +166,21 @@ dimensions. Shipping TypeScript vectors cover fractional/rotated/shadowed geomet
 host tests cover controls, undo/redo, output invalidation, drafts and clipboard.
 Trim hover-margin feedback and the shipping toolbar layout remain unimplemented.
 Windows/Wayland presentation and physical macOS input remain unverified.
+The shared text prerequisite uses `cosmic-text` advanced shaping and CPU Swash
+rasterization for a single line from caller-supplied fonts, with fixed locale and
+no system-font scan. It returns logical advance, baseline, painted bounds and
+straight-alpha pixels, including ligatures, combining marks, bidi ordering and
+negative bearings. Glyph images are scoped to one operation, with line/size/pixel
+limits and explicit missing-font/glyph errors. Original generated fonts give
+independent metrics for tests rather than depending on installed fonts.
+Color-outline and embedded-bitmap glyphs use different alpha representations;
+the primitive normalizes outlines before compositing and retains bitmap RGB.
+Swash's color-outline flattening has integer alpha-rounding loss. Font bytes must
+come from a trusted source; output budgets are not a font-parser sandbox.
+This does not replace the legacy `Shape::Text` primitive or enable text in editor
+documents. Font acquisition/persistence, Tauri paragraph wrapping and plates,
+outlines/shadows, text geometry and transactional commands, both host controls and
+physical input/IME/accessibility remain open. No host text parity gate is closed.
 Next implementation boundary: text and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.
 
