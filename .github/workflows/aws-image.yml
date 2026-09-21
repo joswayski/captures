@@ -167,16 +167,15 @@ jobs:
             {
               username: "Production deploys",
               embeds: [{
-                title: "Captures web image is ready",
-                description: "Deploy Captures web triggers this exact web image. Open GitHub is the fallback.",
+                author: {name: "Captures web image is ready"},
+                title: $title,
                 color: 5763711,
-                fields: ([
-                  {name: "Git SHA", value: ("`" + $git_sha + "`"), inline: false},
-                  {name: "Digest", value: ("`" + $digest + "`"), inline: false},
-                  {name: "Title", value: $title, inline: false}
-                ] + (if $body | test("[^[:space:]]") then
+                fields: ((if $body | test("[^[:space:]]") then
                   [{name: "Description", value: ($body | truncate_field), inline: false}]
-                else [] end))
+                else [] end) + [
+                  {name: "Git SHA", value: ("`" + $git_sha + "`"), inline: false},
+                  {name: "Digest", value: ("`" + $digest + "`"), inline: false}
+                ])
               }],
               components: [{
                 type: 1,
