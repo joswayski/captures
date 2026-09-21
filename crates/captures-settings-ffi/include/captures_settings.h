@@ -370,6 +370,15 @@ void captures_editor_export_free_v1(CapturesEditorExport *exported); /* NULL all
  * never access/free session concurrently. NULL session/input returns an error. */
 char *captures_editor_save_new_v1(const CapturesEditorSession *session, const char *request_json);
 
+/* OVERWRITE ORIGINAL on the serialized session worker. Only the saved_path
+ * captured when this screenshot session opened may be replaced. The shared
+ * implementation revalidates History and the source file before publication.
+ * JSON request: {destination,options}; result schema and ownership match
+ * captures_editor_save_new_v1. Does not mutate document/undo/redo/draft state.
+ * NULL session/input returns an owned error response. */
+char *captures_editor_save_original_v1(const CapturesEditorSession *session,
+    const char *request_json);
+
 /* Allocation-free macOS window-radius fallback in points. Pass the current OS
  * major version from ProcessInfo. No OS access or session handle is required. */
 double captures_macos_window_corner_radius_v1(int64_t major_version);

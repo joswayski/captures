@@ -50,6 +50,10 @@ enum Job {
         destination: PathBuf,
         options: ExportOptions,
     },
+    SaveOriginal {
+        destination: PathBuf,
+        options: ExportOptions,
+    },
     Flush(Sender<Result<(), String>>),
     Shutdown,
 }
@@ -57,6 +61,8 @@ enum Job {
 struct Presented {
     document: Arc<Document>,
     pixels: Arc<RgbaImage>,
+    original_export_path: Option<PathBuf>,
+    replaced_original: bool,
     font_families: BTreeMap<String, String>,
     text_style_presets: Vec<TextStylePreset>,
     output: Option<(RgbaImage, usize)>,
@@ -75,6 +81,8 @@ impl Presented {
         Self {
             document: Arc::new(snapshot.document.clone()),
             pixels: session.pixels(),
+            original_export_path: snapshot.original_export_path.map(Path::to_owned),
+            replaced_original: false,
             font_families: snapshot.font_families.cloned().unwrap_or_default(),
             text_style_presets: snapshot.text_style_presets,
             output: None,
@@ -361,6 +369,7 @@ struct View {
     output_notice: Option<String>,
     import_picker: Option<Receiver<Option<PathBuf>>>,
     history_changed: bool,
+    original_replaced: bool,
     selected_layer: Option<String>,
     layer_gesture: Option<LayerGesture>,
     pending_layer_selection: Option<String>,
@@ -375,6 +384,7 @@ struct View {
     close_requested: bool,
     close_after_save: bool,
     confirm_discard: bool,
+    confirm_replace: Option<(PathBuf, ExportOptions)>,
     error: Option<String>,
     viewport: Viewport,
     viewport_pan: Option<(egui::PointerButton, egui::Pos2)>,
@@ -426,6 +436,7 @@ impl Default for View {
             output_notice: None,
             import_picker: None,
             history_changed: false,
+            original_replaced: false,
             selected_layer: None,
             layer_gesture: None,
             pending_layer_selection: None,
@@ -440,6 +451,7 @@ impl Default for View {
             close_requested: false,
             close_after_save: false,
             confirm_discard: false,
+            confirm_replace: None,
             error: None,
             viewport: Viewport::default(),
             viewport_pan: None,
@@ -493,6 +505,7 @@ impl View {
     }
 
     fn request_close(&mut self) {
+        self.confirm_replace = None;
         self.cancel_drawing();
         self.cancel_layer_gesture();
         self.pending_layer_selection = None;
@@ -517,6 +530,7 @@ impl View {
             return;
         }
         self.pending = false;
+        self.confirm_replace = None;
         match result {
             Ok(mut presented) => {
                 if self.presented.is_none() {
@@ -564,14 +578,21 @@ impl View {
                     self.show_output = true;
                 }
                 if let Some(saved) = presented.saved.take() {
+                    let action = if presented.replaced_original {
+                        self.original_replaced = true;
+                        self.history_changed = true;
+                        "Replaced original at"
+                    } else {
+                        "Saved copy to"
+                    };
                     self.output_notice = Some(match saved {
                         SavedExport::Saved { path, .. } => {
                             self.history_changed = true;
-                            format!("Saved copy to {}", path.display())
+                            format!("{action} {}", path.display())
                         }
                         SavedExport::SavedWithoutHistory { path, warning } => {
                             format!(
-                                "Saved copy to {}. History was not updated: {warning}",
+                                "{action} {}. History was not updated: {warning}",
                                 path.display()
                             )
                         }
@@ -657,6 +678,33 @@ impl View {
         self.submit_job(tx, Job::Copy);
     }
 
+    fn begin_replace(&mut self) {
+        if self.pending || self.closed || self.close_requested || self.confirm_replace.is_some() {
+            return;
+        }
+        if let Some(path) = self
+            .presented
+            .as_ref()
+            .and_then(|p| p.original_export_path.clone())
+        {
+            self.cancel_edit_gestures();
+            self.confirm_replace = Some((path, self.export_options));
+        }
+    }
+
+    fn confirm_replacement(&mut self, tx: &Sender<Job>) {
+        if let Some((destination, options)) = self.confirm_replace.take() {
+            self.output_notice = None;
+            self.submit_job(
+                tx,
+                Job::SaveOriginal {
+                    destination,
+                    options,
+                },
+            );
+        }
+    }
+
     fn choose_folder(&mut self, ctx: &egui::Context) {
         if self.folder_picker.is_some() {
             return;
@@ -739,7 +787,7 @@ impl View {
         }
         // Preserve the one-in-flight edit contract. A selected file waits until
         // an accepted edit or a discard confirmation has finished.
-        if self.pending || self.confirm_discard {
+        if self.pending || self.confirm_discard || self.confirm_replace.is_some() {
             return false;
         }
         let Some(result) = self.import_picker.as_ref().map(Receiver::try_recv) else {
@@ -764,6 +812,7 @@ impl View {
     }
 
     fn submit_job(&mut self, tx: &Sender<Job>, job: Job) {
+        self.confirm_replace = None;
         self.cancel_layer_gesture();
         match tx.send(job) {
             Ok(()) => {
@@ -1126,6 +1175,19 @@ impl Editor {
                             presented.saved = Some(saved);
                             Ok(presented)
                         }),
+                    Job::SaveOriginal {
+                        destination,
+                        options,
+                    } => session
+                        .as_ref()
+                        .ok_or_else(|| "Editor is unavailable.".to_owned())
+                        .and_then(|session| {
+                            let saved = session.save_original_export(&destination, options)?;
+                            let mut presented = Presented::from_session(session);
+                            presented.replaced_original = true;
+                            presented.saved = Some(saved);
+                            Ok(presented)
+                        }),
                     Job::Flush(reply) => {
                         let result = session.as_mut().map_or(Ok(()), save_dirty);
                         let _ = reply.send(result.clone());
@@ -1166,6 +1228,10 @@ impl Editor {
 
     pub fn take_history_changed(&self) -> bool {
         std::mem::take(&mut self.view.lock().unwrap().history_changed)
+    }
+
+    pub fn take_original_replaced(&self) -> bool {
+        std::mem::take(&mut self.view.lock().unwrap().original_replaced)
     }
 
     pub fn receive(&self, ctx: &egui::Context) {
@@ -1263,6 +1329,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         view.cancel_crop();
         view.cancel_drawing();
         view.cancel_layer_gesture();
+        view.confirm_replace = None;
     }
     egui::Panel::top("editor-actions").show(ui, |ui| {
         ui.horizontal(|ui| {
@@ -1309,7 +1376,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 }
             });
         });
-        ui.add_enabled_ui(!view.pending, |ui| {
+        ui.add_enabled_ui(!view.pending && view.confirm_replace.is_none(), |ui| {
             ui.horizontal_wrapped(|ui| {
                 if ui.add_enabled(view.presented.as_ref().is_some_and(|p| p.can_undo), egui::Button::new("Undo")).clicked() { view.submit(tx, Request::Undo); }
                 if ui.add_enabled(view.presented.as_ref().is_some_and(|p| p.can_redo), egui::Button::new("Redo")).clicked() { view.submit(tx, Request::Redo); }
@@ -1351,6 +1418,18 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 }));
             });
         }
+        if let Some((path, _)) = &view.confirm_replace {
+            let path = path.display().to_string();
+            ui.group(|ui| {
+                ui.label("Replace the original screenshot?");
+                ui.label(path);
+                ui.label("This replaces the file and History image. Your draft and undo history are retained.");
+                ui.horizontal(|ui| {
+                    if ui.button("Replace original").clicked() { view.confirm_replacement(tx); }
+                    if ui.button("Cancel replacement").clicked() { view.confirm_replace = None; }
+                });
+            });
+        }
     });
     if view.section != previous_section {
         view.viewport_pan = None;
@@ -1375,7 +1454,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     }
     egui::Panel::left("editor-geometry").resizable(false).exact_size(230.).show(ui, |ui| {
         egui::ScrollArea::vertical().id_salt(view.section).auto_shrink([false, false]).show(ui, |ui| {
-        ui.add_enabled_ui(!view.pending && view.presented.is_some(), |ui| {
+        ui.add_enabled_ui(!view.pending && view.presented.is_some() && view.confirm_replace.is_none(), |ui| {
             if view.section == Section::Output {
                 show_output(ui, tokens, view, tx);
                 return;
@@ -1560,6 +1639,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             }
             if view.section == Section::Draw
                 && !view.pending
+                && view.confirm_replace.is_none()
                 && !view.close_requested
                 && !view.confirm_discard
             {
@@ -1567,6 +1647,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             }
             if view.section == Section::Layers
                 && !view.pending
+                && view.confirm_replace.is_none()
                 && !view.close_requested
                 && !view.confirm_discard
             {
@@ -1655,6 +1736,7 @@ fn handle_viewport_shortcuts(ctx: &egui::Context, view: &mut View) {
         || !ctx.input(|input| input.focused)
         || view.close_requested
         || view.confirm_discard
+        || view.confirm_replace.is_some()
         || egui::Popup::is_any_open(ctx)
     {
         return;
@@ -1717,6 +1799,7 @@ fn handle_viewport_input(ui: &egui::Ui, view: &mut View, available: egui::Rect) 
     if !focused
         || view.close_requested
         || view.confirm_discard
+        || view.confirm_replace.is_some()
         || egui::Popup::is_any_open(ui.ctx())
     {
         view.viewport_pan = None;
@@ -3074,10 +3157,37 @@ fn show_output(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<
             view.copy(tx);
         }
     });
-    ui.small(
-        "Existing files are never replaced. Saving a copy does not save or discard your draft.",
-    );
+    ui.small("A new copy never replaces a file. Saving does not save or discard your draft.");
     ui.small("Copy uses the lossless edited canvas, regardless of export quality.");
+    if let Some(path) = view
+        .presented
+        .as_ref()
+        .and_then(|p| p.original_export_path.as_ref())
+    {
+        let extension = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or_default();
+        let matching = match view.export_options.format {
+            ExportFormat::Png => extension.eq_ignore_ascii_case("png"),
+            ExportFormat::Jpeg => {
+                extension.eq_ignore_ascii_case("jpg") || extension.eq_ignore_ascii_case("jpeg")
+            }
+            ExportFormat::Webp => extension.eq_ignore_ascii_case("webp"),
+        };
+        ui.separator();
+        if ui
+            .add_enabled(
+                matching && output_dimensions.is_ok(),
+                egui::Button::new("Replace original…"),
+            )
+            .on_hover_text(path.display().to_string())
+            .clicked()
+        {
+            view.begin_replace();
+        }
+        ui.small("Replaces this screenshot’s saved file and History image. Use its original file format.");
+    }
     if let Some(notice) = &view.output_notice {
         ui.label(notice);
     }
@@ -4030,6 +4140,8 @@ mod tests {
         Presented {
             document: Arc::new(Document::new_capture("fixture", 7., 3., None)),
             pixels: Arc::new(RgbaImage::new(7, 3)),
+            original_export_path: None,
+            replaced_original: false,
             font_families: captures_app::editor_fonts::bundled().families,
             text_style_presets: captures_app::editor_text::TEXT_STYLE_PRESETS.into(),
             output: None,
@@ -6604,6 +6716,125 @@ mod tests {
         })
         .unwrap();
         assert_eq!(reopened.pixels().dimensions(), (4, 2));
+    }
+
+    #[test]
+    fn replacement_confirmation_freezes_target_and_options_and_cancels_on_state_change() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let (tx, rx) = mpsc::channel();
+        view.receive(&ctx, Ok(presented(false)));
+        view.begin_replace();
+        assert!(view.confirm_replace.is_none());
+        view.presented.as_mut().unwrap().original_export_path =
+            Some("/exports/original.png".into());
+        view.begin_replace();
+        view.destination = "/different/file.png".into();
+        view.export_options.format = ExportFormat::Webp;
+        view.begin_replace(); // A second request does not replace the first confirmation.
+        assert!(rx.try_recv().is_err() && !view.pending);
+        view.confirm_replacement(&tx);
+        let Job::SaveOriginal {
+            destination,
+            options,
+        } = rx.try_recv().unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(destination, PathBuf::from("/exports/original.png"));
+        assert_eq!(options.format, ExportFormat::Png);
+        view.receive(&ctx, Err("source no longer exists".into()));
+        view.begin_replace();
+        assert!(view.confirm_replace.is_some());
+        view.request_close();
+        view.confirm_replacement(&tx);
+        assert!(rx.try_recv().is_err());
+        let mut view = View::default();
+        let mut current = presented(false);
+        current.original_export_path = Some("/exports/current.png".into());
+        view.receive(&ctx, Ok(current));
+        view.begin_replace();
+        view.receive(&ctx, Ok(presented(false)));
+        view.confirm_replacement(&tx);
+        assert!(
+            rx.try_recv().is_err(),
+            "a stale response cancels unaccepted replacement"
+        );
+    }
+
+    #[test]
+    fn replace_original_worker_preserves_editor_and_refreshes_same_history_item() {
+        let (data, id) = fixture();
+        let root = data.path().join("history");
+        let mut entry = captures_history::load(&root, chrono::Utc::now())
+            .unwrap()
+            .remove(0);
+        let destination = data.path().join("original.png");
+        fs::copy(root.join(&id).join("capture.png"), &destination).unwrap();
+        entry.saved_path = Some(destination.to_string_lossy().into_owned());
+        captures_history::update_metadata(&root, &entry).unwrap();
+        let ctx = egui::Context::default();
+        let editor = Editor::open(
+            &ctx,
+            root.clone(),
+            id.clone(),
+            data.path().into(),
+            CaptureMode::Region,
+            |_| Ok(()),
+        );
+        receive(&editor, &ctx);
+        editor.view.lock().unwrap().submit(&editor.tx, crop());
+        receive(&editor, &ctx);
+        editor
+            .view
+            .lock()
+            .unwrap()
+            .submit(&editor.tx, Request::SaveDraft { updated_at_ms: 44 });
+        receive(&editor, &ctx);
+        editor.view.lock().unwrap().preview(&editor.tx);
+        receive(&editor, &ctx);
+        let draft_path = data
+            .path()
+            .join("editor-drafts")
+            .join(&id)
+            .join("manifest.json");
+        let draft = fs::read(&draft_path).unwrap();
+        let document = editor
+            .view
+            .lock()
+            .unwrap()
+            .presented
+            .as_ref()
+            .unwrap()
+            .document
+            .clone();
+        {
+            let mut view = editor.view.lock().unwrap();
+            view.begin_replace();
+            assert!(view.output.is_some());
+            view.confirm_replacement(&editor.tx);
+        }
+        receive(&editor, &ctx);
+        assert!(editor.take_history_changed() && editor.take_original_replaced());
+        assert!(!editor.take_original_replaced());
+        let output = image::open(&destination).unwrap().to_rgba8();
+        assert_eq!(output.dimensions(), (4, 2));
+        assert_eq!(output.get_pixel(0, 0).0, [62, 71, 9, 255]);
+        assert_eq!(output.get_pixel(3, 1).0, [155, 142, 9, 255]);
+        let history = captures_history::load(&root, chrono::Utc::now()).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id, id);
+        assert_eq!(history[0].created_at, entry.created_at);
+        assert_eq!(fs::read(draft_path).unwrap(), draft);
+        let view = editor.view.lock().unwrap();
+        assert!(view.output.is_some() && view.presented.as_ref().unwrap().can_undo);
+        assert_eq!(view.presented.as_ref().unwrap().document, document);
+        assert!(
+            view.output_notice
+                .as_ref()
+                .unwrap()
+                .starts_with("Replaced original at")
+        );
     }
 
     #[test]

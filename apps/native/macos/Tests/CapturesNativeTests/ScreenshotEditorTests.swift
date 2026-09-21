@@ -3,6 +3,119 @@ import XCTest
 @testable import CapturesNative
 
 final class ScreenshotEditorTests: XCTestCase {
+    func testReplaceOriginalRequiresConfirmationAndUsesImmutableRequest() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", originalExportPath: "/exports/original.png"))
+        var confirmation: ((Bool) -> Void)?
+        var confirmedPath: String?
+        var replaced: [String] = []
+        let controller = ScreenshotEditorController(
+            tokens: Tokens.variants["light-mustard"]!, worker: worker,
+            didReplaceOriginal: { replaced.append($0) },
+            confirmReplaceOriginal: { _, path, completion in
+                confirmedPath = path; confirmation = completion
+            })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showOutput(in: controller.root)
+        let replace = try button("Replace original…", in: controller.root)
+        replace.scrollToVisible(replace.bounds)
+        try render(controller.root, name: "screenshot-editor-replace-original-light")
+        replace.performClick(nil)
+        XCTAssertEqual(confirmedPath, "/exports/original.png")
+        XCTAssertTrue(worker.originalSaves.isEmpty)
+        XCTAssertFalse(controller.state.busy)
+        XCTAssertFalse(replace.isEnabled, "a second confirmation must not overlap")
+
+        confirmation?(false)
+        XCTAssertTrue(worker.originalSaves.isEmpty)
+        XCTAssertFalse(controller.state.busy)
+        replace.performClick(nil)
+        // Simulate a late control callback while the native sheet is open.
+        (try field("Output filename", in: controller.root)).stringValue = "different.webp"
+        let format = try popup("Output format", in: controller.root)
+        format.selectItem(withTitle: "WebP")
+        _ = format.sendAction(format.action, to: format.target)
+        confirmation?(true)
+        XCTAssertEqual(worker.originalSaves.count, 1)
+        XCTAssertEqual(worker.originalSaves[0]["destination"] as? String, "/exports/original.png")
+        XCTAssertEqual((worker.originalSaves[0]["options"] as? [String: Any])?["format"] as? String, "png")
+        XCTAssertEqual(replaced, ["shot"])
+    }
+
+    func testReplaceOriginalResultScopeAndStaleConfirmation() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "first", originalExportPath: "/exports/first.png"))
+        var confirmation: ((Bool) -> Void)?
+        var errors: [String] = [], replaced: [String] = []
+        let controller = ScreenshotEditorController(
+            tokens: Tokens.variants["dark-mustard"]!, worker: worker,
+            reportError: { errors.append($0) }, didReplaceOriginal: { replaced.append($0) },
+            confirmReplaceOriginal: { _, _, completion in confirmation = completion })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "first"), historyRoot: "/native/History")
+        try showOutput(in: controller.root)
+        try button("Replace original…", in: controller.root).performClick(nil)
+        worker.snapshot = snapshot(id: "second", originalExportPath: "/exports/second.png")
+        controller.present(artifact: artifact(id: "second"), historyRoot: "/native/History")
+        confirmation?(true)
+        XCTAssertTrue(worker.originalSaves.isEmpty)
+        XCTAssertTrue(errors.last?.contains("changed before replacement") == true)
+
+        try button("Preview output", in: controller.root).performClick(nil)
+        let outputMode = try segmented("Output preview image", in: controller.root)
+        let snapshotBeforeSave = controller.state.snapshot
+        worker.saveOriginalResult = .success(.savedWithoutHistory(path: "/exports/second.png", warning: "database locked"))
+        try button("Replace original…", in: controller.root).performClick(nil)
+        confirmation?(true)
+        XCTAssertEqual(controller.state.snapshot, snapshotBeforeSave)
+        XCTAssertTrue(outputMode.isEnabled)
+        XCTAssertEqual(outputMode.selectedSegment, 1)
+        XCTAssertEqual(replaced, ["second"], "partial publication still notifies only the replaced artifact")
+        XCTAssertTrue(errors.last?.contains("couldn’t update History: database locked") == true)
+        let replace = try button("Replace original…", in: controller.root)
+        replace.scrollToVisible(replace.bounds)
+        try render(controller.root, name: "screenshot-editor-replace-original-history-error-dark")
+
+        worker.saveOriginalResult = .failure(AppBridgeError.backend("denied"))
+        try button("Replace original…", in: controller.root).performClick(nil)
+        confirmation?(true)
+        XCTAssertEqual(replaced, ["second"], "failed publication must not notify")
+        XCTAssertTrue(errors.last?.contains("Couldn’t replace original: denied") == true)
+    }
+
+    func testReplaceOriginalActionOnlyAppearsForSavedOriginal() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showOutput(in: controller.root)
+        XCTAssertTrue(try button("Replace original…", in: controller.root).isHidden)
+        try render(controller.root, name: "screenshot-editor-no-original-minimum-light")
+    }
+
+    func testReplaceOriginalNativeSheetHasExplicitCancelAndTarget() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", originalExportPath: "/exports/My capture.png"))
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showOutput(in: controller.root)
+            try button("Replace original…", in: controller.root).performClick(nil)
+            let sheet = try XCTUnwrap(controller.window.attachedSheet)
+            let content = try XCTUnwrap(sheet.contentView)
+            let buttons = descendants(in: content).compactMap { $0 as? NSButton }
+            XCTAssertTrue(buttons.contains { $0.title == "Replace" })
+            XCTAssertTrue(buttons.contains { $0.title == "Cancel" })
+            XCTAssertTrue(worker.originalSaves.isEmpty)
+            try render(content, name: "screenshot-editor-replace-confirm-\(appearance)")
+            controller.window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+            XCTAssertTrue(worker.originalSaves.isEmpty)
+        }
+    }
+
     func testViewportBridgeKeepsAsymmetricAnchorAfterPanAndRejectsInvalidInput() throws {
         let fit = CGRect(x: 17, y: 29, width: 503, height: 251.5)
         let canvas = CGSize(width: 1600, height: 800)
@@ -3852,11 +3965,12 @@ final class ScreenshotEditorTests: XCTestCase {
 
     private func snapshot(id: String, width: Double = 640, height: Double = 360,
                           unsaved: Bool = false, draft: Bool = false,
+                          originalExportPath: String? = nil,
                           layers: [[String: Any]] = [],
                           annotations: [String: [String: Any]] = [:],
                           textShadows: [String: [String: Any]]? = nil,
                           fonts: [String: String] = [:]) -> NativeEditorSnapshot {
-        NativeEditorSnapshot([
+        var value: [String: Any] = [
             "artifact_id": id, "document": ["width": width, "height": height,
                                                   "elements": layers],
             "font_families": fonts,
@@ -3875,7 +3989,9 @@ final class ScreenshotEditorTests: XCTestCase {
             }),
             "can_undo": unsaved, "can_redo": false,
             "unsaved_changes": unsaved, "has_draft": draft,
-        ])!
+        ]
+        if let originalExportPath { value["original_export_path"] = originalExportPath }
+        return NativeEditorSnapshot(value)!
     }
 
     private func layer(id: String, name: String, x: Double, y: Double, visible: Bool,
@@ -4106,6 +4222,7 @@ private final class FakeEditorWorker: EditorWorking {
     var requests: [[String: Any]] = []
     var encodes: [[String: Any]] = []
     var saves: [[String: Any]] = []
+    var originalSaves: [[String: Any]] = []
     var imports: [(image: EditorDecodedImage, selectedID: String?)] = []
     var openArtifactIDs: [String] = []
     var closeCount = 0
@@ -4117,6 +4234,7 @@ private final class FakeEditorWorker: EditorWorking {
     var deferEncodes = false
     var failEncode = false
     var saveResult: Result<EditorSavePresentation, Error> = .success(.saved(path: "/output/edited.png"))
+    var saveOriginalResult: Result<EditorSavePresentation, Error> = .success(.saved(path: "/exports/original.png"))
     var importLayerID = "imported-layer"
     var failImport = false
     var importedSnapshot: NativeEditorSnapshot?
@@ -4184,6 +4302,12 @@ private final class FakeEditorWorker: EditorWorking {
                  completion: @escaping (Result<EditorSavePresentation, Error>) -> Void) {
         saves.append(request)
         completion(saveResult)
+    }
+
+    func saveOriginal(_ request: [String: Any],
+                      completion: @escaping (Result<EditorSavePresentation, Error>) -> Void) {
+        originalSaves.append(request)
+        completion(saveOriginalResult)
     }
 
     func importImage(_ image: EditorDecodedImage, selectedID: String?,

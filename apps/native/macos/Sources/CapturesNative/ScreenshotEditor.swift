@@ -882,6 +882,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var copyImageButton: CaptureButton!
     private var changeOutputDirectoryButton: CaptureButton!
     private var saveNewCopyButton: CaptureButton!
+    private var replaceOriginalButton: CaptureButton!
+    private let replaceOriginalHelp = NSTextField(wrappingLabelWithString: "")
     private var fields: [NSTextField] = []
     private var closeAfterCommand = false
     private var selectedLayerID: String?
@@ -895,6 +897,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var outputDirectory = ""
     private let directoryPicker: ((NSWindow, URL?, @escaping (URL?) -> Void) -> Void)?
     private let didSaveCopy: () -> Void
+    private let didReplaceOriginal: (String) -> Void
+    private let confirmReplaceOriginal: (NSWindow, String, @escaping (Bool) -> Void) -> Void
+    private var awaitingReplaceConfirmation = false
     private let writeClipboard: (Data) -> Bool
     private let imagePicker: ((NSWindow, @escaping (URL?) -> Void) -> Void)?
     private let imageDecoder: (URL) throws -> EditorDecodedImage
@@ -915,6 +920,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
          reportError: @escaping (String) -> Void = { _ in },
          directoryPicker: ((NSWindow, URL?, @escaping (URL?) -> Void) -> Void)? = nil,
          didSaveCopy: @escaping () -> Void = {},
+         didReplaceOriginal: @escaping (String) -> Void = { _ in },
+         confirmReplaceOriginal: ((NSWindow, String, @escaping (Bool) -> Void) -> Void)? = nil,
          imagePicker: ((NSWindow, @escaping (URL?) -> Void) -> Void)? = nil,
          imageDecoder: @escaping (URL) throws -> EditorDecodedImage = EditorImageDecoder.decode,
          writeClipboard: @escaping (Data) -> Bool = { png in
@@ -924,6 +931,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
          }) {
         self.tokens = tokens; self.worker = worker; self.reportError = reportError
         self.directoryPicker = directoryPicker; self.didSaveCopy = didSaveCopy
+        self.didReplaceOriginal = didReplaceOriginal
+        self.confirmReplaceOriginal = confirmReplaceOriginal ?? Self.presentReplaceOriginalConfirmation
         self.imagePicker = imagePicker; self.imageDecoder = imageDecoder
         self.writeClipboard = writeClipboard
         editorNumberFormatter = NumberFormatter()
@@ -1067,7 +1076,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func build() {
         label("Screenshot editor", frame: NSRect(x: 24, y: 20, width: 400, height: 30),
               size: 21, weight: .semibold)
-        label("Crop and resize a recoverable native draft. The original History image is unchanged.",
+        label("Edit a recoverable draft. Only Replace original changes the source History image.",
               frame: NSRect(x: 24, y: 54, width: 640, height: 22), muted: true)
 
         let previewPanel = Surface(frame: NSRect(x: 24, y: 90, width: 640, height: 550))
@@ -1439,7 +1448,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let scroll = NSScrollView(frame: outputPanel.bounds)
         scroll.autoresizingMask = [.width, .height]
         scroll.hasVerticalScroller = true; scroll.drawsBackground = false
-        outputContent.frame = NSRect(x: 0, y: 0, width: 252, height: 778)
+        outputContent.frame = NSRect(x: 0, y: 0, width: 252, height: 888)
         scroll.documentView = outputContent
         outputPanel.addSubview(scroll)
 
@@ -1557,6 +1566,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         saveNewCopyButton = button("Save new copy", frame: NSRect(x: 0, y: 744, width: 252, height: 34),
                                    parent: outputContent) { [weak self] in self?.saveNewCopy() }
         saveNewCopyButton.primary = true
+        replaceOriginalHelp.frame = NSRect(x: 0, y: 790, width: 252, height: 42)
+        replaceOriginalHelp.maximumNumberOfLines = 2
+        replaceOriginalHelp.setAccessibilityLabel("Replace original availability")
+        outputContent.addSubview(replaceOriginalHelp)
+        replaceOriginalButton = button("Replace original…", frame: NSRect(x: 0, y: 840, width: 252, height: 34),
+                                       parent: outputContent) { [weak self] in self?.confirmReplace() }
         updateOutputOptionControls()
     }
 
@@ -1936,6 +1951,61 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             }
             self.updateControls()
             self.submitPendingImportIfReady()
+        }
+    }
+
+    private static func presentReplaceOriginalConfirmation(window: NSWindow, path: String,
+                                                            completion: @escaping (Bool) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = "Replace the original screenshot?"
+        alert.informativeText = "This replaces the file at:\n\(path)\n\nYour native draft and undo history are retained. The existing History item will show the changed image."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Replace")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { completion($0 == .alertFirstButtonReturn) }
+    }
+
+    private func confirmReplace() {
+        guard !awaitingReplaceConfirmation, !state.busy,
+              let artifactID = state.artifactID,
+              let destination = state.snapshot?.originalExportPath,
+              let options = outputOptions() else { return }
+        let generation = state.generation
+        awaitingReplaceConfirmation = true
+        updateControls()
+        confirmReplaceOriginal(window, destination) { [weak self] confirmed in
+            guard let self else { return }
+            self.awaitingReplaceConfirmation = false
+            guard confirmed else { self.updateControls(); return }
+            guard self.state.generation == generation, self.state.artifactID == artifactID,
+                  self.state.snapshot?.originalExportPath == destination, !self.state.busy,
+                  let commandGeneration = self.state.beginCommand() else {
+                self.showError("The screenshot changed before replacement was confirmed. Try again.")
+                self.updateControls(); return
+            }
+            self.status.textColor = self.tokens.color("text-muted")
+            self.status.stringValue = "Replacing original…"
+            self.updateControls()
+            self.worker.saveOriginal(["destination": destination, "options": options]) { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case .success(let saved):
+                    guard self.state.completeOutput(generation: commandGeneration, artifactID: artifactID) else { return }
+                    switch saved {
+                    case .saved(let path):
+                        self.status.textColor = self.tokens.color("text-muted")
+                        self.status.stringValue = "Replaced original at \(path)"
+                    case .savedWithoutHistory(let path, let warning):
+                        self.showError("Replaced original at \(path), but couldn’t update History: \(warning)")
+                    }
+                    self.didReplaceOriginal(artifactID)
+                case .failure(let error):
+                    guard self.state.fail(generation: commandGeneration) else { return }
+                    self.showError("Couldn’t replace original: \(error.localizedDescription)")
+                }
+                self.updateControls()
+                self.submitPendingImportIfReady()
+            }
         }
     }
 
@@ -2856,6 +2926,18 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         outputFilename.isEnabled = ready
         changeOutputDirectoryButton?.isEnabled = ready
         saveNewCopyButton?.isEnabled = ready && !outputDirectory.isEmpty
+        let originalPath = state.snapshot?.originalExportPath
+        outputContent.frame.size.height = originalPath == nil ? 778 : 888
+        replaceOriginalButton?.isHidden = originalPath == nil
+        replaceOriginalHelp.isHidden = originalPath == nil
+        let matchesOriginalFormat = originalPath.map { path in
+            let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+            return ext == outputExtension || (ext == "jpeg" && outputExtension == "jpg")
+        } ?? false
+        replaceOriginalButton?.isEnabled = ready && !awaitingReplaceConfirmation && matchesOriginalFormat
+        replaceOriginalHelp.stringValue = matchesOriginalFormat
+            ? "Replaces this screenshot’s saved file and updates its History image."
+            : "Choose the original file format to replace this screenshot."
         outputPreviewMode?.isEnabled = ready && encodedOutput != nil
         viewportButtons.forEach { $0.isEnabled = ready }
         zoomPreset.isEnabled = ready

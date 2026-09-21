@@ -1344,9 +1344,12 @@ impl Live {
 
     pub fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let mut editor_history_changed = false;
-        for editor in self.editors.values() {
+        for (id, editor) in &self.editors {
             editor.receive(ctx);
             editor_history_changed |= editor.take_history_changed();
+            if editor.take_original_replaced() {
+                self.previews.remove(id);
+            }
         }
         self.editors.retain(|_, editor| !editor.closed());
         if editor_history_changed {

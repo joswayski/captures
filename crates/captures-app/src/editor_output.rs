@@ -1,8 +1,8 @@
-//! Host-independent publication of a new edited screenshot copy.
+//! Host-independent publication of edited screenshots.
 //!
-//! Hosts choose the destination and own overwrite-original confirmation. This
-//! boundary only creates a distinct export and History artifact; it never
-//! replaces an existing file or mutates an existing History entry.
+//! New copies never clobber files. Confirmed original replacement is restricted
+//! to an existing screenshot's saved path and updates that same History entry.
+//! Neither output operation changes the editable session or its draft.
 
 use std::{
     fs,
@@ -117,6 +117,76 @@ pub fn save_new_export(
     })
 }
 
+/// Atomically replace the saved file belonging to one screenshot and replace
+/// that same History entry. Validation is repeated from disk immediately before
+/// encoding so a stale editor session cannot clobber an unrelated path.
+pub fn save_original_export(
+    history_root: &Path,
+    artifact_id: &str,
+    destination: &Path,
+    image: &RgbaImage,
+    options: ExportOptions,
+) -> Result<SavedExport, Error> {
+    validate_destination(destination, options.format)?;
+    let directory = captures_history::entry_directory(history_root, artifact_id)?;
+    let metadata = fs::read(directory.join(captures_history::HISTORY_METADATA_FILE))?;
+    let mut entry: HistoryEntry = serde_json::from_slice(&metadata)
+        .map_err(|error| Error::History(captures_history::Error::Json(error)))?;
+    if entry.id != artifact_id
+        || entry.kind != ArtifactKind::Screenshot
+        || entry.saved_path.as_deref().map(Path::new) != Some(destination)
+    {
+        return Err(Error::InvalidDestination(
+            "The original screenshot History entry changed; reopen the editor before replacing it."
+                .to_owned(),
+        ));
+    }
+    if !destination.is_file() {
+        return Err(Error::InvalidDestination(
+            "The original saved screenshot is no longer available.".to_owned(),
+        ));
+    }
+
+    let resized = captures_image::resize_for_export(image, options.size).map_err(Error::Image)?;
+    let image = resized.as_ref();
+    let options = ExportOptions {
+        size: ExportSize::Original,
+        ..options
+    };
+    let output = captures_image::encode_export(image, options).map_err(Error::Image)?;
+    let history_png = captures_history::encode_png(image)?;
+    let preview_png = captures_history::encode_thumbnail_png(image)?;
+
+    let parent = destination.parent().expect("validated destination parent");
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(&output)?;
+    temporary.as_file().sync_all()?;
+    temporary
+        .persist(destination)
+        .map_err(|error| error.error)?;
+
+    entry.width = image.width();
+    entry.height = image.height();
+    entry.size_bytes = u64::try_from(output.len()).unwrap_or(u64::MAX);
+    entry.mime_type = Some(mime_type(options.format).to_owned());
+    if let Err(error) =
+        captures_history::save_capture(history_root, &entry, &history_png, &preview_png)
+    {
+        return Ok(SavedExport::SavedWithoutHistory {
+            path: destination.to_owned(),
+            warning: error.to_string(),
+        });
+    }
+    Ok(SavedExport::Saved {
+        path: destination.to_owned(),
+        artifact: Box::new(Artifact {
+            image_path: directory.join(captures_history::HISTORY_IMAGE_FILE),
+            preview_path: directory.join(captures_history::HISTORY_PREVIEW_FILE),
+            entry,
+        }),
+    })
+}
+
 fn validate_destination(destination: &Path, format: ExportFormat) -> Result<&Path, Error> {
     if destination.as_os_str().is_empty() || destination.file_name().is_none() {
         return Err(Error::InvalidDestination(
@@ -197,6 +267,152 @@ mod tests {
             png: PngOptions::default(),
             size: ExportSize::Original,
         }
+    }
+
+    fn saved_screenshot(root: &Path, destination: &Path) -> Artifact {
+        let image = RgbaImage::from_pixel(8, 6, Rgba([3, 7, 11, 255]));
+        fs::write(destination, captures_history::encode_png(&image).unwrap()).unwrap();
+        let mut artifact = crate::persist_screenshot(root, &image, CaptureMode::Display).unwrap();
+        artifact.entry.saved_path = Some(destination.to_string_lossy().into_owned());
+        captures_history::update_metadata(root, &artifact.entry).unwrap();
+        artifact
+    }
+
+    #[test]
+    fn overwrite_resizes_once_and_preserves_history_identity() {
+        let data = tempfile::tempdir().unwrap();
+        let destination = data.path().join("original.png");
+        let original = saved_screenshot(data.path(), &destination);
+        let edited = RgbaImage::from_pixel(10, 8, Rgba([91, 43, 17, 255]));
+        let SavedExport::Saved { artifact, path } = save_original_export(
+            data.path(),
+            &original.entry.id,
+            &destination,
+            &edited,
+            ExportOptions {
+                size: ExportSize::Percent { percent: 50 },
+                ..options(ExportFormat::Png)
+            },
+        )
+        .unwrap() else {
+            panic!("History replacement should succeed")
+        };
+
+        assert_eq!(path, destination);
+        assert_eq!(artifact.entry.id, original.entry.id);
+        assert_eq!(artifact.entry.created_at, original.entry.created_at);
+        assert_eq!(artifact.entry.mode, original.entry.mode);
+        assert_eq!((artifact.entry.width, artifact.entry.height), (5, 4));
+        let output = fs::read(&destination).unwrap();
+        assert_eq!(artifact.entry.size_bytes, output.len() as u64);
+        let expected = RgbaImage::from_pixel(5, 4, Rgba([91, 43, 17, 255]));
+        assert_eq!(
+            image::load_from_memory(&output).unwrap().to_rgba8(),
+            expected
+        );
+        assert_eq!(
+            image::open(&artifact.image_path).unwrap().to_rgba8(),
+            expected
+        );
+        assert_eq!(
+            image::open(&artifact.preview_path).unwrap().to_rgba8(),
+            expected
+        );
+        let entries = captures_history::load(data.path(), Utc::now()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, original.entry.id);
+        assert_eq!(edited.dimensions(), (10, 8));
+    }
+
+    #[test]
+    fn overwrite_rejects_stale_missing_and_mismatched_sources_without_clobbering() {
+        let data = tempfile::tempdir().unwrap();
+        let destination = data.path().join("original.png");
+        let artifact = saved_screenshot(data.path(), &destination);
+        let original_bytes = fs::read(&destination).unwrap();
+        let other = data.path().join("other.png");
+        fs::write(&other, b"other").unwrap();
+
+        for (id, target, format) in [
+            (
+                uuid::Uuid::new_v4().to_string(),
+                destination.clone(),
+                ExportFormat::Png,
+            ),
+            (artifact.entry.id.clone(), other.clone(), ExportFormat::Png),
+            (
+                artifact.entry.id.clone(),
+                destination.clone(),
+                ExportFormat::Jpeg,
+            ),
+        ] {
+            assert!(
+                save_original_export(data.path(), &id, &target, &pixels(), options(format))
+                    .is_err()
+            );
+            assert_eq!(fs::read(&destination).unwrap(), original_bytes);
+            assert_eq!(fs::read(&other).unwrap(), b"other");
+        }
+
+        fs::remove_file(&destination).unwrap();
+        assert!(
+            save_original_export(
+                data.path(),
+                &artifact.entry.id,
+                &destination,
+                &pixels(),
+                options(ExportFormat::Png)
+            )
+            .is_err()
+        );
+        assert!(!destination.exists());
+
+        let mut stale = artifact.entry;
+        stale.kind = ArtifactKind::Video;
+        captures_history::update_metadata(data.path(), &stale).unwrap();
+        fs::write(&destination, &original_bytes).unwrap();
+        assert!(
+            save_original_export(
+                data.path(),
+                &stale.id,
+                &destination,
+                &pixels(),
+                options(ExportFormat::Png)
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(destination).unwrap(), original_bytes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn overwrite_reports_history_failure_after_publishing_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let history = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let destination = output.path().join("original.png");
+        let artifact = saved_screenshot(history.path(), &destination);
+        fs::set_permissions(history.path(), fs::Permissions::from_mode(0o555)).unwrap();
+
+        let result = save_original_export(
+            history.path(),
+            &artifact.entry.id,
+            &destination,
+            &pixels(),
+            options(ExportFormat::Png),
+        );
+        fs::set_permissions(history.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        let SavedExport::SavedWithoutHistory { path, warning } = result.unwrap() else {
+            panic!("file publication must remain a recoverable success")
+        };
+        assert_eq!(path, destination);
+        assert!(!warning.is_empty());
+        assert_eq!(image::open(path).unwrap().to_rgba8(), pixels());
+        let retained = captures_history::load(history.path(), Utc::now()).unwrap();
+        assert_eq!(retained[0].id, artifact.entry.id);
+        assert_eq!(retained[0].width, artifact.entry.width);
+        assert_eq!(retained[0].size_bytes, artifact.entry.size_bytes);
     }
 
     #[test]
