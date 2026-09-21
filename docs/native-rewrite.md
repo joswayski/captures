@@ -130,7 +130,12 @@ math, cancels transient editing and does not enqueue document or output work.
 Fit now uses Tauri's 2–100% scale range: small screenshots stay at actual size,
 larger images use the limiting viewport axis, and manual zoom can still enlarge them.
 AppKit retains centered placement and wgpu retains top-left placement inside their
-existing viewport insets. Tauri's slider and full layout remain open.
+existing viewport insets. Both hosts now connect a continuous logarithmic zoom
+slider using shared Rust's shipping 5–800% mapping and tenth-percent rounding.
+Fit supplies actual displayed scale, not the zero sentinel. Slider changes anchor
+the viewport center and cancel transient editing without document/output work;
+presets, wheel and shortcuts update the thumb. AppKit exposes the displayed percent
+as its accessibility value description. This does not reproduce Tauri's full layout.
 Physical trackpad/mouse behavior still requires platform acceptance.
 Both hosts connect canvas fill/transparency in Geometry. Apply background submits
 one `set_background` worker transaction; the shared renderer validates hex colors

@@ -386,7 +386,9 @@ Fit does not enlarge small screenshots; manual zoom still can.
 Cmd/Ctrl +/− zoom in 1.25× steps; Cmd/Ctrl 0 shows 100% (not Fit), including while
 an editor field has focus. Zoom shortcuts cancel unfinished canvas gestures.
 The zoom menu offers Fit, 50%, 100% and 200% and displays the current custom zoom.
-Fit retains each workbench's existing placement; Tauri's zoom slider remains parity work.
+Both hosts also provide a logarithmic 5–800% zoom slider. It tracks the actual Fit
+scale and preserves the viewport-center image point when dragged.
+Fit retains each workbench's existing placement.
 Windows, Wayland and physical AppKit presentation remain unverified.
 The native editor still uses a workbench layout, not the shipping Tauri editor design.
 Native cloud sharing is not implemented. Its required flow starts from a mini-preview

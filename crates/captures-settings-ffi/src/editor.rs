@@ -9,7 +9,7 @@ use captures_app::{
     },
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
     editor_session::{EditorSession, ExportOptions, ImportImage, OpenRequest, Request},
-    editor_viewport::{Viewport, wheel_zoom_factor},
+    editor_viewport::{Viewport, wheel_zoom_factor, zoom_from_slider, zoom_slider_position},
     selection::Point as AbiPoint,
 };
 use image::RgbaImage;
@@ -187,6 +187,18 @@ pub unsafe extern "C" fn captures_editor_viewport_zoom_v1(
 #[unsafe(no_mangle)]
 pub extern "C" fn captures_editor_viewport_wheel_factor_v1(delta_pixels: f64) -> f64 {
     wheel_zoom_factor(delta_pixels).unwrap_or(0.)
+}
+
+/// Map displayed percent to the logarithmic 0–1 slider; NaN for invalid input.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_editor_viewport_slider_position_v1(percent: f64) -> f64 {
+    zoom_slider_position(percent).unwrap_or(f64::NAN)
+}
+
+/// Map logarithmic 0–1 slider to rounded 5–800 percent; NaN for invalid input.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_editor_viewport_slider_zoom_v1(position: f64) -> f64 {
+    zoom_from_slider(position).unwrap_or(f64::NAN)
 }
 
 #[repr(C)]

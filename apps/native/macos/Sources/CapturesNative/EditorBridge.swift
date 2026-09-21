@@ -59,6 +59,16 @@ struct NativeEditorViewport: Equatable {
         let value = captures_editor_viewport_wheel_factor_v1(deltaPixels)
         return value.isFinite && value > 0 ? value : nil
     }
+
+    static func sliderPosition(percent: Double) -> Double? {
+        let value = captures_editor_viewport_slider_position_v1(percent)
+        return value.isFinite ? value : nil
+    }
+
+    static func sliderZoom(position: Double) -> Double? {
+        let value = captures_editor_viewport_slider_zoom_v1(position)
+        return value.isFinite ? value : nil
+    }
 }
 
 /// Copies shared preview geometry out of its short-lived C owner. No session

@@ -761,6 +761,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var viewportBounds = NSRect.zero
     private var viewportButtons: [CaptureButton] = []
     private let zoomPreset = NSPopUpButton()
+    private let zoomSlider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
     private let cropX = NSTextField()
     private let cropY = NSTextField()
     private let cropWidth = NSTextField()
@@ -1156,12 +1157,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         ]
         var x: CGFloat = 184
         for (title, accessibility, action) in controls {
-            let width: CGFloat = title == "Recenter" ? 92 : 64
+            let width: CGFloat = title == "Recenter" ? 92 : 40
             let control = button(title, frame: NSRect(x: x, y: 650, width: width, height: 30),
                                  parent: root, action: action)
             control.setAccessibilityLabel(accessibility); viewportButtons.append(control); x += width + 8
         }
-        dimensions.frame = NSRect(x: 440, y: 654, width: 224, height: 20)
+        zoomSlider.frame = NSRect(x: 384, y: 650, width: 124, height: 30)
+        zoomSlider.isContinuous = true
+        zoomSlider.setAccessibilityLabel("Canvas zoom")
+        zoomSlider.target = self; zoomSlider.action = #selector(changeZoomSlider)
+        root.addSubview(zoomSlider)
+        dimensions.frame = NSRect(x: 516, y: 654, width: 148, height: 20)
         dimensions.setAccessibilityLabel("Edited canvas dimensions"); root.addSubview(dimensions)
 
         sectionControl = NSSegmentedControl(labels: ["Geometry", "Layers", "Draw", "Output"], trackingMode: .selectOne,
@@ -2459,8 +2465,19 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if value == 0 { fitViewport() } else { setViewportZoom(value) }
     }
 
+    @objc private func changeZoomSlider() {
+        guard let percent = NativeEditorViewport.sliderZoom(position: zoomSlider.doubleValue) else { return }
+        setViewportZoom(percent)
+    }
+
     private func publishZoomPreset() {
         let current = viewport.zoomPercent
+        let displayed = current == 0
+            ? fittedImageRect.width / max(1, viewportCanvasSize.width) * 100 : current
+        zoomSlider.doubleValue = NativeEditorViewport.sliderPosition(percent: displayed) ?? 0
+        let description = current == 0 ? "Fit (\(format(displayed))%)" : "\(format(current))%"
+        zoomSlider.setAccessibilityValueDescription(description)
+        zoomSlider.toolTip = "Canvas zoom: \(description). Drag to zoom from 5% to 800%."
         var values: [Double] = [0, 50, 100, 200]
         if !values.contains(current) { values.insert(current, at: 1) }
         if zoomPreset.itemArray.compactMap({ $0.representedObject as? Double }) != values {
@@ -2941,6 +2958,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         outputPreviewMode?.isEnabled = ready && encodedOutput != nil
         viewportButtons.forEach { $0.isEnabled = ready }
         zoomPreset.isEnabled = ready
+        zoomSlider.isEnabled = ready && !awaitingReplaceConfirmation
         updateOutputOptionControls()
         updateDrawing()
         layerTable?.isEnabled = ready
