@@ -2,19 +2,20 @@
 //!
 //! Image assets are supplied by exact document `src`, so rendering performs no
 //! filesystem, network, host-font, or UI access. The five closed annotation
-//! shapes, curved lines, tapered arrows, and freehand paths are rendered; text
-//! remains an explicit unsupported case.
+//! shapes, curved lines, tapered arrows, and freehand paths are rendered. Filled,
+//! unrotated text and plates additionally require explicit fonts and family mapping.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
 
 use captures_image::{
     BlendMode, DROP_SHADOW_BLUR_MAX, DROP_SHADOW_OFFSET_MAX, DropShadow, Layer, Point, Shape,
+    text::{TextRenderer, TextStyle},
 };
 use image::{Rgba, RgbaImage};
 
 use crate::editor::{
     Document, DropShadowStyle, Element, ElementStyle, ImageElement, ImageOrientation, PathElement,
-    Point as EditorPoint, ShapeElement, arrow_fill_polygon, sample_controlled_path,
+    Point as EditorPoint, ShapeElement, TextElement, arrow_fill_polygon, sample_controlled_path,
 };
 
 pub const MAX_RENDER_DIMENSION: u32 = 16_384;
@@ -28,6 +29,28 @@ pub fn render(
     document: &Document,
     assets: &BTreeMap<String, Arc<RgbaImage>>,
 ) -> Result<RgbaImage, String> {
+    render_inner(document, assets, None)
+}
+
+/// Opt in to filled paragraph text using caller-owned fonts. `families` maps
+/// document family keys (such as `sans`) to names embedded in supplied font bytes.
+/// No installed fonts are scanned. Rotation, outlines and text shadows remain
+/// explicit errors. Existing editor sessions still use the no-font entry point.
+/// Retained text bitmaps are limited to 16M pixels across the visible document.
+pub fn render_with_text(
+    document: &Document,
+    assets: &BTreeMap<String, Arc<RgbaImage>>,
+    renderer: &mut TextRenderer,
+    families: &BTreeMap<String, String>,
+) -> Result<RgbaImage, String> {
+    render_inner(document, assets, Some((renderer, families)))
+}
+
+fn render_inner(
+    document: &Document,
+    assets: &BTreeMap<String, Arc<RgbaImage>>,
+    mut text: Option<(&mut TextRenderer, &BTreeMap<String, String>)>,
+) -> Result<RgbaImage, String> {
     let (width, height) = validate_canvas(document)?;
     let background = document
         .background
@@ -36,8 +59,8 @@ pub fn render(
         .transpose()?
         .unwrap_or(Rgba([0, 0, 0, 0]));
 
-    // Validate the complete visible stack before any orientation or canvas
-    // allocation. A later unsupported layer must not leave earlier work done.
+    // Reject unsupported visible styles/assets before orientation or canvas
+    // allocation. Shaping/rasterization can still fail on missing glyphs/budgets.
     for element in document
         .elements
         .iter()
@@ -45,7 +68,12 @@ pub fn render(
     {
         match element {
             Element::Image(image) => validate_image(image, assets)?,
-            Element::Text(text) => return Err(unsupported_layer("text", &text.base.id)),
+            Element::Text(element) => {
+                let Some((_, families)) = text.as_ref() else {
+                    return Err(unsupported_layer("text", &element.base.id));
+                };
+                validate_text(element, families)?;
+            }
             Element::Shape(shape) => validate_shape(shape)?,
             Element::Path(path) => validate_path(path)?,
         }
@@ -53,6 +81,8 @@ pub fn render(
 
     let mut layers = Vec::new();
     let mut shadows = BTreeMap::new();
+    let mut text_pixels_remaining = 16_777_216;
+    let mut next_text_id = document.elements.len() as u64;
     for (index, element) in document.elements.iter().enumerate() {
         if !element.base().visible {
             continue;
@@ -72,7 +102,22 @@ pub fn render(
                     shadows.insert(id, drop_shadow(&path.style));
                 }
             }
-            Element::Text(_) => {}
+            Element::Text(element) => {
+                let (renderer, families) = text.as_mut().expect("validated text context");
+                for (index, mut layer) in
+                    text_layers(id, element, renderer, families, &mut text_pixels_remaining)?
+                        .into_iter()
+                        .enumerate()
+                {
+                    // Preserve document-index IDs and keep the extra text paints
+                    // disjoint from every shape/path shadow key.
+                    if index > 0 {
+                        layer.id = next_text_id;
+                        next_text_id += 1;
+                    }
+                    layers.push(layer);
+                }
+            }
         }
     }
 
@@ -84,6 +129,131 @@ pub fn render(
         },
         &shadows,
     )
+}
+
+fn validate_text(element: &TextElement, families: &BTreeMap<String, String>) -> Result<(), String> {
+    let id = &element.base.id;
+    if element.outlined || element.has_drop_shadow() || element.base.rotation() != 0. {
+        return Err(format!(
+            "text layer {id} rotation, outlines and shadows are not supported yet"
+        ));
+    }
+    for (axis, value) in [
+        ("x", element.base.x),
+        ("y", element.base.y),
+        ("width", element.width),
+    ] {
+        finite_layer_f32(value, "text", axis, id)?;
+    }
+    if !element.base.opacity.is_finite() {
+        return Err(format!("text layer {id} opacity must be finite"));
+    }
+    blend_mode(&element.base.blend_mode, "text", id)?;
+    parse_color(&element.color, "text")?;
+    if let Some(background) = element.background.as_deref().filter(|s| !s.is_empty()) {
+        parse_color(background, "text background")?;
+    }
+    if !families.contains_key(&element.font_family) {
+        return Err(format!(
+            "text layer {id} has no explicit font family mapping"
+        ));
+    }
+    Ok(())
+}
+
+// Canvas's text preparation replaces ASCII whitespace with spaces. Paragraph
+// breaks are handled before this; normalize both measurement and rasterization.
+// Other line-control characters remain explicit errors from the single-line shaper.
+fn canvas_text_line(line: &str) -> Cow<'_, str> {
+    if line.is_empty() {
+        Cow::Borrowed(" ")
+    } else if line.contains(['\t', '\n', '\r', '\u{000c}']) {
+        Cow::Owned(line.replace(['\t', '\n', '\r', '\u{000c}'], " "))
+    } else {
+        Cow::Borrowed(line)
+    }
+}
+
+fn text_layers(
+    id: u64,
+    element: &TextElement,
+    renderer: &mut TextRenderer,
+    families: &BTreeMap<String, String>,
+    pixels_remaining: &mut u64,
+) -> Result<Vec<Layer>, String> {
+    let color = |value: &str| -> Result<[u8; 4], String> {
+        let mut rgba = parse_color(value, "text")?.0;
+        rgba[3] = (f64::from(rgba[3]) * element.base.opacity.clamp(0., 100.) / 100.).round() as u8;
+        Ok(rgba)
+    };
+    let style = TextStyle {
+        family: &families[&element.font_family],
+        size: element.font_size as f32,
+        bold: element.bold,
+        italic: element.italic,
+        color: color(&element.color)?,
+    };
+    let layout = crate::editor_text::layout(element, |line| {
+        renderer
+            .measure_line(&canvas_text_line(line), &style)
+            .map(f64::from)
+    })?;
+    let mode = blend_mode(&element.base.blend_mode, "text", &element.base.id)?;
+    let number = |value, axis| finite_layer_f32(value, "text", axis, &element.base.id);
+    let layer = |shape, color, fill| Layer {
+        id,
+        shape,
+        color,
+        fill,
+        stroke_width: 0.,
+        rotation_degrees: 0.,
+        rotation_origin: None,
+        blend_mode: mode,
+    };
+    let mut layers = Vec::new();
+    if let Some(plate) = layout.plate {
+        let fill = color(element.background.as_deref().expect("layout plate color"))?;
+        layers.push(layer(
+            Shape::RoundedRectangle {
+                origin: Point {
+                    x: number(plate.bounds.x, "plate x")?,
+                    y: number(plate.bounds.y, "plate y")?,
+                },
+                width: number(plate.bounds.width, "plate width")?,
+                height: number(plate.bounds.height, "plate height")?,
+                radius: number(plate.radius, "plate radius")?,
+            },
+            fill,
+            Some(fill),
+        ));
+    }
+    for row in layout.rows {
+        let line = renderer.render_line(&canvas_text_line(&row.text), &style)?;
+        if line.pixels.width() == 0 || line.pixels.height() == 0 {
+            continue;
+        }
+        *pixels_remaining = pixels_remaining
+            .checked_sub(u64::from(line.pixels.width()) * u64::from(line.pixels.height()))
+            .ok_or("Text exceeds the document's 16M raster pixel budget.")?;
+        // Center actual raster ink vertically, preserving horizontal bearings.
+        // The integer ink box can differ subpixel-wise from Canvas outline metrics.
+        let x = row.x + f64::from(line.bounds.x);
+        let y = row.y + (element.font_size * 1.25 - f64::from(line.bounds.height)) / 2.;
+        layers.push(layer(
+            Shape::Image {
+                origin: Point {
+                    x: number(x, "ink x")?,
+                    y: number(y, "ink y")?,
+                },
+                width: line.pixels.width() as f32,
+                height: line.pixels.height() as f32,
+                pixels: Arc::new(line.pixels),
+            },
+            [255; 4],
+            None,
+        ));
+    }
+    Ok(layers)
 }
 
 fn drop_shadow(style: &ElementStyle) -> DropShadow {

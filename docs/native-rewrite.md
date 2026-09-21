@@ -188,9 +188,22 @@ so long tokens can wrap; rasterization retains its extent/pixel budgets. Paragra
 inputs are limited to 4096 UTF-8 bytes and type sizes greater than zero through 512.
 These helpers describe measured paint layout, not Tauri's estimated selection bounds;
 font-specific control-character support remains the supplied measurer's contract.
-This does not replace the legacy `Shape::Text` primitive or enable text in editor
-documents. Font acquisition/persistence, paragraph raster composition and plates,
-outlines/shadows, interactive text geometry and transactional commands, both host controls and
+An opt-in document renderer now accepts caller-owned fonts and explicit mappings
+from document family keys to supplied font names. It composites filled paragraphs
+and square/rounded plates in layer order, including alignment, italic bearings,
+per-paint opacity, blend modes and canvas clipping. It centers raster ink vertically;
+pixel-aligned ink boxes can differ subpixel-wise from Canvas outline metrics.
+ASCII tabs, carriage returns and form feeds become spaces for both measurement and
+painting, following Canvas text preparation; remaining interior line-control
+characters are rejected by the single-line shaper, not silently omitted.
+Text bitmaps have a shared 16,777,216-pixel budget across the visible document,
+in addition to individual line budgets. Missing fonts/glyphs, invalid styles and
+budget failures return errors without changing the document or assets. Rotation,
+outlines and text shadows remain explicit unsupported cases.
+Existing editor sessions still use the no-font renderer and reject visible text;
+this does not replace legacy `Shape::Text` or provide a native Text tool.
+Font acquisition/persistence, rotation/outlines/shadows, interactive text geometry
+and transactional commands, both host controls and
 physical input/IME/accessibility remain open. No host text parity gate is closed.
 Next implementation boundary: text and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.

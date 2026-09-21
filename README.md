@@ -265,7 +265,10 @@ drop shadows, without host I/O.
 A separate shared text prerequisite shapes and rasterizes single lines from explicit
 font bytes, including ligatures, combining marks and right-to-left text. Shared
 paragraph helpers now provide measured wrapping, alignment, auto-width boxes and
-background-plate geometry. Native Text tools and document rendering are not connected yet.
+background-plate geometry. An opt-in document renderer composites filled, unrotated
+text and square/rounded plates from those fonts, with opacity and blending. Text
+rotation, outlines and shadows are still unsupported; native Text tools, font
+persistence and editor-session integration are not connected yet.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
 resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
 pixel frames for native hosts. Typed rectangle/ellipse, straight-line/arrow and

@@ -3,10 +3,11 @@ use std::{collections::BTreeMap, f64::consts::FRAC_PI_4, sync::Arc};
 use captures_app::{
     editor::{
         Document, DropShadowStyle, Element, ElementBase, ElementStyle, ImageElement,
-        ImageOrientation, OptionalNullable, PathElement, Point, Rect, ShapeElement,
+        ImageOrientation, OptionalNullable, PathElement, Point, Rect, ShapeElement, TextElement,
     },
-    editor_render::render,
+    editor_render::{render, render_with_text},
 };
+use captures_image::text::TextRenderer;
 use image::{Rgba, RgbaImage};
 use serde_json::{Map, json};
 
@@ -754,4 +755,246 @@ fn invalid_and_oversized_inputs_are_rejected_before_canvas_allocation() {
         .unwrap_err()
         .contains("asset exceeds renderer limits")
     );
+}
+
+fn text() -> TextElement {
+    serde_json::from_value(json!({
+        "id":"text", "x":20, "y":20, "visible":true, "locked":false,
+        "opacity":100, "blendMode":"source-over", "text":"L", "fontSize":80,
+        "width":100, "fontFamily":"sans", "bold":false, "italic":false,
+        "align":"left", "color":"#ff0000", "background":null,
+        "outlined":false, "roundedBackground":false,
+        "futureMetadata":{"keep":true}
+    }))
+    .unwrap()
+}
+
+fn fonts() -> (TextRenderer, BTreeMap<String, String>) {
+    (
+        TextRenderer::new([
+            Arc::from(include_bytes!("../../captures-image/tests/shaping-regular.ttf").as_slice()),
+            Arc::from(include_bytes!("../../captures-image/tests/shaping-italic.ttf").as_slice()),
+            Arc::from(include_bytes!("../../captures-image/tests/shaping-bold.ttf").as_slice()),
+        ])
+        .unwrap(),
+        BTreeMap::from([("sans".into(), "Captures Shaping Test".into())]),
+    )
+}
+
+#[test]
+fn explicit_fonts_render_wrapped_aligned_ink_and_canvas_whitespace() {
+    let (mut renderer, families) = fonts();
+    let mut label = text();
+    label.align = "right".into();
+    label.text = "L\nfi".into();
+    let doc = document(200., 240., vec![Element::Text(label.clone())]);
+    let original = doc.clone();
+    let rendered = render_with_text(&doc, &BTreeMap::new(), &mut renderer, &families).unwrap();
+    // Font L advance=56, ink=48×64 at size80: right-aligned x=64, centered y=38.
+    assert_eq!(rendered.get_pixel(65, 45).0, [255, 0, 0, 255]);
+    assert_eq!(rendered.get_pixel(105, 95).0, [255, 0, 0, 255]);
+    assert_eq!(rendered.get_pixel(63, 45)[3], 0);
+    assert_eq!(rendered.get_pixel(100, 60)[3], 0);
+    assert_eq!(rendered.get_pixel(65, 110)[3], 0);
+    // Ligature advance=36, ink height56: second row starts x=84, y=142.
+    assert_eq!(rendered.get_pixel(86, 150).0, [255, 0, 0, 255]);
+    assert_eq!(rendered.get_pixel(114, 194).0, [255, 0, 0, 255]);
+    assert_eq!(doc, original);
+    assert!(
+        render(&doc, &BTreeMap::new())
+            .unwrap_err()
+            .contains("not supported")
+    );
+
+    label.align = "left".into();
+    label.width = 160.;
+    label.text = "L  L".into(); // 56 + 24 + 24 + 56 = 160, exactly one row.
+    let expected = render_with_text(
+        &document(220., 240., vec![Element::Text(label.clone())]),
+        &BTreeMap::new(),
+        &mut renderer,
+        &families,
+    )
+    .unwrap();
+    for whitespace in ["\t\r", "\u{000c} "] {
+        label.text = format!("L{whitespace}L");
+        let actual = render_with_text(
+            &document(220., 240., vec![Element::Text(label.clone())]),
+            &BTreeMap::new(),
+            &mut renderer,
+            &families,
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn text_face_flags_and_negative_bearings_reach_document_pixels() {
+    let (mut renderer, families) = fonts();
+    for (bold, italic, expected_x) in [(true, false, 57), (false, true, 58)] {
+        let mut label = text();
+        label.align = "right".into();
+        label.bold = bold;
+        label.italic = italic;
+        let rendered = render_with_text(
+            &document(200., 180., vec![Element::Text(label)]),
+            &BTreeMap::new(),
+            &mut renderer,
+            &families,
+        )
+        .unwrap();
+        // Bold advance is 64 instead of 56. Italic advance is 56 with a -8
+        // bearing. Ignoring either flag/bearing leaves these pixels empty.
+        assert_eq!(rendered.get_pixel(expected_x, 45).0, [255, 0, 0, 255]);
+    }
+}
+
+#[test]
+fn text_plate_and_glyph_opacity_apply_per_paint_and_blend_against_the_backdrop() {
+    let (mut renderer, families) = fonts();
+    let mut label = text();
+    label.background = Some("#ff0000".into());
+    label.color = "#0000ff".into();
+    label.base.opacity = 50.;
+    let image = render_with_text(
+        &document(200., 180., vec![Element::Text(label.clone())]),
+        &BTreeMap::new(),
+        &mut renderer,
+        &families,
+    )
+    .unwrap();
+    assert_eq!(image.get_pixel(100, 20).0, [255, 0, 0, 128]);
+    // Blue alpha1/2 over red alpha1/2 has alpha3/4, not group alpha1/2.
+    for (actual, expected) in image.get_pixel(22, 45).0.into_iter().zip([85, 0, 170, 192]) {
+        assert!(actual.abs_diff(expected) <= 1, "{actual} != {expected}");
+    }
+    label.rounded_background = true;
+    label.base.x = 60.;
+    let rounded = render_with_text(
+        &document(220., 180., vec![Element::Text(label.clone())]),
+        &BTreeMap::new(),
+        &mut renderer,
+        &families,
+    )
+    .unwrap();
+    assert_eq!(rounded.get_pixel(32, 3)[3], 0); // plate's square corner is clipped
+    assert_eq!(rounded.get_pixel(100, 20)[3], 128);
+
+    label.background = None;
+    label.color = "#0000ff80".into();
+    let faded = render_with_text(
+        &document(220., 180., vec![Element::Text(label.clone())]),
+        &BTreeMap::new(),
+        &mut renderer,
+        &families,
+    )
+    .unwrap();
+    assert_eq!(faded.get_pixel(62, 45).0, [0, 0, 255, 64]);
+    label.base.opacity = 100.;
+    label.base.blend_mode = "multiply".into();
+    label.color = "#40a0ff".into();
+    let mut doc = document(220., 180., vec![Element::Text(label)]);
+    doc.background = Some("#80c040".into());
+    let multiplied = render_with_text(&doc, &BTreeMap::new(), &mut renderer, &families).unwrap();
+    for (actual, expected) in multiplied
+        .get_pixel(62, 45)
+        .0
+        .into_iter()
+        .zip([32, 120, 64, 255])
+    {
+        assert!(actual.abs_diff(expected) <= 1);
+    }
+    for (opacity, alpha) in [(f64::MAX, 255), (-100., 0)] {
+        let mut clamped = text();
+        clamped.base.opacity = opacity;
+        let pixels = render_with_text(
+            &document(200., 180., vec![Element::Text(clamped)]),
+            &BTreeMap::new(),
+            &mut renderer,
+            &families,
+        )
+        .unwrap();
+        assert_eq!(pixels.get_pixel(22, 45)[3], alpha);
+    }
+}
+
+#[test]
+fn text_paints_do_not_collide_with_following_shape_shadow_ids() {
+    let (mut renderer, families) = fonts();
+    let mut label = text();
+    label.text = "L\nfi".into();
+    label.background = Some("#222222".into());
+    let mut annotation = shape("shadow", "rectangle", (200., 30.), (230., 60.));
+    annotation.style.drop_shadow = Some(true);
+    let only_shape = document(280., 250., vec![Element::Shape(annotation.clone())]);
+    let expected = render(&only_shape, &BTreeMap::new()).unwrap();
+    let both = document(
+        280.,
+        250.,
+        vec![Element::Text(label), Element::Shape(annotation)],
+    );
+    let actual = render_with_text(&both, &BTreeMap::new(), &mut renderer, &families).unwrap();
+    for y in 0..250 {
+        for x in 180..280 {
+            assert_eq!(actual.get_pixel(x, y), expected.get_pixel(x, y));
+        }
+    }
+    assert_eq!(actual.get_pixel(22, 45).0, [255, 0, 0, 255]);
+}
+
+#[test]
+fn text_errors_are_explicit_hidden_layers_are_skipped_and_failed_render_is_retryable() {
+    let (mut renderer, families) = fonts();
+    for mutate in [
+        |t: &mut TextElement| t.outlined = true,
+        |t: &mut TextElement| t.drop_shadow = Some(true),
+        |t: &mut TextElement| t.base.rotation = Some(0.3),
+        |t: &mut TextElement| t.text = "☃".into(),
+        |t: &mut TextElement| t.text = "L\u{0085}L".into(),
+        |t: &mut TextElement| t.font_family = "unknown".into(),
+        |t: &mut TextElement| t.color = "invalid".into(),
+        |t: &mut TextElement| t.font_size = 513.,
+        |t: &mut TextElement| t.base.opacity = f64::INFINITY,
+    ] {
+        let mut label = text();
+        mutate(&mut label);
+        let doc = document(200., 180., vec![Element::Text(label.clone())]);
+        let original = doc.clone();
+        assert!(render_with_text(&doc, &BTreeMap::new(), &mut renderer, &families).is_err());
+        assert_eq!(doc, original);
+        label.base.visible = false;
+        let hidden = render_with_text(
+            &document(3., 2., vec![Element::Text(label)]),
+            &BTreeMap::new(),
+            &mut renderer,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(hidden, RgbaImage::new(3, 2));
+    }
+    let mut large = text();
+    large.font_size = 512.;
+    large.text = "L\n".repeat(70);
+    let mut second = large.clone();
+    second.base.id = "second".into();
+    // Each paragraph alone fits; the combined retained bitmap budget does not.
+    assert!(
+        render_with_text(
+            &document(32., 32., vec![Element::Text(large.clone())]),
+            &BTreeMap::new(),
+            &mut renderer,
+            &families,
+        )
+        .is_ok()
+    );
+    let overflow = document(32., 32., vec![Element::Text(large), Element::Text(second)]);
+    assert!(
+        render_with_text(&overflow, &BTreeMap::new(), &mut renderer, &families)
+            .unwrap_err()
+            .contains("16M raster pixel budget")
+    );
+    let valid = document(200., 180., vec![Element::Text(text())]);
+    let recovered = render_with_text(&valid, &BTreeMap::new(), &mut renderer, &families).unwrap();
+    assert_eq!(recovered.get_pixel(22, 45).0, [255, 0, 0, 255]);
 }
