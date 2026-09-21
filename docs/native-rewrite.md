@@ -119,14 +119,23 @@ one undoable render-before-publish transaction. Invalid/no-match requests leave
 history and assets unchanged; retained originals survive draft reopen. The existing
 100-million decoded-pixel asset budget also counts retained edits/undo sources.
 Both native Draw panels now bind Wand clicks through the existing viewport mapping
-and serialized worker. Tolerance defaults to 36 with a 0–255 range, matching Tauri;
-contiguous removal defaults on. Pan and off-image clicks do not submit edits.
+and serialized worker. Tolerance defaults to 36, matching Tauri, and accepts the
+engine's full 0–255 range; contiguous removal defaults on. Pan and off-image clicks do not submit edits.
 AppKit's Draw panel scrolls at minimum size. X11 coverage exercises exact alpha,
 disconnected-color global removal, locked images, no-match recovery, undo/redo,
 draft reopen and copied PNG pixels; AppKit has bridge and rendered-state tests.
 Windows/Wayland presentation and physical AppKit input remain unverified.
 Erase/restore brushes and physical acceptance remain open; these bindings do not
 complete the editor gate or reproduce the shipping Tauri toolbar layout.
+The shared brush prerequisite now accepts a completed erase/restore stroke with
+document-space samples, brush diameter and softness. It locks the first visible
+image, ignores later off-image samples, uses orientation-aware natural-pixel brush
+scaling, and matches Tauri's pixel-center stamps, feathering, interpolation and RGBA
+rounding. Changed strokes publish one undoable owned asset, retain the first original,
+and clear canvas fill; no-op strokes preserve fill, pixels and redo. Restore reads
+that retained original, including after draft reopen. Shared Rust/TypeScript vectors
+check exact pixels. Native brush controls, sampling, transient previews and cancellation
+are not connected yet; the command alone does not complete brush acceptance.
 Next implementation boundary: text/image-background and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.
 

@@ -1,6 +1,6 @@
 use captures_app::{
     editor::{ImageElement, ImageOrientation, Point},
-    editor_image_background::remove_color,
+    editor_image_background::{BrushMode, paint_stroke, remove_color},
 };
 use image::RgbaImage;
 use serde::Deserialize;
@@ -11,6 +11,7 @@ struct Cases {
     mapping: Vec<Mapping>,
     pixels: Pixels,
     wand: Vec<Wand>,
+    brush: Vec<Brush>,
 }
 
 #[derive(Deserialize)]
@@ -35,6 +36,21 @@ struct Wand {
     tolerance: u8,
     contiguous: bool,
     cleared: Vec<usize>,
+}
+
+#[derive(Deserialize)]
+struct Brush {
+    name: String,
+    width: u32,
+    height: u32,
+    working: Vec<u8>,
+    original: Option<Vec<u8>>,
+    points: Vec<(u32, u32)>,
+    radius: f64,
+    hardness: f64,
+    mode: BrushMode,
+    changed: u64,
+    expected: Vec<u8>,
 }
 
 fn cases() -> Cases {
@@ -80,5 +96,64 @@ fn wand_matches_shipping_exact_pixels_not_just_counts() {
             entry.name
         );
         assert_eq!(image.as_raw(), &expected, "{}", entry.name);
+    }
+}
+
+#[test]
+fn brush_matches_shipping_exact_rgba_and_changed_samples() {
+    for entry in cases().brush {
+        let mut working = RgbaImage::from_raw(entry.width, entry.height, entry.working).unwrap();
+        let original = entry
+            .original
+            .map(|rgba| RgbaImage::from_raw(entry.width, entry.height, rgba).unwrap());
+        assert_eq!(
+            paint_stroke(
+                &mut working,
+                original.as_ref(),
+                &entry.points,
+                entry.radius,
+                entry.hardness,
+                entry.mode,
+            ),
+            Ok(entry.changed),
+            "{}",
+            entry.name
+        );
+        assert_eq!(working.as_raw(), &entry.expected, "{}", entry.name);
+    }
+}
+
+#[test]
+fn invalid_brush_inputs_do_not_mutate_working_pixels() {
+    let initial = vec![10, 20, 30, 255];
+    let invalid = [
+        (vec![], 1.0, 0.5, BrushMode::Erase, None),
+        (vec![(0, 0)], 0.0, 0.5, BrushMode::Erase, None),
+        (vec![(0, 0)], f64::NAN, 0.5, BrushMode::Erase, None),
+        (vec![(0, 0)], 1.0, f64::INFINITY, BrushMode::Erase, None),
+        (vec![(1, 0)], 1.0, 0.5, BrushMode::Erase, None),
+        (vec![(0, 0)], 1.0, 0.5, BrushMode::Restore, None),
+        (
+            vec![(0, 0)],
+            1.0,
+            0.5,
+            BrushMode::Restore,
+            Some(RgbaImage::new(2, 1)),
+        ),
+    ];
+    for (points, radius, hardness, mode, original) in invalid {
+        let mut working = RgbaImage::from_raw(1, 1, initial.clone()).unwrap();
+        assert!(
+            paint_stroke(
+                &mut working,
+                original.as_ref(),
+                &points,
+                radius,
+                hardness,
+                mode
+            )
+            .is_err()
+        );
+        assert_eq!(working.as_raw(), &initial);
     }
 }

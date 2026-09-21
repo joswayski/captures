@@ -45,5 +45,50 @@
     {"name":"transparent-seed-does-not-clear-global", "seed":[0,1], "tolerance":255, "contiguous":false, "cleared":[]},
     {"name":"full-tolerance-still-preserves-transparent-rgb", "seed":[0,0], "tolerance":255, "contiguous":true, "cleared":[0,1,2,3,5,6,7,8,9,10,11]},
     {"name":"outside-seed", "seed":[4,0], "tolerance":255, "contiguous":false, "cleared":[]}
+  ],
+  "brush": [
+    {
+      "name":"hard-erase-clears-rgb-at-zero", "width":3, "height":3,
+      "working":[10,20,30,1, 40,50,60,128, 70,80,90,255, 11,22,33,200, 44,55,66,254, 77,88,99,80, 12,23,34,60, 45,56,67,90, 78,89,100,120],
+      "original":null, "points":[[1,1]], "radius":1, "hardness":1, "mode":"erase", "changed":4,
+      "expected":[0,0,0,0, 0,0,0,0, 70,80,90,255, 0,0,0,0, 0,0,0,0, 77,88,99,80, 12,23,34,60, 45,56,67,90, 78,89,100,120]
+    },
+    {
+      "name":"soft-erase-linear-feather", "width":3, "height":3,
+      "working":[10,20,30,255, 40,50,60,128, 70,80,90,64, 11,22,33,201, 44,55,66,101, 77,88,99,33, 12,23,34,17, 45,56,67,9, 78,89,100,1],
+      "original":null, "points":[[1,1]], "radius":1.5, "hardness":0, "mode":"erase", "changed":4,
+      "expected":[10,20,30,120, 40,50,60,60, 70,80,90,64, 11,22,33,95, 44,55,66,48, 77,88,99,33, 12,23,34,17, 45,56,67,9, 78,89,100,1]
+    },
+    {
+      "name":"soft-restore-round-half-up-all-channels", "width":3, "height":3,
+      "working":[0,200,10,1, 200,0,250,200, 4,6,8,10, 101,51,201,99, 9,109,19,209, 1,2,3,4, 250,240,230,220, 8,7,6,5, 90,80,70,60],
+      "original":[101,1,211,200, 1,201,2,1, 4,6,8,10, 0,150,100,200, 110,10,220,10, 1,2,3,4, 250,240,230,220, 8,7,6,5, 90,80,70,60],
+      "points":[[1,1]], "radius":1.4142135623730951, "hardness":0, "mode":"restore", "changed":4,
+      "expected":[51,101,111,101, 101,101,126,101, 4,6,8,10, 51,101,151,150, 60,60,120,110, 1,2,3,4, 250,240,230,220, 8,7,6,5, 90,80,70,60]
+    },
+    {
+      "name":"stroke-interpolation-endpoints-and-turn", "width":5, "height":2,
+      "working":[10,20,30,255, 10,20,30,255, 10,20,30,255, 10,20,30,255, 10,20,30,255, 10,20,30,255, 10,20,30,255, 10,20,30,255, 10,20,30,255, 10,20,30,255],
+      "original":null, "points":[[0,0],[4,0],[4,1]], "radius":0.71, "hardness":1, "mode":"erase", "changed":7,
+      "expected":[0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 10,20,30,255, 10,20,30,255, 10,20,30,255, 0,0,0,0, 0,0,0,0]
+    },
+    {
+      "name":"repeated-stationary-stamps-count-each-change", "width":2, "height":2,
+      "working":[9,8,7,255, 9,8,7,255, 9,8,7,255, 9,8,7,255],
+      "original":null, "points":[[1,1],[1,1],[1,1]], "radius":2, "hardness":0, "mode":"erase", "changed":12,
+      "expected":[9,8,7,11, 9,8,7,11, 9,8,7,11, 9,8,7,11]
+    },
+    {
+      "name":"transparent-erase-is-no-op", "width":2, "height":2,
+      "working":[9,8,7,0, 9,8,7,0, 9,8,7,0, 9,8,7,0],
+      "original":null, "points":[[1,1]], "radius":2, "hardness":0.5, "mode":"erase", "changed":0,
+      "expected":[9,8,7,0, 9,8,7,0, 9,8,7,0, 9,8,7,0]
+    },
+    {
+      "name":"near-top-left-boundary", "width":3, "height":3,
+      "working":[20,30,40,255, 20,30,40,255, 20,30,40,255, 20,30,40,255, 20,30,40,255, 20,30,40,255, 20,30,40,255, 20,30,40,255, 20,30,40,255],
+      "original":null, "points":[[0,0]], "radius":2, "hardness":0.5, "mode":"erase", "changed":3,
+      "expected":[0,0,0,0, 20,30,40,148, 20,30,40,255, 20,30,40,148, 20,30,40,255, 20,30,40,255, 20,30,40,255, 20,30,40,255, 20,30,40,255]
+    }
   ]
 }

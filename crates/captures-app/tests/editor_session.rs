@@ -169,6 +169,190 @@ fn image_background_edits_retain_original_assets_and_preserve_redo_on_failure() 
     assert_eq!(fs::read(path).unwrap(), original_file);
 }
 
+fn background_brush(points: &[(f64, f64)], mode: &str) -> Request {
+    serde_json::from_value(json!({
+        "operation": "paint_image_background",
+        "points": points.iter().map(|(x, y)| json!({"x": x, "y": y})).collect::<Vec<_>>(),
+        "size": 2.0,
+        "softness": 0.0,
+        "mode": mode,
+    }))
+    .unwrap()
+}
+
+#[test]
+fn background_brush_erases_restores_and_undoes_each_completed_stroke() {
+    let (data, id, original) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    editor
+        .execute(Request::SetBackground {
+            color: Some("#123456".into()),
+        })
+        .unwrap();
+    let Element::Image(initial) = &editor.snapshot().document.elements[0] else {
+        panic!()
+    };
+    assert!(initial.base.locked);
+    let original_src = initial.src.clone();
+
+    editor
+        .execute(background_brush(&[(2.5, 1.5)], "erase"))
+        .unwrap();
+    assert_eq!(editor.pixels().get_pixel(2, 1), &Rgba([0; 4]));
+    let Element::Image(erased) = &editor.snapshot().document.elements[0] else {
+        panic!()
+    };
+    assert_eq!(
+        erased.original_src,
+        OptionalNullable::Value(original_src.clone())
+    );
+    assert_eq!(editor.snapshot().document.background, None);
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.pixels().get_pixel(2, 1), original.get_pixel(2, 1));
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.pixels().get_pixel(2, 1), &Rgba([0; 4]));
+
+    editor
+        .execute(background_brush(&[(2.5, 1.5)], "restore"))
+        .unwrap();
+    assert_eq!(*editor.pixels(), original);
+    let Element::Image(restored) = &editor.snapshot().document.elements[0] else {
+        panic!()
+    };
+    assert_eq!(
+        restored.original_src,
+        OptionalNullable::Value(original_src.clone())
+    );
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 31 })
+        .unwrap();
+    let reopened = open(data.path(), &id).unwrap();
+    let Element::Image(reopened_image) = &reopened.snapshot().document.elements[0] else {
+        panic!()
+    };
+    assert_eq!(
+        reopened_image.original_src,
+        OptionalNullable::Value(original_src)
+    );
+    assert_eq!(reopened.pixels().get_pixel(2, 1), original.get_pixel(2, 1));
+}
+
+#[test]
+fn background_brush_locks_initial_target_and_failures_and_noops_are_atomic() {
+    let (data, id, _) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    editor
+        .import_image(ImportImage {
+            pixels: RgbaImage::from_pixel(2, 3, Rgba([200, 30, 40, 255])),
+            name: "front".into(),
+            selected_id: None,
+            point: Some(Point { x: 1., y: 1.5 }),
+        })
+        .unwrap();
+    let mut document = editor.snapshot().document.clone();
+    let Element::Image(front) = &mut document.elements[1] else {
+        panic!()
+    };
+    front.base.x = 0.;
+    front.base.y = 0.;
+    front.width = 2.;
+    front.height = 3.;
+    front.base.locked = true;
+    editor.execute(Request::Commit { document }).unwrap();
+    editor
+        .execute(background_brush(&[(1.5, 1.5), (5.5, 1.5)], "erase"))
+        .unwrap();
+    assert_eq!(editor.pixels().get_pixel(5, 1)[3], 255);
+    assert_eq!(editor.pixels().get_pixel(1, 1)[3], 0);
+
+    editor.execute(Request::Undo).unwrap();
+    let before = serde_json::to_value(editor.snapshot()).unwrap();
+    let frame = editor.pixels();
+    for request in [
+        background_brush(&[], "erase"),
+        background_brush(&[(20., 20.)], "erase"),
+        background_brush(&[(1.5, 1.5)], "restore"),
+        serde_json::from_value(json!({
+            "operation": "paint_image_background", "points": [{"x": 1, "y": 1}],
+            "size": 0, "softness": 0, "mode": "erase"
+        }))
+        .unwrap(),
+    ] {
+        assert!(editor.execute(request).is_err());
+        assert_eq!(serde_json::to_value(editor.snapshot()).unwrap(), before);
+        assert!(Arc::ptr_eq(&frame, &editor.pixels()));
+        assert!(editor.snapshot().can_redo);
+    }
+    editor.execute(Request::Redo).unwrap();
+    editor
+        .execute(Request::SetBackground {
+            color: Some("#123456".into()),
+        })
+        .unwrap();
+    editor
+        .execute(Request::SetBackground {
+            color: Some("#654321".into()),
+        })
+        .unwrap();
+    editor.execute(Request::Undo).unwrap();
+    assert!(editor.snapshot().can_redo);
+    let frame = editor.pixels();
+    let before = serde_json::to_value(editor.snapshot()).unwrap();
+    editor
+        .execute(background_brush(&[(1.5, 1.5)], "erase"))
+        .unwrap();
+    assert_eq!(serde_json::to_value(editor.snapshot()).unwrap(), before);
+    assert!(Arc::ptr_eq(&frame, &editor.pixels()));
+}
+
+#[test]
+fn background_brush_scales_radius_in_oriented_natural_pixels_and_keeps_first_target() {
+    let (data, id, original) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    let mut document = editor.snapshot().document.clone();
+    document.width = 9.;
+    document.height = 14.;
+    let Element::Image(image) = &mut document.elements[0] else {
+        panic!()
+    };
+    image.orientation = Some(ImageOrientation::Rotate90);
+    image.width = 9.;
+    image.height = 14.;
+    editor.execute(Request::Commit { document }).unwrap();
+    editor
+        .execute(
+            serde_json::from_value(json!({
+                "operation": "paint_image_background", "mode": "erase", "size": 6, "softness": 0,
+                "points": [{"x": 1.5, "y": 5}, {"x": -100, "y": 5}]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 37 })
+        .unwrap();
+    let Element::Image(image) = &editor.snapshot().document.elements[0] else {
+        panic!()
+    };
+    let asset = data
+        .path()
+        .join("drafts")
+        .join(&id)
+        .join("assets")
+        .join(format!(
+            "{}.png",
+            image.src.strip_prefix("draft-asset:").unwrap()
+        ));
+    let actual = image::open(asset).unwrap().to_rgba8();
+    // 90° swaps the displayed natural width to 3. A six-document-pixel brush
+    // on a nine-pixel-wide layer has radius 1, not 7/3. The seed is (2,2).
+    let mut expected = original;
+    for (x, y) in [(1, 1), (2, 1), (1, 2), (2, 2)] {
+        expected.put_pixel(x, y, Rgba([0; 4]));
+    }
+    assert_eq!(actual, expected);
+}
+
 #[test]
 fn wand_picks_front_visible_locked_image_without_modifying_hidden_or_underlying_images() {
     let (data, id, original) = setup();

@@ -20,6 +20,7 @@ use crate::{
         FreehandPathCreate, ImageElement, LayerEdit, OpenShapeCreate, OptionalNullable, Point,
         Rect, image_bounds,
     },
+    editor_image_background::{BrushMode, paint_stroke},
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS, render},
 };
 
@@ -66,6 +67,12 @@ pub enum Request {
         point: Point,
         tolerance: f64,
         contiguous: bool,
+    },
+    PaintImageBackground {
+        points: Vec<Point>,
+        size: f64,
+        softness: f64,
+        mode: BrushMode,
     },
     CreateClosedShape {
         #[serde(flatten)]
@@ -379,6 +386,88 @@ impl EditorSession {
         if changed == 0 {
             return Err("No matching pixels were found. Try a higher tolerance.".into());
         }
+        self.publish_image_background_edit(index, edited)
+    }
+
+    fn paint_image_background(
+        &mut self,
+        points: Vec<Point>,
+        size: f64,
+        softness: f64,
+        mode: BrushMode,
+    ) -> Result<(), String> {
+        if points.is_empty()
+            || points
+                .iter()
+                .any(|point| !point.x.is_finite() || !point.y.is_finite())
+            || !size.is_finite()
+            || size <= 0.
+            || !softness.is_finite()
+        {
+            return Err(
+                "Background brush requires finite sample coordinates, positive size, and finite softness."
+                    .into(),
+            );
+        }
+        let first = points[0];
+        let (index, image) = self
+            .history
+            .current()
+            .elements
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, element)| match element {
+                Element::Image(image)
+                    if image.base.visible && image.natural_pixel_at(first).is_some() =>
+                {
+                    Some((index, image))
+                }
+                _ => None,
+            })
+            .ok_or("Start the background brush inside a visible image layer.")?;
+        let samples: Vec<_> = points
+            .into_iter()
+            .filter_map(|point| image.natural_pixel_at(point))
+            .collect();
+        let current = self
+            .assets
+            .get(&image.src)
+            .ok_or("The editor image asset is unavailable.")?;
+        let original = match mode {
+            BrushMode::Erase => None,
+            BrushMode::Restore => {
+                let OptionalNullable::Value(source) = &image.original_src else {
+                    return Err("Restore requires a retained original image asset.".into());
+                };
+                Some(
+                    self.assets
+                        .get(source)
+                        .ok_or("The retained original image asset is unavailable.")?
+                        .as_ref(),
+                )
+            }
+        };
+        let displayed_natural_width = if image.resolved_orientation().matrix().a == 0 {
+            image.natural_height
+        } else {
+            image.natural_width
+        };
+        let radius = (size * displayed_natural_width / image.width.max(1.) * 0.5).max(1.);
+        let hardness = 1. - softness.clamp(0., 100.) / 100.;
+        let mut edited = (**current).clone();
+        let changed = paint_stroke(&mut edited, original, &samples, radius, hardness, mode)?;
+        if changed == 0 {
+            return Ok(());
+        }
+        self.publish_image_background_edit(index, edited)
+    }
+
+    fn publish_image_background_edit(
+        &mut self,
+        index: usize,
+        edited: RgbaImage,
+    ) -> Result<(), String> {
         validate_import_dimensions(
             edited.width(),
             edited.height(),
@@ -420,6 +509,12 @@ impl EditorSession {
             } => {
                 return self.remove_image_background(point, tolerance, contiguous);
             }
+            Request::PaintImageBackground {
+                points,
+                size,
+                softness,
+                mode,
+            } => return self.paint_image_background(points, size, softness, mode),
             edit => edit,
         };
         let mut next = self.history.clone();
@@ -427,7 +522,8 @@ impl EditorSession {
             Request::Snapshot
             | Request::SaveDraft { .. }
             | Request::DiscardDraft
-            | Request::RemoveImageBackground { .. } => unreachable!(),
+            | Request::RemoveImageBackground { .. }
+            | Request::PaintImageBackground { .. } => unreachable!(),
             Request::Undo => {
                 next.undo();
             }
