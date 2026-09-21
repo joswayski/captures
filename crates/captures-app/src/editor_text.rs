@@ -218,8 +218,8 @@ fn estimate(text: &str, size: f64) -> Result<f64, String> {
     Ok(text.encode_utf16().count().max(1) as f64 * size * 0.56)
 }
 
-fn interaction_pad(element: &TextElement, size: f64) -> Point {
-    let shadow = annotation_drop_shadow_pad(&ElementStyle {
+pub(crate) fn shadow_style(element: &TextElement, size: f64) -> ElementStyle {
+    ElementStyle {
         color: element.color.clone(),
         fill: None,
         stroke_width: (size * 0.22).max(4.),
@@ -227,7 +227,11 @@ fn interaction_pad(element: &TextElement, size: f64) -> Point {
         drop_shadow: element.drop_shadow,
         drop_shadow_style: element.drop_shadow_style.clone(),
         extra: Default::default(),
-    });
+    }
+}
+
+fn interaction_pad(element: &TextElement, size: f64) -> Point {
+    let shadow = annotation_drop_shadow_pad(&shadow_style(element, size));
     let plate = element
         .background
         .as_deref()
