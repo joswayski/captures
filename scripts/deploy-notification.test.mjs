@@ -43,13 +43,17 @@ done
       const result = spawnSync('bash', ['-c', script], { env, encoding: 'utf8' })
       assert.equal(result.status, 0, result.stderr)
       const payload = JSON.parse(readFileSync(env.PAYLOAD_FILE, 'utf8'))
-      assert.equal(payload.embeds[0].title, `Captures ${component} image is ready`)
+      assert.equal(payload.embeds[0].author.name, `Captures ${component} image is ready`)
+      assert.equal(payload.embeds[0].title, 'Fix connection')
+      assert.deepEqual(
+        payload.embeds[0].fields.map(({ name }) => name),
+        ['Description', 'Git SHA', 'Digest'],
+      )
       const [deploy, github] = payload.components[0].components
       assert.equal(deploy.label, `Deploy Captures ${component}`)
       assert.equal(deploy.custom_id, `production-deploy:v1:${slug}:${sha}`)
       assert.equal(github.url, url)
       assert.equal(payload.embeds[0].fields.find(f => f.name === 'Digest').value, `\`${digest}\``)
-      assert.equal(payload.embeds[0].fields.find(f => f.name === 'Title').value, 'Fix connection')
       rmSync(env.PAYLOAD_FILE)
       const skipped = spawnSync('bash', ['-c', script], {
         env: { ...env, DEPLOY_NOTIFICATION_WEBHOOK_URL: '' }, encoding: 'utf8',
