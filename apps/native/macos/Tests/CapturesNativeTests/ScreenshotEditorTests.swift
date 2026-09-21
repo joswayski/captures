@@ -142,6 +142,8 @@ final class ScreenshotEditorTests: XCTestCase {
             try showOutput(in: controller.root)
             try button("Replace original…", in: controller.root).performClick(nil)
             let sheet = try XCTUnwrap(controller.window.attachedSheet)
+            settle(sheet)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
             let content = try XCTUnwrap(sheet.contentView)
             let buttons = descendants(in: content).compactMap { $0 as? NSButton }
             XCTAssertTrue(buttons.contains { $0.title == "Replace" })
@@ -149,6 +151,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertTrue(worker.originalSaves.isEmpty)
             try render(content, name: "screenshot-editor-replace-confirm-\(appearance)")
             controller.window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+            sheet.orderOut(nil)
             XCTAssertTrue(worker.originalSaves.isEmpty)
         }
     }
