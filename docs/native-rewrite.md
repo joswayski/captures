@@ -226,7 +226,13 @@ characters are rejected by the single-line shaper, not silently omitted.
 Text bitmaps have a shared 16,777,216-pixel budget across the visible document,
 in addition to individual line budgets. Missing fonts/glyphs, invalid styles and
 budget failures return errors without changing the document or assets. Text outlines
-and shadows remain explicit unsupported cases. Text and plate paints now share the
+and shadows remain explicit unsupported cases. The lower-level bitmap compositor
+now supports a shadow/source pass using transformed pixel alpha, layer opacity,
+canvas-space offsets, blur and blend mode. Shadow work is clipped to output plus
+blur support; existing vector shadow/crisp passes are unchanged. This is a text
+shadow prerequisite only: paragraph paint ordering, commands and both hosts are
+not connected yet, and legacy `Shape::Text` shadows remain unsupported.
+Text and plate paints now share the
 shipping selection pivot for rotation, including when estimated wrapping differs
 from actual glyph layout. Shared selection/hit testing, move snapping, Trim and
 resize accept text geometry. Fixed-width side drags reflow without changing type
