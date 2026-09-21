@@ -218,7 +218,9 @@ fn estimate(text: &str, size: f64) -> Result<f64, String> {
     Ok(text.encode_utf16().count().max(1) as f64 * size * 0.56)
 }
 
-pub(crate) fn shadow_style(element: &TextElement, size: f64) -> ElementStyle {
+/// Project text onto the shared annotation shadow rules. `size` may be the
+/// candidate font size during a resize, rather than the authored size.
+pub fn shadow_style(element: &TextElement, size: f64) -> ElementStyle {
     ElementStyle {
         color: element.color.clone(),
         fill: None,
