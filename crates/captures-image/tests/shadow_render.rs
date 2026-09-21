@@ -47,6 +47,144 @@ fn solid_document(width: u32, height: u32, background: [u8; 4], layer: Layer) ->
     }
 }
 
+fn bitmap_layer() -> Layer {
+    let mut pixels = RgbaImage::new(4, 3);
+    pixels.put_pixel(0, 0, Rgba([255, 0, 0, 255]));
+    pixels.put_pixel(2, 1, Rgba([0, 255, 0, 128]));
+    pixels.put_pixel(3, 0, Rgba([0, 0, 255, 0]));
+    Layer {
+        id: 7,
+        shape: Shape::Image {
+            origin: Point { x: 7., y: 9. },
+            width: 4.,
+            height: 3.,
+            pixels: Arc::new(pixels),
+        },
+        color: [255, 255, 255, 128],
+        fill: None,
+        stroke_width: 0.,
+        rotation_degrees: 0.,
+        rotation_origin: Some(Point { x: 7., y: 9. }),
+        blend_mode: BlendMode::Normal,
+    }
+}
+
+#[test]
+fn bitmap_shadow_uses_pixel_alpha_and_opacity_without_repainting_the_source() {
+    let shadow = DropShadow {
+        color: [0, 0, 255, 128],
+        blur: 0.,
+        offset_x: 11.,
+        offset_y: -4.,
+    };
+    let document = solid_document(32, 24, [0; 4], bitmap_layer());
+    let rendered = render_with_shadows(&document, &BTreeMap::from([(7, shadow)])).unwrap();
+    // Intrinsic alpha × layer opacity; a second crisp pass would produce 192/112.
+    assert_eq!(rendered.get_pixel(7, 9).0, [255, 0, 0, 128]);
+    assert_eq!(rendered.get_pixel(9, 10).0, [0, 255, 0, 64]);
+    // Shadow alpha multiplies the already-opacity-weighted coverage once more.
+    assert_eq!(rendered.get_pixel(18, 5).0, [0, 0, 255, 64]);
+    assert_eq!(rendered.get_pixel(20, 6).0, [0, 0, 255, 32]);
+    assert_eq!(
+        rendered.get_pixel(21, 5).0,
+        [0; 4],
+        "invisible RGB casts no shadow"
+    );
+    assert_eq!(rendered.pixels().filter(|p| p[3] != 0).count(), 4);
+    assert!(document.source.pixels().all(|p| p.0 == [0; 4]));
+}
+
+#[test]
+fn bitmap_shadow_rotates_source_about_custom_pivot_but_offsets_in_canvas_space() {
+    let mut layer = bitmap_layer();
+    layer.rotation_degrees = 90.;
+    let shadow = DropShadow {
+        color: [0, 0, 255, 128],
+        blur: 0.,
+        offset_x: 11.,
+        offset_y: -4.,
+    };
+    let rendered = render_with_shadows(
+        &solid_document(32, 24, [0; 4], layer),
+        &BTreeMap::from([(7, shadow)]),
+    )
+    .unwrap();
+    assert_eq!(rendered.get_pixel(6, 9).0, [255, 0, 0, 128]);
+    assert_eq!(rendered.get_pixel(5, 11).0, [0, 255, 0, 64]);
+    assert_eq!(rendered.get_pixel(17, 5).0, [0, 0, 255, 64]);
+    assert_eq!(rendered.get_pixel(16, 7).0, [0, 0, 255, 32]);
+    assert_eq!(rendered.pixels().filter(|p| p[3] != 0).count(), 4);
+}
+
+#[test]
+fn bitmap_shadow_retains_off_canvas_sources_and_uses_the_layer_blend_mode() {
+    let mut layer = bitmap_layer();
+    if let Shape::Image { origin, .. } = &mut layer.shape {
+        origin.x = -6.;
+    }
+    layer.blend_mode = BlendMode::Multiply;
+    let shadow = DropShadow {
+        color: [255, 0, 255, 255],
+        blur: 0.,
+        offset_x: 8.,
+        offset_y: -4.,
+    };
+    let rendered = render_with_shadows(
+        &solid_document(16, 20, [100, 200, 80, 255], layer),
+        &BTreeMap::from([(7, shadow)]),
+    )
+    .unwrap();
+    // The red source is entirely clipped, but its half-opacity magenta shadow
+    // multiplies the opaque backdrop at x=2, y=5 (not a source-over magenta patch).
+    assert_eq!(rendered.get_pixel(2, 5).0, [100, 100, 80, 255]);
+    assert_eq!(rendered.get_pixel(4, 6).0, [100, 150, 80, 255]);
+    assert_eq!(rendered.get_pixel(5, 5).0, [100, 200, 80, 255]);
+}
+
+#[test]
+fn bitmap_shadow_scales_blurs_and_bounds_work_by_the_output_not_authored_size() {
+    let mut layer = bitmap_layer();
+    if let Shape::Image {
+        origin,
+        width,
+        height,
+        pixels,
+    } = &mut layer.shape
+    {
+        *origin = Point {
+            x: -10_000_000.,
+            y: -10_000_000.,
+        };
+        *width = 20_000_020.;
+        *height = 20_000_020.;
+        *pixels = Arc::new(RgbaImage::from_pixel(2, 3, Rgba([255, 0, 0, 255])));
+    }
+    layer.color[3] = 0; // Invisible source must not cast a shadow.
+    let shadow = DropShadow {
+        color: [0, 0, 255, 255],
+        blur: 4.,
+        offset_x: 2.,
+        offset_y: -3.,
+    };
+    let mut document = solid_document(8, 6, [0; 4], layer);
+    let hidden = render_with_shadows(&document, &BTreeMap::from([(7, shadow)])).unwrap();
+    assert!(hidden.pixels().all(|p| p[3] == 0));
+    document.layers[0].color[3] = 128;
+    let rendered = render_with_shadows(&document, &BTreeMap::from([(7, shadow)])).unwrap();
+    // Uniform huge coverage: half-red source over half-blue shadow, not clipped
+    // to the source image dimensions or to the output before blur/offset.
+    for pixel in rendered.pixels() {
+        for (actual, expected) in pixel.0.into_iter().zip([170, 0, 85, 192]) {
+            assert!(actual.abs_diff(expected) <= 1, "{pixel:?}");
+        }
+    }
+    let invalid = DropShadow {
+        blur: f32::NAN,
+        ..shadow
+    };
+    assert!(render_with_shadows(&document, &BTreeMap::from([(7, invalid)])).is_err());
+}
+
 fn reference_cases() -> Vec<ReferenceCase> {
     let zero_blur = rounded_layer(
         (Point { x: 22.0, y: 18.0 }, 42.0, 27.0, 5.0),

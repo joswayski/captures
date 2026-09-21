@@ -791,6 +791,7 @@ fn push_rounded_rectangle(path: &mut PathBuilder, rect: tiny_skia::Rect, radius:
 enum ShadowPaint<'a> {
     Fill(&'a Path),
     Stroke(&'a Path, &'a Stroke),
+    Bitmap(&'a Pixmap),
 }
 
 fn expanded(bounds: Bounds, amount: f32) -> Bounds {
@@ -869,6 +870,23 @@ fn draw_shadow(
                 .ok_or("Drop shadow stroke is too large")?;
             mask.fill_path(&outline, FillRule::Winding, true, local_transform);
         }
+        ShadowPaint::Bitmap(source) => {
+            let mut raster = Pixmap::new(width, height).ok_or("Drop shadow raster is too large")?;
+            raster.draw_pixmap(
+                0,
+                0,
+                source.as_ref(),
+                &tiny_skia::PixmapPaint {
+                    quality: tiny_skia::FilterQuality::Bilinear,
+                    ..Default::default()
+                },
+                local_transform,
+                None,
+            );
+            for (coverage, pixel) in mask.data_mut().iter_mut().zip(raster.pixels()) {
+                *coverage = pixel.alpha();
+            }
+        }
     }
     for coverage in mask.data_mut() {
         *coverage = ((u16::from(*coverage) * u16::from(source_alpha) + 127) / 255) as u8;
@@ -945,7 +963,7 @@ fn draw_layer(
     };
     if let Some(shadow) = shadow {
         shadow.validate(layer.id)?;
-        if matches!(layer.shape, Shape::Image { .. } | Shape::Text { .. }) {
+        if matches!(layer.shape, Shape::Text { .. }) {
             return Err(format!("Layer {} cannot render a drop shadow", layer.id));
         }
     }
@@ -965,6 +983,22 @@ fn draw_layer(
                 tiny_skia::ColorU8::from_rgba(source[0], source[1], source[2], source[3])
                     .premultiply();
         }
+        let transform = Transform::from_scale(
+            *width / pixels.width() as f32,
+            *height / pixels.height() as f32,
+        )
+        .post_translate(origin.x, origin.y)
+        .post_concat(transform);
+        if let Some(shadow) = shadow.copied() {
+            draw_shadow(
+                canvas,
+                layer,
+                transform,
+                ShadowPaint::Bitmap(&bitmap),
+                layer.color[3],
+                shadow,
+            )?;
+        }
         canvas.draw_pixmap(
             0,
             0,
@@ -974,12 +1008,7 @@ fn draw_layer(
                 quality: tiny_skia::FilterQuality::Bilinear,
                 blend_mode: layer.blend_mode.raster(),
             },
-            Transform::from_scale(
-                *width / pixels.width() as f32,
-                *height / pixels.height() as f32,
-            )
-            .post_translate(origin.x, origin.y)
-            .post_concat(transform),
+            transform,
             None,
         );
         return Ok(());
@@ -1192,6 +1221,10 @@ pub fn render(document: &Document) -> Result<RgbaImage, String> {
 /// Shadows are supported for vector shape/path layers. Each fill and stroke is
 /// painted with its shadow and source first, then painted once more without the
 /// shadow to preserve the shipping editor's operation order.
+/// Bitmap layers support a single shadow/source pass, using transformed pixel
+/// alpha and layer opacity. Callers composing text can append their crisp glyph
+/// passes after all shadowed lines; the bitmap itself is not painted twice here.
+/// Legacy `Shape::Text` remains unsupported for shadows.
 pub fn render_with_shadows(
     document: &Document,
     shadows: &BTreeMap<u64, DropShadow>,
@@ -1212,7 +1245,7 @@ pub fn render_with_shadows(
         layer.validate()?;
         if let Some(shadow) = shadows.get(&layer.id) {
             shadow.validate(layer.id)?;
-            if matches!(layer.shape, Shape::Image { .. } | Shape::Text { .. }) {
+            if matches!(layer.shape, Shape::Text { .. }) {
                 return Err(format!("Layer {} cannot render a drop shadow", layer.id));
             }
         }
