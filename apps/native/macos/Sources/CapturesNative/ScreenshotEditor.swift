@@ -782,7 +782,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("editor-layer"))
         column.width = 252; layerTable.addTableColumn(column); layerTable.headerView = nil
         layerTable.rowHeight = 32; layerTable.dataSource = self; layerTable.delegate = self
-        layerTable.allowsEmptySelection = false; layerTable.setAccessibilityLabel("Screenshot layers")
+        layerTable.allowsEmptySelection = true; layerTable.setAccessibilityLabel("Screenshot layers")
         scroll.documentView = layerTable; layerContent.addSubview(scroll)
 
         panelFieldLabel("Name", x: 0, y: 112, parent: layerContent)

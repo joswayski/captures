@@ -8,6 +8,7 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -618,11 +619,17 @@ def main():
         click(editor, 260, 200)  # Empty point before the unlocked copy clears selection.
         assert draft.read_bytes() == canvas_before
         drag((591, 277), (631, 307))
+        # A 1000-point window leaves 754 points after the 230-point sidebar
+        # and the canvas's two 8-point margins. The 640px image fits that width.
+        expected_position = (190 + 40 * 640 / 754, 70 + 30 * 640 / 754)
         moved_canvas = save_layers(
-            lambda values: values[-1]["x"] > 220 and values[-1]["y"] > 90,
+            lambda values: all(math.isclose(values[-1][axis], expected, abs_tol=1e-5)
+                               for axis, expected in zip(("x", "y"), expected_position)),
             "canvas drag moved duplicate")[-1]
         assert moved_canvas["id"] == copy_id
         shot(editor, "layers-canvas-moved-selection")
+        pixel("layers-canvas-moved-selection", 591, 277, (40, 110, 166))
+        pixel("layers-canvas-moved-selection", 631, 307, (229, 179, 68))
         click(editor, 35, 62)
         save_layers(lambda values: (values[-1]["x"], values[-1]["y"]) == (190, 70),
                     "undo canvas move")

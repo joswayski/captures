@@ -1247,6 +1247,11 @@ fn show_layer_canvas(
                         Err(error) => view.error = Some(error),
                     }
                 }
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    pressed: true,
+                    ..
+                } => view.cancel_layer_gesture(),
                 egui::Event::PointerMoved(pos) => {
                     if let Some(gesture) = &mut view.layer_gesture {
                         gesture.current = image_point(pos, preview, bounds);
@@ -2296,6 +2301,22 @@ mod tests {
         view.cancel_layer_gesture();
         frame(&mut view, vec![button(egui::pos2(120., 110.), false)]);
         assert!(rx.try_recv().is_err() && view.selected_layer.is_none());
+
+        frame(
+            &mut view,
+            vec![
+                button(inside, true),
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                button(egui::pos2(140., 130.), false),
+            ],
+        );
+        assert!(rx.try_recv().is_err() && view.selected_layer.is_none() && !view.pending);
 
         frame(&mut view, vec![button(inside, true)]);
         frame(
