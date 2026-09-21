@@ -123,9 +123,9 @@ final class NativeEditorResizeDrag {
         let guideCount = output.guide_count
         let guides = withUnsafePointer(to: &output.guides) {
             $0.withMemoryRebound(to: CapturesEditorAlignmentGuide.self, capacity: 4) {
-                Array(UnsafeBufferPointer(start: $0, count: guideCount)).compactMap {
-                    guard let orientation = NativeEditorAlignmentGuide.Orientation(rawValue: $0.orientation) else { return nil }
-                    return NativeEditorAlignmentGuide(orientation: orientation, position: $0.position)
+                Array(UnsafeBufferPointer(start: $0, count: guideCount)).compactMap { guide -> NativeEditorAlignmentGuide? in
+                    guard let orientation = NativeEditorAlignmentGuide.Orientation(rawValue: guide.orientation) else { return nil }
+                    return NativeEditorAlignmentGuide(orientation: orientation, position: guide.position)
                 }
             }
         }
