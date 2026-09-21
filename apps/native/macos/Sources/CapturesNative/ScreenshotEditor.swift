@@ -2139,8 +2139,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private var fittedImageRect: NSRect {
         guard viewportCanvasSize.width > 0, viewportCanvasSize.height > 0 else { return .zero }
-        let scale = min(viewportBounds.width / viewportCanvasSize.width,
-                        viewportBounds.height / viewportCanvasSize.height)
+        // Match Tauri's 2–100% Fit range; manual zoom has its own 5–800% range.
+        let scale = min(1, max(0.02, viewportBounds.width / viewportCanvasSize.width),
+                        max(0.02, viewportBounds.height / viewportCanvasSize.height))
         let size = NSSize(width: viewportCanvasSize.width * scale,
                           height: viewportCanvasSize.height * scale)
         return NSRect(x: (viewportBounds.width - size.width) / 2,

@@ -898,6 +898,16 @@ def main():
         assert not draft.exists(), "toolbar zoom must remain outside draft state"
         click(editor, 590, 18)  # Fit also cancels any viewport gesture and restores coordinates.
         if args.zoom_only:
+            # With spare width AND height, Fit keeps the 640×360 source at 1×.
+            # An uncapped fit would paint beyond both independently checked edges.
+            run("xdotool", "windowsize", "--sync", editor, "1180", "900", "sleep", ".3")
+            shot(editor, "viewport-fit-no-upscale")
+            surface = (245, 245, 247) if args.appearance == "light" else (16, 16, 20)
+            pixel("viewport-fit-no-upscale", 877, 100, (40, 110, 166))
+            pixel("viewport-fit-no-upscale", 878, 100, surface)
+            pixel("viewport-fit-no-upscale", 250, 448, (40, 110, 166))
+            pixel("viewport-fit-no-upscale", 250, 449, surface)
+            assert not draft.exists(), "Fit resizing must not create a draft"
             run("xdotool", "windowsize", "--sync", editor, "760", "540",
                 "key", "ctrl+0", "ctrl+equal", "ctrl+equal", "sleep", ".3")
             shot(editor, "viewport-preset-custom-minimum")
@@ -914,7 +924,7 @@ def main():
                            "viewport-keyboard-actual-and-step-pixels", "viewport-field-key-no-draft",
                            "viewport-presets-50-200-pixels", "viewport-custom-preset-menu",
                            "viewport-preset-fit-no-draft", "viewport-reselect-fit-clears-pan",
-                           "viewport-custom-menu-minimum"],
+                           "viewport-fit-no-upscale", "viewport-custom-menu-minimum"],
             }, indent=2) + "\n")
             print("PASS native zoom: wheel, pan, toolbar, keyboard, presets, custom zoom, focused field, no draft")
             return
@@ -1156,8 +1166,8 @@ def main():
         assert not imported_layer["locked"] and imported_layer["visible"] and imported_layer["opacity"] == 100
         assert saved(640, 440, 0, 0)
         shot(editor, "imported-canvas")
-        pixel("imported-canvas", 568, 537, (60, 179, 113))
-        pixel("imported-canvas", 674, 584, (45, 100, 189))
+        pixel("imported-canvas", 523, 468, (60, 179, 113))
+        pixel("imported-canvas", 600, 514, (45, 100, 189))
         click(editor, 463, 62)
         run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "25", "4")
         shot(editor, "imported-selected-layer")
@@ -1182,14 +1192,15 @@ def main():
 
         click(editor, 100, 158)  # Redo retained the original's selection; pick the imported row.
         resize_before = draft.read_bytes()
-        run("xdotool", "mousemove", "--sync", "--window", editor, "685", "560",
+        run("xdotool", "mousemove", "--sync", "--window", editor, "617", "489",
             "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
-            "720", "560", "sleep", ".3")
+            "653", "489", "sleep", ".3")
         shot(editor, "layer-resize-active-guides")
         assert draft.read_bytes() == resize_before, "resize preview must remain transient"
         run("xdotool", "mouseup", "1", "sleep", ".3")
-        # Resize follows the final absolute pointer, not the rounded press pixel.
-        resized_width = (720 - 238) * 640 / 754 - 260
+        # Fit stays at 1×. Resize follows the absolute pointer, not the press
+        # one point inside the grip (adding the raw delta would give 156).
+        resized_width = 653 - 238 - 260
         resized = save_layers(
             lambda values: math.isclose(values[-1]["width"], resized_width, abs_tol=1e-5)
             and values[-1]["height"] == 80 and values[-1]["x"] == 260,
@@ -1197,14 +1208,13 @@ def main():
         assert resized["id"] == imported_id
         shot(editor, "layer-resize-committed")
         # Independently scale the fixture's green center (25,19) from its left edge.
-        resized_green = (round(238 + (260 + 25 * resized_width / 120) * 754 / 640),
-                         round(89 + (360 + 19) * 754 / 640))
+        resized_green = (round(238 + 260 + 25 * resized_width / 120), 89 + 360 + 19)
         pixel("layer-resize-committed", *resized_green, (60, 179, 113))
         click(editor, 35, 62)
         save_layers(lambda values: values[-1]["width"] == 120 and values[-1]["height"] == 80,
                     "undo imported image resize")
         shot(editor, "layer-resize-undone")
-        pixel("layer-resize-undone", 568, 537, (60, 179, 113))
+        pixel("layer-resize-undone", 523, 468, (60, 179, 113))
         click(editor, 98, 62)
         save_layers(lambda values: math.isclose(values[-1]["width"], resized_width, abs_tol=1e-5),
                     "redo imported image resize")
@@ -1226,18 +1236,18 @@ def main():
                     "restore imported size after draft reopen")
         run("xdotool", "windowsize", "--sync", editor, "1000", "700", "sleep", ".3")
 
-        # At 1.178125 scale the 120x80 image's grip is near (615,485), around
-        # pivot (615,560). Start five points above the grip, within its hit radius.
+        # At 1× the 120x80 image's grip is (558,425), around pivot (558,489).
+        # Start five points above the grip, within its hit radius.
         # Exercise a free-angle transient first; Escape must leave draft/pixels intact.
         rotation_before = draft.read_bytes()
-        run("xdotool", "mousemove", "--sync", "--window", editor, "615", "480",
+        run("xdotool", "mousemove", "--sync", "--window", editor, "558", "420",
             "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
-            "650", "460", "sleep", ".3")
+            "593", "400", "sleep", ".3")
         shot(editor, "layer-rotation-free-transient")
         run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
         assert draft.read_bytes() == rotation_before
-        # Vector (0,-80) to (45,-95) is 25.35 degrees, snapping to 30 degrees.
-        drag((615, 480), (660, 465), shift=True)
+        # Vector (0,-69) to (39,-79) is 26.27 degrees, snapping to 30 degrees.
+        drag((558, 420), (597, 410), shift=True)
         rotated = save_layers(
             lambda values: math.isclose(values[-1].get("rotation", 0), math.pi / 6,
                                         abs_tol=1e-12),
@@ -1248,14 +1258,13 @@ def main():
         angle = math.pi / 6
         expected_x = 260 + 60 + (-35 * math.cos(angle) - -21 * math.sin(angle))
         expected_y = 360 + 40 + (-35 * math.sin(angle) + -21 * math.cos(angle))
-        expected_screen = (round(238 + expected_x * 754 / 640),
-                           round(89 + expected_y * 754 / 640))
-        assert expected_screen == (592, 518)
+        expected_screen = (round(238 + expected_x), round(89 + expected_y))
+        assert expected_screen == (538, 453)
         pixel("layer-rotation-shift-result", *expected_screen, (60, 179, 113))
         click(editor, 35, 62)
         save_layers(lambda values: "rotation" not in values[-1], "undo imported image rotation")
         shot(editor, "layer-rotation-undone")
-        pixel("layer-rotation-undone", 568, 537, (60, 179, 113))
+        pixel("layer-rotation-undone", 523, 468, (60, 179, 113))
         click(editor, 98, 62)
         save_layers(lambda values: math.isclose(values[-1].get("rotation", 0), math.pi / 6,
                                                 abs_tol=1e-12),
@@ -1376,13 +1385,12 @@ def main():
         # canvas/background layer edge while retaining the asymmetric raw Y move.
         run("xdotool", "mousemove", "--sync", "--window", editor, "591", "277",
             "sleep", ".2", "mousedown", "1", "sleep", ".2", "mousemove", "--sync",
-            "--window", editor, "367", "307", "sleep", ".3")
+            "--window", editor, "407", "307", "sleep", ".3")
         shot(editor, "layers-canvas-snapped-guides")
         assert draft.read_bytes() == canvas_before
         run("xdotool", "mouseup", "1", "sleep", ".2")
-        # A 1000-point window leaves 754 points after the 230-point sidebar
-        # and the canvas's two 8-point margins. The 640px image fits that width.
-        expected_position = (0, 70 + 30 * 640 / 754)
+        # Fit leaves the 640px image at 1×. Raw x=6 snaps to zero; Y stays exact.
+        expected_position = (0, 100)
         moved_canvas = save_layers(
             lambda values: all(math.isclose(values[-1][axis], expected, abs_tol=1e-5)
                                for axis, expected in zip(("x", "y"), expected_position)),
@@ -1586,7 +1594,7 @@ def main():
         run("xdotool", "windowsize", "--sync", editor, "1000", "700")
         save(360, 240, -40, -30)
         shot(editor, "editor-cropped")
-        pixel("editor-cropped", 900, 400, (40, 110, 166))
+        pixel("editor-cropped", 538, 299, (40, 110, 166))
         pixel("editor-cropped", 350, 200, (229, 179, 68))
         click(editor, 35, 62)  # Undo
         save(640, 360, 0, 0)
@@ -1597,21 +1605,21 @@ def main():
         click(editor, 58, 516)
         save(480, 300, -40, -30)
         shot(editor, "editor-resized")
-        pixel("editor-resized", 900, 400, (46, 158, 113))
+        pixel("editor-resized", 658, 289, (46, 158, 113))
 
         saved_draft = draft.read_bytes()
         run("xdotool", "windowsize", "--sync", editor, "1000", "900")
         click(editor, 535, 62)  # Output: encode the edited frame, not History PNG.
         click(editor, 65, 463)
         shot(editor, "output-png")
-        pixel("output-png", 500, 200, (229, 179, 68))
-        pixel("output-png", 900, 400, (46, 158, 113))
+        pixel("output-png", 350, 200, (229, 179, 68))
+        pixel("output-png", 658, 289, (46, 158, 113))
         click(editor, 20, 371)  # PNG Compress with an explicit palette.
         click(editor, 20, 503)
         field(547, 4)
         click(editor, 65, 595)
         shot(editor, "output-png-palette")
-        pixel("output-png-palette", 900, 400, (46, 158, 113))
+        pixel("output-png-palette", 658, 289, (46, 158, 113))
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "8", "5")
         shot(editor, "output-palette-minimum-scrolled")
@@ -1621,15 +1629,15 @@ def main():
         click(editor, 20, 371)  # Compress.
         click(editor, 65, 507)
         shot(editor, "output-jpeg")
-        pixel("output-jpeg", 900, 400, (46, 158, 113), tolerance=4)
+        pixel("output-jpeg", 658, 289, (46, 158, 113), tolerance=4)
         click(editor, 65, 579)  # Edited canvas comparison.
         shot(editor, "output-edited-canvas")
-        pixel("output-edited-canvas", 900, 400, (46, 158, 113))
+        pixel("output-edited-canvas", 658, 289, (46, 158, 113))
         click(editor, 65, 622)  # Encoded output comparison.
         click(editor, 150, 256)  # WebP, still Compress.
         click(editor, 65, 507)
         shot(editor, "output-webp")
-        pixel("output-webp", 900, 400, (46, 158, 113), tolerance=4)
+        pixel("output-webp", 658, 289, (46, 158, 113), tolerance=4)
         click(editor, 20, 415)  # Maximum file size enables the hard cap.
         field(459, 0)
         click(editor, 65, 507)
@@ -1641,7 +1649,7 @@ def main():
         click(editor, 20, 354)  # Preserve clears the failed budget (error adds 27px).
         click(editor, 65, 490)  # Retry clears error without persisting a draft.
         shot(editor, "output-retry")
-        pixel("output-retry", 900, 400, (46, 158, 113))
+        pixel("output-retry", 658, 289, (46, 158, 113))
         assert draft.read_bytes() == saved_draft, "preview must not write a draft"
         assert not (output / "exports").exists(), "preview must not publish files"
 
@@ -1732,7 +1740,7 @@ def main():
         assert run("xclip", "-selection", "clipboard", "-t", "image/png", "-o") == copied, "workspace retains clipboard after editor closes"
         editor = reopen()
         shot(editor, "editor-reopened")
-        pixel("editor-reopened", 900, 400, (46, 158, 113))
+        pixel("editor-reopened", 658, 289, (46, 158, 113))
         field(428, 510)
         click(editor, 58, 516)
         close(editor)
