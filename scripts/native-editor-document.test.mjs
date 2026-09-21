@@ -8,6 +8,7 @@ import {
   createScreenshotDocument,
   cropDragAspectRatio,
   cropDocument,
+  collectAlignmentSnapLines,
   duplicateScreenshotElement,
   elementBounds,
   elementLocalBounds,
@@ -18,13 +19,21 @@ import {
   elementWorldPoint,
   expandDocumentToFitBounds,
   hitTestElement,
+  hitTestResizeHandle,
   isFullyOutsideCanvas,
+  elementLocalPoint,
+  oppositeResizeHandle,
+  resizeBoundsFromHandle,
+  resizeElement,
+  resizeHandlePoint,
   reorderScreenshotLayers,
   resizeDocumentCanvas,
+  snapResizedBounds,
   snapShapeRotation,
   transformImageElement,
   translateElement,
   withElementRotation,
+  preserveElementWorldPoint,
 } from '../apps/desktop/ui/src/lib/screenshotEditor.ts';
 
 const directory = new URL('../crates/captures-app/tests/', import.meta.url);
@@ -323,6 +332,187 @@ function historyCases() {
   return { initial, operations, expected };
 }
 
+function resizeOutline(element) {
+  const bounds = elementLocalBounds(element);
+  return [
+    { x: bounds.x, y: bounds.y },
+    { x: bounds.x + bounds.width, y: bounds.y },
+    { x: bounds.x + bounds.width, y: bounds.y + bounds.height },
+    { x: bounds.x, y: bounds.y + bounds.height },
+  ].map(point => elementWorldPoint(element, point));
+}
+
+function resizeOracle(input, id, handle, displayScale, current, lockAspect) {
+  const element = input.elements.find(candidate => candidate.id === id);
+  assert.ok(element);
+  const initialBounds = elementLocalBounds(element);
+  const minSize = 8 / Math.max(0.01, displayScale);
+  const threshold = 10 / Math.max(0.01, displayScale);
+  const pointer = elementLocalPoint(element, current);
+  const free = resizeBoundsFromHandle(
+    initialBounds, handle, pointer, minSize, lockAspect,
+  );
+  const lines = collectAlignmentSnapLines(input, id);
+  const snapped = elementRotation(element) !== 0
+    ? { bounds: free, guides: [] }
+    : snapResizedBounds(initialBounds, handle, free, lines, threshold, minSize);
+  const nextBounds = lockAspect
+    ? resizeBoundsFromHandle(
+      initialBounds, handle, resizeHandlePoint(snapped.bounds, handle), minSize, true,
+    )
+    : snapped.bounds;
+  let resized = resizeElement(element, initialBounds, nextBounds);
+  if (elementRotation(resized) !== 0) {
+    resized = preserveElementWorldPoint(
+      element, resized, resizeHandlePoint(initialBounds, oppositeResizeHandle(handle)),
+    );
+  }
+  let committed = {
+    ...input,
+    elements: input.elements.map(candidate => candidate.id === id ? resized : candidate),
+  };
+  const painted = elementBounds(resized);
+  if (isFullyOutsideCanvas(painted, committed)) {
+    committed = expandDocumentToFitBounds(committed, painted, 0);
+  }
+  return {
+    element: resized,
+    outline: resizeOutline(resized),
+    guides: snapped.guides,
+    committed,
+  };
+}
+
+function resizeCases() {
+  const image = {
+    ...document.elements[0], id: 'resize-image', visible: true, x: 61.25, y: 47.5,
+    width: 83.5, height: 46.25, orientation: 'rotate-90', futureResize: { keep: true },
+  };
+  const arrow = {
+    ...document.elements[2], id: 'resize-arrow', x: 52.25, y: 71.5,
+    endX: 174.75, endY: 112.25, controls: [{ x: 91.5, y: 31.75 }, { x: 139.25, y: 146.5 }],
+    style: { ...style, strokeWidth: 13.4 }, futureResize: ['arrow'],
+  };
+  const path = {
+    ...document.elements[3], id: 'resize-path', x: 44.5, y: 55.25,
+    points: [{ x: 44.5, y: 55.25 }, { x: 91.75, y: 128.5 }, { x: 157.25, y: 69.75 }],
+    style: { ...style, strokeWidth: 6.5 }, futureResize: { path: 1 },
+  };
+  const baseDocument = {
+    width: 300, height: 220, background: null, futureResizeDocument: true,
+    elements: [image],
+  };
+  const handles = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+  const hitBounds = elementLocalBounds(image);
+  const hitTests = [{
+    name: 'all eight asymmetric image handles plus miss',
+    element: image,
+    radius: 5.25,
+    queries: [
+      ...handles.map(handle => ({
+        point: elementWorldPoint(image, resizeHandlePoint(hitBounds, handle)),
+        expected: hitTestResizeHandle(hitBounds, resizeHandlePoint(hitBounds, handle), 5.25),
+      })),
+      { point: elementWorldPoint(image, { x: hitBounds.x + 20, y: hitBounds.y + 17 }), expected: null },
+    ],
+  }];
+  for (const rotation of [0, -0.67]) {
+    const element = { ...image, rotation };
+    const localPoints = [-0.125, 0.125].flatMap(offset => [
+      { x: hitBounds.x - 5.25 + offset, y: hitBounds.y },
+      { x: hitBounds.x + 21, y: hitBounds.y - 5.25 + offset },
+      { x: hitBounds.x + hitBounds.width + 5.25 + offset, y: hitBounds.y + 18 },
+      { x: hitBounds.x + 21, y: hitBounds.y + hitBounds.height + 5.25 + offset },
+    ]);
+    hitTests.push({ name: `corner and border boundaries at rotation ${rotation}`, element, radius: 5.25,
+      queries: localPoints.map(local => {
+        const point = elementWorldPoint(element, local);
+        return { point, expected: hitTestResizeHandle(hitBounds, elementLocalPoint(element, point), 5.25) };
+      }) });
+  }
+  const drags = [];
+  const add = (name, input, element, handle, current, lockAspect = false, displayScale = 1) => {
+    const oracle = resizeOracle(input, element.id, handle, displayScale, current, lockAspect);
+    drags.push({ name, input, id: element.id, handle, displayScale, current, lockAspect,
+      expected: { element: oracle.element, outline: oracle.outline, guides: oracle.guides },
+      committed: oracle.committed });
+  };
+
+  // Every handle gets asymmetric movement. Explicit Shift on an edge must still
+  // remain single-axis; only corners lock aspect ratio.
+  handles.forEach((handle, index) => {
+    const point = resizeHandlePoint(hitBounds, handle);
+    add(`asymmetric ${handle}`, baseDocument, image, handle,
+      { x: point.x + 17.25 - index * 2.1, y: point.y - 13.75 + index * 1.3 },
+      ['nw', 'ne', 'se', 'sw'].includes(handle));
+  });
+  add('edge shift remains single axis', baseDocument, image, 'e', { x: 193.25, y: 3.5 }, true);
+  add('crosses fixed anchor', baseDocument, image, 'nw', { x: 190.25, y: 137.75 });
+  add('minimum size at zoom', baseDocument, image, 'se', { x: 63, y: 49 }, false, 2);
+
+  const rotated = { ...image, id: 'rotated', rotation: 0.63, orientation: 'transverse' };
+  add('rotated corner preserves opposite world anchor', { ...baseDocument, elements: [rotated] },
+    rotated, 'ne', { x: 207.5, y: 29.25 }, true, 1.25);
+  add('rotated edge preserves opposite world anchor', { ...baseDocument, elements: [rotated] },
+    rotated, 's', { x: 117.5, y: 174.25 }, false, 0.8);
+
+  const orientations = [undefined, 'rotate-90', 'rotate-180', 'rotate-270',
+    'flip-horizontal', 'flip-vertical', 'transpose', 'transverse'];
+  orientations.forEach((orientation, index) => {
+    const d4 = { ...image, id: `d4-${index}` };
+    if (orientation === undefined) delete d4.orientation;
+    else d4.orientation = orientation;
+    const input = { ...baseDocument, elements: [d4] };
+    add(`D4 ${orientation ?? 'identity'}`, input, d4, handles[index],
+      { x: 35.25 + index * 19.5, y: 28.75 + index * 14.25 }, index % 2 === 0);
+  });
+
+  add('curved arrow scales controls and rounds clamped stroke', { ...baseDocument, elements: [arrow] },
+    arrow, 'se', { x: 81.25, y: 88.75 }, false);
+  add('one axis arrow enlargement retains fractional stroke', { ...baseDocument, elements: [arrow] },
+    arrow, 'e', { x: 250.25, y: 80.5 });
+  for (const kind of ['rectangle', 'ellipse']) {
+    const closed = { ...arrow, id: kind, shape: kind, controls: [], rotation: -0.47 };
+    add(`rotated ${kind} retains stroke padding`, { ...baseDocument, elements: [closed] },
+      closed, 'sw', { x: 63.25, y: 176.5 }, true);
+  }
+  add('path scales points but retains stroke', { ...baseDocument, elements: [path] },
+    path, 'w', { x: 11.25, y: 93.5 }, false);
+  const dot = { ...path, id: 'dot-path', x: 80.25, y: 60.5, points: [{ x: 80.25, y: 60.5 }] };
+  add('single point path', { ...baseDocument, elements: [dot] }, dot, 'se', { x: 128.5, y: 109.75 });
+  const empty = { ...path, id: 'empty-path', x: 80.25, y: 60.5, points: [] };
+  add('empty path', { ...baseDocument, elements: [empty] }, empty, 'nw', { x: 53.25, y: 44.75 });
+
+  const target = { ...image, id: 'target', x: 40, y: 50, width: 40, height: 30 };
+  const visible = { ...image, id: 'visible', x: 120, y: 100, width: 20, height: 20 };
+  const locked = { ...image, id: 'locked', x: 180, y: 140, width: 20, height: 15, locked: true };
+  const hidden = { ...image, id: 'hidden', x: 90, y: 80, width: 10, height: 10, visible: false };
+  const snapDocument = { ...baseDocument, width: 210, height: 180,
+    elements: [target, visible, locked, hidden] };
+  add('snap threshold inclusive and visible layer', snapDocument, target, 'se', { x: 110, y: 90 });
+  add('snap closest tie chooses later line', snapDocument, target, 'e', { x: 130, y: 65 });
+  add('canvas origin snapping', snapDocument,
+    target, 'nw', { x: 9.75, y: 9.75 }, false);
+  add('just outside snap threshold', snapDocument, target, 'se', { x: 109.875, y: 89.875 });
+  add('locked visible contributes', snapDocument, target, 'se', { x: 171, y: 131 });
+  add('hidden edges are excluded', snapDocument, target, 'se', { x: 99, y: 89 });
+
+  const outside = { ...image, id: 'outside', x: 100, y: 75, width: 30, height: 20 };
+  const partial = { ...outside, x: 20, y: 20 };
+  const sibling = { ...image, id: 'sibling', x: 2, y: 3, width: 5, height: 4, locked: true };
+  add('fully outside expands and translates siblings',
+    { ...baseDocument, width: 80, height: 60, elements: [sibling, outside] },
+    outside, 'se', { x: 145, y: 112 });
+  add('partial overlap remains clipped',
+    { ...baseDocument, width: 80, height: 60, elements: [sibling, partial] },
+    partial, 'nw', { x: -30, y: -20 });
+  const negative = { ...outside, x: -80, y: -60, width: 20, height: 10 };
+  add('negative outside resize translates siblings',
+    { ...baseDocument, width: 80, height: 60, elements: [sibling, negative] },
+    negative, 'nw', { x: -115, y: -90 });
+  return { hitTests, drags };
+}
+
 function shippingCases() {
   const elements = [...document.elements, { ...document.elements[0], id: 'above', visible: true }];
   const layers = {
@@ -349,6 +539,7 @@ function shippingCases() {
     openShapeCreations: openShapeCreationCases(),
     freehandCreations: freehandCreationCases(),
     hitTests: hitTestCases(),
+    resize: resizeCases(),
     rotations: rotationCases(),
     orientations: orientationCases(),
     layers,
@@ -867,6 +1058,10 @@ function fixtureText(cases) {
     `  "openShapeCreations": ${array(cases.openShapeCreations, '    ')},`,
     `  "freehandCreations": ${array(cases.freehandCreations, '    ')},`,
     `  "hitTests": ${array(cases.hitTests, '    ')},`,
+    '  "resize": {',
+    `    "hitTests": ${array(cases.resize.hitTests, '      ')},`,
+    `    "drags": ${array(cases.resize.drags, '      ')}`,
+    '  },',
     '  "rotations": {',
     `    "angles": ${array(cases.rotations.angles, '      ')},`,
     `    "handles": ${array(cases.rotations.handles, '      ')},`,
@@ -928,6 +1123,12 @@ if (process.argv.includes('--write')) {
     assert.ok(vectors.freehandCreations.some(entry => entry.request.points.length === 1));
     assert.ok(vectors.freehandCreations.some(entry => entry.request.points[0].x < 0));
     assert.ok(vectors.freehandCreations.some(entry => entry.expected.elements[0].x > entry.input.elements[0].x));
+    assert.equal(vectors.resize.hitTests[0].queries.length, 9);
+    assert.equal(vectors.resize.drags.length, 37);
+    assert.deepEqual(
+      new Set(vectors.resize.drags.slice(0, 8).map(entry => entry.handle)),
+      new Set(['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']),
+    );
     assert.ok(vectors.history.expected.some(entry => entry.undo === 100));
     assert.ok(vectors.history.expected.some(entry => entry.redo === 100));
     assert.equal(vectors.history.expected[0].changed, false);

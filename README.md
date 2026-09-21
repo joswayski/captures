@@ -329,9 +329,13 @@ The selected layer also exposes a **rotation grip** when it fits inside the imag
 Drag it to rotate; hold Shift for 15° stops. Rotation uses the same outline-only
 preview, cancellation, undo and draft behavior. Hidden or locked layers have no
 grip; custom snap increments are not connected yet.
+Eight border grips resize images, shapes and drawings. Shift keeps corner drags
+proportional; edge grips remain single-axis. Unrotated resizes snap to canvas and
+visible-layer edges with guide lines; rotated resizes retain the opposite anchor.
+Resizing uses an outline-only preview and commits on release.
 Windows, Wayland and physical AppKit presentation remain unverified.
 The native editor still uses a workbench layout, not the shipping Tauri editor design.
-Canvas resize handles, alignment snapping, pan/zoom, other drawing tools, text, overwrite-original, AppKit edited-image
+Move alignment snapping, pan/zoom, other drawing tools, text, overwrite-original, AppKit edited-image
 clipboard output, and recording editing remain unconnected. Shared editor support
 is prerequisite work, not native editor acceptance. OS shortcut takeover, login items,
 single-instance relaunch and updates

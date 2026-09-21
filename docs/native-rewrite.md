@@ -23,7 +23,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices | Audio meter/device-change parity, physical recording/audio acceptance, recording editor and transcoded exports |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation, import, image transforms, annotation styles, Rectangle/Ellipse/Line/Arrow/Pen and save-new-copy | Canvas resize/alignment-snap/pan/zoom, text/background/erase, remaining output controls and Tauri design parity; recording playback/timeline/editing/export |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, resize snapping, import, image transforms, annotation styles, Rectangle/Ellipse/Line/Arrow/Pen and save-new-copy | Move alignment snapping, pan/zoom, text/background/erase, remaining output controls and Tauri design parity; recording playback/timeline/editing/export |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -73,7 +73,18 @@ the document. Partial overflow remains clipped; fully outside rotated bounds exp
 the canvas. AppKit's C boundary is allocation-free, without per-event JSON or worker
 session access. TypeScript-oracle fixtures check angles, grip placement, gestures and
 document edits. Both hosts retain outline-only feedback until release.
-Next implementation boundary: resize/alignment snapping and pan/zoom, then
+Both hosts also connect eight resize grips and border hit regions. Shared Rust
+retains original element geometry and snap lines for a gesture; AppKit holds an
+independent immutable C owner, without per-event JSON or worker-session access.
+Shift locks corner aspect ratio while edge grips stay single-axis. Unrotated
+resizes snap to canvas and other visible-layer edges (including locked layers);
+rotated resizes skip axis snapping and preserve the opposite world anchor.
+Images retain D4 orientation; arrows scale controls and stroke, while paths retain
+their stroke width. Preview outlines and guides do not modify pixels or drafts.
+A release after three view points submits one worker transaction; cancellation,
+clicks and failures preserve the document, and fully outside content expands the
+canvas. Text resize still requires native font layout and is unsupported.
+Next implementation boundary: move alignment snapping and pan/zoom, then
 text/background and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.
 
@@ -692,7 +703,7 @@ Across both hosts, physical input/accessibility/IME acceptance remains open.
 The current native screenshot editor is a functional workbench, not a visual match
 for the shipping Tauri editor. Functional controls and inspected fixtures do not
 complete the editor layout/interaction/design parity gate.
-Canvas resize handles, alignment snapping, pan/zoom, other drawing tools and AppKit
+Move alignment snapping, pan/zoom, other drawing tools and AppKit
 edited-image clipboard output are not connected. Recording editing remains open on both hosts; the
 screenshot-editor parity gate stays open.
 

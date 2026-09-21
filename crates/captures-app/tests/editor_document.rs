@@ -1,7 +1,7 @@
 use captures_app::editor::{
     ClosedShapeCreate, CropDrag, Document, DocumentHistory, Element, FreehandPathCreate,
-    ImageTransform, LayerEdit, OpenShapeCreate, Point, Rect, bounded_crop_rect, preview_rotation,
-    rotation_angle, rotation_handle, smooth_path_centerline,
+    ImageTransform, LayerEdit, OpenShapeCreate, Point, Rect, ResizeDrag, ResizeHandle,
+    bounded_crop_rect, preview_rotation, rotation_angle, rotation_handle, smooth_path_centerline,
 };
 use captures_history::editor_draft::{self, SaveRequest};
 use serde::Deserialize;
@@ -21,10 +21,46 @@ struct Fixture {
     open_shape_creations: Vec<OpenShapeCreationCase>,
     freehand_creations: Vec<FreehandCreationCase>,
     hit_tests: Vec<HitTestCase>,
+    resize: ResizeFixture,
     rotations: Value,
     orientations: Vec<OrientationCase>,
     layers: Value,
     history: HistoryCase,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResizeFixture {
+    hit_tests: Vec<ResizeHitTestCase>,
+    drags: Vec<ResizeDragCase>,
+}
+
+#[derive(Deserialize)]
+struct ResizeHitTestCase {
+    name: String,
+    element: Element,
+    radius: f64,
+    queries: Vec<ResizeHitTestQuery>,
+}
+
+#[derive(Deserialize)]
+struct ResizeHitTestQuery {
+    point: Point,
+    expected: Option<ResizeHandle>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResizeDragCase {
+    name: String,
+    input: Document,
+    id: String,
+    handle: ResizeHandle,
+    display_scale: f64,
+    current: Point,
+    lock_aspect: bool,
+    expected: Value,
+    committed: Value,
 }
 
 #[derive(Deserialize)]
@@ -331,6 +367,183 @@ fn assert_json_equivalent(actual: Value, expected: Value) {
         }
         (actual, expected) => assert_eq!(actual, expected),
     }
+}
+
+fn assert_json_close(actual: Value, expected: Value, context: &str) {
+    match (actual, expected) {
+        (Value::Number(actual), Value::Number(expected)) => assert!(
+            (actual.as_f64().unwrap() - expected.as_f64().unwrap()).abs() < 1e-8,
+            "{context}: {actual} != {expected}"
+        ),
+        (Value::Array(actual), Value::Array(expected)) => {
+            assert_eq!(actual.len(), expected.len(), "{context}");
+            for (actual, expected) in actual.into_iter().zip(expected) {
+                assert_json_close(actual, expected, context);
+            }
+        }
+        (Value::Object(actual), Value::Object(expected)) => {
+            assert_eq!(
+                actual.len(),
+                expected.len(),
+                "{context}: {actual:?} != {expected:?}"
+            );
+            for (key, expected) in expected {
+                assert_json_close(actual[&key].clone(), expected, context);
+            }
+        }
+        (actual, expected) => assert_eq!(actual, expected, "{context}"),
+    }
+}
+
+#[test]
+fn resize_handles_previews_and_commits_match_typescript() {
+    let resize = fixture().resize;
+    assert_eq!(
+        serde_json::to_value([
+            ResizeHandle::Nw,
+            ResizeHandle::N,
+            ResizeHandle::Ne,
+            ResizeHandle::E,
+            ResizeHandle::Se,
+            ResizeHandle::S,
+            ResizeHandle::Sw,
+            ResizeHandle::W,
+        ])
+        .unwrap(),
+        json!(["nw", "n", "ne", "e", "se", "s", "sw", "w"])
+    );
+    for case in resize.hit_tests {
+        for query in case.queries {
+            assert_eq!(
+                case.element
+                    .resize_handle_at(query.point, case.radius)
+                    .unwrap(),
+                query.expected,
+                "{} at {:?}",
+                case.name,
+                query.point
+            );
+        }
+    }
+    for case in resize.drags {
+        let drag = ResizeDrag::new(&case.input, &case.id, case.handle, case.display_scale)
+            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+        let actual = drag.preview(case.current, case.lock_aspect).unwrap();
+        assert_json_close(
+            json!({
+                "element": actual.element,
+                "outline": actual.outline,
+                "guides": actual.guides,
+            }),
+            case.expected,
+            &case.name,
+        );
+
+        let mut committed = case.input;
+        committed
+            .edit_layer(
+                &case.id,
+                LayerEdit::Resize {
+                    handle: case.handle,
+                    current: case.current,
+                    display_scale: case.display_scale,
+                    lock_aspect: case.lock_aspect,
+                },
+            )
+            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+        assert_json_close(
+            serde_json::to_value(committed).unwrap(),
+            case.committed,
+            &case.name,
+        );
+    }
+}
+
+#[test]
+fn resize_rejects_invalid_locked_and_unsupported_edits_transactionally() {
+    let case = fixture().resize.drags.remove(0);
+    let element = &case.input.elements[0];
+    assert!(
+        element
+            .resize_handle_at(Point { x: f64::NAN, y: 1. }, 5.)
+            .is_err()
+    );
+    assert!(
+        element
+            .resize_handle_at(Point { x: 1., y: 1. }, f64::INFINITY)
+            .is_err()
+    );
+    assert!(ResizeDrag::new(&case.input, "missing", case.handle, 1.).is_err());
+    assert!(ResizeDrag::new(&case.input, &case.id, case.handle, f64::NAN).is_err());
+    let drag = ResizeDrag::new(&case.input, &case.id, case.handle, 1.).unwrap();
+    assert!(
+        drag.preview(
+            Point {
+                x: f64::INFINITY,
+                y: 1.
+            },
+            false
+        )
+        .is_err()
+    );
+
+    let mut invalid = case.input.clone();
+    let before = invalid.clone();
+    assert!(
+        invalid
+            .edit_layer(
+                &case.id,
+                LayerEdit::Resize {
+                    handle: case.handle,
+                    current: Point { x: f64::NAN, y: 1. },
+                    display_scale: 1.,
+                    lock_aspect: false,
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(invalid, before);
+
+    let mut locked = case.input.clone();
+    locked
+        .edit_layer(&case.id, LayerEdit::Lock { locked: true })
+        .unwrap();
+    let before = locked.clone();
+    locked
+        .edit_layer(
+            &case.id,
+            LayerEdit::Resize {
+                handle: case.handle,
+                current: case.current,
+                display_scale: 1.,
+                lock_aspect: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(locked, before);
+
+    let mut unsupported = case.input;
+    let mut text = fixture().document["elements"][1].clone();
+    text["locked"] = json!(false);
+    unsupported
+        .elements
+        .push(serde_json::from_value(text).unwrap());
+    let before = unsupported.clone();
+    assert!(ResizeDrag::new(&unsupported, "locked-text", ResizeHandle::Se, 1.).is_err());
+    assert!(
+        unsupported
+            .edit_layer(
+                "locked-text",
+                LayerEdit::Resize {
+                    handle: ResizeHandle::Se,
+                    current: Point { x: 700., y: 100. },
+                    display_scale: 1.,
+                    lock_aspect: true,
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(unsupported, before);
 }
 
 #[test]

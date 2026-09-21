@@ -16,6 +16,51 @@ pub const MAX_CANVAS_DIMENSION: f64 = 32_768.;
 /// no arrow. Hosts additionally own the shipping `3 / displayScale` gesture
 /// threshold and cancel before submitting the completed command.
 pub const ARROW_MIN_DRAW_LENGTH: f64 = 1.5;
+pub const ALIGNMENT_SNAP_SCREEN_PX: f64 = 10.;
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[repr(u32)]
+#[serde(rename_all = "lowercase")]
+pub enum ResizeHandle {
+    Nw = 0,
+    N = 1,
+    Ne = 2,
+    E = 3,
+    Se = 4,
+    S = 5,
+    Sw = 6,
+    W = 7,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GuideOrientation {
+    Vertical,
+    Horizontal,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AlignmentGuide {
+    pub orientation: GuideOrientation,
+    pub position: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ResizePreview {
+    pub element: Element,
+    pub outline: [Point; 4],
+    pub guides: Vec<AlignmentGuide>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResizeDrag {
+    element: Element,
+    initial_bounds: Rect,
+    handle: ResizeHandle,
+    display_scale: f64,
+    vertical_lines: Vec<f64>,
+    horizontal_lines: Vec<f64>,
+}
 
 const fn default_opacity() -> f64 {
     100.
@@ -786,6 +831,23 @@ impl Element {
         Ok(points)
     }
 
+    /// Hit-test resize chrome in the element's unrotated local selection space.
+    pub fn resize_handle_at(
+        &self,
+        point: Point,
+        radius: f64,
+    ) -> Result<Option<ResizeHandle>, String> {
+        if !point.x.is_finite() || !point.y.is_finite() || !radius.is_finite() || radius < 0. {
+            return Err(
+                "Resize hit testing requires finite coordinates and nonnegative radius.".into(),
+            );
+        }
+        let bounds = self.selection_bounds()?;
+        let center = rect_center(bounds);
+        let local = rotate_point(point, center, -self.base().rotation());
+        Ok(hit_test_resize_handle(bounds, local, radius))
+    }
+
     fn base_mut(&mut self) -> &mut ElementBase {
         match self {
             Self::Image(element) => &mut element.base,
@@ -841,6 +903,223 @@ fn translate_points(points: &mut [Point], delta_x: f64, delta_y: f64) {
     }
 }
 
+impl ResizeDrag {
+    pub fn new(
+        document: &Document,
+        id: &str,
+        handle: ResizeHandle,
+        display_scale: f64,
+    ) -> Result<Self, String> {
+        if !display_scale.is_finite() || display_scale <= 0. {
+            return Err("Resize display scale must be finite and positive.".into());
+        }
+        let element = document
+            .elements
+            .iter()
+            .find(|element| element.base().id == id)
+            .ok_or("The selected layer no longer exists.")?
+            .clone();
+        let initial_bounds = element.selection_bounds()?;
+        let mut vertical_lines = vec![0., document.width];
+        let mut horizontal_lines = vec![0., document.height];
+        for other in &document.elements {
+            if other.base().id == id || !other.base().visible {
+                continue;
+            }
+            let bounds = painted_bounds(other)?;
+            push_unique_number(&mut vertical_lines, bounds.x);
+            push_unique_number(&mut vertical_lines, bounds.x + bounds.width);
+            push_unique_number(&mut horizontal_lines, bounds.y);
+            push_unique_number(&mut horizontal_lines, bounds.y + bounds.height);
+        }
+        Ok(Self {
+            element,
+            initial_bounds,
+            handle,
+            display_scale,
+            vertical_lines,
+            horizontal_lines,
+        })
+    }
+
+    pub fn preview(&self, current: Point, lock_aspect: bool) -> Result<ResizePreview, String> {
+        if !current.x.is_finite() || !current.y.is_finite() {
+            return Err("Resize coordinates must be finite.".into());
+        }
+        let minimum = 8. / self.display_scale.max(0.01);
+        let threshold = ALIGNMENT_SNAP_SCREEN_PX / self.display_scale.max(0.01);
+        let center = rect_center(self.initial_bounds);
+        let local_current = rotate_point(current, center, -self.element.base().rotation());
+        let free = resize_bounds_from_handle(
+            self.initial_bounds,
+            self.handle,
+            local_current,
+            minimum,
+            lock_aspect,
+        );
+        let (snapped, guides) = if self.element.base().rotation() == 0. {
+            snap_resized_bounds(
+                self.initial_bounds,
+                self.handle,
+                free,
+                &self.vertical_lines,
+                &self.horizontal_lines,
+                threshold,
+                minimum,
+            )
+        } else {
+            (free, Vec::new())
+        };
+        let next_bounds = if lock_aspect {
+            resize_bounds_from_handle(
+                self.initial_bounds,
+                self.handle,
+                resize_handle_point(snapped, self.handle),
+                minimum,
+                true,
+            )
+        } else {
+            snapped
+        };
+        let mut element = resize_element(&self.element, self.initial_bounds, next_bounds)?;
+        if element.base().rotation() != 0. {
+            let anchor =
+                resize_handle_point(self.initial_bounds, opposite_resize_handle(self.handle));
+            preserve_element_world_point(&self.element, &mut element, anchor)?;
+        }
+        let outline = element.selection_outline()?;
+        if !finite_outline(&outline) {
+            return Err("Resize must keep geometry finite.".into());
+        }
+        Ok(ResizePreview {
+            element,
+            outline,
+            guides,
+        })
+    }
+}
+
+fn push_unique_number(values: &mut Vec<f64>, value: f64) {
+    if !values.contains(&value) {
+        values.push(value);
+    }
+}
+
+fn rect_center(bounds: Rect) -> Point {
+    Point {
+        x: bounds.x + bounds.width / 2.,
+        y: bounds.y + bounds.height / 2.,
+    }
+}
+
+fn resize_handle_point(bounds: Rect, handle: ResizeHandle) -> Point {
+    let center = rect_center(bounds);
+    match handle {
+        ResizeHandle::Nw => Point {
+            x: bounds.x,
+            y: bounds.y,
+        },
+        ResizeHandle::N => Point {
+            x: center.x,
+            y: bounds.y,
+        },
+        ResizeHandle::Ne => Point {
+            x: bounds.x + bounds.width,
+            y: bounds.y,
+        },
+        ResizeHandle::E => Point {
+            x: bounds.x + bounds.width,
+            y: center.y,
+        },
+        ResizeHandle::Se => Point {
+            x: bounds.x + bounds.width,
+            y: bounds.y + bounds.height,
+        },
+        ResizeHandle::S => Point {
+            x: center.x,
+            y: bounds.y + bounds.height,
+        },
+        ResizeHandle::Sw => Point {
+            x: bounds.x,
+            y: bounds.y + bounds.height,
+        },
+        ResizeHandle::W => Point {
+            x: bounds.x,
+            y: center.y,
+        },
+    }
+}
+
+fn opposite_resize_handle(handle: ResizeHandle) -> ResizeHandle {
+    match handle {
+        ResizeHandle::Nw => ResizeHandle::Se,
+        ResizeHandle::N => ResizeHandle::S,
+        ResizeHandle::Ne => ResizeHandle::Sw,
+        ResizeHandle::E => ResizeHandle::W,
+        ResizeHandle::Se => ResizeHandle::Nw,
+        ResizeHandle::S => ResizeHandle::N,
+        ResizeHandle::Sw => ResizeHandle::Ne,
+        ResizeHandle::W => ResizeHandle::E,
+    }
+}
+
+fn is_corner(handle: ResizeHandle) -> bool {
+    matches!(
+        handle,
+        ResizeHandle::Nw | ResizeHandle::Ne | ResizeHandle::Se | ResizeHandle::Sw
+    )
+}
+
+fn hit_test_resize_handle(bounds: Rect, point: Point, radius: f64) -> Option<ResizeHandle> {
+    let radius = radius.max(4.);
+    for handle in [
+        ResizeHandle::Nw,
+        ResizeHandle::Ne,
+        ResizeHandle::Se,
+        ResizeHandle::Sw,
+    ] {
+        let grip = resize_handle_point(bounds, handle);
+        if (point.x - grip.x).abs() <= radius && (point.y - grip.y).abs() <= radius {
+            return Some(handle);
+        }
+    }
+    for handle in [
+        ResizeHandle::N,
+        ResizeHandle::E,
+        ResizeHandle::S,
+        ResizeHandle::W,
+    ] {
+        let grip = resize_handle_point(bounds, handle);
+        if (point.x - grip.x).abs() <= radius && (point.y - grip.y).abs() <= radius {
+            return Some(handle);
+        }
+    }
+    let right = bounds.x + bounds.width;
+    let bottom = bounds.y + bounds.height;
+    if point.x < bounds.x - radius
+        || point.x > right + radius
+        || point.y < bounds.y - radius
+        || point.y > bottom + radius
+    {
+        return None;
+    }
+    let near_left = (point.x - bounds.x).abs() <= radius;
+    let near_right = (point.x - right).abs() <= radius;
+    let near_top = (point.y - bounds.y).abs() <= radius;
+    let near_bottom = (point.y - bottom).abs() <= radius;
+    if near_top && !near_left && !near_right {
+        Some(ResizeHandle::N)
+    } else if near_bottom && !near_left && !near_right {
+        Some(ResizeHandle::S)
+    } else if near_left && !near_top && !near_bottom {
+        Some(ResizeHandle::W)
+    } else if near_right && !near_top && !near_bottom {
+        Some(ResizeHandle::E)
+    } else {
+        None
+    }
+}
+
 /// Layer-panel actions shared by native hosts. Storage is back-to-front;
 /// placement refers to the front-to-back order displayed by the layer panel.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -867,6 +1146,12 @@ pub enum LayerEdit {
     },
     Rotate {
         radians: f64,
+    },
+    Resize {
+        handle: ResizeHandle,
+        current: Point,
+        display_scale: f64,
+        lock_aspect: bool,
     },
     Delete,
     Duplicate {
@@ -1263,30 +1548,34 @@ impl Document {
                 if !locked {
                     self.elements[index].selection_bounds()?;
                     self.elements[index].base_mut().rotation = (radians != 0.).then_some(radians);
-                    let element = &self.elements[index];
-                    let outline = element.selection_outline()?;
-                    let bounds = if let Element::Path(path) = element
-                        && !path.points.is_empty()
-                        && radians != 0.
-                    {
-                        let origin = midpoint(outline[0], outline[2]);
-                        bounds_from_points(
-                            &path
-                                .points
-                                .iter()
-                                .map(|point| rotate_point(*point, origin, radians))
-                                .collect::<Vec<_>>(),
-                            path.style.stroke_width.max(4.)
-                                + annotation_drop_shadow_pad(&path.style),
-                        )
-                    } else if radians == 0. {
-                        element.selection_bounds()?
-                    } else {
-                        bounds_from_points(&outline, 0.)
-                    };
+                    let bounds = painted_bounds(&self.elements[index])?;
                     if fully_outside_canvas(bounds, self.width, self.height) {
                         self.expand_canvas_to_bounds(bounds);
                     }
+                }
+            }
+            LayerEdit::Resize {
+                handle,
+                current,
+                display_scale,
+                lock_aspect,
+            } => {
+                if !current.x.is_finite() || !current.y.is_finite() {
+                    return Err("Resize coordinates must be finite.".into());
+                }
+                if !display_scale.is_finite() || display_scale <= 0. {
+                    return Err("Resize display scale must be finite and positive.".into());
+                }
+                if !locked {
+                    let drag = ResizeDrag::new(self, id, handle, display_scale)?;
+                    let preview = drag.preview(current, lock_aspect)?;
+                    let mut next = self.clone();
+                    next.elements[index] = preview.element;
+                    let bounds = painted_bounds(&next.elements[index])?;
+                    if fully_outside_canvas(bounds, next.width, next.height) {
+                        next.expand_canvas_to_bounds(bounds);
+                    }
+                    *self = next;
                 }
             }
             LayerEdit::Delete => {
@@ -1435,6 +1724,299 @@ fn bounds_from_points(points: &[Point], padding: f64) -> Rect {
         width: (right - left).max(1.) + padding * 2.,
         height: (bottom - top).max(1.) + padding * 2.,
     }
+}
+
+fn resize_bounds_from_handle(
+    initial: Rect,
+    handle: ResizeHandle,
+    current: Point,
+    minimum: f64,
+    lock_aspect: bool,
+) -> Rect {
+    let min = minimum.max(1.);
+    if lock_aspect && is_corner(handle) && initial.width >= 1. && initial.height >= 1. {
+        let aspect = initial.width / initial.height;
+        let anchor = resize_handle_point(initial, opposite_resize_handle(handle));
+        let mut width = (current.x - anchor.x).abs().max(1e-6);
+        let mut height = (current.y - anchor.y).abs().max(1e-6);
+        if width / height > aspect {
+            height = width / aspect;
+        } else {
+            width = height * aspect;
+        }
+        if width < min || height < min {
+            if aspect >= 1. {
+                width = width.max(min);
+                height = width / aspect;
+                if height < min {
+                    height = min;
+                    width = height * aspect;
+                }
+            } else {
+                height = height.max(min);
+                width = height * aspect;
+                if width < min {
+                    width = min;
+                    height = width / aspect;
+                }
+            }
+        }
+        return Rect {
+            x: if current.x >= anchor.x {
+                anchor.x
+            } else {
+                anchor.x - width
+            },
+            y: if current.y >= anchor.y {
+                anchor.y
+            } else {
+                anchor.y - height
+            },
+            width,
+            height,
+        };
+    }
+    let mut left = if matches!(
+        handle,
+        ResizeHandle::W | ResizeHandle::Nw | ResizeHandle::Sw
+    ) {
+        current.x
+    } else {
+        initial.x
+    };
+    let mut right = if matches!(
+        handle,
+        ResizeHandle::E | ResizeHandle::Ne | ResizeHandle::Se
+    ) {
+        current.x
+    } else {
+        initial.x + initial.width
+    };
+    let mut top = if matches!(
+        handle,
+        ResizeHandle::N | ResizeHandle::Nw | ResizeHandle::Ne
+    ) {
+        current.y
+    } else {
+        initial.y
+    };
+    let mut bottom = if matches!(
+        handle,
+        ResizeHandle::S | ResizeHandle::Sw | ResizeHandle::Se
+    ) {
+        current.y
+    } else {
+        initial.y + initial.height
+    };
+    if left > right {
+        std::mem::swap(&mut left, &mut right);
+    }
+    if top > bottom {
+        std::mem::swap(&mut top, &mut bottom);
+    }
+    let move_left = matches!(
+        handle,
+        ResizeHandle::W | ResizeHandle::Nw | ResizeHandle::Sw
+    );
+    let move_right = matches!(
+        handle,
+        ResizeHandle::E | ResizeHandle::Ne | ResizeHandle::Se
+    );
+    let move_top = matches!(
+        handle,
+        ResizeHandle::N | ResizeHandle::Nw | ResizeHandle::Ne
+    );
+    let move_bottom = matches!(
+        handle,
+        ResizeHandle::S | ResizeHandle::Sw | ResizeHandle::Se
+    );
+    if right - left < min {
+        if move_left && !move_right {
+            left = right - min;
+        } else if move_right && !move_left {
+            right = left + min;
+        } else {
+            let center = (left + right) / 2.;
+            left = center - min / 2.;
+            right = center + min / 2.;
+        }
+    }
+    if bottom - top < min {
+        if move_top && !move_bottom {
+            top = bottom - min;
+        } else if move_bottom && !move_top {
+            bottom = top + min;
+        } else {
+            let center = (top + bottom) / 2.;
+            top = center - min / 2.;
+            bottom = center + min / 2.;
+        }
+    }
+    Rect {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+    }
+}
+
+fn closest_snap(value: f64, lines: &[f64], threshold: f64) -> Option<f64> {
+    let mut best = None;
+    let mut distance = threshold;
+    for &line in lines {
+        let next = (line - value).abs();
+        if next <= distance {
+            distance = next;
+            best = Some(line);
+        }
+    }
+    best
+}
+
+fn snap_resized_bounds(
+    initial: Rect,
+    handle: ResizeHandle,
+    mut next: Rect,
+    vertical: &[f64],
+    horizontal: &[f64],
+    threshold: f64,
+    minimum: f64,
+) -> (Rect, Vec<AlignmentGuide>) {
+    if threshold <= 0. {
+        return (next, Vec::new());
+    }
+    let min = minimum.max(1.);
+    let anchor = resize_handle_point(initial, opposite_resize_handle(handle));
+    let mut guides = Vec::new();
+    if (next.x - anchor.x).abs() > 0.5
+        && let Some(position) = closest_snap(next.x, vertical, threshold)
+        && next.width + next.x - position >= min
+    {
+        next.width += next.x - position;
+        next.x = position;
+        guides.push(AlignmentGuide {
+            orientation: GuideOrientation::Vertical,
+            position,
+        });
+    }
+    if (next.x + next.width - anchor.x).abs() > 0.5 {
+        let right = next.x + next.width;
+        if let Some(position) = closest_snap(right, vertical, threshold)
+            && position - next.x >= min
+        {
+            next.width = position - next.x;
+            guides.push(AlignmentGuide {
+                orientation: GuideOrientation::Vertical,
+                position,
+            });
+        }
+    }
+    if (next.y - anchor.y).abs() > 0.5
+        && let Some(position) = closest_snap(next.y, horizontal, threshold)
+        && next.height + next.y - position >= min
+    {
+        next.height += next.y - position;
+        next.y = position;
+        guides.push(AlignmentGuide {
+            orientation: GuideOrientation::Horizontal,
+            position,
+        });
+    }
+    if (next.y + next.height - anchor.y).abs() > 0.5 {
+        let bottom = next.y + next.height;
+        if let Some(position) = closest_snap(bottom, horizontal, threshold)
+            && position - next.y >= min
+        {
+            next.height = position - next.y;
+            guides.push(AlignmentGuide {
+                orientation: GuideOrientation::Horizontal,
+                position,
+            });
+        }
+    }
+    (next, guides)
+}
+
+fn resize_element(element: &Element, initial: Rect, next: Rect) -> Result<Element, String> {
+    let scale_x = next.width / initial.width.max(1.);
+    let scale_y = next.height / initial.height.max(1.);
+    let map = |point: Point| Point {
+        x: next.x + (point.x - initial.x) * scale_x,
+        y: next.y + (point.y - initial.y) * scale_y,
+    };
+    let mut resized = element.clone();
+    match &mut resized {
+        Element::Image(image) => {
+            let origin = map(Point {
+                x: image.base.x,
+                y: image.base.y,
+            });
+            image.base.x = origin.x;
+            image.base.y = origin.y;
+            image.width = (image.width * scale_x).max(1.);
+            image.height = (image.height * scale_y).max(1.);
+        }
+        Element::Text(_) => return Err("Text resize requires native text layout.".into()),
+        Element::Shape(shape) => {
+            let start = map(Point {
+                x: shape.base.x,
+                y: shape.base.y,
+            });
+            let end = map(Point {
+                x: shape.end_x,
+                y: shape.end_y,
+            });
+            shape.base.x = start.x;
+            shape.base.y = start.y;
+            shape.end_x = end.x;
+            shape.end_y = end.y;
+            for point in &mut shape.controls {
+                *point = map(*point);
+            }
+            if matches!(shape.shape.as_str(), "line" | "arrow") {
+                let stroke_scale = scale_x.abs().min(scale_y.abs()).max(0.05);
+                if stroke_scale != 1. {
+                    shape.style.stroke_width =
+                        clamp(shape.style.stroke_width * stroke_scale, 1., 80.).round();
+                }
+            }
+        }
+        Element::Path(path) => {
+            let origin = map(Point {
+                x: path.base.x,
+                y: path.base.y,
+            });
+            path.base.x = origin.x;
+            path.base.y = origin.y;
+            for point in &mut path.points {
+                *point = map(*point);
+            }
+        }
+    }
+    Ok(resized)
+}
+
+fn preserve_element_world_point(
+    initial: &Element,
+    next: &mut Element,
+    anchor: Point,
+) -> Result<(), String> {
+    let before = rotate_point(
+        anchor,
+        rect_center(initial.selection_bounds()?),
+        initial.base().rotation(),
+    );
+    let after = rotate_point(
+        anchor,
+        rect_center(next.selection_bounds()?),
+        next.base().rotation(),
+    );
+    let delta_x = before.x - after.x;
+    let delta_y = before.y - after.y;
+    if delta_x.abs() >= 1e-9 || delta_y.abs() >= 1e-9 {
+        next.translate(delta_x, delta_y);
+    }
+    Ok(())
 }
 
 /// Sample the exact midpoint-quadratic centerline used to render a freehand
@@ -1843,6 +2425,30 @@ pub(crate) fn image_bounds(image: &ImageElement) -> Rect {
         width: (max_x - min_x).max(1.),
         height: (max_y - min_y).max(1.),
     }
+}
+
+fn painted_bounds(element: &Element) -> Result<Rect, String> {
+    if let Element::Image(image) = element {
+        return Ok(image_bounds(image));
+    }
+    let rotation = element.base().rotation();
+    if rotation == 0. {
+        return element.selection_bounds();
+    }
+    if let Element::Path(path) = element
+        && !path.points.is_empty()
+    {
+        let origin = rect_center(element.selection_bounds()?);
+        return Ok(bounds_from_points(
+            &path
+                .points
+                .iter()
+                .map(|point| rotate_point(*point, origin, rotation))
+                .collect::<Vec<_>>(),
+            path.style.stroke_width.max(4.) + annotation_drop_shadow_pad(&path.style),
+        ));
+    }
+    Ok(bounds_from_points(&element.selection_outline()?, 0.))
 }
 
 fn fully_outside_canvas(bounds: Rect, width: f64, height: f64) -> bool {

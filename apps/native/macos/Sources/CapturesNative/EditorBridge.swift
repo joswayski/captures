@@ -66,6 +66,74 @@ struct NativeEditorRotationPreview {
     }
 }
 
+struct NativeEditorAlignmentGuide: Equatable {
+    enum Orientation: UInt32 { case vertical = 0, horizontal = 1 }
+    let orientation: Orientation
+    let position: Double
+}
+
+struct NativeEditorResizePreview {
+    let outline: [CGPoint]
+    let guides: [NativeEditorAlignmentGuide]
+}
+
+/// Owns the immutable Rust drag for the complete gesture, including modifier changes.
+/// Creating this owner before decoding the response guarantees malformed responses
+/// cannot leak a successfully-created native drag.
+final class NativeEditorResizeDrag {
+    private let handle: OpaquePointer
+
+    private init(handle: OpaquePointer) { self.handle = handle }
+    deinit { captures_editor_resize_free_v1(handle) }
+
+    static func begin(documentJSON: String, layerID: String, point: CGPoint,
+                      displayScale: Double) throws -> (NativeEditorResizeDrag?, Int?) {
+        var nativeDrag: OpaquePointer?
+        let response = documentJSON.withCString { document in
+            layerID.withCString { layer in
+                captures_editor_resize_begin_v1(document, layer,
+                    CapturesSelectionPoint(x: point.x, y: point.y), displayScale, &nativeDrag)
+            }
+        }
+        let owner = nativeDrag.map(NativeEditorResizeDrag.init)
+        guard let response else { throw AppBridgeError.invalidResponse }
+        defer { captures_settings_free_v1(response) }
+        let result = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+        if result["handle"] is NSNull {
+            guard owner == nil else { throw AppBridgeError.invalidResponse }
+            return (nil, nil)
+        }
+        guard let number = result["handle"] as? NSNumber,
+              (0...7).contains(number.intValue), let owner else {
+            throw AppBridgeError.invalidResponse
+        }
+        return (owner, number.intValue)
+    }
+
+    func preview(current: CGPoint, lockAspect: Bool) -> NativeEditorResizePreview? {
+        var output = CapturesEditorResizePreview()
+        guard captures_editor_resize_preview_v1(handle,
+            CapturesSelectionPoint(x: current.x, y: current.y), lockAspect, &output),
+            output.guide_count <= 4 else { return nil }
+        let outline = withUnsafePointer(to: &output.outline) {
+            $0.withMemoryRebound(to: CapturesSelectionPoint.self, capacity: 4) {
+                Array(UnsafeBufferPointer(start: $0, count: 4)).map { CGPoint(x: $0.x, y: $0.y) }
+            }
+        }
+        let guideCount = output.guide_count
+        let guides = withUnsafePointer(to: &output.guides) {
+            $0.withMemoryRebound(to: CapturesEditorAlignmentGuide.self, capacity: 4) {
+                Array(UnsafeBufferPointer(start: $0, count: guideCount)).compactMap {
+                    guard let orientation = NativeEditorAlignmentGuide.Orientation(rawValue: $0.orientation) else { return nil }
+                    return NativeEditorAlignmentGuide(orientation: orientation, position: $0.position)
+                }
+            }
+        }
+        guard guides.count == guideCount else { return nil }
+        return NativeEditorResizePreview(outline: outline, guides: guides)
+    }
+}
+
 /// Display values resolved by Rust, never a replacement for authored document data.
 struct NativeAnnotationStyle: Equatable {
     let closed: Bool

@@ -1746,6 +1746,73 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(commits, 0)
     }
 
+    func testCanvasResizeEightHandlesPrecedeBodyAndUseCornerShiftSemantics() throws {
+        let overlay = EditorSelectionOverlay(frame: NSRect(x: 0, y: 0, width: 300, height: 220))
+        overlay.canvasSize = NSSize(width: 300, height: 220); overlay.selectionEnabled = true
+        let element: [String: Any] = [
+            "kind": "shape", "id": "selected", "shape": "rectangle", "x": 100.0, "y": 70.0,
+            "endX": 180.0, "endY": 130.0, "controls": [], "locked": false, "visible": true,
+            "opacity": 100.0, "blendMode": "source-over",
+            "style": ["color": "#ff3b5c", "fill": "#ff3b5c", "strokeWidth": 8.0],
+        ]
+        let document: [String: Any] = ["width": 300.0, "height": 220.0, "elements": [element]]
+        overlay.documentJSON = String(decoding: try JSONSerialization.data(withJSONObject: document), as: UTF8.self)
+        overlay.selectedLayerID = "selected"
+        overlay.selectedOutline = [CGPoint(x: 95, y: 65), CGPoint(x: 185, y: 65),
+                                   CGPoint(x: 185, y: 135), CGPoint(x: 95, y: 135)]
+        overlay.resizeEnabled = true
+        XCTAssertEqual(overlay.resizeHandlePoints.count, 8)
+        var bodyHits = 0
+        var commits: [(String, Bool)] = []
+        overlay.hitTestLayer = { _, _ in bodyHits += 1; return "overlap" }
+        overlay.onResize = { _, handle, _, _, lock in commits.append((handle, lock)) }
+        for (index, grip) in overlay.resizeHandlePoints.enumerated() {
+            overlay.begin(at: grip, snap: true)
+            overlay.end(at: CGPoint(x: grip.x + 12, y: grip.y + 9), snap: true)
+            XCTAssertEqual(commits[index].0, EditorSelectionOverlay.resizeHandleNames[index])
+            XCTAssertEqual(commits[index].1, index.isMultiple(of: 2),
+                           "Shift locks only corner resize handles")
+        }
+        XCTAssertEqual(bodyHits, 0, "resize grips win over an overlapping layer body")
+    }
+
+    func testCanvasResizeKeepsOriginalDragAcrossShiftAndCancellationOrClickNeverCommits() throws {
+        let overlay = EditorSelectionOverlay(frame: NSRect(x: 0, y: 0, width: 300, height: 220))
+        overlay.canvasSize = NSSize(width: 300, height: 220); overlay.selectionEnabled = true
+        let element: [String: Any] = [
+            "kind": "shape", "id": "selected", "shape": "rectangle", "x": 100.0, "y": 70.0,
+            "endX": 180.0, "endY": 130.0, "controls": [], "locked": false, "visible": true,
+            "opacity": 100.0, "blendMode": "source-over",
+            "style": ["color": "#ff3b5c", "fill": "#ff3b5c", "strokeWidth": 8.0],
+        ]
+        let document: [String: Any] = ["width": 300.0, "height": 220.0, "elements": [element]]
+        overlay.documentJSON = String(decoding: try JSONSerialization.data(withJSONObject: document), as: UTF8.self)
+        overlay.selectedLayerID = "selected"
+        overlay.selectedOutline = [CGPoint(x: 95, y: 65), CGPoint(x: 185, y: 65),
+                                   CGPoint(x: 185, y: 135), CGPoint(x: 95, y: 135)]
+        overlay.resizeEnabled = true
+        let grip = try XCTUnwrap(overlay.resizeHandlePoints.first)
+        let current = CGPoint(x: grip.x - 23, y: grip.y - 11)
+        var commits = 0; overlay.onResize = { _, _, _, _, _ in commits += 1 }
+        overlay.begin(at: grip); overlay.drag(to: current, snap: false)
+        let unlocked = try XCTUnwrap(overlay.resizePreview).outline
+        func flags(_ modifiers: NSEvent.ModifierFlags) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(with: .flagsChanged, location: .zero,
+                modifierFlags: modifiers, timestamp: 0, windowNumber: 0, context: nil,
+                characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 56))
+        }
+        overlay.flagsChanged(with: try flags(.shift))
+        XCTAssertNotEqual(overlay.resizePreview?.outline, unlocked)
+        overlay.flagsChanged(with: try flags([]))
+        XCTAssertEqual(overlay.resizePreview?.outline, unlocked,
+                       "modifier changes reuse the immutable original drag")
+        overlay.cancelGesture(); overlay.end(at: current)
+        overlay.begin(at: grip); overlay.end(at: grip)
+        XCTAssertEqual(commits, 0)
+        overlay.begin(at: grip); overlay.drag(to: current); _ = overlay.resignFirstResponder(); overlay.end(at: current)
+        XCTAssertEqual(commits, 0)
+    }
+
     func testSnapshotParsesRotatedSelectionOutlineAndCachesSortedDocument() throws {
         let element = shapeLayer(id: "rotated", x: 10, y: 20)
         var rotatedElement = element
@@ -1999,6 +2066,96 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(failure.state.snapshot, rotated.snapshot)
             XCTAssertFalse(failure.state.busy); XCTAssertEqual(surface.selectedLayerID, id)
             try render(failure.root, name: "screenshot-editor-rotation-error-minimum-\(appearance)")
+        }
+    }
+
+    func testRealCanvasResizePixelsUndoRedoDraftReopenAndFailureFixtures() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let fixture = try makeHistoryFixture()
+            defer { try? FileManager.default.removeItem(at: fixture.root) }
+            func request(_ object: [String: Any], using worker: EditorWorker) throws -> EditorPresentation {
+                let done = expectation(description: "resize request")
+                var response: Result<EditorPresentation, Error>?
+                worker.request(object) { response = $0; done.fulfill() }
+                wait(for: [done], timeout: 5); return try XCTUnwrap(response).get()
+            }
+            let seed = EditorWorker()
+            let opened = expectation(description: "resize fixture")
+            seed.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path, artifactID: fixture.id) {
+                XCTAssertNotNil(try? $0.get()); opened.fulfill()
+            }
+            wait(for: [opened], timeout: 5)
+            _ = try request(["operation": "resize_canvas", "width": 640, "height": 360], using: seed)
+            let created = try request(["operation": "create_closed_shape", "shape": "rectangle",
+                "start": ["x": 100, "y": 80], "end": ["x": 220, "y": 140]], using: seed)
+            let id = try XCTUnwrap(created.snapshot.layers.first?.id)
+            _ = try request(["operation": "save_draft", "updated_at_ms": 5000], using: seed)
+            seed.close(); EditorWorker.flush()
+
+            let live = EditorWorker()
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: live)
+            defer { controller.window.orderOut(nil); live.close(); EditorWorker.flush() }
+            controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+            waitUntil { controller.state.snapshot != nil && !controller.state.busy }
+            try showLayers(in: controller.root); controller.root.layoutSubtreeIfNeeded()
+            let overlay = controller.selectionOverlay
+            let image = overlay.presentedImageRect, scale = image.width / 640
+            XCTAssertEqual(overlay.resizeHandlePoints.count, 8)
+            let southeast = overlay.resizeHandlePoints[4]
+            let press = CGPoint(x: image.minX + southeast.x * scale, y: image.minY + southeast.y * scale)
+            let release = CGPoint(x: press.x + 60 * scale, y: press.y + 40 * scale)
+            overlay.begin(at: press); overlay.drag(to: release)
+            XCTAssertNotNil(overlay.resizePreview); XCTAssertFalse(controller.state.snapshot!.unsavedChanges)
+            try render(controller.root, name: "screenshot-editor-resize-active-\(appearance)")
+            overlay.end(at: release)
+            waitUntil { !controller.state.busy && controller.state.snapshot?.unsavedChanges == true }
+            let resized = try request(["operation": "snapshot"], using: live)
+            XCTAssertEqual(resized.snapshot.layers.first?.id, id)
+            XCTAssertEqual(rgba(resized.image, x: 260, y: 165), [255, 59, 92, 255])
+            try render(controller.root, name: "screenshot-editor-resize-committed-\(appearance)")
+            try button("Undo", in: controller.root).performClick(nil)
+            waitUntil { !controller.state.busy && controller.state.snapshot?.canRedo == true }
+            XCTAssertEqual(rgba(try request(["operation": "snapshot"], using: live).image,
+                                x: 260, y: 165), [247, 247, 245, 255])
+            try button("Redo", in: controller.root).performClick(nil)
+            waitUntil { !controller.state.busy && controller.state.snapshot?.canRedo == false }
+            try button("Save draft", in: controller.root).performClick(nil)
+            waitUntil { !controller.state.busy && controller.state.snapshot?.unsavedChanges == false }
+            live.close(); EditorWorker.flush()
+            let reopened = EditorWorker(), restored = expectation(description: "reopen resized draft")
+            reopened.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path, artifactID: fixture.id) {
+                if let value = try? $0.get() {
+                    XCTAssertEqual(self.rgba(value.image, x: 260, y: 165), [255, 59, 92, 255])
+                } else { XCTFail("resized draft reopen failed") }
+                restored.fulfill()
+            }
+            wait(for: [restored], timeout: 5); reopened.close(); EditorWorker.flush()
+
+            let failingWorker = FakeEditorWorker(snapshot: resized.snapshot)
+            let failure = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: failingWorker)
+            defer { failure.window.orderOut(nil) }
+            failure.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+            try showOutput(in: failure.root); try button("Preview output", in: failure.root).performClick(nil)
+            let output = try segmented("Output preview image", in: failure.root)
+            try showLayers(in: failure.root); failure.root.layoutSubtreeIfNeeded()
+            let surface = failure.selectionOverlay, fitted = surface.presentedImageRect
+            XCTAssertEqual(surface.resizeHandlePoints.count, 8)
+            let grip = surface.resizeHandlePoints[4]
+            let start = CGPoint(x: fitted.minX + grip.x * fitted.width / 640,
+                                y: fitted.minY + grip.y * fitted.width / 640)
+            failingWorker.deferRequests = true
+            surface.begin(at: start); surface.end(at: CGPoint(x: start.x + 20, y: start.y + 20))
+            XCTAssertTrue(failure.state.busy); XCTAssertFalse(output.isEnabled)
+            XCTAssertEqual((failingWorker.requests.last?["edit"] as? [String: Any])?["action"] as? String, "resize")
+            failingWorker.completePending(with: resized.snapshot)
+            XCTAssertEqual(surface.selectedLayerID, id)
+            failingWorker.deferRequests = false; failingWorker.failLayerAction = "resize"
+            failingWorker.failureMessage = "Resize failed; original pixels and selection remain recoverable."
+            surface.begin(at: start); surface.end(at: CGPoint(x: start.x + 20, y: start.y + 20))
+            XCTAssertFalse(failure.state.busy); XCTAssertEqual(surface.selectedLayerID, id)
+            XCTAssertEqual(failure.state.snapshot, resized.snapshot)
+            try render(failure.root, name: "screenshot-editor-resize-error-minimum-\(appearance)")
         }
     }
 

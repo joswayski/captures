@@ -214,6 +214,31 @@ bool captures_editor_rotation_handle_v1(const CapturesSelectionPoint *outline,
 bool captures_editor_rotation_preview_v1(const CapturesSelectionPoint *outline,
     double initial, CapturesSelectionPoint start, CapturesSelectionPoint current,
     bool snap, CapturesEditorRotationPreview *output);
+/* Independent immutable resize gesture. Begin parses the published document
+ * once and hit-tests the selected layer at 8 view points of tolerance. Output
+ * is set to NULL on miss/error; success transfers a drag with copied geometry
+ * and snap lines. Returns owned JSON {ok:true,result:{handle:0..7|null}} or
+ * {ok:false,error:string}, freed with captures_settings_free_v1. Handle order:
+ * NW,N,NE,E,SE,S,SW,W. Strings and output pointer storage are borrowed for begin.
+ * Preview has no JSON/session/render/I/O; false leaves output untouched. Guides
+ * are at most four, orientation 0 vertical / 1 horizontal, in document pixels.
+ * Keep original drag through Shift changes; release/free it on cancellation,
+ * window resize, snapshot replacement or completion, after all calls finish. */
+typedef struct CapturesEditorResizeDrag CapturesEditorResizeDrag;
+typedef struct {
+    uint32_t orientation;
+    double position;
+} CapturesEditorAlignmentGuide;
+typedef struct {
+    CapturesSelectionPoint outline[4];
+    CapturesEditorAlignmentGuide guides[4];
+    size_t guide_count;
+} CapturesEditorResizePreview;
+char *captures_editor_resize_begin_v1(const char *document_json, const char *layer_id,
+    CapturesSelectionPoint point, double display_scale, CapturesEditorResizeDrag **output);
+bool captures_editor_resize_preview_v1(const CapturesEditorResizeDrag *drag,
+    CapturesSelectionPoint current, bool lock_aspect, CapturesEditorResizePreview *output);
+void captures_editor_resize_free_v1(CapturesEditorResizeDrag *drag);
 /* Stateless shared preview geometry; no session access or per-event JSON.
  * kind 0: arrow outline, exactly two signed document-space endpoints.
  * kind 1: smoothed Pen centerline, one or more accepted samples; one is a dot,

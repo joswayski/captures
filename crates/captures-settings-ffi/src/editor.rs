@@ -3,8 +3,8 @@
 use super::region::{RegionPixels, response, text};
 use captures_app::{
     editor::{
-        Document, ElementBase, ElementStyle, Point, ShapeElement, arrow_fill_polygon,
-        preview_rotation, rotation_handle, smooth_path_centerline,
+        Document, ElementBase, ElementStyle, GuideOrientation, Point, ResizeDrag, ShapeElement,
+        arrow_fill_polygon, preview_rotation, rotation_handle, smooth_path_centerline,
     },
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
     editor_session::{EditorSession, ExportOptions, ImportImage, OpenRequest, Request},
@@ -34,6 +34,141 @@ pub struct RotationHandle {
 pub struct RotationPreview {
     pub radians: f64,
     pub outline: [AbiPoint; 4],
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct AlignmentGuide {
+    pub orientation: u32,
+    pub position: f64,
+}
+
+#[repr(C)]
+pub struct ResizePreview {
+    pub outline: [AbiPoint; 4],
+    pub guides: [AlignmentGuide; 4],
+    pub guide_count: usize,
+}
+
+/// Hit-test the selected layer and retain an independent immutable resize drag.
+/// The owned response contains a nullable handle index (NW,N,NE,E,SE,S,SW,W).
+/// # Safety
+/// Strings are readable NUL-terminated UTF-8 for this call; output is writable.
+/// Free response with captures_settings_free_v1 and drag with resize_free_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_resize_begin_v1(
+    document_json: *const c_char,
+    layer_id: *const c_char,
+    point: AbiPoint,
+    display_scale: f64,
+    output: *mut *mut ResizeDrag,
+) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if output.is_null() {
+            return Err("Missing resize output.".into());
+        }
+        // SAFETY: caller supplies writable pointer storage.
+        unsafe { output.write(ptr::null_mut()) };
+        if !display_scale.is_finite() || display_scale <= 0. {
+            return Err("Resize display scale must be positive and finite.".into());
+        }
+        // SAFETY: both input strings remain readable during this call.
+        let document: Document = serde_json::from_str(unsafe { text(document_json) }?)
+            .map_err(|error| error.to_string())?;
+        let id = unsafe { text(layer_id) }?;
+        let element = document
+            .elements
+            .iter()
+            .find(|element| element.base().id == id)
+            .ok_or("The selected layer no longer exists.")?;
+        if element.base().locked || !element.base().visible {
+            return Ok(json!({"handle": null}));
+        }
+        let handle = element.resize_handle_at(
+            Point {
+                x: point.x,
+                y: point.y,
+            },
+            8. / display_scale,
+        )?;
+        let Some(handle) = handle else {
+            return Ok(json!({"handle": null}));
+        };
+        let drag = ResizeDrag::new(&document, id, handle, display_scale)?;
+        let result = json!({"handle": handle as u32});
+        // SAFETY: the caller takes ownership independently of the parsed document.
+        unsafe { output.write(Box::into_raw(Box::new(drag))) };
+        Ok::<_, String>(result)
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    response(match result {
+        Ok(result) => json!({"ok":true,"result":result}),
+        Err(error) => json!({"ok":false,"error":error}),
+    })
+}
+
+/// Preview using the retained original geometry; no JSON, session or I/O.
+/// # Safety
+/// Drag is live from resize_begin_v1, output is writable for one descriptor.
+/// False leaves output untouched. Guide count never exceeds four.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_resize_preview_v1(
+    drag: *const ResizeDrag,
+    current: AbiPoint,
+    lock_aspect: bool,
+    output: *mut ResizePreview,
+) -> bool {
+    if drag.is_null() || output.is_null() {
+        return false;
+    }
+    catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains a live immutable drag for this call.
+        let Ok(preview) = unsafe { &*drag }.preview(
+            Point {
+                x: current.x,
+                y: current.y,
+            },
+            lock_aspect,
+        ) else {
+            return false;
+        };
+        let mut guides = [AlignmentGuide {
+            orientation: 0,
+            position: 0.,
+        }; 4];
+        for (destination, source) in guides.iter_mut().zip(&preview.guides) {
+            *destination = AlignmentGuide {
+                orientation: match source.orientation {
+                    GuideOrientation::Vertical => 0,
+                    GuideOrientation::Horizontal => 1,
+                },
+                position: source.position,
+            };
+        }
+        // SAFETY: output is writable; all returned geometry is copied by value.
+        unsafe {
+            output.write(ResizePreview {
+                outline: preview.outline.map(|point| AbiPoint {
+                    x: point.x,
+                    y: point.y,
+                }),
+                guides,
+                guide_count: preview.guides.len(),
+            })
+        };
+        true
+    }))
+    .unwrap_or(false)
+}
+
+/// # Safety
+/// Null or a live resize drag returned by begin, released exactly once after use.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_resize_free_v1(drag: *mut ResizeDrag) {
+    if !drag.is_null() {
+        // SAFETY: caller transfers ownership after all preview calls complete.
+        drop(unsafe { Box::from_raw(drag) });
+    }
 }
 
 /// Shared rotation grip. False leaves output untouched, including when no grip fits.
@@ -610,6 +745,90 @@ mod tests {
         ffi::{CStr, CString},
         mem::MaybeUninit,
     };
+
+    #[test]
+    fn resize_abi_retains_original_geometry_and_rejects_invalid_output() {
+        let (_data, request, _) = editor_fixture();
+        // SAFETY: strings and descriptors are live for each call; each owner is
+        // freed exactly once. The session and input strings die before preview.
+        unsafe {
+            let session = open_editor(&request);
+            let snapshot = take_json(captures_editor_request_v1(
+                session,
+                c"{\"operation\":\"snapshot\"}".as_ptr(),
+            ));
+            let mut document = snapshot["result"]["document"].clone();
+            document["width"] = json!(240);
+            document["height"] = json!(200);
+            let image = &mut document["elements"][0];
+            image["locked"] = json!(false);
+            image["x"] = json!(40);
+            image["y"] = json!(50);
+            image["width"] = json!(80);
+            image["height"] = json!(40);
+            let input = CString::new(document.to_string()).unwrap();
+            let mut drag = ptr::null_mut();
+            let miss = take_json(captures_editor_resize_begin_v1(
+                input.as_ptr(),
+                c"capture-background".as_ptr(),
+                AbiPoint { x: 80., y: 70. },
+                1.,
+                &mut drag,
+            ));
+            assert_eq!(miss["result"]["handle"], json!(null));
+            assert!(drag.is_null());
+            let hit = take_json(captures_editor_resize_begin_v1(
+                input.as_ptr(),
+                c"capture-background".as_ptr(),
+                AbiPoint { x: 120., y: 70. },
+                1.,
+                &mut drag,
+            ));
+            assert_eq!(hit["result"]["handle"], json!(3));
+            assert!(!drag.is_null());
+            drop(input);
+            drop(document);
+            captures_editor_free_v1(session);
+            let mut output = MaybeUninit::<ResizePreview>::uninit();
+            assert!(captures_editor_resize_preview_v1(
+                drag,
+                AbiPoint { x: 159., y: 75. },
+                true,
+                output.as_mut_ptr()
+            ));
+            let mut output = output.assume_init();
+            assert_eq!((output.outline[0].x, output.outline[0].y), (40., 50.));
+            assert_eq!((output.outline[2].x, output.outline[2].y), (159., 90.));
+            assert_eq!(output.guide_count, 0);
+            assert!(!captures_editor_resize_preview_v1(
+                drag,
+                AbiPoint { x: f64::NAN, y: 1. },
+                false,
+                &mut output
+            ));
+            assert_eq!(output.outline[2].x, 159.);
+            assert!(captures_editor_resize_preview_v1(
+                drag,
+                AbiPoint { x: 231., y: 75. },
+                false,
+                &mut output
+            ));
+            assert_eq!(output.outline[2].x, 240.);
+            assert_eq!(output.guide_count, 1);
+            assert_eq!(
+                (output.guides[0].orientation, output.guides[0].position),
+                (0, 240.)
+            );
+            assert!(!captures_editor_resize_preview_v1(
+                drag,
+                AbiPoint { x: 159., y: 75. },
+                false,
+                ptr::null_mut()
+            ));
+            captures_editor_resize_free_v1(drag);
+            captures_editor_resize_free_v1(ptr::null_mut());
+        }
+    }
 
     #[test]
     fn rotation_abi_copies_geometry_and_leaves_failed_outputs_untouched() {

@@ -510,6 +510,50 @@ def main():
         assert layers()[-1]["id"] == imported_id
 
         click(editor, 100, 158)  # Redo retained the original's selection; pick the imported row.
+        resize_before = draft.read_bytes()
+        run("xdotool", "mousemove", "--sync", "--window", editor, "685", "560",
+            "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
+            "720", "560", "sleep", ".3")
+        shot(editor, "layer-resize-active-guides")
+        assert draft.read_bytes() == resize_before, "resize preview must remain transient"
+        run("xdotool", "mouseup", "1", "sleep", ".3")
+        # Resize follows the final absolute pointer, not the rounded press pixel.
+        resized_width = (720 - 238) * 640 / 754 - 260
+        resized = save_layers(
+            lambda values: math.isclose(values[-1]["width"], resized_width, abs_tol=1e-5)
+            and values[-1]["height"] == 80 and values[-1]["x"] == 260,
+            "imported image resized from east grip")[-1]
+        assert resized["id"] == imported_id
+        shot(editor, "layer-resize-committed")
+        # Independently scale the fixture's green center (25,19) from its left edge.
+        resized_green = (round(238 + (260 + 25 * resized_width / 120) * 754 / 640),
+                         round(89 + (360 + 19) * 754 / 640))
+        pixel("layer-resize-committed", *resized_green, (60, 179, 113))
+        click(editor, 35, 62)
+        save_layers(lambda values: values[-1]["width"] == 120 and values[-1]["height"] == 80,
+                    "undo imported image resize")
+        shot(editor, "layer-resize-undone")
+        pixel("layer-resize-undone", 568, 537, (60, 179, 113))
+        click(editor, 98, 62)
+        save_layers(lambda values: math.isclose(values[-1]["width"], resized_width, abs_tol=1e-5),
+                    "redo imported image resize")
+        close(editor)
+        wait(lambda: not windows("Screenshot editor"), "resized imported draft closes")
+        editor = reopen()
+        shot(editor, "layer-resize-reopened")
+        reopened_resize = layers()[-1]
+        assert reopened_resize["id"] == imported_id
+        assert math.isclose(reopened_resize["width"], resized_width, abs_tol=1e-5)
+        pixel("layer-resize-reopened", *resized_green, (60, 179, 113))
+        # Undo history is session-local. Restore through a fresh east-grip resize
+        # at 1:1 scale, where the desired edge lands on an exact pointer pixel.
+        click(editor, 100, 158)
+        run("xdotool", "windowsize", "--sync", editor, "886", "700", "sleep", ".3")
+        drag((round(238 + 260 + resized_width), 489), (618, 489))
+        save_layers(lambda values: values[-1]["width"] == 120 and values[-1]["height"] == 80,
+                    "restore imported size after draft reopen")
+        run("xdotool", "windowsize", "--sync", editor, "1000", "700", "sleep", ".3")
+
         # At 1.178125 scale the 120x80 image's grip is near (615,485), around
         # pivot (615,560). Start five points above the grip, within its hit radius.
         # Exercise a free-angle transient first; Escape must leave draft/pixels intact.
@@ -1038,6 +1082,7 @@ def main():
                        "canvas", "undo-redo", "draft-reopen", "close-preserves-draft",
                        "image-picker-pending-cancel-retry", "image-import-exact-pixels",
                        "image-import-owned-draft-reopen", "image-picker-stale-close-result",
+                       "layer-resize-guides-commit-undo-draft-reopen-pixels",
                        "layer-rotation-free-cancel-shift-snap", "layer-rotation-undo-draft-reopen-pixels",
                        "explicit-discard", "save-error", "quit-error-retry", "original-unchanged",
                        "layer-duplicate-rename-move", "layer-canvas-click-drag-escape",
