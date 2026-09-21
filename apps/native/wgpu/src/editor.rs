@@ -1278,6 +1278,11 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 if ui.button("Reset fields").clicked() { view.reset_background_fields(); }
             });
             ui.small("Changes the canvas fill, not an image layer's background.");
+            ui.add_space(tokens.number("s-4"));
+            if ui.button("Trim edges").clicked() {
+                view.submit(tx, Request::TrimCanvas);
+            }
+            ui.small("Fits visible layer bounds, including off-canvas content. Does not trim transparent pixels within images.");
         });
         ui.add_space(tokens.number("s-6"));
         ui.label(RichText::new("Native editor preview").color(tokens.color("text-muted")));

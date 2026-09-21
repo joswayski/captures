@@ -76,6 +76,8 @@ def main():
                         help="Exercise image-background removal, undo, draft and clipboard alpha")
     parser.add_argument("--brush-only", action="store_true",
                         help="Exercise erase/restore gestures, cancellation, draft and clipboard")
+    parser.add_argument("--trim-only", action="store_true",
+                        help="Exercise canvas trimming, undo/redo, draft and output dimensions")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -396,6 +398,47 @@ def main():
                 "passed": True, "appearance": args.appearance, "checks": checks,
             }, indent=2) + "\n")
             print("PASS native Wand: locked image, contiguous/global, rollback, undo/redo, draft, clipboard alpha")
+            return
+
+        if args.trim_only:
+            run("xdotool", "windowsize", "--sync", editor, "1000", "1000")
+            field(428, 720)
+            field(472, 420)
+            click(editor, 58, 516)
+            save(720, 420, 0, 0)
+            shot(editor, "trim-before")
+            click(editor, 60, 751)
+            save(640, 360, 0, 0)
+            shot(editor, "trim-applied")
+            click(editor, 35, 62)
+            save(720, 420, 0, 0)
+            click(editor, 98, 62)
+            save(640, 360, 0, 0)
+            close(editor)
+            wait(lambda: not windows("Screenshot editor"), "trim draft closes")
+            editor = reopen()
+            save(640, 360, 0, 0)
+            run("xdotool", "windowsize", "--sync", editor, "760", "540")
+            run("xdotool", "mousemove", "--window", editor, "180", "400", "click", "--repeat", "16", "5")
+            shot(editor, "trim-minimum-reopened")
+            run("xdotool", "windowsize", "--sync", editor, "1000", "800")
+            click(editor, 535, 62)
+            click(editor, 65, 366)
+            click(editor, 170, 657)
+            png = output / "clipboard-trim.png"
+            png.write_bytes(run("xclip", "-selection", "clipboard", "-t", "image/png", "-o"))
+            assert run("identify", "-format", "%wx%h", str(png)) == b"640x360"
+            assert run("convert", str(png), "-crop", "1x1+2+1", "-depth", "8", "rgba:-") == bytes((40, 110, 166, 255))
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "trim suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["trim-locked-capture-bounds", "trim-undo-redo", "trim-draft-reopen",
+                           "trim-minimum-scroll", "trim-clipboard-dimensions-pixels-original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS native trim: canvas bounds, undo/redo, draft, minimum, clipboard pixels")
             return
 
         if args.background_only:

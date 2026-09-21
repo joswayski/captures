@@ -310,6 +310,76 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(previewMode.isEnabled, "changed options cannot leave stale output current")
     }
 
+    func testTrimControlsUseSharedGeometryAndInvalidateOutput() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let fixture = try makeHistoryFixture()
+            defer { try? FileManager.default.removeItem(at: fixture.root) }
+            let worker = EditorWorker()
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil); worker.close(); EditorWorker.flush() }
+            controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+            waitUntil { controller.state.snapshot != nil && !controller.state.busy }
+            let initial = try XCTUnwrap(controller.state.snapshot)
+            (try field("Canvas width", in: controller.root)).stringValue = "10"
+            (try field("Canvas height", in: controller.root)).stringValue = "5"
+            try button("Resize canvas", in: controller.root).performClick(nil)
+            waitUntil { controller.state.snapshot?.width == 10 && !controller.state.busy }
+            try showOutput(in: controller.root)
+            try button("Preview output", in: controller.root).performClick(nil)
+            waitUntil { !controller.state.busy }
+            let output = try segmented("Output preview image", in: controller.root)
+            XCTAssertTrue(output.isEnabled)
+            let section = try segmented("Editor section", in: controller.root)
+            section.selectedSegment = 0; _ = section.sendAction(section.action, to: section.target)
+            let trim = try button("Trim edges", in: controller.root)
+            let scroll = try XCTUnwrap(trim.enclosingScrollView)
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: 356))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            XCTAssertTrue(scroll.documentVisibleRect.contains(trim.frame))
+            try render(controller.root, name: "screenshot-editor-trim-minimum-\(appearance)")
+            trim.performClick(nil)
+            XCTAssertFalse(trim.isEnabled, "one shared command owns busy state")
+            waitUntil { !controller.state.busy }
+            XCTAssertEqual(controller.state.snapshot?.width, initial.width)
+            XCTAssertEqual(controller.state.snapshot?.height, initial.height)
+            XCTAssertEqual(controller.state.snapshot?.layers, initial.layers)
+            XCTAssertFalse(output.isEnabled, "trim invalidates encoded output")
+            try render(controller.root, name: "screenshot-editor-trim-applied-\(appearance)")
+            try button("Undo", in: controller.root).performClick(nil)
+            waitUntil { !controller.state.busy }
+            XCTAssertEqual(controller.state.snapshot?.width, 10)
+            XCTAssertEqual(controller.state.snapshot?.height, 5)
+            try button("Redo", in: controller.root).performClick(nil)
+            waitUntil { !controller.state.busy }
+            XCTAssertEqual(controller.state.snapshot?.width, initial.width)
+        }
+    }
+
+    func testTrimFailureRetainsAcceptedStateAndCanRetry() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let initial = snapshot(id: "shot", width: 640, height: 360)
+            let worker = FakeEditorWorker(snapshot: initial)
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            let trim = try button("Trim edges", in: controller.root)
+            let scroll = try XCTUnwrap(trim.enclosingScrollView)
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: 356))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            worker.failOperation = "trim_canvas"
+            worker.failureMessage = "The trimmed canvas exceeds the image dimension limit. The accepted pixels and draft are unchanged."
+            trim.performClick(nil)
+            XCTAssertEqual(controller.state.snapshot, initial)
+            XCTAssertTrue(trim.isEnabled)
+            try render(controller.root, name: "screenshot-editor-trim-error-minimum-\(appearance)")
+            worker.failOperation = nil
+            trim.performClick(nil)
+            XCTAssertEqual(worker.requests.filter { $0["operation"] as? String == "trim_canvas" }.count, 2)
+        }
+    }
+
     func testCanvasBackgroundControlsCommitRestoreAndCopyTransparentPixels() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {

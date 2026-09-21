@@ -60,6 +60,7 @@ pub enum Request {
         width: f64,
         height: f64,
     },
+    TrimCanvas,
     SetBackground {
         color: Option<String>,
     },
@@ -577,6 +578,11 @@ impl EditorSession {
                 }
                 let mut document = next.current().clone();
                 document.resize_canvas(width, height);
+                next.commit(document);
+            }
+            Request::TrimCanvas => {
+                let mut document = next.current().clone();
+                document.trim_to_content()?;
                 next.commit(document);
             }
         }

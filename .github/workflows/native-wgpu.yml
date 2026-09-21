@@ -93,6 +93,7 @@ jobs:
             /usr/bin/python3 apps/native/x11_editor_smoke.py --background-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-background-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --wand-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-wand-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --brush-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-brush-$appearance"
+            /usr/bin/python3 apps/native/x11_editor_smoke.py --trim-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-trim-$appearance"
           done
       - name: Exercise real native mini previews on private X11
         if: runner.os == 'Linux'

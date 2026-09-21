@@ -663,6 +663,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var discardButton: CaptureButton!
     private var applyCropButton: CaptureButton!
     private var resizeButton: CaptureButton!
+    private var trimButton: CaptureButton!
     private var previewOutputButton: CaptureButton!
     private var copyImageButton: CaptureButton!
     private var changeOutputDirectoryButton: CaptureButton!
@@ -931,7 +932,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let geometryScroll = NSScrollView(frame: geometryPanel.bounds)
         geometryScroll.autoresizingMask = [.width, .height]
         geometryScroll.hasVerticalScroller = true; geometryScroll.drawsBackground = false
-        geometryContent.frame = NSRect(x: 0, y: 0, width: 252, height: 616)
+        geometryContent.frame = NSRect(x: 0, y: 0, width: 252, height: 746)
         geometryScroll.documentView = geometryContent
         geometryPanel.addSubview(geometryScroll)
 
@@ -990,6 +991,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         panelLabel("Changes canvas fill, not an image layer’s background.",
                    frame: NSRect(x: 0, y: 574, width: 252, height: 42), muted: true,
+                   parent: geometryContent)
+        trimButton = button("Trim edges", frame: NSRect(x: 0, y: 632, width: 252, height: 34),
+                            parent: geometryContent) { [weak self] in
+            self?.command(["operation": "trim_canvas"], message: "Trimming canvas…", resetCrop: true)
+        }
+        panelLabel("Fits visible layer bounds, including off-canvas content. Does not trim transparent pixels within images.",
+                   frame: NSRect(x: 0, y: 680, width: 252, height: 66), muted: true,
                    parent: geometryContent)
 
         buildLayersPanel()
@@ -2016,6 +2024,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let ready = state.snapshot != nil && !state.busy
         fields.forEach { $0.isEnabled = ready }
         applyCropButton?.isEnabled = ready; resizeButton?.isEnabled = ready
+        trimButton?.isEnabled = ready
         backgroundMode?.isEnabled = ready
         backgroundColor.isEnabled = ready && backgroundMode?.indexOfSelectedItem == 0
         backgroundApply?.isEnabled = ready; backgroundReset?.isEnabled = ready

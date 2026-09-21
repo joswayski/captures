@@ -17,6 +17,7 @@ struct Fixture {
     translations: Vec<TranslationCase>,
     crop_rects: Vec<DocumentCropCase>,
     canvas_sizes: Vec<CanvasSizeCase>,
+    trims: Vec<TrimCase>,
     shape_creations: Vec<ShapeCreationCase>,
     open_shape_creations: Vec<OpenShapeCreationCase>,
     freehand_creations: Vec<FreehandCreationCase>,
@@ -169,6 +170,13 @@ struct DocumentCropCase {
 struct CanvasSizeCase {
     width: f64,
     height: f64,
+    expected: Value,
+}
+
+#[derive(Deserialize)]
+struct TrimCase {
+    name: String,
+    input: Document,
     expected: Value,
 }
 
@@ -861,6 +869,24 @@ fn initialization_crop_translation_and_canvas_size_match_typescript() {
         let mut document: Document = serde_json::from_value(fixture.document.clone()).unwrap();
         document.resize_canvas(case.width, case.height);
         assert_json_equivalent(serde_json::to_value(document).unwrap(), case.expected);
+    }
+}
+
+#[test]
+fn canvas_trim_matches_shipping_bounds_and_is_idempotent() {
+    for case in fixture().trims {
+        let mut document = case.input;
+        document.trim_to_content().expect(&case.name);
+        assert_eq!(document.width, case.expected["width"].as_f64().unwrap());
+        assert_eq!(document.height, case.expected["height"].as_f64().unwrap());
+        assert_json_close(
+            serde_json::to_value(&document).unwrap(),
+            case.expected,
+            &case.name,
+        );
+        let trimmed = document.clone();
+        document.trim_to_content().expect(&case.name);
+        assert_eq!(document, trimmed, "{}", case.name);
     }
 }
 

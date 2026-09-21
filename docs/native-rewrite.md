@@ -23,7 +23,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, counted media filters, clear all, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices | Audio meter/device-change parity, physical recording/audio acceptance, recording editor and transcoded exports |
 | Supporting UI | Appearance/preferences, resident tray/menu bar, retained preview stacks, explicit optional feedback | Onboarding, remaining Preferences parity, preview drag/fan/effects, single-instance/relaunch/login items, Open With, crash reporting |
-| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency, import, image transforms, annotation styles, Rectangle/Ellipse/Line/Arrow/Pen, copy and save-new-copy | Text/image-background/erase, remaining viewport/output controls and Tauri design parity; recording playback/timeline/editing/export |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Line/Arrow/Pen/Wand/Erase/Restore, copy and save-new-copy | Text, live pixel brush feedback, remaining viewport/output controls and Tauri design parity; recording playback/timeline/editing/export |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises | Physical acceptance, accessibility/IME, Wayland live capture, packaging/signing/updater, performance/energy and rollback gates |
 
 The former History and recording/HUD/feedback stacks are integrated through
@@ -144,7 +144,17 @@ X11 tests cover cancellation, actual feathered alpha, erase/restore, undo/redo, 
 and clipboard; AppKit has input/bridge tests and minimum light/dark/error fixtures.
 Windows/Wayland presentation and physical AppKit input remain unverified; sampling
 cadence, live pixel feedback and the Tauri brush cursor/layout remain parity work.
-Next implementation boundary: text/image-background and remaining output. The shipping Tauri editor remains the design
+Both hosts connect Geometry → Trim edges through a shared `trim_canvas` command.
+It fits visible layer geometry, including locked/zero-opacity and off-canvas layers,
+rounds bounds outward, and translates every layer including hidden siblings. Empty,
+hidden-only and already-tight documents are no-ops that preserve redo and pixels.
+It includes rotated image/shape/path bounds and annotation shadows, not an alpha scan.
+Changed trims are one render-before-publish undo step; draft and output use the new
+dimensions. Shipping TypeScript vectors cover fractional/rotated/shadowed geometry;
+host tests cover controls, undo/redo, output invalidation, drafts and clipboard.
+Trim hover-margin feedback and the shipping toolbar layout remain unimplemented.
+Windows/Wayland presentation and physical macOS input remain unverified.
+Next implementation boundary: text and remaining output. The shipping Tauri editor remains the design
 reference; this slice does not reproduce its layout or live pixel dragging.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams

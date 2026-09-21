@@ -349,6 +349,9 @@ Both hosts can copy the full-resolution edited image without saving a file or dr
 copy ignores export format and quality settings.
 Canvas background controls support a hex color or transparency, with undo/redo and
 draft restore. They change the canvas fill, not backgrounds within image layers.
+**Trim edges** fits the canvas to visible layer geometry, preserving off-canvas
+content and moving hidden layers with the document. It does not scan image alpha
+to remove transparent borders. Trimming supports undo/redo and draft restore.
 Both hosts also connect **Draw → Wand**: click an image to remove similar colors,
 using a 0–255 tolerance and either a contiguous region or all matching pixels.
 The frontmost visible image is editable even when locked; transparent pixels do

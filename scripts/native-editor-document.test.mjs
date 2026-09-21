@@ -33,6 +33,7 @@ import {
   snapShapeRotation,
   transformImageElement,
   translateElement,
+  trimDocumentToContent,
   withElementRotation,
   preserveElementWorldPoint,
 } from '../apps/desktop/ui/src/lib/screenshotEditor.ts';
@@ -156,7 +157,24 @@ function geometryCases() {
     { width: 100.49, height: 200.5 },
     { width: -7.25, height: 40_000.75 },
   ].map(size => ({ ...size, expected: resizeDocumentCanvas(document, size.width, size.height) }));
-  return { crops, cropDrags: cropDragCases(), translations, cropRects, canvasSizes };
+  const image = { ...document.elements[0], visible: true, locked: true, opacity: 0 };
+  const trims = [
+    ['empty', []],
+    ['hidden-only', [document.elements[0]]],
+    ['locked-transparent-fractional-overhang', [image]],
+    ['subpixel-minimum-extent', [{ ...image, x: 2.2, y: -3.7, width: 0.2, height: 0.3 }]],
+    ['rotated-image-and-hidden-sibling', [{ ...image, rotation: 0.67 }, document.elements[0]]],
+    ['rotated-shape-shadow', [{ ...document.elements[2], rotation: -0.39,
+      style: { ...style, dropShadow: true } }]],
+    ['rotated-path-shadow', [{ ...document.elements[3], rotation: 0.41 }]],
+    ['mixed-visible-with-hidden-sibling', [image, document.elements[2], document.elements[3],
+      { ...image, id: 'hidden', visible: false, x: -900, y: 1000 }]],
+    ['already-tight', [{ ...image, x: 0, y: 0, width: 713, height: 257 }]],
+  ].map(([name, elements]) => {
+    const input = { ...document, elements };
+    return { name, input, expected: trimDocumentToContent(input) };
+  });
+  return { crops, cropDrags: cropDragCases(), translations, cropRects, canvasSizes, trims };
 }
 
 function cropDragCase(origin, bounds, initialPreset, initialShiftKey, updates) {
@@ -1186,6 +1204,7 @@ function fixtureText(cases) {
     `  "translations": ${array(cases.translations, '    ')},`,
     `  "cropRects": ${array(cases.cropRects, '    ')},`,
     `  "canvasSizes": ${array(cases.canvasSizes, '    ')},`,
+    `  "trims": ${array(cases.trims, '    ')},`,
     `  "shapeCreations": ${array(cases.shapeCreations, '    ')},`,
     `  "openShapeCreations": ${array(cases.openShapeCreations, '    ')},`,
     `  "freehandCreations": ${array(cases.freehandCreations, '    ')},`,
@@ -1219,6 +1238,18 @@ if (process.argv.includes('--write')) {
 } else {
   test('native editor vectors match the shipping TypeScript oracle', async () => {
     assert.deepEqual(JSON.parse(await readFile(fixture, 'utf8')), serializableCases());
+  });
+  test('trim rounds outward, includes transparent locked geometry, and ignores hidden-only documents', () => {
+    const cases = geometryCases().trims;
+    const fractional = cases.find(entry => entry.name === 'locked-transparent-fractional-overhang').expected;
+    assert.deepEqual([fractional.width, fractional.height, fractional.elements[0].x,
+      fractional.elements[0].y], [93, 44, 0.75, 0.75]);
+    const subpixel = cases.find(entry => entry.name === 'subpixel-minimum-extent').expected;
+    assert.deepEqual([subpixel.width, subpixel.height], [2, 2]);
+    for (const name of ['empty', 'hidden-only', 'already-tight']) {
+      const entry = cases.find(entry => entry.name === name);
+      assert.equal(entry.expected, entry.input);
+    }
   });
   test('selection vectors distinguish local edges, layer order and transparent content', () => {
     const cases = hitTestCases();

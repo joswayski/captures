@@ -1406,6 +1406,38 @@ impl Document {
         self.height = clamp(height.round(), 1., MAX_CANVAS_DIMENSION);
     }
 
+    /// Fit the canvas to visible layer geometry, including locked/transparent
+    /// layers and off-canvas content. This does not scan flattened alpha pixels.
+    pub fn trim_to_content(&mut self) -> Result<(), String> {
+        let mut content: Option<Rect> = None;
+        for element in self
+            .elements
+            .iter()
+            .filter(|element| element.base().visible)
+        {
+            let bounds = painted_bounds(element)?;
+            content = Some(match content {
+                None => bounds,
+                Some(previous) => {
+                    let x = previous.x.min(bounds.x);
+                    let y = previous.y.min(bounds.y);
+                    Rect {
+                        x,
+                        y,
+                        width: (previous.x + previous.width).max(bounds.x + bounds.width) - x,
+                        height: (previous.y + previous.height).max(bounds.y + bounds.height) - y,
+                    }
+                }
+            });
+        }
+        if let Some(mut bounds) = content {
+            bounds.width = bounds.width.max(1.);
+            bounds.height = bounds.height.max(1.);
+            self.fit_canvas_to_bounds(bounds);
+        }
+        Ok(())
+    }
+
     /// Append one completed rectangle or ellipse using the shipping editor's
     /// layer defaults and fully-outside canvas expansion policy.
     pub fn create_closed_shape(&mut self, create: ClosedShapeCreate) -> Result<String, String> {

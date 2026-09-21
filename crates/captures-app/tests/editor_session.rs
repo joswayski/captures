@@ -51,6 +51,93 @@ fn image_transform(id: &str, transform: &str) -> Request {
 }
 
 #[test]
+fn trim_is_one_undo_step_preserves_pixels_redo_and_original_and_reopens() {
+    let (data, id, original) = setup();
+    let path = data.path().join("history").join(&id).join("capture.png");
+    let original_file = fs::read(&path).unwrap();
+    let mut editor = open(data.path(), &id).unwrap();
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 12.,
+            height: 8.,
+        })
+        .unwrap();
+    let enlarged = editor.snapshot().document.clone();
+    let trim = || serde_json::from_value::<Request>(json!({"operation": "trim_canvas"})).unwrap();
+    editor.execute(trim()).unwrap();
+    assert_eq!(editor.pixels().as_ref(), &original);
+    assert_eq!(
+        (
+            editor.snapshot().document.width,
+            editor.snapshot().document.height
+        ),
+        (7., 3.)
+    );
+    assert_eq!(editor.snapshot().document.elements, enlarged.elements);
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.snapshot().document, &enlarged);
+    editor.execute(Request::Redo).unwrap();
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 11.,
+            height: 6.,
+        })
+        .unwrap();
+    editor.execute(Request::Undo).unwrap();
+    let pixels = editor.pixels();
+    editor.execute(trim()).unwrap();
+    assert!(
+        editor.snapshot().can_redo,
+        "already-tight trim must preserve redo"
+    );
+    assert!(Arc::ptr_eq(&pixels, &editor.pixels()));
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 29 })
+        .unwrap();
+    let reopened = open(data.path(), &id).unwrap();
+    assert_eq!(reopened.snapshot().document, editor.snapshot().document);
+    assert_eq!(reopened.pixels(), editor.pixels());
+    assert_eq!(fs::read(path).unwrap(), original_file);
+}
+
+#[test]
+fn trim_render_failure_keeps_accepted_frame_draft_and_redo() {
+    let (data, id, _) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 31 })
+        .unwrap();
+    let manifest = data.path().join("drafts").join(&id).join("manifest.json");
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+    let mut off_canvas = value["document"]["elements"][0].clone();
+    off_canvas["id"] = json!("overhanging-image");
+    off_canvas["x"] = json!(-20_000);
+    value["document"]["elements"]
+        .as_array_mut()
+        .unwrap()
+        .push(off_canvas);
+    fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
+    let mut editor = open(data.path(), &id).unwrap();
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 8.,
+            height: 4.,
+        })
+        .unwrap();
+    editor.execute(Request::Undo).unwrap();
+    let before = serde_json::to_value(editor.snapshot()).unwrap();
+    let pixels = editor.pixels();
+    let persisted = fs::read(&manifest).unwrap();
+    let error = editor.execute(Request::TrimCanvas).unwrap_err();
+    assert!(error.contains("16384 pixels per side"), "{error}");
+    assert_eq!(serde_json::to_value(editor.snapshot()).unwrap(), before);
+    assert!(editor.snapshot().can_redo);
+    assert!(Arc::ptr_eq(&pixels, &editor.pixels()));
+    assert_eq!(fs::read(manifest).unwrap(), persisted);
+}
+
+#[test]
 fn background_commands_preserve_layers_and_are_transactional_undoable_and_persisted() {
     let (data, id, original) = setup();
     let path = data.path().join("history").join(&id).join("capture.png");
