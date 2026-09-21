@@ -1051,6 +1051,12 @@ Across both hosts, physical input/accessibility/IME acceptance remains open.
 The current native screenshot editor is a functional workbench, not a visual match
 for the shipping Tauri editor. Functional controls and inspected fixtures do not
 complete the editor layout/interaction/design parity gate.
+Both hosts now place the scrolling inspector on the right of the canvas. The wgpu
+placement is exercised with real X11 input in all editor test modes and normal/
+minimum-size light/dark fixtures; Windows and Wayland use the same implementation
+but their physical presentation remains unverified. AppKit's existing right-side
+inspector is unchanged. The tool rail, toolbar/export-bar organization and wgpu
+Fit canvas centering still differ from Tauri.
 Remaining viewport controls and other drawing tools are not connected.
 Recording editing remains open on both hosts; the
 screenshot-editor parity gate stays open.
