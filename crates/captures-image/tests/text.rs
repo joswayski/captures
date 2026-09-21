@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use captures_image::text::{TextRenderer, TextStyle};
+use captures_image::text::{TextLine, TextRenderer, TextStyle};
 
 fn renderer() -> TextRenderer {
     TextRenderer::new([
@@ -141,10 +141,27 @@ fn outlines_stroke_contours_with_hollow_interiors_round_joins_and_stable_metrics
     let outlined = engine.render_outline_line("L", &style(), 8.).unwrap();
     assert_eq!(outlined.advance, 70.);
     assert_eq!(outlined.baseline, filled.baseline);
-    assert_eq!(outlined.bounds.x, filled.bounds.x - 4.);
-    assert_eq!(outlined.bounds.y, filled.bounds.y - 4.);
-    assert_eq!(outlined.bounds.width, filled.bounds.width + 8.);
-    assert_eq!(outlined.bounds.height, filled.bounds.height + 8.);
+    // Zeno encloses the stroked cubic control hull with floor/ceil. Native f32
+    // round-join math can add transparent border pixels on different CPUs.
+    // Assert the actual nonzero-alpha extent in line coordinates instead: no
+    // tolerance, clipping, shifted stroke or extra painted pixel is accepted.
+    let ink_bounds = |line: &TextLine| {
+        let mut bounds = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+        for (x, y, _) in line.pixels.enumerate_pixels().filter(|(_, _, p)| p[3] != 0) {
+            let x = line.bounds.x as i32 + x as i32;
+            let y = line.bounds.y as i32 + y as i32;
+            bounds = (
+                bounds.0.min(x),
+                bounds.1.min(y),
+                bounds.2.max(x + 1),
+                bounds.3.max(y + 1),
+            );
+        }
+        bounds
+    };
+    let baseline = outlined.baseline as i32;
+    // The fixture contour is x=0..60, baseline-up y=0..80, plus half the stroke.
+    assert_eq!(ink_bounds(&outlined), (-4, baseline - 84, 64, baseline + 4));
     let pixel = |x: i32, up: i32| {
         outlined
             .pixels
@@ -167,12 +184,8 @@ fn outlines_stroke_contours_with_hollow_interiors_round_joins_and_stable_metrics
         "round, not square/mitered, outer corner"
     );
     assert_eq!(
-        engine
-            .render_outline_line("L", &style(), 2.)
-            .unwrap()
-            .pixels
-            .width(),
-        filled.pixels.width() + 2
+        ink_bounds(&engine.render_outline_line("L", &style(), 2.).unwrap()),
+        (-1, baseline - 81, 61, baseline + 1)
     );
     assert_eq!(
         engine
