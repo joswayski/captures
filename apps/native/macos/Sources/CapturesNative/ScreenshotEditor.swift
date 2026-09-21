@@ -2153,14 +2153,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if textShadow.state == .on, let shadow = style.shadowStyle {
             var shadowPatch: [String: Any] = [:]
             if let color = textShadowFields["color"]?.stringValue, color != shadow.color {
-                guard !color.isEmpty else { showError("Enter a shadow color."); return }
-                shadowPatch["color"] = color
+                guard let value = PreferencesController.normalizeHex(color) else {
+                    showError("Enter shadow color as #RGB or #RRGGBB."); return
+                }
+                shadowPatch["color"] = value
             }
             for (key, path) in textShadowNumbers {
                 guard let field = textShadowFields[key] else { continue }
                 // Formatting unchanged display values must not round authored precision.
                 if field.stringValue != format(shadow[keyPath: path]) {
-                    guard let value = Double(field.stringValue), value.isFinite else {
+                    guard let value = number(field) else {
                         showError("Enter a finite shadow \(key) value."); return
                     }
                     shadowPatch[key] = value

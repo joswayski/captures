@@ -3202,6 +3202,10 @@ final class ScreenshotEditorTests: XCTestCase {
         blur.stringValue = "invalid"
         apply.performClick(nil)
         XCTAssertEqual(worker.requests.count, count, "invalid numbers never enter the worker")
+        blur.stringValue = "14.96"
+        try field("Text shadow color", in: controller.root).stringValue = "invalid"
+        apply.performClick(nil)
+        XCTAssertEqual(worker.requests.count, count, "invalid colors never enter the worker")
         shadow.performClick(nil)
         XCTAssertTrue(try XCTUnwrap(blur.superview).isHidden)
         apply.performClick(nil)
@@ -3209,6 +3213,24 @@ final class ScreenshotEditorTests: XCTestCase {
         try button("Cancel", in: controller.root).performClick(nil)
         XCTAssertEqual(blur.stringValue, "14.96")
         XCTAssertFalse(try XCTUnwrap(blur.superview).isHidden)
+    }
+
+    func testTextShadowNumbersUseTheDisplayedLocale() throws {
+        _ = NSApplication.shared
+        var original = textLayer(id: "copy", text: "accepted")
+        original["dropShadow"] = true
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [original]))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+            worker: worker, numberLocale: Locale(identifier: "fr_FR"))
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let blur = try field("Text shadow blur", in: controller.root)
+        XCTAssertEqual(blur.stringValue, "5,984")
+        blur.stringValue = "7,25"
+        try button("Apply", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.requests.last?["patch"] as? NSDictionary,
+                       ["dropShadowStyle": ["blur": 7.25]] as NSDictionary)
     }
 
     func testTextOutlineStagesCancelsAndKeepsFailedInput() throws {
