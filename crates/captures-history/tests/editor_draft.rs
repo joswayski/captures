@@ -1,6 +1,6 @@
-use std::fs;
+use std::{collections::BTreeMap, fs, sync::Arc};
 
-use captures_history::editor_draft::{self, AssetInput, SaveRequest};
+use captures_history::editor_draft::{self, AssetInput, FontAssets, SaveRequest};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -353,4 +353,178 @@ fn caller_roots_and_discard_are_isolated_from_other_drafts_history_and_exports()
     );
     assert_eq!(fs::read(history.join("capture.png")).unwrap(), b"history");
     assert_eq!(fs::read(root.path().join("export.png")).unwrap(), b"export");
+}
+
+fn fonts(id: &str, bytes: &[u8]) -> FontAssets {
+    FontAssets {
+        families: BTreeMap::from([("sans".into(), "Embedded Family".into())]),
+        files: BTreeMap::from([(id.into(), Arc::from(bytes))]),
+    }
+}
+
+#[test]
+fn fonts_round_trip_as_sidecars_not_json_and_cannot_rebind_ids() {
+    let root = tempdir().unwrap();
+    let input = fonts("regular", b"opaque trusted font bytes");
+    editor_draft::save_with_fonts(root.path(), request(vec![]), Some(&input)).unwrap();
+    let manifest = root.path().join("capture-1/manifest.json");
+    let before = fs::read(&manifest).unwrap();
+    let value: Value = serde_json::from_slice(&before).unwrap();
+    assert_eq!(
+        value["fonts"],
+        json!({
+            "families": {"sans":"Embedded Family"}, "assets":["regular"]
+        })
+    );
+    let loaded = editor_draft::load(root.path(), "capture-1", url)
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded.fonts.as_ref(), Some(&input));
+    assert_eq!(
+        serde_json::to_value(&loaded).unwrap(),
+        json!({
+            "document": request(vec![]).document, "updated_at_ms":17
+        })
+    );
+    assert!(
+        editor_draft::save_with_fonts(
+            root.path(),
+            request(vec![]),
+            Some(&fonts("regular", b"replacement"))
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("cannot change")
+    );
+    assert_eq!(fs::read(manifest).unwrap(), before);
+    assert_eq!(
+        fs::read(root.path().join("capture-1/fonts/regular.font")).unwrap(),
+        b"opaque trusted font bytes"
+    );
+    editor_draft::save_with_fonts(root.path(), request(vec![]), Some(&input)).unwrap();
+    editor_draft::save(root.path(), request(vec![])).unwrap();
+    assert!(!root.path().join("capture-1/fonts/regular.font").exists());
+    assert!(
+        editor_draft::load(root.path(), "capture-1", url)
+            .unwrap()
+            .unwrap()
+            .fonts
+            .is_none()
+    );
+}
+
+#[test]
+fn failed_manifest_publication_retains_previous_fonts_then_success_prunes() {
+    let root = tempdir().unwrap();
+    let previous = fonts("previous", b"old");
+    editor_draft::save_with_fonts(root.path(), request(vec![]), Some(&previous)).unwrap();
+    let manifest = root.path().join("capture-1/manifest.json");
+    let backup = root.path().join("capture-1/previous.json");
+    fs::rename(&manifest, &backup).unwrap();
+    fs::create_dir(&manifest).unwrap(); // Force manifest replacement to fail after font writes.
+    let next = fonts("next", b"different");
+    assert!(editor_draft::save_with_fonts(root.path(), request(vec![]), Some(&next)).is_err());
+    assert_eq!(
+        fs::read(root.path().join("capture-1/fonts/previous.font")).unwrap(),
+        b"old"
+    );
+    assert_eq!(
+        fs::read(root.path().join("capture-1/fonts/next.font")).unwrap(),
+        b"different"
+    );
+    fs::remove_dir(&manifest).unwrap();
+    fs::rename(backup, manifest).unwrap();
+    assert_eq!(
+        editor_draft::load(root.path(), "capture-1", url)
+            .unwrap()
+            .unwrap()
+            .fonts,
+        Some(previous)
+    );
+    editor_draft::save_with_fonts(root.path(), request(vec![]), Some(&next)).unwrap();
+    assert!(!root.path().join("capture-1/fonts/previous.font").exists());
+    assert_eq!(
+        editor_draft::load(root.path(), "capture-1", url)
+            .unwrap()
+            .unwrap()
+            .fonts,
+        Some(next)
+    );
+}
+
+#[test]
+fn font_validation_precedes_mutation_and_shares_the_image_byte_budget() {
+    let root = tempdir().unwrap();
+    editor_draft::save(root.path(), request(vec![asset("keep", Some(b"old"))])).unwrap();
+    let manifest = root.path().join("capture-1/manifest.json");
+    let before = fs::read(&manifest).unwrap();
+    let mut too_many = fonts("valid", b"font");
+    too_many.files = (0..65)
+        .map(|i| (format!("f{i}"), Arc::from(b"x".as_slice())))
+        .collect();
+    for invalid in [
+        fonts("../outside", b"x"),
+        fonts("empty", b""),
+        too_many,
+        FontAssets {
+            families: BTreeMap::new(),
+            ..fonts("valid", b"x")
+        },
+    ] {
+        assert!(
+            editor_draft::save_with_fonts(root.path(), request(vec![]), Some(&invalid)).is_err()
+        );
+        assert_eq!(fs::read(&manifest).unwrap(), before);
+        assert_eq!(
+            editor_draft::read_asset(root.path(), "capture-1", "keep").unwrap(),
+            b"old"
+        );
+        assert!(!root.path().join("capture-1/fonts").exists());
+    }
+    let retained = fs::OpenOptions::new()
+        .write(true)
+        .open(root.path().join("capture-1/assets/keep.png"))
+        .unwrap();
+    retained.set_len(80 * 1024 * 1024 - 3).unwrap();
+    let font = fonts("limit", b"abc");
+    editor_draft::save_with_fonts(root.path(), request(vec![asset("keep", None)]), Some(&font))
+        .unwrap();
+    let before = fs::read(&manifest).unwrap();
+    retained.set_len(80 * 1024 * 1024 - 2).unwrap();
+    assert!(
+        editor_draft::save_with_fonts(root.path(), request(vec![asset("keep", None)]), Some(&font))
+            .is_err()
+    );
+    assert_eq!(fs::read(manifest).unwrap(), before);
+}
+
+#[test]
+fn invalid_or_missing_font_sidecars_error_without_discarding_the_draft() {
+    let root = tempdir().unwrap();
+    editor_draft::save_with_fonts(root.path(), request(vec![]), Some(&fonts("face", b"font")))
+        .unwrap();
+    let manifest = root.path().join("capture-1/manifest.json");
+    let original: Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+    for ids in [
+        json!(["face", "face"]),
+        json!(["../outside"]),
+        json!(["missing"]),
+    ] {
+        let mut invalid = original.clone();
+        invalid["fonts"]["assets"] = ids;
+        let bytes = serde_json::to_vec(&invalid).unwrap();
+        fs::write(&manifest, &bytes).unwrap();
+        assert!(editor_draft::load(root.path(), "capture-1", url).is_err());
+        assert_eq!(fs::read(&manifest).unwrap(), bytes);
+    }
+    fs::write(&manifest, serde_json::to_vec(&original).unwrap()).unwrap();
+    let sidecar = fs::OpenOptions::new()
+        .write(true)
+        .open(root.path().join("capture-1/fonts/face.font"))
+        .unwrap();
+    for len in [0, 80 * 1024 * 1024 + 1] {
+        sidecar.set_len(len).unwrap();
+        assert!(editor_draft::load(root.path(), "capture-1", url).is_err());
+        assert!(manifest.is_file());
+    }
 }
